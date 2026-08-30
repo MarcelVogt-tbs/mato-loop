@@ -111,6 +111,52 @@ async def test_compaction_falls_back_to_active_model_after_specialist_failure(
     ]
 
 
+async def test_compaction_streams_visible_output_and_resets_failed_candidate(
+    monkeypatch,
+) -> None:
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    active = ModelConfig(provider_id=provider.id, model_id="agent")
+    compaction = ModelConfig(provider_id=provider.id, model_id="compact")
+    settings = AiSettings(
+        providers=[provider],
+        models=[active, compaction],
+        compaction_model_id=compaction.id,
+    )
+    calls = 0
+
+    async def complete(_db, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await kwargs["on_delta"]("Discarded draft")
+            raise RuntimeError("failed candidate")
+        await kwargs["on_delta"](_VALID_SUMMARY[:20])
+        await kwargs["on_delta"](_VALID_SUMMARY[20:])
+        return ProviderResult(content=_VALID_SUMMARY)
+
+    monkeypatch.setattr(ProviderService, "complete", complete)
+    updates = []
+
+    async def on_update(content, is_fallback):
+        updates.append((content, is_fallback))
+
+    result = await AgentRuntime._summarize(
+        AsyncMock(spec=AsyncSession),
+        "USER: Test",
+        512,
+        ai_settings=settings,
+        active_model=active,
+        runtime_settings=AgentRuntimeSettings(),
+        on_update=on_update,
+    )
+
+    assert result.model_config_id == active.id
+    assert ("Discarded draft", False) in updates
+    discarded_index = updates.index(("Discarded draft", False))
+    assert ("", False) in updates[discarded_index + 1 :]
+    assert updates[-1] == (_VALID_SUMMARY.strip(), False)
+
+
 async def test_compaction_disables_optional_reasoning(monkeypatch) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="Qwen3.8-27B-GGUF-UD-Q4_K_XL")

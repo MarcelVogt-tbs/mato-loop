@@ -14,9 +14,11 @@ class RunEventBroker:
         self._cleanup_tasks: set[asyncio.Task[None]] = set()
 
     async def publish(self, run_id: UUID, event: dict[str, Any]) -> None:
-        if event.get("type") == "reasoning.updated":
+        if event.get("type") in {"reasoning.updated", "context.summary.updated"}:
             self._history[run_id] = [
-                item for item in self._history[run_id] if item.get("type") != "reasoning.updated"
+                item
+                for item in self._history[run_id]
+                if item.get("type") != event.get("type")
             ]
         self._history[run_id].append(event)
         self._history[run_id] = self._history[run_id][-200:]

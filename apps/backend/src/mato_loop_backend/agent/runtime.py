@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
@@ -1793,6 +1794,28 @@ class AgentRuntime:
                 active_runtime_settings: AgentRuntimeSettings = runtime_settings,
             ) -> SummaryResult:
                 await _publish_run_phase(run.id, "compacting_context")
+
+                last_summary_publish_at = 0.0
+
+                async def on_update(text: str, is_fallback: bool) -> None:
+                    nonlocal last_summary_publish_at
+                    now = time.monotonic()
+                    if text and not is_fallback and now - last_summary_publish_at < 0.1:
+                        return
+                    if text:
+                        last_summary_publish_at = now
+                    await run_events.publish(
+                        run.id,
+                        {
+                            "type": "context.summary.updated",
+                            "summary": {
+                                "content": text,
+                                "isFallback": is_fallback,
+                                "status": "streaming",
+                            },
+                        },
+                    )
+
                 return await cls._summarize(
                     db,
                     source,
@@ -1800,6 +1823,7 @@ class AgentRuntime:
                     ai_settings=active_ai_settings,
                     active_model=active_model,
                     runtime_settings=active_runtime_settings,
+                    on_update=on_update,
                 )
 
             projection = None
@@ -1855,11 +1879,26 @@ class AgentRuntime:
             if projection is None:
                 raise ContextError("agent.contextWindowExceeded")
             if projection.compacted:
+                summary = projection.context_summary
+                assert summary is not None
                 await run_events.publish(
                     run.id,
                     {
                         "type": "context.compacted",
                         "estimatedInputTokens": projection.estimated_input_tokens,
+                        "summary": {
+                            "id": str(summary.id),
+                            "coveredThroughMessageId": str(
+                                summary.covered_through_message_id
+                            ),
+                            "content": summary.content,
+                            "isFallback": summary.is_fallback,
+                            "createdAt": (
+                                summary.created_at.isoformat()
+                                if summary.created_at
+                                else None
+                            ),
+                        },
                     },
                 )
 
@@ -3728,6 +3767,7 @@ class AgentRuntime:
         ai_settings: AiSettings,
         active_model: ModelConfig,
         runtime_settings: AgentRuntimeSettings,
+        on_update: Callable[[str, bool], Awaitable[None]] | None = None,
     ) -> SummaryResult:
         helper = next(
             (
@@ -3763,7 +3803,21 @@ class AgentRuntime:
             input_chars = int(available_input_tokens * candidate.characters_per_token)
             if len(prompt) > input_chars:
                 continue
+            streamed_parts: list[str] = []
+
+            async def on_delta(text: str, parts: list[str] = streamed_parts) -> None:
+                parts.append(text)
+                if on_update is not None:
+                    await on_update("".join(parts), False)
+
+            async def on_retry(*_args: Any, parts: list[str] = streamed_parts) -> None:
+                parts.clear()
+                if on_update is not None:
+                    await on_update("", False)
+
             try:
+                if on_update is not None:
+                    await on_update("", False)
                 profile = reasoning_profile(
                     candidate.model_id, candidate.discovery_metadata
                 )
@@ -3775,6 +3829,8 @@ class AgentRuntime:
                     tools=[],
                     timeout=runtime_settings.request_timeout_seconds,
                     max_output_tokens=effective_output_tokens,
+                    on_delta=on_delta,
+                    on_retry=on_retry,
                     reasoning_effort=(
                         ReasoningEffort.NONE
                         if profile is not None
@@ -3787,6 +3843,8 @@ class AgentRuntime:
                 continue
             content = result.content.strip()
             if valid_compaction_summary(content):
+                if on_update is not None:
+                    await on_update(content, False)
                 return SummaryResult(content, candidate.id)
             logger.warning(
                 "Context compaction with model %s returned invalid visible output "
@@ -3808,6 +3866,8 @@ class AgentRuntime:
             "Facts and earlier context\n"
             + source_excerpt
         )
+        if on_update is not None:
+            await on_update(fallback, True)
         return SummaryResult(fallback, None, is_fallback=True)
 
     @staticmethod

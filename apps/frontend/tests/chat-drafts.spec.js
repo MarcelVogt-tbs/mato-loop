@@ -1134,7 +1134,7 @@ describe('chat drafts', () => {
     expect(chat.current.nextMessageCursor).toBe('older-cursor')
   })
 
-  it('refreshes canonical summaries after a context compaction event', async () => {
+  it('streams and promotes a canonical context summary', async () => {
     global.EventSource = EventSourceMock
     const chat = useChatStore()
     chat.current = { id: 'session-1', messages: [], contextSummaries: [] }
@@ -1142,8 +1142,26 @@ describe('chat drafts', () => {
     const refresh = vi.spyOn(chat, 'refreshSession').mockResolvedValue(chat.current)
 
     chat.watchRun('session-1', 'run-1', { status: 'running' })
-    EventSourceMock.instances[0].emit('context.compacted', {})
+    const source = EventSourceMock.instances[0]
+    source.emit('context.summary.updated', {
+      summary: { content: 'Goal\nWeiterarbeiten', isFallback: false, status: 'streaming' }
+    })
 
+    expect(chat.streamContextSummary).toEqual({
+      content: 'Goal\nWeiterarbeiten', isFallback: false, status: 'streaming'
+    })
+
+    const summary = {
+      id: 'summary-1',
+      coveredThroughMessageId: 'message-1',
+      content: 'Goal\nWeiterarbeiten',
+      isFallback: false,
+      createdAt: '2026-08-30T10:00:00Z'
+    }
+    source.emit('context.compacted', { summary })
+
+    expect(chat.streamContextSummary).toBeNull()
+    expect(chat.current.contextSummaries).toEqual([summary])
     expect(refresh).toHaveBeenCalledWith('session-1')
   })
 

@@ -130,6 +130,7 @@
                 :activity="message.currentTurn ? chat.activity : null"
                 :presentation="message.currentTurn ? runPresentation : null"
                 :reasoning="message.currentTurn ? chat.streamReasoning : null"
+                :context-summary="message.currentTurn ? chat.streamContextSummary : null"
                 :process-outputs="message.currentTurn ? chat.processOutputs : emptyProcessOutputs"
                 :warnings="message.currentTurn ? chat.runWarnings : []"
                 :running="chat.running && message.currentTurn"
@@ -278,18 +279,10 @@
             unelevated
             icon="keyboard_arrow_down"
             class="chat-scroll-to-bottom__button"
-            :aria-label="followButtonLabel"
+            aria-label="Automatisches Mitscrollen aktivieren"
             @click="enableFollowMode"
           >
-            <q-badge
-              v-if="hasNewContent"
-              floating
-              rounded
-              color="primary"
-              label="Neu"
-              aria-hidden="true"
-            />
-            <q-tooltip>{{ followButtonLabel }}</q-tooltip>
+            <q-tooltip>Automatisches Mitscrollen aktivieren</q-tooltip>
           </q-btn>
         </div>
       </transition>
@@ -453,10 +446,6 @@ const virtualScroll = ref(null)
 const composer = ref(null)
 const trustedImageOriginsBySession = ref(new Map())
 const followingBottom = ref(true)
-const hasNewContent = ref(false)
-const followButtonLabel = computed(() => hasNewContent.value
-  ? 'Neue Inhalte anzeigen und automatisches Mitscrollen aktivieren'
-  : 'Automatisches Mitscrollen aktivieren')
 const messageTimestampNow = ref(Date.now())
 const messageActionId = ref(null)
 const announcedRunStatus = ref('')
@@ -1010,7 +999,6 @@ function updateFollowState() {
   )
   if (shouldFollow && !followingBottom.value) {
     followingBottom.value = true
-    hasNewContent.value = false
     clearReadingAnchor()
   }
   else if (!shouldFollow && followingBottom.value) {
@@ -1097,7 +1085,6 @@ function enableFollowMode() {
   clearTimeout(userScrollTimer)
   userScrollTimer = null
   followingBottom.value = true
-  hasNewContent.value = false
   clearReadingAnchor()
   cancelFollowScroll()
   scheduleBottomScroll()
@@ -1158,23 +1145,8 @@ watch(
   { flush: 'pre' }
 )
 watch(
-  [() => chat.current?.id, () => transcript.value.messages.at(-1)?.id],
-  ([sessionId, tailId], [previousSessionId, previousTailId]) => {
-    if (
-      !followingBottom.value
-      && sessionId === previousSessionId
-      && previousTailId
-      && tailId !== previousTailId
-      && transcript.value.messages.at(-1)?.role === 'assistant'
-    ) hasNewContent.value = true
-  }
-)
-watch(
-  () => chat.streamContent,
-  (content, previousContent) => {
-    const streaming = Boolean(content)
-    if (streaming && !followingBottom.value) hasNewContent.value = true
-    if (streaming === Boolean(previousContent)) return
+  () => Boolean(chat.streamContent),
+  (streaming) => {
     if (!followingBottom.value || userScrollActive) return
     cancelFollowScroll()
     if (streaming) {
@@ -1204,7 +1176,6 @@ watch(
   async (sessionId, previousSessionId) => {
     if (!sessionId || sessionId === previousSessionId) return
     followingBottom.value = true
-    hasNewContent.value = false
     clearReadingAnchor()
     cancelFollowScroll()
     if (routeMessageId.value) {

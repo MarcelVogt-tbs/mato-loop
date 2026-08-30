@@ -117,6 +117,7 @@ export const useChatStore = defineStore('chat', {
     cancelRequested: false,
     streamContent: '',
     streamReasoning: null,
+    streamContextSummary: null,
     runWarnings: [],
     streamModelName: null,
     processOutputs: {},
@@ -970,6 +971,7 @@ export const useChatStore = defineStore('chat', {
         this.cancelRequested = false
         this.streamContent = ''
         this.streamReasoning = null
+        this.streamContextSummary = null
         this.streamModelName = null
         this.processOutputs = {}
         this.clearActivity()
@@ -1274,6 +1276,7 @@ export const useChatStore = defineStore('chat', {
       this.cancelRequested = false
       this.streamContent = ''
       this.streamReasoning = null
+      this.streamContextSummary = null
       this.runWarnings = []
       this.streamModelName = null
       this.processOutputs = {}
@@ -1792,6 +1795,7 @@ export const useChatStore = defineStore('chat', {
       this.running = !this.cancelRequested
       this.streamContent = ''
       this.streamReasoning = null
+      this.streamContextSummary = null
       this.streamModelName = null
       this.processOutputs = {}
       this.setActivity('submitting', { startedAt: new Date().toISOString() })
@@ -1895,6 +1899,7 @@ export const useChatStore = defineStore('chat', {
       this.running = !this.cancelRequested
       this.streamContent = ''
       this.streamReasoning = null
+      this.streamContextSummary = null
       this.streamModelName = null
       this.processOutputs = {}
       this.setActivity('submitting', { startedAt: new Date().toISOString() })
@@ -2044,6 +2049,13 @@ export const useChatStore = defineStore('chat', {
         if (this.eventSource !== source) return
         this.streamReasoning = JSON.parse(event.data).reasoning
       })
+      source.addEventListener('context.summary.updated', (event) => {
+        if (this.eventSource !== source) return
+        const summary = JSON.parse(event.data).summary
+        this.streamContextSummary = summary && typeof summary.content === 'string'
+          ? summary
+          : null
+      })
       source.addEventListener('run.warning', (event) => {
         if (this.eventSource !== source) return
         const warning = JSON.parse(event.data)
@@ -2052,8 +2064,16 @@ export const useChatStore = defineStore('chat', {
         ))) return
         this.runWarnings.push({ code: warning.code, modelRequest: warning.modelRequest })
       })
-      source.addEventListener('context.compacted', () => {
+      source.addEventListener('context.compacted', (event) => {
         if (this.eventSource !== source) return
+        const summary = JSON.parse(event.data).summary
+        if (summary?.id && this.current?.id === sessionId) {
+          this.current.contextSummaries = mergeMessages(
+            this.current.contextSummaries,
+            [summary]
+          )
+        }
+        this.streamContextSummary = null
         void this.refreshSession(sessionId).catch(() => {})
       })
       source.addEventListener('process.output', (event) => {
@@ -2095,6 +2115,7 @@ export const useChatStore = defineStore('chat', {
         }
         this.streamContent = ''
         this.streamReasoning = null
+        this.streamContextSummary = null
       }
       source.addEventListener('message.completed', (event) => {
         if (this.eventSource !== source) return
@@ -2256,6 +2277,7 @@ export const useChatStore = defineStore('chat', {
         this.cancelRequested = false
         this.streamContent = ''
         this.streamReasoning = null
+        this.streamContextSummary = null
         this.runWarnings = []
         this.streamModelName = null
         this.clearActivity()
@@ -2291,6 +2313,7 @@ export const useChatStore = defineStore('chat', {
         this.eventSource = null
         this.streamContent = ''
         this.streamReasoning = null
+        this.streamContextSummary = null
         if (finished) return
         this.running = !this.cancelRequested
         if (!this.cancelRequested) this.setActivity('reconnecting')

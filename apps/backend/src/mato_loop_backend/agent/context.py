@@ -95,6 +95,7 @@ class ContextProjection:
     estimated_input_tokens: int
     input_budget_tokens: int
     compacted: bool = False
+    context_summary: ContextSummary | None = None
 
 
 SummaryCallback = Callable[[str, int], Awaitable[SummaryResult]]
@@ -1903,4 +1904,10 @@ class ContextManager:
             db.add(pending_summary)
             await db.commit()
         _strip_projection_metadata(messages)
-        return ContextProjection(messages, estimated, input_budget, compacted=compacted)
+        return ContextProjection(
+            messages,
+            estimated,
+            input_budget,
+            compacted=compacted,
+            context_summary=pending_summary,
+        )

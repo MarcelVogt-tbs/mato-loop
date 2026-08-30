@@ -645,6 +645,26 @@ async def test_reasoning_history_keeps_only_latest_snapshot() -> None:
     ]
 
 
+async def test_context_summary_history_keeps_only_latest_snapshot() -> None:
+    broker = RunEventBroker()
+    run_id = uuid4()
+
+    await broker.publish(
+        run_id,
+        {"type": "context.summary.updated", "summary": {"content": "A"}},
+    )
+    await broker.publish(run_id, {"type": "run.phase", "phase": "compacting_context"})
+    await broker.publish(
+        run_id,
+        {"type": "context.summary.updated", "summary": {"content": "AB"}},
+    )
+
+    assert broker._history[run_id] == [
+        {"type": "run.phase", "phase": "compacting_context"},
+        {"type": "context.summary.updated", "summary": {"content": "AB"}},
+    ]
+
+
 def test_public_reasoning_payload_preserves_long_content() -> None:
     text = "x" * 150_000
 

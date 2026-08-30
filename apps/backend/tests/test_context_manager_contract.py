@@ -1874,6 +1874,7 @@ async def test_existing_summary_is_recompacted_for_smaller_context_window() -> N
     assert "PREVIOUS SUMMARY" in source
     assert summary.content in source
     replacement = db.add.call_args.args[0]
+    assert projection.context_summary is replacement
     assert replacement.previous_summary_id == summary.id
     assert replacement.covered_through_message_id == covered.id
     assert replacement.content == "Neue Kurzfassung"

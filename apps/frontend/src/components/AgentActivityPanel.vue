@@ -214,6 +214,7 @@ const props = defineProps({
   activity: { type: Object, default: null },
   presentation: { type: Object, default: null },
   reasoning: { type: Object, default: null },
+  contextSummary: { type: Object, default: null },
   warnings: { type: Array, default: () => [] },
   processOutputs: { type: Object, default: () => ({}) },
   running: Boolean
@@ -232,6 +233,21 @@ const preparedEntries = computed(() => [
   ...runWarningEntries(props.warnings, 'live-warning', true),
   ...(props.reasoning
     ? [{ key: 'live-reasoning', type: 'reasoning', reasoning: props.reasoning, live: true }]
+    : []),
+  ...(props.contextSummary?.content
+    ? [{
+        key: 'live-context-summary',
+        type: 'context-summary',
+        text: props.contextSummary.content,
+        warning: props.contextSummary.isFallback,
+        current: true,
+        live: true,
+        presentation: {
+          title: 'Gesprächskontext wird verdichtet',
+          summary: props.contextSummary.isFallback ? 'Vereinfachte Ersatzfassung' : null,
+          duration: null
+        }
+      }]
     : [])
 ].map((entry) => entry.type === 'reasoning'
   ? {
