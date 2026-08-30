@@ -11,7 +11,10 @@ die() {
 tags_for() {
     local mode="$1" tag="${2:-}"
     case "$mode" in
-        develop) printf '%s\n' develop ;;
+        develop)
+            [[ "$tag" =~ ^[0-9a-f]{12,64}$ ]] || return 1
+            printf '%s\n' develop "sha-${tag:0:12}"
+            ;;
         release)
             [[ "$tag" =~ ^v$SEMVER$ ]] || return 1
             printf '%s\n' "$tag" "${tag#v}" latest
@@ -44,7 +47,8 @@ self_test() {
     local tags
     mapfile -t tags < <(tags_for release v1.2.3)
     [[ "${tags[*]}" == "v1.2.3 1.2.3 latest" ]]
-    [[ "$(tags_for develop)" == develop ]]
+    [[ "$(tags_for develop 0123456789abcdef)" == $'develop\nsha-0123456789ab' ]]
+    ! tags_for develop short >/dev/null 2>&1
     ! tags_for release v1.2 >/dev/null 2>&1
     version_at_least 1.2.3 1.2.3
     version_at_least 2.0.0 1.9.9
@@ -120,7 +124,9 @@ CONTAINER_IMAGE_NAMESPACE="${CONTAINER_IMAGE_NAMESPACE:-${GITHUB_REPOSITORY:-}}"
 CONTAINER_IMAGE_NAMESPACE="$(printf '%s' "$CONTAINER_IMAGE_NAMESPACE" | tr '[:upper:]' '[:lower:]')"
 [[ "$CONTAINER_IMAGE_NAMESPACE" =~ ^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*$ ]] || die "CONTAINER_IMAGE_NAMESPACE must be a lowercase OCI image path."
 
-TAG_OUTPUT="$(tags_for "$MODE" "$RELEASE_TAG")" || die "Release tags must use stable SemVer vX.Y.Z."
+TAG_SOURCE="$RELEASE_TAG"
+[[ "$MODE" != develop ]] || TAG_SOURCE="$REVISION"
+TAG_OUTPUT="$(tags_for "$MODE" "$TAG_SOURCE")" || die "Release tags must use stable SemVer vX.Y.Z and develop revisions must be hexadecimal."
 mapfile -t TAGS <<<"$TAG_OUTPUT"
 IMAGE_REF="$CONTAINER_REGISTRY/$CONTAINER_IMAGE_NAMESPACE/$IMAGE"
 LOCAL_REF="$IMAGE:ci-${CI_RUN_ID:-local}"
@@ -130,6 +136,11 @@ for tag in "${TAGS[@]}"; do
 done
 
 printf '%s' "$CONTAINER_PASSWORD" | docker login "$CONTAINER_REGISTRY" --username "$CONTAINER_USERNAME" --password-stdin
+if [[ "$MODE" == develop && "$(remote_state "$IMAGE_REF:${TAGS[1]}")" == exists ]]; then
+    docker pull "$IMAGE_REF:${TAGS[1]}" >/dev/null
+    EXISTING_REVISION="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE_REF:${TAGS[1]}")"
+    [[ "$EXISTING_REVISION" == "$REVISION" ]] || die "Short commit tag collision for $IMAGE_REF:${TAGS[1]}."
+fi
 if [[ "$MODE" == release ]]; then
     version_exists=false
     numeric_exists=false

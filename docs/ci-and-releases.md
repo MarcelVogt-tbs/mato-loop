@@ -11,7 +11,7 @@ ${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/mato-loop
 ${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/matoloop-agent
 ```
 
-Both images currently target `linux/amd64` only. Successful `develop` pushes also provide a native Linux amd64 MatoLoop Agent archive as a seven-day Forgejo workflow artifact. There is no multi-architecture manifest or stable native release archive yet.
+Both images currently target `linux/amd64` only. Successful `develop` pushes publish both the mutable `develop` tag and an immutable `sha-<12>` tag derived from the Git commit ID. They also provide a native Linux amd64 MatoLoop Agent archive as a seven-day Forgejo workflow artifact. There is no multi-architecture manifest or stable native release archive yet.
 
 The tag policy deliberately limits mutable artifact storage:
 
@@ -19,11 +19,11 @@ The tag policy deliberately limits mutable artifact storage:
 | --- | --- | --- | --- |
 | Pull request | Full checks and tests | Both images | Never |
 | Feature branch push | Checks and tests only | No | Never |
-| `develop` push | Full checks and tests | Both images and native MatoLoop Agent | Mutable `develop` images and seven-day workflow artifact |
+| `develop` push | Full checks and tests | Both images and native MatoLoop Agent | Mutable `develop`, immutable `sha-<12>`, and seven-day workflow artifact |
 | `main` push | Full checks and tests | No | Never; release tags only |
 | Release `vX.Y.Z` | Full checks and tests | Both images | `vX.Y.Z`, `X.Y.Z`, `latest` |
 
-Feature branches therefore consume runner cache only, `develop` retains one named moving image tag plus short-lived native artifacts, and releases retain fixed version tags. Forgejo registry retention and unreferenced-blob cleanup remain instance-administrator responsibilities.
+Feature branches therefore consume runner cache only, each accepted `develop` revision retains an immutable image tag plus the moving `develop` tag and short-lived native artifacts, and releases retain fixed version tags. Forgejo registry retention and unreferenced-blob cleanup remain instance-administrator responsibilities.
 
 The native archive is named `matoloop-agent-linux-amd64-develop-<commit>.tar.gz` and includes the `matoloop-agent` executable, README, a capability-enabled example configuration, and build metadata. Its adjacent `.sha256` file verifies the download. The workflow builds in a digest-pinned Ubuntu 22.04 amd64 container, so the executable targets glibc 2.35 or newer and does not support musl-based distributions. A Git tag is not required; select the successful `develop` workflow run in Forgejo Actions and download its artifact. Stable releases do not include a native archive yet.
 
@@ -92,6 +92,8 @@ Start a release explicitly from a clean, current `develop` checkout:
 
 Use the numeric version without a leading `v`. The script generates `docs/user/changelog/vX.Y.Z.md`, adds it to the changelog index, synchronizes package versions and locks, runs all checks and tests, commits on `develop`, fast-forwards `main`, creates `vX.Y.Z`, returns to `develop`, and atomically pushes both branches and the tag. CI accepts only annotated release tags whose commit is on `main`. Do not create release tags manually or publish from arbitrary commits.
 
+Normal commits do not change version declarations. The first release may use the already synchronized repository version while no local or remote `v*` tag exists; every later release must increase the version.
+
 After checks and both `linux/amd64` builds succeed, the release job publishes these tags on both images:
 
 ```text
@@ -104,20 +106,22 @@ It then creates the matching Forgejo Release from the same categorized notes sto
 
 ## Compose and Rollback
 
-`docker-compose.yaml` keeps local builds and adds optional image names. With no overrides, build locally:
+`docker-compose.yaml` uses the published MatoLoop and MatoLoop Agent images configured in the production `.env`. Start from the tracked template:
 
 ```bash
-docker compose build
+cp .env.example .env
+# Set the database password and the same published image tag for both images.
+docker compose pull
 docker compose up -d
 ```
 
 Use `docker compose -f docker-compose.no-agent.yaml up -d --remove-orphans` for a production stack without a MatoLoop Agent. `--remove-orphans` also removes a `matoloop-agent` container left by an earlier standard-stack deployment.
 
-To consume published images, set fixed tags and pull before recreating containers:
+For a reproducible `develop` deployment, set the same immutable commit tag on both images and pull before recreating containers:
 
 ```env
-MATO_LOOP_IMAGE=${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/mato-loop:X.Y.Z
-MATOLOOP_AGENT_IMAGE=${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/matoloop-agent:X.Y.Z
+MATO_LOOP_IMAGE=${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/mato-loop:sha-0123456789ab
+MATOLOOP_AGENT_IMAGE=${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/matoloop-agent:sha-0123456789ab
 ```
 
 ```bash
@@ -125,8 +129,8 @@ docker compose pull
 docker compose up -d
 ```
 
-Use the same version for MatoLoop and the MatoLoop Agent. `latest` is convenient for discovery but is not a reproducible deployment reference.
+Use the same commit tag for MatoLoop and the MatoLoop Agent. Stable releases may use the matching fixed `vX.Y.Z` or `X.Y.Z` tags instead. `develop` and `latest` are not reproducible deployment references.
 
-For a mutable `develop` test environment, use a separate checkout or deployment directory so the relative `./data` and `./db` bind mounts cannot overlap stable storage. Set both image variables to `:develop` and run `docker compose pull` before every recreation. Never attach a `develop` deployment to production data.
+Use the mutable `develop` tag only for short-lived test environments and run `docker compose pull` before every recreation. Never use `develop` as a rollback target.
 
-Rollback by setting both image variables to the previous fixed `X.Y.Z` tag, pulling, and recreating the containers. Because startup applies Alembic migrations, an image rollback may also require restoring the database and `/data` from the matching pre-upgrade backup. Never use `develop` or `latest` as a rollback target.
+Rollback by setting both image variables to the previous fixed `sha-<12>` or release tag, pulling, and recreating the containers. Because startup applies Alembic migrations, an image rollback may also require restoring the database and `/data` from the matching pre-upgrade backup. Never use `develop` or `latest` as a rollback target.

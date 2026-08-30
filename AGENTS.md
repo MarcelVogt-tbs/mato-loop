@@ -17,6 +17,7 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - `apps/matoloop-agent`: standalone MatoLoop Agent for filesystem, process, transfer, and local-integration operations.
 - `docs`: architecture and operations decisions.
 - `docker-compose.dev.yaml`: local development environment with separate frontend, backend, and `matoloop-agent` services.
+- `.env.example`: production Compose configuration template for published Forgejo images.
 - `docker-compose.yaml`: prepared production stack with a MatoLoop Agent.
 - `docker-compose.no-agent.yaml`: prepared production stack without a MatoLoop Agent.
 - `scripts/dev.sh`: unified entry point for development, checks, tests, and migrations.
@@ -138,8 +139,10 @@ For UI changes, verify at least desktop and mobile in light and dark mode. For A
 ## CI and Releases
 
 - Pull requests run complete checks and image builds without registry or release secrets and never publish artifacts.
-- Feature branch pushes run tests only. The default branch `develop` publishes mutable `develop` images and short-lived native Linux amd64 MatoLoop Agent workflow artifacts. `main` has no mutable publication channel.
+- Feature branch pushes run tests only. The default branch `develop` publishes mutable `develop` images, immutable `sha-<12>` image tags, and short-lived native Linux amd64 MatoLoop Agent workflow artifacts. `main` has no mutable publication channel.
 - Add one `Release-Note: <category>: <text>` Git trailer at the end of a non-merge commit for each noteworthy change. Supported categories are `Added`, `Changed`, `Fixed`, and `Security`; use concise English text. Multiple trailers are allowed, and commits without a trailer are omitted from release notes.
+- Normal commits do not change `VERSION` or package version declarations. The release script updates every version declaration together.
+- The first release may use the already synchronized `VERSION` only while no local or remote `v*` release tag exists. Every later release version must be greater.
 - Start a release explicitly from a clean, current `develop` branch with `./scripts/release.sh X.Y.Z`; the script fast-forwards release-only `main` and pushes atomically. Do not create release tags manually.
 - Release images use `vX.Y.Z`, `X.Y.Z`, and `latest`. Published artifacts currently target `linux/amd64` only.
 - CI publishes images, short-lived development artifacts, and Forgejo releases only. It does not deploy, mutate deployment storage, or clean runner Docker storage.
