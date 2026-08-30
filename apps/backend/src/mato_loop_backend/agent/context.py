@@ -1541,6 +1541,11 @@ def _repair_tool_pairs(messages: list[dict[str, Any]]) -> None:
     while index < len(messages):
         calls = messages[index].get("tool_calls") or []
         if not calls:
+            if messages[index].get("role") == "tool" and messages[index].get(
+                "tool_call_id"
+            ):
+                messages.pop(index)
+                continue
             index += 1
             continue
         expected = {str(call.get("id")) for call in calls if call.get("id")}
@@ -1548,8 +1553,14 @@ def _repair_tool_pairs(messages: list[dict[str, Any]]) -> None:
         present: set[str] = set()
         while cursor < len(messages) and messages[cursor].get("role") == "tool":
             tool_call_id = messages[cursor].get("tool_call_id")
-            if tool_call_id:
-                present.add(str(tool_call_id))
+            normalized_id = str(tool_call_id) if tool_call_id else None
+            if normalized_id is not None and (
+                normalized_id not in expected or normalized_id in present
+            ):
+                messages.pop(cursor)
+                continue
+            if normalized_id is not None:
+                present.add(normalized_id)
             cursor += 1
         for missing in sorted(expected - present):
             messages.insert(

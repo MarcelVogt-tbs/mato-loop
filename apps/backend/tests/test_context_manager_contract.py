@@ -660,6 +660,21 @@ def test_public_projection_pairs_reused_tool_ids_with_their_own_turn() -> None:
     assert tool_results[1] == "öffentlicher Inhalt"
 
 
+def test_projection_discards_orphaned_tool_results() -> None:
+    session = _session()
+    answer = _message(session.id, "assistant", "Abgeschlossene Antwort")
+    orphan = _message(session.id, "tool", "verwaistes Ergebnis")
+    orphan.tool_call_id = "deleted-call"
+    latest_user = _message(session.id, "user", "Neue Frage")
+
+    projected = _projection_messages(
+        "System", None, [answer, orphan, latest_user], TrustLevel.PRIVATE
+    )
+
+    assert [item["role"] for item in projected] == ["system", "assistant", "user"]
+    assert all("verwaistes Ergebnis" not in item["content"] for item in projected)
+
+
 def test_projection_compacts_tool_outputs_before_latest_user_turn() -> None:
     session = _session()
     first_user = _message(session.id, "user", "Recherchiere das Thema")
