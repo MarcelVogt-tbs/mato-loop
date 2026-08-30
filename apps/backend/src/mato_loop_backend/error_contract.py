@@ -20,7 +20,10 @@ _MESSAGES = {
     "agent.requiredOpenScadSourceReviewMissing": "The model did not review the rendered OpenSCAD source.",
     "agent.researchSourcesInvalid": "The researched answer could not be supported by valid current sources.",
     "agent.researchBudgetReached": "The current-turn research budget has been reached.",
-    "agent.repeatedToolCall": "The model repeated a failed tool call without changing its arguments.",
+    "agent.repeatedToolCall": (
+        "The model repeated a failed tool call without changing its arguments. "
+        "Change the arguments or use another approach."
+    ),
     "agent.toolCallLimitReached": "The agent reached the maximum number of tool calls.",
     "agentProfile.notFound": "The agent profile was not found.",
     "agentProfile.duplicate": "An agent profile with this name already exists.",

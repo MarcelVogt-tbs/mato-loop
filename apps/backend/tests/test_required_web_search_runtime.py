@@ -2310,6 +2310,79 @@ async def test_successful_mutation_correction_releases_the_final_response(monkey
     assert [event.get("delta") for event in events].count("Die Datei wurde erstellt.") == 1
 
 
+async def test_repeated_failed_tool_call_gets_one_correction_turn(monkeypatch) -> None:
+    failed = {"url": "https://example.test/missing"}
+    corrected = {"url": "https://example.test/current"}
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[ToolCall("fetch-failed", "webfetch", failed)],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[ToolCall("fetch-repeated", "webfetch", failed)],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[ToolCall("fetch-corrected", "webfetch", corrected)],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content="Korrigierte Antwort", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    tool_registry._execute_definition.side_effect = [
+        ToolResult.error("webfetch.requestFailed", params={"statusCode": 404}),
+        ToolResult.json({"content": "Aktuelle Quelle"}),
+    ]
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == 4
+    assert [
+        call.args[0].arguments
+        for call in tool_registry._execute_definition.await_args_list
+    ] == [failed, corrected]
+    assert [
+        json.loads(message.content).get("error", {}).get("code")
+        for message in _tool_messages(db)
+    ] == ["webfetch.requestFailed", "agent.repeatedToolCall", None]
+    assert _assistant_messages(db)[-1].content == "Korrigierte Antwort"
+
+
+async def test_second_repeated_failed_tool_call_ends_the_run(monkeypatch) -> None:
+    arguments = {"url": "https://example.test/missing"}
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[ToolCall("fetch-failed", "webfetch", arguments)],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[ToolCall("fetch-repeated", "webfetch", arguments)],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(
+                tool_calls=[ToolCall("fetch-repeated-again", "webfetch", arguments)],
+                finish_reason="tool_calls",
+            ),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    tool_registry._execute_definition.return_value = ToolResult.error(
+        "webfetch.requestFailed", params={"statusCode": 404}
+    )
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime._execute_loop(db, run)
+
+    assert exc_info.value.code == "agent.repeatedToolCall"
+    assert len(requests) == 3
+    tool_registry._execute_definition.assert_awaited_once()
+
+
 async def test_directory_change_allows_retrying_a_failed_workspace_call(monkeypatch) -> None:
     workspace_read = {"root": "workspace", "path": "README.md"}
     db, run, _requests, _projections, _events = await _runtime_setup(

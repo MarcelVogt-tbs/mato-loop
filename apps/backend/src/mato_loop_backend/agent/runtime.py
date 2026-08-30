@@ -1207,6 +1207,7 @@ class AgentRuntime:
         successful_research_calls: dict[str, dict[str, Any]] = {}
         tool_calls_used = 0
         failed_tool_call_signatures: set[str] = set()
+        repeated_tool_call_repair_available = True
         unresolved_mutation_errors: dict[str, str] = {}
         live_tool_calls: dict[UUID, list[dict[str, Any]]] = {}
         session_read_cursors: dict[UUID, UUID | None] = {}
@@ -2259,7 +2260,7 @@ class AgentRuntime:
             memory_write_attempted = False
             resolved_memory_outcome: str | None = None
             tool_call_limit_reached = False
-            repeated_tool_call_detected = False
+            repeated_tool_call_limit_reached = False
             research_budget_reached = False
             user_denied_batch = False
             invalid_question_batch = any(
@@ -2374,7 +2375,10 @@ class AgentRuntime:
                     )
                     metadata = {"errorCode": "agent.researchBudgetReached"}
                 elif call_signature in failed_tool_call_signatures:
-                    repeated_tool_call_detected = True
+                    if repeated_tool_call_repair_available:
+                        repeated_tool_call_repair_available = False
+                    else:
+                        repeated_tool_call_limit_reached = True
                     tool_result_content = json.dumps(
                         error_payload("agent.repeatedToolCall"), ensure_ascii=False
                     )
@@ -3506,7 +3510,7 @@ class AgentRuntime:
                     required_skill_load_called = True
                     if not isinstance(metadata.get("errorCode"), str):
                         required_skill_load_succeeded = True
-                if tool_call_limit_reached or repeated_tool_call_detected:
+                if tool_call_limit_reached or repeated_tool_call_limit_reached:
                     break
             for tool_name, error_code in mutation_results.items():
                 if error_code is None:
@@ -3525,7 +3529,7 @@ class AgentRuntime:
                 unresolved_mutation_errors.pop("edit_file", None)
             if tool_call_limit_reached:
                 raise AgentRunError("agent.toolCallLimitReached")
-            if repeated_tool_call_detected:
+            if repeated_tool_call_limit_reached:
                 raise AgentRunError("agent.repeatedToolCall")
             if memory_workflow_resolved:
                 memory_write_pending = False
