@@ -5,7 +5,7 @@ COMPOSE_FILE="docker-compose.dev.yaml"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 compose() {
-    local args=(docker compose --env-file .env.default --env-file .env.dev)
+    local args=(docker compose --env-file .env.dev)
     if [[ -f .env.dev.override ]]; then
         args+=(--env-file .env.dev.override)
     fi
@@ -24,6 +24,7 @@ usage() {
         "  reset-storage       Remove containers and volumes" \
         "  logs [service]      Show logs" \
         "  status              Show service status" \
+        "  config              Show the resolved Compose configuration" \
         "  doctor              Check pgvector and the embedding index" \
         "  db [args]           Run Alembic" \
         "  lock <target>       Update the backend, frontend, or MatoLoop Agent lockfile" \
@@ -124,6 +125,7 @@ case "${1:-}" in
     reset-storage) compose down -v ;;
     logs) shift; compose logs -f "$@" ;;
     status) compose ps ;;
+    config) compose config ;;
     doctor)
         compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT extversion AS vector_version FROM pg_extension WHERE extname = '\''vector'\'';"'
         compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT format_type(a.atttypid, a.atttypmod) AS embedding_type FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname = '\''memory_embeddings'\'' AND a.attname = '\''embedding'\'';"'

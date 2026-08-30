@@ -333,22 +333,22 @@ db_data  -> /var/lib/postgresql/data
 
 Additional named volumes hold Python and frontend dependencies. The repository is mounted at `/workspace` for HMR.
 
-The production Compose stack starts the `matoloop-agent` service with exactly `${MATOLOOP_AGENT_DATA:-./data/matoloop-agent}:/data` and `${MATOLOOP_AGENT_HOME:-./data/home}:/workspace`. The development service additionally mounts the source tree and a disposable dependency volume. Agent configuration is `/data/config.json`; credentials and durable state also remain below `/data`. These paths are not backend-managed storage, but the defaults are below the same host `./data` directory that is broadly mounted into the backend container. Deployments requiring container-level separation must set both variables to host paths outside that directory. The backend does not migrate or delete agent home contents. Interactive pairing asks for the backend WebSocket URL, computer ID, and one-time token. Non-interactive pairing requires the complete `MATOLOOP_AGENT_BACKEND_URL`, `MATOLOOP_AGENT_ID`, and `MATOLOOP_AGENT_PAIRING_TOKEN` set. Old environment aliases are unsupported. The container currently runs as root, so these mounts and deployment policy, not MatoLoop model policies, define its operating-system scope.
+The production Compose stack starts the `matoloop-agent` service with exactly `MATOLOOP_AGENT_DATA:/data` and `MATOLOOP_AGENT_HOME:/workspace`. The production environment template sets these host paths to `/opt/matoloop-agent/data` and `/opt/matoloop-agent/home`; Compose retains the former relative fallbacks for existing deployments. The development service additionally mounts the source tree and a disposable dependency volume. Agent configuration is `/data/config.json`; credentials and durable state also remain below `/data`. These paths are not backend-managed storage. The backend does not migrate or delete agent home contents. Interactive pairing asks for the backend WebSocket URL, computer ID, and one-time token. Non-interactive pairing requires the complete `MATOLOOP_AGENT_BACKEND_URL`, `MATOLOOP_AGENT_ID`, and `MATOLOOP_AGENT_PAIRING_TOKEN` set. Old environment aliases are unsupported. The container currently runs as root, so these mounts and deployment policy, not MatoLoop model policies, define its operating-system scope.
 
 Deleting a deactivated account removes its relationally owned records and backend session trees. Database deletion revokes the backend's `ExecutionAgent` records and credentials, but the backend does not erase files, caches, durable agent state, or configuration on any MatoLoop Agent, including the bundled Compose agent, nor data already written to an external service. Operators must remove those separately. Shared instance resources and credentials remain because they have no user owner.
 
 The production stack uses the two application bind mounts and adds the MatoLoop Agent `/data` and `/workspace` mounts. `docker-compose.no-agent.yaml` is the production alternative without the agent service or its settings:
 
 ```text
-./data -> /data
-./db   -> /var/lib/postgresql/data
+/opt/mato-loop/data -> /data
+/opt/mato-loop/db   -> /var/lib/postgresql/data
 ```
 
 The production SPA is served by the MatoLoop container together with FastAPI. The development stack keeps separate frontend and backend processes for HMR. The production stack is not used for development work.
 
 ## CI and Release Boundary
 
-Forgejo Actions verifies changes and publishes OCI images and Forgejo releases; it never deploys MatoLoop or accesses deployment storage. Pull requests build without secrets, feature branches retain no images, `develop` has one mutable image tag plus short-lived native Linux amd64 MatoLoop Agent artifacts, and releases from `main` have immutable version tags plus mutable `latest`. Both application images currently target `linux/amd64`; stable native archives are not published yet. Runner isolation, variables, release tags, and operator rollback are defined in [ci-and-releases.md](ci-and-releases.md).
+Forgejo Actions verifies changes and publishes OCI images and Forgejo releases; it never deploys MatoLoop or accesses deployment storage. Pull requests build without secrets, feature branches retain no images, `develop` has one mutable image tag, an immutable `sha-<12>` tag per accepted commit, and short-lived native Linux amd64 MatoLoop Agent artifacts, while releases from `main` have immutable version tags plus mutable `latest`. Both application images currently target `linux/amd64`; stable native archives are not published yet. Runner isolation, variables, release tags, and operator rollback are defined in [ci-and-releases.md](ci-and-releases.md).
 
 ## User Documentation
 

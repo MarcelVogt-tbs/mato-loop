@@ -79,7 +79,7 @@ Migrations:
 ./scripts/dev.sh db upgrade head
 ```
 
-Local configuration overrides belong in `.env.dev.override`; use `.env.dev.override.example` as a template.
+`.env.dev` contains the ready-to-run development configuration. Local overrides belong in `.env.dev.override`; use `.env.dev.override.example` as a template.
 
 ## Development Data
 
@@ -104,13 +104,20 @@ The following command deletes containers and all development named volumes, incl
 
 ## Production Preparation
 
-`docker-compose.yaml` prepares a combined MatoLoop container, PostgreSQL with pgvector, an internal Infinity CPU service, and a MatoLoop Agent. The prepared `matoloop-agent` image includes OpenSCAD for CAD rendering. With no image variables set, `docker compose build` builds both images locally. `docker-compose.no-agent.yaml` is the production stack without a MatoLoop Agent; use `--remove-orphans` when switching an existing deployment to it. Set `MATO_LOOP_IMAGE` and `MATOLOOP_AGENT_IMAGE` to consume published images instead. Published images currently target `linux/amd64` only.
+`docker-compose.yaml` prepares a combined MatoLoop container, PostgreSQL with pgvector, an internal Infinity CPU service, and a MatoLoop Agent. The prepared `matoloop-agent` image includes OpenSCAD for CAD rendering. `docker-compose.no-agent.yaml` is the production stack without a MatoLoop Agent; use `--remove-orphans` when switching an existing deployment to it. Published images currently target `linux/amd64` only.
 
-The `matoloop-agent` service has exactly two runtime mounts: `${MATOLOOP_AGENT_DATA:-./data/matoloop-agent}:/data` for `/data/config.json`, credentials, transfers, Git state, and cache data, and `${MATOLOOP_AGENT_HOME:-./data/home}:/workspace` for the configured home directory. The backend does not access, migrate, or delete the host home directory. The Docker container currently runs as root, so MatoLoop policies are not an operating-system sandbox: mounted scope and host policy determine what it can access.
+Copy `.env.example` to `.env`, replace the database password and both image placeholders, and use the same immutable Forgejo CI tag in `MATO_LOOP_IMAGE` and `MATOLOOP_AGENT_IMAGE`. Development publications use `sha-` followed by the first 12 characters of the Git commit ID. Then authenticate to the registry when required and start the stack:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+The `matoloop-agent` service has exactly two runtime mounts: `MATOLOOP_AGENT_DATA:/data` for `/data/config.json`, credentials, transfers, Git state, and cache data, and `MATOLOOP_AGENT_HOME:/workspace` for the configured home directory. The production template sets these to `/opt/matoloop-agent/data` and `/opt/matoloop-agent/home`. The backend does not access, migrate, or delete the host home directory. The Docker container currently runs as root, so MatoLoop policies are not an operating-system sandbox: mounted scope and host policy determine what it can access.
 
 When upgrading from the former standalone MatoLoop Agent, move or copy its credential and durable state into the new `MATOLOOP_AGENT_DATA` directory before starting `matoloop-agent`. Pair the agent again if that state is not retained. Old environment-variable aliases are unsupported.
 
-The prepared production setup uses `./data:/data` and `./db:/var/lib/postgresql/data` bind mounts. Before production use, define and verify TLS, secure cookies, credentials, backups, and restoration for the target environment.
+The production template stores backend and PostgreSQL data below `/opt/mato-loop` and MatoLoop Agent data below `/opt/matoloop-agent`. It publishes port `10020` on `0.0.0.0`; restrict access with the host firewall and configure TLS through a suitable reverse proxy. Before production use, verify secure cookies, credentials, backups, and restoration for the target environment.
 
 Forgejo CI and the manual release process are documented in [CI and releases](docs/ci-and-releases.md). CI publishes images and Forgejo releases; it does not deploy MatoLoop.
 
@@ -163,7 +170,7 @@ Agent profiles combine an optional persona and separate task instructions with s
 
 ## Configuration and Secrets
 
-Infrastructure values such as the database connection, ports, and data directory come from environment variables prefixed with `MATO_LOOP_`. Typed settings documents and the Web UI manage operational settings.
+Infrastructure values such as images, database credentials, ports, and host data paths come from the gitignored production `.env` or the tracked development `.env.dev`. Typed settings documents and the Web UI manage operational settings.
 
 API keys and OAuth tokens are encrypted in PostgreSQL. Personal credentials are owner-scoped; instance credentials belong to shared instance resources. The local Fernet key is stored at `/data/secrets/credential.key` and must be backed up together with the database.
 

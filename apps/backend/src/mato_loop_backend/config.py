@@ -17,10 +17,12 @@ for parent in PACKAGE_FILE.parents:
 
 def _environment_files() -> tuple[Path, ...]:
     environment = os.getenv("MATO_LOOP_ENVIRONMENT", "dev")
+    if environment == "production":
+        return (PROJECT_ROOT / ".env",)
+    base_name = f".env.{environment}"
     return (
-        PROJECT_ROOT / ".env.default",
-        PROJECT_ROOT / f".env.{environment}",
-        PROJECT_ROOT / f".env.{environment}.override",
+        PROJECT_ROOT / base_name,
+        PROJECT_ROOT / f"{base_name}.override",
     )
 
 

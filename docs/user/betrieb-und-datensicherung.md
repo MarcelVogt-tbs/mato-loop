@@ -14,9 +14,19 @@ Planen und prüfen Sie mindestens:
 - getestete Wiederherstellung
 - Aktualisierungs- und Monitoring-Prozess
 
-Die Standardwerte der vorbereiteten Compose-Datei sind nicht als sichere Internet-Konfiguration gedacht.
+Kopieren Sie vor dem ersten Start `.env.example` nach `.env`. Ersetzen Sie das Datenbankpasswort und beide Image-Platzhalter. Verwenden Sie für MatoLoop und den MatoLoop Agent denselben von Forgejo CI veröffentlichten Tag im Format `sha-<12 Zeichen der Commit-ID>`.
 
-Setzen Sie bei einem Betrieb über HTTPS ausdrücklich `MATO_LOOP_SECURE_COOKIES=true`. Der vorbereitete Stack verwendet standardmäßig `false`; ohne die Umstellung besitzt das Anmelde-Cookie kein `Secure`-Attribut.
+```bash
+cp .env.example .env
+docker compose pull
+docker compose up -d
+```
+
+Der Stack veröffentlicht Port `10020` standardmäßig auf `0.0.0.0`. Begrenzen Sie den Zugriff mit der Host-Firewall und einem geeigneten Reverse Proxy. Die Standardwerte der vorbereiteten Compose-Datei sind nicht als sichere Internet-Konfiguration gedacht.
+
+Bestehende Installationen, die bisher die eingebauten Compose-Fallbacks verwendet haben, tragen vor dem Wechsel ihre bisherigen Datenbankwerte sowie `./db`, `./data`, `./data/matoloop-agent` und `./data/home` ausdrücklich in `.env` ein. Verschieben Sie persistente Daten nur als separate, geprüfte Migration.
+
+Die Produktionsvorlage setzt `MATO_LOOP_SECURE_COOKIES=true`. Ändern Sie den Wert nur für einen ausdrücklich HTTP-basierten Betrieb in einem vertrauenswürdigen Netz; ohne `true` besitzt das Anmelde-Cookie kein `Secure`-Attribut.
 
 ## App und Push-Benachrichtigungen
 
@@ -47,11 +57,11 @@ MatoLoop kann mehrere Computer verwalten. Öffnen Sie **Einstellungen > Computer
 Die beiden Host-Verzeichnisse des mitgelieferten MatoLoop Agent können vor dem Start angepasst werden:
 
 ```env
-MATOLOOP_AGENT_DATA=./data/matoloop-agent
-MATOLOOP_AGENT_HOME=./mein-agent-arbeitsbereich
+MATOLOOP_AGENT_DATA=/opt/matoloop-agent/data
+MATOLOOP_AGENT_HOME=/opt/matoloop-agent/home
 ```
 
-Der Produktionsstack bindet ausschließlich `${MATOLOOP_AGENT_DATA:-./data/matoloop-agent}` als `/data` und `${MATOLOOP_AGENT_HOME:-./data/home}` als `/workspace` ein. Der Entwicklungsdienst bindet zusätzlich den Quellcode und ein wegwerfbares Abhängigkeits-Volume ein. Die Konfiguration liegt unter `/data/config.json`; Zugang, Transfers, Git-Zustand und Cache bleiben ebenfalls unter `/data`. Die Standardpfade liegen innerhalb des Host-Verzeichnisses `./data`, das auch vollständig in den Backend-Container eingebunden ist. Legen Sie beide Pfade außerhalb von `./data` ab, wenn Agent-Zugang und Arbeitsbereich auch auf Container-Ebene vom Backend getrennt sein müssen. Das Backend verwaltet, migriert oder löscht den Inhalt des Agent-Arbeitsbereichs nicht.
+Der Produktionsstack bindet `MATOLOOP_AGENT_DATA` als `/data` und `MATOLOOP_AGENT_HOME` als `/workspace` ein. Die Produktionsvorlage setzt dafür `/opt/matoloop-agent/data` und `/opt/matoloop-agent/home`; Compose behält für bestehende Installationen die früheren relativen Fallbacks. Der Entwicklungsdienst bindet zusätzlich den Quellcode und ein wegwerfbares Abhängigkeits-Volume ein. Die Konfiguration liegt unter `/data/config.json`; Zugang, Transfers, Git-Zustand und Cache bleiben ebenfalls unter `/data`. Das Backend verwaltet, migriert oder löscht den Inhalt des Agent-Arbeitsbereichs nicht.
 
 Der normale Produktions- und Entwicklungsstack startet den Computer automatisch. Solange er ungekoppelt ist, wartet er auf die einmalige Kopplung. Führen Sie diese im laufenden Produktionscontainer aus:
 
@@ -70,7 +80,7 @@ Der Dialog fragt die Backend-WebSocket-Adresse, die Computer-ID und das verdeckt
 
 ### Nativen Agent unter Ubuntu testen
 
-MatoLoop enthält für Ubuntu- und Debian-Systeme mit systemd einen interaktiven Entwicklungshelfer. Starten Sie ihn als normaler Benutzer mit `./scripts/install-matoloop-agent.sh`. Innerhalb eines Checkouts verwendet er dessen aktuellen Stand; eine einzeln kopierte Scriptdatei klont das Repository stattdessen nach `~/mato-loop-agent/source`. Der Helfer fragt Datenverzeichnis, Workspace und die normale HTTP(S)-Adresse der MatoLoop-Instanz ab, leitet daraus die WebSocket-Adresse ab, richtet einen systemd-Benutzerdienst ein und führt anschließend die sichere Kopplungsabfrage des Agents aus. Vorbelegte Pfade und Adressen lassen sich mit den Cursor-, Pos1- und Ende-Tasten bearbeiten. Ein erneuter parameterloser Aufruf erkennt vollständige und unterbrochene Installationen und bietet Reparatur, Status oder Deinstallation an. Der Helfer ist kein stabiles natives Release und aktualisiert den Checkout nicht automatisch.
+MatoLoop enthält für Ubuntu- und Debian-Systeme mit systemd einen interaktiven Entwicklungshelfer. Starten Sie ihn als normaler Benutzer mit `./scripts/install-matoloop-agent.sh`. Innerhalb eines Checkouts verwendet er dessen aktuellen Stand; eine einzeln kopierte Scriptdatei klont das Repository stattdessen nach `~/mato-loop-agent/source`. Der Helfer fragt Datenverzeichnis, Workspace und die normale HTTP(S)-Adresse der MatoLoop-Instanz ab, leitet daraus die WebSocket-Adresse ab, richtet einen systemd-Benutzerdienst ein und führt anschließend die sichere Kopplungsabfrage des Agents aus. Vorbelegte Pfade und Adressen lassen sich mit den Cursor-, Pos1- und Ende-Tasten bearbeiten. Ein erneuter parameterloser Aufruf erkennt vollständige und unterbrochene Installationen und bietet Aktualisierung, Reparatur, Status oder Deinstallation an. `./scripts/install-matoloop-agent.sh update` aktualisiert ausschließlich einen unveränderten, vom Installer erzeugten Clone per Fast-Forward, installiert die Abhängigkeiten neu und startet den Dienst. Einen vorhandenen Entwickler-Checkout verändert der Helfer nicht; aktualisieren Sie ihn selbst und führen Sie anschließend `repair` aus. Der Helfer ist weiterhin kein stabiles natives Release und führt keine automatischen Hintergrundaktualisierungen aus.
 
 !!! warning "Prozess- und Shell-Zugriff"
     Der Compose-Computer aktiviert mit der Beispielkonfiguration Prozess- und Shell-Funktionen und läuft derzeit als `root`. MatoLoop Agent verwendet Betriebssystemrechte sowie Descriptor- und No-Follow-Prüfungen, ist aber keine Betriebssystem-Sandbox. Ein gestarteter Prozess kann grundsätzlich auf beide eingebundenen Bereiche und erreichbare Netzwerke zugreifen. Begrenzen Sie deshalb Mounts, Netzwerk und Host-Richtlinien passend zum Einsatzzweck.
@@ -104,11 +114,11 @@ Beim Wechsel vom früheren Compose-Dienst liegt dessen Zugang gewöhnlich im ben
 
 ### Veröffentlichtes Image verwenden
 
-Die normale Compose-Datei kann MatoLoop und den Computer weiterhin lokal bauen. Für veröffentlichte Images setzen Sie stattdessen beide Image-Adressen mit einem festen, gleichen Versions-Tag:
+Die normale Compose-Datei verwendet veröffentlichte Images. Setzen Sie beide Image-Adressen auf denselben unveränderlichen Forgejo-CI-Tag:
 
 ```env
-MATO_LOOP_IMAGE=git.example/owner/mato-loop:1.2.3
-MATOLOOP_AGENT_IMAGE=git.example/owner/matoloop-agent:1.2.3
+MATO_LOOP_IMAGE=git.devmato.net/devmato/matoloop/mato-loop:sha-0123456789ab
+MATOLOOP_AGENT_IMAGE=git.devmato.net/devmato/matoloop/matoloop-agent:sha-0123456789ab
 ```
 
 Melden Sie Docker bei einer privaten Registry an. Laden Sie die Images anschließend ausdrücklich und erstellen Sie die Container neu:
@@ -120,11 +130,11 @@ docker compose up -d
 
 Die veröffentlichten Images unterstützen derzeit nur `linux/amd64`. Erfolgreiche `develop`-Läufe stellen zusätzlich sieben Tage lang ein Archiv `matoloop-agent-linux-amd64-develop-<commit>.tar.gz` für Linux amd64 mit glibc 2.35 oder neuer bereit. Stabile Releases enthalten noch kein natives Archiv. Eine Installation oder Aktualisierung auf Ihrem Server erfolgt nicht automatisch.
 
-Der Tag `develop` ist veränderlich und nur für Testinstallationen vorgesehen. Verwenden Sie dafür ein eigenes Bereitstellungsverzeichnis: Die relativen Pfade `./data` und `./db` bleiben dadurch von der Produktion getrennt. Führen Sie vor jedem Neustart `docker compose pull` aus. Verwenden Sie `develop` niemals mit Produktivdaten und nicht als Rollback-Ziel.
+Der Tag `develop` ist veränderlich und nur für kurzlebige Testinstallationen vorgesehen. Für reproduzierbare Installationen und Rollbacks verwenden Sie den zugehörigen `sha-<12>`-Tag und führen vor jeder Neuerstellung `docker compose pull` aus.
 
 ### Rollback
 
-Setzen Sie für beide Images den vorherigen festen Versions-Tag, laden Sie ihn und erstellen Sie die Container erneut. Verwenden Sie weder `latest` noch `develop`, da beide Tags auf andere Images verschoben werden können.
+Setzen Sie für beide Images den vorherigen festen `sha-<12>`- oder Release-Tag, laden Sie ihn und erstellen Sie die Container erneut. Verwenden Sie weder `latest` noch `develop`, da beide Tags auf andere Images verschoben werden können.
 
 !!! warning "Datenbankschema beim Rollback"
     Beim Start können Datenbankmigrationen ausgeführt werden. Ein älteres Image kann mit dem bereits migrierten Schema unvereinbar sein. Stellen Sie dann zusätzlich die gemeinsam vor dem Update gesicherte Datenbank und das zugehörige Datenverzeichnis wieder her.

@@ -4,13 +4,10 @@ services:
   db:
     image: pgvector/pgvector:0.8.5-pg17-bookworm
     restart: unless-stopped
-    env_file:
-      - path: .env.default
-        required: true
-      - path: .env.dev
-        required: true
-      - path: .env.dev.override
-        required: false
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
@@ -65,8 +62,6 @@ services:
       dockerfile: Dockerfile.dev
     restart: unless-stopped
     env_file:
-      - path: .env.default
-        required: true
       - path: .env.dev
         required: true
       - path: .env.dev.override
@@ -106,14 +101,9 @@ services:
       context: ./apps/frontend
       dockerfile: Dockerfile.dev
     restart: unless-stopped
-    env_file:
-      - path: .env.default
-        required: true
-      - path: .env.dev
-        required: true
-      - path: .env.dev.override
-        required: false
     environment:
+      MATO_LOOP_BIND_BACKEND_PORT: ${MATO_LOOP_BIND_BACKEND_PORT:-6020}
+      MATO_LOOP_BIND_FRONTEND_PORT: ${MATO_LOOP_BIND_FRONTEND_PORT:-10020}
       QUASAR_API_PROXY_TARGET: http://backend:${MATO_LOOP_BIND_BACKEND_PORT:-6020}
       MATO_LOOP_FRONTEND_MODE: ${MATO_LOOP_FRONTEND_MODE:-spa}
     volumes:
