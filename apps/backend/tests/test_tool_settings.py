@@ -16,6 +16,7 @@ from mato_loop_backend.api.routes.tool_settings import (
     get_tool_settings,
     reset_personal_tool_settings,
     set_personal_tool_settings_enabled,
+    tool_configuration_payload,
     update_tool_settings,
 )
 from mato_loop_backend.settings import (
@@ -366,6 +367,17 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
     assert discovery == {
         "session_browse": "session.search",
         "session_search": "session.search",
+    }
+
+
+def test_tool_configuration_uses_frontend_webfetch_field_names() -> None:
+    result = tool_configuration_payload(
+        ToolSettings(web_fetch={"userAgent": "MatoLoop/1.0", "maxResponseMiB": 32})
+    )
+
+    assert result["webFetch"] == {
+        "userAgent": "MatoLoop/1.0",
+        "maxResponseMiB": 32,
     }
 
 

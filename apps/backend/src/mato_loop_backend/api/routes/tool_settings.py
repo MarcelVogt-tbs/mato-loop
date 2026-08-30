@@ -199,7 +199,10 @@ def tool_configuration_payload(settings: ToolSettings) -> dict:
         "groups": groups,
         "toolAvailability": settings.tool_availability,
         "resourceAvailability": settings.resource_availability,
-        "webFetch": settings.web_fetch.model_dump(mode="json", by_alias=True),
+        "webFetch": {
+            "userAgent": settings.web_fetch.user_agent,
+            "maxResponseMiB": settings.web_fetch.max_response_mib,
+        },
     }
 
 
