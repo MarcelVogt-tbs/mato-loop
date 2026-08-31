@@ -5,6 +5,7 @@ import NotificationCenterApp from 'components/NotificationCenterApp.vue'
 import MailApp from 'components/MailApp.vue'
 import CodingApp from 'components/CodingApp.vue'
 import TerminalApp from 'components/TerminalApp.vue'
+import TerminalFooter from 'components/TerminalFooter.vue'
 import {
   controlCenterGlobalSectionManifest,
   controlCenterIntegrationManifest
@@ -20,7 +21,8 @@ const components = {
 }
 
 const footerComponents = {
-  files: FileExplorerFooter
+  files: FileExplorerFooter,
+  terminal: TerminalFooter
 }
 
 function withComponents(items) {

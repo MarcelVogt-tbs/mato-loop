@@ -29,16 +29,9 @@
         </q-chip>
         <q-space />
         <q-spinner-dots
-          v-if="terminal.status === 'connecting' || ['attach', 'detach'].includes(terminal.submitting)"
+          v-if="terminal.status === 'connecting'"
           color="primary"
           size="24px"
-        />
-        <q-toggle
-          :model-value="terminal.attached"
-          label="Chat-Agent verbinden"
-          color="primary"
-          :disable="terminal.status !== 'open' || Boolean(terminal.submitting) || (terminal.attached && terminal.interactionLocked)"
-          @update:model-value="toggleAttachment"
         />
       </div>
       <q-separator />
@@ -53,23 +46,6 @@
       </div>
 
       <template v-else>
-      <div v-if="terminal.attached" class="row items-center q-gutter-sm q-px-sm q-py-xs">
-        <q-icon name="link" color="positive" />
-        <span class="text-body2 text-weight-medium">Mit Chat-Agent verbunden</span>
-        <q-space />
-        <q-spinner-dots v-if="terminal.submitting === 'mode'" color="primary" size="20px" />
-        <q-btn-toggle
-          :model-value="terminal.mode"
-          :options="modeOptions"
-          dense
-          no-caps
-          unelevated
-          toggle-color="primary"
-          :disable="terminal.interactionLocked"
-          @update:model-value="changeMode"
-        />
-      </div>
-
       <div
         v-if="terminal.attached && terminal.mode === 'auto'"
         class="row items-center q-gutter-xs q-px-sm q-py-xs text-caption app-muted"
@@ -87,8 +63,7 @@
       </q-banner>
 
       <div class="terminal-app__stage col relative-position">
-        <div v-show="!terminal.attached" ref="personalHost" class="terminal-app__host fit" />
-        <div v-show="terminal.attached" ref="agentHost" class="terminal-app__host fit" />
+        <div ref="terminalHost" class="terminal-app__host fit" />
 
         <div
           v-if="terminal.proposal"
@@ -135,6 +110,10 @@
         </div>
       </div>
 
+      <span class="app-sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {{ accessibilityStatus }}
+      </span>
+
       <div
         v-if="terminal.commandRunning || terminal.commandExit || (terminal.submitting === 'execute' && !terminal.proposal)"
         class="q-px-sm q-py-xs text-caption app-muted"
@@ -174,8 +153,7 @@ const chat = useChatStore()
 const controlCenter = useControlCenterStore()
 const executionAgents = useExecutionAgentStore()
 const terminal = useTerminalStore()
-const personalHost = ref(null)
-const agentHost = ref(null)
+const terminalHost = ref(null)
 const proposalCommand = ref(terminalProposalCommand(terminal.proposal))
 const integrationIndex = computed(() => controlCenter.tabs.findIndex((tab) => tab.appId === 'terminal'))
 const contextState = computed(() => terminalControlCenterState(chat.current, executionAgents))
@@ -188,10 +166,6 @@ const disconnected = computed(() => Boolean(
   && terminal.sessionId === chat.current?.id
   && terminal.agentId === chat.current?.preferredExecutionAgentId
 ))
-const modeOptions = [
-  { label: 'Auto', value: 'auto' },
-  { label: 'Bestätigen', value: 'confirm' }
-]
 const unavailableTitle = computed(() => ({
   missing: chat.current ? 'Kein Computer ausgewählt' : 'Keine aktive Session',
   offline: 'Computer offline',
@@ -206,89 +180,87 @@ const unavailableMessage = computed(() => ({
 })[contextState.value.reason])
 const unavailableIcon = computed(() => contextState.value.reason === 'offline' ? 'cloud_off' : 'terminal_off')
 const exitStatus = computed(() => terminalExitStatus(terminal.commandExit))
+const activeView = computed(() => terminal.attached ? 'agent' : 'personal')
+const activeBuffer = computed(() => terminal.attached ? terminal.agentBuffer : terminal.personalBuffer)
+const accessibilityStatus = computed(() => {
+  if (terminal.status === 'connecting') return 'Terminal wird verbunden.'
+  if (disconnected.value) return 'Terminalverbindung getrennt.'
+  if (terminal.submitting === 'attach') return 'Chat-Agent wird verbunden.'
+  if (terminal.submitting === 'detach') return 'Persönliches Terminal wird geöffnet.'
+  if (terminal.submitting === 'mode') return 'Agent-Modus wird gewechselt.'
+  if (!terminal.attached) return 'Persönliches Terminal aktiv.'
+  if (terminal.proposal) return 'Agent-Befehl wartet auf Bestätigung.'
+  if (terminal.commandRunning) return 'Agent-Befehl läuft.'
+  return terminal.mode === 'confirm' ? 'Agent-Modus Bestätigen aktiv.' : 'Agent-Modus Auto aktiv.'
+})
 
-let personalXterm
-let agentXterm
-let personalFit
-let agentFit
+let xterm
+let fitAddon
 let resizeObserver
+let switchingView = false
 
-function createXterm(host, onData) {
+function createXterm(host) {
+  Terminal.strings.promptLabel = 'Terminaleingabe'
+  Terminal.strings.tooMuchOutput = 'Zu viel Ausgabe für die vollständige Sprachausgabe. Navigiere zeilenweise, um alles zu lesen.'
   const instance = new Terminal({
     convertEol: false,
     cursorBlink: false,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
     fontSize: 14,
+    minimumContrastRatio: 4.5,
+    screenReaderMode: true,
     scrollback: 5000,
     theme: { background: '#111318', foreground: '#f1f3f5', cursor: '#f1f3f5' }
   })
   const fit = new FitAddon()
   instance.loadAddon(fit)
   instance.open(host)
-  instance.onData(onData)
+  instance.onData((data) => {
+    if (terminal.attached && terminal.mode === 'auto') handleAutoTerminalData(data, chat.stop)
+    else terminal.input(data)
+  })
   return [instance, fit]
 }
 
 function fitVisibleTerminal(force = false) {
-  const view = terminal.attached ? 'agent' : 'personal'
-  const instance = terminal.attached ? agentXterm : personalXterm
-  const fit = terminal.attached ? agentFit : personalFit
-  if (!instance || !fit) return
+  if (!xterm || !fitAddon) return
   try {
-    fit.fit()
-    terminal.resize(view, instance.cols, instance.rows, force === true)
+    fitAddon.fit()
+    terminal.resize(activeView.value, xterm.cols, xterm.rows, force === true)
   } catch {
     // The next observed layout change retries after the host becomes measurable.
   }
 }
 
 function initializeXterms() {
-  if (personalXterm || !personalHost.value || !agentHost.value) return
-  ;[personalXterm, personalFit] = createXterm(personalHost.value, (data) => terminal.input(data))
-  ;[agentXterm, agentFit] = createXterm(agentHost.value, (data) => {
-    if (terminal.mode === 'auto') handleAutoTerminalData(data, chat.stop)
-    else terminal.input(data)
-  })
-  personalXterm.write(terminal.personalBuffer)
-  agentXterm.write(terminal.agentBuffer)
-  resizeObserver = new ResizeObserver(() => fitVisibleTerminal())
-  resizeObserver.observe(personalHost.value)
-  resizeObserver.observe(agentHost.value)
+  if (xterm || !terminalHost.value) return
+  ;[xterm, fitAddon] = createXterm(terminalHost.value)
   updateCursorState()
   fitVisibleTerminal()
+  xterm.write(activeBuffer.value)
+  resizeObserver = new ResizeObserver(() => fitVisibleTerminal())
+  resizeObserver.observe(terminalHost.value)
 }
 
 function updateCursorState() {
-  if (personalXterm) personalXterm.options.cursorBlink = !terminal.attached
-  if (agentXterm) {
-    agentXterm.options.cursorBlink = terminal.attached
-      && terminal.mode === 'confirm'
-      && terminal.commandRunning
-  }
+  if (!xterm) return
+  xterm.options.cursorBlink = !terminal.attached
+    || (terminal.mode === 'confirm' && terminal.commandRunning)
+}
+
+function redrawTerminal() {
+  if (!xterm) return
+  xterm.reset()
+  xterm.write(activeBuffer.value)
+  updateCursorState()
 }
 
 function disposeXterms() {
   resizeObserver?.disconnect()
   resizeObserver = null
-  personalXterm?.dispose()
-  agentXterm?.dispose()
-  personalXterm = null
-  agentXterm = null
-  personalFit = null
-  agentFit = null
-}
-
-function toggleAttachment(attached) {
-  if (attached) {
-    terminal.attach(chat.current?.messages, chat.processOutputs)
-  } else {
-    terminal.detach()
-  }
-  void nextTick(fitVisibleTerminal)
-}
-
-function changeMode(mode) {
-  terminal.setMode(mode)
+  xterm?.dispose()
+  xterm = null
+  fitAddon = null
 }
 
 function resolveProposal(decision) {
@@ -316,27 +288,32 @@ function openApprovals() {
   void controlCenter.openApp('approvals').catch(() => {})
 }
 
-watch(() => terminal.proposal, (proposal) => {
+watch(() => terminal.proposal, (proposal, previous) => {
   proposalCommand.value = terminalProposalCommand(proposal)
+  if (!proposal && previous) void nextTick(() => xterm?.focus())
 }, { immediate: true })
 watch(() => terminal.personalBuffer, (value, previous = '') => {
-  if (!personalXterm) return
-  if (value.startsWith(previous)) personalXterm.write(value.slice(previous.length))
-  else {
-    personalXterm.reset()
-    personalXterm.write(value)
-  }
+  if (!xterm || switchingView || activeView.value !== 'personal') return
+  if (value.startsWith(previous)) xterm.write(value.slice(previous.length))
+  else redrawTerminal()
 })
 watch(() => terminal.agentBuffer, (value, previous = '') => {
-  if (!agentXterm) return
-  if (value.startsWith(previous)) agentXterm.write(value.slice(previous.length))
-  else {
-    agentXterm.reset()
-    agentXterm.write(value)
-  }
+  if (!xterm || switchingView || activeView.value !== 'agent') return
+  if (value.startsWith(previous)) xterm.write(value.slice(previous.length))
+  else redrawTerminal()
+})
+watch(() => terminal.attached, (attached) => {
+  switchingView = true
+  if (attached) terminal.syncAgentOutput(chat.current?.messages, chat.processOutputs)
+  void nextTick(() => {
+    fitVisibleTerminal(true)
+    redrawTerminal()
+    switchingView = false
+    xterm?.focus()
+  })
 })
 watch(
-  () => [terminal.attached, terminal.mode, terminal.commandRunning],
+  () => [terminal.mode, terminal.commandRunning],
   () => {
     updateCursorState()
     if (terminal.attached) terminal.syncAgentOutput(chat.current?.messages, chat.processOutputs)

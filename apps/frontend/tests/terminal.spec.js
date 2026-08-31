@@ -227,6 +227,16 @@ describe('control center terminal', () => {
     expect(store.agentBuffer).toContain('new output')
   })
 
+  it('formats multiline agent commands as terminal prompt lines', () => {
+    const store = useTerminalStore()
+
+    store.appendAgentCommand('set -eu\nprintf one\rprintf two\r\npwd')
+
+    expect(store.agentBuffer).toBe(
+      '\r\n\x1b[1;36m$ set -eu\r\n> printf one\r\n> printf two\r\n> pwd\x1b[0m\r\n'
+    )
+  })
+
   it('retains proposals on errors and displays the final edited command after execute acknowledgement', () => {
     const { store, socket } = connectedStore()
     attach(store, socket)

@@ -290,7 +290,8 @@ export const useTerminalStore = defineStore('terminal', {
       ]))
     },
     appendAgentCommand(command) {
-      this.agentBuffer = bounded(this.agentBuffer, `\r\n\x1b[1;36m$ ${command}\x1b[0m\r\n`)
+      const displayed = command.replace(/\r\n|\r|\n/g, '\r\n> ')
+      this.agentBuffer = bounded(this.agentBuffer, `\r\n\x1b[1;36m$ ${displayed}\x1b[0m\r\n`)
     },
     syncAgentOutput(messages, processOutputs) {
       if (!this.attached || (this.mode === 'confirm' && !this.commandRunning)) return
