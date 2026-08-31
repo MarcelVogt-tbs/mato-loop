@@ -17,10 +17,16 @@ export const useApprovalStore = defineStore('approvals', {
     loading: false,
     loaded: false,
     loadFailed: false,
-    revision: 0
+    revision: 0,
+    grants: [],
+    grantsLoading: false,
+    grantsLoaded: false,
+    grantsLoadFailed: false,
+    grantRevision: 0
   }),
   getters: {
     pendingCount: (state) => state.pending.length,
+    grantsForSession: (state) => (sessionId) => state.grants.filter((item) => item.sessionId === sessionId),
     forSession: (state) => (sessionId) => state.pending.filter((item) => (
       item.sessionId === sessionId && item.requestType !== 'memory_change'
     ))
@@ -64,6 +70,9 @@ export const useApprovalStore = defineStore('approvals', {
         this.revision += 1
         this.pending = this.pending.filter((item) => item.id !== id)
         this.loading = false
+        if (decision === 'allow_session' && this.grantsLoaded) {
+          void this.fetchGrants({ suppressErrorToast: true }).catch(() => {})
+        }
       } catch (error) {
         if (TERMINAL_DECISION_ERRORS.has(errorDescriptor(error)?.code)) {
           await this.fetchPending()
@@ -76,8 +85,35 @@ export const useApprovalStore = defineStore('approvals', {
     async permissions(sessionId, config = {}) {
       return (await api.get(`/approvals/sessions/${sessionId}/permissions`, config)).data
     },
+    async fetchGrants(config = {}) {
+      const revision = ++this.grantRevision
+      this.grantsLoading = true
+      this.grantsLoadFailed = false
+      try {
+        const { data } = Object.keys(config).length
+          ? await api.get('/approvals/permissions', config)
+          : await api.get('/approvals/permissions')
+        if (revision !== this.grantRevision || !Array.isArray(data)) return
+        this.grants = data
+        this.grantsLoaded = true
+      } catch (error) {
+        if (revision === this.grantRevision) this.grantsLoadFailed = true
+        throw error
+      } finally {
+        if (revision === this.grantRevision) this.grantsLoading = false
+      }
+    },
     async revoke(sessionId, grantId) {
       await api.delete(`/approvals/sessions/${sessionId}/permissions/${grantId}`)
+      this.grantRevision += 1
+      this.grants = this.grants.filter((item) => item.id !== grantId)
+      this.grantsLoading = false
+    },
+    async revokeAll(sessionId) {
+      await api.delete(`/approvals/sessions/${sessionId}/permissions`)
+      this.grantRevision += 1
+      this.grants = this.grants.filter((item) => item.sessionId !== sessionId)
+      this.grantsLoading = false
     }
   }
 })

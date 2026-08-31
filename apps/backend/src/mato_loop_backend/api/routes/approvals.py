@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.runtime import (
@@ -30,6 +30,38 @@ class ApprovalDecisionRequest(BaseModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+
+
+def _permission_payload(
+    grant: PermissionGrant, source: ApprovalRequest | None = None
+) -> dict:
+    resource_display = None
+    shell_details = {}
+    if grant.source_approval_id is not None:
+        if grant.resource_type == "skill_collection":
+            resource_display = "Persönliche Skills"
+        elif source and isinstance(source.payload.get("resourceDisplay"), str):
+            resource_display = source.payload["resourceDisplay"]
+        if grant.resource_type == "shell_command" and source is not None:
+            shell_details = {
+                "shellClassification": source.payload.get("shellClassification"),
+                "shellPrefixes": source.payload.get("shellPrefixes"),
+            }
+    return {
+        "id": str(grant.id),
+        "capability": grant.capability,
+        "resourceType": grant.resource_type,
+        "resourceScope": grant.resource_scope,
+        "resourceDisplay": resource_display,
+        "agentProfileId": (
+            str(grant.agent_profile_id)
+            if grant.agent_profile_id is not None
+            else None
+        ),
+        "trustLevel": grant.trust_level,
+        **shell_details,
+        "createdAt": grant.created_at.isoformat(),
+    }
 
 
 @router.get("/pending")
@@ -229,37 +261,57 @@ async def list_permissions(
     )
     payloads = []
     for item in grants:
-        resource_display = None
-        shell_details = {}
-        if item.source_approval_id is not None:
-            source = await db.get(ApprovalRequest, item.source_approval_id)
-            if item.resource_type == "skill_collection":
-                resource_display = "Persönliche Skills"
-            elif source and isinstance(source.payload.get("resourceDisplay"), str):
-                resource_display = source.payload["resourceDisplay"]
-            if item.resource_type == "shell_command" and source is not None:
-                shell_details = {
-                    "shellClassification": source.payload.get("shellClassification"),
-                    "shellPrefixes": source.payload.get("shellPrefixes"),
-                }
-        payloads.append(
-            {
-                "id": str(item.id),
-                "capability": item.capability,
-                "resourceType": item.resource_type,
-                "resourceScope": item.resource_scope,
-                "resourceDisplay": resource_display,
-                "agentProfileId": (
-                    str(item.agent_profile_id)
-                    if item.agent_profile_id is not None
-                    else None
-                ),
-                "trustLevel": item.trust_level,
-                **shell_details,
-                "createdAt": item.created_at.isoformat(),
-            }
+        source = (
+            await db.get(ApprovalRequest, item.source_approval_id)
+            if item.source_approval_id is not None
+            else None
         )
+        payloads.append(_permission_payload(item, source))
     return payloads
+
+
+@router.get("/permissions")
+async def all_permissions(
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[dict]:
+    rows = (
+        await db.execute(
+            select(PermissionGrant, ChatSession, ApprovalRequest)
+            .join(ChatSession, ChatSession.id == PermissionGrant.session_id)
+            .outerjoin(
+                ApprovalRequest,
+                ApprovalRequest.id == PermissionGrant.source_approval_id,
+            )
+            .where(ChatSession.user_id == user.id)
+            .order_by(PermissionGrant.created_at)
+        )
+    ).all()
+    return [
+        {
+            **_permission_payload(grant, source),
+            "sessionId": str(session.id),
+            "sourceSession": {"id": str(session.id), "title": session.title},
+        }
+        for grant, session, source in rows
+    ]
+
+
+@router.delete(
+    "/sessions/{session_id}/permissions", status_code=status.HTTP_204_NO_CONTENT
+)
+async def revoke_permissions(
+    session_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> None:
+    session = await db.get(ChatSession, session_id)
+    if session is None or session.user_id != user.id:
+        raise ApiError(404, "approval.notFound")
+    await db.execute(
+        delete(PermissionGrant).where(PermissionGrant.session_id == session_id)
+    )
+    await db.commit()
 
 
 @router.delete(

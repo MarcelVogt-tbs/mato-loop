@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('src/boot/axios', () => ({
-  api: { get: vi.fn(), post: vi.fn() }
+  api: { delete: vi.fn(), get: vi.fn(), post: vi.fn() }
 }))
 
 import { useApprovalStore } from '../src/stores/approvals'
@@ -121,5 +121,81 @@ describe('inline approvals', () => {
       '/approvals/sessions/session-1/permissions',
       { suppressErrorToast: true }
     )
+  })
+
+  it('loads grants from all sessions', async () => {
+    api.get.mockResolvedValue({ data: [{ id: 'grant-1', sessionId: 'session-1' }] })
+    const approvals = useApprovalStore()
+
+    await approvals.fetchGrants({ suppressErrorToast: true })
+
+    expect(api.get).toHaveBeenCalledWith('/approvals/permissions', { suppressErrorToast: true })
+    expect(approvals.grants).toEqual([{ id: 'grant-1', sessionId: 'session-1' }])
+    expect(approvals.grantsLoaded).toBe(true)
+    expect(approvals.grantsLoadFailed).toBe(false)
+  })
+
+  it('exposes grants only for the selected session', () => {
+    const approvals = useApprovalStore()
+    approvals.grants = [
+      { id: 'grant-1', sessionId: 'session-1' },
+      { id: 'grant-2', sessionId: 'session-2' }
+    ]
+
+    expect(approvals.grantsForSession('session-1')).toEqual([
+      { id: 'grant-1', sessionId: 'session-1' }
+    ])
+    expect(approvals.grantsForSession(null)).toEqual([])
+  })
+
+  it('removes a revoked grant from the global list', async () => {
+    api.delete.mockResolvedValue({})
+    const approvals = useApprovalStore()
+    approvals.grants = [{ id: 'grant-1', sessionId: 'session-1' }]
+
+    await approvals.revoke('session-1', 'grant-1')
+
+    expect(api.delete).toHaveBeenCalledWith('/approvals/sessions/session-1/permissions/grant-1')
+    expect(approvals.grants).toEqual([])
+  })
+
+  it('keeps a grant visible when revoking fails', async () => {
+    api.delete.mockRejectedValue(new Error('request failed'))
+    const approvals = useApprovalStore()
+    const grant = { id: 'grant-1', sessionId: 'session-1' }
+    approvals.grants = [grant]
+
+    await expect(approvals.revoke('session-1', 'grant-1')).rejects.toThrow('request failed')
+
+    expect(approvals.grants).toEqual([grant])
+  })
+
+  it('removes all grants of one session after bulk revoke', async () => {
+    api.delete.mockResolvedValue({})
+    const approvals = useApprovalStore()
+    approvals.grants = [
+      { id: 'grant-1', sessionId: 'session-1' },
+      { id: 'grant-2', sessionId: 'session-1' },
+      { id: 'grant-3', sessionId: 'session-2' }
+    ]
+
+    await approvals.revokeAll('session-1')
+
+    expect(api.delete).toHaveBeenCalledWith('/approvals/sessions/session-1/permissions')
+    expect(approvals.grants).toEqual([{ id: 'grant-3', sessionId: 'session-2' }])
+  })
+
+  it('keeps all grants visible when bulk revoke fails', async () => {
+    api.delete.mockRejectedValue(new Error('request failed'))
+    const approvals = useApprovalStore()
+    const grants = [
+      { id: 'grant-1', sessionId: 'session-1' },
+      { id: 'grant-2', sessionId: 'session-1' }
+    ]
+    approvals.grants = grants
+
+    await expect(approvals.revokeAll('session-1')).rejects.toThrow('request failed')
+
+    expect(approvals.grants).toEqual(grants)
   })
 })
