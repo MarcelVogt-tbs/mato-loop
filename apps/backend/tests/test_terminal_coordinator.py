@@ -69,6 +69,20 @@ def _connection(user_id, agent_id, terminal_id=None):
     )
 
 
+def test_auto_terminal_resize_targets_active_pty_without_enabling_input() -> None:
+    coordinator = TerminalCoordinator()
+    connection = _connection(uuid4(), uuid4())
+    connection.session_id = uuid4()
+    connection.active_terminal_id = str(uuid4())
+    connection.active_confirm = False
+
+    assert coordinator.input_terminal_id(connection) is None
+    assert coordinator.resize_terminal_id(connection, rows=41, columns=132) == (
+        connection.active_terminal_id
+    )
+    assert (connection.rows, connection.columns) == (41, 132)
+
+
 async def test_terminal_proposal_persists_waits_reconnects_and_resolves_once() -> None:
     coordinator = TerminalCoordinator()
     user_id = uuid4()

@@ -215,17 +215,16 @@ async def _handle_browser(connection: BrowserTerminalConnection) -> None:
                 terminal_id = terminal_coordinator.resize_terminal_id(
                     connection, rows=message.rows, columns=message.columns
                 )
-                if terminal_id is None:
-                    raise ValueError("terminal.readOnly")
-                await connection.client.request(
-                    "terminal.resize",
-                    {
-                        "terminalId": terminal_id,
-                        "rows": message.rows,
-                        "columns": message.columns,
-                    },
-                    TerminalControlResult,
-                )
+                if terminal_id is not None:
+                    await connection.client.request(
+                        "terminal.resize",
+                        {
+                            "terminalId": terminal_id,
+                            "rows": message.rows,
+                            "columns": message.columns,
+                        },
+                        TerminalControlResult,
+                    )
             elif isinstance(message, _AttachMessage):
                 async with AsyncSessionFactory() as db:
                     session = await db.get(ChatSession, message.session_id)

@@ -211,3 +211,34 @@ async def test_attached_idle_terminal_rejects_input_without_writing_personal_pty
 
     assert client.requests == []
     assert websocket.sent[0]["error"]["code"] == "terminal.readOnly"
+
+
+async def test_attached_idle_terminal_accepts_resize_without_error() -> None:
+    class ControlWebSocket(FakeWebSocket):
+        def __init__(self):
+            super().__init__()
+            self.controls = [
+                {"type": "resize", "rows": 41, "columns": 132},
+                {"type": "close"},
+            ]
+
+        async def receive_json(self):
+            return self.controls.pop(0)
+
+    client = SimpleNamespace(request=AsyncMock(return_value=TerminalControlResult()))
+    websocket = ControlWebSocket()
+    connection = BrowserTerminalConnection(
+        uuid4(),
+        uuid4(),
+        str(uuid4()),
+        client,  # type: ignore[arg-type]
+        websocket,  # type: ignore[arg-type]
+        session_id=uuid4(),
+        mode="auto",
+    )
+
+    await terminals._handle_browser(connection)
+
+    assert (connection.rows, connection.columns) == (41, 132)
+    client.request.assert_not_awaited()
+    assert websocket.sent == []

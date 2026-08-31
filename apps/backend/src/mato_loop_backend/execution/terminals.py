@@ -181,7 +181,9 @@ class TerminalCoordinator:
     ) -> str | None:
         connection.rows = rows
         connection.columns = columns
-        return TerminalCoordinator.input_terminal_id(connection)
+        if connection.session_id is None:
+            return connection.terminal_id
+        return connection.active_terminal_id
 
     async def propose(
         self,
