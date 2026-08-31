@@ -108,6 +108,7 @@ async def _runtime_setup(
     user_content: str = "Aktuelle Frage",
     user_trust_level: TrustLevel | None = None,
     reasoning_effort: str | None = None,
+    model_id: str = "local-model",
 ):
     provider = LlmProviderConfig(
         name="Local",
@@ -116,7 +117,7 @@ async def _runtime_setup(
     )
     model = ModelConfig(
         provider_id=provider.id,
-        model_id="local-model",
+        model_id=model_id,
         supports_image_input=active_supports_image_input,
     )
     vision_model = (
@@ -1997,6 +1998,32 @@ async def test_empty_response_repair_can_cross_the_step_limit(monkeypatch) -> No
 
     assert len(requests) == 2
     assert _assistant_messages(db)[0].content == "Reparierte Antwort"
+
+
+@pytest.mark.parametrize(
+    ("model_id", "expected_efforts"),
+    [
+        ("Qwen3.8-27B-GGUF-UD-Q4_K_XL", ["low", "none"]),
+        ("local-model", ["low", "low"]),
+    ],
+)
+async def test_empty_response_repair_disables_supported_reasoning(
+    monkeypatch, model_id, expected_efforts
+) -> None:
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(content="", finish_reason="stop"),
+            ProviderResult(content="Reparierte Antwort", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        reasoning_effort="low",
+        model_id=model_id,
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert [request["reasoning_effort"] for request in requests] == expected_efforts
 
 
 async def test_repeated_empty_response_fails_without_persisting_it(monkeypatch) -> None:

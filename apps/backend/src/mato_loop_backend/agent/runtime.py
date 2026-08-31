@@ -1150,6 +1150,13 @@ class AgentRuntime:
         provider = _provider_for_model(ai_settings, model)
         if provider is None:
             raise AgentRunError("provider.notFound")
+        model_reasoning_profile = reasoning_profile(
+            model.model_id, model.discovery_metadata
+        )
+        can_disable_reasoning = (
+            model_reasoning_profile is not None
+            and ReasoningEffort.NONE in model_reasoning_profile.options
+        )
         model_trust_level = TrustLevel(
             run.trust_level or effective_model_trust(provider, model).value
         )
@@ -2047,7 +2054,11 @@ class AgentRuntime:
                 pseudonymization_enabled=run_pseudonymization_enabled,
                 prompt_cache_key=str(chat_session.id),
                 required_image_ids=required_image_ids,
-                reasoning_effort=chat_session.reasoning_effort,
+                reasoning_effort=(
+                    ReasoningEffort.NONE
+                    if empty_response_retries > 0 and can_disable_reasoning
+                    else chat_session.reasoning_effort
+                ),
             )
             openscad_preview_image_id = None
             provider_duration_ms = max(
