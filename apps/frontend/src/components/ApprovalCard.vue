@@ -84,9 +84,9 @@
             <q-chip
               dense
               square
-              :color="shellClassification === 'write' ? 'warning' : 'primary'"
+              :color="shellClassification.color"
               text-color="white"
-              :label="shellClassification === 'write' ? 'Schreibender Befehl' : 'Lesender Befehl'"
+              :label="shellClassification.label"
             />
             <div v-if="shellPrefixes.length" class="q-mt-sm">
               <div class="text-caption app-muted">Session-Präfixe</div>
@@ -217,7 +217,12 @@
 <script setup>
 import { computed, ref } from 'vue'
 import ToolPresentation from 'components/ToolPresentation.vue'
-import { approvalResource, memoryApprovalDisplay, technicalDetailsDisplay } from 'src/utils/approval-display'
+import {
+  approvalResource,
+  memoryApprovalDisplay,
+  shellClassificationDisplay,
+  technicalDetailsDisplay
+} from 'src/utils/approval-display'
 import {
   approvalPresentationKind as resolveApprovalPresentationKind,
   toolArgumentsDisplay,
@@ -240,10 +245,7 @@ const workspace = useWorkspaceStore()
 const loadingDecision = ref(null)
 const showFullDetails = ref(false)
 const rememberForSession = ref(false)
-const shellClassification = computed(() => {
-  const value = props.approval.payload?.shellClassification
-  return ['read', 'write'].includes(value) ? value : null
-})
+const shellClassification = computed(() => shellClassificationDisplay(props.approval))
 const shellPrefixes = computed(() => (
   Array.isArray(props.approval.payload?.shellPrefixes)
     ? props.approval.payload.shellPrefixes

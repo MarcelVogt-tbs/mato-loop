@@ -161,6 +161,18 @@ export function approvalResource(approval, sessions = []) {
   }
 }
 
+export function shellClassificationDisplay(approval) {
+  const classification = approval?.payload?.shellClassification
+  if (!['read', 'write'].includes(classification)) return null
+  if (classification === 'read') return { color: 'primary', label: 'Lesender Befehl' }
+  return {
+    color: 'warning',
+    label: approval.payload.shellAnalysisComplete === false
+      ? 'Nicht vollständig analysiert'
+      : 'Schreibender Befehl'
+  }
+}
+
 function sanitize(value, depth, seen, key = '', truncate = true) {
   if (value == null || typeof value === 'boolean' || typeof value === 'number') return value
   if (typeof value === 'string') {

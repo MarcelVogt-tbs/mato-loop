@@ -362,7 +362,52 @@ async def test_shell_dispatches_with_inspection_classification(tmp_path) -> None
     assert request.capability == "shell.read"
     assert request.approval_details == {
         "shellClassification": "read",
+        "shellAnalysisComplete": True,
         "shellPrefixes": [["cat"]],
+    }
+
+
+async def test_shell_labels_incomplete_inspection_as_unverified(tmp_path) -> None:
+    call = ToolCall("shell", "shell_run", {"command": "printf '%s\\n' test"})
+    client = FakeExecutionClient(
+        {
+            "shell.inspect": ShellInspectResult(
+                targets=[],
+                analysis_complete=False,
+                classification="write",
+                read_only=False,
+                commands=[],
+                inspection_revision="b" * 64,
+            ),
+            "shell.run": ProcessResult(
+                exit_code=0,
+                timed_out=False,
+                duration_ms=1,
+                stdout_bytes=0,
+                stderr_bytes=0,
+                stdout_truncated=False,
+                stderr_truncated=False,
+            ),
+        },
+        {"shell.inspect", "shell.run"},
+    )
+    context = _context(tmp_path, call, client)
+
+    result = await _tools(client.operations).execute(call, context)
+
+    assert not result.is_error
+    request = context.ask_handler.await_args.args[0]
+    assert request.capability == "shell.write"
+    assert request.risk_level == "high"
+    assert request.title == "Nicht vollständig geprüften Shell-Befehl ausführen?"
+    assert request.summary == (
+        "Der Befehl konnte nicht vollständig geprüft werden und wird vorsichtshalber "
+        "wie ein schreibender Befehl behandelt."
+    )
+    assert request.approval_details == {
+        "shellClassification": "write",
+        "shellAnalysisComplete": False,
+        "shellPrefixes": [],
     }
 
 

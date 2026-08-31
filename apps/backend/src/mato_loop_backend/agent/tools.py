@@ -1520,6 +1520,9 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
             and all(command.prefix is not None for command in inspection.commands)
             else []
         )
+        analysis_incomplete = (
+            inspection.classification == "write" and not inspection.analysis_complete
+        )
         permission = PermissionRequest(
             capability=f"shell.{inspection.classification}",
             resource_type="shell_command",
@@ -1536,16 +1539,25 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
             title=(
                 "Lesenden Shell-Befehl ausführen?"
                 if inspection.classification == "read"
-                else "Schreibenden Shell-Befehl ausführen?"
+                else (
+                    "Nicht vollständig geprüften Shell-Befehl ausführen?"
+                    if analysis_incomplete
+                    else "Schreibenden Shell-Befehl ausführen?"
+                )
             ),
             summary=(
                 "Der Befehl wurde als rein lesend klassifiziert."
                 if inspection.classification == "read"
-                else "Der Befehl kann Dateien verändern, Programme starten und Netzwerkdienste verwenden."
+                else (
+                    "Der Befehl konnte nicht vollständig geprüft werden und wird vorsichtshalber wie ein schreibender Befehl behandelt."
+                    if analysis_incomplete
+                    else "Der Befehl kann Dateien verändern, Programme starten und Netzwerkdienste verwenden."
+                )
             ),
             resource_display=client.current_directory,
             approval_details={
                 "shellClassification": inspection.classification,
+                "shellAnalysisComplete": inspection.analysis_complete,
                 "shellPrefixes": prefixes,
             },
             display_items=(

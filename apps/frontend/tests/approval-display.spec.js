@@ -5,6 +5,7 @@ import {
   formatTechnicalDetails,
   memoryApprovalDisplay,
   permissionGrantDisplay,
+  shellClassificationDisplay,
   technicalDetailsDisplay
 } from '../src/utils/approval-display'
 
@@ -123,6 +124,18 @@ describe('approval display', () => {
       value: '/home/user/project · git status · cat',
       icon: 'terminal'
     })
+  })
+
+  it('distinguishes incomplete shell analysis from an analyzed write', () => {
+    expect(shellClassificationDisplay({
+      payload: { shellClassification: 'write', shellAnalysisComplete: false }
+    })).toEqual({ color: 'warning', label: 'Nicht vollständig analysiert' })
+    expect(shellClassificationDisplay({
+      payload: { shellClassification: 'write', shellAnalysisComplete: true }
+    })).toEqual({ color: 'warning', label: 'Schreibender Befehl' })
+    expect(shellClassificationDisplay({
+      payload: { shellClassification: 'read', shellAnalysisComplete: true }
+    })).toEqual({ color: 'primary', label: 'Lesender Befehl' })
   })
 
   it('shows cleaned URL approvals and readable session grants', () => {
