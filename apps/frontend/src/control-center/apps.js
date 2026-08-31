@@ -1,5 +1,6 @@
 import ApprovalCenterApp from 'components/ApprovalCenterApp.vue'
 import FileExplorerPanel from 'components/FileExplorerPanel.vue'
+import FileExplorerFooter from 'components/FileExplorerFooter.vue'
 import NotificationCenterApp from 'components/NotificationCenterApp.vue'
 import MailApp from 'components/MailApp.vue'
 import CodingApp from 'components/CodingApp.vue'
@@ -18,10 +19,15 @@ const components = {
   approvals: ApprovalCenterApp
 }
 
+const footerComponents = {
+  files: FileExplorerFooter
+}
+
 function withComponents(items) {
   return items.map((item) => ({
     ...item,
-    component: components[item.id]
+    component: components[item.id],
+    footerComponent: footerComponents[item.id] || null
   }))
 }
 

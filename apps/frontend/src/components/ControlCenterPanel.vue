@@ -167,6 +167,12 @@
         </div>
       </div>
     </div>
+    <template v-if="activeFooter">
+      <q-separator />
+      <footer class="control-center__footer" aria-label="App-Informationen und Steuerelemente">
+        <component :is="activeFooter" class="full-width" />
+      </footer>
+    </template>
   </section>
 </template>
 
@@ -217,6 +223,7 @@ const executionAgents = useExecutionAgentStore()
 const terminal = useTerminalStore()
 const draggedIntegrationId = ref(null)
 const dropTarget = ref(null)
+const activeFooter = computed(() => content(controlCenter.activeContentId)?.footerComponent)
 const closedIntegrations = computed(() => controlCenterIntegrations.filter(
   (item) => !controlCenter.tabs.some((tab) => tab.appId === item.id)
 ))

@@ -88,6 +88,11 @@
   overflow: hidden;
 }
 
+.control-center__footer {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
 .notification-center__text {
   overflow-wrap: anywhere;
   white-space: normal;

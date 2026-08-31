@@ -56,21 +56,6 @@
       </template>
     </ControlCenterContentHeader>
     <div class="file-explorer__controls q-px-md q-pb-md q-gutter-y-sm">
-      <q-btn-toggle
-        v-if="sourceSwitchAvailable"
-        :model-value="workspace.scope"
-        :options="sourceOptions"
-        spread
-        outline
-        no-caps
-        dense
-        color="primary"
-        toggle-color="primary"
-        toggle-text-color="white"
-        :disable="chat.running || chat.sessionSettingsPending > 0"
-        aria-label="Dateiquelle"
-        @update:model-value="selectSource"
-      />
       <div class="row items-center no-wrap q-gutter-sm">
         <div class="col text-caption app-muted ellipsis">{{ scopeDescription }}</div>
         <q-btn
@@ -226,39 +211,6 @@
         />
       </div>
     </q-scroll-area>
-    <q-separator v-if="chat.current" />
-    <div
-      v-if="chat.current"
-      class="file-explorer__storage-footer row items-center no-wrap q-px-md q-py-xs text-caption app-muted"
-    >
-      <div class="col row items-center no-wrap" tabindex="0" :aria-label="storageDescription">
-        <q-spinner v-if="workspace.storageUsageLoading && !storage" size="18px" class="q-mr-xs" />
-        <q-icon v-else :name="workspace.storageUsageFailed ? 'warning_amber' : 'folder'" size="18px" class="q-mr-xs" />
-        <span class="q-mr-sm">{{ storageScopeLabel }}</span>
-        <q-linear-progress
-          v-if="storageProgress !== null"
-          :value="storageProgress"
-          size="4px"
-          rounded
-          class="file-explorer__storage-progress q-mr-sm"
-          aria-hidden="true"
-        />
-        <span class="ellipsis">{{ storageLabel || '–' }}</span>
-        <q-tooltip>{{ storageDescription }}</q-tooltip>
-      </div>
-      <q-btn
-        v-if="workspace.storageUsageFailed && !storage"
-        flat
-        round
-        dense
-        size="sm"
-        icon="refresh"
-        aria-label="Speichernutzung erneut laden"
-        @click="workspace.fetchStorageUsage(chat.current.id)"
-      >
-        <q-tooltip>Speichernutzung erneut laden</q-tooltip>
-      </q-btn>
-    </div>
     </div>
 
     <q-dialog v-model="renameDialogOpen" :persistent="renaming">
@@ -414,11 +366,6 @@ import FileViewerPanel from 'components/FileViewerPanel.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { permissionGrantDisplay } from 'src/utils/approval-display'
 import { apiErrorMessage } from 'src/utils/api-errors'
-import {
-  formatByteSize,
-  formatStorageUsage,
-  storageUsageProgress
-} from 'src/utils/resource-metrics'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
@@ -474,18 +421,7 @@ const selectedIsDirectory = computed(() => workspace.selectedKind === 'directory
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
 ))
-const sourceSwitchAvailable = computed(() => (
-  !workspace.toolContext
-  && Boolean(workspace.sessionId)
-  && selectedExecutionAgent.value?.connected
-  && selectedExecutionAgent.value.operations?.includes('filesystem.list')
-))
 const managedSourceLabel = computed(() => 'Ablage')
-const computerSourceLabel = computed(() => 'Computer')
-const sourceOptions = computed(() => [
-  { label: managedSourceLabel.value, value: 'session', icon: 'inventory_2', attrs: { 'aria-label': managedSourceLabel.value } },
-  { label: computerSourceLabel.value, value: 'filesystem', icon: 'computer', attrs: { 'aria-label': computerSourceLabel.value } }
-])
 const hasOverflowActions = computed(() => Boolean(
   (workspace.scope === 'filesystem' && explorerAvailable.value)
   || chat.current
@@ -551,21 +487,6 @@ const filterEmpty = computed(() => Boolean(
     entry.name?.toLocaleLowerCase().includes(workspace.filter.toLocaleLowerCase())
   ))
 ))
-const storage = computed(() => (
-  workspace.storageUsageSessionId === chat.current?.id ? workspace.storageUsage : null
-))
-const storageLabel = computed(() => formatStorageUsage(storage.value))
-const storageProgress = computed(() => storageUsageProgress(storage.value))
-const storageScopeLabel = computed(() => (
-  storage.value?.scope === 'project' || chat.current?.projectId ? 'Projekt-Speicher' : 'Session-Speicher'
-))
-const storageDescription = computed(() => {
-  if (workspace.storageUsageLoading && !storage.value) return 'Speichernutzung wird geladen.'
-  if (!storage.value) return 'Speichernutzung nicht verfügbar.'
-  const sharing = storage.value.scope === 'project' ? ', projektweit geteilt' : ''
-  const stale = workspace.storageUsageFailed ? ' Letzter Stand.' : ''
-  return `${formatByteSize(storage.value.usedBytes)} von ${formatByteSize(storage.value.quotaBytes)} belegt${sharing}.${stale}`
-})
 const rootLoadError = computed(() => apiErrorMessage(
   workspace.loadErrors[workspace.directoryPath],
   'Die Dateien konnten nicht geladen werden.'
@@ -585,11 +506,6 @@ function refreshFiles() {
   const requests = [workspace.refresh()]
   if (chat.current?.id) requests.push(workspace.fetchStorageUsage(chat.current.id))
   return Promise.all(requests)
-}
-
-async function selectSource(scope) {
-  if (scope === workspace.scope || !await confirmDiscard()) return
-  await workspace.setScope(scope)
 }
 
 async function loadPermissions() {
@@ -873,23 +789,6 @@ watch(
     ) workspace.restoreView(controlCenter.fileView)
     workspace.load(workspace.directoryPath)
     if (permissionsDialogOpen.value) loadPermissions()
-  },
-  { immediate: true }
-)
-
-watch(
-  [
-    () => chat.current?.id || null,
-    () => chat.current?.projectId || null,
-    () => controlCenter.activeContentId
-  ],
-  ([sessionId, , activeContentId]) => {
-    if (!sessionId || activeContentId !== 'files') return
-    if (
-      workspace.storageUsageSessionId !== sessionId
-      || !workspace.storageUsage
-      || workspace.storageUsageFailed
-    ) void workspace.fetchStorageUsage(sessionId)
   },
   { immediate: true }
 )
