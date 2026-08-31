@@ -50,6 +50,16 @@ describe('automation store', () => {
     expect(store.items[0].archivedAt).toBeTruthy()
   })
 
+  it('loads one automation for routed detail and editing pages', async () => {
+    api.get.mockResolvedValue({ data: automation })
+    const store = useAutomationStore()
+
+    await store.fetchAutomation(automation.id)
+
+    expect(api.get).toHaveBeenCalledWith('/automations/automation-1')
+    expect(store.detail).toEqual(automation)
+  })
+
   it('creates, updates and deletes only after successful requests', async () => {
     const payload = { name: 'Bericht', task: 'Erstellen', schedules: [] }
     const updated = { ...automation, revision: 2, name: 'Neuer Bericht' }

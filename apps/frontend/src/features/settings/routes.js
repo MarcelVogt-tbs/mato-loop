@@ -69,7 +69,24 @@ export const settingsRoutes = [
     path: 'automations',
     name: 'settings-automations',
     component: () => import('pages/settings/AutomationSettingsPage.vue'),
-    meta: { settingsLabel: 'Automationen', settingsIcon: 'schedule' }
+    meta: { settingsLabel: 'Automationen', settingsIcon: 'schedule' },
+    children: [
+      {
+        path: 'new',
+        name: 'settings-automation-create',
+        component: () => import('pages/settings/AutomationEditorPage.vue')
+      },
+      {
+        path: ':automationId/edit',
+        name: 'settings-automation-edit',
+        component: () => import('pages/settings/AutomationEditorPage.vue')
+      },
+      {
+        path: ':automationId',
+        name: 'settings-automation-detail',
+        component: () => import('pages/settings/AutomationDetailPage.vue')
+      }
+    ]
   },
   {
     path: 'personalization',

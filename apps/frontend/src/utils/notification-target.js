@@ -4,8 +4,9 @@ export function notificationTargetRoute(target) {
   }
   if (target?.type === 'automationRun' && target.automationId && target.runId) {
     return {
-      name: 'settings-automations',
-      query: { automation: target.automationId, run: target.runId }
+      name: 'settings-automation-detail',
+      params: { automationId: target.automationId },
+      query: { run: target.runId }
     }
   }
   return null

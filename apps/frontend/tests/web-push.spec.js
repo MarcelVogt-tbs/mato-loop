@@ -34,7 +34,7 @@ describe('web push contract', () => {
     expect(pushTargetPath(payload.options.data.target)).toBe(`/?session=${SESSION_ID}`)
     expect(pushTargetPath({
       type: 'automationRun', automationId: AUTOMATION_ID, runId: RUN_ID
-    })).toBe(`/settings/automations?automation=${AUTOMATION_ID}&run=${RUN_ID}`)
+    })).toBe(`/settings/automations/${AUTOMATION_ID}?run=${RUN_ID}`)
     expect(pushTargetPath({ type: 'actions' })).toBe('/?controlCenter=approvals')
   })
 

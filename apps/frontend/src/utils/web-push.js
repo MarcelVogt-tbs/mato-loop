@@ -15,7 +15,7 @@ export function pushTargetPath(target) {
     && UUID_PATTERN.test(target.automationId || '')
     && UUID_PATTERN.test(target.runId || '')
   ) {
-    return `/settings/automations?automation=${encodeURIComponent(target.automationId)}&run=${encodeURIComponent(target.runId)}`
+    return `/settings/automations/${encodeURIComponent(target.automationId)}?run=${encodeURIComponent(target.runId)}`
   }
   if (target?.type === 'actions') return '/?controlCenter=approvals'
   return '/'

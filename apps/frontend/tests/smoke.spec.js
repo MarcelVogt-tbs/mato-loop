@@ -33,6 +33,14 @@ describe('MatoLoop frontend scaffold', () => {
       settingsRoute.children.find((route) => route.name === 'settings-agents').children
         .map((route) => route.name)
     ).toEqual(['settings-agent-create', 'settings-agent-edit'])
+    expect(
+      settingsRoute.children.find((route) => route.name === 'settings-automations').children
+        .map(({ name, path }) => ({ name, path }))
+    ).toEqual([
+      { name: 'settings-automation-create', path: 'new' },
+      { name: 'settings-automation-edit', path: ':automationId/edit' },
+      { name: 'settings-automation-detail', path: ':automationId' }
+    ])
     expect(routes.find((route) => route.name === 'markdown-print')?.path).toBe('/print/markdown')
     expect(settingsRoutes.find((route) => route.name === 'settings-users')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-instance-limits')?.meta.requiresAdmin).toBe(true)

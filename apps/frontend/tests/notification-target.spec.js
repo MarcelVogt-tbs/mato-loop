@@ -12,8 +12,9 @@ describe('notification target navigation', () => {
     expect(notificationTargetRoute({
       type: 'automationRun', automationId: 'automation-1', runId: 'run-1'
     })).toEqual({
-      name: 'settings-automations',
-      query: { automation: 'automation-1', run: 'run-1' }
+      name: 'settings-automation-detail',
+      params: { automationId: 'automation-1' },
+      query: { run: 'run-1' }
     })
   })
 
