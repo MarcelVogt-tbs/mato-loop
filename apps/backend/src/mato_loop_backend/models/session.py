@@ -97,14 +97,18 @@ class ChatSession(Base):
         JSONB,
         nullable=False,
         default=lambda: {
-            "tabs": [{"app_id": "files", "pinned": False}],
-            "active_app_id": "files",
+            "tabs": [
+                {"app_id": "session", "pinned": False},
+                {"app_id": "files", "pinned": False},
+            ],
+            "active_app_id": "session",
         },
         server_default=text(
             "jsonb_build_object("
-            "'tabs', jsonb_build_array(jsonb_build_object("
-            "'app_id', 'files', 'pinned', false)), "
-            "'active_app_id', 'files')"
+            "'tabs', jsonb_build_array("
+            "jsonb_build_object('app_id', 'session', 'pinned', false), "
+            "jsonb_build_object('app_id', 'files', 'pinned', false)), "
+            "'active_app_id', 'session')"
         ),
     )
     model_config_id: Mapped[UUID | None] = mapped_column(nullable=True)

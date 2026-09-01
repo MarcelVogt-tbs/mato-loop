@@ -78,6 +78,25 @@ def _user() -> UserAccount:
     return UserAccount(id=uuid4(), username="test", password_hash="hash")
 
 
+def _stored_app_tab(app_id: str, *, pinned: bool = False) -> dict:
+    return {
+        "tab_id": app_id,
+        "kind": "app",
+        "app_id": app_id,
+        "pinned": pinned,
+        "file_target": None,
+    }
+
+
+def _api_app_tab(app_id: str, *, pinned: bool = False) -> dict:
+    return {
+        "tabId": app_id,
+        "kind": "app",
+        "appId": app_id,
+        "pinned": pinned,
+    }
+
+
 def test_workspace_active_file_requires_a_normalized_absolute_posix_path() -> None:
     agent_id = uuid4()
     session = ChatSession(
@@ -403,13 +422,28 @@ def test_standalone_project_move_rebinds_file_action_and_control_center_metadata
 
     session_id = uuid4()
     project_id = uuid4()
+    file_tab_id = f"file-{uuid4()}"
     session = ChatSession(
         id=session_id,
         user_id=uuid4(),
         title="Move",
         control_center={
-            "tabs": [{"app_id": "files", "pinned": False}],
-            "active_app_id": "files",
+            "tabs": [
+                {"app_id": "files", "pinned": False},
+                {
+                    "tab_id": file_tab_id,
+                    "kind": "file",
+                    "app_id": "file-viewer",
+                    "pinned": False,
+                    "file_target": {
+                        "scope": "session",
+                        "path": "note.txt",
+                        "name": "note.txt",
+                        "root_identity": str(session_id),
+                    },
+                },
+            ],
+            "active_app_id": file_tab_id,
             "open": True,
             "file_view": {
                 "scope": "session",
@@ -417,6 +451,16 @@ def test_standalone_project_move_rebinds_file_action_and_control_center_metadata
                 "selected_kind": "file",
                 "viewed_file_path": "note.txt",
                 "root_identity": str(session_id),
+            },
+            "file_views": {
+                "session": {
+                    "scope": "session",
+                    "selected_path": "note.txt",
+                    "selected_kind": "file",
+                    "viewed_file_path": "note.txt",
+                    "root_identity": str(session_id),
+                },
+                "filesystem": None,
             },
         },
     )
@@ -447,6 +491,12 @@ def test_standalone_project_move_rebinds_file_action_and_control_center_metadata
     )
 
     assert session.control_center["file_view"]["root_identity"] == str(project_id)
+    assert session.control_center["file_views"]["session"]["root_identity"] == str(
+        project_id
+    )
+    assert session.control_center["tabs"][1]["file_target"]["root_identity"] == str(
+        project_id
+    )
     assert (
         message.provider_data["_matoloop"]["fileActions"][0]["rootIdentity"]
         == str(project_id)
@@ -460,8 +510,48 @@ def test_standalone_project_move_rebinds_file_action_and_control_center_metadata
     )
 
     assert session.control_center["file_view"] is None
+    assert session.control_center["file_views"]["session"] is None
+    assert session.control_center["tabs"] == [{"app_id": "files", "pinned": False}]
+    assert session.control_center["active_app_id"] == "files"
     assert message.provider_data["_matoloop"]["fileActions"] == []
     assert "activeFile" not in message.provider_data["_matoloop"]
+
+
+def test_removing_an_active_file_tab_falls_back_to_the_fixed_session_tab() -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    root_id = uuid4()
+    tab_id = f"file-{uuid4()}"
+    session = ChatSession(
+        id=uuid4(),
+        user_id=uuid4(),
+        title="Move",
+        control_center={
+            "tabs": [
+                {"app_id": "session", "pinned": False},
+                {
+                    "tab_id": tab_id,
+                    "kind": "file",
+                    "app_id": "file-viewer",
+                    "pinned": False,
+                    "file_target": {
+                        "scope": "session",
+                        "path": "note.txt",
+                        "name": "note.txt",
+                        "root_identity": str(root_id),
+                    },
+                },
+            ],
+            "active_app_id": tab_id,
+        },
+    )
+
+    sessions_route._rebind_session_file_metadata(session, [], root_id, None)
+
+    assert session.control_center["tabs"] == [
+        {"app_id": "session", "pinned": False}
+    ]
+    assert session.control_center["active_app_id"] == "session"
 
 
 async def test_mark_session_read_uses_owned_assistant_message_monotonically() -> None:
@@ -568,12 +658,14 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     assert session.current_directory is None
     assert session.control_center == {
         "tabs": [
-            {"app_id": "files", "pinned": False},
-            {"app_id": "notifications", "pinned": True},
+            _stored_app_tab("session"),
+            _stored_app_tab("files"),
+            _stored_app_tab("notifications", pinned=True),
         ],
         "active_app_id": "notifications",
         "open": False,
         "file_view": None,
+        "file_views": {"session": None, "filesystem": None},
     }
     assert session.title_generation_status == TitleGenerationStatus.PENDING.value
     start.assert_awaited_once_with(
@@ -823,10 +915,11 @@ async def test_session_detail_contains_active_run_and_aggregate_metrics() -> Non
 
     assert result["pinned"] is True
     assert result["controlCenter"] == {
-        "tabs": [{"appId": "files", "pinned": False}],
-        "activeAppId": "files",
+        "tabs": [_api_app_tab("session"), _api_app_tab("files")],
+        "activeAppId": "session",
         "open": False,
         "fileView": None,
+        "fileViews": {"session": None, "filesystem": None},
     }
     assert result["activeRun"] == {
         "id": str(run.id),
@@ -893,10 +986,11 @@ def test_session_payload_ignores_invalid_persisted_file_view() -> None:
     result = session_payload(session)
 
     assert result["controlCenter"] == {
-        "tabs": [{"appId": "files", "pinned": False}],
-        "activeAppId": "files",
+        "tabs": [_api_app_tab("session"), _api_app_tab("files")],
+        "activeAppId": "session",
         "open": False,
         "fileView": None,
+        "fileViews": {"session": None, "filesystem": None},
     }
 
 
@@ -1957,11 +2051,22 @@ async def test_control_center_state_can_be_replaced() -> None:
         session.id, SessionUpdateRequest(control_center=state), user, db
     )
 
-    assert session.control_center == state
+    assert session.control_center == {
+        "tabs": [
+            _stored_app_tab("session"),
+            _stored_app_tab("files", pinned=True),
+            _stored_app_tab("terminal_2"),
+        ],
+        "active_app_id": "terminal_2",
+        "open": True,
+        "file_view": state["file_view"],
+        "file_views": {"session": None, "filesystem": None},
+    }
     assert result["controlCenter"] == {
         "tabs": [
-            {"appId": "files", "pinned": True},
-            {"appId": "terminal_2", "pinned": False},
+            _api_app_tab("session"),
+            _api_app_tab("files", pinned=True),
+            _api_app_tab("terminal_2"),
         ],
         "activeAppId": "terminal_2",
         "open": True,
@@ -1974,8 +2079,56 @@ async def test_control_center_state_can_be_replaced() -> None:
             "executionAgentId": None,
             "currentDirectory": None,
         },
+        "fileViews": {"session": None, "filesystem": None},
     }
     db.commit.assert_awaited_once()
+
+
+def test_control_center_state_accepts_a_session_file_tab() -> None:
+    root_id = uuid4()
+    tab_id = f"file-{uuid4()}"
+
+    request = SessionUpdateRequest(
+        control_center={
+            "tabs": [
+                {
+                    "tab_id": tab_id,
+                    "kind": "file",
+                    "app_id": "file-viewer",
+                    "pinned": False,
+                    "file_target": {
+                        "scope": "session",
+                        "path": "notes/plan.md",
+                        "name": "plan.md",
+                        "root_identity": str(root_id),
+                    },
+                }
+            ],
+            "active_app_id": tab_id,
+        }
+    )
+
+    assert request.control_center is not None
+    assert request.control_center.tabs[0].app_id == "session"
+    assert request.control_center.tabs[1].file_target is not None
+    assert request.control_center.tabs[1].file_target.path == "notes/plan.md"
+
+
+def test_control_center_state_preserves_twenty_legacy_tabs_when_adding_session() -> None:
+    request = SessionUpdateRequest(
+        control_center={
+            "tabs": [
+                {"app_id": f"app_{index}", "pinned": False}
+                for index in range(20)
+            ],
+            "active_app_id": "app_0",
+        }
+    )
+
+    assert request.control_center is not None
+    assert len(request.control_center.tabs) == 21
+    assert request.control_center.tabs[0].app_id == "session"
+    assert request.control_center.active_app_id == "app_0"
 
 
 @pytest.mark.parametrize(
@@ -2008,12 +2161,19 @@ async def test_control_center_state_can_be_replaced() -> None:
             },
         },
         {
-            "tabs": [{"app_id": "../files", "pinned": False}],
-            "active_app_id": "../files",
+            "tabs": [{"app_id": "files", "pinned": False}],
+            "active_app_id": "files",
+            "file_view": {
+                "scope": "filesystem",
+                "selected_path": "/work/../secret.txt",
+                "selected_kind": "file",
+                "execution_agent_id": "550e8400-e29b-41d4-a716-446655440001",
+                "current_directory": "/work",
+            },
         },
         {
-            "tabs": [{"app_id": "files", "pinned": False}],
-            "active_app_id": None,
+            "tabs": [{"app_id": "../files", "pinned": False}],
+            "active_app_id": "../files",
         },
         {"tabs": [], "active_app_id": "files"},
         {
@@ -2023,6 +2183,41 @@ async def test_control_center_state_can_be_replaced() -> None:
             ],
             "active_app_id": "app_0",
         },
+        {
+            "tabs": [
+                {
+                    "tab_id": "file-x",
+                    "kind": "file",
+                    "app_id": "file-viewer",
+                    "pinned": False,
+                    "file_target": {
+                        "scope": "session",
+                        "path": "plan.md",
+                        "name": "plan.md",
+                        "root_identity": str(uuid4()),
+                    },
+                }
+            ],
+            "active_app_id": "file-x",
+        },
+        {
+            "tabs": [
+                {
+                    "tab_id": "file-550e8400-e29b-41d4-a716-446655440000",
+                    "kind": "file",
+                    "app_id": "file-viewer",
+                    "pinned": False,
+                    "file_target": {
+                        "scope": "filesystem",
+                        "path": "/work/../secret.txt",
+                        "name": "secret.txt",
+                        "execution_agent_id": "550e8400-e29b-41d4-a716-446655440001",
+                        "current_directory": "/work",
+                    },
+                }
+            ],
+            "active_app_id": "file-550e8400-e29b-41d4-a716-446655440000",
+        },
         None,
     ],
 )
@@ -2031,7 +2226,7 @@ def test_control_center_state_rejects_invalid_full_state(state) -> None:
         SessionUpdateRequest(control_center=state)
 
 
-async def test_control_center_state_can_be_empty() -> None:
+async def test_control_center_state_keeps_the_fixed_session_tab() -> None:
     user = _user()
     session = ChatSession(
         id=uuid4(),
@@ -2050,16 +2245,18 @@ async def test_control_center_state_can_be_empty() -> None:
     )
 
     assert session.control_center == {
-        "tabs": [],
-        "active_app_id": None,
+        "tabs": [_stored_app_tab("session")],
+        "active_app_id": "session",
         "open": False,
         "file_view": None,
+        "file_views": {"session": None, "filesystem": None},
     }
     assert result["controlCenter"] == {
-        "tabs": [],
-        "activeAppId": None,
+        "tabs": [_api_app_tab("session")],
+        "activeAppId": "session",
         "open": False,
         "fileView": None,
+        "fileViews": {"session": None, "filesystem": None},
     }
 
 
@@ -2086,7 +2283,7 @@ async def test_control_center_state_can_change_during_active_run() -> None:
         db,
     )
 
-    assert session.control_center["tabs"][0]["pinned"] is True
+    assert session.control_center["tabs"][1]["pinned"] is True
     db.scalar.assert_not_awaited()
 
 

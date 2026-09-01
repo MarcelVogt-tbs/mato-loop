@@ -181,6 +181,7 @@ def rebind_session_file_metadata(
     target = str(target_identity) if target_identity is not None else None
     control_center = dict(session.control_center or {})
     file_view = control_center.get("file_view")
+    file_views = control_center.get("file_views")
     if (
         isinstance(file_view, dict)
         and file_view.get("scope") == "session"
@@ -189,6 +190,60 @@ def rebind_session_file_metadata(
         control_center["file_view"] = (
             {**file_view, "root_identity": target} if target is not None else None
         )
+        session.control_center = control_center
+    if isinstance(file_views, dict):
+        managed_view = file_views.get("session")
+        if (
+            isinstance(managed_view, dict)
+            and managed_view.get("root_identity") == source
+        ):
+            file_views = {
+                **file_views,
+                "session": (
+                    {**managed_view, "root_identity": target}
+                    if target is not None
+                    else None
+                ),
+            }
+            control_center["file_views"] = file_views
+            session.control_center = control_center
+    tabs = control_center.get("tabs")
+    if isinstance(tabs, list):
+        rebound_tabs = []
+        removed_active_tab = False
+        for tab in tabs:
+            if not isinstance(tab, dict):
+                rebound_tabs.append(tab)
+                continue
+            target_data = tab.get("file_target")
+            if not (
+                isinstance(target_data, dict)
+                and target_data.get("scope") == "session"
+                and target_data.get("root_identity") == source
+            ):
+                rebound_tabs.append(tab)
+                continue
+            if target is not None:
+                rebound_tabs.append(
+                    {**tab, "file_target": {**target_data, "root_identity": target}}
+                )
+            elif control_center.get("active_app_id") == tab.get("tab_id"):
+                removed_active_tab = True
+        if removed_active_tab:
+            remaining_ids = [
+                tab.get("tab_id") or tab.get("app_id")
+                for tab in rebound_tabs
+                if isinstance(tab, dict)
+            ]
+            control_center["active_app_id"] = next(
+                (
+                    tab_id
+                    for tab_id in ("files", "session", *remaining_ids)
+                    if tab_id in remaining_ids
+                ),
+                None,
+            )
+        control_center["tabs"] = rebound_tabs
         session.control_center = control_center
     for message in messages:
         provider_data = dict(message.provider_data or {})
@@ -240,6 +295,7 @@ def session_payload(
     has_unread_messages: bool | None = None,
 ) -> dict[str, Any]:
     file_view = control_center.get("file_view")
+    file_views = control_center.get("file_views")
     payload = {
         "id": str(item.id),
         "projectId": str(item.project_id) if item.project_id else None,
@@ -247,10 +303,7 @@ def session_payload(
         "titleGenerationStatus": item.title_generation_status,
         "pinned": bool(item.is_pinned),
         "controlCenter": {
-            "tabs": [
-                {"appId": tab["app_id"], "pinned": tab["pinned"]}
-                for tab in control_center["tabs"]
-            ],
+            "tabs": [_control_center_tab_payload(tab) for tab in control_center["tabs"]],
             "activeAppId": control_center["active_app_id"],
             "open": bool(control_center.get("open", False)),
             "fileView": (
@@ -266,6 +319,12 @@ def session_payload(
                 if isinstance(file_view, dict)
                 else None
             ),
+            "fileViews": {
+                scope: _control_center_file_view_payload(
+                    file_views.get(scope) if isinstance(file_views, dict) else None
+                )
+                for scope in ("session", "filesystem")
+            },
         },
         "modelId": str(item.model_config_id) if item.model_config_id else None,
         "agentProfileId": (
@@ -304,6 +363,47 @@ def session_payload(
         payload["memoryToolsAvailable"] = memory_tools_available
         payload["memoryUnavailableReason"] = memory_unavailable_reason
     return payload
+
+
+def _control_center_tab_payload(tab: dict[str, Any]) -> dict[str, Any]:
+    target = tab.get("file_target")
+    return {
+        "tabId": tab.get("tab_id") or tab["app_id"],
+        "kind": tab.get("kind", "app"),
+        "appId": tab["app_id"],
+        "pinned": tab["pinned"],
+        **(
+            {
+                "fileTarget": {
+                    "scope": target["scope"],
+                    "path": target["path"],
+                    "name": target["name"],
+                    "rootIdentity": target.get("root_identity"),
+                    "executionAgentId": target.get("execution_agent_id"),
+                    "currentDirectory": target.get("current_directory"),
+                    "readOnly": bool(target.get("read_only", False)),
+                }
+            }
+            if isinstance(target, dict)
+            else {}
+        ),
+    }
+
+
+def _control_center_file_view_payload(
+    file_view: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(file_view, dict):
+        return None
+    return {
+        "scope": file_view["scope"],
+        "selectedPath": file_view["selected_path"],
+        "selectedKind": file_view["selected_kind"],
+        "viewedFilePath": file_view.get("viewed_file_path"),
+        "rootIdentity": file_view.get("root_identity"),
+        "executionAgentId": file_view.get("execution_agent_id"),
+        "currentDirectory": file_view.get("current_directory"),
+    }
 
 
 def message_payload(item: Message, *, retry_available: bool = False) -> dict[str, Any]:
