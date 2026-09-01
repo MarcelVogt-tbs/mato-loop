@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { notifyError } from 'src/utils/notifications'
+import { randomUuid } from 'src/utils/random-id'
 import { applicationServerKey } from 'src/utils/web-push'
 
 const PAGE_SIZE = 20
@@ -19,7 +20,7 @@ function deviceId(create = false) {
     const stored = window.localStorage.getItem(DEVICE_ID_KEY)
     if (UUID_PATTERN.test(stored || '')) return stored
     if (!create) return null
-    const id = window.crypto.randomUUID()
+    const id = randomUuid(window.crypto)
     window.localStorage.setItem(DEVICE_ID_KEY, id)
     return id
   } catch (error) {
