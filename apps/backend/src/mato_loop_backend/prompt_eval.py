@@ -84,7 +84,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 30
+INVENTORY_VERSION = 31
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -120,6 +120,7 @@ SlimmingVariant = Literal[
     "prompt-no-mermaid",
     "prompt-no-budgets",
     "prompt-no-transcript-duplicate",
+    "prompt-agent-web-routing",
     "prompt-atoms",
     "combined-lean",
     "combined-selective-lean",
@@ -151,6 +152,7 @@ SLIMMING_VARIANTS: tuple[SlimmingVariant, ...] = (
     "prompt-no-mermaid",
     "prompt-no-budgets",
     "prompt-no-transcript-duplicate",
+    "prompt-agent-web-routing",
     "prompt-atoms",
     "combined-lean",
     "combined-selective-lean",
@@ -1553,6 +1555,72 @@ CASES = (
         tools=("web_search", "webfetch"),
         expected_tool="webfetch",
         expected_arguments={"url": "https://example.com/specification"},
+    ),
+    PromptCase(
+        id="known_url_with_shell_uses_webfetch",
+        kind="general",
+        user="Lies https://example.com/specification und fasse die Seite zusammen.",
+        tools=("web_search", "webfetch", "shell_run"),
+        working_directory="/data/home/project",
+        expected_tool="webfetch",
+        expected_arguments={"url": "https://example.com/specification"},
+        expected_tool_call_count=1,
+        forbidden_tools=("web_search", "shell_run"),
+    ),
+    PromptCase(
+        id="current_information_with_shell_uses_search",
+        kind="general",
+        user="Welche Python-Version ist aktuell die neueste stabile Version?",
+        tools=("web_search", "webfetch", "shell_run"),
+        working_directory="/data/home/project",
+        expected_tool="web_search",
+        argument_contains={"query": ("Python", "Version")},
+        expected_tool_call_count=1,
+        forbidden_tools=("webfetch", "shell_run"),
+    ),
+    PromptCase(
+        id="paginated_web_extraction_uses_shell",
+        kind="general",
+        user=(
+            "Extrahiere aus allen Seiten des paginierten Produktkatalogs ab "
+            "https://example.com/catalog?page=1 die Produkt-ID und den Preis und speichere das "
+            "Ergebnis als products.csv im aktuellen Computerverzeichnis."
+        ),
+        tools=("web_search", "webfetch", "shell_run"),
+        working_directory="/data/home/project",
+        continuation=_exchange(
+            "webfetch",
+            {"url": "https://example.com/catalog?page=1"},
+            json.dumps(
+                {
+                    "url": "https://example.com/catalog?page=1",
+                    "citationEligible": True,
+                    "content": (
+                        '<article data-product-id="p-001" data-price="19.90"></article>'
+                        '<a rel="next" href="https://example.com/catalog?page=2">Next</a>'
+                        " Page 1 of 20."
+                    ),
+                }
+            ),
+        ),
+        expected_tool="shell_run",
+        expected_tool_call_count=1,
+        forbidden_tools=("web_search", "webfetch"),
+    ),
+    PromptCase(
+        id="custom_http_extraction_uses_shell",
+        kind="general",
+        user=(
+            "Rufe https://api.example.com/items auf dem ausgewählten Computer mit dem HTTP-Header "
+            "Accept: application/json ab. Folge dem Feld next bis null und zähle lokal alle Einträge "
+            "mit enabled=true."
+        ),
+        tools=("web_search", "webfetch", "shell_run"),
+        working_directory="/data/home/project",
+        expected_tool="shell_run",
+        argument_contains={"command": ("https://api.example.com/items",)},
+        expected_tool_call_count=1,
+        forbidden_tools=("web_search", "webfetch"),
     ),
     PromptCase(
         id="youtube_url_uses_published_transcript",
@@ -3460,6 +3528,16 @@ _SEMANTIC_CONTRACTS = (
     ),
     ContractCoverage("webfetch.known_url", "webfetch", ("known_url_uses_webfetch",)),
     ContractCoverage(
+        "tools.web_vs_computer_routing",
+        "tools",
+        (
+            "known_url_with_shell_uses_webfetch",
+            "current_information_with_shell_uses_search",
+            "paginated_web_extraction_uses_shell",
+            "custom_http_extraction_uses_shell",
+        ),
+    ),
+    ContractCoverage(
         "transcript.remote_published_captions",
         "transcript",
         (
@@ -4226,6 +4304,16 @@ def _general_offered_tools(case: PromptCase) -> EffectiveToolSet:
         )
         instances.append(instance)
     integration_settings = IntegrationSettings(instances=instances)
+    execution_operations = {
+        definition.required_operation
+        for name, definition in tool_registry._operation_definitions.items()
+        if name in case.tools
+        and definition.required_operation is not None
+        and (
+            case.working_directory is not None
+            or definition.required_operation not in {"process.exec", "shell.run"}
+        )
+    }
     return tool_registry.effective(
         integration_settings,
         webfetch_enabled="webfetch" in case.tools,
@@ -4234,6 +4322,7 @@ def _general_offered_tools(case: PromptCase) -> EffectiveToolSet:
         memory_write_enabled="memory_write" in case.tools,
         tool_capabilities=capabilities,
         tool_settings=tool_settings,
+        execution_operations=execution_operations,
     )
 
 
@@ -5144,6 +5233,17 @@ def slimming_system_prompt(
     offered_names: frozenset[str],
     variant: SlimmingVariant,
 ) -> str:
+    if (
+        variant == "prompt-agent-web-routing"
+        and "shell_run" in offered_names
+        and {"web_search", "webfetch"} & offered_names
+    ):
+        marker = "Web research contract:"
+        rule = (
+            "Use web_search for discovery and webfetch for simple retrieval; prefer shell_run for raw "
+            "data, custom HTTP, pagination, multiple requests, or local processing."
+        )
+        return prompt.replace(marker, f"{marker} {rule}", 1)
     prompt_variant: SlimmingVariant = (
         "prompt-atoms"
         if variant in {"combined-lean", "combined-selective-lean"}
@@ -5374,6 +5474,11 @@ def _general_case(
     tools = slimming_tool_schemas(tools, slimming_variant)
     offered_names = frozenset(tool["name"] for tool in narrow_tools)
     system_options = dict(case.system_options)
+    if offered_names & set(tool_registry._operation_definitions):
+        system_options.setdefault("execution_agent_name", "Evaluator")
+        system_options.setdefault("execution_agent_platform", "linux")
+        system_options.setdefault("execution_agent_connected", True)
+        system_options.setdefault("current_directory", case.working_directory)
     synthetic_memory = message_layout == "memory-tool-result" and case.memory_text is not None
     tool_driven_overview = (
         message_layout == "memory-tool-driven"

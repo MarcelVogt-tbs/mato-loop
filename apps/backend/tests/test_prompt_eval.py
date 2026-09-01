@@ -54,7 +54,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 30
+    assert INVENTORY_VERSION == 31
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -88,7 +88,7 @@ def test_inventory_is_complete_and_versioned() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 176
+    assert 80 <= len(CASES) <= 192
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",
@@ -184,6 +184,54 @@ def test_transcript_routing_uses_the_production_tool_contract() -> None:
 
     _messages, webfetch_tools = build_case(_case("known_url_uses_webfetch"))
     assert {tool["name"] for tool in webfetch_tools} == {"web_search", "webfetch"}
+
+
+def test_agent_web_routing_candidate_is_prompt_only_and_conditional() -> None:
+    case = _case("paginated_web_extraction_uses_shell")
+    baseline_messages, baseline_tools = build_case(case)
+    candidate_messages, candidate_tools = build_case(
+        case, slimming_variant="prompt-agent-web-routing"
+    )
+    rule = "prefer shell_run for raw data"
+
+    assert baseline_tools == candidate_tools
+    assert {tool["name"] for tool in candidate_tools} == {
+        "web_search",
+        "webfetch",
+        "shell_run",
+    }
+    assert rule not in baseline_messages[0]["content"]
+    assert rule in candidate_messages[0]["content"]
+    assert len(candidate_messages[0]["content"]) - len(
+        baseline_messages[0]["content"]
+    ) < 250
+    assert "Selected computer context:" in candidate_messages[0]["content"]
+    assert '"name": "Evaluator"' in candidate_messages[0]["content"]
+    assert '"currentDirectory": "/data/home/project"' in candidate_messages[0]["content"]
+
+    web_only_messages, _tools = build_case(
+        _case("known_url_uses_webfetch"),
+        slimming_variant="prompt-agent-web-routing",
+    )
+    assert rule not in web_only_messages[0]["content"]
+
+
+def test_agent_web_routing_cases_offer_real_production_schemas() -> None:
+    case_ids = {
+        "known_url_with_shell_uses_webfetch",
+        "current_information_with_shell_uses_search",
+        "paginated_web_extraction_uses_shell",
+        "custom_http_extraction_uses_shell",
+    }
+
+    for case_id in case_ids:
+        _messages, tools = build_case(_case(case_id))
+        by_name = {tool["name"]: tool for tool in tools}
+
+        assert set(by_name) == {"web_search", "webfetch", "shell_run"}
+        assert set(by_name["shell_run"]["parameters"]["properties"]) == {"command"}
+        assert by_name["shell_run"]["parameters"]["required"] == ["command"]
+        assert by_name["shell_run"]["parameters"]["additionalProperties"] is False
 
 
 def test_qr_generation_requires_an_explicit_user_request() -> None:
@@ -2014,11 +2062,11 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     report = markdown_report(payload)
 
     assert payload["caseCount"] == len(CASES)
-    assert payload["semanticContractCount"] == 133
-    assert payload["contractCount"] == 309
-    assert "Cases: 176" in report
-    assert "Semantic contracts: 133" in report
-    assert "All inventory rows: 309" in report
+    assert payload["semanticContractCount"] == 134
+    assert payload["contractCount"] == 314
+    assert "Cases: 180" in report
+    assert "Semantic contracts: 134" in report
+    assert "All inventory rows: 314" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report
