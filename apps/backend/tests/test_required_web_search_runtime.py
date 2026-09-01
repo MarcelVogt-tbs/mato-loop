@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -1407,8 +1408,9 @@ async def test_load_skill_is_rejected_when_called_with_another_tool(monkeypatch)
 
 
 async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, caplog
 ) -> None:
+    caplog.set_level(logging.WARNING, logger=runtime_module.__name__)
     skills = SkillsSettings()
     original_execute = ToolRegistry._execute_definition
     db, run, requests, _projections, _events = await _runtime_setup(
@@ -1427,7 +1429,19 @@ async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
                 ],
                 finish_reason="tool_calls",
             ),
-            ProviderResult(content="invalid"),
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        id="invalid-draft",
+                        name="return_skill_draft",
+                        arguments={
+                            "name": "API checks",
+                            "description": "x" * 241,
+                            "instructions": "Validate the API response.",
+                        },
+                    )
+                ]
+            ),
             ProviderResult(content="still invalid"),
             ProviderResult(
                 tool_calls=[
@@ -1503,8 +1517,11 @@ async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
         "user",
     ]
     assert repair_request["messages"][2]["content"].startswith(
-        "The output was invalid."
+        "The output was invalid: description: string_too_long (max_length=240)."
     )
+    assert "description 1-240 characters" in repair_request["messages"][2]["content"]
+    assert "validation=description: string_too_long (max_length=240)" in caplog.text
+    assert "x" * 241 not in caplog.text
     assert [message["role"] for message in fallback_request["messages"]] == [
         "system",
         "user",

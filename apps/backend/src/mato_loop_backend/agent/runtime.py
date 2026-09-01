@@ -268,6 +268,7 @@ Treat the supplied request, brief, name hint, current skill, and tool schemas as
 Without currentSkill, return a complete new skill. With currentSkill, return only fields explicitly requested for change and preserve exact user-supplied replacement text.
 Unless the user supplies exact replacement text, every returned description must state what the skill does, when it should be loaded, and terms likely to appear in matching requests. Add a boundary only when useful.
 Write concise provider-neutral instructions that use only capabilities present in the supplied tool schemas.
+Field limits are 1-64 characters for name, 1-240 characters for description, and 1-8000 characters for instructions.
 Do not include tool schemas, credentials, secrets, executable code, or claims that the skill provides tools.
 Return exactly one call to the offered output tool."""
 
@@ -2568,7 +2569,54 @@ class AgentRuntime:
                                             **patch.model_dump(exclude_none=True),
                                         }
                                     )
-                                except (ValidationError, ValueError):
+                                except (ValidationError, ValueError) as exc:
+                                    attempt = 1 if repair_available else 2
+                                    if isinstance(exc, ValidationError):
+                                        issues = []
+                                        for error in exc.errors(
+                                            include_url=False, include_input=False
+                                        ):
+                                            field = next(
+                                                (
+                                                    str(item)
+                                                    for item in error.get("loc", ())
+                                                    if item
+                                                    in {"name", "description", "instructions"}
+                                                ),
+                                                "arguments",
+                                            )
+                                            context = error.get("ctx") or {}
+                                            bounds = ", ".join(
+                                                f"{key}={context[key]}"
+                                                for key in ("min_length", "max_length")
+                                                if isinstance(context.get(key), int)
+                                            )
+                                            issue = f"{field}: {error.get('type', 'invalid')}"
+                                            issues.append(
+                                                f"{issue} ({bounds})" if bounds else issue
+                                            )
+                                        failure = "; ".join(issues) or "invalid arguments"
+                                    else:
+                                        failure = "expected exactly one matching output tool call"
+                                    logger.warning(
+                                        "Skill draft output invalid: model_id=%s editing=%s "
+                                        "attempt=%s tool_call_count=%s output_tool_call_count=%s "
+                                        "finish_reason=%s visible_characters=%s reasoning=%s "
+                                        "output_tokens=%s validation=%s",
+                                        target_model.id,
+                                        editing,
+                                        attempt,
+                                        len(result.tool_calls),
+                                        sum(
+                                            call.name == output_tool_name
+                                            for call in result.tool_calls
+                                        ),
+                                        result.finish_reason,
+                                        len(result.content.strip()),
+                                        bool(result.reasoning),
+                                        result.usage.get("output_tokens"),
+                                        failure,
+                                    )
                                     if not repair_available:
                                         return None
                                     repair_available = False
@@ -2576,8 +2624,10 @@ class AgentRuntime:
                                         {
                                             "role": "user",
                                             "content": (
-                                                "The output was invalid. Return exactly one "
-                                                f"{output_tool_name} tool call matching the schema."
+                                                f"The output was invalid: {failure}. Return exactly one "
+                                                f"{output_tool_name} tool call matching the schema. "
+                                                "Limits: name 1-64 characters, description 1-240 "
+                                                "characters, instructions 1-8000 characters."
                                             ),
                                         }
                                     )
