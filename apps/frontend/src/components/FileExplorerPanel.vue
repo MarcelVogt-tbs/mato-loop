@@ -151,10 +151,6 @@
                 <q-item-section avatar><q-icon name="drive_file_move" /></q-item-section>
                 <q-item-section>Absoluten Pfad öffnen</q-item-section>
               </q-item>
-              <q-item v-if="chat.current" clickable v-ripple v-close-popup @click="openPermissionsDialog">
-                <q-item-section avatar><q-icon name="verified_user" /></q-item-section>
-                <q-item-section>Session-Freigaben</q-item-section>
-              </q-item>
               <q-separator v-if="hasOverflowActions && (canCreateFile || canCreateDirectory || canUpload)" spaced />
               <q-item v-if="canCreateFile" clickable v-ripple v-close-popup @click="openCreateDialog('file')">
                 <q-item-section avatar><q-icon name="note_add" /></q-item-section>
@@ -323,55 +319,6 @@
       </q-card>
     </q-dialog>
 
-    <q-dialog v-model="permissionsDialogOpen" :persistent="permissionLoading || Boolean(revokingId)">
-      <q-card class="file-permissions-dialog">
-        <q-toolbar>
-          <q-icon name="verified_user" color="primary" size="24px" class="q-ml-sm" />
-          <q-toolbar-title class="text-subtitle1 text-weight-bold">Session-Freigaben</q-toolbar-title>
-          <q-btn class="file-icon-action" flat round dense icon="close" aria-label="Dialog schließen" :disable="Boolean(revokingId)" v-close-popup>
-            <q-tooltip>Schließen</q-tooltip>
-          </q-btn>
-        </q-toolbar>
-        <q-separator />
-        <q-card-section class="q-pa-none file-permissions-dialog__content">
-          <div v-if="permissionLoading" class="q-pa-xl text-center"><q-spinner color="primary" /></div>
-          <div v-else-if="permissionError" class="file-load-state q-ma-md q-pa-md text-center" role="alert">
-            <q-icon name="cloud_off" size="32px" class="app-muted" />
-            <div class="q-mt-sm">{{ permissionErrorMessage }}</div>
-            <q-btn class="q-mt-sm" flat no-caps color="primary" label="Erneut versuchen" @click="loadPermissions" />
-          </div>
-          <q-list v-else separator>
-            <q-item v-for="grant in permissions" :key="grant.id">
-              <q-item-section avatar>
-                <q-icon :name="grantDisplay(grant).icon" color="primary" />
-              </q-item-section>
-              <q-item-section>
-                <q-item-label>{{ grantDisplay(grant).label }}</q-item-label>
-                <q-item-label caption class="file-path-value">{{ grantDisplay(grant).value }}</q-item-label>
-              </q-item-section>
-              <q-item-section side>
-                <q-btn
-                  class="file-icon-action"
-                  flat
-                  round
-                  dense
-                  icon="delete_outline"
-                  color="negative"
-                  :loading="revokingId === grant.id"
-                  :disable="Boolean(revokingId)"
-                  :aria-label="`${grantDisplay(grant).label} widerrufen`"
-                  @click="revoke(grant)"
-                >
-                  <q-tooltip>Freigabe widerrufen</q-tooltip>
-                </q-btn>
-              </q-item-section>
-            </q-item>
-            <q-item v-if="!permissions.length"><q-item-section class="app-muted">Keine Freigaben vorhanden.</q-item-section></q-item>
-          </q-list>
-        </q-card-section>
-      </q-card>
-    </q-dialog>
-
   </div>
 </template>
 
@@ -380,9 +327,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import FileTreeNode from 'components/FileTreeNode.vue'
 import { useConfirm } from 'src/composables/confirm'
-import { permissionGrantDisplay } from 'src/utils/approval-display'
 import { apiErrorMessage } from 'src/utils/api-errors'
-import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
@@ -407,12 +352,6 @@ const chat = useChatStore()
 const controlCenter = useControlCenterStore()
 const executionAgents = useExecutionAgentStore()
 const instanceLimits = useInstanceLimitsStore()
-const approvals = useApprovalStore()
-const permissions = ref([])
-const permissionLoading = ref(false)
-const permissionError = ref(null)
-const permissionsDialogOpen = ref(false)
-const revokingId = ref(null)
 const uploadInput = ref(null)
 const explorerRoot = ref(null)
 const searchInput = ref(null)
@@ -440,8 +379,7 @@ const selectedExecutionAgent = computed(() => (
   executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
 ))
 const hasOverflowActions = computed(() => Boolean(
-  (workspace.scope === 'filesystem' && explorerAvailable.value)
-  || chat.current
+  workspace.scope === 'filesystem' && explorerAvailable.value
 ))
 const targetDirectory = computed(() => {
   if (selectedIsDirectory.value) return workspace.selectedPath
@@ -509,16 +447,8 @@ const rootLoadError = computed(() => apiErrorMessage(
   workspace.loadErrors[workspace.directoryPath],
   'Die Dateien konnten nicht geladen werden.'
 ))
-const permissionErrorMessage = computed(() => apiErrorMessage(
-  permissionError.value,
-  'Die Session-Freigaben konnten nicht geladen werden.'
-))
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Name erforderlich.'
 const activeWorkspaceContext = computed(() => executionAgents.workspaceContextFor(chat.activeContext))
-
-function grantDisplay(grant) {
-  return permissionGrantDisplay(grant, chat.cachedSessions)
-}
 
 function refreshFiles() {
   const requests = [workspace.refresh()]
@@ -539,25 +469,6 @@ async function toggleSearch() {
 function closeSearch() {
   workspace.filter = ''
   searchOpen.value = false
-}
-
-async function loadPermissions() {
-  permissionLoading.value = true
-  permissionError.value = null
-  try {
-    permissions.value = chat.current
-      ? await approvals.permissions(chat.current.id, { suppressErrorToast: true })
-      : []
-  } catch (error) {
-    permissionError.value = error
-  } finally {
-    permissionLoading.value = false
-  }
-}
-
-function openPermissionsDialog() {
-  permissionsDialogOpen.value = true
-  loadPermissions()
 }
 
 function openCreateDialog(kind) {
@@ -723,7 +634,6 @@ async function renameEntry() {
       workspace.rebindFileTabPaths(reboundTabs, source.path, renamed.path)
     }
     renameDialogOpen.value = false
-    if (permissionsDialogOpen.value) await loadPermissions()
     await focusPath(renamed.path, targetDirectory.value)
   } catch {
     // The central API interceptor displays the error; keep the dialog open.
@@ -754,7 +664,6 @@ async function removeEntry(entry) {
     removedTabs.forEach((tabId) => workspace.discardFileTab(tabId))
   }
   workspace.selectPath(parent)
-  if (permissionsDialogOpen.value) await loadPermissions()
   await focusPath(parent)
 }
 
@@ -764,23 +673,6 @@ function fileTargetForPath(path) {
     path,
     name: path.split('/').filter(Boolean).at(-1) || path
   })
-}
-
-async function revoke(grant) {
-  const display = grantDisplay(grant)
-  const accepted = await confirm(
-    `Soll die Freigabe „${display.label}“ für ${display.value} widerrufen werden?`,
-    'Freigabe widerrufen',
-    { okLabel: 'Widerrufen', okColor: 'negative' }
-  )
-  if (!accepted) return
-  revokingId.value = grant.id
-  try {
-    await approvals.revoke(chat.current.id, grant.id)
-    await loadPermissions()
-  } finally {
-    revokingId.value = null
-  }
 }
 
 watch(
@@ -813,7 +705,6 @@ watch(
       && controlCenter.ready
     ) workspace.restoreView(controlCenter.fileViews[props.scope])
     workspace.load(workspace.directoryPath)
-    if (permissionsDialogOpen.value) loadPermissions()
   },
   { immediate: true }
 )

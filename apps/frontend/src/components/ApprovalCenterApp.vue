@@ -8,7 +8,7 @@
               <h2 id="approval-app-title" class="text-subtitle1 text-weight-bold q-my-none">Freigaben</h2>
               <q-badge v-if="attentionCount" rounded color="warning" text-color="dark" :label="attentionCount" />
             </div>
-            <div class="text-caption app-muted">Offene Entscheidungen global, Session-Freigaben für die aktuelle Session</div>
+            <div class="text-caption app-muted">Offene Entscheidungen und Rückfragen</div>
           </div>
           <q-btn flat round dense icon="refresh" aria-label="Freigaben aktualisieren" :loading="loading" @click="load">
             <q-tooltip>Freigaben aktualisieren</q-tooltip>
@@ -56,75 +56,6 @@
           </article>
         </section>
 
-        <section aria-labelledby="session-permissions-title" class="q-mt-xl">
-          <div class="row items-center justify-between q-gutter-sm q-mb-md">
-            <div id="session-permissions-title" class="text-subtitle1 text-weight-bold">Session-Freigaben</div>
-            <q-btn
-              v-if="sessionGrants.length"
-              flat
-              no-caps
-              color="negative"
-              icon="delete_sweep"
-              label="Alle widerrufen"
-              :loading="revokingId === 'all'"
-              :disable="Boolean(revokingId)"
-              @click="revokeAll"
-            />
-          </div>
-          <q-card v-if="approvals.grantsLoading && !approvals.grantsLoaded" flat class="app-surface">
-            <q-card-section class="row items-center no-wrap q-gutter-md">
-              <q-skeleton type="QAvatar" />
-              <div class="col"><q-skeleton type="text" width="35%" /><q-skeleton type="text" width="75%" /></div>
-            </q-card-section>
-          </q-card>
-          <q-card v-else-if="approvals.grantsLoadFailed && !approvals.grantsLoaded" flat class="app-surface">
-            <q-card-section class="column items-center text-center q-py-lg">
-              <q-icon name="cloud_off" size="32px" class="app-muted" />
-              <div class="q-mt-sm">Session-Freigaben konnten nicht geladen werden.</div>
-              <q-btn class="q-mt-sm" flat no-caps color="primary" label="Erneut laden" @click="approvals.fetchGrants()" />
-            </q-card-section>
-          </q-card>
-          <q-card v-else flat class="app-surface">
-            <q-list separator>
-              <q-item
-                v-for="grant in sessionGrants"
-                :key="grant.id"
-                clickable
-                :aria-label="`${grant.sourceSession?.title || sessionTitle(grant.sessionId)} öffnen`"
-                @click="openSession(grant.sessionId)"
-              >
-                <q-item-section avatar>
-                  <q-icon :name="grantDisplay(grant).icon" color="primary" />
-                </q-item-section>
-                <q-item-section>
-                  <q-item-label>{{ grantDisplay(grant).label }}</q-item-label>
-                  <q-item-label caption>{{ grantDisplay(grant).value }}</q-item-label>
-                  <q-item-label caption>
-                    {{ grant.sourceSession?.title || sessionTitle(grant.sessionId) }} · {{ formatRelativeDateTime(grant.createdAt) }}
-                  </q-item-label>
-                </q-item-section>
-                <q-item-section side>
-                  <q-btn
-                    flat
-                    round
-                    dense
-                    icon="delete_outline"
-                    color="negative"
-                    :loading="revokingId === grant.id"
-                    :disable="Boolean(revokingId)"
-                    :aria-label="`${grantDisplay(grant).label} widerrufen`"
-                    @click.stop="revoke(grant)"
-                  >
-                    <q-tooltip>Freigabe widerrufen</q-tooltip>
-                  </q-btn>
-                </q-item-section>
-              </q-item>
-              <q-item v-if="!sessionGrants.length">
-                <q-item-section class="app-muted">Keine Session-Freigaben vorhanden.</q-item-section>
-              </q-item>
-            </q-list>
-          </q-card>
-        </section>
       </div>
     </q-scroll-area>
   </section>
@@ -138,8 +69,6 @@ import QuestionDock from 'components/QuestionDock.vue'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useQuestionStore } from 'stores/questions'
-import { useConfirm } from 'src/composables/confirm'
-import { permissionGrantDisplay } from 'src/utils/approval-display'
 import { formatRelativeDateTime } from 'src/utils/date-time'
 
 defineOptions({ name: 'ApprovalCenterApp' })
@@ -148,18 +77,15 @@ const router = useRouter()
 const approvals = useApprovalStore()
 const chat = useChatStore()
 const questions = useQuestionStore()
-const { confirm } = useConfirm()
 const selectedType = ref('all')
-const revokingId = ref(null)
 const typeOptions = [
   { label: 'Alle Typen', value: 'all' },
   { label: 'Agent-Aktionen', value: 'agent_action' },
   { label: 'Memory-Änderungen', value: 'memory_change' }
 ]
 const attentionCount = computed(() => approvals.pending.length + questions.pending.length)
-const sessionGrants = computed(() => approvals.grantsForSession(chat.selectedSessionId))
-const loading = computed(() => approvals.loading || approvals.grantsLoading || questions.loading)
-const loadFailed = computed(() => approvals.loadFailed || approvals.grantsLoadFailed || questions.loadFailed)
+const loading = computed(() => approvals.loading || questions.loading)
+const loadFailed = computed(() => approvals.loadFailed || questions.loadFailed)
 const filteredApprovals = computed(() => selectedType.value === 'all'
   ? approvals.pending
   : approvals.pending.filter((item) => (item.requestType || 'agent_action') === selectedType.value))
@@ -169,42 +95,7 @@ function sessionTitle(sessionId) {
 }
 
 async function load() {
-  await Promise.allSettled([approvals.fetchPending(), approvals.fetchGrants(), questions.fetchPending()])
-}
-
-const grantDisplay = (grant) => permissionGrantDisplay(grant, chat.cachedSessions)
-
-async function revoke(grant) {
-  const display = grantDisplay(grant)
-  const accepted = await confirm(
-    `Soll die Freigabe „${display.label}“ für ${display.value} widerrufen werden?`,
-    'Freigabe widerrufen',
-    { okLabel: 'Widerrufen', okColor: 'negative' }
-  )
-  if (!accepted) return
-  revokingId.value = grant.id
-  try {
-    await approvals.revoke(grant.sessionId, grant.id)
-  } finally {
-    revokingId.value = null
-  }
-}
-
-async function revokeAll() {
-  const sessionId = chat.selectedSessionId
-  if (!sessionId || !sessionGrants.value.length) return
-  const accepted = await confirm(
-    `Sollen alle ${sessionGrants.value.length} Freigaben dieser Session widerrufen werden? Der Agent fragt bei passenden Aktionen künftig wieder nach.`,
-    'Alle Session-Freigaben widerrufen',
-    { okLabel: 'Alle widerrufen', okColor: 'negative' }
-  )
-  if (!accepted) return
-  revokingId.value = 'all'
-  try {
-    await approvals.revokeAll(sessionId)
-  } finally {
-    revokingId.value = null
-  }
+  await Promise.allSettled([approvals.fetchPending(), questions.fetchPending()])
 }
 
 async function openSession(sessionId) {

@@ -192,19 +192,8 @@
 }
 
 .file-rename-dialog,
-.file-create-dialog,
-.file-permissions-dialog {
+.file-create-dialog {
   width: min(420px, calc(100vw - 32px));
-}
-
-.file-permissions-dialog__content {
-  max-height: min(65vh, 520px);
-  overflow: auto;
-}
-
-.file-path-value {
-  white-space: normal;
-  overflow-wrap: anywhere;
 }
 
 body.body--dark .file-explorer .app-muted,
@@ -262,7 +251,6 @@ body.body--dark .file-viewer .app-muted {
   .file-viewer .q-btn,
   .file-create-dialog .q-btn,
   .file-rename-dialog .q-btn,
-  .file-permissions-dialog .q-btn,
   .file-tree-row,
   .file-tree-row__main {
     min-height: 48px;
