@@ -26,86 +26,23 @@
         <q-tooltip>Speichernutzung erneut laden</q-tooltip>
       </q-btn>
     </div>
-    <q-space v-else />
-
-    <div class="col-auto q-ml-sm">
-      <q-btn-dropdown
-        flat
-        dense
-        no-caps
-        no-wrap
-        auto-close
-        color="primary"
-        :icon="sourceIcon"
-        :label="sourceLabel"
-        :disable="sourceSelectionDisabled"
-        :aria-label="`Dateiquelle: ${sourceLabel}`"
-        toggle-aria-label="Dateiquelle wechseln"
-      >
-        <q-list padding>
-          <q-item
-            v-for="option in sourceOptions"
-            :key="option.value"
-            clickable
-            v-ripple
-            :active="workspace.scope === option.value"
-            active-class="text-primary"
-            :disable="option.disable"
-            @click="selectSource(option.value)"
-          >
-            <q-item-section avatar><q-icon :name="option.icon" /></q-item-section>
-            <q-item-section>{{ option.label }}</q-item-section>
-            <q-item-section v-if="workspace.scope === option.value" side><q-icon name="check" color="primary" /></q-item-section>
-          </q-item>
-        </q-list>
-      </q-btn-dropdown>
-      <q-tooltip>{{ sourceTooltip }}</q-tooltip>
-    </div>
   </div>
 </template>
 
 <script setup>
 import { computed, watch } from 'vue'
-import { useConfirm } from 'src/composables/confirm'
 import {
   formatByteSize,
   formatStorageUsage,
   storageUsageProgress
 } from 'src/utils/resource-metrics'
 import { useChatStore } from 'stores/chat'
-import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useWorkspaceStore } from 'stores/workspace'
 
 defineOptions({ name: 'FileExplorerFooter' })
 
-const { confirm } = useConfirm()
 const chat = useChatStore()
-const executionAgents = useExecutionAgentStore()
 const workspace = useWorkspaceStore()
-const selectedExecutionAgent = computed(() => (
-  executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
-))
-const agentAvailable = computed(() => Boolean(
-  selectedExecutionAgent.value?.connected
-  && selectedExecutionAgent.value.operations?.includes('filesystem.list')
-))
-const sourceOptions = computed(() => [
-  { label: 'Session', value: 'session', icon: 'inventory_2', disable: !workspace.sessionId },
-  { label: 'Agent', value: 'filesystem', icon: 'computer', disable: !agentAvailable.value }
-])
-const sourceLabel = computed(() => workspace.scope === 'session' ? 'Session' : 'Agent')
-const sourceIcon = computed(() => workspace.scope === 'session' ? 'inventory_2' : 'computer')
-const sourceSelectionDisabled = computed(() => Boolean(
-  workspace.toolContext
-  || chat.running
-  || chat.sessionSettingsPending > 0
-  || !sourceOptions.value.some((option) => !option.disable && option.value !== workspace.scope)
-))
-const sourceTooltip = computed(() => {
-  if (workspace.toolContext) return 'Gespeicherter Dateistand; wechsle zuerst zu den aktuellen Dateien.'
-  if (!agentAvailable.value) return 'Kein Agent-Dateisystem verfügbar.'
-  return 'Zwischen Session und Agent-Dateisystem wechseln.'
-})
 const storage = computed(() => (
   workspace.storageUsageSessionId === chat.current?.id ? workspace.storageUsage : null
 ))
@@ -121,20 +58,6 @@ const storageDescription = computed(() => {
   const stale = workspace.storageUsageFailed ? ' Letzter Stand.' : ''
   return `${storageScopeLabel.value}: ${formatByteSize(storage.value.usedBytes)} von ${formatByteSize(storage.value.quotaBytes)} belegt${sharing}.${stale}`
 })
-
-async function selectSource(scope) {
-  if (scope === workspace.scope) return
-  if (workspace.editorDirty) {
-    const accepted = await confirm(
-      'Sollen die ungespeicherten Änderungen verworfen werden?',
-      'Änderungen verwerfen?',
-      { okLabel: 'Verwerfen' }
-    )
-    if (!accepted) return
-    workspace.discardEdit()
-  }
-  await workspace.setScope(scope)
-}
 
 watch(
   [() => chat.current?.id || null, () => chat.current?.projectId || null],

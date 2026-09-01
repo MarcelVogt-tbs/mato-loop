@@ -535,7 +535,6 @@ const trustedImageOrigins = computed(() => (
 const sessionLoadErrorMessage = computed(() => (
   apiErrorMessage(chat.loadError, 'Die Session konnte nicht geladen werden.')
 ))
-const liveWorkspaceContext = computed(() => executionAgents.workspaceContextFor(chat.activeContext))
 const desktopControlCenterOpen = computed(() => controlCenter.open && $q.screen.gt.sm)
 const splitLimits = computed(() => (
   desktopControlCenterOpen.value
@@ -566,48 +565,22 @@ function resizeWorkspacePane(event) {
 async function openToolFile(action) {
   const sessionId = action?.sessionId
   if (!sessionId || chat.current?.id !== sessionId) return
-  if (workspace.editorDirty) {
-    const accepted = await confirm(
-      'Sollen die ungespeicherten Änderungen verworfen werden?',
-      'Änderungen verwerfen?',
-      { okLabel: 'Verwerfen' }
-    )
-    if (!accepted) return
-    workspace.discardEdit()
-  }
-  if (chat.current?.id !== sessionId) return
-  workspace.configure({
-    sessionId,
-    rootIdentity: chat.current.projectId || sessionId,
-    currentDirectory: chat.current.currentDirectory,
-    workspaceContext: liveWorkspaceContext.value
-  })
-  await workspace.openToolFile(action)
-  await controlCenter.openApp('files')
+  const target = workspace.fileTargetFromAction(action)
+  if (target) await controlCenter.openFile(target)
 }
 
 async function openApprovalDraft(approval) {
   const draft = approval?.details?.draftFile
   const sessionId = approval?.sessionId
   if (!['build_skill', 'edit_skill'].includes(approval?.actionKind) || !draft || chat.current?.id !== sessionId) return
-  if (workspace.editorDirty) {
-    const accepted = await confirm(
-      'Sollen die ungespeicherten Änderungen verworfen werden?',
-      'Änderungen verwerfen?',
-      { okLabel: 'Verwerfen' }
-    )
-    if (!accepted) return
-    workspace.discardEdit()
-  }
-  if (chat.current?.id !== sessionId) return
-  workspace.configure({
-    sessionId,
-    rootIdentity: chat.current.projectId || sessionId,
-    currentDirectory: chat.current.currentDirectory,
-    workspaceContext: liveWorkspaceContext.value
+  const tabId = await controlCenter.openFile({
+    scope: 'session',
+    path: draft.path,
+    name: draft.filename,
+    rootIdentity: draft.rootIdentity || chat.current.projectId || sessionId,
+    readOnly: false
   })
-  await workspace.openApprovalDraft({ ...draft, sessionId })
-  await controlCenter.openApp('files')
+  if (tabId) workspace.startFileTabEdit(tabId)
 }
 
 function trustImageOrigin(origin) {

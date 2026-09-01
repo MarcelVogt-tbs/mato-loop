@@ -1,17 +1,5 @@
 <template>
-  <section class="terminal-app column full-height no-wrap" aria-labelledby="terminal-app-title">
-    <ControlCenterContentHeader
-      icon="terminal"
-      title="Terminal"
-      title-id="terminal-app-title"
-      integration-id="terminal"
-      :can-move-left="integrationIndex > 0"
-      :can-move-right="integrationIndex >= 0 && integrationIndex < controlCenter.tabs.length - 1"
-      @close="emit('close')"
-      @remove="emit('remove', 'terminal')"
-      @move="emit('move', 'terminal', $event)"
-    />
-
+  <section class="terminal-app column full-height no-wrap" aria-label="Terminal">
     <div v-if="!contextState.available" class="col column flex-center text-center q-pa-xl">
       <q-icon :name="unavailableIcon" size="52px" color="grey-6" />
       <div class="text-subtitle1 text-weight-medium q-mt-md">{{ unavailableTitle }}</div>
@@ -19,23 +7,6 @@
     </div>
 
     <template v-else>
-      <div class="row items-center q-gutter-sm q-pa-sm">
-        <q-chip dense square icon="computer" class="q-ma-none">
-          {{ contextState.agent.alias || contextState.agent.computerName }}
-        </q-chip>
-        <q-chip dense square icon="folder_open" class="q-ma-none ellipsis">
-          {{ activeDirectory }}
-          <q-tooltip>{{ activeDirectory }}</q-tooltip>
-        </q-chip>
-        <q-space />
-        <q-spinner-dots
-          v-if="terminal.status === 'connecting'"
-          color="primary"
-          size="24px"
-        />
-      </div>
-      <q-separator />
-
       <div v-if="disconnected" class="col column flex-center text-center q-pa-xl">
         <q-icon name="link_off" size="52px" color="grey-6" />
         <div class="text-subtitle1 text-weight-medium q-mt-md">Terminalverbindung getrennt</div>
@@ -134,7 +105,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import ControlCenterContentHeader from 'components/ControlCenterContentHeader.vue'
 import { terminalControlCenterState } from 'src/control-center/manifest'
 import {
   handleAutoTerminalData,
@@ -148,18 +118,13 @@ import { useTerminalStore } from 'stores/terminal'
 
 defineOptions({ name: 'TerminalApp' })
 
-const emit = defineEmits(['close', 'remove', 'move'])
 const chat = useChatStore()
 const controlCenter = useControlCenterStore()
 const executionAgents = useExecutionAgentStore()
 const terminal = useTerminalStore()
 const terminalHost = ref(null)
 const proposalCommand = ref(terminalProposalCommand(terminal.proposal))
-const integrationIndex = computed(() => controlCenter.tabs.findIndex((tab) => tab.appId === 'terminal'))
 const contextState = computed(() => terminalControlCenterState(chat.current, executionAgents))
-const activeDirectory = computed(() => terminal.attached
-  ? terminal.currentDirectory || chat.current?.currentDirectory || contextState.value.agent?.homeDirectory || '/'
-  : contextState.value.agent?.homeDirectory || terminal.currentDirectory || '/')
 const policyWaiting = computed(() => terminal.attached && chat.activity.phase === 'waiting_approval')
 const disconnected = computed(() => Boolean(
   terminal.status === 'closed'

@@ -1,21 +1,5 @@
 <template>
-  <section class="column full-height no-wrap" aria-labelledby="coding-app-title">
-    <ControlCenterContentHeader
-      icon="code"
-      title="OpenCode"
-      title-id="coding-app-title"
-      integration-id="coding"
-      refreshable
-      refresh-label="Coding-Daten aktualisieren"
-      :refreshing="coding.loading"
-      :can-move-left="integrationIndex > 0"
-      :can-move-right="integrationIndex >= 0 && integrationIndex < controlCenter.tabs.length - 1"
-      @refresh="refresh"
-      @close="emit('close')"
-      @remove="emit('remove', 'coding')"
-      @move="emit('move', 'coding', $event)"
-    />
-
+  <section class="column full-height no-wrap" aria-label="OpenCode">
     <div v-if="!project" class="col column flex-center text-center q-pa-xl">
       <q-icon name="code_off" size="52px" color="grey-6" />
       <div class="text-subtitle1 text-weight-medium q-mt-md">Kein Projekt ausgewählt</div>
@@ -54,13 +38,18 @@
         <div v-else-if="coding.loaded" class="text-caption app-muted">
           Die Zuordnung ist gesperrt, da bereits ein Plan gespeichert wurde.
         </div>
-        <template v-if="bindingMutable" #action>
-          <q-btn flat dense no-caps color="primary" label="Ändern" @click="openBindingDialog" />
-          <q-btn
-            flat dense no-caps color="negative" label="Trennen"
-            :loading="bindingSaving"
-            @click="clearBinding"
-          />
+        <template #action>
+          <q-btn flat round dense icon="refresh" aria-label="Coding-Daten aktualisieren" :loading="coding.loading" @click="refresh">
+            <q-tooltip>Coding-Daten aktualisieren</q-tooltip>
+          </q-btn>
+          <template v-if="bindingMutable">
+            <q-btn flat dense no-caps color="primary" label="Ändern" @click="openBindingDialog" />
+            <q-btn
+              flat dense no-caps color="negative" label="Trennen"
+              :loading="bindingSaving"
+              @click="clearBinding"
+            />
+          </template>
         </template>
       </q-banner>
       <q-separator />
@@ -330,7 +319,6 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import ControlCenterContentHeader from 'components/ControlCenterContentHeader.vue'
 import MessageContent from 'components/MessageContent.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { parentPath } from 'src/features/workspace/state'
@@ -343,7 +331,6 @@ import { useProjectCodingStore } from 'stores/project-coding'
 import { useProjectStore } from 'stores/projects'
 
 defineOptions({ name: 'CodingApp' })
-const emit = defineEmits(['close', 'remove', 'move'])
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const chat = useChatStore()
@@ -388,7 +375,6 @@ const bindingOptions = computed(() => bindings.value.map((item, index) => ({
   label: `${item.label} · ${item.workspaceKey}`,
   value: String(index)
 })))
-const integrationIndex = computed(() => controlCenter.tabs.findIndex((item) => item.appId === 'coding'))
 const modelOptions = computed(() => coding.models.map((model) => ({
   label: `${model.providerLabel} · ${model.label}`,
   value: model.key

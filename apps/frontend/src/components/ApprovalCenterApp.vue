@@ -1,23 +1,19 @@
 <template>
   <section class="approval-center-app column full-height no-wrap" aria-labelledby="approval-app-title">
-    <ControlCenterContentHeader
-      icon="pending_actions"
-      title="Freigaben"
-      title-id="approval-app-title"
-      subtitle="Offene Entscheidungen global, Session-Freigaben für die aktuelle Session"
-      refreshable
-      refresh-label="Freigaben aktualisieren"
-      :refreshing="loading"
-      @refresh="load"
-      @close="emit('close')"
-    >
-      <template #actions>
-        <q-badge v-if="attentionCount" rounded color="warning" text-color="dark" :label="attentionCount" />
-      </template>
-    </ControlCenterContentHeader>
-
     <q-scroll-area class="col">
       <div class="q-pa-md">
+        <div class="row items-start no-wrap q-gutter-sm q-mb-md">
+          <div class="col">
+            <div class="row items-center q-gutter-sm">
+              <h2 id="approval-app-title" class="text-subtitle1 text-weight-bold q-my-none">Freigaben</h2>
+              <q-badge v-if="attentionCount" rounded color="warning" text-color="dark" :label="attentionCount" />
+            </div>
+            <div class="text-caption app-muted">Offene Entscheidungen global, Session-Freigaben für die aktuelle Session</div>
+          </div>
+          <q-btn flat round dense icon="refresh" aria-label="Freigaben aktualisieren" :loading="loading" @click="load">
+            <q-tooltip>Freigaben aktualisieren</q-tooltip>
+          </q-btn>
+        </div>
         <q-banner v-if="loadFailed" rounded class="bg-negative text-white q-mb-md">
           Freigaben oder Rückfragen konnten nicht vollständig geladen werden.
           <template #action><q-btn flat no-caps color="white" label="Erneut laden" @click="load" /></template>
@@ -138,7 +134,6 @@
 import { computed, onMounted, ref } from 'vue'
 import { isNavigationFailure, NavigationFailureType, useRouter } from 'vue-router'
 import ApprovalCard from 'components/ApprovalCard.vue'
-import ControlCenterContentHeader from 'components/ControlCenterContentHeader.vue'
 import QuestionDock from 'components/QuestionDock.vue'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
@@ -148,7 +143,6 @@ import { permissionGrantDisplay } from 'src/utils/approval-display'
 import { formatRelativeDateTime } from 'src/utils/date-time'
 
 defineOptions({ name: 'ApprovalCenterApp' })
-const emit = defineEmits(['close'])
 
 const router = useRouter()
 const approvals = useApprovalStore()

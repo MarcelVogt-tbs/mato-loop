@@ -760,6 +760,38 @@ describe('workspace store', () => {
     expect(workspace.editorDirty).toBe(false)
   })
 
+  it('keeps unsaved drafts isolated while switching file tabs', () => {
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a', rootIdentity: 'root-a' })
+    const fileTab = (tabId, path) => ({
+      tabId,
+      kind: 'file',
+      appId: 'file-viewer',
+      fileTarget: {
+        scope: 'session',
+        path,
+        name: path,
+        rootIdentity: 'root-a',
+        readOnly: false
+      }
+    })
+
+    workspace.activateFileTab(fileTab('file-a', 'a.md'))
+    workspace.filePreviews['a.md'] = { kind: 'markdown', content: 'A', revision: 'revision-a' }
+    workspace.startEdit('A')
+    workspace.updateEditorDraft('A geändert', 'A')
+    workspace.activateFileTab(fileTab('file-b', 'b.md'))
+    workspace.startEdit('B')
+    workspace.updateEditorDraft('B geändert', 'B')
+
+    workspace.activateFileTab(fileTab('file-a', 'a.md'))
+    expect(workspace.editorDraft).toBe('A geändert')
+    expect(workspace.filePreviews['a.md'].revision).toBe('revision-a')
+    expect(workspace.editorDirty).toBe(true)
+    expect(workspace.fileTabDirty('file-b')).toBe(true)
+    expect(workspace.hasDirtyEditors).toBe(true)
+  })
+
   it('keeps a dirty editor and marks an external file mutation', () => {
     const workspace = useWorkspaceStore()
     workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'notes.md' }, true)
@@ -828,6 +860,28 @@ describe('workspace store', () => {
 
     workspace.toolContext = { executionAgentId: 'agent', currentDirectory: '/project' }
     expect(workspace.activeFileSnapshot()).toBeNull()
+  })
+
+  it('does not attach a computer file from a different selected computer', () => {
+    const workspace = useWorkspaceStore()
+    const controlCenter = useControlCenterStore()
+    workspace.configure({
+      sessionId: 'session-1',
+      currentDirectory: '/work',
+      workspaceContext: {
+        executionAgentId: 'agent-old',
+        connected: true,
+        operations: ['filesystem.read']
+      },
+      scope: 'filesystem'
+    })
+    workspace.openEntry({ kind: 'file', name: 'plan.md', path: '/work/plan.md' })
+    workspace.filePreviews['/work/plan.md'] = { revision: 'a'.repeat(64) }
+    controlCenter.open = true
+    controlCenter.activeAppId = 'files'
+
+    expect(workspace.activeFileSnapshot('agent-new')).toBeNull()
+    expect(workspace.activeFileSnapshot(null)).toBeNull()
   })
 
   it('uses the revision endpoints and reloads canonical state after restore', async () => {

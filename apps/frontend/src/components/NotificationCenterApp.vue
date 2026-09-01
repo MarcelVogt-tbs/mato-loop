@@ -1,34 +1,36 @@
 <template>
   <section class="notification-center-app column full-height no-wrap" aria-labelledby="notification-app-title">
-    <ControlCenterContentHeader
-      icon="notifications"
-      title="Benachrichtigungen"
-      title-id="notification-app-title"
-      subtitle="Dauerhafte Hinweise zu Automationsläufen"
-      refreshable
-      refresh-label="Benachrichtigungen aktualisieren"
-      :refreshing="notifications.loading"
-      @refresh="refresh"
-      @close="emit('close')"
-    >
-      <template #actions>
-        <q-btn
-          flat
-          round
-          dense
-          icon="done_all"
-          aria-label="Alle Benachrichtigungen als gelesen markieren"
-          :disable="!notifications.unreadCount || Boolean(notifications.markingId)"
-          :loading="notifications.markingAll"
-          @click="markAllRead"
-        >
-          <q-tooltip>Alle als gelesen markieren</q-tooltip>
-        </q-btn>
-      </template>
-    </ControlCenterContentHeader>
-
     <q-scroll-area class="col">
       <div class="q-pa-md">
+        <div class="row items-start no-wrap q-gutter-sm q-mb-md">
+          <div class="col">
+            <h2 id="notification-app-title" class="text-subtitle1 text-weight-bold q-my-none">Benachrichtigungen</h2>
+            <div class="text-caption app-muted">Dauerhafte Hinweise zu Automationsläufen</div>
+          </div>
+          <q-btn
+            flat
+            round
+            dense
+            icon="done_all"
+            aria-label="Alle Benachrichtigungen als gelesen markieren"
+            :disable="!notifications.unreadCount || Boolean(notifications.markingId)"
+            :loading="notifications.markingAll"
+            @click="markAllRead"
+          >
+            <q-tooltip>Alle als gelesen markieren</q-tooltip>
+          </q-btn>
+          <q-btn
+            flat
+            round
+            dense
+            icon="refresh"
+            aria-label="Benachrichtigungen aktualisieren"
+            :loading="notifications.loading"
+            @click="refresh"
+          >
+            <q-tooltip>Benachrichtigungen aktualisieren</q-tooltip>
+          </q-btn>
+        </div>
         <q-item class="app-surface-tonal rounded-borders q-mb-md">
           <q-item-section avatar><q-icon name="notifications_active" color="primary" /></q-item-section>
           <q-item-section>
@@ -99,13 +101,11 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { isNavigationFailure, NavigationFailureType, useRouter } from 'vue-router'
-import ControlCenterContentHeader from 'components/ControlCenterContentHeader.vue'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'
 import { notificationTargetRoute } from 'src/utils/notification-target'
 
 defineOptions({ name: 'NotificationCenterApp' })
-const emit = defineEmits(['close'])
 
 const router = useRouter()
 const notifications = useInAppNotificationStore()

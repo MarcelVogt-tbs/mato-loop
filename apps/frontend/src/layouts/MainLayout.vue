@@ -782,12 +782,9 @@ async function deleteProject(project) {
     if (!automationsAccepted) return
     automationMode = 'unlink'
   }
-  const workspaceEdit = selectedProjectId.value === project.id && workspace.editorDirty
+  const workspaceEdit = selectedProjectId.value === project.id && workspace.hasDirtyEditors
     ? {
-        sessionId: workspace.sessionId,
-        rootIdentity: workspace.rootIdentity,
-        viewVersion: workspace.viewVersion,
-        draft: workspace.editorDraft
+        sessionId: workspace.sessionId
       }
     : null
   if (workspaceEdit && !await confirmDiscardedEdit({ discard: false })) return
@@ -810,12 +807,8 @@ async function deleteProject(project) {
   if (
     selectedProjectId.value === project.id
     && workspaceEdit
-    && workspace.editorDirty
     && workspace.sessionId === workspaceEdit.sessionId
-    && workspace.rootIdentity === workspaceEdit.rootIdentity
-    && workspace.viewVersion === workspaceEdit.viewVersion
-    && workspace.editorDraft === workspaceEdit.draft
-  ) workspace.discardEdit()
+  ) workspace.discardAllEdits()
   delete expandedProjects[project.id]
   if (selectedProjectId.value === project.id) {
     try {
@@ -1074,7 +1067,7 @@ async function removeSession(session) {
   } catch {
     return
   }
-  if (workspace.sessionId === id) workspace.discardEdit()
+  if (workspace.sessionId === id) workspace.discardAllEdits()
   if (automationMode) void automations.fetchAutomations().catch(() => {})
   if (route.query.session === id) {
     await router.push({ name: 'chat', query: chatQuery(null, sourceProjectId) })
@@ -1087,13 +1080,13 @@ async function logout() {
 }
 
 async function confirmDiscardedEdit({ discard = true } = {}) {
-  if (!workspace.editorDirty) return true
+  if (!workspace.hasDirtyEditors) return true
   const accepted = await confirm(
     'Sollen die ungespeicherten Änderungen verworfen werden?',
     'Änderungen verwerfen?',
     { okLabel: 'Verwerfen' }
   )
-  if (accepted && discard) workspace.discardEdit()
+  if (accepted && discard) workspace.discardAllEdits()
   return accepted
 }
 
@@ -1106,7 +1099,6 @@ async function openControlCenter() {
 }
 
 async function setControlCenterOpen(open) {
-  if (!open && !await confirmDiscardedEdit()) return
   try {
     await controlCenter.setOpen(open)
   } catch {
@@ -1148,8 +1140,11 @@ watch(
   { deep: true }
 )
 
-function closeTerminalForPageExit() {
+function closeTerminalForPageExit(event) {
   terminal.close()
+  if (!workspace.hasDirtyEditors) return
+  event.preventDefault()
+  event.returnValue = ''
 }
 
 watch(

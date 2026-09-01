@@ -81,70 +81,14 @@
           </template>
         </q-banner>
         <div class="chat-composer__footer row items-center q-gutter-xs">
-          <q-select
-            :model-value="session?.agentProfileId ?? agentProfiles.defaultAgentProfileId"
-            :options="agentProfileOptions"
-            emit-value
-            map-options
-            dense
-            borderless
-            options-dense
-            label="Agent"
-            class="composer-agent-mode"
-            popup-content-class="app-menu-popup"
-            :disable="interactionDisabled || agentProfiles.loading"
-            @update:model-value="update({ agent_profile_id: $event })"
-          >
-            <template #prepend><q-icon :name="selectedAgentIcon" size="18px" /></template>
-            <template #option="scope">
-              <q-item v-bind="scope.itemProps">
-                <q-item-section avatar><q-icon :name="scope.opt.icon" /></q-item-section>
-                <q-item-section>
-                  <q-item-label>{{ scope.opt.label }}</q-item-label>
-                  <q-item-label v-if="scope.opt.caption" caption>{{ scope.opt.caption }}</q-item-label>
-                </q-item-section>
-              </q-item>
-            </template>
-          </q-select>
-          <q-select
-            :model-value="effectiveModelId"
-            :options="modelSelectionOptions"
-            emit-value
-            map-options
-            dense
-            borderless
-            options-dense
-            label="LLM"
-            class="composer-model"
-            popup-content-class="app-menu-popup"
-            :disable="interactionDisabled"
-            @update:model-value="selectModel"
-          >
-            <template #prepend><q-icon :name="selectedModelTrustIcon" size="18px" /></template>
-            <template #option="scope">
-              <q-item v-bind="scope.itemProps">
-                <q-item-section avatar><q-icon :name="scope.opt.trustIcon" /></q-item-section>
-                <q-item-section><q-item-label>{{ scope.opt.label }}</q-item-label></q-item-section>
-              </q-item>
-            </template>
-          </q-select>
-          <q-select
-            v-if="reasoningEffortOptions.length"
-            :model-value="session?.reasoningEffort ?? null"
-            :options="reasoningEffortOptions"
-            emit-value
-            map-options
-            dense
-            borderless
-            options-dense
-            label="Denken"
-            class="composer-reasoning"
-            popup-content-class="app-menu-popup"
-            :disable="interactionDisabled"
-            @update:model-value="update({ reasoning_effort: $event })"
-          >
-            <q-tooltip>Reasoning-Aufwand für diese Session</q-tooltip>
-          </q-select>
+          <SessionSettingsFields
+            ref="settingsFields"
+            :session="session"
+            :disabled="interactionDisabled"
+            :fields="['agent', 'model', 'reasoning']"
+            compact
+            @update="$emit('update', $event)"
+          />
           <q-chip v-if="pendingCount" dense square color="warning" text-color="dark" icon="pending_actions">
             {{ pendingCount }} offen
           </q-chip>
@@ -203,97 +147,13 @@
                   <q-separator />
 
                   <q-card-section class="chat-session-settings-panel__content scroll">
-                    <div class="chat-session-settings-panel__fields column">
-                      <q-select
-                        :model-value="session?.preferredExecutionAgentId"
-                        :options="executionAgentOptions"
-                        emit-value
-                        map-options
-                        outlined
-                        :dense="$q.screen.gt.xs"
-                        options-dense
-                        label="Computer"
-                        hint="Der Computer wird für den nächsten Lauf verwendet."
-                        persistent-hint
-                        popup-content-class="app-menu-popup"
-                        :disable="interactionDisabled"
-                        @update:model-value="selectExecutionAgent"
-                      >
-                        <template #prepend><q-icon name="computer" /></template>
-                        <template #option="scope">
-                          <q-item v-bind="scope.itemProps">
-                            <q-item-section avatar>
-                              <q-icon :name="scope.opt.connected === false ? 'cloud_off' : 'computer'" />
-                            </q-item-section>
-                            <q-item-section>
-                              <q-item-label>{{ scope.opt.label }}</q-item-label>
-                              <q-item-label v-if="scope.opt.caption" caption>{{ scope.opt.caption }}</q-item-label>
-                            </q-item-section>
-                          </q-item>
-                        </template>
-                      </q-select>
-
-                      <q-banner v-if="executionAgentMessage" dense rounded class="app-surface-tonal">
-                        <template #avatar>
-                          <q-icon :name="selectedExecutionAgent?.connected === false ? 'cloud_off' : 'info_outline'" color="warning" />
-                        </template>
-                        {{ executionAgentMessage }}
-                      </q-banner>
-
-                      <q-select
-                        :model-value="session?.memoryMode"
-                        :options="memoryModeOptions"
-                        emit-value
-                        map-options
-                        outlined
-                        :dense="$q.screen.gt.xs"
-                        options-dense
-                        label="Memory"
-                        :hint="memoryMessage"
-                        persistent-hint
-                        popup-content-class="app-menu-popup"
-                        :disable="interactionDisabled"
-                        @update:model-value="update({ memory_mode: $event })"
-                      >
-                        <template #prepend><q-icon :name="memoryModeIcon" /></template>
-                        <template #option="scope">
-                          <q-item v-bind="scope.itemProps">
-                            <q-item-section avatar><q-icon :name="scope.opt.icon" /></q-item-section>
-                            <q-item-section>
-                              <q-item-label>{{ scope.opt.label }}</q-item-label>
-                              <q-item-label caption>{{ scope.opt.description }}</q-item-label>
-                            </q-item-section>
-                          </q-item>
-                        </template>
-                      </q-select>
-
-                      <q-select
-                        :model-value="session?.webSearchPolicy"
-                        :options="webSearchOptions"
-                        emit-value
-                        map-options
-                        outlined
-                        :dense="$q.screen.gt.xs"
-                        options-dense
-                        label="Websuche"
-                        :hint="webSearchMessage"
-                        persistent-hint
-                        popup-content-class="app-menu-popup"
-                        :disable="interactionDisabled"
-                        @update:model-value="update({ web_search_policy: $event })"
-                      >
-                        <template #prepend><q-icon :name="webSearchIcon" /></template>
-                        <template #option="scope">
-                          <q-item v-bind="scope.itemProps">
-                            <q-item-section avatar><q-icon :name="scope.opt.icon" /></q-item-section>
-                            <q-item-section>
-                              <q-item-label>{{ scope.opt.label }}</q-item-label>
-                              <q-item-label caption>{{ scope.opt.description }}</q-item-label>
-                            </q-item-section>
-                          </q-item>
-                        </template>
-                      </q-select>
-                    </div>
+                    <SessionSettingsFields
+                      :session="session"
+                      :disabled="interactionDisabled"
+                      :fields="['computer', 'memory', 'webSearch']"
+                      class="chat-session-settings-panel__fields"
+                      @update="$emit('update', $event)"
+                    />
                   </q-card-section>
                 </q-card>
               </q-popup-proxy>
@@ -361,20 +221,16 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ComposerAttachments from 'components/ComposerAttachments.vue'
+import SessionSettingsFields from 'components/SessionSettingsFields.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
-import { useAgentProfileStore } from 'stores/agent-profiles'
-import { useExecutionAgentStore } from 'stores/execution-agents'
-import { useIntegrationStore } from 'stores/integrations'
 import { useChatStore } from 'stores/chat'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
 import { useProviderStore } from 'stores/providers'
 import { useToolSettingsStore } from 'stores/tool-settings'
 import { api } from 'src/boot/axios'
 import { recorderErrorMessage, useAudioRecorder } from 'src/composables/audio-recorder'
-import { apiErrorMessage } from 'src/utils/api-errors'
 import { clipboardAttachmentFiles } from 'src/utils/attachment-drafts'
 import { formatAttachmentDuration } from 'src/utils/attachments'
-import { modelReasoningEffortOptions } from 'src/utils/model-runtime'
 
 defineOptions({ name: 'ChatComposer' })
 
@@ -391,14 +247,13 @@ const props = defineProps({
 const emit = defineEmits(['add-attachments', 'remove-attachment', 'send', 'stop', 'update', 'update:draft'])
 const $q = useQuasar()
 const identity = useAgentIdentityStore()
-const agentProfiles = useAgentProfileStore()
-const integrations = useIntegrationStore()
 const chat = useChatStore()
 const instanceLimits = useInstanceLimitsStore()
 const providers = useProviderStore()
 const toolSettings = useToolSettingsStore()
 const input = ref(null)
 const attachmentInput = ref(null)
+const settingsFields = ref(null)
 const settingsOpen = ref(false)
 let transcriptionRequest = null
 const {
@@ -416,75 +271,10 @@ const dictationKey = computed(() => props.session?.id || null)
 const currentDictation = computed(() => chat.getAudioDictation(dictationKey.value))
 const transcribing = computed(() => currentDictation.value?.status === 'transcribing')
 const recordingDuration = computed(() => formatAttachmentDuration(recordingDurationMs.value) || '0:00')
-const executionAgents = useExecutionAgentStore()
-const selectedAgent = computed(() => agentProfiles.byId(props.session?.agentProfileId))
-const agentProfileOptions = computed(() => {
-  const options = agentProfiles.agents.map((agent) => ({
-    label: agent.name,
-    value: agent.id,
-    icon: 'smart_toy',
-    caption: agent.description
-  }))
-  if (props.session?.agentProfileId && !selectedAgent.value) {
-    options.unshift({
-      label: 'Nicht verfügbares Agent-Profil',
-      value: props.session.agentProfileId,
-      icon: 'warning_amber',
-      caption: 'Nicht mehr verfügbar',
-      disable: true
-    })
-  }
-  return options
-})
-const selectedAgentIcon = computed(() => (
-  !props.session?.agentProfileId || selectedAgent.value ? 'smart_toy' : 'warning_amber'
-))
-const selectedExecutionAgent = computed(() => (
-  executionAgents.byId(props.session?.preferredExecutionAgentId)
-))
-const executionAgentOptions = computed(() => {
-  const options = [
-    { label: 'Kein Computer', value: null, connected: null, caption: 'Nur Backend-Funktionen verwenden' },
-    ...executionAgents.items.map((agent) => ({
-      label: agent.alias,
-      value: agent.id,
-      connected: agent.connected,
-      caption: agent.pairingState === 'pending'
-        ? 'Kopplung ausstehend'
-        : agent.pairingState === 'unpaired'
-          ? 'Nicht gekoppelt'
-          : agent.connected ? agent.computerName || agent.platform : 'Offline'
-    }))
-  ]
-  if (props.session?.preferredExecutionAgentId && !selectedExecutionAgent.value) {
-    options.push({
-      label: 'Nicht verfügbarer Computer',
-      value: props.session.preferredExecutionAgentId,
-      connected: false,
-      caption: 'Nicht mehr eingerichtet'
-    })
-  }
-  return options
-})
-const liveWorkspaceContext = computed(() => executionAgents.workspaceContextFor(props.session))
-const executionAgentMessage = computed(() => {
-  if (executionAgents.loadFailed) return 'Der Status der Computer konnte nicht geladen werden.'
-  if (!props.session?.preferredExecutionAgentId) return 'Ohne Computer stehen keine lokalen Datei- und Shell-Funktionen zur Verfügung.'
-  if (!selectedExecutionAgent.value) return 'Der ausgewählte Computer ist nicht mehr eingerichtet.'
-  if (selectedExecutionAgent.value.pairingState === 'pending') return 'Die Kopplung des ausgewählten Computers steht noch aus.'
-  if (selectedExecutionAgent.value.pairingState === 'unpaired') return 'Der ausgewählte Computer ist nicht gekoppelt.'
-  if (!selectedExecutionAgent.value.connected) return 'Der ausgewählte Computer ist offline. Es erfolgt kein automatischer Wechsel.'
-  if (!selectedExecutionAgent.value.operations?.includes('filesystem.list')) return 'Der ausgewählte Computer bietet keinen Dateizugriff an.'
-  if (!liveWorkspaceContext.value.connected) return 'Der ausgewählte Computer ist nicht verfügbar.'
-  return ''
-})
 const effectiveModelId = computed(() => props.session?.modelId || providers.defaultModelId)
-const modelSelectionOptions = computed(() => providers.selectionOptions(effectiveModelId.value, true))
 const selectedModelConfig = computed(() => providers.models.find((model) => (
   model.id === effectiveModelId.value
 )))
-const selectedModelTrustIcon = computed(() => selectedModelConfig.value?.effectiveTrustLevel === 'private' ? 'lock' : 'public')
-const reasoningEffortOptions = computed(() => modelReasoningEffortOptions(selectedModelConfig.value))
 const modelSupportsTools = computed(() => selectedModelConfig.value?.supportsTools !== false)
 const transcriptionModelAvailable = computed(() => (
   Boolean(providers.audioTranscriptionModelId)
@@ -505,33 +295,12 @@ const micUnavailableReason = computed(() => {
   return ''
 })
 const micAvailable = computed(() => !micUnavailableReason.value)
-const memoryModeOptions = [
-  { label: 'Nutzen und speichern', value: 'full', icon: 'memory', description: 'Vorherige Chats und Erinnerungen nutzen; neue Erinnerungen speichern' },
-  { label: 'Nur nutzen', value: 'read_only', icon: 'visibility', description: 'Vorherige Chats und Erinnerungen nutzen; nichts speichern' },
-  { label: 'Sitzungsübergreifend aus', value: 'disabled', icon: 'memory_alt', description: 'Keine Inhalte aus vorherigen Chats oder Erinnerungen nutzen' }
-]
-const effectiveMemoryMode = computed(() => props.session?.effectiveMemoryMode || props.session?.memoryMode || 'disabled')
-const memoryMessage = computed(() => {
-  if (props.session?.memoryUnavailableReason) {
-    return apiErrorMessage({ error: { code: props.session.memoryUnavailableReason } })
-  }
-  return {
-    full: 'Vorherige Chats und Erinnerungen nutzen; neue Erinnerungen speichern.',
-    read_only: 'Vorherige Chats und Erinnerungen nutzen; keine neuen Erinnerungen speichern.',
-    disabled: 'Keine Inhalte aus vorherigen Chats oder Erinnerungen nutzen.'
-  }[effectiveMemoryMode.value]
-})
-const memoryModeIcon = computed(() => ({ full: 'memory', read_only: 'visibility', disabled: 'memory_alt' })[props.session?.memoryMode] || 'memory')
 const interactionDisabled = computed(() => (
   !props.session || props.disabled || props.running || props.pendingCount > 0
 ))
 const inputDisabled = computed(() => !props.session || props.disabled)
 const draftHasContent = computed(() => Boolean(props.draft.trim() || props.attachments.length))
 const inputPlaceholder = computed(() => `Eine Nachricht an ${identity.displayName} senden`)
-const requiredSearchUnavailable = computed(() => (
-  props.session?.webSearchPolicy === 'required'
-  && (!searchAvailable.value || !modelSupportsTools.value)
-))
 const sendDisabled = computed(() => (
   inputDisabled.value
   || (props.running && !props.queueMode)
@@ -541,93 +310,7 @@ const sendDisabled = computed(() => (
   || !modelSupportsTools.value
   || (!props.draft.trim() && !props.attachments.length)
 ))
-const searchAvailable = computed(() => integrations.search.effectiveEnabled)
-const webSearchOptions = computed(() => [
-  {
-    label: searchAvailable.value && modelSupportsTools.value
-      ? 'Erzwingen'
-      : 'Erzwingen (nicht verfügbar)',
-    value: 'required',
-    icon: 'travel_explore',
-    disable: !searchAvailable.value || !modelSupportsTools.value,
-    description: 'Vor jeder Antwort erfolgreich im Web suchen'
-  },
-  {
-    label: searchAvailable.value && modelSupportsTools.value
-      ? 'Verfügbar'
-      : 'Nicht verfügbar',
-    value: 'available',
-    icon: 'public',
-    description: 'Das Modell entscheidet über die Websuche'
-  },
-  {
-    label: 'Deaktiviert',
-    value: 'disabled',
-    icon: 'public_off',
-    description: 'Kein Websuch-Tool anbieten'
-  }
-])
-const webSearchIcon = computed(() => ({
-  required: 'travel_explore',
-  available: 'public',
-  disabled: 'public_off'
-})[props.session?.webSearchPolicy] || 'public')
-const webSearchTooltip = computed(() => {
-  if (!modelSupportsTools.value) return 'Das ausgewählte Modell unterstützt keine Tools.'
-  if (!searchAvailable.value) {
-    return integrations.search.unavailableReason === 'integration.disabled'
-      ? 'Websuche ist deaktiviert'
-      : 'Websuche ist nicht eingerichtet'
-  }
-  return ''
-})
-const webSearchMessage = computed(() => (
-  webSearchTooltip.value
-  || webSearchOptions.value.find((option) => option.value === props.session?.webSearchPolicy)?.description
-  || 'Websuche für diese Session konfigurieren.'
-))
-const sessionSettingsWarning = computed(() => {
-  const warnings = []
-  if (!modelSupportsTools.value) {
-    warnings.push('Wähle ein Agentmodell mit Tool-Unterstützung.')
-  }
-  if (
-    props.session?.memoryMode !== 'disabled'
-    && props.session?.memoryUnavailableReason !== 'session.modelUnavailable'
-    && (
-      props.session?.memoryUnavailableReason
-      || (!props.session?.memoryToolsAvailable && effectiveMemoryMode.value !== 'disabled')
-    )
-  ) {
-    warnings.push(memoryMessage.value)
-  }
-  if (requiredSearchUnavailable.value) {
-    warnings.push(webSearchTooltip.value || 'Die erforderliche Websuche ist nicht verfügbar.')
-  }
-  if (executionAgentMessage.value) warnings.push(executionAgentMessage.value)
-  return warnings.join(' ')
-})
-
-function update(patch) {
-  if (props.session) emit('update', patch)
-}
-
-function selectModel(modelId) {
-  const model = providers.models.find((item) => item.id === modelId)
-  const effort = props.session?.reasoningEffort
-  update({
-    model_id: modelId,
-    ...(effort && !model?.reasoningEfforts?.includes(effort) ? { reasoning_effort: null } : {})
-  })
-}
-
-async function selectExecutionAgent(value) {
-  const agent = executionAgents.byId(value)
-  await chat.updateActive({
-    preferred_execution_agent_id: value,
-    current_directory: agent?.homeDirectory || null
-  })
-}
+const sessionSettingsWarning = computed(() => settingsFields.value?.warning || '')
 
 function submit() {
   const content = props.draft.trim()

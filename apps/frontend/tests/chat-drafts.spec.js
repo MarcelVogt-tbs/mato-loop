@@ -1527,9 +1527,8 @@ describe('chat drafts', () => {
     workspace.sessionId = sessionId
     workspace.scope = 'session'
     workspace.rootIdentity = rootIdentity
-    const open = vi.spyOn(workspace, 'openToolFile').mockResolvedValue([])
     const controlCenter = useControlCenterStore()
-    vi.spyOn(controlCenter, 'openApp').mockResolvedValue()
+    const open = vi.spyOn(controlCenter, 'openFile').mockResolvedValue('file-result')
     const chat = useChatStore()
     chat.current = { id: sessionId, messages: [] }
     chat.selectedSessionId = sessionId
@@ -1539,7 +1538,13 @@ describe('chat drafts', () => {
     source.emit('run.phase', { phase: 'processing_tool', tool: 'write_file', toolCallId: 'call-1' })
     source.emit('tool.completed', { tool: 'write_file', toolCallId: 'call-1', metadata: {} })
 
-    await vi.waitFor(() => expect(open).toHaveBeenCalledWith(expect.objectContaining({ path: 'result.md' })))
+    await vi.waitFor(() => expect(open).toHaveBeenCalledWith({
+      scope: 'session',
+      path: 'result.md',
+      name: 'result.md',
+      rootIdentity,
+      readOnly: false
+    }))
   })
 
   it('opens a newly managed binary attachment through the guarded file view', async () => {
@@ -1568,9 +1573,8 @@ describe('chat drafts', () => {
     workspace.sessionId = sessionId
     workspace.scope = 'session'
     workspace.rootIdentity = rootIdentity
-    const open = vi.spyOn(workspace, 'openToolFile').mockResolvedValue([])
     const controlCenter = useControlCenterStore()
-    vi.spyOn(controlCenter, 'openApp').mockResolvedValue()
+    const open = vi.spyOn(controlCenter, 'openFile').mockResolvedValue('file-generated')
     const chat = useChatStore()
     chat.current = { id: sessionId, projectId: rootIdentity, messages: [] }
     chat.selectedSessionId = sessionId
@@ -1581,17 +1585,15 @@ describe('chat drafts', () => {
     source.emit('tool.completed', { tool: 'generate_file', toolCallId: 'call-1', metadata: {} })
 
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith({
-      root: 'session',
-      rootIdentity,
+      scope: 'session',
       path: 'generated/generated.bin',
-      filename: 'generated.bin',
-      sizeBytes: 12,
-      sessionId,
-      fileRevision: 1
+      name: 'generated.bin',
+      rootIdentity,
+      readOnly: false
     }))
   })
 
-  it('does not open a newly managed attachment over a dirty edit', async () => {
+  it('opens a newly managed attachment without replacing a dirty edit', async () => {
     global.EventSource = EventSourceMock
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
     const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
@@ -1619,7 +1621,8 @@ describe('chat drafts', () => {
     workspace.rootIdentity = rootIdentity
     workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'notes.md' }, true)
     workspace.updateEditorDraft('lokal', 'alt')
-    const open = vi.spyOn(workspace, 'openToolFile').mockResolvedValue([])
+    const controlCenter = useControlCenterStore()
+    const open = vi.spyOn(controlCenter, 'openFile').mockResolvedValue('file-generated')
     const chat = useChatStore()
     chat.current = { id: sessionId, projectId: rootIdentity, messages: [] }
     chat.selectedSessionId = sessionId
@@ -1630,7 +1633,7 @@ describe('chat drafts', () => {
     source.emit('tool.completed', { tool: 'generate_file', toolCallId: 'call-1', metadata: {} })
 
     await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith(`/sessions/${sessionId}`, expect.any(Object)))
-    expect(open).not.toHaveBeenCalled()
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ path: 'generated.bin' }))
     expect(workspace.editorDraft).toBe('lokal')
   })
 
@@ -1662,7 +1665,8 @@ describe('chat drafts', () => {
     workspace.rootIdentity = rootIdentity
     workspace.openEntry({ kind: 'file', name: 'generated.bin', path: 'generated.bin' }, true)
     workspace.editorDraft = 'stale'
-    const open = vi.spyOn(workspace, 'openToolFile')
+    const controlCenter = useControlCenterStore()
+    const open = vi.spyOn(controlCenter, 'openFile').mockResolvedValue('file-generated')
     const chat = useChatStore()
     chat.current = { id: sessionId, projectId: rootIdentity, messages: [] }
     chat.selectedSessionId = sessionId
@@ -1699,9 +1703,8 @@ describe('chat drafts', () => {
     workspace.sessionId = sessionId
     workspace.scope = 'session'
     workspace.rootIdentity = rootIdentity
-    const open = vi.spyOn(workspace, 'openToolFile').mockResolvedValue([])
     const controlCenter = useControlCenterStore()
-    vi.spyOn(controlCenter, 'openApp').mockResolvedValue()
+    const open = vi.spyOn(controlCenter, 'openFile').mockResolvedValue('file-result')
     const chat = useChatStore()
     chat.current = { id: sessionId, projectId: rootIdentity, messages: [] }
     chat.selectedSessionId = sessionId
@@ -1754,7 +1757,8 @@ describe('chat drafts', () => {
     workspace.sessionId = sessionId
     workspace.scope = 'session'
     workspace.rootIdentity = rootIdentity
-    const open = vi.spyOn(workspace, 'openToolFile').mockResolvedValue([])
+    const controlCenter = useControlCenterStore()
+    const open = vi.spyOn(controlCenter, 'openFile').mockResolvedValue('file-result')
     const chat = useChatStore()
     chat.current = { id: sessionId, messages: [] }
     chat.selectedSessionId = sessionId

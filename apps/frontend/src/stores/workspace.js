@@ -46,6 +46,8 @@ export const useWorkspaceStore = defineStore('workspace', {
     editorDirty: false,
     editorDraft: null,
     editorExternalChange: false,
+    activeFileTabId: null,
+    fileTabStates: {},
     fileChangeVersions: {},
     fileRevisions: {},
     viewVersion: 0,
@@ -53,6 +55,11 @@ export const useWorkspaceStore = defineStore('workspace', {
     contextVersion: 0
   }),
   getters: {
+    hasDirtyEditors: (state) => state.editorDirty
+      || Object.values(state.fileTabStates).some((value) => value.editorDirty),
+    fileTabDirty: (state) => (tabId) => state.activeFileTabId === tabId
+      ? state.editorDirty
+      : state.fileTabStates[tabId]?.editorDirty === true,
     operationAvailable: (state) => (operation) => (
       state.toolContext
         ? Boolean(
@@ -108,10 +115,15 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.persistView()
       return this.load(this.directoryPath)
     },
-    configure({ sessionId = null, rootIdentity = null, currentDirectory = null, workspaceContext = null } = {}) {
+    configure({ sessionId = null, rootIdentity = null, currentDirectory = null, workspaceContext = null, scope = null } = {}) {
+      const nextScope = scope || (sessionId ? 'session' : 'filesystem')
       const sessionChanged = this.sessionId !== sessionId
       const managedRootChanged = Boolean(sessionId && !this.toolContext && this.rootIdentity !== rootIdentity)
       if (sessionChanged || managedRootChanged) this.clearStorageUsage()
+      if (sessionChanged) {
+        this.activeFileTabId = null
+        this.fileTabStates = {}
+      }
       if (sessionChanged) this.scope = sessionId ? 'session' : 'filesystem'
       else if (
         !this.toolContext
@@ -122,12 +134,14 @@ export const useWorkspaceStore = defineStore('workspace', {
       ) this.scope = 'filesystem'
       const changed = sessionChanged
         || managedRootChanged
+        || this.scope !== nextScope
         || this.currentDirectory !== currentDirectory
         || workspaceContextKey(this.workspaceContext) !== workspaceContextKey(workspaceContext)
       this.sessionId = sessionId
+      this.scope = nextScope
       this.currentDirectory = currentDirectory
       this.workspaceContext = workspaceContext
-      if (changed) this.reset()
+      if (changed) this.reset(false)
       this.currentRootIdentity = rootIdentity
       if (!this.toolContext) this.rootIdentity = rootIdentity
     },
@@ -214,6 +228,32 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.persistView()
       return this.load(this.directoryPath)
     },
+    fileTargetFromAction(action) {
+      if (
+        !['session', 'workspace'].includes(action?.root)
+        || !action.path
+        || !action.filename
+      ) return null
+      if (action.root === 'session') {
+        if (!action.rootIdentity) return null
+        return {
+          scope: 'session',
+          path: action.path,
+          name: action.filename,
+          rootIdentity: action.rootIdentity,
+          readOnly: false
+        }
+      }
+      if (!action.executionAgentId || !action.currentDirectory || !action.path.startsWith('/')) return null
+      return {
+        scope: 'filesystem',
+        path: action.path,
+        name: action.filename,
+        executionAgentId: action.executionAgentId,
+        currentDirectory: action.currentDirectory,
+        readOnly: true
+      }
+    },
     openApprovalDraft(action) {
       if (
         action?.root !== 'session'
@@ -244,6 +284,128 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorDraft = null
       this.editorExternalChange = false
       this.persistView()
+    },
+    activateFileTab(tab, workspaceContext = null) {
+      const target = tab?.fileTarget
+      if (tab?.kind !== 'file' || !target) return false
+      this.stashActiveFileTab()
+      this.reset(false)
+      this.activeFileTabId = tab.tabId
+      this.scope = target.scope
+      this.rootIdentity = target.scope === 'session' ? target.rootIdentity : null
+      this.currentDirectory = target.currentDirectory || this.currentDirectory
+      this.workspaceContext = workspaceContext || this.workspaceContext
+      this.toolContext = target.scope === 'filesystem' && target.readOnly
+        ? {
+            executionAgentId: target.executionAgentId,
+            currentDirectory: target.currentDirectory
+          }
+        : null
+      this.selectedPath = target.path
+      this.directoryPath = parentPath(target.path)
+      this.selectedKind = 'file'
+      this.viewedEntry = { kind: 'file', name: target.name, path: target.path }
+      const saved = this.fileTabStates[tab.tabId]
+      if (saved) {
+        if (saved.path && saved.path !== target.path) {
+          this.rebindFileTabPaths([tab.tabId], saved.path, target.path)
+          saved.path = target.path
+        }
+        this.filePreviews = saved.filePreviews
+        this.previewVersions = saved.previewVersions
+        this.editorActive = saved.editorActive
+        this.editorDirty = saved.editorDirty
+        this.editorDraft = saved.editorDraft
+        this.editorExternalChange = saved.editorExternalChange
+        this.fileChangeVersions = saved.fileChangeVersions
+        this.fileRevisions = saved.fileRevisions
+      }
+      return true
+    },
+    stashActiveFileTab(tabId = null) {
+      if (!this.activeFileTabId || (tabId && this.activeFileTabId !== tabId)) return
+      this.fileTabStates[this.activeFileTabId] = {
+        path: this.viewedEntry?.path,
+        filePreviews: this.filePreviews,
+        previewVersions: this.previewVersions,
+        editorActive: this.editorActive,
+        editorDirty: this.editorDirty,
+        editorDraft: this.editorDraft,
+        editorExternalChange: this.editorExternalChange,
+        fileChangeVersions: this.fileChangeVersions,
+        fileRevisions: this.fileRevisions
+      }
+      this.activeFileTabId = null
+    },
+    discardFileTab(tabId) {
+      if (this.activeFileTabId === tabId) {
+        this.discardEdit()
+        this.activeFileTabId = null
+      }
+      delete this.fileTabStates[tabId]
+    },
+    rebindFileTabPaths(tabIds, source, destination) {
+      for (const tabId of tabIds) {
+        const state = this.fileTabStates[tabId]
+        if (!state) continue
+        for (const key of ['filePreviews', 'previewVersions', 'fileChangeVersions', 'fileRevisions']) {
+          state[key] = Object.fromEntries(Object.entries(state[key]).map(([path, value]) => [
+            renamedPath(path, source, destination),
+            value
+          ]))
+        }
+      }
+    },
+    noteFileTabMutations(tabIds) {
+      for (const tabId of tabIds) {
+        if (this.activeFileTabId === tabId) {
+          this.noteFileMutation(this.viewedEntry?.path)
+          continue
+        }
+        const state = this.fileTabStates[tabId]
+        if (!state) continue
+        if (state.editorDirty) state.editorExternalChange = true
+      }
+    },
+    startFileTabEdit(tabId) {
+      if (this.activeFileTabId === tabId) {
+        this.editorActive = true
+        return
+      }
+      if (this.fileTabStates[tabId]) this.fileTabStates[tabId].editorActive = true
+    },
+    discardAllEdits() {
+      this.discardEdit()
+      this.fileTabStates = Object.fromEntries(Object.entries(this.fileTabStates).map(([tabId, value]) => [
+        tabId,
+        { ...value, editorActive: false, editorDirty: false, editorDraft: null, editorExternalChange: false }
+      ]))
+    },
+    fileTarget(entry, edit = false) {
+      if (entry?.kind !== 'file') return null
+      if (this.scope === 'session') {
+        if (!this.rootIdentity) return null
+        return {
+          scope: 'session',
+          path: entry.path,
+          name: entry.name,
+          rootIdentity: this.rootIdentity,
+          readOnly: false,
+          edit
+        }
+      }
+      const executionAgentId = this.toolContext?.executionAgentId || this.workspaceContext?.executionAgentId
+      const currentDirectory = this.toolContext?.currentDirectory || this.currentDirectory
+      if (!executionAgentId || !currentDirectory) return null
+      return {
+        scope: 'filesystem',
+        path: entry.path,
+        name: entry.name,
+        executionAgentId,
+        currentDirectory,
+        readOnly: Boolean(this.toolContext),
+        edit
+      }
     },
     selectPath(path, kind = 'directory') {
       if (path !== this.selectedPath || kind !== this.selectedKind) this.viewVersion += 1
@@ -295,13 +457,17 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorDraft = null
       this.fileChangeVersions[path] = (this.fileChangeVersions[path] || 0) + 1
     },
-    activeFileSnapshot() {
+    activeFileSnapshot(expectedExecutionAgentId = undefined) {
       const controlCenter = useControlCenterStore()
       const path = this.viewedEntry?.path
       const sha256 = this.filePreviews[path]?.revision
+      const activeFileVisible = (
+        controlCenter.activeTab?.kind === 'file'
+        && controlCenter.activeTab.tabId === this.activeFileTabId
+      ) || controlCenter.activeContentId === 'files'
       if (
         !controlCenter.open
-        || controlCenter.activeContentId !== 'files'
+        || !activeFileVisible
         || controlCenter.sessionId !== this.sessionId
         || this.toolContext
         || !path
@@ -310,6 +476,11 @@ export const useWorkspaceStore = defineStore('workspace', {
       ) return null
       const rootIdentity = this.scope === 'session' ? this.rootIdentity : null
       if (this.scope === 'session' && !rootIdentity) return null
+      if (
+        this.scope === 'filesystem'
+        && expectedExecutionAgentId !== undefined
+        && this.workspaceContext?.executionAgentId !== expectedExecutionAgentId
+      ) return null
       return {
         root: this.scope === 'session' ? 'session' : 'workspace',
         ...(rootIdentity ? { root_identity: rootIdentity } : {}),

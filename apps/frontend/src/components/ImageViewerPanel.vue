@@ -36,9 +36,6 @@
       >
         <q-tooltip>{{ fullscreen ? 'Vollbild verlassen' : 'Im Vollbild öffnen' }}</q-tooltip>
       </q-btn>
-      <q-btn class="file-icon-action" flat round dense icon="close" aria-label="Bildansicht schließen" @click="emit('close')">
-        <q-tooltip>Bildansicht schließen</q-tooltip>
-      </q-btn>
     </q-toolbar>
     <q-separator />
     <div class="col file-viewer__content q-pa-md">

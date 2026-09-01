@@ -1,35 +1,5 @@
 <template>
-  <section class="column full-height no-wrap" aria-labelledby="mail-app-title">
-    <ControlCenterContentHeader
-      icon="mail"
-      title="E-Mail"
-      title-id="mail-app-title"
-      integration-id="mail"
-      refreshable
-      refresh-label="E-Mails aktualisieren"
-      :refreshing="mail.accountsLoading || mail.messagesLoading"
-      :can-move-left="integrationIndex > 0"
-      :can-move-right="integrationIndex >= 0 && integrationIndex < controlCenter.tabs.length - 1"
-      @refresh="refresh"
-      @close="emit('close')"
-      @remove="emit('remove', 'mail')"
-      @move="emit('move', 'mail', $event)"
-    >
-      <template #actions>
-        <q-btn
-          flat
-          round
-          dense
-          icon="edit"
-          aria-label="E-Mail verfassen"
-          :disable="!activeAccount"
-          @click="openCompose()"
-        >
-          <q-tooltip>E-Mail verfassen</q-tooltip>
-        </q-btn>
-      </template>
-    </ControlCenterContentHeader>
-
+  <section class="column full-height no-wrap" aria-label="E-Mail">
     <div v-if="mail.accountsLoading && !mail.accountsLoaded" class="col flex flex-center">
       <q-spinner color="primary" size="40px" aria-label="Mail-Konten werden geladen" />
     </div>
@@ -46,7 +16,7 @@
 
     <template v-else>
       <div class="row q-col-gutter-sm q-pa-sm">
-        <div class="col-12 col-sm-6">
+        <div class="col-12 col-sm">
           <q-select
             v-model="selectedAccountId"
             outlined
@@ -59,7 +29,7 @@
             @update:model-value="selectAccount"
           />
         </div>
-        <div class="col-12 col-sm-6">
+        <div class="col-12 col-sm">
           <q-select
             v-model="selectedMailboxKey"
             outlined
@@ -73,6 +43,30 @@
             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
             @update:model-value="selectMailbox"
           />
+        </div>
+        <div class="col-12 col-sm-auto row items-center justify-end no-wrap q-gutter-xs">
+          <q-btn
+            flat
+            round
+            dense
+            icon="edit"
+            aria-label="E-Mail verfassen"
+            :disable="!activeAccount"
+            @click="openCompose()"
+          >
+            <q-tooltip>E-Mail verfassen</q-tooltip>
+          </q-btn>
+          <q-btn
+            flat
+            round
+            dense
+            icon="refresh"
+            aria-label="E-Mails aktualisieren"
+            :loading="mail.accountsLoading || mail.messagesLoading"
+            @click="refresh"
+          >
+            <q-tooltip>E-Mails aktualisieren</q-tooltip>
+          </q-btn>
         </div>
       </div>
       <q-separator />
@@ -230,17 +224,13 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import ControlCenterContentHeader from 'components/ControlCenterContentHeader.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
-import { useControlCenterStore } from 'stores/control-center'
 import { useMailStore } from 'stores/mail'
 
 defineOptions({ name: 'MailApp' })
-const emit = defineEmits(['close', 'remove', 'move'])
 const $q = useQuasar()
 const { confirm } = useConfirm()
-const controlCenter = useControlCenterStore()
 const mail = useMailStore()
 const selectedAccountId = ref(null)
 const selectedMailboxKey = ref(null)
@@ -248,7 +238,6 @@ const selectedToken = ref(null)
 const composeOpen = ref(false)
 const composeSaving = ref(false)
 const compose = reactive(emptyCompose())
-const integrationIndex = computed(() => controlCenter.tabs.findIndex((tab) => tab.appId === 'mail'))
 const activeAccount = computed(() => mail.accounts.find((account) => account.id === selectedAccountId.value))
 const accountOptions = computed(() => mail.accounts.map((account) => ({ label: account.name, value: account.id })))
 const mailboxOptions = computed(() => mail.mailboxes.map((mailbox) => ({

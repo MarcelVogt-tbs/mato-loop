@@ -4,7 +4,6 @@ import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useApprovalStore } from 'src/stores/approvals'
 import { controlCenterRequestState, useControlCenterStore } from 'src/stores/control-center'
-import { useExecutionAgentStore } from 'src/stores/execution-agents'
 import { useInstanceLimitsStore } from 'src/stores/instance-limits'
 import { useQuestionStore } from 'src/stores/questions'
 import { useWorkspaceStore } from 'src/stores/workspace'
@@ -53,6 +52,7 @@ import {
   saveChatOutboxEntry
 } from 'src/utils/chat-outbox'
 import { notifyError } from 'src/utils/notifications'
+import { randomUuid } from 'src/utils/random-id'
 
 const SESSION_PAGE_SIZE = 20
 const ACTIVE_TITLE_GENERATION_STATUSES = new Set(['pending', 'running'])
@@ -66,22 +66,51 @@ const FILESYSTEM_MUTATION_TOOLS = new Set([
 ])
 const OUTBOX_RETRY_MS = 4000
 
+function absoluteToolPath(path, currentDirectory) {
+  if (path?.startsWith('/')) return path
+  if (!path || !currentDirectory?.startsWith('/')) return null
+  const parts = `${currentDirectory}/${path}`.split('/')
+  const normalized = []
+  for (const part of parts) {
+    if (!part || part === '.') continue
+    if (part === '..') normalized.pop()
+    else normalized.push(part)
+  }
+  return `/${normalized.join('/')}`
+}
+
+function controlCenterFileTarget(root, path, session) {
+  if (!path) return null
+  const name = path.split('/').filter(Boolean).at(-1)
+  if (!name) return null
+  if (['files', 'session'].includes(root)) {
+    return {
+      scope: 'session',
+      path,
+      name,
+      rootIdentity: session.projectId || session.id,
+      readOnly: false
+    }
+  }
+  if (!['computer', 'workspace'].includes(root)) return null
+  const absolutePath = absoluteToolPath(path, session.currentDirectory)
+  if (!absolutePath || !session.preferredExecutionAgentId || !session.currentDirectory) return null
+  return {
+    scope: 'filesystem',
+    path: absolutePath,
+    name,
+    executionAgentId: session.preferredExecutionAgentId,
+    currentDirectory: session.currentDirectory,
+    readOnly: false
+  }
+}
+
 function mergeMessages(existing = [], incoming = []) {
   const replacements = new Map(incoming.map((message) => [message.id, message]))
   const merged = existing.map((message) => replacements.get(message.id) || message)
   const existingIds = new Set(existing.map((message) => message.id))
   merged.push(...incoming.filter((message) => !existingIds.has(message.id)))
   return merged
-}
-
-function newSubmissionId() {
-  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
-  const bytes = globalThis.crypto?.getRandomValues?.(new Uint8Array(16))
-  if (!bytes) throw new Error('Secure random UUID generation is unavailable')
-  bytes[6] = (bytes[6] & 0x0f) | 0x40
-  bytes[8] = (bytes[8] & 0x3f) | 0x80
-  const value = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
-  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`
 }
 
 async function sessionStateAfterMutation(sessionId, messageId) {
@@ -1525,7 +1554,7 @@ export const useChatStore = defineStore('chat', {
       if (!text && !attachments.length) return null
       const sessionId = this.current?.id || null
       const entry = {
-        id: newSubmissionId(),
+        id: randomUuid(),
         ownerUserId,
         sessionId,
         projectId: this.current?.projectId || this.sessionsProjectId || null,
@@ -1539,7 +1568,9 @@ export const useChatStore = defineStore('chat', {
         })),
         options: sessionId ? null : sanitizedSessionOptions({ ...this.drafts.newSession.options }),
         controlCenter: sessionId ? null : controlCenterRequestState(useControlCenterStore()),
-        activeFile: useWorkspaceStore().activeFileSnapshot(),
+        activeFile: useWorkspaceStore().activeFileSnapshot(
+          this.activeContext?.preferredExecutionAgentId
+        ),
         queuedAt: new Date().toISOString(),
         paused: false
       }
@@ -1802,7 +1833,9 @@ export const useChatStore = defineStore('chat', {
       const options = sanitizedSessionOptions(requestedOptions || this.drafts.newSession.options)
       try {
         const activeFile = requestedActiveFile === undefined
-          ? useWorkspaceStore().activeFileSnapshot()
+          ? useWorkspaceStore().activeFileSnapshot(
+              this.activeContext?.preferredExecutionAgentId
+            )
           : requestedActiveFile
         const payload = {
           content,
@@ -1905,7 +1938,9 @@ export const useChatStore = defineStore('chat', {
       this.setActivity('submitting', { startedAt: new Date().toISOString() })
       try {
         const activeFile = requestedActiveFile === undefined
-          ? useWorkspaceStore().activeFileSnapshot()
+          ? useWorkspaceStore().activeFileSnapshot(
+              this.activeContext?.preferredExecutionAgentId
+            )
           : requestedActiveFile
         const payload = {
           content,
@@ -2016,7 +2051,6 @@ export const useChatStore = defineStore('chat', {
           const controlCenter = useControlCenterStore()
           toolViewContexts.set(payload.toolCallId, {
             viewVersion: workspace.viewVersion,
-            editorDirty: workspace.editorDirty,
             controlCenterOpen: controlCenter.open,
             activeContentId: controlCenter.activeContentId
           })
@@ -2161,8 +2195,38 @@ export const useChatStore = defineStore('chat', {
             !payload.metadata?.errorCode
             && (managedRootMutation || attachmentAction?.root === 'session')
           ) void workspace.refreshStorageUsage(sessionId)
-          if (!start) return
           const sourcePath = argumentsValue.source_path || argumentsValue.path
+          if (
+            !payload.metadata?.errorCode
+            && sourcePath
+            && ['delete_path', 'move_path'].includes(payload.tool)
+          ) {
+            const controlCenter = useControlCenterStore()
+            const sourceTarget = controlCenterFileTarget(sourceRoot, sourcePath, session)
+            if (sourceTarget && payload.tool === 'move_path') {
+              const destinationTarget = controlCenterFileTarget(
+                argumentsValue.destination_root,
+                argumentsValue.destination_path,
+                session
+              )
+              if (destinationTarget) {
+                const reboundTabs = await controlCenter.rebindFileTargets(sourceTarget, destinationTarget)
+                workspace.rebindFileTabPaths(reboundTabs, sourceTarget.path, destinationTarget.path)
+              }
+            } else if (sourceTarget) {
+              const affectedTabs = controlCenter.fileTabsForTarget(sourceTarget)
+              const dirtyTabIds = affectedTabs
+                .filter((tab) => workspace.fileTabDirty(tab.tabId))
+                .map((tab) => tab.tabId)
+              workspace.noteFileTabMutations(dirtyTabIds)
+              const cleanTabIds = affectedTabs
+                .filter((tab) => !dirtyTabIds.includes(tab.tabId))
+                .map((tab) => tab.tabId)
+              const removedTabs = await controlCenter.rebindFileTargets(sourceTarget, null, cleanTabIds)
+              removedTabs.forEach((tabId) => workspace.discardFileTab(tabId))
+            }
+          }
+          if (!start) return
           const sourceMatchesOpenFile = ['delete_path', 'move_path'].includes(payload.tool)
             && workspace.viewedEntry?.path
             && (workspace.viewedEntry.path === sourcePath
@@ -2186,26 +2250,12 @@ export const useChatStore = defineStore('chat', {
           if (!shouldOpen) return
           const controlCenter = useControlCenterStore()
           if (
-            start.editorDirty
-            || workspace.editorDirty
-            || workspace.viewVersion !== start.viewVersion
+            workspace.viewVersion !== start.viewVersion
             || controlCenter.open !== start.controlCenterOpen
             || controlCenter.activeContentId !== start.activeContentId
           ) return
-          workspace.configure({
-            sessionId,
-            rootIdentity: session.projectId || sessionId,
-            currentDirectory: session.currentDirectory,
-            workspaceContext: useExecutionAgentStore().workspaceContextFor(this.activeContext)
-          })
-          await workspace.openToolFile(action)
-          if (
-            workspace.viewedEntry?.path !== action.path
-            || (action.root === 'session' && workspace.rootIdentity !== action.rootIdentity)
-            || controlCenter.open !== start.controlCenterOpen
-            || controlCenter.activeContentId !== start.activeContentId
-          ) return
-          await controlCenter.openApp('files')
+          const target = workspace.fileTargetFromAction(action)
+          if (target) await controlCenter.openFile(target)
         }).catch(() => {})
         if (FILESYSTEM_MUTATION_TOOLS.has(payload.tool) && !payload.metadata?.errorCode) {
           const workspace = useWorkspaceStore()

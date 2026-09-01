@@ -1,77 +1,9 @@
 <template>
   <div ref="explorerRoot" class="column full-height no-wrap file-explorer">
-    <FileViewerPanel
-      v-if="workspace.viewedEntry && !viewerFullscreen"
-      :entry="workspace.viewedEntry"
-      :fullscreen-toggle="$q.screen.gt.sm"
-      @back="backToFiles"
-      @close="closeExplorer"
-      @navigate="navigateFromViewer"
-      @toggle-fullscreen="viewerFullscreen = true"
-    />
-    <div v-show="!workspace.viewedEntry" class="column full-height no-wrap">
-    <ControlCenterContentHeader
-      icon="folder_open"
-      title="Dateien"
-      integration-id="files"
-      refreshable
-      :refreshing="workspace.loading[workspace.directoryPath]"
-      :refresh-disabled="!explorerAvailable"
-      :custom-menu="hasOverflowActions"
-      :can-move-left="integrationIndex > 0"
-      :can-move-right="integrationIndex >= 0 && integrationIndex < controlCenter.tabs.length - 1"
-      @refresh="refreshFiles"
-      @close="emit('close')"
-      @remove="emit('remove', 'files')"
-      @move="emit('move', 'files', $event)"
-    >
-      <template #menu>
-        <template v-if="hasOverflowActions">
-            <q-item
-              v-if="!workspace.toolContext && workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('filesystem.list')"
-              clickable
-              v-ripple
-              v-close-popup
-              :disable="chat.running"
-              @click="setWorkdir"
-            >
-              <q-item-section avatar><q-icon name="home_work" /></q-item-section>
-              <q-item-section>Als aktuellen Ordner verwenden</q-item-section>
-            </q-item>
-            <q-item
-              v-if="!workspace.toolContext && workspace.scope === 'filesystem' && explorerAvailable"
-              clickable
-              v-ripple
-              v-close-popup
-              @click="openAbsolutePath"
-            >
-              <q-item-section avatar><q-icon name="drive_file_move" /></q-item-section>
-              <q-item-section>Absoluten Pfad öffnen</q-item-section>
-            </q-item>
-            <q-item v-if="chat.current" clickable v-ripple v-close-popup @click="openPermissionsDialog">
-              <q-item-section avatar><q-icon name="verified_user" /></q-item-section>
-              <q-item-section>Session-Freigaben</q-item-section>
-            </q-item>
-        </template>
-      </template>
-    </ControlCenterContentHeader>
-    <div class="file-explorer__controls q-px-md q-pb-md q-gutter-y-sm">
-      <div class="row items-center no-wrap q-gutter-sm">
-        <div class="col text-caption app-muted ellipsis">{{ scopeDescription }}</div>
+    <div class="file-explorer__controls">
+      <q-toolbar class="file-explorer__toolbar q-px-sm" role="toolbar" aria-label="Dateien durchsuchen und verwalten">
         <q-btn
-          v-if="workspace.toolContext"
-          flat
-          dense
-          no-caps
-          color="primary"
-          icon="undo"
-          label="Zu aktuellen Dateien"
-          @click="workspace.returnToCurrentContext()"
-        />
-      </div>
-      <div class="row items-center no-wrap">
-        <q-btn
-          class="file-icon-action q-mr-xs"
+          class="file-icon-action"
           flat
           round
           dense
@@ -82,47 +14,164 @@
         >
           <q-tooltip>Zum übergeordneten Ordner</q-tooltip>
         </q-btn>
-        <q-breadcrumbs class="col file-breadcrumbs" separator="/" active-color="primary">
+        <q-separator vertical inset class="q-mx-xs" />
+        <q-input
+          v-if="searchOpen"
+          ref="searchInput"
+          v-model="workspace.filter"
+          class="file-explorer__filter col"
+          borderless
+          dense
+          clearable
+          placeholder="Geladene Einträge filtern"
+          aria-label="Geladene Einträge filtern"
+          :disable="!explorerAvailable"
+          @keydown.esc.stop.prevent="closeSearch"
+        />
+        <q-breadcrumbs v-else class="file-breadcrumbs col q-px-sm" gutter="xs" active-color="primary">
+          <template #separator><q-icon name="chevron_right" size="18px" /></template>
           <q-breadcrumbs-el
             v-for="crumb in selectedBreadcrumbs"
             :key="crumb.path"
+            :icon="crumb.icon"
             :label="crumb.label"
+            :aria-label="crumb.ariaLabel"
             :class="{ 'cursor-pointer': explorerAvailable && crumb.path !== workspace.directoryPath }"
             @click="explorerAvailable && crumb.path !== workspace.directoryPath && navigateDirectory(crumb.path)"
           />
         </q-breadcrumbs>
-      </div>
-      <q-input v-model="workspace.filter" outlined dense clearable label="Geladene Einträge filtern" :disable="!explorerAvailable">
-        <template #prepend><q-icon name="search" /></template>
-      </q-input>
-      <div class="file-explorer__actions row items-center no-wrap q-gutter-sm">
-        <q-btn-dropdown v-if="canCreateFile || canCreateDirectory" unelevated no-caps color="primary" icon="add" label="Neu">
-          <q-list padding class="file-actions-menu">
-            <q-item v-if="canCreateFile" clickable v-ripple v-close-popup @click="openCreateDialog('file')">
-              <q-item-section avatar><q-icon name="note_add" /></q-item-section>
-              <q-item-section>Neue Datei</q-item-section>
-            </q-item>
-            <q-item v-if="canCreateDirectory" clickable v-ripple v-close-popup @click="openCreateDialog('directory')">
-              <q-item-section avatar><q-icon name="create_new_folder" /></q-item-section>
-              <q-item-section>Neuer Ordner</q-item-section>
-            </q-item>
-          </q-list>
-        </q-btn-dropdown>
+        <q-btn
+          flat
+          round
+          dense
+          :icon="searchOpen ? 'close' : 'search'"
+          :aria-label="searchOpen ? 'Suche schließen' : 'Dateien durchsuchen'"
+          :disable="!explorerAvailable"
+          @click="toggleSearch"
+        >
+          <q-tooltip>{{ searchOpen ? 'Suche schließen' : 'Dateien durchsuchen' }}</q-tooltip>
+        </q-btn>
+        <q-btn
+          flat
+          round
+          dense
+          icon="refresh"
+          aria-label="Dateien aktualisieren"
+          :loading="workspace.loading[workspace.directoryPath]"
+          :disable="!explorerAvailable"
+          @click="refreshFiles"
+        >
+          <q-tooltip>Dateien aktualisieren</q-tooltip>
+        </q-btn>
+        <q-separator
+          v-if="workspace.toolContext || hasOverflowActions || canCreateFile || canCreateDirectory || canUpload"
+          vertical
+          inset
+          class="q-mx-xs"
+        />
+        <q-btn
+          v-if="workspace.toolContext"
+          flat
+          round
+          dense
+          color="primary"
+          icon="undo"
+          aria-label="Zu aktuellen Dateien"
+          @click="workspace.returnToCurrentContext()"
+        >
+          <q-tooltip>Zu aktuellen Dateien</q-tooltip>
+        </q-btn>
+        <q-btn
+          v-if="canCreateFile || canCreateDirectory"
+          class="file-explorer__primary-action"
+          flat
+          round
+          dense
+          color="primary"
+          icon="add"
+          aria-label="Datei oder Ordner erstellen"
+        >
+          <q-tooltip>Neu</q-tooltip>
+          <q-menu anchor="bottom right" self="top right">
+            <q-list padding class="file-actions-menu">
+              <q-item v-if="canCreateFile" clickable v-ripple v-close-popup @click="openCreateDialog('file')">
+                <q-item-section avatar><q-icon name="note_add" /></q-item-section>
+                <q-item-section>Neue Datei</q-item-section>
+              </q-item>
+              <q-item v-if="canCreateDirectory" clickable v-ripple v-close-popup @click="openCreateDialog('directory')">
+                <q-item-section avatar><q-icon name="create_new_folder" /></q-item-section>
+                <q-item-section>Neuer Ordner</q-item-section>
+              </q-item>
+            </q-list>
+          </q-menu>
+        </q-btn>
         <q-btn
           v-if="canUpload"
-          class="file-upload-action"
-          outline
-          no-caps
+          class="file-upload-action file-explorer__primary-action"
+          flat
+          round
+          dense
           color="primary"
           icon="upload_file"
-          label="Hochladen"
           aria-label="Dateien hochladen"
           :loading="workspace.uploading"
           @click="uploadInput.click()"
         >
           <q-tooltip>Dateien hochladen</q-tooltip>
         </q-btn>
-      </div>
+        <q-btn
+          v-if="hasOverflowActions || canCreateFile || canCreateDirectory || canUpload"
+          flat
+          round
+          dense
+          icon="more_vert"
+          aria-label="Weitere Dateiaktionen"
+        >
+          <q-tooltip>Weitere Aktionen</q-tooltip>
+          <q-menu anchor="bottom right" self="top right" class="app-action-menu">
+            <q-list padding>
+              <q-item
+                v-if="!workspace.toolContext && workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('filesystem.list')"
+                clickable
+                v-ripple
+                v-close-popup
+                :disable="chat.running"
+                @click="setWorkdir"
+              >
+                <q-item-section avatar><q-icon name="home_work" /></q-item-section>
+                <q-item-section>Als aktuellen Ordner verwenden</q-item-section>
+              </q-item>
+              <q-item
+                v-if="!workspace.toolContext && workspace.scope === 'filesystem' && explorerAvailable"
+                clickable
+                v-ripple
+                v-close-popup
+                @click="openAbsolutePath"
+              >
+                <q-item-section avatar><q-icon name="drive_file_move" /></q-item-section>
+                <q-item-section>Absoluten Pfad öffnen</q-item-section>
+              </q-item>
+              <q-item v-if="chat.current" clickable v-ripple v-close-popup @click="openPermissionsDialog">
+                <q-item-section avatar><q-icon name="verified_user" /></q-item-section>
+                <q-item-section>Session-Freigaben</q-item-section>
+              </q-item>
+              <q-separator v-if="hasOverflowActions && (canCreateFile || canCreateDirectory || canUpload)" spaced />
+              <q-item v-if="canCreateFile" clickable v-ripple v-close-popup @click="openCreateDialog('file')">
+                <q-item-section avatar><q-icon name="note_add" /></q-item-section>
+                <q-item-section>Neue Datei</q-item-section>
+              </q-item>
+              <q-item v-if="canCreateDirectory" clickable v-ripple v-close-popup @click="openCreateDialog('directory')">
+                <q-item-section avatar><q-icon name="create_new_folder" /></q-item-section>
+                <q-item-section>Neuer Ordner</q-item-section>
+              </q-item>
+              <q-item v-if="canUpload" clickable v-ripple v-close-popup @click="uploadInput.click()">
+                <q-item-section avatar><q-icon name="upload_file" /></q-item-section>
+                <q-item-section>Dateien hochladen</q-item-section>
+              </q-item>
+            </q-list>
+          </q-menu>
+        </q-btn>
+      </q-toolbar>
       <input ref="uploadInput" type="file" multiple class="hidden" @change="uploadSelected">
     </div>
     <q-separator />
@@ -147,25 +196,10 @@
         class="q-pa-sm"
         role="tree"
         aria-label="Dateien und Ordner"
+        :tabindex="treeFocusPath === workspace.directoryPath ? 0 : -1"
+        @focus.self="focusTreeItem(visibleTreeItems()[0])"
         @keydown="handleTreeKeydown"
       >
-        <div
-          :class="['file-tree-row row items-center no-wrap', { 'file-tree-row--selected': workspace.selectedPath === workspace.directoryPath }]"
-          role="treeitem"
-          :tabindex="treeFocusPath === workspace.directoryPath ? 0 : -1"
-          :data-file-path="workspace.directoryPath"
-          data-file-kind="directory"
-          aria-level="1"
-          aria-expanded="true"
-          :aria-selected="workspace.selectedPath === workspace.directoryPath"
-          :aria-current="workspace.selectedPath === workspace.directoryPath ? 'true' : undefined"
-          @click="workspace.selectPath(workspace.directoryPath)"
-          @focus="treeFocusPath = workspace.directoryPath"
-        >
-          <span class="file-tree-spacer" />
-          <q-icon name="folder_special" size="20px" />
-          <span class="q-ml-sm">{{ workspace.directoryPath }}</span>
-        </div>
         <div v-if="workspace.loadErrors[workspace.directoryPath]" class="file-load-state q-ma-sm q-pa-md text-center" role="alert">
           <q-icon name="cloud_off" size="32px" class="app-muted" />
           <div class="q-mt-sm">{{ rootLoadError }}</div>
@@ -211,8 +245,6 @@
         />
       </div>
     </q-scroll-area>
-    </div>
-
     <q-dialog v-model="renameDialogOpen" :persistent="renaming">
       <q-card class="file-rename-dialog">
         <q-form @submit.prevent="renameEntry">
@@ -340,29 +372,13 @@
       </q-card>
     </q-dialog>
 
-    <q-dialog v-model="viewerFullscreen" maximized transition-show="fade" transition-hide="fade">
-      <q-card class="app-file-dialog">
-        <FileViewerPanel
-          v-if="workspace.viewedEntry"
-          :entry="workspace.viewedEntry"
-          fullscreen
-          fullscreen-toggle
-          @back="backToFiles"
-          @close="closeExplorer"
-          @navigate="navigateFromViewer"
-          @toggle-fullscreen="viewerFullscreen = false"
-        />
-      </q-card>
-    </q-dialog>
   </div>
 </template>
 
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import ControlCenterContentHeader from 'components/ControlCenterContentHeader.vue'
 import FileTreeNode from 'components/FileTreeNode.vue'
-import FileViewerPanel from 'components/FileViewerPanel.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { permissionGrantDisplay } from 'src/utils/approval-display'
 import { apiErrorMessage } from 'src/utils/api-errors'
@@ -380,7 +396,9 @@ import {
 } from 'stores/workspace'
 
 defineOptions({ name: 'FileExplorerPanel' })
-const emit = defineEmits(['close', 'remove', 'move'])
+const props = defineProps({
+  scope: { type: String, default: 'session' }
+})
 
 const $q = useQuasar()
 const { confirm } = useConfirm()
@@ -397,6 +415,8 @@ const permissionsDialogOpen = ref(false)
 const revokingId = ref(null)
 const uploadInput = ref(null)
 const explorerRoot = ref(null)
+const searchInput = ref(null)
+const searchOpen = ref(Boolean(workspace.filter))
 const treeFocusPath = ref('.')
 const renameDialogOpen = ref(false)
 const renameTarget = ref(null)
@@ -407,7 +427,6 @@ const createKind = ref('file')
 const createName = ref('')
 const createSuffix = ref('.txt')
 const creating = ref(false)
-const viewerFullscreen = ref(false)
 let typeahead = ''
 let typeaheadTimer = null
 const fileTypeOptions = [
@@ -416,12 +435,10 @@ const fileTypeOptions = [
   { label: 'OpenSCAD (.scad)', value: '.scad' }
 ]
 const createFileName = computed(() => withFileSuffix(createName.value, createSuffix.value))
-const integrationIndex = computed(() => controlCenter.tabs.findIndex((tab) => tab.appId === 'files'))
 const selectedIsDirectory = computed(() => workspace.selectedKind === 'directory')
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
 ))
-const managedSourceLabel = computed(() => 'Ablage')
 const hasOverflowActions = computed(() => Boolean(
   (workspace.scope === 'filesystem' && explorerAvailable.value)
   || chat.current
@@ -445,7 +462,7 @@ const explorerAvailable = computed(() => workspace.operationAvailable('filesyste
 const explorerUnavailableMessage = computed(() => {
   if (explorerAvailable.value) return ''
   if (workspace.scope === 'session') {
-    return `${managedSourceLabel.value} sind verfügbar, sobald die Session erstellt wurde.`
+    return 'Dateien sind verfügbar, sobald die Session erstellt wurde.'
   }
   if (!chat.activeContext?.preferredExecutionAgentId) {
     return workspace.sessionId
@@ -463,27 +480,28 @@ const explorerUnavailableMessage = computed(() => {
 const explorerUnavailableIcon = computed(() => (
   selectedExecutionAgent.value?.connected === false ? 'cloud_off' : 'folder_off'
 ))
-const scopeDescription = computed(() => {
-  if (workspace.toolContext) return 'Gespeicherter Dateistand · nur Lesen'
-  if (workspace.scope === 'session') return managedSourceLabel.value
-  if (!workspace.operationAvailable('filesystem.list')) return 'Der ausgewählte Computer ist nicht verfügbar.'
-  return `Aktueller Ordner · ${chat.activeContext?.currentDirectory || selectedExecutionAgent.value?.homeDirectory || '/'}`
-})
 const browserRootPath = computed(() => workspace.scope === 'filesystem' ? '/' : '.')
 const selectedParentPath = computed(() => parentPath(workspace.directoryPath))
-const selectedBreadcrumbs = computed(() => workspace.scope === 'filesystem'
-  ? [
-      { label: '/', path: '/' },
-      ...workspace.directoryPath.split('/').filter(Boolean).map((label, index, parts) => ({
-        label,
-        path: `/${parts.slice(0, index + 1).join('/')}`
-      }))
-    ]
-  : [{ label: managedSourceLabel.value, path: '.' }])
+const selectedBreadcrumbs = computed(() => {
+  const filesystem = workspace.scope === 'filesystem'
+  const parts = workspace.directoryPath.split('/').filter((part) => part && part !== '.')
+  return [
+    {
+      icon: filesystem ? 'computer' : 'folder_open',
+      ariaLabel: filesystem ? 'Computer' : 'Ablage',
+      path: filesystem ? '/' : '.'
+    },
+    ...parts.map((label, index) => ({
+      label,
+      ariaLabel: label,
+      path: `${filesystem ? '/' : ''}${parts.slice(0, index + 1).join('/')}`
+    }))
+  ]
+})
 const filterEmpty = computed(() => Boolean(
   workspace.filter
   && workspace.entries[workspace.directoryPath]
-  && !Object.values(workspace.entries).flat().some((entry) => (
+  && !workspace.entries[workspace.directoryPath].some((entry) => (
     entry.name?.toLocaleLowerCase().includes(workspace.filter.toLocaleLowerCase())
   ))
 ))
@@ -506,6 +524,21 @@ function refreshFiles() {
   const requests = [workspace.refresh()]
   if (chat.current?.id) requests.push(workspace.fetchStorageUsage(chat.current.id))
   return Promise.all(requests)
+}
+
+async function toggleSearch() {
+  if (searchOpen.value) {
+    closeSearch()
+    return
+  }
+  searchOpen.value = true
+  await nextTick()
+  searchInput.value?.focus()
+}
+
+function closeSearch() {
+  workspace.filter = ''
+  searchOpen.value = false
 }
 
 async function loadPermissions() {
@@ -541,7 +574,8 @@ async function createFile() {
     if (createKind.value === 'directory') {
       await workspace.createDirectory(mutationDirectory.value, createName.value.trim())
     } else {
-      await workspace.createFile(mutationDirectory.value, createFileName.value)
+      const entry = await workspace.createFile(mutationDirectory.value, createFileName.value)
+      await openViewer({ entry, edit: true })
     }
     createDialogOpen.value = false
   } catch {
@@ -585,9 +619,12 @@ async function uploadSelected(event) {
   }
 }
 
-function openViewer({ entry }) {
+async function openViewer({ entry, edit = false }) {
   if (entry?.kind !== 'file') return
-  workspace.openEntry(entry)
+  const target = workspace.fileTarget(entry, edit)
+  if (!target) return
+  const tabId = await controlCenter.openFile(target)
+  if (edit && tabId) workspace.startFileTabEdit(tabId)
 }
 
 function visibleTreeItems() {
@@ -612,13 +649,13 @@ function handleTreeKeydown(event) {
   else if (event.key === 'Home') target = items[0]
   else if (event.key === 'End') target = items.at(-1)
   else if (event.key === 'ArrowRight' && current.dataset.fileKind === 'directory') {
-    if (current.getAttribute('aria-expanded') === 'false') current.click()
-    else target = items.slice(index + 1).find((item) => item.dataset.filePath.startsWith(
-      current.dataset.filePath === '.' ? '' : current.dataset.filePath === '/' ? '/' : `${current.dataset.filePath}/`
-    ))
-  } else if (event.key === 'ArrowLeft') {
-    if (current.getAttribute('aria-expanded') === 'true' && current.dataset.filePath !== '.') current.click()
-    else target = items.find((item) => item.dataset.filePath === parentPath(current.dataset.filePath))
+    event.preventDefault()
+    current.click()
+    return
+  } else if (event.key === 'ArrowLeft' && workspace.directoryPath !== browserRootPath.value) {
+    event.preventDefault()
+    navigateDirectory(selectedParentPath.value)
+    return
   } else if (event.key === 'Enter' || event.key === ' ') {
     current.click()
   } else if (event.key.length === 1 && /\S/u.test(event.key)) {
@@ -639,49 +676,14 @@ function navigateDirectory(path) {
   focusPath(path)
 }
 
-async function navigateFromViewer(path) {
-  if (!await confirmDiscard()) return
-  viewerFullscreen.value = false
-  workspace.closeViewer()
-  navigateDirectory(path)
-}
-
-async function backToFiles() {
-  if (!await confirmDiscard()) return
-  viewerFullscreen.value = false
-  const path = workspace.viewedEntry?.path
-  workspace.closeViewer()
-  await nextTick()
-  const rows = [...(explorerRoot.value?.querySelectorAll('[data-file-path]') || [])]
-  const row = rows.find((item) => item.dataset.filePath === path)
-    || rows.find((item) => item.dataset.filePath === workspace.directoryPath)
-  row?.focus()
-}
-
 async function focusPath(path, fallback = workspace.directoryPath) {
   await nextTick()
   const rows = [...(explorerRoot.value?.querySelectorAll('[data-file-path]') || [])]
   const row = rows.find((item) => item.dataset.filePath === path)
     || rows.find((item) => item.dataset.filePath === fallback)
     || rows.find((item) => item.dataset.filePath === workspace.directoryPath)
+    || rows[0]
   row?.focus()
-}
-
-async function closeExplorer() {
-  if (!await confirmDiscard()) return
-  viewerFullscreen.value = false
-  emit('close')
-}
-
-async function confirmDiscard() {
-  if (!workspace.editorDirty) return true
-  const accepted = await confirm(
-    'Sollen die ungespeicherten Änderungen verworfen werden?',
-    'Änderungen verwerfen?',
-    { okLabel: 'Verwerfen' }
-  )
-  if (accepted) workspace.discardEdit()
-  return accepted
 }
 
 async function setWorkdir() {
@@ -714,7 +716,12 @@ async function renameEntry() {
   if (!canRename.value) return
   renaming.value = true
   try {
+    const source = fileTargetForPath(renameTarget.value.path)
     const renamed = await workspace.renameEntry(renameTarget.value.path, renameName.value.trim())
+    if (source) {
+      const reboundTabs = await controlCenter.rebindFileTargets(source, renamed.path).catch(() => [])
+      workspace.rebindFileTabPaths(reboundTabs, source.path, renamed.path)
+    }
     renameDialogOpen.value = false
     if (permissionsDialogOpen.value) await loadPermissions()
     await focusPath(renamed.path, targetDirectory.value)
@@ -727,19 +734,36 @@ async function renameEntry() {
 
 async function removeEntry(entry) {
   workspace.selectPath(entry.path, entry.kind)
+  const target = fileTargetForPath(entry.path)
+  const affectedTabs = target ? controlCenter.fileTabsForTarget(target) : []
+  const dirtyHint = affectedTabs.some((tab) => workspace.fileTabDirty(tab.tabId))
+    ? ' Ungespeicherte Änderungen in geöffneten Datei-Tabs gehen verloren.'
+    : ''
   const accepted = await confirm(
     entry.kind === 'directory'
-      ? `Soll der Ordner „${entry.name}“ einschließlich aller enthaltenen Dateien und Ordner gelöscht werden?`
-      : `Soll die Datei „${entry.name}“ gelöscht werden?`,
+      ? `Soll der Ordner „${entry.name}“ einschließlich aller enthaltenen Dateien und Ordner gelöscht werden?${dirtyHint}`
+      : `Soll die Datei „${entry.name}“ gelöscht werden?${dirtyHint}`,
     entry.kind === 'directory' ? 'Ordner löschen' : 'Datei löschen',
     { okLabel: 'Löschen', okColor: 'negative' }
   )
   if (!accepted) return
   const parent = parentPath(entry.path)
   await workspace.deleteEntry(entry.path)
+  if (target) {
+    const removedTabs = await controlCenter.rebindFileTargets(target).catch(() => [])
+    removedTabs.forEach((tabId) => workspace.discardFileTab(tabId))
+  }
   workspace.selectPath(parent)
   if (permissionsDialogOpen.value) await loadPermissions()
   await focusPath(parent)
+}
+
+function fileTargetForPath(path) {
+  return workspace.fileTarget({
+    kind: 'file',
+    path,
+    name: path.split('/').filter(Boolean).at(-1) || path
+  })
 }
 
 async function revoke(grant) {
@@ -779,14 +803,15 @@ watch(
       sessionId,
       rootIdentity: sessionId ? currentProjectId || sessionId : null,
       currentDirectory: selectedDirectory || selectedExecutionAgent.value?.homeDirectory || '/',
-      workspaceContext: activeWorkspaceContext.value
+      workspaceContext: activeWorkspaceContext.value,
+      scope: props.scope
     })
     if (
       sessionId
       && currentSessionId === sessionId
       && controlCenter.sessionId === sessionId
       && controlCenter.ready
-    ) workspace.restoreView(controlCenter.fileView)
+    ) workspace.restoreView(controlCenter.fileViews[props.scope])
     workspace.load(workspace.directoryPath)
     if (permissionsDialogOpen.value) loadPermissions()
   },
@@ -794,9 +819,6 @@ watch(
 )
 
 watch(() => workspace.contextVersion, () => { treeFocusPath.value = workspace.directoryPath })
-watch(() => workspace.viewedEntry, (entry) => {
-  if (!entry) viewerFullscreen.value = false
-})
 watch(() => workspace.filter, async () => {
   await nextTick()
   if (!visibleTreeItems().some((item) => item.dataset.filePath === treeFocusPath.value)) {

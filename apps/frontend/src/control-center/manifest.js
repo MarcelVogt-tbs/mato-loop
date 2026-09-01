@@ -1,9 +1,16 @@
 export const controlCenterIntegrationManifest = Object.freeze([
-  { id: 'files', label: 'Dateien', icon: 'folder_open' },
+  { id: 'session', label: 'Session', icon: 'tune', fixed: true },
+  { id: 'files', label: 'Ablage', icon: 'folder_open' },
+  { id: 'computer-files', label: 'Computer-Dateien', icon: 'folder_shared' },
   { id: 'mail', label: 'E-Mail', icon: 'mail' },
   { id: 'coding', label: 'OpenCode', icon: 'code' },
-  { id: 'terminal', label: 'Terminal', icon: 'terminal' }
+  { id: 'terminal', label: 'Terminal', icon: 'terminal' },
+  { id: 'file-viewer', label: 'Datei', icon: 'description', resource: true }
 ])
+
+export const controlCenterFixedAppIds = new Set(
+  controlCenterIntegrationManifest.filter((item) => item.fixed).map((item) => item.id)
+)
 
 export const controlCenterGlobalSectionManifest = Object.freeze([
   { id: 'notifications', label: 'Benachrichtigungen', icon: 'notifications' },
@@ -19,6 +26,11 @@ export function mailControlCenterAvailable(mail) {
 
 export function codingControlCenterAvailable(project) {
   return Boolean(project)
+}
+
+export function computerFilesControlCenterAvailable(context, executionAgents) {
+  const agent = executionAgents.byId(context?.preferredExecutionAgentId)
+  return Boolean(agent?.connected && agent.operations?.includes('filesystem.list'))
 }
 
 export const TERMINAL_OPERATIONS = Object.freeze([

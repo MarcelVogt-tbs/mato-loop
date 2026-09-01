@@ -16,9 +16,6 @@
     @keydown.esc="handleEscape"
   >
     <q-toolbar class="file-viewer__toolbar q-px-md">
-      <q-btn v-if="entry" class="file-icon-action" flat round dense icon="arrow_back" aria-label="Zur Dateiliste" @click="emit('back')">
-        <q-tooltip>Zur Dateiliste</q-tooltip>
-      </q-btn>
       <q-toolbar-title id="file-viewer-title" class="text-subtitle1 text-weight-bold ellipsis">{{ viewerName }}</q-toolbar-title>
       <q-btn-toggle
         v-if="preview.kind === 'openscad'"
@@ -127,27 +124,7 @@
       >
         <q-tooltip>{{ fullscreen ? 'Vollbild verlassen' : 'Im Vollbild öffnen' }}</q-tooltip>
       </q-btn>
-      <q-btn class="file-icon-action" flat round dense icon="close" aria-label="Explorer schließen" @click="emit('close')">
-        <q-tooltip>Explorer schließen</q-tooltip>
-      </q-btn>
     </q-toolbar>
-    <div v-if="entry" class="file-viewer__path q-px-md q-pb-sm">
-      <div class="row items-center no-wrap">
-        <q-btn class="file-icon-action q-mr-xs" flat round dense icon="arrow_upward" aria-label="Zum übergeordneten Ordner" @click="emit('navigate', parentPath)">
-          <q-tooltip>Zum übergeordneten Ordner</q-tooltip>
-        </q-btn>
-        <q-breadcrumbs class="col file-breadcrumbs" separator="/" active-color="primary">
-          <q-breadcrumbs-el
-            v-for="crumb in breadcrumbs"
-            :key="crumb.path"
-            :label="crumb.label"
-            :class="{ 'cursor-pointer': crumb.path !== entry.path }"
-            @click="crumb.path !== entry.path && emit('navigate', crumb.path)"
-          />
-        </q-breadcrumbs>
-      </div>
-      <div class="text-caption app-muted ellipsis q-pl-sm">{{ fileDetails }}</div>
-    </div>
     <q-separator />
 
     <div v-if="workspace.editorActive && editable" class="col column no-wrap file-viewer__editor">
@@ -307,7 +284,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { copyToClipboard, useQuasar } from 'quasar'
 import { useRouter } from 'vue-router'
 import ImageViewerPanel from 'components/ImageViewerPanel.vue'
@@ -327,7 +304,7 @@ const props = defineProps({
   fullscreen: Boolean,
   fullscreenToggle: Boolean
 })
-const emit = defineEmits(['back', 'close', 'navigate', 'toggle-fullscreen'])
+const emit = defineEmits(['close', 'toggle-fullscreen'])
 const $q = useQuasar()
 const router = useRouter()
 const { confirm } = useConfirm()
@@ -410,34 +387,6 @@ const printUrl = computed(() => {
     })
   }).href
 })
-const fileDetails = computed(() => {
-  const size = props.entry?.size
-  if (!Number.isFinite(size)) return props.entry?.path || ''
-  return `${new Intl.NumberFormat('de-DE').format(size)} Byte · ${props.entry.path}`
-})
-const rootLabel = computed(() => {
-  return workspace.scope === 'session' ? 'Ablage' : 'Computer'
-})
-const parentPath = computed(() => (
-  props.entry?.path?.startsWith('/')
-    ? props.entry.path.slice(0, props.entry.path.lastIndexOf('/')) || '/'
-    : props.entry?.path?.includes('/') ? props.entry.path.slice(0, props.entry.path.lastIndexOf('/')) : '.'
-))
-const breadcrumbs = computed(() => props.entry?.path?.startsWith('/')
-  ? [
-      { label: '/', path: '/' },
-      ...props.entry.path.split('/').filter(Boolean).map((label, index, parts) => ({
-        label,
-        path: `/${parts.slice(0, index + 1).join('/')}`
-      }))
-    ]
-  : [
-      { label: rootLabel.value, path: '.' },
-      ...(props.entry?.path || '').split('/').filter((part) => part && part !== '.').map((label, index, parts) => ({
-        label,
-        path: parts.slice(0, index + 1).join('/')
-      }))
-    ])
 const loadErrorMessage = computed(() => apiErrorMessage(loadError.value, 'Die Vorschau konnte nicht geladen werden.'))
 const saveErrorMessage = computed(() => apiErrorMessage(saveError.value, 'Die Datei konnte nicht gespeichert werden.'))
 const conflictLoadErrorMessage = computed(() => apiErrorMessage(conflictLoadError.value, 'Die aktuelle Revision konnte nicht geladen werden.'))
@@ -473,6 +422,15 @@ async function loadPreview() {
     return
   }
   if (!props.entry?.path) return
+  const preservedPreview = workspace.editorDirty
+    ? workspace.filePreviews[props.entry.path]
+    : null
+  if (preservedPreview) {
+    preview.value = preservedPreview
+    await nextTick()
+    viewerRoot.value?.focus()
+    return
+  }
   loading.value = true
   await nextTick()
   viewerRoot.value?.focus()
@@ -748,12 +706,6 @@ async function loadLatestForConflict() {
   }
 }
 
-function warnBeforeUnload(event) {
-  if (!workspace.editorDirty) return
-  event.preventDefault()
-  event.returnValue = ''
-}
-
 function download() {
   if (!directModel.value) {
     workspace.download(props.entry.path)
@@ -769,7 +721,7 @@ function download() {
 
 function handleEscape() {
   if (props.fullscreen) emit('toggle-fullscreen')
-  else emit('back')
+  else emit('close')
 }
 
 function imageFailed() {
@@ -798,9 +750,7 @@ watch(
   { immediate: true }
 )
 
-onMounted(() => window.addEventListener('beforeunload', warnBeforeUnload))
 onBeforeUnmount(() => {
-  window.removeEventListener('beforeunload', warnBeforeUnload)
   previewVersion += 1
   clearOpenScadRender()
   clearOpenScadExport()

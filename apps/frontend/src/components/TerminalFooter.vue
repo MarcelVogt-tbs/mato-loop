@@ -1,6 +1,17 @@
 <template>
   <div class="row items-center no-wrap q-px-sm q-py-xs">
-    <div class="col-auto row items-center no-wrap">
+    <div v-if="agent" class="col row items-center no-wrap text-caption app-muted">
+      <q-icon name="computer" size="18px" class="q-mr-xs" />
+      <span class="ellipsis">{{ agent.alias || agent.computerName }}</span>
+      <q-spinner-dots
+        v-if="terminal.status === 'connecting'"
+        class="q-ml-xs"
+        color="primary"
+        size="20px"
+      />
+    </div>
+    <q-space v-else />
+    <div class="col-auto row items-center no-wrap q-ml-sm">
       <q-toggle
         :model-value="terminal.attached"
         :disable="connectionDisabled"
@@ -16,9 +27,8 @@
         size="20px"
       />
     </div>
-    <q-space />
     <q-select
-      class="terminal-footer__mode"
+      class="terminal-footer__mode q-ml-sm"
       :model-value="terminal.mode"
       :options="modeOptions"
       :disable="modeDisabled"
@@ -50,12 +60,15 @@
 <script setup>
 import { computed } from 'vue'
 import { useChatStore } from 'stores/chat'
+import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useTerminalStore } from 'stores/terminal'
 
 defineOptions({ name: 'TerminalFooter' })
 
 const chat = useChatStore()
+const executionAgents = useExecutionAgentStore()
 const terminal = useTerminalStore()
+const agent = computed(() => executionAgents.byId(chat.current?.preferredExecutionAgentId))
 const modeOptions = [
   { label: 'Automatisch', value: 'auto' },
   { label: 'Bestätigen', value: 'confirm' }

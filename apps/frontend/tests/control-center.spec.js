@@ -27,11 +27,32 @@ function storage(initialValue = null) {
 }
 
 function tab(appId) {
-  return { appId, pinned: false }
+  return { tabId: appId, kind: 'app', appId, pinned: false }
+}
+
+function requestTab(appId) {
+  return { tab_id: appId, kind: 'app', app_id: appId, pinned: false }
 }
 
 function response(tabs, activeAppId) {
-  return { data: { controlCenter: { tabs, activeAppId } } }
+  return {
+    data: {
+      controlCenter: {
+        tabs: tabs.some((item) => item.appId === 'session') ? tabs : [tab('session'), ...tabs],
+        activeAppId
+      }
+    }
+  }
+}
+
+function requestState(appIds, activeAppId, open, fileView = null, fileViews = { session: null, filesystem: null }) {
+  return {
+    tabs: appIds.map(requestTab),
+    active_app_id: activeAppId,
+    open,
+    file_view: fileView,
+    file_views: fileViews
+  }
 }
 
 const sessionFileView = {
@@ -49,7 +70,7 @@ describe('control center store', () => {
     delete globalThis.localStorage
     testIntegrationIds.forEach((id) => controlCenterIntegrationIds.add(id))
     setActivePinia(createPinia())
-    vi.clearAllMocks()
+    vi.resetAllMocks()
   })
 
   afterEach(() => {
@@ -58,11 +79,11 @@ describe('control center store', () => {
     else delete globalThis.localStorage
   })
 
-  it('starts drafts with the files integration', () => {
+  it('starts drafts with the fixed Session app and files integration', () => {
     const store = useControlCenterStore()
-    expect(store.tabs).toEqual([tab('files')])
-    expect(store.activeAppId).toBe('files')
-    expect(store.activeContentId).toBe('files')
+    expect(store.tabs).toEqual([tab('session'), tab('files')])
+    expect(store.activeAppId).toBe('session')
+    expect(store.activeContentId).toBe('session')
     expect(store.open).toBe(false)
     expect(store.fileView).toBeNull()
   })
@@ -110,7 +131,7 @@ describe('control center store', () => {
     expect(store.open).toBe(true)
     expect(store.activeGlobalSectionId).toBe('notifications')
     expect(store.activeContentId).toBe('notifications')
-    expect(store.tabs).toEqual([tab('files')])
+    expect(store.tabs).toEqual([tab('session'), tab('files')])
     expect(api.patch).toHaveBeenCalledOnce()
 
     store.syncSession({ id: 'session-2', controlCenter: { tabs: [tab('calendar')], activeAppId: 'calendar' } })
@@ -136,8 +157,8 @@ describe('control center store', () => {
       }
     })
 
-    expect(store.tabs).toEqual([tab('git'), tab('files'), tab('calendar')])
-    expect(store.activeAppId).toBe('git')
+    expect(store.tabs).toEqual([tab('session'), tab('git'), tab('files'), tab('calendar')])
+    expect(store.activeAppId).toBe('session')
   })
 
   it('adds and persists an integration for the active session', async () => {
@@ -149,15 +170,7 @@ describe('control center store', () => {
 
     expect(store.activeContentId).toBe('calendar')
     expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
-      control_center: {
-        tabs: [
-          { app_id: 'files', pinned: false },
-          { app_id: 'calendar', pinned: false }
-        ],
-        active_app_id: 'calendar',
-        open: true,
-        file_view: null
-      }
+      control_center: requestState(['session', 'files', 'calendar'], 'calendar', true)
     })
   })
 
@@ -172,10 +185,10 @@ describe('control center store', () => {
     })
 
     await store.moveIntegration('files', 1)
-    expect(store.tabs.map((item) => item.appId)).toEqual(['calendar', 'files', 'git'])
+    expect(store.tabs.map((item) => item.appId)).toEqual(['session', 'calendar', 'files', 'git'])
 
     await store.removeIntegration('files')
-    expect(store.tabs.map((item) => item.appId)).toEqual(['calendar', 'git'])
+    expect(store.tabs.map((item) => item.appId)).toEqual(['session', 'calendar', 'git'])
     expect(store.activeAppId).toBe('calendar')
   })
 
@@ -186,7 +199,7 @@ describe('control center store', () => {
 
     await expect(store.openApp('calendar')).rejects.toThrow('request failed')
 
-    expect(store.tabs).toEqual([tab('files')])
+    expect(store.tabs).toEqual([tab('session'), tab('files')])
     expect(store.activeAppId).toBe('files')
   })
 
@@ -225,7 +238,7 @@ describe('control center store', () => {
 
     expect(api.patch).toHaveBeenCalledTimes(2)
     expect(store.activeAppId).toBe('git')
-    expect(store.tabs.map((item) => item.appId)).toEqual(['files', 'calendar', 'git'])
+    expect(store.tabs.map((item) => item.appId)).toEqual(['session', 'files', 'calendar', 'git'])
   })
 
   it('persists draft integration changes made after session creation starts', async () => {
@@ -239,15 +252,7 @@ describe('control center store', () => {
     })
 
     expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
-      control_center: {
-        tabs: [
-          { app_id: 'files', pinned: false },
-          { app_id: 'calendar', pinned: false }
-        ],
-        active_app_id: 'calendar',
-        open: true,
-        file_view: null
-      }
+      control_center: requestState(['session', 'files', 'calendar'], 'calendar', true)
     })
     expect(state.activeAppId).toBe('calendar')
   })
@@ -279,11 +284,11 @@ describe('control center store', () => {
     expect(store.open).toBe(false)
     expect(store.fileView).toEqual(sessionFileView)
     expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
-      control_center: {
-        tabs: [{ app_id: 'files', pinned: false }],
-        active_app_id: 'files',
-        open: false,
-        file_view: {
+      control_center: requestState(
+        ['session', 'files'],
+        'files',
+        false,
+        {
           scope: 'session',
           selected_path: sessionFileView.selectedPath,
           selected_kind: 'file',
@@ -291,9 +296,60 @@ describe('control center store', () => {
           root_identity: null,
           execution_agent_id: null,
           current_directory: null
+        },
+        {
+          session: {
+            scope: 'session',
+            selected_path: sessionFileView.selectedPath,
+            selected_kind: 'file',
+            viewed_file_path: sessionFileView.viewedFilePath,
+            root_identity: null,
+            execution_agent_id: null,
+            current_directory: null
+          },
+          filesystem: null
         }
-      }
+      )
     })
+  })
+
+  it('opens each file once as a persistent resource tab', async () => {
+    const store = useControlCenterStore()
+    const target = {
+      scope: 'session',
+      path: 'notes/plan.md',
+      name: 'plan.md',
+      rootIdentity: '550e8400-e29b-41d4-a716-446655440000',
+      readOnly: false
+    }
+
+    const tabId = await store.openFile(target)
+    expect(tabId).toMatch(/^file-/u)
+    expect(store.activeAppId).toBe(tabId)
+    expect(store.fileTabs).toEqual([expect.objectContaining({
+      tabId,
+      kind: 'file',
+      appId: 'file-viewer',
+      fileTarget: target
+    })])
+
+    await expect(store.openFile(target)).resolves.toBe(tabId)
+    expect(store.fileTabs).toHaveLength(1)
+
+    await store.setOpen(false)
+    await store.openApp(tabId)
+    expect(store.open).toBe(true)
+    expect(store.activeAppId).toBe(tabId)
+
+    await store.rebindFileTargets(target, 'notes/final.md')
+    expect(store.fileTabs[0].fileTarget).toEqual({
+      ...target,
+      path: 'notes/final.md',
+      name: 'final.md'
+    })
+    await store.rebindFileTargets(store.fileTabs[0].fileTarget)
+    expect(store.fileTabs).toEqual([])
+    expect(store.activeAppId).toBe('files')
   })
 
   it('defers integration shortcuts until authoritative session state is loaded', async () => {
@@ -314,8 +370,9 @@ describe('control center store', () => {
     await vi.waitFor(() => expect(api.patch).toHaveBeenCalled())
 
     expect(api.patch.mock.calls[0][1].control_center.tabs).toEqual([
-      { app_id: 'files', pinned: false },
-      { app_id: 'calendar', pinned: false }
+      requestTab('session'),
+      requestTab('files'),
+      requestTab('calendar')
     ])
   })
 

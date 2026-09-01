@@ -1,34 +1,107 @@
 <template>
   <section id="control-center-panel" class="control-center column full-height no-wrap" aria-label="Control Center">
-    <q-toolbar class="q-px-sm">
-      <div
-        v-if="chat.current"
-        class="control-center__resources col row items-center no-wrap overflow-hidden text-caption app-muted"
+    <div class="control-center__tabs row items-center no-wrap q-pl-sm">
+      <q-tabs
+        :model-value="activeFlexibleTabId"
+        class="col"
+        dense
+        no-caps
+        inline-label
+        align="left"
+        :breakpoint="0"
+        indicator-color="transparent"
+        mobile-arrows
+        outside-arrows
+        @update:model-value="activate"
       >
-        <div class="control-center__resource row items-center no-wrap q-mr-sm" tabindex="0" :aria-label="requestDescription">
-          <q-icon name="forum" size="18px" class="q-mr-xs" />
-          <span class="ellipsis">{{ requestLabel }}</span>
-          <q-tooltip>{{ requestDescription }}</q-tooltip>
-        </div>
         <div
-          v-if="contextPercentage !== null"
-          class="control-center__resource row items-center no-wrap q-mr-sm"
-          tabindex="0"
-          :aria-label="contextDescription"
+          v-for="tab in flexibleTabs"
+          :key="tab.tabId"
+          class="control-center__tab-shell row items-stretch no-wrap"
+          :class="{
+            'control-center__tab-shell--active': controlCenter.activeAppId === tab.tabId && !controlCenter.activeGlobalSectionId,
+            'control-center__tab--dragging': draggedIntegrationId === tab.tabId,
+            'control-center__tab--drop-before': dropTarget?.appId === tab.tabId && !dropTarget.after,
+            'control-center__tab--drop-after': dropTarget?.appId === tab.tabId && dropTarget.after
+          }"
+          :draggable="controlCenter.ready && !controlCenter.saving"
+          @dragstart="startDrag($event, tab.tabId)"
+          @dragover.prevent="updateDropTarget($event, tab.tabId)"
+          @drop.prevent="dropIntegration"
+          @dragend="endDrag"
         >
-          <q-icon name="token" size="18px" class="q-mr-xs" />
-          <q-linear-progress
-            :value="contextProgress"
-            size="4px"
-            rounded
-            class="control-center__resource-progress q-mr-xs"
-            aria-hidden="true"
-          />
-          <span class="ellipsis">≈ {{ contextPercentage }} %</span>
-          <q-tooltip>{{ contextDescription }}</q-tooltip>
+          <q-tab
+            :id="`control-center-tab-${tab.tabId}`"
+            :name="tab.tabId"
+            :alert="tab.appId === 'terminal' && terminal.pendingProposal ? 'warning' : false"
+            :alert-icon="tab.appId === 'terminal' ? 'priority_high' : undefined"
+            :aria-label="tabAriaLabel(tab)"
+            class="control-center__tab"
+            :disable="controlCenter.saving || !controlCenter.ready"
+          >
+            <q-icon :name="content(tab.appId).icon" size="20px" class="control-center__tab-icon" />
+            <span class="control-center__tab-label">{{ tabLabel(tab) }}</span>
+            <q-tooltip>{{ tabLabel(tab) }}</q-tooltip>
+          </q-tab>
+          <q-btn
+            flat
+            square
+            dense
+            icon="close"
+            class="control-center__tab-close"
+            :aria-label="`${tabLabel(tab)} schließen`"
+            :disable="controlCenter.saving || !controlCenter.ready"
+            @click.stop="closeTab(tab)"
+            @keydown.stop
+          >
+            <q-tooltip>{{ tab.kind === 'file' ? 'Datei schließen' : 'App aus Session entfernen' }}</q-tooltip>
+          </q-btn>
         </div>
-      </div>
-      <q-space v-if="!chat.current" />
+
+        <q-btn
+          v-if="launcherIntegrations.length"
+          flat
+          square
+          dense
+          icon="add"
+          class="control-center__tab-add self-stretch"
+          aria-label="App hinzufügen"
+          :disable="controlCenter.saving || !controlCenter.ready"
+        >
+          <q-tooltip>App hinzufügen</q-tooltip>
+          <q-menu anchor="bottom right" self="top right" class="app-action-menu">
+            <q-list padding>
+              <q-item
+                v-for="item in launcherIntegrations"
+                :key="item.id"
+                clickable
+                v-ripple
+                v-close-popup
+                @click="openContent(item.id)"
+              >
+                <q-item-section avatar><q-icon :name="item.icon" /></q-item-section>
+                <q-item-section>{{ item.label }}</q-item-section>
+              </q-item>
+            </q-list>
+          </q-menu>
+        </q-btn>
+      </q-tabs>
+
+      <q-btn
+        id="control-center-session-button"
+        flat
+        round
+        dense
+        class="col-auto"
+        icon="tune"
+        :color="!controlCenter.activeGlobalSectionId && controlCenter.activeAppId === 'session' ? 'primary' : undefined"
+        :loading="!controlCenter.ready && controlCenter.requestedAppId === 'session'"
+        aria-label="Session öffnen"
+        @click="openContent('session')"
+      >
+        <q-tooltip>Session</q-tooltip>
+      </q-btn>
+
       <q-btn
         v-for="item in controlCenterGlobalSections"
         :key="item.id"
@@ -52,72 +125,17 @@
         />
         <q-tooltip>{{ item.label }}</q-tooltip>
       </q-btn>
-    </q-toolbar>
-    <q-separator />
-
-    <div class="control-center__tabs row items-center no-wrap q-pl-sm">
-      <q-tabs
-        :model-value="controlCenter.activeGlobalSectionId ? null : controlCenter.activeAppId"
-        class="col"
-        dense
-        no-caps
-        inline-label
-        align="left"
-        active-color="primary"
-        indicator-color="primary"
-        mobile-arrows
-        outside-arrows
-        @update:model-value="activate"
-      >
-        <q-tab
-          v-for="tab in controlCenter.tabs"
-          :key="tab.appId"
-          :name="tab.appId"
-          :icon="content(tab.appId).icon"
-          :label="content(tab.appId).label"
-          :alert="tab.appId === 'terminal' && terminal.pendingProposal ? 'warning' : false"
-          :alert-icon="tab.appId === 'terminal' ? 'priority_high' : undefined"
-          :aria-label="tabAriaLabel(tab.appId)"
-          class="control-center__tab"
-          :class="{
-            'control-center__tab--dragging': draggedIntegrationId === tab.appId,
-            'control-center__tab--drop-before': dropTarget?.appId === tab.appId && !dropTarget.after,
-            'control-center__tab--drop-after': dropTarget?.appId === tab.appId && dropTarget.after
-          }"
-          :disable="controlCenter.saving || !controlCenter.ready"
-          :draggable="controlCenter.tabs.length > 1 && controlCenter.ready && !controlCenter.saving"
-          @dragstart="startDrag($event, tab.appId)"
-          @dragover.prevent="updateDropTarget($event, tab.appId)"
-          @drop.prevent="dropIntegration"
-          @dragend="endDrag"
-        />
-      </q-tabs>
 
       <q-btn
-        v-if="launcherIntegrations.length"
         flat
         round
         dense
-        icon="add"
-        aria-label="Integration hinzufügen"
-        :disable="!launcherIntegrations.length || controlCenter.saving || !controlCenter.ready"
+        class="col-auto"
+        icon="close"
+        aria-label="Control Center schließen"
+        @click="closePanel"
       >
-        <q-tooltip>Integration hinzufügen</q-tooltip>
-        <q-menu anchor="bottom right" self="top right" class="app-action-menu">
-          <q-list padding>
-            <q-item
-              v-for="item in launcherIntegrations"
-              :key="item.id"
-              clickable
-              v-ripple
-              v-close-popup
-              @click="openContent(item.id)"
-            >
-              <q-item-section avatar><q-icon :name="item.icon" /></q-item-section>
-              <q-item-section>{{ item.label }}</q-item-section>
-            </q-item>
-          </q-list>
-        </q-menu>
+        <q-tooltip>Control Center schließen</q-tooltip>
       </q-btn>
     </div>
     <q-separator />
@@ -125,13 +143,23 @@
     <div class="control-center__content col relative-position">
       <component
         :is="content(tab.appId).component"
-        v-for="tab in controlCenter.tabs"
-        v-show="controlCenter.activeContentId === tab.appId"
-        :key="tab.appId"
+        v-for="tab in controlCenter.tabs.filter((item) => item.kind === 'app' && !['files', 'computer-files'].includes(item.appId))"
+        v-show="controlCenter.activeContentId === tab.tabId"
+        :key="tab.tabId"
         class="fit"
-        @close="closePanel"
-        @remove="removeIntegration"
-        @move="moveIntegration"
+      />
+      <component
+        :is="content(controlCenter.activeTab.appId).component"
+        v-if="controlCenter.activeTab?.kind === 'app' && ['files', 'computer-files'].includes(controlCenter.activeTab.appId)"
+        :key="controlCenter.activeTab.appId"
+        class="fit"
+      />
+      <component
+        :is="content(controlCenter.activeTab.appId).component"
+        v-if="controlCenter.activeTab?.kind === 'file'"
+        :key="`${controlCenter.activeTab.tabId}:${controlCenter.activeTab.fileTarget.path}`"
+        :tab="controlCenter.activeTab"
+        class="fit"
       />
       <component
         :is="item.component"
@@ -139,20 +167,18 @@
         v-show="controlCenter.activeContentId === item.id"
         :key="item.id"
         class="fit"
-        @close="closePanel"
       />
       <div v-if="!controlCenter.activeContentId" class="fit column no-wrap">
-        <ControlCenterContentHeader icon="extension" title="Integrationen" @close="closePanel" />
         <div class="col column flex-center text-center q-pa-xl">
           <q-icon name="extension_off" size="52px" color="grey-6" />
-          <div class="text-subtitle1 text-weight-medium q-mt-md">Keine Integration in dieser Session</div>
-          <div class="text-body2 app-muted q-mt-xs q-mb-md">Füge eine Integration hinzu, um sie hier zu verwenden.</div>
+          <div class="text-subtitle1 text-weight-medium q-mt-md">Keine App in dieser Session</div>
+          <div class="text-body2 app-muted q-mt-xs q-mb-md">Füge eine App hinzu, um sie hier zu verwenden.</div>
           <q-btn
             unelevated
             no-caps
             color="primary"
             icon="add"
-            label="Integration hinzufügen"
+            label="App hinzufügen"
             :disable="!launcherIntegrations.length || !controlCenter.ready"
           >
             <q-menu anchor="bottom middle" self="top middle" class="app-action-menu">
@@ -179,7 +205,6 @@
 <script setup>
 import { computed, nextTick, ref } from 'vue'
 import { Notify } from 'quasar'
-import ControlCenterContentHeader from 'components/ControlCenterContentHeader.vue'
 import { useApprovalStore } from 'stores/approvals'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
@@ -188,8 +213,8 @@ import { useQuestionStore } from 'stores/questions'
 import { useMailStore } from 'stores/mail'
 import { useChatStore } from 'stores/chat'
 import { useProjectStore } from 'stores/projects'
-import { useWorkspaceStore } from 'stores/workspace'
 import { useTerminalStore } from 'stores/terminal'
+import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
 import {
   controlCenterContentsById,
@@ -198,13 +223,10 @@ import {
 } from 'src/control-center/apps'
 import {
   codingControlCenterAvailable,
+  computerFilesControlCenterAvailable,
   mailControlCenterAvailable,
   terminalControlCenterState
 } from 'src/control-center/manifest'
-import {
-  formatMetricInteger,
-  modelContextPercentage
-} from 'src/utils/resource-metrics'
 import { terminalTabLabel } from 'src/utils/terminal-output'
 
 defineOptions({ name: 'ControlCenterPanel' })
@@ -212,7 +234,6 @@ defineOptions({ name: 'ControlCenterPanel' })
 const emit = defineEmits(['close'])
 const { confirm } = useConfirm()
 const controlCenter = useControlCenterStore()
-const workspace = useWorkspaceStore()
 const approvals = useApprovalStore()
 const questions = useQuestionStore()
 const notifications = useInAppNotificationStore()
@@ -221,11 +242,22 @@ const chat = useChatStore()
 const projects = useProjectStore()
 const executionAgents = useExecutionAgentStore()
 const terminal = useTerminalStore()
+const workspace = useWorkspaceStore()
 const draggedIntegrationId = ref(null)
 const dropTarget = ref(null)
-const activeFooter = computed(() => content(controlCenter.activeContentId)?.footerComponent)
+const flexibleTabs = computed(() => controlCenter.tabs.filter((tab) => tab.appId !== 'session'))
+const activeFlexibleTabId = computed(() => (
+  controlCenter.activeGlobalSectionId || controlCenter.activeAppId === 'session'
+    ? null
+    : controlCenter.activeAppId
+))
+const activeFooter = computed(() => (
+  controlCenter.activeGlobalSectionId
+    ? content(controlCenter.activeGlobalSectionId)?.footerComponent
+    : content(controlCenter.activeTab?.appId)?.footerComponent
+))
 const closedIntegrations = computed(() => controlCenterIntegrations.filter(
-  (item) => !controlCenter.tabs.some((tab) => tab.appId === item.id)
+  (item) => !item.fixed && !item.resource && !controlCenter.tabs.some((tab) => tab.appId === item.id)
 ))
 const activeProject = computed(() => projects.items.find(
   (project) => project.id === (chat.current ? chat.current.projectId : chat.sessionsProjectId)
@@ -233,29 +265,25 @@ const activeProject = computed(() => projects.items.find(
 const launcherIntegrations = computed(() => closedIntegrations.value.filter((item) => (
   (item.id !== 'mail' || mailControlCenterAvailable(mail))
   && (item.id !== 'coding' || codingControlCenterAvailable(activeProject.value))
+  && (item.id !== 'computer-files' || computerFilesControlCenterAvailable(chat.activeContext, executionAgents))
   && (item.id !== 'terminal' || terminalControlCenterState(chat.current, executionAgents).available)
 )))
-const requestCount = computed(() => {
-  const count = chat.current?.userRequestCount
-  return Number.isInteger(count) && count >= 0 ? count : null
-})
-const requestLabel = computed(() => formatMetricInteger(requestCount.value) ?? '–')
-const requestDescription = computed(() => requestCount.value === null
-  ? 'Anfragezahl nicht verfügbar.'
-  : `${formatMetricInteger(requestCount.value)} Nutzeranfragen in dieser Session.`)
-const contextPercentage = computed(() => modelContextPercentage(chat.current?.latestModelContext))
-const contextProgress = computed(() => Math.min((contextPercentage.value || 0) / 100, 1))
-const contextDescription = computed(() => {
-  const context = chat.current?.latestModelContext
-  return `Letzter Modellaufruf: ≈ ${contextPercentage.value} % (${formatMetricInteger(context.estimatedInputTokens)} / ${formatMetricInteger(context.inputBudgetTokens)} Tokens).`
-})
-
 function content(contentId) {
   return controlCenterContentsById.get(contentId)
 }
 
-function tabAriaLabel(appId) {
-  return terminalTabLabel(content(appId).label, appId === 'terminal' && terminal.pendingProposal)
+function tabLabel(tab) {
+  if (tab.kind === 'file') return tab.fileTarget.name
+  if (['terminal', 'computer-files'].includes(tab.appId)) {
+    const agent = executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
+    return agent?.alias ? `${content(tab.appId).label} · ${agent.alias}` : content(tab.appId).label
+  }
+  return content(tab.appId).label
+}
+
+function tabAriaLabel(tab) {
+  const label = tabLabel(tab)
+  return terminalTabLabel(label, tab.appId === 'terminal' && terminal.pendingProposal)
 }
 
 function badge(appId) {
@@ -265,19 +293,7 @@ function badge(appId) {
   return count > 99 ? '99+' : count || null
 }
 
-async function confirmDiscardedEdit() {
-  if (!workspace.editorDirty) return true
-  const accepted = await confirm(
-    'Sollen die ungespeicherten Änderungen verworfen werden?',
-    'Änderungen verwerfen?',
-    { okLabel: 'Verwerfen' }
-  )
-  if (accepted) workspace.discardEdit()
-  return accepted
-}
-
 async function closePanel() {
-  if (!await confirmDiscardedEdit()) return
   try {
     await controlCenter.setOpen(false)
   } catch {
@@ -299,28 +315,45 @@ async function removeIntegration(appId) {
     })
     return
   }
-  const unsavedHint = appId === 'files' && workspace.editorDirty
-    ? ' Ungespeicherte Änderungen gehen verloren.'
-    : ''
   const terminalHint = appId === 'terminal'
     ? ' Die laufende Shell und ihr sichtbarer Verlauf gehen verloren.'
     : ''
   const accepted = await confirm(
-    `„${item.label}“ wird aus dieser Session entfernt.${unsavedHint}${terminalHint} Gespeicherte Daten werden nicht gelöscht. Die Integration kann später erneut hinzugefügt werden.`,
-    'Integration aus Session entfernen?',
+    `„${item.label}“ wird aus dieser Session entfernt.${terminalHint} Gespeicherte Daten werden nicht gelöscht. Die App kann später erneut hinzugefügt werden.`,
+    'App aus Session entfernen?',
     { okLabel: 'Entfernen', okColor: 'negative' }
   )
   if (!accepted) return
-  if (appId === 'files') {
-    if (workspace.editorDirty) workspace.discardEdit()
-    workspace.returnToCurrentContext()
-  }
   try {
     await controlCenter.removeIntegration(appId)
     if (appId === 'terminal') terminal.close()
   } catch {
     // The central API interceptor displays the error and the store restores server state.
   }
+}
+
+async function closeTab(tab) {
+  if (tab.kind === 'file') {
+    if (workspace.fileTabDirty(tab.tabId) && !await confirm(
+      'Sollen die ungespeicherten Änderungen verworfen werden?',
+      'Änderungen verwerfen?',
+      { okLabel: 'Verwerfen' }
+    )) return
+    try {
+      await controlCenter.closeFile(tab.tabId)
+      workspace.discardFileTab(tab.tabId)
+    } catch {
+      // The central API interceptor displays the error and keeps the draft available.
+      return
+    }
+  } else {
+    await removeIntegration(tab.appId)
+  }
+  await nextTick()
+  const activeId = controlCenter.activeAppId === 'session'
+    ? 'control-center-session-button'
+    : `control-center-tab-${controlCenter.activeAppId}`
+  document.getElementById(activeId)?.focus()
 }
 
 async function activate(appId) {
@@ -334,14 +367,6 @@ async function activate(appId) {
 async function openContent(contentId) {
   try {
     await controlCenter.openApp(contentId)
-  } catch {
-    // The central API interceptor displays the error and the store restores server state.
-  }
-}
-
-async function moveIntegration(appId, offset) {
-  try {
-    await controlCenter.moveIntegration(appId, offset)
   } catch {
     // The central API interceptor displays the error and the store restores server state.
   }
