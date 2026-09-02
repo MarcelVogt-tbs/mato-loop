@@ -54,7 +54,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 31
+    assert INVENTORY_VERSION == 32
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -88,7 +88,7 @@ def test_inventory_is_complete_and_versioned() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 192
+    assert 80 <= len(CASES) <= 256
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",
@@ -1701,6 +1701,32 @@ def test_dreaming_and_reconciliation_repairs_use_runtime_helpers() -> None:
     ]
 
 
+def test_memory_plan_dreaming_cases_use_production_contracts() -> None:
+    dreaming_messages, dreaming_tools = build_case(
+        _case("memory_plan_dreaming_extracts_plain_owned_hardware")
+    )
+    reconciliation_messages, reconciliation_tools = build_case(
+        _case("memory_plan_reconciliation_creates_ambiguous_hardware")
+    )
+
+    assert dreaming_messages[0]["content"] == dreaming.DREAMING_SYSTEM_PROMPT
+    assert dreaming_tools == [dreaming._record_candidates_tool()]
+    assert reconciliation_messages[0]["content"] == dreaming.RECONCILIATION_SYSTEM_PROMPT
+    assert reconciliation_tools == [dreaming._reconciliation_tool(1)]
+    invalid = ProviderResult(
+        tool_calls=[
+            ToolCall(
+                "invalid",
+                "reconcile_memory_candidates",
+                {"decisions": [{"index": 0, "action": "create", "memoryIds": []}]},
+            )
+        ]
+    )
+    assert "reconcile_memory_candidates returned invalid arguments" in evaluate(
+        _case("memory_plan_reconciliation_creates_ambiguous_hardware"), invalid
+    )
+
+
 def test_compaction_accepts_semantic_approval_but_preserves_opaque_values_exactly() -> None:
     case = _case("compaction_preserves_contract")
     summary = """Goal: prepare a release
@@ -1786,11 +1812,11 @@ def test_reconciliation_case_uses_runtime_contract() -> None:
     assert messages[0]["content"].startswith("Consolidate new cross-session memory candidates")
     assert [tool["name"] for tool in tools] == ["reconcile_memory_candidates"]
     decision_schema = tools[0]["parameters"]["properties"]["decisions"]["items"]
-    assert decision_schema["properties"]["memory"] == {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 20_000,
-    }
+    memory_schema = decision_schema["properties"]["memory"]
+    assert memory_schema["type"] == "string"
+    assert memory_schema["minLength"] == 1
+    assert memory_schema["maxLength"] == 20_000
+    assert "short canonical sentence" in memory_schema["description"]
     assert "anyOf" not in json.dumps(decision_schema)
 
 
@@ -2063,10 +2089,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 134
-    assert payload["contractCount"] == 314
-    assert "Cases: 180" in report
+    assert payload["contractCount"] == 337
+    assert "Cases: 203" in report
     assert "Semantic contracts: 134" in report
-    assert "All inventory rows: 314" in report
+    assert "All inventory rows: 337" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

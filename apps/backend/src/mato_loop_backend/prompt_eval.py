@@ -45,8 +45,8 @@ from mato_loop_backend.memory.dreaming import (
     DREAMING_SYSTEM_PROMPT,
     RECONCILIATION_SYSTEM_PROMPT,
     DreamCandidates,
-    DreamReconciliation,
     _append_contract_retry,
+    _merged_reconciliation_calls,
     _reconciliation_tool,
     _record_candidates_tool,
 )
@@ -84,7 +84,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 31
+INVENTORY_VERSION = 32
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -386,7 +386,11 @@ class PromptCase:
     forbidden_success_terms: tuple[str, ...] = ()
     required_headings: tuple[str, ...] = ()
     expected_candidate_count: int | None = None
-    expected_action: Literal["create", "update", "unchanged", "merge"] | None = None
+    expected_candidate_content_contains: tuple[str, ...] = ()
+    expected_candidate_content_excludes: tuple[str, ...] = ()
+    expected_candidate_categories: tuple[str, ...] = ()
+    expected_action: Literal["create", "update", "unchanged", "merge", "remove"] | None = None
+    expected_decision_content_contains: tuple[str, ...] = ()
     expected_pin: bool | None = None
     expected_pin_kind: str | None = None
     expected_marker: str | None = None
@@ -3301,6 +3305,228 @@ CASES = (
         expected_candidate_count=1,
     ),
     PromptCase(
+        id="memory_plan_dreaming_extracts_plain_owned_hardware",
+        kind="dreaming",
+        user="Ich habe eine NVIDIA RTX 6000 Blackwell.",
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=1,
+        expected_candidate_content_contains=("RTX 6000 Blackwell",),
+        expected_candidate_categories=("fact",),
+    ),
+    PromptCase(
+        id="memory_plan_dreaming_rejects_temporary_hardware",
+        kind="dreaming",
+        user="Ich teste nur heute eine geliehene NVIDIA RTX 6000 Blackwell.",
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=0,
+    ),
+    PromptCase(
+        id="memory_plan_dreaming_extracts_durable_technical_setup",
+        kind="dreaming",
+        user=(
+            "Auf meinem Hauptrechner läuft dauerhaft Ubuntu 24.04 LTS mit CUDA 12.8 für lokale "
+            "KI-Modelle."
+        ),
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=1,
+        expected_candidate_content_contains=("Ubuntu 24.04 LTS", "CUDA 12.8"),
+        expected_candidate_categories=("fact",),
+    ),
+    PromptCase(
+        id="memory_plan_dreaming_extracts_durable_capability",
+        kind="dreaming",
+        user="Ich entwickle beruflich seit acht Jahren mit Rust.",
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=1,
+        expected_candidate_content_contains=("Rust",),
+        expected_candidate_categories=("fact",),
+    ),
+    PromptCase(
+        id="memory_plan_dreaming_extracts_long_term_project",
+        kind="dreaming",
+        user=(
+            "Ich entwickle langfristig das Open-Source-Projekt Aurora, einen lokalen "
+            "KI-Assistenten."
+        ),
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=1,
+        expected_candidate_content_contains=("Aurora", "lokalen KI-Assistenten"),
+    ),
+    PromptCase(
+        id="memory_plan_dreaming_extracts_recurring_preference",
+        kind="dreaming",
+        user=(
+            "Bei technischen Erklärungen bevorzuge ich dauerhaft kurze Beispiele vor langer "
+            "Theorie."
+        ),
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=1,
+        expected_candidate_content_contains=("kurze Beispiele",),
+        expected_candidate_categories=("preference",),
+    ),
+    PromptCase(
+        id="memory_plan_dreaming_extracts_enduring_constraint",
+        kind="dreaming",
+        user=(
+            "Meine Entwicklungsumgebung darf aus Compliance-Gründen dauerhaft keine Cloud-Dienste "
+            "verwenden."
+        ),
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=1,
+        expected_candidate_content_contains=("Compliance", "keine Cloud-Dienste"),
+    ),
+    PromptCase(
+        id="memory_plan_dreaming_keeps_stable_and_rejects_temporary_equipment",
+        kind="dreaming",
+        user=(
+            "Ich besitze eine NVIDIA RTX 6000 Blackwell. Nur heute teste ich zusätzlich einen "
+            "geliehenen NVIDIA Jetson AGX Orin."
+        ),
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=1,
+        expected_candidate_content_contains=("RTX 6000 Blackwell",),
+        expected_candidate_content_excludes=("Jetson AGX Orin",),
+        expected_candidate_categories=("fact",),
+    ),
+    PromptCase(
+        id="memory_plan_dreaming_rejects_one_off_technical_task",
+        kind="dreaming",
+        user="Installiere heute CUDA 12.8 für diesen einmaligen Test.",
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=0,
+    ),
+    PromptCase(
+        id="memory_plan_dreaming_rejects_current_work_state",
+        kind="dreaming",
+        user="Der Build scheitert gerade in test_cuda.py; ich behebe das heute.",
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=0,
+    ),
+    PromptCase(
+        id="memory_plan_dreaming_rejects_one_off_shopping",
+        kind="dreaming",
+        user="Suche mir heute einen 4K-Monitor bis 800 Euro.",
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=0,
+    ),
+    PromptCase(
+        id="memory_plan_dreaming_rejects_temporary_project_setup",
+        kind="dreaming",
+        user="Für dieses eine Projekt nutze ich vorübergehend Python 3.13.",
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=0,
+    ),
+    PromptCase(
+        id="memory_plan_dreaming_rejects_quote_hypothesis_and_assistant_claim",
+        kind="dreaming",
+        user=(
+            "Im Beispiel steht: 'Ich besitze einen Mac Studio.' Angenommen, ich wäre außerdem "
+            "Pilot."
+        ),
+        dreaming_assistant="The user permanently owns a Tesla Model S.",
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=0,
+    ),
+    PromptCase(
+        id="memory_plan_dreaming_excludes_maintained_profile_fields",
+        kind="dreaming",
+        user=(
+            "Ich heiße Viktor, möchte Viki genannt werden, nutze er/ihm, spreche hauptsächlich "
+            "Deutsch und wohne dauerhaft in Berlin."
+        ),
+        tool_choice="required",
+        expected_tool="record_memory_candidates",
+        expected_candidate_count=0,
+    ),
+    PromptCase(
+        id="memory_plan_reconciliation_creates_ambiguous_hardware",
+        kind="reconciliation",
+        user="hardware_ambiguous",
+        tool_choice="required",
+        expected_tool="reconcile_memory_candidates",
+        expected_action="create",
+    ),
+    PromptCase(
+        id="memory_plan_reconciliation_merges_hardware_duplicates",
+        kind="reconciliation",
+        user="hardware_primary_merge",
+        tool_choice="required",
+        expected_tool="reconcile_memory_candidates",
+        expected_action="merge",
+        expected_decision_content_contains=("RTX 6000 Blackwell",),
+    ),
+    PromptCase(
+        id="memory_plan_reconciliation_keeps_hardware_separate",
+        kind="reconciliation",
+        user="hardware_independent",
+        tool_choice="required",
+        expected_tool="reconcile_memory_candidates",
+        expected_action="create",
+    ),
+    PromptCase(
+        id="memory_plan_reconciliation_refines_same_hardware",
+        kind="reconciliation",
+        user="hardware_primary_refinement",
+        tool_choice="required",
+        expected_tool="reconcile_memory_candidates",
+        expected_action="update",
+        expected_decision_content_contains=("RTX 6000 Blackwell",),
+    ),
+    PromptCase(
+        id="memory_plan_reconciliation_keeps_specific_hardware",
+        kind="reconciliation",
+        user="hardware_primary_broader",
+        tool_choice="required",
+        expected_tool="reconcile_memory_candidates",
+        expected_action="unchanged",
+    ),
+    PromptCase(
+        id="memory_plan_reconciliation_updates_explicit_hardware_correction",
+        kind="reconciliation",
+        user="hardware_primary_correction",
+        tool_choice="required",
+        expected_tool="reconcile_memory_candidates",
+        expected_action="update",
+        expected_decision_content_contains=("RTX 6000 Blackwell",),
+    ),
+    PromptCase(
+        id="memory_plan_reconciliation_detects_equivalent_preference",
+        kind="reconciliation",
+        user="preference_equivalent",
+        tool_choice="required",
+        expected_tool="reconcile_memory_candidates",
+        expected_action="unchanged",
+    ),
+    PromptCase(
+        id="memory_plan_reconciliation_keeps_preferences_separate",
+        kind="reconciliation",
+        user="preference_independent",
+        tool_choice="required",
+        expected_tool="reconcile_memory_candidates",
+        expected_action="create",
+    ),
+    PromptCase(
+        id="memory_plan_reconciliation_keeps_projects_separate",
+        kind="reconciliation",
+        user="project_independent",
+        tool_choice="required",
+        expected_tool="reconcile_memory_candidates",
+        expected_action="create",
+    ),
+    PromptCase(
         id="dreaming_extracts_relationship_and_dated_correction",
         kind="dreaming",
         user=(
@@ -5767,11 +5993,11 @@ def _dreaming_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[st
             "category": "identity",
             "evidence": [str(DREAM_USER_MESSAGE_ID)],
             "remove": False,
-            "pin": True,
         }
         instruction = (
             "Call record_memory_candidates even when candidates is empty. Each candidate "
-            "requires exact fields memory, category, evidence, remove, and pin."
+            "requires memory, category, evidence, and remove. Use remove=false for normal "
+            "candidates or remove=true for explicit removals."
         )
         if case.dreaming_repair == "missing_tool":
             result = ProviderResult(content="Lara should be remembered.")
@@ -5820,47 +6046,85 @@ def _dreaming_case(case: PromptCase) -> tuple[list[dict[str, Any]], list[dict[st
 def _reconciliation_case(
     case: PromptCase,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    candidate = {
-        "equivalent": "Ich heiße Lara.",
-        "independent": "Ich spiele Klavier.",
-        "update": "Ich heiße jetzt Mara.",
-        "repair": "Ich heiße Lara.",
-        "duplicate_conflict": "Ich spiele Klavier.",
-        "merge": "Bitte nennt mich Lara.",
+    candidate, category, existing_contents = {
+        "equivalent": ("Ich heiße Lara.", "identity", ["Mein Name ist Lara."]),
+        "independent": ("Ich spiele Klavier.", "identity", ["Mein Name ist Lara."]),
+        "update": ("Ich heiße jetzt Mara.", "identity", ["Mein Name ist Lara."]),
+        "repair": ("Ich heiße Lara.", "identity", ["Mein Name ist Lara."]),
+        "duplicate_conflict": ("Ich spiele Klavier.", "identity", ["Mein Name ist Lara."]),
+        "merge": (
+            "Bitte nennt mich Lara.",
+            "identity",
+            ["Lara ist mein bevorzugter Name.", "Die Nutzerin möchte Lara genannt werden."],
+        ),
+        "hardware_independent": (
+            "Der Nutzer besitzt einen NVIDIA Jetson AGX Orin.",
+            "fact",
+            ["Der Nutzer besitzt eine NVIDIA-Grafikkarte."],
+        ),
+        "hardware_ambiguous": (
+            "Der Nutzer besitzt eine NVIDIA RTX 6000 Blackwell GPU.",
+            "fact",
+            ["Der Nutzer besitzt eine NVIDIA-Grafikkarte."],
+        ),
+        "hardware_primary_merge": (
+            "Die primäre GPU des Nutzers ist eine NVIDIA RTX 6000 Blackwell.",
+            "fact",
+            [
+                "Der Nutzer verwendet eine NVIDIA RTX 6000 Blackwell als primäre GPU.",
+                "Die primäre Grafikkarte des Nutzers ist eine RTX 6000 Blackwell von NVIDIA.",
+            ],
+        ),
+        "hardware_primary_refinement": (
+            "Die primäre GPU des Nutzers ist eine NVIDIA RTX 6000 Blackwell.",
+            "fact",
+            ["Die primäre GPU des Nutzers ist eine NVIDIA-Grafikkarte."],
+        ),
+        "hardware_primary_broader": (
+            "Die primäre GPU des Nutzers ist eine NVIDIA-Grafikkarte.",
+            "fact",
+            ["Die primäre GPU des Nutzers ist eine NVIDIA RTX 6000 Blackwell."],
+        ),
+        "hardware_primary_correction": (
+            "Die primäre GPU des Nutzers ist nun eine NVIDIA RTX 6000 Blackwell statt einer RTX 4090.",
+            "fact",
+            ["Die primäre GPU des Nutzers ist eine NVIDIA RTX 4090."],
+        ),
+        "preference_equivalent": (
+            "Der Nutzer bevorzugt knappe Antworten.",
+            "preference",
+            ["Der Nutzer möchte kurze Antworten."],
+        ),
+        "preference_independent": (
+            "Der Nutzer mag Kaffee.",
+            "preference",
+            ["Der Nutzer mag Tee."],
+        ),
+        "project_independent": (
+            "Der Nutzer entwickelt langfristig das Projekt Aurora.",
+            "context",
+            ["Der Nutzer entwickelt langfristig das Projekt Borealis."],
+        ),
     }[case.user]
+    memory_ids = (EXISTING_MEMORY_ID, SECOND_MEMORY_ID)
     possible_memories = [
         {
-            "id": str(EXISTING_MEMORY_ID),
-            "content": (
-                "Lara ist mein bevorzugter Name."
-                if case.user == "merge"
-                else "Mein Name ist Lara."
-            ),
-            "category": "identity",
-            "pinned": True,
+            "id": str(memory_ids[index]),
+            "content": content,
+            "category": category,
+            "pinned": index == 0,
             "sourceMessageAt": FIXED_NOW.isoformat(),
             "memoryCreatedAt": FIXED_NOW.isoformat(),
             "memoryUpdatedAt": FIXED_NOW.isoformat(),
         }
+        for index, content in enumerate(existing_contents)
     ]
-    if case.user == "merge":
-        possible_memories.append(
-            {
-                "id": str(SECOND_MEMORY_ID),
-                "content": "Die Nutzerin möchte Lara genannt werden.",
-                "category": "identity",
-                "pinned": False,
-                "sourceMessageAt": FIXED_NOW.isoformat(),
-                "memoryCreatedAt": FIXED_NOW.isoformat(),
-                "memoryUpdatedAt": FIXED_NOW.isoformat(),
-            }
-        )
     source = json.dumps(
         {
             "candidates": [{
                 "index": 0,
                 "memory": candidate,
-                "category": "identity",
+                "category": category,
                 "possibleMemories": possible_memories,
             }],
         },
@@ -6026,9 +6290,7 @@ def _validate_tool_calls(
                 failures.append("record_memory_candidates returned invalid arguments")
             continue
         if call.name == "reconcile_memory_candidates":
-            try:
-                DreamReconciliation.model_validate(call.arguments)
-            except ValidationError:
+            if _merged_reconciliation_calls([call]) is None:
                 failures.append("reconcile_memory_candidates returned invalid arguments")
             continue
         if definition is None:
@@ -6308,6 +6570,42 @@ def evaluate(
             for item in candidates
         ):
             failures.append("dreaming candidate lacks the supplied user evidence ID")
+        if isinstance(candidates, list) and case.expected_candidate_content_contains:
+            candidate_contents = [
+                str(item.get("memory", item.get("content", "")))
+                for item in candidates
+                if isinstance(item, dict)
+            ]
+            if not any(
+                all(fragment in content for fragment in case.expected_candidate_content_contains)
+                for content in candidate_contents
+            ):
+                failures.append(
+                    "dreaming candidate does not preserve required content: "
+                    + ", ".join(case.expected_candidate_content_contains)
+                )
+        if isinstance(candidates, list):
+            candidate_contents = [
+                str(item.get("memory", item.get("content", "")))
+                for item in candidates
+                if isinstance(item, dict)
+            ]
+            for fragment in case.expected_candidate_content_excludes:
+                if any(fragment.casefold() in content.casefold() for content in candidate_contents):
+                    failures.append(
+                        f"dreaming candidates contain excluded content: {fragment}"
+                    )
+            if case.expected_candidate_categories:
+                actual_categories = sorted(
+                    str(item.get("category", ""))
+                    for item in candidates
+                    if isinstance(item, dict)
+                )
+                if actual_categories != sorted(case.expected_candidate_categories):
+                    failures.append(
+                        "dreaming candidate categories expected "
+                        f"{sorted(case.expected_candidate_categories)!r}, got {actual_categories!r}"
+                    )
         if isinstance(candidates, list) and case.expected_pin is not None:
             pins = [item.get("pin", False) for item in candidates if isinstance(item, dict)]
             if case.expected_pin and not any(pin is True for pin in pins):
@@ -6340,6 +6638,20 @@ def evaluate(
             str(SECOND_MEMORY_ID),
         }:
             failures.append("merge decision did not reference both supplied memory IDs")
+        if (
+            isinstance(decisions, list)
+            and len(decisions) == 1
+            and isinstance(decisions[0], dict)
+            and case.expected_decision_content_contains
+            and not all(
+                fragment in str(decisions[0].get("memory", decisions[0].get("content", "")))
+                for fragment in case.expected_decision_content_contains
+            )
+        ):
+            failures.append(
+                "reconciliation decision does not preserve required content: "
+                + ", ".join(case.expected_decision_content_contains)
+            )
     if not result.content.strip() and not result.tool_calls:
         failures.append("model returned neither content nor a tool call")
     return failures

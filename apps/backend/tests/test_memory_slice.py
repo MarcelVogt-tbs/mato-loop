@@ -1312,11 +1312,14 @@ def test_dreaming_output_accepts_empty_and_validates_evidence_shape() -> None:
                     "index": 0,
                     "action": "remove",
                     "memoryIds": [str(memory_id)],
+                    "memory": "Der Nutzer lebt in Berlin.",
+                    "category": "identity",
                 }
             ]
         }
     ).decisions[0]
     assert remove.content is None
+    assert remove.category is None
     assert remove.memory_ids == [memory_id]
     with pytest.raises(ValidationError):
         DreamReconciliation.model_validate(
@@ -1433,7 +1436,13 @@ def test_dreaming_tool_schemas_are_inline_for_local_models() -> None:
         "index",
         "action",
         "memoryIds",
+        "memory",
+        "category",
     }
+    assert decisions["items"]["properties"]["memory"]["maxLength"] == 20_000
+    assert "independent or uncertain facts" in decisions["items"]["properties"]["action"][
+        "description"
+    ]
     assert "pin" not in decisions["items"]["properties"]
     assert "pinKind" not in decisions["items"]["properties"]
     assert "anyOf" not in json.dumps(reconciliation_schema)
@@ -1774,6 +1783,8 @@ async def test_dreaming_reconciliation_repairs_invalid_output(monkeypatch) -> No
                                     "index": 0,
                                     "action": "unchanged",
                                     "memoryIds": [str(memory_id)],
+                                    "memory": "Mein Name ist Lara.",
+                                    "category": "identity",
                                 }
                             ]
                         },
@@ -1820,6 +1831,8 @@ async def test_dreaming_removal_reconciliation_allows_only_exact_remove(
                                     "index": 0,
                                     "action": "create",
                                     "memoryIds": [],
+                                    "memory": "Mein Name ist Lara.",
+                                    "category": "identity",
                                 }
                             ]
                         },
@@ -1837,6 +1850,8 @@ async def test_dreaming_removal_reconciliation_allows_only_exact_remove(
                                     "index": 0,
                                     "action": "remove",
                                     "memoryIds": [str(memory_id)],
+                                    "memory": "Mein Name ist Lara.",
+                                    "category": "identity",
                                 }
                             ]
                         },
@@ -1880,6 +1895,8 @@ async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> N
                                 "index": 0,
                                 "action": "unchanged",
                                 "memoryIds": [str(memory_id)],
+                                "memory": "Mein Name ist Lara.",
+                                "category": "identity",
                             }
                         ]
                     },
@@ -1889,7 +1906,13 @@ async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> N
                     name="reconcile_memory_candidates",
                     arguments={
                         "decisions": [
-                            {"index": 1, "action": "create", "memoryIds": []}
+                            {
+                                "index": 1,
+                                "action": "create",
+                                "memoryIds": [],
+                                "memory": "Ich spiele Klavier.",
+                                "category": "identity",
+                            }
                         ]
                     },
                 ),
@@ -1914,11 +1937,12 @@ async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> N
 
 
 def test_dreaming_system_prompt_remains_isolated_from_agent_context() -> None:
-    assert "persistent user knowledge" in DREAMING_SYSTEM_PROMPT
+    assert "durable user-specific knowledge" in DREAMING_SYSTEM_PROMPT
     assert "retrieval-only memories" in DREAMING_SYSTEM_PROMPT
     assert "those belong to the maintained user profile" in DREAMING_SYSTEM_PROMPT
-    assert "ordinary technical facts" in DREAMING_SYSTEM_PROMPT
-    assert "project or task details" in DREAMING_SYSTEM_PROMPT
+    assert "owned equipment or lasting technical capabilities" in DREAMING_SYSTEM_PROMPT
+    assert "current tasks, implementation details, or work state" in DREAMING_SYSTEM_PROMPT
+    assert "temporary or borrowed equipment" in DREAMING_SYSTEM_PROMPT
     assert "empty candidates array" in DREAMING_SYSTEM_PROMPT
     assert "one-off questions" in DREAMING_SYSTEM_PROMPT
     assert "single request does not establish" in DREAMING_SYSTEM_PROMPT
@@ -1939,6 +1963,8 @@ def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
                     "index": 0,
                     "action": "create",
                     "memoryIds": [],
+                    "memory": "Neue Erinnerung",
+                    "category": "fact",
                 }
             ]
         }
@@ -1960,7 +1986,8 @@ def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
     assert create.content is None
     assert result.decisions[0].memory_ids == [memory_id]
     assert "Reference only memory IDs supplied" in RECONCILIATION_SYSTEM_PROMPT
-    assert "broader or weaker restatement" in RECONCILIATION_SYSTEM_PROMPT
+    assert "default to create" in RECONCILIATION_SYSTEM_PROMPT
+    assert "Never infer that a new statement replaces" in RECONCILIATION_SYSTEM_PROMPT
     assert "usefully connects" not in RECONCILIATION_SYSTEM_PROMPT
     merge = DreamReconciliation.model_validate(
         {
@@ -2241,6 +2268,8 @@ async def test_host_matching_routes_profile_and_remove_candidates(
                         "index": 0,
                         "action": "remove" if remove_candidate else "unchanged",
                         "memoryIds": [str(existing.id)],
+                        "memory": existing.content,
+                        "category": existing.category,
                     }
                 ]
             }
