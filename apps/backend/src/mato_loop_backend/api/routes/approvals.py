@@ -9,14 +9,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.runtime import (
-    AgentRuntime,
-    ApprovalResolution,
-    approval_payload,
+from mato_loop_backend.agent.approval_decisions import (
+    ApprovalDecisionError,
+    decide_agent_action,
 )
+from mato_loop_backend.agent.runtime import approval_payload
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.events import run_events
 from mato_loop_backend.memory.service import MemoryService
 from mato_loop_backend.models import ApprovalRequest, ChatSession, PermissionGrant, UserAccount
 from mato_loop_backend.security import require_user
@@ -100,108 +99,28 @@ async def decide_approval(
     approval = await db.get(ApprovalRequest, approval_id, with_for_update=True)
     if approval is None or approval.user_id != user.id:
         raise ApiError(404, "approval.notFound")
-    if approval.status != "pending":
-        raise ApiError(409, "approval.alreadyDecided")
-    if approval.action_kind == "terminal_command":
-        raise ApiError(404, "approval.notFound")
-    if payload.decision not in approval.available_decisions:
-        raise ApiError(400, "approval.decisionUnavailable")
     if approval.request_type == "memory_change":
+        if approval.status != "pending":
+            raise ApiError(409, "approval.alreadyDecided")
+        if approval.action_kind == "terminal_command":
+            raise ApiError(404, "approval.notFound")
+        if payload.decision not in approval.available_decisions:
+            raise ApiError(400, "approval.decisionUnavailable")
         if payload.decision not in {"approve", "deny"}:
             raise ApiError(400, "approval.decisionUnavailable")
         if payload.expected_revision is not None:
             raise ApiError(400, "validation.invalid", field="expected_revision")
         return await _decide_memory_change(approval, payload.decision, user.id, db)
-    if approval.request_type != "agent_action":
-        raise ApiError(400, "approval.decisionUnavailable")
-    skill_draft_approval = (
-        approval.capability == "skills.write"
-        and (
-            (
-                approval.action_kind == "build_skill"
-                and approval.resource_type == "skill_collection"
-            )
-            or (
-                approval.action_kind == "edit_skill"
-                and approval.resource_type == "skill"
-            )
-        )
-    )
-    if (
-        skill_draft_approval
-        and payload.decision.startswith("allow")
-        and payload.expected_revision is None
-    ):
-        raise ApiError(422, "validation.required", field="expected_revision")
-    if not skill_draft_approval and payload.expected_revision is not None:
-        raise ApiError(400, "validation.invalid", field="expected_revision")
-    if not AgentRuntime.claim_approval_resolution(approval.id):
-        approval.status = "expired"
-        approval.resolved_at = datetime.now(UTC)
-        await db.commit()
-        raise ApiError(409, "approval.runInactive")
-    approval.status = "approved" if payload.decision.startswith("allow") else "denied"
-    approval.decision = payload.decision
-    approval.resolved_at = datetime.now(UTC)
-    if skill_draft_approval and payload.expected_revision is not None:
-        approval.payload = {
-            **approval.payload,
-            "approvedRevision": payload.expected_revision,
-        }
-    created_grant: PermissionGrant | None = None
-    if payload.decision == "allow_session":
-        profile_id = approval.payload.get("agentProfileId")
-        trust_level = approval.payload.get("trustLevel")
-        try:
-            profile_id = UUID(profile_id) if profile_id is not None else None
-        except (TypeError, ValueError):
-            profile_id = None
-        if trust_level not in {"private", "public"}:
-            trust_level = None
-        existing_grant = await db.scalar(
-            select(PermissionGrant).where(
-                PermissionGrant.session_id == approval.session_id,
-                PermissionGrant.capability == approval.capability,
-                PermissionGrant.resource_type == approval.resource_type,
-                PermissionGrant.resource_scope == approval.resource_scope,
-                PermissionGrant.agent_profile_id == profile_id,
-                PermissionGrant.trust_level == trust_level,
-            )
-        )
-        if existing_grant is None:
-            created_grant = PermissionGrant(
-                session_id=approval.session_id,
-                capability=approval.capability,
-                resource_type=approval.resource_type,
-                resource_scope=approval.resource_scope,
-                agent_profile_id=profile_id,
-                trust_level=trust_level,
-                source_approval_id=approval.id,
-            )
-            db.add(created_grant)
+
     try:
-        await db.commit()
-    except Exception:
-        AgentRuntime.release_approval_resolution(approval.id)
-        raise
-    resolution = ApprovalResolution(payload.decision, payload.expected_revision)
-    if not AgentRuntime.resolve_approval(approval.id, resolution):
-        approval.status = "expired"
-        approval.decision = None
-        approval.payload = {
-            key: value
-            for key, value in approval.payload.items()
-            if key != "approvedRevision"
-        }
-        if created_grant is not None:
-            await db.delete(created_grant)
-        await db.commit()
-        raise ApiError(409, "approval.runInactive")
-    await run_events.publish(
-        approval.run_id,
-        {"type": "approval.resolved", "approvalId": str(approval.id), "decision": payload.decision},
-    )
-    return {"status": approval.status, "decision": payload.decision}
+        return await decide_agent_action(
+            db,
+            approval,
+            payload.decision,
+            expected_revision=payload.expected_revision,
+        )
+    except ApprovalDecisionError as exc:
+        raise ApiError(exc.status_code, exc.code, field=exc.field) from exc
 
 
 async def _decide_memory_change(

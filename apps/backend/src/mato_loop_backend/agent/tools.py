@@ -3779,6 +3779,12 @@ async def _edit_automation(
             ),
             output_session_id=output_session_id,
             output_session_required=arguments.output_session_required,
+            delivery_channel_type=(
+                automation.delivery_channel_type if output_session_id else None
+            ),
+            delivery_endpoint_id=(
+                automation.delivery_endpoint_id if output_session_id else None
+            ),
             schedules=schedules,
             archive_after_success=arguments.archive_after_success,
         )

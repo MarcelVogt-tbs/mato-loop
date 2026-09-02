@@ -725,6 +725,12 @@ class GeneralSettings(SettingsDocument):
     default_timezone: str = "Europe/Berlin"
 
 
+class ChannelSettings(SettingsDocument):
+    settings_key = "channels"
+
+    allowed_providers: set[str] = Field(default_factory=lambda: {"telegram"})
+
+
 class InstanceLimits(SettingsDocument):
     settings_key = "instance-limits"
     model_config = ConfigDict(

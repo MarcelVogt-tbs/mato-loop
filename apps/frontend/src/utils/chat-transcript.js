@@ -213,15 +213,20 @@ export function buildChatTranscript(
       || assistantSection[0]
     const reversedSection = [...assistantSection].reverse()
     const finalCreatedAt = reversedSection.find((message) => message.createdAt)?.createdAt || null
+    const activeDurationMs = reversedSection.find((message) => (
+      Number.isInteger(message.activeDurationMs) && message.activeDurationMs >= 0
+    ))?.activeDurationMs ?? null
     const currentTurn = running && assistantSection.some((message) => (
       message._sourceIndex > lastUserIndex || message.contextSummaryEntry?.current
     ))
-    if (workEntries.length) {
+    if (workEntries.length || Number.isInteger(activeDurationMs)) {
       const durations = reasoningItems.map((item) => item.observedDurationMs).filter(Number.isFinite)
       carrier.workHistory = {
         id: `work-history-${carrier.id}`,
         entries: workEntries,
         observedDurationMs: durations.length ? durations.reduce((total, value) => total + value, 0) : null,
+        activeDurationMs,
+        activeDurationUpdatedAt: null,
         startedAt: turnStartedAt,
         completedAt: currentTurn ? null : finalCreatedAt
       }

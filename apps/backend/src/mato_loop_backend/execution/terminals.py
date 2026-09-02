@@ -12,7 +12,9 @@ from fastapi import WebSocket
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.coordinator import approval_coordinator
+from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
 from mato_loop_backend.error_contract import describe_error
+from mato_loop_backend.events import run_events
 from mato_loop_backend.execution.client import ExecutionClient, ExecutionClientError, ProcessResult
 from mato_loop_backend.models import AgentRun, ApprovalRequest, ChatSession
 
@@ -236,7 +238,7 @@ class TerminalCoordinator:
             status="pending",
         )
         db.add(approval)
-        run.status = "waiting_approval"
+        transition_run_status(run, "waiting_approval")
         await db.flush()
         proposal = _Proposal(
             approval.id,
@@ -263,6 +265,9 @@ class TerminalCoordinator:
             await self._remove_proposal(proposal)
             approval_coordinator.discard(approval.id)
             raise
+        await run_events.publish(
+            run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}
+        )
         current = self._attachments.get(session_id)
         if current is not None:
             with suppress(Exception):
@@ -284,8 +289,12 @@ class TerminalCoordinator:
             approval_coordinator.discard(approval.id)
         await db.refresh(run)
         if run.status == "waiting_approval":
-            run.status = "running"
+            transition_run_status(run, "running")
             await db.commit()
+            await run_events.publish(
+                run.id,
+                {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)},
+            )
         if not isinstance(decision, TerminalDecision):
             raise ExecutionClientError("terminal.disconnected")
         return decision

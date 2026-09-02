@@ -27,6 +27,7 @@ from mato_loop_backend.memory.episode_indexing import (
     EpisodeIndexService,
 )
 from mato_loop_backend.memory.indexing import MemoryIndexScheduler, MemoryIndexService
+from mato_loop_backend.messaging.telegram import TelegramScheduler
 from mato_loop_backend.models import (
     ApprovalRequest,
     ChatSession,
@@ -143,6 +144,7 @@ async def lifespan(_app: FastAPI):
     MemoryIndexScheduler.start()
     EpisodeIndexScheduler.start()
     CodingScheduler.start()
+    TelegramScheduler.start()
     try:
         yield
     finally:
@@ -151,6 +153,7 @@ async def lifespan(_app: FastAPI):
         await MemoryIndexScheduler.stop()
         await EpisodeIndexScheduler.stop()
         await CodingScheduler.stop()
+        await TelegramScheduler.stop()
         await AgentRuntime.shutdown()
         await embedding_client.close()
         await engine.dispose()

@@ -23,6 +23,7 @@ from mato_loop_backend.models.agent import (
     QuestionRequest,
 )
 from mato_loop_backend.models.notification import Notification, WebPushSubscription
+from mato_loop_backend.models.messaging import MessagingEndpoint, MessagingInbox, MessagingOutbox
 from mato_loop_backend.models.memory import (
     MemoryAudience,
     MemoryCategory,
@@ -66,6 +67,9 @@ __all__ = [
     "Message",
     "MessageAttachment",
     "MessageSearchChunk",
+    "MessagingEndpoint",
+    "MessagingInbox",
+    "MessagingOutbox",
     "Notification",
     "PermissionGrant",
     "Project",

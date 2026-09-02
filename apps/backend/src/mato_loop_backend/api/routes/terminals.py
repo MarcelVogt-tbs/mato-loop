@@ -173,12 +173,17 @@ async def _reject(websocket: WebSocket, close_code: int, error_code: str) -> Non
 
 async def _read_terminal(connection: BrowserTerminalConnection) -> None:
     while True:
-        result = await connection.client.request(
-            "terminal.read",
-            {"terminalId": connection.terminal_id, "maxBytes": 65_536, "waitSeconds": 5},
-            TerminalReadResult,
-            timeout=10,
-        )
+        try:
+            result = await connection.client.request(
+                "terminal.read",
+                {"terminalId": connection.terminal_id, "maxBytes": 65_536, "waitSeconds": 5},
+                TerminalReadResult,
+                timeout=10,
+            )
+        except ExecutionClientError as exc:
+            if exc.code == "executionAgent.timeout":
+                continue
+            raise
         assert isinstance(result, TerminalReadResult)
         if result.data:
             try:

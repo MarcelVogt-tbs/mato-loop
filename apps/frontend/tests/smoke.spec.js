@@ -14,6 +14,7 @@ describe('MatoLoop frontend scaffold', () => {
       'settings-default-models',
       'settings-agents',
       'settings-integrations',
+      'settings-channels',
       'settings-tools',
       'settings-approvals',
       'settings-execution-agents',
@@ -44,6 +45,9 @@ describe('MatoLoop frontend scaffold', () => {
     expect(routes.find((route) => route.name === 'markdown-print')?.path).toBe('/print/markdown')
     expect(settingsRoutes.find((route) => route.name === 'settings-users')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-instance-limits')?.meta.requiresAdmin).toBe(true)
+    expect(settingsRoutes.find((route) => route.name === 'settings-channels')?.meta).toEqual({
+      settingsLabel: 'Kanäle', settingsIcon: 'forum'
+    })
     expect(settingsRoutes.some((route) => route.name === 'settings-account')).toBe(false)
     expect(settingsRoutes.find((route) => route.name === 'settings-approvals')?.redirect).toEqual({
       name: 'chat', query: { controlCenter: 'approvals' }

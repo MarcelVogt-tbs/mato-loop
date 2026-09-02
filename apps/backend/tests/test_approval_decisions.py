@@ -6,6 +6,10 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import runtime as runtime_module
+from mato_loop_backend.agent.approval_decisions import (
+    ApprovalDecisionError,
+    decide_agent_action,
+)
 from mato_loop_backend.agent.permissions import PermissionRequest
 from mato_loop_backend.agent.runtime import AgentRuntime, ApprovalResolution
 from mato_loop_backend.api.errors import ApiError
@@ -15,6 +19,7 @@ from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
     ChatSession,
+    Message,
     PermissionGrant,
     UserAccount,
 )
@@ -106,6 +111,69 @@ async def test_deny_is_persisted_before_resuming_without_a_grant(monkeypatch) ->
     assert result == {"status": "denied", "decision": "deny"}
 
 
+async def test_matching_committed_decision_can_be_retried_without_effects(
+    monkeypatch,
+) -> None:
+    approval = _approval()
+    approval.status = "approved"
+    approval.decision = "allow_session"
+    db = AsyncMock(spec=AsyncSession)
+    claim = Mock()
+    publish = AsyncMock()
+    monkeypatch.setattr(AgentRuntime, "claim_approval_resolution", claim)
+    monkeypatch.setattr(run_events, "publish", publish)
+
+    result = await decide_agent_action(
+        db,
+        approval,
+        "allow_session",
+        idempotent_same_decision=True,
+    )
+
+    assert result == {"status": "approved", "decision": "allow_session"}
+    claim.assert_not_called()
+    db.scalar.assert_not_awaited()
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
+    publish.assert_not_awaited()
+
+
+async def test_idempotent_retry_rejects_a_different_decision() -> None:
+    approval = _approval()
+    approval.status = "approved"
+    approval.decision = "allow_once"
+    db = AsyncMock(spec=AsyncSession)
+
+    with pytest.raises(ApprovalDecisionError) as exc_info:
+        await decide_agent_action(
+            db,
+            approval,
+            "deny",
+            idempotent_same_decision=True,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "approval.alreadyDecided"
+    db.commit.assert_not_awaited()
+
+
+async def test_http_retry_of_matching_decision_remains_non_idempotent() -> None:
+    approval = _approval()
+    approval.status = "denied"
+    approval.decision = "deny"
+    user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = approval
+
+    with pytest.raises(ApiError) as exc_info:
+        await decide_approval(
+            approval.id, ApprovalDecisionRequest(decision="deny"), user, db
+        )
+
+    assert exc_info.value.code == "approval.alreadyDecided"
+    db.commit.assert_not_awaited()
+
+
 async def test_approval_without_live_waiter_expires_without_creating_grant(monkeypatch) -> None:
     approval = _approval()
     user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
@@ -174,9 +242,18 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
     approval_id = uuid4()
     target_session_id = uuid4()
     session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
-    run = AgentRun(id=uuid4(), session_id=session.id)
+    run = AgentRun(id=uuid4(), session_id=session.id, input_message_id=uuid4())
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = "Ziel-Session"
+    db.get.return_value = Message(
+        id=run.input_message_id,
+        session_id=session.id,
+        role="user",
+        content="Test",
+        source_type="endpoint",
+        source_provider="telegram",
+        source_endpoint_id=uuid4(),
+    )
     created = asyncio.Event()
 
     async def flush() -> None:
@@ -192,6 +269,8 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
     monkeypatch.setattr(run_events, "publish", publish)
     push = AsyncMock(side_effect=deliver)
     monkeypatch.setattr(runtime_module.WebPushService, "deliver_after_commit", push)
+    enqueue = AsyncMock()
+    monkeypatch.setattr(runtime_module, "enqueue_approval_prompt", enqueue)
     wait_for = AsyncMock(side_effect=AssertionError("approval wait must not time out"))
     monkeypatch.setattr(asyncio, "wait_for", wait_for)
 
@@ -219,6 +298,7 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
     assert persisted.request_type == "agent_action"
     assert persisted.user_id == session.user_id
     assert persisted.payload["resourceDisplay"] == "Ziel-Session"
+    enqueue.assert_awaited_once_with(db, persisted)
     statement = db.scalar.await_args.args[0]
     assert "chat_sessions.user_id =" in str(statement)
     assert {target_session_id, session.user_id, "chat"}.issubset(

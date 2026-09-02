@@ -120,6 +120,9 @@ export function emptyActivity(revision = 0) {
   return {
     phase: 'idle',
     startedAt: null,
+    activeDurationMs: null,
+    activeDurationUpdatedAt: null,
+    activeTimingRevision: null,
     tool: null,
     toolCallId: null,
     modelRequest: null,

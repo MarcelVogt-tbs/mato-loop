@@ -12,6 +12,8 @@ Automationen führen einen festen Agent-Auftrag manuell oder nach Zeitplan aus. 
 
 Optional können Sie einen Skill auswählen, Laufzeiteinstellungen aus einer vorhandenen Session übernehmen und eine Ausgabe-Session festlegen. Modell, Memory-Modus, Websuche, Computer und Arbeitsordner werden beim Übernehmen in den eigenen Automation-Kontext kopiert. Spätere Änderungen der Quell-Session verändern die Automation nicht.
 
+Für eine Ausgabe-Session können Sie zusätzlich den Sessionstandard, die MatoLoop-App oder einen persönlichen Kanal als Zustellziel wählen. Wird ein gewählter Kanalanbieter später administrativ gesperrt, bleibt die Auswahl gespeichert, der Lauf stellt sein Ergebnis aber nur in der MatoLoop-App bereit. Nach erneuter Freigabe verwenden spätere Läufe wieder den gewählten Kanal.
+
 Bei genau einem einmaligen Zeitplan kann die Automation nach einem erfolgreichen geplanten Lauf automatisch archiviert werden. Archivierte Automationen werden nicht mehr ausgeführt oder bearbeitet, behalten aber ihre Laufhistorie und können im Archiv endgültig gelöscht werden. Fehlgeschlagene, abgebrochene und übersprungene Läufe archivieren die Automation nicht.
 
 ## Zeitpläne

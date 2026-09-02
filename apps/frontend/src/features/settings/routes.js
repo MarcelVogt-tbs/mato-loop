@@ -43,6 +43,12 @@ export const settingsRoutes = [
     ]
   },
   {
+    path: 'channels',
+    name: 'settings-channels',
+    component: () => import('pages/settings/ChannelSettingsPage.vue'),
+    meta: { settingsLabel: 'Kanäle', settingsIcon: 'forum' }
+  },
+  {
     path: 'tools',
     name: 'settings-tools',
     component: () => import('pages/settings/ToolSettingsPage.vue'),

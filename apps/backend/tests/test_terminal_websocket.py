@@ -8,7 +8,12 @@ import pytest
 from fastapi import WebSocketDisconnect
 
 from mato_loop_backend.api.routes import terminals
-from mato_loop_backend.execution import TerminalControlResult, TerminalOpenResult
+from mato_loop_backend.execution import (
+    ExecutionClientError,
+    TerminalControlResult,
+    TerminalOpenResult,
+    TerminalReadResult,
+)
 from mato_loop_backend.execution.terminals import BrowserTerminalConnection
 from mato_loop_backend.models import ExecutionAgent, UserAccount
 
@@ -173,6 +178,32 @@ async def test_terminal_login_watch_detects_revocation(monkeypatch) -> None:
 
     with pytest.raises(terminals.ExecutionClientError, match="auth.sessionExpired"):
         await terminals._watch_login(login)
+
+
+async def test_terminal_read_retries_agent_timeout() -> None:
+    class FakeClient:
+        calls = 0
+
+        async def request(self, *_args, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise ExecutionClientError("executionAgent.timeout")
+            return TerminalReadResult(data="", eof=True)
+
+    client = FakeClient()
+    websocket = FakeWebSocket()
+    connection = BrowserTerminalConnection(
+        uuid4(),
+        uuid4(),
+        str(uuid4()),
+        client,  # type: ignore[arg-type]
+        websocket,  # type: ignore[arg-type]
+    )
+
+    await terminals._read_terminal(connection)
+
+    assert client.calls == 2
+    assert websocket.sent == []
 
 
 async def test_attached_idle_terminal_rejects_input_without_writing_personal_pty() -> None:

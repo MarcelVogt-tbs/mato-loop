@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
@@ -82,6 +82,12 @@ class AutomationRequest(BaseModel):
     source_session_id: UUID | None = Field(default=None, alias="sourceSessionId", strict=False)
     output_session_id: UUID | None = Field(default=None, alias="outputSessionId", strict=False)
     output_session_required: bool = Field(default=False, alias="outputSessionRequired")
+    delivery_channel_type: Literal["app", "endpoint"] | None = Field(
+        default=None, alias="deliveryChannelType"
+    )
+    delivery_endpoint_id: UUID | None = Field(
+        default=None, alias="deliveryEndpointId", strict=False
+    )
     archive_after_success: bool = Field(default=False, alias="archiveAfterSuccess")
     schedules: list[ScheduleRequest] = Field(min_length=1, max_length=50)
     expected_revision: int | None = Field(default=None, alias="expectedRevision", ge=1)
@@ -95,6 +101,12 @@ class AutomationRequest(BaseModel):
     def required_output_present(self) -> AutomationRequest:
         if self.output_session_required and self.output_session_id is None:
             raise ValueError("outputSessionId is required")
+        if (self.delivery_channel_type == "endpoint") != (
+            self.delivery_endpoint_id is not None
+        ):
+            raise ValueError("deliveryEndpointId is required only for endpoint delivery")
+        if self.delivery_channel_type is not None and self.output_session_id is None:
+            raise ValueError("outputSessionId is required for delivery configuration")
         return self
 
 
@@ -169,6 +181,16 @@ async def _automation_payload(
         "revision": item.revision,
         "outputSessionId": str(item.output_session_id) if item.output_session_id else None,
         "outputSessionRequired": item.output_session_required,
+        "deliveryChannel": (
+            {
+                "type": item.delivery_channel_type,
+                "endpointId": str(item.delivery_endpoint_id)
+                if item.delivery_endpoint_id
+                else None,
+            }
+            if item.delivery_channel_type
+            else None
+        ),
         "executionSessionId": str(item.execution_session_id),
         "runtime": runtime_snapshot(execution_session),
         "schedules": schedules,
@@ -263,6 +285,12 @@ async def _run_payload(db: AsyncSession, run: AutomationRun) -> dict[str, Any]:
             ),
             "outputSessionId": str(run.output_session_id) if run.output_session_id else None,
             "outputMessageId": str(run.output_message_id) if run.output_message_id else None,
+            "channel": {
+                "type": run.delivery_channel_type,
+                "endpointId": str(run.delivery_endpoint_id)
+                if run.delivery_endpoint_id
+                else None,
+            },
         },
         "createdAt": run.created_at.isoformat() if run.created_at else None,
         "startedAt": run.started_at.isoformat() if run.started_at else None,
@@ -315,6 +343,8 @@ async def create_automation(
             source_session_id=payload.source_session_id,
             output_session_id=payload.output_session_id,
             output_session_required=payload.output_session_required,
+            delivery_channel_type=payload.delivery_channel_type,
+            delivery_endpoint_id=payload.delivery_endpoint_id,
             schedules=_schedule_drafts(payload),
             archive_after_success=payload.archive_after_success,
         )
@@ -362,6 +392,8 @@ async def replace_automation(
             source_session_id=payload.source_session_id,
             output_session_id=payload.output_session_id,
             output_session_required=payload.output_session_required,
+            delivery_channel_type=payload.delivery_channel_type,
+            delivery_endpoint_id=payload.delivery_endpoint_id,
             schedules=_schedule_drafts(payload),
             archive_after_success=payload.archive_after_success,
         )

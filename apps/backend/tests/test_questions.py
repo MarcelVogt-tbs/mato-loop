@@ -6,6 +6,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import runtime as runtime_module
+from mato_loop_backend.agent.question_decisions import QuestionDecisionError
+from mato_loop_backend.agent.question_decisions import (
+    answer_question as answer_question_decision,
+)
+from mato_loop_backend.agent.question_decisions import (
+    reject_question as reject_question_decision,
+)
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.tools import QuestionArguments, validate_question_answers
 from mato_loop_backend.api.routes.questions import (
@@ -214,6 +221,78 @@ async def test_failed_answer_commit_releases_resolution(monkeypatch) -> None:
             user,
             db,
         )
+
+    db.rollback.assert_awaited_once()
+    release.assert_called_once_with(request.id)
+
+
+async def test_question_decisions_are_idempotent_only_for_same_final_result(
+    monkeypatch,
+) -> None:
+    arguments = _arguments()
+    answers = {"format": ["Kurz"], "topics": ["API"], "note": ["Keine"]}
+    request = QuestionRequest(
+        id=uuid4(),
+        session_id=uuid4(),
+        run_id=uuid4(),
+        tool_call_id="call-1",
+        questions=arguments.model_dump(mode="json")["questions"],
+        answers=answers,
+        status="answered",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    claim = Mock()
+    resolve = Mock()
+    monkeypatch.setattr(AgentRuntime, "claim_question_resolution", claim)
+    monkeypatch.setattr(AgentRuntime, "resolve_question", resolve)
+
+    assert await answer_question_decision(
+        db, request, answers, idempotent_same_result=True
+    ) == {"status": "answered"}
+    with pytest.raises(QuestionDecisionError) as exc_info:
+        await answer_question_decision(
+            db,
+            request,
+            {**answers, "format": ["Ausführlich"]},
+            idempotent_same_result=True,
+        )
+    assert (exc_info.value.status_code, exc_info.value.code) == (
+        409,
+        "question.alreadyAnswered",
+    )
+    with pytest.raises(QuestionDecisionError, match="question.alreadyAnswered"):
+        await reject_question_decision(db, request, idempotent_same_result=True)
+    claim.assert_not_called()
+    resolve.assert_not_called()
+    db.commit.assert_not_awaited()
+
+    request.status = "rejected"
+    request.answers = None
+    assert await reject_question_decision(
+        db, request, idempotent_same_result=True
+    ) == {"status": "rejected"}
+    claim.assert_not_called()
+
+
+async def test_cancelled_commit_rolls_back_and_releases_resolution(monkeypatch) -> None:
+    request = QuestionRequest(
+        id=uuid4(),
+        session_id=uuid4(),
+        run_id=uuid4(),
+        tool_call_id="call-1",
+        questions=_arguments().model_dump(mode="json")["questions"],
+        status="pending",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.commit.side_effect = asyncio.CancelledError
+    monkeypatch.setattr(
+        AgentRuntime, "claim_question_resolution", Mock(return_value=True)
+    )
+    release = Mock()
+    monkeypatch.setattr(AgentRuntime, "release_question_resolution", release)
+
+    with pytest.raises(asyncio.CancelledError):
+        await reject_question_decision(db, request)
 
     db.rollback.assert_awaited_once()
     release.assert_called_once_with(request.id)

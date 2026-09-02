@@ -25,10 +25,12 @@ from pydantic import (
     model_validator,
 )
 from sqlalchemy import and_, select, update
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.agent import AgentRuntime
+from mato_loop_backend.agent.run_timing import run_timing_payload
 from mato_loop_backend.agent.runtime import AgentRunError
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.attachments import (
@@ -482,6 +484,7 @@ def session_payload(
     workspace_context: dict[str, Any] | None = None,
     last_message_at: Any = _LAST_MESSAGE_AT_UNSET,
     has_unread_messages: bool | None = None,
+    default_channel: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
         control_center = ControlCenterState.model_validate(
@@ -498,6 +501,7 @@ def session_payload(
         workspace_context=workspace_context,
         last_message_at=last_message_at,
         has_unread_messages=has_unread_messages,
+        default_channel=default_channel,
     )
 
 
@@ -509,6 +513,28 @@ async def _session_payload(
     has_unread_messages: bool | None = None,
 ) -> dict[str, Any]:
     workspace_context = await session_service.workspace_context(db, item)
+    first_user_message = (
+        await db.scalar(
+            select(Message)
+            .where(Message.session_id == item.id, Message.role == "user")
+            .order_by(Message.created_at, Message.id)
+            .limit(1)
+        )
+        if sa_inspect(item).persistent
+        else None
+    )
+    default_channel = (
+        {
+            "type": "endpoint",
+            "provider": first_user_message.source_provider,
+            "endpointId": str(first_user_message.source_endpoint_id),
+        }
+        if first_user_message is not None
+        and first_user_message.source_type == "endpoint"
+        and first_user_message.source_provider
+        and first_user_message.source_endpoint_id
+        else {"type": "app"}
+    )
     if item.memory_mode == MemoryMode.DISABLED.value:
         return session_payload(
             item,
@@ -518,6 +544,7 @@ async def _session_payload(
             workspace_context=workspace_context,
             last_message_at=last_message_at,
             has_unread_messages=has_unread_messages,
+            default_channel=default_channel,
         )
     ai = await load_effective_ai(db, item.user_id)
     memory = await SettingsStore.load(db, MemorySettings, user_id=item.user_id)
@@ -532,6 +559,7 @@ async def _session_payload(
         workspace_context=workspace_context,
         last_message_at=last_message_at,
         has_unread_messages=has_unread_messages,
+        default_channel=default_channel,
     )
 
 
@@ -911,6 +939,7 @@ async def retry_failed_message(
         "runId": str(result.run.id),
         "modelName": result.run.model_name,
         "createdAt": result.run.created_at.isoformat() if result.run.created_at else None,
+        **run_timing_payload(result.run),
     }
 
 
@@ -1073,6 +1102,7 @@ async def stream_run_events(
         raise ApiError(404, "session.runNotFound")
     run_status = run.status
     run_error = run.error
+    run_timing = run_timing_payload(run)
     error_message = (
         await db.scalar(
             select(Message)
@@ -1102,9 +1132,17 @@ async def stream_run_events(
                         "message": error_message_payload,
                     }
                     yield f"event: message.completed\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-                event = {"type": "run.failed", "error": error.payload()}
+                event = {
+                    "type": "run.failed",
+                    "error": error.payload(),
+                    **run_timing,
+                }
             else:
-                event = {"type": f"run.{run_status}", "runId": str(run_id)}
+                event = {
+                    "type": f"run.{run_status}",
+                    "runId": str(run_id),
+                    **run_timing,
+                }
             yield f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
             return
         async for event in run_events.subscribe(run_id):

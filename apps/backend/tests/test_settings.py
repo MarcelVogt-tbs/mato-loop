@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.settings import (
+    ChannelSettings,
     DefaultTaskListSettings,
     InstanceLimits,
     IntegrationSettings,
@@ -53,6 +54,8 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert InstanceLimits().max_upload_mib == 64
     assert InstanceLimits().session_quota_mib == 500
     assert InstanceLimits().max_extracted_characters == 5_000_000
+    assert ChannelSettings.settings_key == "channels"
+    assert ChannelSettings().allowed_providers == {"telegram"}
 
 
 def test_instance_limits_validate_related_limits_and_aliases() -> None:

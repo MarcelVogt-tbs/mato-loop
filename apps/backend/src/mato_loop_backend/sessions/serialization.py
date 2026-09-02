@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from mato_loop_backend.agent.run_timing import run_timing_payload
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.integrations import WebFetchError, canonicalize_url
 from mato_loop_backend.message_content import canonical_assistant_content
@@ -130,6 +131,19 @@ def _public_warnings(item: Message) -> list[str]:
             for code in warnings
             if isinstance(code, str) and code in _PUBLIC_WARNING_CODES
         )
+    )
+
+
+def _public_active_duration_ms(item: Message) -> int | None:
+    if item.role != "assistant" or not isinstance(item.provider_data, dict):
+        return None
+    runtime_data = item.provider_data.get("_matoloop")
+    performance = runtime_data.get("performance") if isinstance(runtime_data, dict) else None
+    duration = performance.get("activeDurationMs") if isinstance(performance, dict) else None
+    return (
+        duration
+        if isinstance(duration, int) and not isinstance(duration, bool) and duration >= 0
+        else None
     )
 
 
@@ -291,6 +305,7 @@ def session_payload(
     memory_tools_available: bool | None = None,
     memory_unavailable_reason: str | None = None,
     workspace_context: dict[str, Any] | None = None,
+    default_channel: dict[str, Any] | None = None,
     last_message_at: datetime | None | object = LAST_MESSAGE_AT_UNSET,
     has_unread_messages: bool | None = None,
 ) -> dict[str, Any]:
@@ -349,6 +364,7 @@ def session_payload(
             "connected": False,
             "operations": [],
         },
+        "defaultChannel": default_channel or {"type": "app"},
         "createdAt": item.created_at.isoformat() if item.created_at else None,
         "updatedAt": item.updated_at.isoformat() if item.updated_at else None,
     }
@@ -430,12 +446,27 @@ def message_payload(item: Message, *, retry_available: bool = False) -> dict[str
         "toolCallId": item.tool_call_id,
         "toolCalls": item.tool_calls,
         "reasoning": item.public_reasoning,
+        "activeDurationMs": _public_active_duration_ms(item),
         "warnings": _public_warnings(item),
         "research": _public_research_payload(item),
         "fileActions": _public_file_actions(item),
         "sourceType": (
             "automationRun"
             if isinstance(source, dict) and source.get("type") == "automationRun"
+            else None
+        ),
+        "source": (
+            {
+                "type": "endpoint",
+                "provider": item.source_provider,
+                "endpointId": str(item.source_endpoint_id),
+            }
+            if item.role == "user"
+            and item.source_type == "endpoint"
+            and item.source_provider
+            and item.source_endpoint_id
+            else {"type": "app"}
+            if item.role == "user"
             else None
         ),
         "error": error.payload() if error else None,
@@ -487,4 +518,5 @@ def run_payload(run: AgentRun) -> dict[str, Any]:
         "modelName": run.model_name,
         "error": describe_error(run.error).payload() if run.error else None,
         "createdAt": run.created_at.isoformat() if run.created_at else None,
+        **run_timing_payload(run),
     }

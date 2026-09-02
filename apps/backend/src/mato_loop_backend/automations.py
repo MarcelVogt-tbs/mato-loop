@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.message_content import canonical_assistant_content
+from mato_loop_backend.messaging.policy import channel_provider_allowed
 from mato_loop_backend.models import (
     AgentRun,
     Automation,
@@ -23,6 +24,8 @@ from mato_loop_backend.models import (
     AutomationSchedule,
     ChatSession,
     Message,
+    MessagingEndpoint,
+    MessagingOutbox,
     UserAccount,
 )
 from mato_loop_backend.notifications import NotificationDraft, NotificationService
@@ -193,6 +196,75 @@ class AutomationService:
         return skill
 
     @staticmethod
+    async def delivery_endpoint(
+        db: AsyncSession, user_id: UUID, endpoint_id: UUID, *, field: str
+    ) -> MessagingEndpoint:
+        endpoint = await db.scalar(
+            select(MessagingEndpoint).where(
+                MessagingEndpoint.id == endpoint_id,
+                MessagingEndpoint.user_id == user_id,
+                MessagingEndpoint.enabled.is_(True),
+                MessagingEndpoint.deleted_at.is_(None),
+                MessagingEndpoint.paired_chat_id.is_not(None),
+            )
+        )
+        if endpoint is None:
+            raise AutomationError("automation.deliveryUnavailable", field=field)
+        if not await channel_provider_allowed(db, endpoint.provider):
+            raise AutomationError("automation.deliveryUnavailable", field=field)
+        return endpoint
+
+    @staticmethod
+    async def resolved_delivery_channel(
+        db: AsyncSession, automation: Automation
+    ) -> dict[str, Any]:
+        if automation.delivery_channel_type == "app":
+            return {
+                "delivery_channel_type": "app",
+                "delivery_endpoint_id": None,
+                "delivery_destination": None,
+            }
+        endpoint_id = automation.delivery_endpoint_id
+        if endpoint_id is None and automation.output_session_id is not None:
+            first = await db.scalar(
+                select(Message)
+                .where(
+                    Message.session_id == automation.output_session_id,
+                    Message.role == "user",
+                )
+                .order_by(Message.created_at, Message.id)
+                .limit(1)
+            )
+            endpoint_id = (
+                first.source_endpoint_id
+                if first is not None and first.source_type == "endpoint"
+                else None
+            )
+        if endpoint_id is not None:
+            endpoint = await db.scalar(
+                select(MessagingEndpoint).where(
+                    MessagingEndpoint.id == endpoint_id,
+                    MessagingEndpoint.user_id == automation.user_id,
+                    MessagingEndpoint.enabled.is_(True),
+                    MessagingEndpoint.deleted_at.is_(None),
+                    MessagingEndpoint.paired_chat_id.is_not(None),
+                )
+            )
+            if endpoint is not None and await channel_provider_allowed(
+                db, endpoint.provider, lock=True
+            ):
+                return {
+                    "delivery_channel_type": "endpoint",
+                    "delivery_endpoint_id": endpoint.id,
+                    "delivery_destination": endpoint.paired_chat_id,
+                }
+        return {
+            "delivery_channel_type": "app",
+            "delivery_endpoint_id": None,
+            "delivery_destination": None,
+        }
+
+    @staticmethod
     def set_schedules(
         automation: Automation,
         schedules: list[dict[str, Any]],
@@ -259,6 +331,8 @@ class AutomationService:
         output_session_id: UUID | None,
         output_session_required: bool,
         schedules: list[dict[str, Any]],
+        delivery_channel_type: str | None = None,
+        delivery_endpoint_id: UUID | None = None,
         archive_after_success: bool = False,
         now: datetime | None = None,
     ) -> Automation:
@@ -275,6 +349,10 @@ class AutomationService:
         if output_session_id:
             await AutomationService.normal_session(
                 db, output_session_id, user_id, field="outputSessionId"
+            )
+        if delivery_channel_type == "endpoint" and delivery_endpoint_id is not None:
+            await AutomationService.delivery_endpoint(
+                db, user_id, delivery_endpoint_id, field="deliveryEndpointId"
             )
         AutomationService.validate_archive_policy(schedules, archive_after_success)
         execution_session = ChatSession(
@@ -294,6 +372,8 @@ class AutomationService:
             execution_session_id=execution_session.id,
             output_session_id=output_session_id,
             output_session_required=output_session_required,
+            delivery_channel_type=delivery_channel_type,
+            delivery_endpoint_id=delivery_endpoint_id,
             name=name,
             task=task,
             skill_id=skill_id,
@@ -343,6 +423,8 @@ class AutomationService:
         output_session_id: UUID | None,
         output_session_required: bool,
         schedules: list[dict[str, Any]],
+        delivery_channel_type: str | None = None,
+        delivery_endpoint_id: UUID | None = None,
         archive_after_success: bool = False,
         now: datetime | None = None,
     ) -> Automation:
@@ -358,6 +440,17 @@ class AutomationService:
         if output_session_id:
             await AutomationService.normal_session(
                 db, output_session_id, automation.user_id, field="outputSessionId"
+            )
+        if (
+            delivery_channel_type == "endpoint"
+            and delivery_endpoint_id is not None
+            and delivery_endpoint_id != automation.delivery_endpoint_id
+        ):
+            await AutomationService.delivery_endpoint(
+                db,
+                automation.user_id,
+                delivery_endpoint_id,
+                field="deliveryEndpointId",
             )
         AutomationService.validate_archive_policy(schedules, archive_after_success)
         execution_session = await db.get(ChatSession, automation.execution_session_id)
@@ -384,6 +477,8 @@ class AutomationService:
         automation.archive_after_success = archive_after_success
         automation.output_session_id = output_session_id
         automation.output_session_required = output_session_required
+        automation.delivery_channel_type = delivery_channel_type
+        automation.delivery_endpoint_id = delivery_endpoint_id
         automation.revision += 1
         automation.schedules = []
         await db.flush()
@@ -447,6 +542,7 @@ class AutomationService:
             definition_snapshot=await AutomationService._snapshot(db, automation),
             output_session_id=automation.output_session_id,
             delivery_status=("pending" if automation.output_session_id else "not_requested"),
+            **await AutomationService.resolved_delivery_channel(db, automation),
         )
         db.add(run)
         await db.commit()
@@ -619,6 +715,7 @@ class AutomationService:
                 ),
                 error_code="automation.alreadyRunning" if active else None,
                 completed_at=now if active else None,
+                **await AutomationService.resolved_delivery_channel(db, automation),
             )
             db.add(run)
             count += 1
@@ -886,9 +983,47 @@ class AutomationService:
             await db.rollback()
             return False
         run, automation = row
+        if run.delivery_channel_type == "endpoint":
+            endpoint = await db.get(MessagingEndpoint, run.delivery_endpoint_id)
+            if (
+                endpoint is None
+                or not endpoint.enabled
+                or endpoint.deleted_at is not None
+                or endpoint.paired_chat_id is None
+                or not await channel_provider_allowed(db, endpoint.provider)
+            ):
+                run.delivery_channel_type = "app"
+                run.delivery_endpoint_id = None
+                run.delivery_destination = None
         if run.output_message_id is not None:
-            run.delivery_status = "delivered"
-            run.delivery_next_attempt_at = None
+            if run.delivery_channel_type == "endpoint":
+                outbox = await db.scalar(
+                    select(MessagingOutbox).where(
+                        MessagingOutbox.endpoint_id == run.delivery_endpoint_id,
+                        MessagingOutbox.deduplication_key == f"automation:{run.id}",
+                    )
+                )
+                if outbox is None:
+                    output_message = await db.get(Message, run.output_message_id)
+                    if output_message is not None and run.delivery_endpoint_id and run.delivery_destination:
+                        db.add(
+                            MessagingOutbox(
+                                endpoint_id=run.delivery_endpoint_id,
+                                automation_run_id=run.id,
+                                source_message_id=output_message.id,
+                                destination=run.delivery_destination,
+                                deduplication_key=f"automation:{run.id}",
+                                 payload={
+                                     "text": canonical_assistant_content(output_message.content),
+                                     "contentFormat": "markdown",
+                                     "includeAttachments": True,
+                                 },
+                            )
+                        )
+                run.delivery_next_attempt_at = now + timedelta(seconds=5)
+            else:
+                run.delivery_status = "delivered"
+                run.delivery_next_attempt_at = None
             await db.commit()
             return True
         if run.output_session_id is None:
@@ -960,8 +1095,29 @@ class AutomationService:
                     await WebPushService.deliver_after_commit(automation.user_id, push)
             return True
         run.output_message_id = message.id
-        run.delivery_status = "delivered"
-        run.delivery_next_attempt_at = None
+        if (
+            run.delivery_channel_type == "endpoint"
+            and run.delivery_endpoint_id is not None
+            and run.delivery_destination is not None
+        ):
+            db.add(
+                MessagingOutbox(
+                    endpoint_id=run.delivery_endpoint_id,
+                    automation_run_id=run.id,
+                    source_message_id=message.id,
+                    destination=run.delivery_destination,
+                    deduplication_key=f"automation:{run.id}",
+                     payload={
+                         "text": canonical_assistant_content(message.content),
+                         "contentFormat": "markdown",
+                         "includeAttachments": True,
+                     },
+                )
+            )
+            run.delivery_next_attempt_at = now + timedelta(seconds=5)
+        else:
+            run.delivery_status = "delivered"
+            run.delivery_next_attempt_at = None
         await db.commit()
         return True
 
@@ -981,10 +1137,46 @@ class AutomationService:
         )
         if run is None:
             raise AutomationError("automation.runNotFound")
-        if run.status != "completed" or run.output_session_id is None:
+        if (
+            run.status != "completed"
+            or run.output_session_id is None
+            or run.delivery_status != "failed"
+        ):
             raise AutomationError("automation.deliveryUnavailable")
         if run.output_message_id is not None:
-            run.delivery_status = "delivered"
+            if run.delivery_channel_type == "app":
+                run.delivery_status = "delivered"
+                return run
+            endpoint = await db.get(MessagingEndpoint, run.delivery_endpoint_id)
+            if (
+                endpoint is None
+                or not endpoint.enabled
+                or endpoint.deleted_at is not None
+                or endpoint.paired_chat_id != run.delivery_destination
+                or not await channel_provider_allowed(db, endpoint.provider)
+            ):
+                run.delivery_channel_type = "app"
+                run.delivery_endpoint_id = None
+                run.delivery_destination = None
+                run.delivery_status = "delivered"
+                run.delivery_next_attempt_at = None
+                await db.commit()
+                return run
+            outbox = await db.scalar(
+                select(MessagingOutbox).where(
+                    MessagingOutbox.endpoint_id == run.delivery_endpoint_id,
+                    MessagingOutbox.deduplication_key == f"automation:{run.id}",
+                )
+            )
+            if outbox is not None:
+                outbox.status = "pending"
+                outbox.attempts = 0
+                outbox.next_attempt_at = datetime.now(UTC)
+                outbox.error_code = None
+            run.delivery_status = "pending"
+            run.delivery_attempts = 0
+            run.delivery_next_attempt_at = datetime.now(UTC)
+            await db.commit()
             return run
         run.delivery_status = "pending"
         run.delivery_attempts = 0

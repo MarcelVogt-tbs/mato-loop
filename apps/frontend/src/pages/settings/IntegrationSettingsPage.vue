@@ -39,8 +39,8 @@
       indicator-color="primary"
       class="q-mb-lg"
     >
-      <q-tab name="catalog" icon="extension" label="Verfügbare Integrationen" />
       <q-tab name="instances" icon="settings" label="Integrationsinstanzen" />
+      <q-tab name="catalog" icon="extension" label="Verfügbare Integrationen" />
     </q-tabs>
 
     <template v-if="auth.isAdmin && section === 'catalog'">

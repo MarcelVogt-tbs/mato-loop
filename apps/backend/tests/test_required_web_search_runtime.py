@@ -1214,10 +1214,11 @@ async def test_provider_retry_publishes_waiting_model_phase(monkeypatch) -> None
     started_at = events[0].pop("startedAt")
     assert isinstance(started_at, str)
     assert events == [
-        {
-            "type": "run.phase",
-            "phase": "waiting_model",
-            "modelRequest": 1,
+            {
+                "type": "run.phase",
+                "phase": "waiting_model",
+                "activityLabel": "Provider-Anfrage: Versuch 2 von 3",
+                "modelRequest": 1,
             "providerAttempt": 2,
             "providerAttemptTotal": 3,
         }

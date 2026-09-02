@@ -435,9 +435,49 @@ export const useChatStore = defineStore('chat', {
       const startedAt = sameDisplay
         ? this.activity.startedAt || details.startedAt || new Date().toISOString()
         : details.startedAt || new Date().toISOString()
+      const timingRevision = Number.isInteger(details.activeTimingRevision)
+        && details.activeTimingRevision >= 0
+        && Number.isInteger(details.activeDurationMs)
+        && details.activeDurationMs >= 0
+        && typeof details.activeDurationRunning === 'boolean'
+        ? details.activeTimingRevision
+        : null
+      const acceptTiming = timingRevision !== null && (
+        this.activity.activeTimingRevision === null
+        || timingRevision > this.activity.activeTimingRevision
+      )
       this.activity = {
         ...nextActivity,
         startedAt,
+        activeDurationMs: acceptTiming
+          ? details.activeDurationMs
+          : this.activity.activeDurationMs,
+        activeDurationUpdatedAt: acceptTiming
+          ? details.activeDurationRunning ? new Date().toISOString() : null
+          : this.activity.activeDurationUpdatedAt,
+        activeTimingRevision: acceptTiming
+          ? timingRevision
+          : this.activity.activeTimingRevision,
+        revision: this.activity.revision + 1
+      }
+    },
+    setRunTiming(timing = {}) {
+      if (
+        !Number.isInteger(timing.activeTimingRevision)
+        || timing.activeTimingRevision < 0
+        || !Number.isInteger(timing.activeDurationMs)
+        || timing.activeDurationMs < 0
+        || typeof timing.activeDurationRunning !== 'boolean'
+        || (
+          this.activity.activeTimingRevision !== null
+          && timing.activeTimingRevision <= this.activity.activeTimingRevision
+        )
+      ) return
+      this.activity = {
+        ...this.activity,
+        activeDurationMs: timing.activeDurationMs,
+        activeDurationUpdatedAt: timing.activeDurationRunning ? new Date().toISOString() : null,
+        activeTimingRevision: timing.activeTimingRevision,
         revision: this.activity.revision + 1
       }
     },
@@ -1030,7 +1070,7 @@ export const useChatStore = defineStore('chat', {
         if (this.sessionLoadVersion === loadVersion) this.loading = false
       }
     },
-    async refreshSession(id) {
+    async refreshSession(id, { suppressErrorToast = false } = {}) {
       if (this.selectedSessionId !== id || this.loading) return
       const refresh = (this.sessionRefreshPromise || Promise.resolve()).catch(() => {}).then(async () => {
         if (this.selectedSessionId !== id || this.loading) return
@@ -1040,7 +1080,10 @@ export const useChatStore = defineStore('chat', {
         const controller = markRaw(new AbortController())
         this.sessionRequestController = controller
         try {
-          const session = (await api.get(`/sessions/${id}`, { signal: controller.signal })).data
+          const session = (await api.get(`/sessions/${id}`, {
+            signal: controller.signal,
+            ...(suppressErrorToast ? { suppressErrorToast: true } : {})
+          })).data
           if (this.selectedSessionId === id && this.sessionLoadVersion === loadVersion) {
             if (this.current?.id === id) {
               session.messages = mergeMessages(this.current.messages, session.messages)
@@ -1471,7 +1514,10 @@ export const useChatStore = defineStore('chat', {
                 data = {
                   runId: recovered.session.activeRun?.id || null,
                   modelName: recovered.session.activeRun?.modelName || null,
-                  createdAt: recovered.session.activeRun?.createdAt || null
+                  createdAt: recovered.session.activeRun?.createdAt || null,
+                  activeDurationMs: recovered.session.activeRun?.activeDurationMs ?? null,
+                  activeDurationRunning: recovered.session.activeRun?.activeDurationRunning === true,
+                  activeTimingRevision: recovered.session.activeRun?.activeTimingRevision ?? null
                 }
               }
             } catch {
@@ -1487,7 +1533,10 @@ export const useChatStore = defineStore('chat', {
           id: data.runId,
           status: 'queued',
           modelName: data.modelName,
-          createdAt: data.createdAt
+          createdAt: data.createdAt,
+          activeDurationMs: data.activeDurationMs,
+          activeDurationRunning: data.activeDurationRunning,
+          activeTimingRevision: data.activeTimingRevision
         } : null
         const stillSelected = this.selectedSessionId === session.id && this.current?.id === session.id
         const updatedSession = recoveredSession || sessionBeforeFailedResponse(
@@ -1905,7 +1954,13 @@ export const useChatStore = defineStore('chat', {
         if (stillSelected) {
           this.current = session
           this.selectedSessionId = session.id
-          this.watchRun(session.id, data.runId, { status: 'queued', modelName: data.modelName })
+          this.watchRun(session.id, data.runId, {
+            status: 'queued',
+            modelName: data.modelName,
+            activeDurationMs: data.activeDurationMs,
+            activeDurationRunning: data.activeDurationRunning,
+            activeTimingRevision: data.activeTimingRevision
+          })
           await this.cancelActiveRun()
         }
         return { created: stillSelected, sessionId: session.id }
@@ -1983,7 +2038,13 @@ export const useChatStore = defineStore('chat', {
           && this.selectedSessionId === session.id
           && this.current?.id === session.id
         ) {
-          this.watchRun(session.id, data.runId, { status: 'queued', modelName: data.modelName })
+          this.watchRun(session.id, data.runId, {
+            status: 'queued',
+            modelName: data.modelName,
+            activeDurationMs: data.activeDurationMs,
+            activeDurationRunning: data.activeDurationRunning,
+            activeTimingRevision: data.activeTimingRevision
+          })
           await this.cancelActiveRun()
         } else {
           void this.refreshSessions().catch(() => {})
@@ -2025,23 +2086,27 @@ export const useChatStore = defineStore('chat', {
           const connectedPhase = run.status === 'waiting_approval' || run.status === 'waiting_input'
             ? run.status
             : run.status === 'queued' ? 'queued' : 'preparing_context'
-          this.setActivity(connectedPhase, { startedAt: run.createdAt })
+          this.setActivity(connectedPhase, { ...run, startedAt: run.createdAt })
         }
       }
       if (run.reconnecting) {
-        this.setActivity('reconnecting', { startedAt: run.createdAt })
+        this.setActivity('reconnecting', { ...run, startedAt: run.createdAt })
       } else {
         const resumedPhase = run.status === 'waiting_approval' || run.status === 'waiting_input'
           ? run.status
           : run.status === 'queued' ? 'queued' : 'preparing_context'
-        this.setActivity(resumedPhase, { startedAt: run.createdAt })
+        this.setActivity(resumedPhase, { ...run, startedAt: run.createdAt })
       }
       source.addEventListener('run.started', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
         this.streamModelName = payload.modelName || this.streamModelName
         this.setSessionRunStatus(sessionId, 'running')
-        this.setActivity('preparing_context', { startedAt: payload.createdAt })
+        this.setActivity('preparing_context', { ...payload, startedAt: payload.createdAt })
+      })
+      source.addEventListener('run.timing', (event) => {
+        if (this.eventSource !== source) return
+        this.setRunTiming(JSON.parse(event.data))
       })
       source.addEventListener('run.phase', (event) => {
         if (this.eventSource !== source) return
@@ -2081,7 +2146,11 @@ export const useChatStore = defineStore('chat', {
       })
       source.addEventListener('reasoning.updated', (event) => {
         if (this.eventSource !== source) return
-        this.streamReasoning = JSON.parse(event.data).reasoning
+        const payload = JSON.parse(event.data)
+        this.streamReasoning = payload.reasoning
+        if (typeof payload.activityLabel === 'string' && payload.activityLabel.trim()) {
+          this.activity = { ...this.activity, reasoningLabel: payload.activityLabel }
+        }
       })
       source.addEventListener('context.summary.updated', (event) => {
         if (this.eventSource !== source) return
@@ -2156,7 +2225,10 @@ export const useChatStore = defineStore('chat', {
         const payload = JSON.parse(event.data)
         promoteStreamedMessage(payload.message)
         this.runWarnings = []
-        this.setActivity(payload.message?.toolCalls?.length ? 'preparing_tools' : 'finalizing')
+        this.setActivity(
+          payload.message?.toolCalls?.length ? 'preparing_tools' : 'finalizing',
+          { activityLabel: payload.activityLabel }
+        )
         this.refreshSession(sessionId)
       })
       source.addEventListener('message.interrupted', (event) => {
@@ -2264,10 +2336,12 @@ export const useChatStore = defineStore('chat', {
       })
       source.addEventListener('approval.created', (event) => {
         if (this.eventSource !== source) return
-        const approval = JSON.parse(event.data).approval
+        const payload = JSON.parse(event.data)
+        const approval = payload.approval
         this.setActivity('waiting_approval', {
           tool: approval.details?.tool,
-          toolCallId: approval.details?.toolCallId
+          toolCallId: approval.details?.toolCallId,
+          activityLabel: payload.activityLabel
         })
         this.setSessionRunStatus(sessionId, 'waiting_approval')
         useApprovalStore().add(approval)
@@ -2292,10 +2366,12 @@ export const useChatStore = defineStore('chat', {
       })
       source.addEventListener('question.created', (event) => {
         if (this.eventSource !== source) return
-        const question = JSON.parse(event.data).question
+        const payload = JSON.parse(event.data)
+        const question = payload.question
         this.setActivity('waiting_input', {
           tool: 'question',
-          toolCallId: question.toolCallId
+          toolCallId: question.toolCallId,
+          activityLabel: payload.activityLabel
         })
         this.setSessionRunStatus(sessionId, 'waiting_input')
         useQuestionStore().add(question)

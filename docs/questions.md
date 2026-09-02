@@ -12,3 +12,9 @@ grants. Users can also reject a request, which returns a controlled rejected too
 frontend loads pending requests independently of SSE and replaces the normal composer with a
 sequential question dock. Backend restarts expire pending requests and fail their active runs
 through the normal recovery path.
+
+Question delivery is channel-neutral. A run started from a paired messaging endpoint persists a
+versioned question envelope in that endpoint's outbox. Providers may render the envelope with
+native controls and direct-reply text input, but all interactions use the same backend state
+machine and answer validation. Every interaction revalidates the endpoint owner, source message,
+session, run, delivered prompt, and pending request before changing canonical state.

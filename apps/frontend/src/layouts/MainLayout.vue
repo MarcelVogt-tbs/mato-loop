@@ -964,6 +964,9 @@ async function closeNavigation() {
 function refreshSessionsWhenVisible() {
   if (document.visibilityState !== 'visible') return
   if (projects.loadFailed) void loadProjects()
+  if (chat.current?.id && !chat.running) {
+    void chat.refreshSession(chat.current.id, { suppressErrorToast: true }).catch(() => {})
+  }
   for (const [scope, list] of Object.entries(chat.sessionLists)) {
     if (list.loaded) void chat.refreshSessions(null, scope === 'standalone' ? null : scope).catch(() => {})
   }
@@ -996,6 +999,9 @@ async function refreshActiveSessions() {
       approvals.fetchPending({ suppressErrorToast: true }),
       questions.fetchPending({ suppressErrorToast: true })
     ]
+    if (chat.current?.id && !chat.running) {
+      requests.push(chat.refreshSession(chat.current.id, { suppressErrorToast: true }))
+    }
     for (const [scope, list] of Object.entries(chat.sessionLists)) {
       if (list.items.some((session) => ACTIVE_RUN_STATUSES.has(session.activeRunStatus))) {
         requests.push(chat.refreshSessions(

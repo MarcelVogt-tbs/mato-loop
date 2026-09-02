@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import runtime as runtime_module
 from mato_loop_backend.agent.context import _model_tool_calls
+from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
 from mato_loop_backend.agent.runtime import (
     RUN_PHASES,
     AgentRunError,
@@ -36,6 +38,58 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 
 
+def test_run_timing_sums_active_segments_and_excludes_user_waits() -> None:
+    started_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    run = AgentRun(id=uuid4(), session_id=uuid4(), status="queued")
+
+    transition_run_status(run, "running", now=started_at)
+    transition_run_status(run, "waiting_approval", now=started_at + timedelta(seconds=2))
+    transition_run_status(run, "running", now=started_at + timedelta(hours=2))
+    assert run_timing_payload(
+        run, now=started_at + timedelta(hours=2, seconds=1)
+    ) == {
+        "activeDurationMs": 3_000,
+        "activeDurationRunning": True,
+        "activeTimingRevision": 3,
+    }
+    transition_run_status(run, "waiting_input", now=started_at + timedelta(hours=2, seconds=3))
+    transition_run_status(run, "running", now=started_at + timedelta(hours=3))
+    transition_run_status(run, "completed", now=started_at + timedelta(hours=3, seconds=4))
+
+    assert run.active_duration_ms == 9_000
+    assert run.active_started_at is None
+    assert run.active_timing_revision == 6
+
+
+async def test_run_duration_is_merged_into_result_message_metadata() -> None:
+    message = Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        role="assistant",
+        provider_data={
+            "provider": "private",
+            "_matoloop": {"performance": {"providerDurationMs": 400}},
+        },
+    )
+    run = AgentRun(
+        id=uuid4(),
+        session_id=message.session_id,
+        result_message_id=message.id,
+        active_duration_ms=9_000,
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = message
+
+    await AgentRuntime._persist_run_duration(db, run)
+
+    assert message.provider_data == {
+        "provider": "private",
+        "_matoloop": {
+            "performance": {"providerDurationMs": 400, "activeDurationMs": 9_000}
+        },
+    }
+
+
 async def test_run_phase_event_has_stable_language_neutral_payload(monkeypatch) -> None:
     published = []
 
@@ -60,10 +114,11 @@ async def test_run_phase_event_has_stable_language_neutral_payload(monkeypatch) 
     assert published == [
         (
             run_id,
-            {
-                "type": "run.phase",
-                "phase": "processing_tool",
-                "tool": "read_file",
+                {
+                    "type": "run.phase",
+                    "phase": "processing_tool",
+                    "activityLabel": "Datei wird gelesen",
+                    "tool": "read_file",
                 "toolCallId": "call-1",
                 "index": 0,
                 "total": 2,

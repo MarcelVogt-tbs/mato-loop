@@ -5,6 +5,7 @@ from mato_loop_backend.api.routes.agent_profiles import router as agent_profiles
 from mato_loop_backend.api.routes.approvals import router as approvals_router
 from mato_loop_backend.api.routes.auth import router as auth_router
 from mato_loop_backend.api.routes.automations import router as automations_router
+from mato_loop_backend.api.routes.channels import router as channels_router
 from mato_loop_backend.api.routes.execution_agents import router as execution_agents_router
 from mato_loop_backend.api.routes.health import router as health_router
 from mato_loop_backend.api.routes.instance_limits import router as instance_limits_router
@@ -30,6 +31,7 @@ api_router = APIRouter()
 api_router.include_router(health_router, tags=["health"])
 api_router.include_router(auth_router, tags=["auth"])
 api_router.include_router(automations_router, tags=["automations"])
+api_router.include_router(channels_router, tags=["channels"])
 api_router.include_router(users_router, tags=["users"])
 api_router.include_router(execution_agents_router, tags=["execution-agents"])
 api_router.include_router(instance_limits_router, tags=["instance-limits"])

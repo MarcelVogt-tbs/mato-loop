@@ -18,6 +18,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from mato_loop_backend.agent.activity import reasoning_activity_label, run_activity_label
 from mato_loop_backend.agent.context import (
     ContextError,
     ContextManager,
@@ -46,6 +47,7 @@ from mato_loop_backend.agent.research import (
 from mato_loop_backend.agent.research import (
     _without_inline_dollar_math as _without_inline_dollar_math,
 )
+from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
 from mato_loop_backend.agent.runtime_memory import (
     MEMORY_OVERVIEW_MAX_CHARACTERS as MEMORY_OVERVIEW_MAX_CHARACTERS,
 )
@@ -128,6 +130,8 @@ from mato_loop_backend.memory.episode_retrieval import (
 from mato_loop_backend.memory.retrieval import MemoryRetrievalService, MemoryRetrieveMode
 from mato_loop_backend.memory.service import MemoryService
 from mato_loop_backend.message_content import canonical_assistant_content
+from mato_loop_backend.messaging.approvals import enqueue_approval_prompt
+from mato_loop_backend.messaging.questions import enqueue_question_prompt
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
@@ -558,6 +562,13 @@ async def _publish_run_phase(run_id: UUID, phase: str, **details: Any) -> None:
             "type": "run.phase",
             "phase": phase,
             "startedAt": datetime.now(UTC).isoformat(),
+            "activityLabel": run_activity_label(
+                phase,
+                model_request=details.get("modelRequest"),
+                provider_attempt=details.get("providerAttempt"),
+                provider_attempt_total=details.get("providerAttemptTotal"),
+                tool=details.get("tool"),
+            ),
             **details,
         },
     )
@@ -608,10 +619,13 @@ class AgentRuntime:
         )
 
     @staticmethod
-    async def _ensure_user_active(db: AsyncSession, user_id: UUID) -> None:
-        active = await db.scalar(
-            select(UserAccount.is_active).where(UserAccount.id == user_id)
-        )
+    async def _ensure_user_active(
+        db: AsyncSession, user_id: UUID, *, for_update: bool = False
+    ) -> None:
+        statement = select(UserAccount.is_active).where(UserAccount.id == user_id)
+        if for_update:
+            statement = statement.with_for_update()
+        active = await db.scalar(statement)
         if active is False or active is None:
             raise AgentRunError("auth.accountDisabled")
 
@@ -639,7 +653,16 @@ class AgentRuntime:
         model_id_override: UUID | None = None,
         required_skill: SkillDefinition | None = None,
         active_file: dict[str, Any] | None = None,
+        source_type: str = "app",
+        source_provider: str | None = None,
+        source_endpoint_id: UUID | None = None,
     ) -> AgentRun:
+        if (source_type, source_provider, source_endpoint_id) != ("app", None, None) and (
+            source_type != "endpoint"
+            or not source_provider
+            or source_endpoint_id is None
+        ):
+            raise ValueError("invalid message source")
         locked_session = await db.scalar(
             select(ChatSession)
             .where(ChatSession.id == chat_session.id)
@@ -656,7 +679,7 @@ class AgentRuntime:
         )
         if active_run is not None:
             raise AgentRunError("session.runAlreadyActive")
-        await cls._ensure_user_active(db, chat_session.user_id)
+        await cls._ensure_user_active(db, chat_session.user_id, for_update=True)
         ai_settings = await load_effective_ai(db, chat_session.user_id)
         instance_limits = await SettingsStore.load(db, InstanceLimits)
         model_id = model_id_override or chat_session.model_config_id or ai_settings.default_model_id
@@ -714,6 +737,9 @@ class AgentRuntime:
                 if active_file is not None
                 else {}
             ),
+            source_type=source_type,
+            source_provider=source_provider,
+            source_endpoint_id=source_endpoint_id,
         )
         run = AgentRun(
             id=run_id or uuid4(),
@@ -763,7 +789,7 @@ class AgentRuntime:
                 logger.exception("Could not roll back uncertain attachment transaction")
 
         try:
-            await cls._ensure_user_active(db, chat_session.user_id)
+            await cls._ensure_user_active(db, chat_session.user_id, for_update=True)
             await db.flush()
             run.input_message_id = message.id
             if automation_run is not None:
@@ -891,7 +917,7 @@ class AgentRuntime:
         db.add(run)
         commit_task: asyncio.Task[None] | None = None
         try:
-            await cls._ensure_user_active(db, chat_session.user_id)
+            await cls._ensure_user_active(db, chat_session.user_id, for_update=True)
             await db.flush()
             commit_task = asyncio.create_task(db.commit())
             await asyncio.shield(commit_task)
@@ -974,7 +1000,7 @@ class AgentRuntime:
                 try:
                     if run_id in cls._user_cancelled_runs:
                         raise asyncio.CancelledError
-                    run.status = "running"
+                    transition_run_status(run, "running")
                     await db.commit()
                     await run_events.publish(
                         run_id,
@@ -983,16 +1009,24 @@ class AgentRuntime:
                             "runId": str(run_id),
                             "modelName": run.model_name,
                             "createdAt": run.created_at.isoformat() if run.created_at else None,
+                            "activityLabel": run_activity_label("preparing_context"),
+                            **run_timing_payload(run),
                         },
                     )
                     await cls._execute_loop(db, run, visible_response)
-                    run.status = "completed"
+                    transition_run_status(run, "completed")
                     run.completed_at = datetime.now(UTC)
+                    await cls._persist_run_duration(db, run)
                     await db.commit()
                     run_completed = True
                     cls._cancellable_runs.discard(run_id)
                     await run_events.publish(
-                        run_id, {"type": "run.completed", "runId": str(run_id)}
+                        run_id,
+                        {
+                            "type": "run.completed",
+                            "runId": str(run_id),
+                            **run_timing_payload(run),
+                        },
                     )
                     await cls._deliver_run_push(db, run, failed=False)
                 except asyncio.CancelledError:
@@ -1003,7 +1037,7 @@ class AgentRuntime:
                     cancelled_run = await db.get(AgentRun, run_id)
                     interrupted_message = None
                     if cancelled_run is not None:
-                        cancelled_run.status = "cancelled"
+                        transition_run_status(cancelled_run, "cancelled")
                         cancelled_run.completed_at = datetime.now(UTC)
                         if run_id in cls._user_cancelled_runs:
                             reasoning = dict(visible_response.reasoning or {}) or None
@@ -1031,6 +1065,7 @@ class AgentRuntime:
                             db.add(interrupted_message)
                             await db.flush()
                             cancelled_run.result_message_id = interrupted_message.id
+                        await cls._persist_run_duration(db, cancelled_run)
                         await db.commit()
                     if interrupted_message is not None:
                         await run_events.publish(
@@ -1047,11 +1082,21 @@ class AgentRuntime:
                                     "toolCalls": None,
                                     "reasoning": interrupted_message.public_reasoning,
                                     "warnings": list(visible_response.warnings),
+                                    "activeDurationMs": cancelled_run.active_duration_ms,
                                 },
                             },
                         )
                     await run_events.publish(
-                        run_id, {"type": "run.cancelled", "runId": str(run_id)}
+                        run_id,
+                        {
+                            "type": "run.cancelled",
+                            "runId": str(run_id),
+                            **(
+                                run_timing_payload(cancelled_run)
+                                if cancelled_run is not None
+                                else {}
+                            ),
+                        },
                     )
                     raise
                 except Exception as exc:
@@ -1068,12 +1113,13 @@ class AgentRuntime:
                         await cls._terminalize_incomplete_tool_calls(db, session_id)
                         failed_run = await db.get(AgentRun, run_id)
                         if failed_run is not None:
-                            failed_run.status = "failed"
+                            transition_run_status(failed_run, "failed")
                             failed_run.error = public_error.code
                             failed_run.completed_at = datetime.now(UTC)
                             error_message = await cls._persist_error_message(
                                 db, failed_run, public_error
                             )
+                            await cls._persist_run_duration(db, failed_run)
                             await db.commit()
                             failure_committed = True
                     except Exception:
@@ -1087,7 +1133,16 @@ class AgentRuntime:
                             },
                         )
                     await run_events.publish(
-                        run_id, {"type": "run.failed", "error": public_error.payload()}
+                        run_id,
+                        {
+                            "type": "run.failed",
+                            "error": public_error.payload(),
+                            **(
+                                run_timing_payload(failed_run)
+                                if failed_run is not None
+                                else {}
+                            ),
+                        },
                     )
                     if failure_committed and failed_run is not None:
                         await cls._deliver_run_push(db, failed_run, failed=True)
@@ -1981,6 +2036,7 @@ class AgentRuntime:
                     {
                         "type": "reasoning.updated",
                         "reasoning": payload,
+                        "activityLabel": reasoning_activity_label(payload),
                     },
                 )
                 visible_response.reasoning = payload
@@ -2281,12 +2337,16 @@ class AgentRuntime:
                     {
                         "type": "reasoning.updated",
                         "reasoning": public_reasoning,
+                        "activityLabel": reasoning_activity_label(public_reasoning),
                     },
                 )
             await run_events.publish(
                 run.id,
                 {
                     "type": "message.completed",
+                    "activityLabel": run_activity_label(
+                        "preparing_tools" if serialized_calls else "finalizing"
+                    ),
                     "message": {
                         "id": str(assistant.id),
                         "role": "assistant",
@@ -2334,10 +2394,17 @@ class AgentRuntime:
             )
             mutation_results: dict[str, str | None] = {}
             for index, call in enumerate(normalized_calls):
+                bound_tool = (
+                    effective_toolset.tools.get(call.name)
+                    if effective_toolset is not None
+                    else None
+                )
+                tool_label = bound_tool.definition.label if bound_tool else None
                 await _publish_run_phase(
                     run.id,
                     "processing_tool",
                     tool=call.name,
+                    toolLabel=tool_label,
                     toolCallId=call.id,
                     index=index,
                     total=len(normalized_calls),
@@ -3589,6 +3656,7 @@ class AgentRuntime:
                     {
                         "type": "tool.completed",
                         "tool": call.name,
+                        "toolLabel": tool_label,
                         "toolCallId": call.id,
                         "output": tool_result_content[:500],
                         "metadata": metadata,
@@ -3783,6 +3851,24 @@ class AgentRuntime:
         return message
 
     @staticmethod
+    async def _persist_run_duration(db: AsyncSession, run: AgentRun) -> None:
+        if run.result_message_id is None:
+            return
+        message = await db.get(Message, run.result_message_id)
+        if not isinstance(message, Message):
+            return
+        provider_data = dict(message.provider_data or {})
+        runtime_data = provider_data.get("_matoloop")
+        runtime_data = dict(runtime_data) if isinstance(runtime_data, dict) else {}
+        performance = runtime_data.get("performance")
+        performance = dict(performance) if isinstance(performance, dict) else {}
+        performance["activeDurationMs"] = max(0, run.active_duration_ms or 0)
+        message.provider_data = {
+            **provider_data,
+            "_matoloop": {**runtime_data, "performance": performance},
+        }
+
+    @staticmethod
     def _error_message_event(message: Message, error: ErrorDescriptor) -> dict[str, Any]:
         return {
             "id": str(message.id),
@@ -3810,11 +3896,15 @@ class AgentRuntime:
         )
         error = describe_error("agent.backendRestarted")
         for run in runs:
+            duration_complete = run.status != "running"
             await cls._terminalize_incomplete_tool_calls(db, run.session_id)
-            run.status = "failed"
+            run.active_started_at = None
+            transition_run_status(run, "failed")
             run.error = error.code
             run.completed_at = datetime.now(UTC)
             await cls._persist_error_message(db, run, error)
+            if duration_complete:
+                await cls._persist_run_duration(db, run)
         await db.flush()
         return len(runs)
 
@@ -4351,8 +4441,16 @@ class AgentRuntime:
             available_decisions=list(permission.available_decisions),
         )
         db.add(approval)
-        run.status = "waiting_approval"
+        transition_run_status(run, "waiting_approval")
         await db.flush()
+        if run.input_message_id is not None:
+            input_message = await db.get(Message, run.input_message_id)
+            if (
+                input_message is not None
+                and input_message.source_type == "endpoint"
+                and input_message.source_endpoint_id is not None
+            ):
+                await enqueue_approval_prompt(db, approval)
         waiter = approval_coordinator.register(approval.id)
         try:
             await db.commit()
@@ -4360,8 +4458,15 @@ class AgentRuntime:
             approval_coordinator.discard(approval.id)
             raise
         await run_events.publish(
+            run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}
+        )
+        await run_events.publish(
             run.id,
-            {"type": "approval.created", "approval": approval_payload(approval)},
+            {
+                "type": "approval.created",
+                "approval": approval_payload(approval),
+                "activityLabel": run_activity_label("waiting_approval"),
+            },
         )
         await WebPushService.deliver_after_commit(
             chat_session.user_id,
@@ -4385,8 +4490,11 @@ class AgentRuntime:
         finally:
             approval_coordinator.discard(approval.id)
         await db.refresh(approval)
-        run.status = "running"
+        transition_run_status(run, "running")
         await db.commit()
+        await run_events.publish(
+            run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}
+        )
         return decision
 
     @staticmethod
@@ -4423,14 +4531,30 @@ class AgentRuntime:
             questions=questions.model_dump(mode="json")["questions"],
         )
         db.add(request)
-        run.status = "waiting_input"
+        transition_run_status(run, "waiting_input")
         await db.flush()
+        if run.input_message_id is not None:
+            input_message = await db.get(Message, run.input_message_id)
+            if (
+                input_message is not None
+                and input_message.source_type == "endpoint"
+                and input_message.source_endpoint_id is not None
+            ):
+                await enqueue_question_prompt(db, request)
         waiter = question_coordinator.register(request.id)
         try:
             await db.commit()
             await run_events.publish(
                 run.id,
-                {"type": "question.created", "question": question_payload(request)},
+                {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)},
+            )
+            await run_events.publish(
+                run.id,
+                {
+                    "type": "question.created",
+                    "question": question_payload(request),
+                    "activityLabel": run_activity_label("waiting_input"),
+                },
             )
             await WebPushService.deliver_after_commit(
                 chat_session.user_id,
@@ -4452,8 +4576,11 @@ class AgentRuntime:
         finally:
             question_coordinator.discard(request.id)
         await db.refresh(request)
-        run.status = "running"
+        transition_run_status(run, "running")
         await db.commit()
+        await run_events.publish(
+            run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}
+        )
         return answers
 
     @staticmethod

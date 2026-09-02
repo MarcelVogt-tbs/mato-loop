@@ -190,6 +190,17 @@
               color="primary"
               label="Ausgabe-Session als Pflichtbindung schützen"
             />
+            <q-select
+              v-if="form.outputSessionId"
+              v-model="form.deliveryTarget"
+              outlined
+              emit-value
+              map-options
+              label="Zustellkanal"
+              :options="deliveryOptions"
+              :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+              hint="Standard übernimmt den Kanal der ersten Nachricht in der Ausgabe-Session."
+            />
           </q-card-section>
         </q-card>
       </div>
@@ -334,6 +345,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import { useConfirm } from 'src/composables/confirm'
 import { formatDateTimeLocalInput, localDateTimeToIso } from 'src/utils/date-time'
 import { useAutomationStore } from 'stores/automations'
+import { useChannelStore } from 'stores/channels'
 import { useChatStore } from 'stores/chat'
 import { useSkillStore } from 'stores/skills'
 
@@ -344,6 +356,7 @@ const route = useRoute()
 const router = useRouter()
 const { confirm } = useConfirm()
 const automations = useAutomationStore()
+const channels = useChannelStore()
 const chat = useChatStore()
 const skills = useSkillStore()
 const formRef = ref(null)
@@ -360,7 +373,7 @@ let loadToken = 0
 
 const form = reactive({
   name: '', task: '', skillId: null, enabled: true, sourceSessionId: null, copyRuntime: false,
-  outputSessionId: null, outputSessionRequired: false, archiveAfterSuccess: false, schedules: []
+  outputSessionId: null, outputSessionRequired: false, deliveryTarget: 'default', archiveAfterSuccess: false, schedules: []
 })
 const scheduleKindOptions = [
   { label: 'Wiederkehrend', value: 'cron' },
@@ -372,17 +385,47 @@ const canArchiveAfterSuccess = computed(() => (
   form.schedules.length === 1 && form.schedules[0]?.kind === 'once'
 ))
 const sessionOptions = computed(() => {
-  const options = chat.sessionCatalog.map((session) => ({ label: session.title, value: session.id }))
+  const options = chat.sessionCatalog.map((session) => ({
+    label: `${session.title} · ${session.defaultChannel?.type === 'endpoint' && session.defaultChannel.provider === 'telegram' ? 'Telegram' : 'App'}`,
+    value: session.id
+  }))
   if (form.outputSessionId && !options.some((option) => option.value === form.outputSessionId)) {
     options.push({ label: 'Session nicht verfügbar', value: form.outputSessionId })
   }
   return options
+})
+const deliveryOptions = computed(() => {
+  const allowed = new Set(channels.providers.filter((provider) => provider.allowed).map((provider) => provider.provider))
+  const endpoints = channels.endpoints
+    .filter((endpoint) => allowed.has(endpoint.provider)
+      && endpoint.enabled && endpoint.pairingState === 'paired')
+    .map((endpoint) => ({ label: channelEndpointLabel(endpoint), value: endpoint.id }))
+  if (!['default', 'app'].includes(form.deliveryTarget)
+    && !endpoints.some((option) => option.value === form.deliveryTarget)) {
+    const saved = channels.endpoints.find((endpoint) => endpoint.id === form.deliveryTarget)
+    endpoints.unshift({
+      label: saved ? `${channelEndpointLabel(saved)} (nicht verfügbar)` : 'Gespeicherter Kanal nicht verfügbar',
+      value: form.deliveryTarget,
+      disable: true
+    })
+  }
+  return [
+    { label: 'Sessionstandard', value: 'default' },
+    { label: 'MatoLoop-App', value: 'app' },
+    ...endpoints
+  ]
 })
 const skillOptions = computed(() => skills.items.map((skill) => ({ label: skill.name, value: skill.id })))
 const dirty = computed(() => Boolean(savedPayload.value) && JSON.stringify(requestPayload()) !== savedPayload.value)
 
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtfeld'
 const cronRule = (value) => String(value || '').trim().split(/\s+/).length === 5 || 'Cron muss genau fünf Felder enthalten.'
+
+function channelEndpointLabel(endpoint) {
+  const providerName = endpoint.provider
+  const provider = channels.providers.find((item) => item.provider === providerName)
+  return `${endpoint.name} · ${provider?.label || providerName}`
+}
 
 function blankSchedule() {
   return { kind: 'cron', cron: '0 8 * * 1-5', timezone: 'Europe/Berlin', runAt: '', validUntil: '', enabled: true }
@@ -397,6 +440,12 @@ function requestPayload() {
     sourceSessionId: editingAutomation.value && !form.copyRuntime ? null : form.sourceSessionId || null,
     outputSessionId: form.outputSessionId || null,
     outputSessionRequired: Boolean(form.outputSessionId && form.outputSessionRequired),
+    deliveryChannelType: form.deliveryTarget === 'default'
+      ? null
+      : form.deliveryTarget === 'app' ? 'app' : 'endpoint',
+    deliveryEndpointId: !['default', 'app'].includes(form.deliveryTarget)
+      ? form.deliveryTarget
+      : null,
     archiveAfterSuccess: Boolean(canArchiveAfterSuccess.value && form.archiveAfterSuccess),
     schedules: form.schedules.map((schedule) => schedule.kind === 'once'
       ? { runAt: localDateTimeToIso(schedule.runAt), enabled: schedule.enabled }
@@ -420,6 +469,9 @@ function assignForm(automation = null) {
     copyRuntime: false,
     outputSessionId: automation?.outputSessionId || null,
     outputSessionRequired: automation?.outputSessionRequired || false,
+    deliveryTarget: automation?.deliveryChannel?.type === 'endpoint'
+      ? automation.deliveryChannel.endpointId
+      : automation?.deliveryChannel?.type || 'default',
     archiveAfterSuccess: automation?.archiveAfterSuccess || false,
     schedules: automation?.schedules?.map(({ cron, timezone, runAt, validUntil, enabled }) => ({
       kind: runAt ? 'once' : 'cron',
@@ -438,7 +490,10 @@ function addSchedule() {
 }
 
 function clearOutputRequirement(value) {
-  if (!value) form.outputSessionRequired = false
+  if (!value) {
+    form.outputSessionRequired = false
+    form.deliveryTarget = 'default'
+  }
 }
 
 function invalidSection() {
@@ -474,6 +529,7 @@ async function load() {
   section.value = 'task'
   void skills.fetchSkills().catch(() => {})
   void loadSessions()
+  void channels.fetchAll({ suppressErrorToast: true }).catch(() => {})
   try {
     if (isCreate.value) {
       assignForm()

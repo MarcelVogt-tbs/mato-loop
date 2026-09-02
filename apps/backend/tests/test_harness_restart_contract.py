@@ -11,6 +11,7 @@ from mato_loop_backend.api.routes.approvals import ApprovalDecisionRequest, deci
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
+    Message,
     TitleGenerationStatus,
     UserAccount,
 )
@@ -112,9 +113,41 @@ async def test_startup_recovery_persists_one_error_message_per_active_run(monkey
     assert message.error_code == "agent.backendRestarted"
     assert message.error_params is None
     assert message.content == ""
+    assert not message.provider_data
     terminalize.assert_awaited_once_with(db, run.session_id)
     db.flush.assert_awaited()
     db.commit.assert_not_awaited()
+
+
+async def test_startup_recovery_keeps_duration_completed_before_user_wait(monkeypatch) -> None:
+    run = AgentRun(
+        id=uuid4(),
+        session_id=uuid4(),
+        status="waiting_approval",
+        model_name="Test model",
+        trust_level="private",
+        active_duration_ms=2_500,
+    )
+    rows = Mock()
+    rows.all.return_value = [run]
+    messages = []
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = rows
+    db.scalar.return_value = None
+    db.add.side_effect = lambda message: (
+        setattr(message, "id", uuid4()),
+        messages.append(message),
+    )
+    db.get.side_effect = lambda model, _item_id: messages[0] if model is Message else None
+    terminalize = AsyncMock()
+
+    monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", terminalize)
+
+    await AgentRuntime.recover(db)
+
+    assert messages[0].provider_data == {
+        "_matoloop": {"performance": {"activeDurationMs": 2_500}}
+    }
 
 
 async def test_persisted_approval_without_live_waiter_cannot_resume_run(monkeypatch) -> None:

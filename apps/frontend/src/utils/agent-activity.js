@@ -37,6 +37,8 @@ export function runWarningEntries(warnings = [], keyPrefix = 'warning', live = f
 }
 
 export function agentActivityLabel(activity) {
+  const suppliedLabel = typeof activity?.activityLabel === 'string' ? activity.activityLabel.trim() : ''
+  if (suppliedLabel) return activity.activityLabel
   if (activity?.phase === 'waiting_model') {
     if (
       Number.isInteger(activity.providerAttempt)
@@ -86,8 +88,12 @@ export function agentRunPresentation({
     || transcript?.unmatchedApprovals?.[0]
   const question = toolItems.find((item) => item.question)?.question
     || transcript?.unmatchedQuestions?.[0]
-  const reasoningLabel = activity?.phase === 'waiting_model' && !streamContent && streamReasoning
-    ? reasoningStatusLabel(streamReasoning) || 'Nachdenken'
+  const suppliedReasoningLabel = typeof activity?.reasoningLabel === 'string'
+    ? activity.reasoningLabel.trim()
+    : ''
+  const reasoningLabel = activity?.phase === 'waiting_model' && !streamContent
+    && (streamReasoning || suppliedReasoningLabel)
+    ? suppliedReasoningLabel || reasoningStatusLabel(streamReasoning) || 'Nachdenken'
     : ''
   const label = stopping
     ? 'Anfrage wird abgebrochen'
@@ -107,17 +113,22 @@ export function agentRunPresentation({
     announcement = 'Antwort erforderlich'
   } else if (streamContent) {
     announcement = 'Antwort wird erstellt'
-  } else if (streamReasoning) {
+  } else if (streamReasoning || suppliedReasoningLabel) {
     announcement = 'Nachdenken'
   }
   return { showActivity: true, label, summary, announcement }
 }
 
-export function formatActivityDuration(startedAt, now = Date.now()) {
-  if (!startedAt) return '0 s'
-  const started = new Date(startedAt).getTime()
-  if (!Number.isFinite(started)) return '0 s'
-  const seconds = Math.max(0, Math.floor((now - started) / 1000))
+export function activityDurationMs(history, running, now = Date.now()) {
+  if (!Number.isInteger(history?.activeDurationMs) || history.activeDurationMs < 0) return null
+  const activeDurationUpdatedAt = Date.parse(history.activeDurationUpdatedAt || '')
+  return Math.max(0, history.activeDurationMs + (
+    running && Number.isFinite(activeDurationUpdatedAt) ? now - activeDurationUpdatedAt : 0
+  ))
+}
+
+export function formatActivityDuration(milliseconds) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000))
   if (seconds < 60) return `${seconds} s`
   if (seconds < 3600) return `${Math.floor(seconds / 60)} min ${seconds % 60} s`
   if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ${Math.floor((seconds % 3600) / 60)} min`

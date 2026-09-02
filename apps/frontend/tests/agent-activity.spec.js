@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  activityDurationMs,
   agentActivityDisplayKey,
   agentActivityLabel,
   agentRunPresentation,
@@ -20,6 +21,20 @@ describe('agent activity', () => {
       phase: 'waiting_model', modelRequest: 2, providerAttempt: 2, providerAttemptTotal: 3
     })).toBe('Provider-Anfrage: Versuch 2 von 3')
     expect(agentActivityLabel({ phase: 'streaming' })).toBe('Antwort wird erstellt')
+  })
+
+  it('prefers non-empty backend activity labels for every phase kind', () => {
+    expect(agentActivityLabel({
+      phase: 'waiting_model', modelRequest: 2, activityLabel: 'Kanonische Modellaktivität'
+    })).toBe('Kanonische Modellaktivität')
+    expect(agentActivityLabel({
+      phase: 'processing_tool', tool: 'read_file', activityLabel: 'Kanonische Tool-Aktivität'
+    })).toBe('Kanonische Tool-Aktivität')
+    expect(agentActivityLabel({
+      phase: 'unknown', activityLabel: 'Kanonische Aktivität'
+    })).toBe('Kanonische Aktivität')
+    expect(agentActivityLabel({ phase: 'streaming', activityLabel: '   ' }))
+      .toBe('Antwort wird erstellt')
   })
 
   it('reuses readable tool identities without exposing arguments', () => {
@@ -67,6 +82,16 @@ describe('agent activity', () => {
     })).toEqual({
       showActivity: true,
       label: 'Ergebnisse prüfen',
+      summary: '',
+      announcement: 'Nachdenken'
+    })
+    expect(agentRunPresentation({
+      running: true,
+      activity: { ...activity, reasoningLabel: 'Kanonische Denkaktivität' },
+      streamReasoning: { kind: 'summary', text: '**Lokale Denkaktivität**' }
+    })).toEqual({
+      showActivity: true,
+      label: 'Kanonische Denkaktivität',
       summary: '',
       announcement: 'Nachdenken'
     })
@@ -168,12 +193,27 @@ describe('agent activity', () => {
   })
 
   it('formats the total duration in whole seconds', () => {
-    const startedAt = '2026-07-19T12:00:00.000Z'
-    expect(formatActivityDuration(startedAt, Date.parse('2026-07-19T12:00:09.900Z'))).toBe('9 s')
-    expect(formatActivityDuration(startedAt, Date.parse('2026-07-19T12:01:05.000Z'))).toBe('1 min 5 s')
-    expect(formatActivityDuration(startedAt, Date.parse('2026-07-19T14:05:00.000Z'))).toBe('2 h 5 min')
-    expect(formatActivityDuration(startedAt, Date.parse('2026-07-21T15:00:00.000Z'))).toBe('2 T 3 h')
-    expect(formatActivityDuration(null)).toBe('0 s')
+    expect(formatActivityDuration(9_900)).toBe('9 s')
+    expect(formatActivityDuration(65_000)).toBe('1 min 5 s')
+    expect(formatActivityDuration(7_500_000)).toBe('2 h 5 min')
+    expect(formatActivityDuration(183_600_000)).toBe('2 T 3 h')
+    expect(formatActivityDuration(0)).toBe('0 s')
+  })
+
+  it('adds only the current active segment to persisted runtime', () => {
+    const now = Date.parse('2026-07-19T12:00:05.000Z')
+
+    expect(activityDurationMs({ activeDurationMs: 9_000, activeDurationUpdatedAt: null }, true, now))
+      .toBe(9_000)
+    expect(activityDurationMs({
+      activeDurationMs: 9_000,
+      activeDurationUpdatedAt: '2026-07-19T12:00:02.000Z'
+    }, true, now)).toBe(12_000)
+    expect(activityDurationMs({
+      activeDurationMs: 9_000,
+      activeDurationUpdatedAt: '2026-07-19T12:00:02.000Z'
+    }, false, now)).toBe(9_000)
+    expect(activityDurationMs({}, false, now)).toBeNull()
   })
 
   it('maps only known runtime warnings to German activity entries', () => {

@@ -29,6 +29,7 @@ from sqlalchemy.orm import aliased, selectinload
 
 from mato_loop_backend.agent import AgentRuntime
 from mato_loop_backend.agent.permissions import execution_directory_scope
+from mato_loop_backend.agent.run_timing import run_timing_payload
 from mato_loop_backend.agent.runtime import AgentRunError
 from mato_loop_backend.attachments import AttachmentInput
 from mato_loop_backend.automations import automation_impact_token
@@ -423,6 +424,7 @@ async def session_detail_payload(
                 "status": active_run.status,
                 "modelName": active_run.model_name,
                 "createdAt": active_run.created_at.isoformat() if active_run.created_at else None,
+                **run_timing_payload(active_run),
             }
             if active_run
             else None
@@ -564,6 +566,7 @@ async def duplicate_submission_response(
     response = {
         "runId": str(run.id),
         "modelName": run.model_name,
+        **run_timing_payload(run),
         "message": message_serializer(message),
     }
     if requested_session_id is not None:
@@ -846,6 +849,7 @@ async def create_session(
         "message": message_serializer(user_message),
         "runId": str(run.id),
         "modelName": run.model_name,
+        **run_timing_payload(run),
     }
 
 
@@ -946,6 +950,7 @@ async def send_message(
     return {
         "runId": str(run.id),
         "modelName": run.model_name,
+        **run_timing_payload(run),
         "message": message_serializer(user_message),
     }
 
@@ -1448,6 +1453,8 @@ async def delete_session(
     if automation_mode == "unlink":
         for automation in linked_automations:
             automation.output_session_id = None
+            automation.delivery_channel_type = None
+            automation.delivery_endpoint_id = None
             automation.revision += 1
     execution_sessions = []
     if automation_mode == "deleteAutomations":

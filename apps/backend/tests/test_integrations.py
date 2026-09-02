@@ -297,7 +297,7 @@ async def test_personal_policy_read_exposes_no_integration_configuration(
 
     assert result == {
         "enabled": True,
-        "allowedAdapterTypes": ["caldav", "git", "imap_smtp", "opencode"],
+            "allowedAdapterTypes": ["caldav", "git", "imap_smtp", "opencode"],
     }
 
 

@@ -180,6 +180,9 @@ def test_send_message_http_response_accepts_nested_message(monkeypatch) -> None:
     assert response.json() == {
         "runId": str(run.id),
         "modelName": None,
+        "activeDurationMs": 0,
+        "activeDurationRunning": False,
+        "activeTimingRevision": 0,
         "message": message_payload(message),
     }
 
@@ -887,6 +890,7 @@ async def test_session_detail_contains_active_run_and_aggregate_metrics() -> Non
         session_id=session_id,
         status="waiting_approval",
         model_name="Aktives Modell",
+        active_duration_ms=1_500,
         created_at=created_at,
     )
     db = AsyncMock(spec=AsyncSession)
@@ -926,6 +930,9 @@ async def test_session_detail_contains_active_run_and_aggregate_metrics() -> Non
         "status": "waiting_approval",
         "modelName": "Aktives Modell",
         "createdAt": created_at.isoformat(),
+        "activeDurationMs": 1_500,
+        "activeDurationRunning": False,
+        "activeTimingRevision": 0,
     }
     assert result["userRequestCount"] == 47
     assert result["latestModelContext"] == {
@@ -1169,6 +1176,39 @@ def test_message_payload_exposes_only_public_reasoning() -> None:
     assert payload["generationStatus"] == "completed"
     assert "private-state" not in str(payload)
     assert payload["attachments"] == []
+
+
+@pytest.mark.parametrize("duration", [False, -1, 1.5, "1000"])
+def test_message_payload_exposes_only_valid_active_duration(duration) -> None:
+    message = Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        role="assistant",
+        content="Antwort",
+        provider_data={
+            "_matoloop": {"performance": {"activeDurationMs": duration}}
+        },
+    )
+
+    assert message_payload(message)["activeDurationMs"] is None
+
+
+def test_message_payload_exposes_active_duration() -> None:
+    message = Message(
+        id=uuid4(),
+        session_id=uuid4(),
+        role="assistant",
+        content="Antwort",
+        provider_data={
+            "privateProviderValue": "must-not-leak",
+            "_matoloop": {"performance": {"activeDurationMs": 9_000}},
+        },
+    )
+
+    payload = message_payload(message)
+
+    assert payload["activeDurationMs"] == 9_000
+    assert "must-not-leak" not in str(payload)
 
 
 def test_message_payload_canonicalizes_historical_assistant_markdown() -> None:

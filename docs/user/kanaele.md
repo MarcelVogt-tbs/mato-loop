@@ -1,0 +1,24 @@
+# Kanäle
+
+Kanäle verbinden persönliche Messenger mit MatoLoop. Sie sind keine Integrationen und stellen dem Agenten keine zusätzlichen Tools oder Zugriffsrechte bereit. Jeder Benutzer verwaltet ausschließlich die eigenen Kanalinstanzen und Zugangsdaten unter **Einstellungen > Kanäle**.
+
+## Telegram verbinden
+
+Erstellen Sie mit BotFather einen persönlichen Telegram-Bot. Öffnen Sie unter **Einstellungen > Kanäle** den Tab **Kanalinstanzen**, wählen Sie **Kanal hinzufügen** und anschließend den Anbieter **Telegram**. MatoLoop speichert den eingegebenen Bot-Token verschlüsselt und zeigt ihn später nicht wieder an. Öffnen Sie anschließend den angezeigten Telegram-Link oder senden Sie `/start KOPPLUNGSCODE` in einem privaten Chat an den Bot. Gruppen- und Kanalnachrichten werden nicht verarbeitet.
+
+Nach der Kopplung können Sie dem Bot Text, Bilder, Dateien, Audio, Video und Sprachnachrichten senden. Eine Sprachnachricht wird wie ein Diktat in der Weboberfläche mit dem konfigurierten Transkriptionsmodell in Text umgewandelt. Der erkannte Text wird als Ihre Anfrage gespeichert; die ursprüngliche Aufnahme wird nach erfolgreicher Transkription nicht zusätzlich an die Nachricht angehängt.
+
+Während der Agent arbeitet, zeigt Telegram zunächst den Schreibstatus und anschließend die aktuelle Reasoning-Zusammenfassung, Tool-Aktivität und entstehende, formatierte Antwort als temporären Entwurf. Die Aktivität verwendet dieselben Bezeichnungen wie die MatoLoop-Oberfläche, zum Beispiel **Datei wird gelesen**. Ohne veröffentlichte Reasoning-Zusammenfassung erscheint nur **Nachdenken**. Tool-Argumente und -Ergebnisse erscheinen dort nicht. Wartet der Agent auf eine Freigabe oder Antwort, bleibt dieser Zustand sichtbar.
+
+Normale Agent-Freigaben aus einer Telegram-Anfrage erscheinen mit den jeweils zulässigen Schaltflächen direkt im privaten Chat. MatoLoop prüft eine Auswahl erneut gegen den gekoppelten Benutzer, die ursprüngliche Nachricht, Session, Lauf und noch offene Freigabe. Freigaben zum Erstellen oder Bearbeiten eines Skill-Entwurfs müssen wegen der exakten Dateirevision weiterhin in MatoLoop geprüft und erlaubt werden; in Telegram können Sie diese Anfrage ablehnen. Terminalbestätigungen bleiben im verbundenen Terminal.
+
+Strukturierte Agent-Rückfragen erscheinen ebenfalls direkt im privaten Chat. Wählen Sie Antworten
+über die Schaltflächen aus und wechseln Sie mit **Zurück** oder **Weiter** zwischen mehreren Fragen.
+Eigene Antworten und Freitext senden Sie als direkte Antwort auf die Fragen-Nachricht. Mit
+**Antworten senden** schließen Sie die Rückfrage ab; **Ablehnen** beendet sie ohne Antworten.
+
+Die endgültige Antwort wird als normale Nachricht zugestellt und zusammen mit der Anfrage vollständig in der zugehörigen MatoLoop-Session gespeichert. Telegram stellt Überschriften, Hervorhebungen, Listen, Links, Zitate und Code passend dar; komplexere Inhalte wie Tabellen, Mathematik oder Mermaid-Diagramme erscheinen in einer lesbaren Text- oder Codeform. Mit `/new` beginnen Sie eine neue Session, `/sessions` zeigt zuletzt verwendete Sessions und `/use <ID>` wechselt die Session. `/current`, `/stop`, `/unlink` und `/help` stehen ebenfalls zur Verfügung.
+
+## Administrative Freigabe
+
+Telegram ist bei einer neuen Installation zunächst erlaubt. Administratoren können den Anbieter unter **Einstellungen > Kanäle > Verfügbare Kanäle** global sperren oder erneut erlauben. Während einer Sperrung bleiben persönliche Telegram-Instanzen und ihre Automationseinstellungen gespeichert, werden aber ausgeblendet und nicht verwendet. Automationsläufe fallen in dieser Zeit auf die MatoLoop-App zurück; bereits wartende Telegram-Zustellungen werden nicht später nachgesendet.

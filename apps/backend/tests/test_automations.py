@@ -569,6 +569,29 @@ async def test_third_delivery_failure_is_terminal_and_notifies_once(
     assert push.notification.target.run_id == run.id
 
 
+async def test_delivery_retry_rejects_delivery_still_in_progress() -> None:
+    run = AutomationRun(
+        id=uuid4(),
+        automation_id=uuid4(),
+        automation_revision=1,
+        trigger="manual",
+        status="completed",
+        definition_snapshot={},
+        output_session_id=uuid4(),
+        delivery_status="pending",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = run
+
+    with pytest.raises(AutomationError) as exc_info:
+        await AutomationService.retry_delivery(
+            db, run.automation_id, run.id, uuid4()
+        )
+
+    assert exc_info.value.code == "automation.deliveryUnavailable"
+    db.scalar.assert_awaited_once()
+
+
 def test_notification_exposes_automation_run_target() -> None:
     automation = Automation(
         id=uuid4(),

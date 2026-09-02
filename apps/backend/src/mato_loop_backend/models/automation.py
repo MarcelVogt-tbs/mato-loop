@@ -31,6 +31,14 @@ class Automation(Base):
             "NOT output_session_required OR output_session_id IS NOT NULL",
             name="required_output_session_present",
         ),
+        CheckConstraint(
+            "(output_session_id IS NULL AND delivery_channel_type IS NULL "
+            "AND delivery_endpoint_id IS NULL) OR "
+            "(output_session_id IS NOT NULL AND (delivery_channel_type IS NULL OR "
+            "(delivery_channel_type = 'app' AND delivery_endpoint_id IS NULL) OR "
+            "(delivery_channel_type = 'endpoint' AND delivery_endpoint_id IS NOT NULL)))",
+            name="automation_delivery_channel_valid",
+        ),
         Index("ix_automations_user_updated", "user_id", "updated_at", "id"),
     )
 
@@ -46,6 +54,10 @@ class Automation(Base):
     )
     output_session_required: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    delivery_channel_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    delivery_endpoint_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("messaging_endpoints.id", ondelete="SET NULL"), nullable=True, index=True
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)
     task: Mapped[str] = mapped_column(Text, nullable=False)
@@ -136,6 +148,13 @@ class AutomationRun(Base):
             name="delivery_status_valid",
         ),
         CheckConstraint("delivery_attempts >= 0", name="delivery_attempts_nonnegative"),
+        CheckConstraint(
+            "(delivery_channel_type = 'app' AND delivery_endpoint_id IS NULL "
+            "AND delivery_destination IS NULL) OR "
+            "(delivery_channel_type = 'endpoint' AND delivery_endpoint_id IS NOT NULL "
+            "AND delivery_destination IS NOT NULL)",
+            name="automation_run_delivery_channel_valid",
+        ),
         Index("ix_automation_runs_status_created", "status", "created_at", "id"),
         Index(
             "ix_automation_runs_delivery_due",
@@ -168,6 +187,13 @@ class AutomationRun(Base):
     output_message_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("messages.id", ondelete="SET NULL", use_alter=True), nullable=True, unique=True
     )
+    delivery_channel_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="app", server_default="app"
+    )
+    delivery_endpoint_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("messaging_endpoints.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    delivery_destination: Mapped[str | None] = mapped_column(String(128), nullable=True)
     delivery_status: Mapped[str] = mapped_column(
         String(30), nullable=False, default="not_requested"
     )

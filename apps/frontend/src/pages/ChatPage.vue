@@ -109,7 +109,7 @@
               tabindex="-1"
             >
             <div v-if="message.role === 'user' || message.showAgentLabel" class="chat-message__label">
-              <span>{{ message.role === 'user' ? 'Du' : identity.displayName }}</span>
+              <span>{{ message.role === 'user' ? userMessageLabel(message) : identity.displayName }}</span>
             </div>
             <template v-if="message.kind === 'runtime_error' && message.error">
               <q-banner rounded class="chat-runtime-error app-surface-tonal" role="alert">
@@ -453,11 +453,15 @@ const bottomThreshold = 64
 const liveWorkHistory = computed(() => ({
   entries: [],
   observedDurationMs: null,
-  startedAt: [...(chat.current?.messages || [])].reverse()
-    .find((message) => message.role === 'user')?.createdAt || chat.activity.startedAt,
-  completedAt: null
+  activeDurationMs: chat.activity.activeDurationMs,
+  activeDurationUpdatedAt: chat.activity.activeDurationUpdatedAt
 }))
 const emptyProcessOutputs = {}
+const userMessageLabel = (message) => (
+  message.source?.type === 'endpoint' && message.source.provider === 'telegram'
+    ? 'Du · Telegram'
+    : 'Du'
+)
 const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
 ))

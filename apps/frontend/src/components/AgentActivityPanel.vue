@@ -198,7 +198,11 @@ import {
   toolFileActions,
   toolFileAttachment
 } from 'src/utils/attachments'
-import { formatActivityDuration, runWarningEntries } from 'src/utils/agent-activity'
+import {
+  activityDurationMs,
+  formatActivityDuration,
+  runWarningEntries
+} from 'src/utils/agent-activity'
 import { groupWorkHistoryEntries, splitLiveWorkHistory } from 'src/utils/chat-transcript'
 import {
   reasoningBlocks,
@@ -225,8 +229,6 @@ const now = ref(Date.now())
 const historyExpanded = ref(false)
 const previousHistoryExpanded = ref(false)
 let timer = null
-let pausedAt = null
-let pausedDuration = 0
 const expansionDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 180
 const preparedEntries = computed(() => [
   ...(props.history?.entries || []),
@@ -279,12 +281,8 @@ const warningItems = computed(() => [
   ...entries.value.filter((entry) => entry.type === 'warning')
 ])
 const totalDuration = computed(() => {
-  if (!props.history?.startedAt || (!props.running && !props.history?.completedAt)) return null
-  const startedAt = new Date(props.history?.startedAt).getTime()
-  const completedAt = props.running ? now.value : new Date(props.history?.completedAt).getTime()
-  return Number.isFinite(startedAt) && Number.isFinite(completedAt)
-    ? formatActivityDuration(startedAt, completedAt - pausedDuration)
-    : null
+  const duration = activityDurationMs(props.history, props.running, now.value)
+  return duration === null ? null : formatActivityDuration(duration)
 })
 const headerTitle = computed(() => props.running
   ? props.presentation?.label || 'Agent arbeitet'
@@ -337,29 +335,18 @@ function updateTimer(running) {
   timer = running ? setInterval(() => { now.value = Date.now() }, 1000) : null
 }
 
-function syncTimer(running, wasRunning = false) {
-  const timestamp = Date.now()
-  if (running && !wasRunning) {
-    pausedAt = null
-    pausedDuration = 0
-  }
-  const paused = running && ['waiting_approval', 'waiting_input'].includes(props.activity?.phase)
-  if (paused && pausedAt === null) pausedAt = timestamp
-  if (!paused && pausedAt !== null) {
-    pausedDuration += timestamp - pausedAt
-    pausedAt = null
-  }
-  now.value = timestamp
-  updateTimer(running && !paused)
+function syncTimer() {
+  now.value = Date.now()
+  updateTimer(props.running && Boolean(props.history?.activeDurationUpdatedAt))
 }
 
-watch([() => props.running, () => props.activity?.phase], ([running], [wasRunning]) => {
-  syncTimer(running, wasRunning)
+watch([() => props.running, () => props.history?.activeDurationUpdatedAt], ([running], [wasRunning]) => {
+  syncTimer()
   if (wasRunning && !running) {
     historyExpanded.value = false
     previousHistoryExpanded.value = false
   }
 })
-onMounted(() => syncTimer(props.running))
+onMounted(syncTimer)
 onBeforeUnmount(() => clearInterval(timer))
 </script>

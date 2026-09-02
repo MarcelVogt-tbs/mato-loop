@@ -1134,6 +1134,31 @@ describe('chat drafts', () => {
     expect(chat.current.nextMessageCursor).toBe('older-cursor')
   })
 
+  it('discovers an externally started run while refreshing the open session', async () => {
+    global.EventSource = EventSourceMock
+    api.get.mockResolvedValue({
+      data: {
+        id: 'session-1',
+        messages: [{ id: 'telegram-1', role: 'user', content: 'Von Telegram' }],
+        contextSummaries: [],
+        activeRun: { id: 'run-1', status: 'running' }
+      }
+    })
+    const chat = useChatStore()
+    chat.selectedSessionId = 'session-1'
+    chat.current = { id: 'session-1', messages: [], contextSummaries: [] }
+
+    await chat.refreshSession('session-1', { suppressErrorToast: true })
+
+    expect(chat.current.messages).toEqual([
+      { id: 'telegram-1', role: 'user', content: 'Von Telegram' }
+    ])
+    expect(api.get).toHaveBeenCalledWith('/sessions/session-1', expect.objectContaining({
+      suppressErrorToast: true
+    }))
+    expect(chat.eventSource.url).toBe('/api/sessions/session-1/runs/run-1/events')
+  })
+
   it('streams and promotes a canonical context summary', async () => {
     global.EventSource = EventSourceMock
     const chat = useChatStore()
@@ -1326,7 +1351,10 @@ describe('chat drafts', () => {
           id: 'run-1',
           status: 'running',
           modelName: 'Aktives Modell',
-          createdAt: '2026-07-19T12:00:00Z'
+          createdAt: '2026-07-19T12:00:00Z',
+          activeDurationMs: 1_500,
+          activeDurationRunning: true,
+          activeTimingRevision: 1
         }
       }
     })
@@ -1339,8 +1367,10 @@ describe('chat drafts', () => {
     expect(chat.eventSource.url).toBe('/api/sessions/session-1/runs/run-1/events')
     expect(chat.activity).toMatchObject({
       phase: 'preparing_context',
-      startedAt: '2026-07-19T12:00:00Z'
+      startedAt: '2026-07-19T12:00:00Z',
+      activeDurationMs: 1_500
     })
+    expect(chat.activity.activeDurationUpdatedAt).toEqual(expect.any(String))
   })
 
   it('tracks model, streaming and interaction phases from SSE', () => {
@@ -1359,7 +1389,10 @@ describe('chat drafts', () => {
     const source = EventSourceMock.instances[0]
     source.emit('run.started', {
       modelName: 'Streaming-Modell',
-      createdAt: '2026-07-19T12:00:00Z'
+      createdAt: '2026-07-19T12:00:00Z',
+      activeDurationMs: 0,
+      activeDurationRunning: true,
+      activeTimingRevision: 1
     })
     expect(chat.activity.phase).toBe('preparing_context')
     expect(chat.streamModelName).toBe('Streaming-Modell')
@@ -1403,8 +1436,27 @@ describe('chat drafts', () => {
     })
     expect(chat.sessions[0].activeRunStatus).toBe('waiting_approval')
 
+    source.emit('run.timing', {
+      activeDurationMs: 2_500,
+      activeDurationRunning: false,
+      activeTimingRevision: 2
+    })
+    expect(chat.activity).toMatchObject({ activeDurationMs: 2_500, activeDurationUpdatedAt: null })
+    source.emit('run.timing', {
+      activeDurationMs: 0,
+      activeDurationRunning: true,
+      activeTimingRevision: 1
+    })
+    expect(chat.activity).toMatchObject({ activeDurationMs: 2_500, activeDurationUpdatedAt: null })
+
     source.emit('approval.resolved', {})
     expect(chat.sessions[0].activeRunStatus).toBe('running')
+    source.emit('run.timing', {
+      activeDurationMs: 2_500,
+      activeDurationRunning: true,
+      activeTimingRevision: 3
+    })
+    expect(chat.activity.activeDurationUpdatedAt).toEqual(expect.any(String))
 
     source.emit('question.created', {
       question: { id: 'question-1', toolCallId: 'call-2', questions: [] }

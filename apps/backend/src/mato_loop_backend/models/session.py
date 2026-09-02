@@ -163,6 +163,17 @@ class Message(Base):
             "(error_code IS NOT NULL AND role = 'assistant' AND error_run_id IS NOT NULL)",
             name="message_error_valid",
         ),
+        CheckConstraint(
+            "(role <> 'user' AND source_type IS NULL AND source_provider IS NULL "
+            "AND source_endpoint_id IS NULL) OR "
+            "(role = 'user' AND source_type IS NULL AND source_provider IS NULL "
+            "AND source_endpoint_id IS NULL) OR "
+            "(role = 'user' AND source_type = 'app' AND source_provider IS NULL "
+            "AND source_endpoint_id IS NULL) OR "
+            "(role = 'user' AND source_type = 'endpoint' AND source_provider IS NOT NULL "
+            "AND source_endpoint_id IS NOT NULL)",
+            name="message_source_valid",
+        ),
         UniqueConstraint("error_run_id"),
     )
 
@@ -182,6 +193,9 @@ class Message(Base):
     tool_call_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     provider_data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    source_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    source_provider: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    source_endpoint_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
     public_reasoning: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
     error_params: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)

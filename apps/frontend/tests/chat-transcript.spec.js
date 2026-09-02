@@ -276,7 +276,8 @@ describe('chat transcript', () => {
       { id: 'result-2', role: 'tool', toolCallId: 'call-2', content: 'Seite' },
       {
         id: 'assistant-3', role: 'assistant', content: 'Ergebnis', toolCalls: [],
-        modelName: 'Antwortmodell', trustLevel: 'public', createdAt: '2026-08-06T12:00:03Z'
+        modelName: 'Antwortmodell', trustLevel: 'public', createdAt: '2026-08-06T12:00:03Z',
+        activeDurationMs: 2_400
       }
     ]
 
@@ -286,6 +287,8 @@ describe('chat transcript', () => {
       .toEqual(['user-1', 'assistant-1', 'assistant-3'])
     expect(transcript.messages[1].workHistory).toMatchObject({
       observedDurationMs: 500,
+      activeDurationMs: 2_400,
+      activeDurationUpdatedAt: null,
       startedAt: '2026-08-06T12:00:00Z',
       completedAt: '2026-08-06T12:00:03Z'
     })
@@ -311,6 +314,19 @@ describe('chat transcript', () => {
       createdAt: '2026-08-06T12:00:03Z',
       modelName: 'Antwortmodell',
       trustLevel: 'private'
+    })
+  })
+
+  it('creates duration metadata for a plain completed answer', () => {
+    const transcript = buildChatTranscript([
+      { id: 'user-1', role: 'user', content: 'Hallo' },
+      { id: 'assistant-1', role: 'assistant', content: 'Hi', activeDurationMs: 750 }
+    ])
+
+    expect(transcript.messages[1].workHistory).toMatchObject({
+      entries: [],
+      activeDurationMs: 750,
+      activeDurationUpdatedAt: null
     })
   })
 
