@@ -4474,13 +4474,11 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "question",
-            "Ask user questions blocking one action in one call. Each needs a unique id, short "
-            "header, question, and type: free_text, single_choice, or multiple_choice. Options need a "
-            "label; description is optional. allow_custom adds the custom choice; never add Other. "
-            "State defaults and pass exact lists in default_answers; empty answers accept them. Never "
-            "use question for console commands, output, or permission. Use shell_run for requested "
-            "execution only; otherwise put commands and output requests in assistant text. Host "
-            "handles approval. Call this tool alone.",
+            "Ask 1-5 blocking questions in one call. Preserve each requested answer mode: free_text "
+            "is unrestricted text without options; single_choice is exactly one of 2-12 labeled "
+            "options; multiple_choice is one or more of 2-12 labeled options. A choice is never "
+            "free_text. Descriptions are optional; allow_custom replaces Other. Put exact fallback "
+            "lists in default_answers. Never use for commands, output, or permissions; call alone.",
             QuestionArguments,
             _question,
             group="agent",

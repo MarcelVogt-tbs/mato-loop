@@ -15,7 +15,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Bot, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import InvalidToken, NetworkError, RetryAfter, TelegramError, TimedOut
 
@@ -905,7 +905,7 @@ def _question_markup(envelope: MessagingQuestionEnvelope) -> InlineKeyboardMarku
                 ),
             )
         )
-    if not envelope.awaiting_text:
+    if not _question_expects_text(envelope):
         navigation.append(
             InlineKeyboardButton(
                 "Antworten senden"
@@ -921,7 +921,8 @@ def _question_markup(envelope: MessagingQuestionEnvelope) -> InlineKeyboardMarku
                 ),
             )
         )
-    rows.append(navigation)
+    if navigation:
+        rows.append(navigation)
     rows.append(
         [
             InlineKeyboardButton(
@@ -940,6 +941,66 @@ def _render_question(envelope: MessagingQuestionEnvelope) -> RenderedChannelText
         "telegram", _question_prompt(envelope), content_format="plain"
     )
     return parts[-1] if parts else RenderedChannelText("")
+
+
+def _question_expects_text(envelope: MessagingQuestionEnvelope) -> bool:
+    question = envelope.questions[envelope.current_index]
+    return envelope.awaiting_text or (
+        question.type == "free_text" and not envelope.answers.get(question.id)
+    )
+
+
+async def _send_question_reply_prompt(
+    bot: Bot, chat_id: str, envelope: MessagingQuestionEnvelope
+) -> str | None:
+    if not _question_expects_text(envelope):
+        return None
+    placeholder = envelope.questions[envelope.current_index].placeholder or "Antwort eingeben"
+    sent = await bot.send_message(
+        chat_id=chat_id,
+        text="Antwort eingeben:",
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder=_telegram_button_text(placeholder),
+        ),
+    )
+    return str(sent.message_id)
+
+
+def _question_main_message_id(
+    outbox: MessagingOutbox, envelope: MessagingQuestionEnvelope
+) -> str | None:
+    message_ids = outbox.external_message_ids
+    if not message_ids:
+        return None
+    if _question_expects_text(envelope) and len(message_ids) > 1:
+        return message_ids[-2]
+    return message_ids[-1]
+
+
+async def _track_question_messages(
+    db: AsyncSession,
+    question_id: UUID,
+    main_message_id: str,
+    reply_message_id: str | None,
+) -> None:
+    outbox = await db.scalar(
+        select(MessagingOutbox)
+        .where(MessagingOutbox.deduplication_key == f"question:{question_id}")
+        .with_for_update()
+    )
+    if (
+        outbox is None
+        or outbox.status != "delivered"
+        or main_message_id not in outbox.external_message_ids
+    ):
+        await db.rollback()
+        return
+    outbox.external_message_ids = [
+        main_message_id,
+        *([reply_message_id] if reply_message_id is not None else []),
+    ]
+    await db.commit()
 
 
 def _question_result_text(
@@ -1012,7 +1073,7 @@ async def _update_question_message(
     *,
     callback_query_id: str | None = None,
     response: str = "",
-) -> None:
+) -> str | None:
     try:
         async with Bot(token=token) as bot:
             if callback_query_id is not None:
@@ -1025,7 +1086,7 @@ async def _update_question_message(
                     message_id=int(source_message_id),
                     reply_markup=None,
                 )
-                return
+                return None
             rendered = _render_question(result.envelope)
             await bot.edit_message_text(
                 chat_id=chat_id,
@@ -1034,8 +1095,10 @@ async def _update_question_message(
                 parse_mode=ParseMode.HTML if rendered.syntax == TELEGRAM_HTML else None,
                 reply_markup=_question_markup(result.envelope),
             )
+            return await _send_question_reply_prompt(bot, chat_id, result.envelope)
     except (InvalidToken, NetworkError, TelegramError, TimedOut, ValueError):
         logger.warning("Telegram question update failed")
+        return None
 
 
 async def process_inbox(inbox_id: UUID) -> UUID | None:
@@ -1121,7 +1184,7 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
                 )
                 if token is not None:
                     if result is not None:
-                        await _update_question_message(
+                        reply_message_id = await _update_question_message(
                             token,
                             chat_id,
                             source_message_id,
@@ -1129,6 +1192,13 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
                             callback_query_id=callback_query_id,
                             response=response,
                         )
+                        if result.changed:
+                            await _track_question_messages(
+                                db,
+                                question_id,
+                                source_message_id,
+                                reply_message_id,
+                            )
                     else:
                         try:
                             async with Bot(token=token) as bot:
@@ -1200,6 +1270,9 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
             except ValidationError:
                 question_envelope = None
             if question_envelope is not None:
+                main_message_id = _question_main_message_id(
+                    question_outbox, question_envelope
+                )
                 try:
                     token = await endpoint_token(db, endpoint)
                 except TelegramServiceError:
@@ -1212,13 +1285,24 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
                     QuestionInteraction(action="text", text=text.strip()),
                     reply_to_message_id,
                 )
-                if token is not None and result is not None:
-                    await _update_question_message(
+                if (
+                    token is not None
+                    and result is not None
+                    and main_message_id is not None
+                ):
+                    reply_message_id = await _update_question_message(
                         token,
                         str(inbox.payload["chatId"]),
-                        reply_to_message_id,
+                        main_message_id,
                         result,
                     )
+                    if result.changed:
+                        await _track_question_messages(
+                            db,
+                            question_envelope.question_id,
+                            main_message_id,
+                            reply_message_id,
+                        )
                 return None
         approval_command = parse_approval_command(text)
         if approval_command is not None:
@@ -1246,6 +1330,37 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
         if await _command(db, inbox, endpoint, text):
             inbox.status = "completed"
             inbox.processing_at = None
+            await db.commit()
+            return None
+        waiting_for_answer = (
+            await db.scalar(
+                select(AgentRun.id)
+                .join(Message, Message.id == AgentRun.input_message_id)
+                .where(
+                    AgentRun.session_id == endpoint.current_session_id,
+                    AgentRun.status == "waiting_input",
+                    Message.source_endpoint_id == endpoint.id,
+                )
+                .limit(1)
+            )
+            if endpoint.current_session_id is not None
+            else None
+        )
+        if waiting_for_answer is not None:
+            _enqueue_text(
+                db,
+                endpoint,
+                destination=str(inbox.payload["chatId"]),
+                key=f"question-reply-required:{inbox.id}",
+                text=(
+                    "Bitte nutze das eingeblendete Antwortfeld oder Telegrams Funktion "
+                    "„Antworten“ an der Fragen-Nachricht."
+                ),
+                inbox_id=inbox.id,
+            )
+            inbox.status = "completed"
+            inbox.processing_at = None
+            inbox.error_code = None
             await db.commit()
             return None
         existing_run = await db.get(AgentRun, inbox.id)
@@ -1860,6 +1975,13 @@ async def deliver_outbox(outbox_id: UUID) -> None:
                         reply_markup=reply_markup if index == len(parts) - 1 else None,
                     )
                     message_ids.append(str(sent.message_id))
+                if question_payload is not None:
+                    message_ids = [message_ids[-1]]
+                    reply_message_id = await _send_question_reply_prompt(
+                        bot, destination, question_payload
+                    )
+                    if reply_message_id is not None:
+                        message_ids.append(reply_message_id)
                 for path, kind, filename in attachments:
                     message_ids.append(
                         str(

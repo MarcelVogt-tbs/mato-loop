@@ -289,7 +289,8 @@ async def test_telegram_callback_resolves_question_interaction(monkeypatch) -> N
         return result, "Auswahl aktualisiert."
 
     process = AsyncMock(side_effect=process_interaction)
-    update = AsyncMock()
+    update = AsyncMock(return_value=None)
+    track = AsyncMock()
     monkeypatch.setattr(telegram, "AsyncSessionFactory", SessionContext)
     monkeypatch.setattr(
         telegram, "channel_provider_allowed", AsyncMock(return_value=True)
@@ -297,6 +298,7 @@ async def test_telegram_callback_resolves_question_interaction(monkeypatch) -> N
     monkeypatch.setattr(telegram, "endpoint_token", AsyncMock(return_value="token"))
     monkeypatch.setattr(telegram, "_process_question_interaction", process)
     monkeypatch.setattr(telegram, "_update_question_message", update)
+    monkeypatch.setattr(telegram, "_track_question_messages", track)
 
     assert await telegram.process_inbox(inbox.id) is None
 
@@ -312,6 +314,7 @@ async def test_telegram_callback_resolves_question_interaction(monkeypatch) -> N
         callback_query_id="callback-1",
         response="Auswahl aktualisiert.",
     )
+    track.assert_awaited_once_with(db, question_id, "42", None)
     assert inbox.status == "completed"
 
 
@@ -348,7 +351,7 @@ async def test_telegram_direct_reply_answers_question_text(monkeypatch) -> None:
         deduplication_key=f"question:{uuid4()}",
         payload={},
         status="delivered",
-        external_message_ids=["42"],
+        external_message_ids=["41", "42"],
     )
     envelope = MessagingQuestionEnvelope.model_validate(
         {
@@ -393,7 +396,8 @@ async def test_telegram_direct_reply_answers_question_text(monkeypatch) -> None:
         return result, "Auswahl aktualisiert."
 
     process = AsyncMock(side_effect=process_interaction)
-    update = AsyncMock()
+    update = AsyncMock(return_value=None)
+    track = AsyncMock()
     monkeypatch.setattr(telegram, "AsyncSessionFactory", SessionContext)
     monkeypatch.setattr(
         telegram, "channel_provider_allowed", AsyncMock(return_value=True)
@@ -401,6 +405,7 @@ async def test_telegram_direct_reply_answers_question_text(monkeypatch) -> None:
     monkeypatch.setattr(telegram, "endpoint_token", AsyncMock(return_value="token"))
     monkeypatch.setattr(telegram, "_process_question_interaction", process)
     monkeypatch.setattr(telegram, "_update_question_message", update)
+    monkeypatch.setattr(telegram, "_track_question_messages", track)
 
     assert await telegram.process_inbox(inbox.id) is None
 
@@ -408,8 +413,124 @@ async def test_telegram_direct_reply_answers_question_text(monkeypatch) -> None:
     assert interaction.action == "text"
     assert interaction.text == "Mein Format"
     assert process.await_args.args[5] == "42"
-    update.assert_awaited_once_with("token", "789", "42", result)
+    update.assert_awaited_once_with("token", "789", "41", result)
+    track.assert_awaited_once_with(db, envelope.question_id, "41", None)
     assert inbox.status == "completed"
+
+
+async def test_telegram_force_reply_prompts_for_question_text() -> None:
+    envelope = MessagingQuestionEnvelope.model_validate(
+        {
+            "kind": "question",
+            "version": 1,
+            "questionId": uuid4(),
+            "sessionId": uuid4(),
+            "runId": uuid4(),
+            "questions": [
+                {
+                    "id": "note",
+                    "type": "free_text",
+                    "header": "Hinweis",
+                    "question": "Welcher Hinweis?",
+                    "placeholder": "Hier antworten",
+                }
+            ],
+        }
+    )
+    bot = AsyncMock()
+    bot.send_message.return_value = SimpleNamespace(message_id=43)
+
+    assert await telegram._send_question_reply_prompt(bot, "789", envelope) == "43"
+
+    sent = bot.send_message.await_args.kwargs
+    assert sent["chat_id"] == "789"
+    assert sent["text"] == "Antwort eingeben:"
+    assert isinstance(sent["reply_markup"], telegram.ForceReply)
+    assert sent["reply_markup"].input_field_placeholder == "Hier antworten"
+    assert [
+        button.text
+        for row in telegram._question_markup(envelope).inline_keyboard
+        for button in row
+    ] == ["Ablehnen"]
+
+    answered = MessagingQuestionEnvelope.model_validate(
+        {
+            **envelope.model_dump(mode="json", by_alias=True),
+            "answers": {"note": ["Kaffee"]},
+        }
+    )
+    bot.send_message.reset_mock()
+    assert await telegram._send_question_reply_prompt(bot, "789", answered) is None
+    bot.send_message.assert_not_awaited()
+    assert [
+        button.text
+        for row in telegram._question_markup(answered).inline_keyboard
+        for button in row
+    ] == ["Antworten senden", "Ablehnen"]
+
+
+async def test_telegram_unbound_text_during_question_gets_direct_guidance(
+    monkeypatch,
+) -> None:
+    session_id = uuid4()
+    endpoint = MessagingEndpoint(
+        id=uuid4(),
+        user_id=uuid4(),
+        provider="telegram",
+        name="Privater Bot",
+        enabled=True,
+        external_identity="123",
+        paired_user_id="456",
+        paired_chat_id="789",
+        current_session_id=session_id,
+    )
+    inbox = MessagingInbox(
+        id=uuid4(),
+        endpoint_id=endpoint.id,
+        external_event_id="1",
+        payload={
+            "type": "message",
+            "chatId": "789",
+            "userId": "456",
+            "messageId": "43",
+            "replyToMessageId": None,
+            "text": "Kaffee",
+            "media": [],
+        },
+        status="processing",
+        attempts=1,
+    )
+    user = UserAccount(
+        id=endpoint.user_id,
+        username="user",
+        password_hash="hash",
+        is_active=True,
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = [inbox, endpoint]
+    db.scalar.side_effect = [user, endpoint, uuid4()]
+
+    class SessionContext:
+        async def __aenter__(self):
+            return db
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(telegram, "AsyncSessionFactory", SessionContext)
+    monkeypatch.setattr(
+        telegram, "channel_provider_allowed", AsyncMock(return_value=True)
+    )
+
+    assert await telegram.process_inbox(inbox.id) is None
+
+    guidance = db.add.call_args.args[0]
+    assert guidance.payload["text"] == (
+        "Bitte nutze das eingeblendete Antwortfeld oder Telegrams Funktion "
+        "„Antworten“ an der Fragen-Nachricht."
+    )
+    assert inbox.status == "completed"
+    assert inbox.attempts == 1
 
 
 async def test_disabled_provider_falls_back_to_app(monkeypatch) -> None:
@@ -670,7 +791,7 @@ async def test_telegram_voice_transcript_becomes_plain_user_text(monkeypatch) ->
     run = AgentRun(id=inbox.id, session_id=session.id, input_message_id=uuid4())
     db = AsyncMock(spec=AsyncSession)
     db.get.side_effect = [inbox, endpoint, None, session]
-    db.scalar.side_effect = [user, endpoint, user, endpoint, inbox]
+    db.scalar.side_effect = [user, endpoint, None, user, endpoint, inbox]
 
     class SessionContext:
         async def __aenter__(self):

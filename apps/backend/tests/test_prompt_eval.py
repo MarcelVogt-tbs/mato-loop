@@ -319,10 +319,10 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
         "calendar_create_event",
     ]
     assert "never ask in assistant text" in calendar_messages[0]["content"]
-    assert "Call this tool alone" in calendar_tools[0]["description"]
-    assert "Never use question for console commands" in calendar_tools[0]["description"]
-    assert "Use shell_run for requested execution only" in calendar_tools[0]["description"]
-    assert "output requests in assistant text" in calendar_tools[0]["description"]
+    assert "Preserve each requested answer mode" in calendar_tools[0]["description"]
+    assert "A choice is never free_text" in calendar_tools[0]["description"]
+    assert "Never use for commands, output, or permissions" in calendar_tools[0]["description"]
+    assert "call alone" in calendar_tools[0]["description"]
     question_parameters = json.dumps(calendar_tools[0]["parameters"])
     assert "free_text" in question_parameters
     assert "QuestionOption" in question_parameters
