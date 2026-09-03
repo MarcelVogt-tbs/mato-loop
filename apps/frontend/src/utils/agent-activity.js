@@ -2,16 +2,14 @@ import { reasoningStatusLabel } from 'src/utils/reasoning-display'
 import { toolActivityLabel, toolSummary } from 'src/utils/tool-display'
 
 const LABELS = {
-  submitting: 'Anfrage wird übergeben',
-  queued: 'Ausführung wartet auf den Start',
-  preparing_context: 'Kontext und Tools werden vorbereitet',
-  compacting_context: 'Gesprächskontext wird verdichtet',
-  streaming: 'Antwort wird erstellt',
-  preparing_tools: 'Tool-Aufrufe werden vorbereitet',
-  waiting_approval: 'Wartet auf Freigabe',
-  waiting_input: 'Wartet auf deine Antwort',
-  finalizing: 'Antwort wird abgeschlossen',
-  reconnecting: 'Verbindung wird wiederhergestellt'
+  submitting: 'Verarbeite Anfrage',
+  queued: 'Verarbeite Anfrage',
+  preparing_context: 'Verarbeite Anfrage',
+  compacting_context: 'Kontext verdichten',
+  waiting_approval: 'Freigabe erforderlich',
+  waiting_input: 'Antwort erforderlich',
+  finalizing: 'Abschließen',
+  reconnecting: 'Neu verbinden'
 }
 
 const WARNING_PRESENTATIONS = {
@@ -39,18 +37,8 @@ export function runWarningEntries(warnings = [], keyPrefix = 'warning', live = f
 export function agentActivityLabel(activity) {
   const suppliedLabel = typeof activity?.activityLabel === 'string' ? activity.activityLabel.trim() : ''
   if (suppliedLabel) return activity.activityLabel
-  if (activity?.phase === 'waiting_model') {
-    if (
-      Number.isInteger(activity.providerAttempt)
-      && Number.isInteger(activity.providerAttemptTotal)
-      && activity.providerAttempt >= 2
-      && activity.providerAttempt <= activity.providerAttemptTotal
-    ) {
-      return `Provider-Anfrage: Versuch ${activity.providerAttempt} von ${activity.providerAttemptTotal}`
-    }
-    return activity.modelRequest > 1
-      ? 'Modell wertet Tool-Ergebnisse aus'
-      : 'Modell analysiert die Anfrage'
+  if (['preparing_context', 'waiting_model'].includes(activity?.phase)) {
+    return activity.modelRequest > 1 ? 'Verarbeite Tool-Ergebnisse' : 'Verarbeite Anfrage'
   }
   if (activity?.phase === 'processing_tool') {
     return toolActivityLabel(activity.tool)
@@ -73,23 +61,11 @@ export function agentRunPresentation({
   stopping = false,
   activity = null,
   streamReasoning = null,
-  streamContextSummary = null,
   streamContent = '',
   transcript = null
 } = {}) {
   if (!running) return { showActivity: false, label: '', summary: '', announcement: '' }
 
-  const contextSummaryText = activity?.phase === 'compacting_context'
-    ? String(streamContextSummary?.content || '')
-      .trim()
-      .split(/\n\s*\n/)
-      .at(-1)
-      ?.replace(/\s+/g, ' ')
-      .trim() || ''
-    : ''
-  const contextSummaryLabel = contextSummaryText.length > 160
-    ? `…${contextSummaryText.slice(-159)}`
-    : contextSummaryText
   const toolItems = (transcript?.messages || []).flatMap((message) => (
     message.workHistory?.entries?.filter((entry) => entry.type === 'tool') || message.toolCalls || []
   ))
@@ -100,6 +76,14 @@ export function agentRunPresentation({
     || transcript?.unmatchedApprovals?.[0]
   const question = toolItems.find((item) => item.question)?.question
     || transcript?.unmatchedQuestions?.[0]
+  if (
+    !stopping
+    && !approval
+    && !question
+    && (streamContent || ['preparing_tools', 'finalizing'].includes(activity?.phase))
+  ) {
+    return { showActivity: false, label: '', summary: '', announcement: 'Antwort' }
+  }
   const suppliedReasoningLabel = typeof activity?.reasoningLabel === 'string'
     ? activity.reasoningLabel.trim()
     : ''
@@ -108,15 +92,16 @@ export function agentRunPresentation({
     ? suppliedReasoningLabel || reasoningStatusLabel(streamReasoning) || 'Nachdenken'
     : ''
   const label = stopping
-    ? 'Anfrage wird abgebrochen'
+    ? 'Anfrage abbrechen'
     : approval
-      ? 'Wartet auf Freigabe'
-      : question ? 'Wartet auf deine Antwort' : reasoningLabel || agentActivityLabel(activity)
-  const summary = approval?.title
-    || question?.questions?.[0]?.question
-    || (activeTool ? toolSummary(activeTool.tool) : '')
-    || contextSummaryLabel
-    || ''
+      ? 'Freigabe erforderlich'
+      : question ? 'Antwort erforderlich' : reasoningLabel || agentActivityLabel(activity)
+  const summary = activity?.phase === 'compacting_context'
+    ? ''
+    : approval?.title
+      || question?.questions?.[0]?.question
+      || (activeTool ? toolSummary(activeTool.tool) : '')
+      || ''
   let announcement = label
   if (approval) {
     announcement = approval.title
@@ -124,10 +109,6 @@ export function agentRunPresentation({
       : 'Freigabe erforderlich'
   } else if (question) {
     announcement = 'Antwort erforderlich'
-  } else if (streamContent) {
-    announcement = 'Antwort wird erstellt'
-  } else if (contextSummaryLabel) {
-    announcement = 'Gesprächskontext wird verdichtet'
   } else if (streamReasoning || suppliedReasoningLabel) {
     announcement = 'Nachdenken'
   }

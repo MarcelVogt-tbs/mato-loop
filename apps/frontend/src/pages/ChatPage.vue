@@ -126,7 +126,9 @@
                 || message.generationStatus === 'interrupted'"
             >
               <AgentActivityPanel
-                v-if="message.workHistory"
+                v-if="message.workHistory && (
+                  !message.currentTurn || !chat.running || runPresentation.showActivity
+                )"
                 :history="message.workHistory"
                 :activity="message.currentTurn ? chat.activity : null"
                 :presentation="message.currentTurn ? runPresentation : null"
@@ -531,7 +533,6 @@ const runPresentation = computed(() => agentRunPresentation({
   stopping: chat.stopping,
   activity: chat.activity,
   streamReasoning: chat.streamReasoning,
-  streamContextSummary: chat.streamContextSummary,
   streamContent: chat.streamContent,
   transcript: transcript.value
 }))

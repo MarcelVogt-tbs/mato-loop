@@ -1345,7 +1345,11 @@ class AgentRuntime:
             openscad_source_review_finalization_pending = False
             await cls._ensure_user_active(db, chat_session.user_id)
             context_started_at = time.monotonic()
-            await _publish_run_phase(run.id, "preparing_context")
+            await _publish_run_phase(
+                run.id,
+                "preparing_context",
+                modelRequest=model_requests + 1,
+            )
             await db.refresh(chat_session)
             ai_settings = await load_effective_ai(db, chat_session.user_id)
             runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
@@ -2039,6 +2043,8 @@ class AgentRuntime:
             streamed_reasoning_state: dict[str, Any] = {
                 "text": "",
                 "kind": "content",
+                "summaryText": "",
+                "summaryLabel": None,
                 "lastPublished": 0.0,
             }
 
@@ -2053,10 +2059,22 @@ class AgentRuntime:
                 mark_first_signal("firstReasoningMs")
                 state["kind"] = kind
                 state["text"] += text
+                summary_became_available = False
+                if kind == "summary":
+                    state["summaryText"] += text
+                    summary_label = reasoning_activity_label(
+                        {"kind": "summary", "text": state["summaryText"]}
+                    )
+                    if summary_label != "Nachdenken":
+                        summary_became_available = state["summaryLabel"] is None
+                        state["summaryLabel"] = summary_label
                 if pending:
                     return
                 now = time.monotonic()
-                if now - state["lastPublished"] < 0.1:
+                if (
+                    now - state["lastPublished"] < 0.1
+                    and not summary_became_available
+                ):
                     return
                 state["lastPublished"] = now
                 payload = {
@@ -2071,7 +2089,8 @@ class AgentRuntime:
                     {
                         "type": "reasoning.updated",
                         "reasoning": payload,
-                        "activityLabel": reasoning_activity_label(payload),
+                        "activityLabel": state["summaryLabel"]
+                        or reasoning_activity_label(payload),
                     },
                 )
                 visible_response.reasoning = payload
@@ -2367,21 +2386,24 @@ class AgentRuntime:
                         },
                     )
             if public_reasoning:
+                reasoning_label = reasoning_activity_label(public_reasoning)
+                if (
+                    reasoning_label == "Nachdenken"
+                    and streamed_reasoning_state["summaryLabel"]
+                ):
+                    reasoning_label = streamed_reasoning_state["summaryLabel"]
                 await run_events.publish(
                     run.id,
                     {
                         "type": "reasoning.updated",
                         "reasoning": public_reasoning,
-                        "activityLabel": reasoning_activity_label(public_reasoning),
+                        "activityLabel": reasoning_label,
                     },
                 )
             await run_events.publish(
                 run.id,
                 {
                     "type": "message.completed",
-                    "activityLabel": run_activity_label(
-                        "preparing_tools" if serialized_calls else "finalizing"
-                    ),
                     "message": {
                         "id": str(assistant.id),
                         "role": "assistant",

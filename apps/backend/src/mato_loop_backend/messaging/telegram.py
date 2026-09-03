@@ -1534,6 +1534,11 @@ async def _progress_target(run_id: UUID) -> tuple[str, str, int, int] | None:
 
 def _progress_activity(event: dict) -> str | None:
     event_type = event.get("type")
+    if event_type == "run.phase" and event.get("phase") in {
+        "preparing_tools",
+        "finalizing",
+    }:
+        return None
     supplied = event.get("activityLabel")
     if isinstance(supplied, str) and supplied.strip():
         return supplied
@@ -1564,6 +1569,15 @@ def _progress_draft(activity: str, content: str) -> str:
     return activity
 
 
+def _retry_after_seconds(exc: RetryAfter) -> float:
+    retry_after = exc.retry_after
+    return (
+        retry_after.total_seconds()
+        if isinstance(retry_after, timedelta)
+        else float(retry_after)
+    )
+
+
 async def _relay_run_progress(run_id: UUID) -> None:
     try:
         initial = await _progress_target(run_id)
@@ -1572,6 +1586,8 @@ async def _relay_run_progress(run_id: UUID) -> None:
         _, token, chat_id, draft_id = initial
         content = ""
         activity = ""
+        reasoning_label = ""
+        resume_activity = ""
         draft_dirty = False
         next_draft_at = 0.0
         next_indicator_at = 0.0
@@ -1589,17 +1605,25 @@ async def _relay_run_progress(run_id: UUID) -> None:
                     or current_draft_id != draft_id
                 ):
                     return
-                if status not in {"waiting_approval", "waiting_input"}:
-                    await bot.send_chat_action(
-                        chat_id=chat_id,
-                        action=ChatAction.TYPING,
-                    )
                 next_indicator_at = (
                     asyncio.get_running_loop().time() + TYPING_REFRESH_SECONDS
                 )
+                if status not in {"waiting_approval", "waiting_input"}:
+                    try:
+                        await bot.send_chat_action(
+                            chat_id=chat_id,
+                            action=ChatAction.TYPING,
+                        )
+                    except RetryAfter as exc:
+                        next_indicator_at = (
+                            asyncio.get_running_loop().time()
+                            + max(_retry_after_seconds(exc), TYPING_REFRESH_SECONDS)
+                        )
                 while True:
                     now = asyncio.get_running_loop().time()
-                    deadlines = [next_indicator_at]
+                    deadlines = []
+                    if not activity and not content:
+                        deadlines.append(next_indicator_at)
                     if draft_dirty:
                         deadlines.append(next_draft_at)
                     elif activity or content:
@@ -1624,14 +1648,53 @@ async def _relay_run_progress(run_id: UUID) -> None:
                         elif event_type == "question.created":
                             content = ""
                             activity = ""
+                            reasoning_label = ""
                             draft_dirty = False
                         elif (
                             event_type == "run.timing"
                             and event.get("activeDurationRunning") is True
                         ):
-                            next_indicator_at = 0.0
+                            if activity == run_activity_label("waiting_approval"):
+                                activity = resume_activity or run_activity_label(
+                                    "processing_tool"
+                                )
+                                resume_activity = ""
+                                draft_dirty = True
+                            else:
+                                next_indicator_at = 0.0
                         elif not content:
+                            phase = event.get("phase")
+                            if event_type == "approval.created":
+                                approval = event.get("approval")
+                                details = (
+                                    approval.get("details")
+                                    if isinstance(approval, dict)
+                                    else None
+                                )
+                                resume_activity = run_activity_label(
+                                    "processing_tool",
+                                    tool=(
+                                        details.get("tool")
+                                        if isinstance(details, dict)
+                                        else None
+                                    ),
+                                )
+                            if event_type == "approval.created" or (
+                                event_type == "run.phase"
+                                and phase in {"preparing_context", "processing_tool"}
+                            ):
+                                reasoning_label = ""
                             next_activity = _progress_activity(event)
+                            if event_type == "reasoning.updated":
+                                if next_activity and next_activity != "Nachdenken":
+                                    reasoning_label = next_activity
+                                next_activity = reasoning_label or next_activity
+                            elif (
+                                event_type == "run.phase"
+                                and phase == "waiting_model"
+                                and reasoning_label
+                            ):
+                                next_activity = reasoning_label
                             if next_activity is not None and next_activity != activity:
                                 activity = next_activity
                                 draft_dirty = True
@@ -1639,10 +1702,9 @@ async def _relay_run_progress(run_id: UUID) -> None:
                             message = event.get("message")
                             if isinstance(message, dict) and message.get("toolCalls"):
                                 content = ""
-                                activity = _progress_activity(event) or run_activity_label(
-                                    "preparing_tools"
-                                )
-                                draft_dirty = True
+                                if reasoning_label:
+                                    activity = reasoning_label
+                                    draft_dirty = True
                         elif event_type in {
                             "run.completed",
                             "run.failed",
@@ -1658,7 +1720,7 @@ async def _relay_run_progress(run_id: UUID) -> None:
                     ):
                         draft_dirty = True
                     send_draft = draft_dirty and now >= next_draft_at
-                    send_typing = now >= next_indicator_at
+                    send_typing = not has_draft and now >= next_indicator_at
                     if not send_draft and not send_typing:
                         continue
                     target = await _progress_target(run_id)
@@ -1683,22 +1745,36 @@ async def _relay_run_progress(run_id: UUID) -> None:
                             partial=True,
                         )
                         part = parts[-1] if parts else RenderedChannelText("")
-                        await bot.send_message_draft(
-                            chat_id=chat_id,
-                            draft_id=draft_id,
-                            text=part.text,
-                            parse_mode=(
-                                ParseMode.HTML if part.syntax == TELEGRAM_HTML else None
-                            ),
-                        )
+                        try:
+                            await bot.send_message_draft(
+                                chat_id=chat_id,
+                                draft_id=draft_id,
+                                text=part.text,
+                                parse_mode=(
+                                    ParseMode.HTML
+                                    if part.syntax == TELEGRAM_HTML
+                                    else None
+                                ),
+                            )
+                        except RetryAfter as exc:
+                            next_draft_at = now + max(
+                                _retry_after_seconds(exc), DRAFT_UPDATE_SECONDS
+                            )
+                            continue
                         draft_dirty = False
                         next_draft_at = now + DRAFT_UPDATE_SECONDS
                     if send_typing:
-                        await bot.send_chat_action(
-                            chat_id=chat_id,
-                            action=ChatAction.TYPING,
-                        )
-                        next_indicator_at = now + TYPING_REFRESH_SECONDS
+                        try:
+                            await bot.send_chat_action(
+                                chat_id=chat_id,
+                                action=ChatAction.TYPING,
+                            )
+                        except RetryAfter as exc:
+                            next_indicator_at = now + max(
+                                _retry_after_seconds(exc), TYPING_REFRESH_SECONDS
+                            )
+                        else:
+                            next_indicator_at = now + TYPING_REFRESH_SECONDS
         finally:
             event_task.cancel()
             await asyncio.gather(event_task, return_exceptions=True)

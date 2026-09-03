@@ -954,6 +954,16 @@ async def test_telegram_relays_typing_and_native_drafts(monkeypatch) -> None:
             "type": "reasoning.updated",
             "reasoning": {"kind": "summary", "text": "**Vorgehen prüfen**"},
         }
+        yield {
+            "type": "reasoning.updated",
+            "reasoning": {"kind": "content", "text": "more private reasoning"},
+        }
+        yield {
+            "type": "run.phase",
+            "phase": "waiting_model",
+            "modelRequest": 1,
+            "activityLabel": "Verarbeite Anfrage",
+        }
         yield {"type": "message.delta", "delta": "Zwischenstand"}
         yield {
             "type": "message.completed",
@@ -1011,8 +1021,8 @@ async def test_telegram_relays_typing_and_native_drafts(monkeypatch) -> None:
         "Nachdenken",
         "Vorgehen prüfen",
         "Zwischenstand",
-        "Tool-Aufrufe werden vorbereitet",
-        "Datei wird gelesen",
+        "Vorgehen prüfen",
+        "Datei lesen",
         "Antwort",
     ]
     assert "secret" not in "".join(drafts)
@@ -1026,6 +1036,23 @@ async def test_telegram_relays_typing_and_native_drafts(monkeypatch) -> None:
         for kind, payload in calls
         if kind == "draft" and payload["text"]
     )
+
+
+def test_telegram_omits_preparation_and_finalizing_activity() -> None:
+    assert telegram._progress_activity(
+        {
+            "type": "run.phase",
+            "phase": "preparing_tools",
+            "activityLabel": "Tools vorbereiten",
+        }
+    ) is None
+    assert telegram._progress_activity(
+        {
+            "type": "run.phase",
+            "phase": "finalizing",
+            "activityLabel": "Abschließen",
+        }
+    ) is None
 
 
 async def test_telegram_refreshes_unchanged_draft_before_expiry(monkeypatch) -> None:
@@ -1069,12 +1096,14 @@ async def test_telegram_refreshes_unchanged_draft_before_expiry(monkeypatch) -> 
     assert set(drafts) == {"Antwort"}
 
 
-async def test_telegram_keeps_typing_active_while_draft_exists(monkeypatch) -> None:
+async def test_telegram_stops_typing_after_native_draft(monkeypatch) -> None:
     calls = []
 
     async def events():
+        yield {"type": "run.started"}
+        await asyncio.sleep(0.005)
         yield {"type": "message.delta", "delta": "Antwort"}
-        await asyncio.sleep(0.025)
+        await asyncio.sleep(0.005)
         yield {"type": "run.completed"}
 
     class FakeBot:
@@ -1085,10 +1114,10 @@ async def test_telegram_keeps_typing_active_while_draft_exists(monkeypatch) -> N
             return None
 
         async def send_chat_action(self, **_kwargs):
-            calls.append("typing")
+            calls.append(("typing", None))
 
-        async def send_message_draft(self, **_kwargs):
-            calls.append("draft")
+        async def send_message_draft(self, **kwargs):
+            calls.append(("draft", kwargs["text"]))
 
     monkeypatch.setattr(telegram, "TYPING_REFRESH_SECONDS", 0.005)
     monkeypatch.setattr(telegram, "DRAFT_UPDATE_SECONDS", 0)
@@ -1102,8 +1131,9 @@ async def test_telegram_keeps_typing_active_while_draft_exists(monkeypatch) -> N
 
     await telegram._relay_run_progress(uuid4())
 
-    assert "draft" in calls
-    assert calls.count("typing") >= 3
+    assert sum(kind == "typing" for kind, _text in calls) == 1
+    drafts = [text for kind, text in calls if kind == "draft"]
+    assert drafts == ["Verarbeite Anfrage", "Antwort"]
 
 
 async def test_telegram_resumes_progress_after_approval(monkeypatch) -> None:
@@ -1113,7 +1143,13 @@ async def test_telegram_resumes_progress_after_approval(monkeypatch) -> None:
 
     async def events():
         nonlocal status
-        yield {"type": "approval.created", "approval": {"summary": "secret"}}
+        yield {
+            "type": "approval.created",
+            "approval": {
+                "summary": "secret",
+                "details": {"tool": "web_search"},
+            },
+        }
         status = "running"
         yield {"type": "run.timing", "activeDurationRunning": True}
         yield {"type": "run.completed"}
@@ -1145,8 +1181,8 @@ async def test_telegram_resumes_progress_after_approval(monkeypatch) -> None:
 
     await telegram._relay_run_progress(uuid4())
 
-    assert drafts == ["Wartet auf Freigabe"]
-    assert typing_statuses == ["running"]
+    assert drafts == ["Freigabe erforderlich", "Websuche"]
+    assert typing_statuses == []
 
 
 async def test_telegram_resumes_progress_after_question(monkeypatch) -> None:

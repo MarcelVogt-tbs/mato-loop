@@ -421,6 +421,9 @@ export const useChatStore = defineStore('chat', {
     setActivity(phase, details = {}) {
       const nextActivity = {
         phase,
+        activityLabel: typeof details.activityLabel === 'string' && details.activityLabel.trim()
+          ? details.activityLabel.trim()
+          : null,
         tool: details.tool || null,
         toolCallId: details.toolCallId || null,
         modelRequest: details.modelRequest || null,
@@ -432,6 +435,9 @@ export const useChatStore = defineStore('chat', {
         total: Number.isInteger(details.total) ? details.total : null
       }
       const sameDisplay = agentActivityDisplayKey(this.activity) === agentActivityDisplayKey(nextActivity)
+      const sameModelRequest = phase === 'waiting_model'
+        && this.activity.phase === 'waiting_model'
+        && this.activity.modelRequest === nextActivity.modelRequest
       const startedAt = sameDisplay
         ? this.activity.startedAt || details.startedAt || new Date().toISOString()
         : details.startedAt || new Date().toISOString()
@@ -448,6 +454,7 @@ export const useChatStore = defineStore('chat', {
       )
       this.activity = {
         ...nextActivity,
+        reasoningLabel: sameModelRequest ? this.activity.reasoningLabel || null : null,
         startedAt,
         activeDurationMs: acceptTiming
           ? details.activeDurationMs
@@ -2149,7 +2156,10 @@ export const useChatStore = defineStore('chat', {
         const payload = JSON.parse(event.data)
         this.streamReasoning = payload.reasoning
         if (typeof payload.activityLabel === 'string' && payload.activityLabel.trim()) {
-          this.activity = { ...this.activity, reasoningLabel: payload.activityLabel }
+          const reasoningLabel = payload.activityLabel.trim()
+          if (reasoningLabel !== 'Nachdenken' || !this.activity.reasoningLabel) {
+            this.activity = { ...this.activity, reasoningLabel }
+          }
         }
       })
       source.addEventListener('context.summary.updated', (event) => {

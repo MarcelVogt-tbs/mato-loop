@@ -1411,19 +1411,35 @@ describe('chat drafts', () => {
     expect(chat.sessions[0].activeRunStatus).toBe('running')
 
     source.emit('run.phase', {
-      phase: 'waiting_model', modelRequest: 1, providerAttempt: 2, providerAttemptTotal: 3
+      phase: 'waiting_model',
+      modelRequest: 1,
+      providerAttempt: 2,
+      providerAttemptTotal: 3,
+      activityLabel: 'Verarbeite Anfrage'
     })
     expect(chat.activity).toMatchObject({
       phase: 'waiting_model',
       modelRequest: 1,
       providerAttempt: 2,
-      providerAttemptTotal: 3
+      providerAttemptTotal: 3,
+      activityLabel: 'Verarbeite Anfrage'
     })
 
     source.emit('reasoning.updated', {
-      reasoning: { kind: 'content', text: 'Plan prüfen', status: 'streaming' }
+      reasoning: { kind: 'summary', text: '**Plan prüfen**', status: 'streaming' },
+      activityLabel: 'Plan prüfen'
     })
-    expect(chat.streamReasoning.text).toBe('Plan prüfen')
+    expect(chat.streamReasoning.text).toBe('**Plan prüfen**')
+    expect(chat.activity.reasoningLabel).toBe('Plan prüfen')
+
+    source.emit('reasoning.updated', {
+      reasoning: { kind: 'content', text: 'Weitere Überlegung', status: 'streaming' },
+      activityLabel: 'Nachdenken'
+    })
+    source.emit('run.phase', {
+      phase: 'waiting_model', modelRequest: 1, activityLabel: 'Verarbeite Anfrage'
+    })
+    expect(chat.activity.reasoningLabel).toBe('Plan prüfen')
 
     source.emit('message.delta', { delta: 'Hallo' })
     expect(chat.activity.phase).toBe('streaming')

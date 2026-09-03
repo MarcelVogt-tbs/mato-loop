@@ -1214,15 +1214,40 @@ async def test_provider_retry_publishes_waiting_model_phase(monkeypatch) -> None
     started_at = events[0].pop("startedAt")
     assert isinstance(started_at, str)
     assert events == [
-            {
-                "type": "run.phase",
-                "phase": "waiting_model",
-                "activityLabel": "Provider-Anfrage: Versuch 2 von 3",
-                "modelRequest": 1,
+        {
+            "type": "run.phase",
+            "phase": "waiting_model",
+            "activityLabel": "Verarbeite Anfrage",
+            "modelRequest": 1,
             "providerAttempt": 2,
             "providerAttemptTotal": 3,
         }
     ]
+
+
+async def test_reasoning_summary_label_remains_after_content_updates(
+    monkeypatch,
+) -> None:
+    db, run, requests, _projections, events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content="Fertig", finish_reason="stop")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+
+    await AgentRuntime._execute_loop(db, run)
+    events.clear()
+    on_reasoning = requests[0]["on_reasoning"]
+
+    await on_reasoning("**", "summary")
+    await on_reasoning("Plan prüfen**", "summary")
+    await asyncio.sleep(0.11)
+    await on_reasoning("Weitere Überlegung", "content")
+
+    assert [
+        event["activityLabel"]
+        for event in events
+        if event.get("type") == "reasoning.updated"
+    ] == ["Nachdenken", "Plan prüfen", "Plan prüfen"]
 
 
 async def test_required_search_loads_matching_skill_before_search(monkeypatch) -> None:

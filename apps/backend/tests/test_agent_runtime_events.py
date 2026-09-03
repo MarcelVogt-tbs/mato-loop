@@ -117,7 +117,7 @@ async def test_run_phase_event_has_stable_language_neutral_payload(monkeypatch) 
                 {
                     "type": "run.phase",
                     "phase": "processing_tool",
-                    "activityLabel": "Datei wird gelesen",
+                    "activityLabel": "Datei lesen",
                     "tool": "read_file",
                 "toolCallId": "call-1",
                 "index": 0,

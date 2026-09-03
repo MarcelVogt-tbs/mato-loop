@@ -12,15 +12,14 @@ import {
 describe('agent activity', () => {
   it('uses safe German labels for runtime phases', () => {
     expect(agentActivityLabel({ phase: 'preparing_context' }))
-      .toBe('Kontext und Tools werden vorbereitet')
+      .toBe('Verarbeite Anfrage')
     expect(agentActivityLabel({ phase: 'waiting_model', modelRequest: 1 }))
-      .toBe('Modell analysiert die Anfrage')
+      .toBe('Verarbeite Anfrage')
     expect(agentActivityLabel({ phase: 'waiting_model', modelRequest: 2 }))
-      .toBe('Modell wertet Tool-Ergebnisse aus')
+      .toBe('Verarbeite Tool-Ergebnisse')
     expect(agentActivityLabel({
       phase: 'waiting_model', modelRequest: 2, providerAttempt: 2, providerAttemptTotal: 3
-    })).toBe('Provider-Anfrage: Versuch 2 von 3')
-    expect(agentActivityLabel({ phase: 'streaming' })).toBe('Antwort wird erstellt')
+    })).toBe('Verarbeite Tool-Ergebnisse')
   })
 
   it('prefers non-empty backend activity labels for every phase kind', () => {
@@ -34,21 +33,21 @@ describe('agent activity', () => {
       phase: 'unknown', activityLabel: 'Kanonische Aktivität'
     })).toBe('Kanonische Aktivität')
     expect(agentActivityLabel({ phase: 'streaming', activityLabel: '   ' }))
-      .toBe('Antwort wird erstellt')
+      .toBe('Agent arbeitet')
   })
 
   it('reuses readable tool identities without exposing arguments', () => {
     expect(agentActivityLabel({ phase: 'processing_tool', tool: 'read_file' }))
-      .toBe('Datei wird gelesen')
+      .toBe('Datei lesen')
     expect(agentActivityLabel({ phase: 'processing_tool', tool: 'unknown_tool' }))
-      .toBe('Tool wird ausgeführt')
+      .toBe('Tool ausführen')
     expect(agentActivityLabel({
       phase: 'processing_tool', tool: 'read_file', index: 1, total: 3
-    })).toBe('Datei wird gelesen')
+    })).toBe('Datei lesen')
     expect(agentActivityLabel({ phase: 'processing_tool', tool: 'web_search' }))
-      .toBe('Web wird durchsucht')
+      .toBe('Websuche')
     expect(agentActivityLabel({ phase: 'processing_tool', tool: 'webfetch' }))
-      .toBe('Webseite wird abgerufen')
+      .toBe('Webseite abrufen')
   })
 
   it('identifies changes to the visible activity independently from event timestamps', () => {
@@ -71,9 +70,9 @@ describe('agent activity', () => {
     const activity = { phase: 'waiting_model', modelRequest: 1 }
     expect(agentRunPresentation({ running: true, activity })).toEqual({
       showActivity: true,
-      label: 'Modell analysiert die Anfrage',
+      label: 'Verarbeite Anfrage',
       summary: '',
-      announcement: 'Modell analysiert die Anfrage'
+      announcement: 'Verarbeite Anfrage'
     })
     expect(agentRunPresentation({
       running: true,
@@ -83,9 +82,9 @@ describe('agent activity', () => {
       }
     })).toEqual({
       showActivity: true,
-      label: 'Gesprächskontext wird verdichtet',
-      summary: 'Facts Der bisherige Kontext wird verdichtet',
-      announcement: 'Gesprächskontext wird verdichtet'
+      label: 'Kontext verdichten',
+      summary: '',
+      announcement: 'Kontext verdichten'
     })
     expect(agentRunPresentation({
       running: true,
@@ -100,7 +99,7 @@ describe('agent activity', () => {
     expect(agentRunPresentation({
       running: true,
       activity: { ...activity, reasoningLabel: 'Kanonische Denkaktivität' },
-      streamReasoning: { kind: 'summary', text: '**Lokale Denkaktivität**' }
+      streamReasoning: { kind: 'content', text: 'Weitere Überlegung' }
     })).toEqual({
       showActivity: true,
       label: 'Kanonische Denkaktivität',
@@ -124,10 +123,10 @@ describe('agent activity', () => {
       streamContent: 'Antwort'
     }))
       .toEqual({
-        showActivity: true,
-        label: 'Antwort wird erstellt',
+        showActivity: false,
+        label: '',
         summary: '',
-        announcement: 'Antwort wird erstellt'
+        announcement: 'Antwort'
       })
     expect(agentRunPresentation({
       running: true,
@@ -147,9 +146,9 @@ describe('agent activity', () => {
       }
     })).toEqual({
       showActivity: true,
-      label: 'Datei wird gelesen',
+      label: 'Datei lesen',
       summary: 'plan.md',
-      announcement: 'Datei wird gelesen'
+      announcement: 'Datei lesen'
     })
     expect(agentRunPresentation({
       running: true,
@@ -162,7 +161,7 @@ describe('agent activity', () => {
       }
     })).toEqual({
       showActivity: true,
-      label: 'Wartet auf Freigabe',
+      label: 'Freigabe erforderlich',
       summary: 'Datei schreiben?',
       announcement: 'Freigabe erforderlich: Datei schreiben?'
     })
@@ -176,7 +175,7 @@ describe('agent activity', () => {
       }
     })).toEqual({
       showActivity: true,
-      label: 'Wartet auf deine Antwort',
+      label: 'Antwort erforderlich',
       summary: 'Welches Format?',
       announcement: 'Antwort erforderlich'
     })
@@ -186,15 +185,15 @@ describe('agent activity', () => {
       activity
     })).toEqual({
       showActivity: true,
-      label: 'Anfrage wird abgebrochen',
+      label: 'Anfrage abbrechen',
       summary: '',
-      announcement: 'Anfrage wird abgebrochen'
+      announcement: 'Anfrage abbrechen'
     })
     expect(agentRunPresentation({ running: true, activity: { phase: 'finalizing' } })).toEqual({
-      showActivity: true,
-      label: 'Antwort wird abgeschlossen',
+      showActivity: false,
+      label: '',
       summary: '',
-      announcement: 'Antwort wird abgeschlossen'
+      announcement: 'Antwort'
     })
     expect(agentRunPresentation({ running: false, activity })).toEqual({
       showActivity: false,

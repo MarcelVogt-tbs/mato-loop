@@ -136,16 +136,16 @@ describe('tool display', () => {
       { label: 'Aufgabe löschen', icon: 'delete_outline' }
     ])
     expect(toolSummary({ name: 'session_browse', arguments: {} })).toBe('Letzte Sessions')
-    expect(toolActivityLabel('web_search')).toBe('Web wird durchsucht')
-    expect(toolActivityLabel('webfetch')).toBe('Webseite wird abgerufen')
+    expect(toolActivityLabel('web_search')).toBe('Websuche')
+    expect(toolActivityLabel('webfetch')).toBe('Webseite abrufen')
     expect(toolIdentity('fetch_transcript')).toEqual({ label: 'Untertitel abrufen', icon: 'subtitles' })
-    expect(toolActivityLabel('fetch_transcript')).toBe('Untertitel werden abgerufen')
-    expect(toolActivityLabel('write_file')).toBe('Datei wird geschrieben')
-    expect(toolActivityLabel('edit_file')).toBe('Datei wird bearbeitet')
-    expect(toolActivityLabel('shell_run')).toBe('Befehl wird ausgeführt')
-    expect(toolActivityLabel('unknown_tool')).toBe('Tool wird ausgeführt')
+    expect(toolActivityLabel('fetch_transcript')).toBe('Untertitel abrufen')
+    expect(toolActivityLabel('write_file')).toBe('Datei schreiben')
+    expect(toolActivityLabel('edit_file')).toBe('Datei bearbeiten')
+    expect(toolActivityLabel('shell_run')).toBe('Shell-Befehl ausführen')
+    expect(toolActivityLabel('unknown_tool')).toBe('Tool ausführen')
     expect(toolIdentity('create_automation')).toEqual({ label: 'Automation erstellen', icon: 'add_task' })
-    expect(toolActivityLabel('run_automation')).toBe('Automation wird gestartet')
+    expect(toolActivityLabel('run_automation')).toBe('Automation starten')
     expect(toolSummary({ name: 'create_automation', arguments: { name: 'Morgenbericht' } })).toBe('Morgenbericht')
     expect(toolSummary({ name: 'web_search', arguments: { query: 'Quasar Expansion Item' } }))
       .toBe('Quasar Expansion Item')
@@ -176,7 +176,7 @@ describe('tool display', () => {
       { tool: { name: 'webfetch' }, active: true },
       { tool: { name: 'web_search' }, active: true }
     ])).toEqual([
-      { name: 'web_search', label: 'Im Web suchen', icon: 'travel_explore', count: 2, active: true },
+      { name: 'web_search', label: 'Websuche', icon: 'travel_explore', count: 2, active: true },
       { name: 'webfetch', label: 'Webseite abrufen', icon: 'language', count: 1, active: true }
     ])
   })
