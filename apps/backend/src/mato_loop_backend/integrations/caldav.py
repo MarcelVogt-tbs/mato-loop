@@ -936,6 +936,7 @@ async def calendar_list_calendars(
         await _remember_resource_labels(arguments.integration_id, discovery, context)
         return _result(
             {
+                "integrationId": str(arguments.integration_id),
                 "calendars": [
                     {
                         "calendarKey": f"calendar:{calendar.key}",
@@ -1870,7 +1871,7 @@ CALDAV_SHARED_TOOLS = (
     ),
     ToolContribution(
         name="calendar_query_events",
-        description="Read events from one calendar in an aware time range.",
+        description="Read one calendar with offset times and an exclusive range end.",
         arguments_model=CalendarQueryEventsArguments,
         handler=calendar_query_events,
         label="Termine lesen",

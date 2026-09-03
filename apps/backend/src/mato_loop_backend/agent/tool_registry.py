@@ -340,9 +340,9 @@ def _tool_prompt_fragments(tools: dict[str, BoundTool]) -> tuple[str, ...]:
         if name in tools
     ):
         fragments.append(
-            "A default calendar is configured. Unless the user requests discovery or another "
-            "calendar, call calendar_query_events or calendar_create_event directly and omit "
-            "integration_id and calendar_key."
+            "A default calendar is configured. For it, call calendar_query_events or "
+            "calendar_create_event directly and omit both integration_id and calendar_key. "
+            "For another calendar, include both."
         )
     if any(
         tools[name].default_arguments
@@ -350,9 +350,9 @@ def _tool_prompt_fragments(tools: dict[str, BoundTool]) -> tuple[str, ...]:
         if name in tools
     ):
         fragments.append(
-            "A default task list is configured. Unless the user requests discovery or another "
-            "task list, call tasks_query, tasks_create, or tasks_create_many directly and omit "
-            "integration_id and task_list_key."
+            "A default task list is configured. For it, call tasks_query, tasks_create, or "
+            "tasks_create_many directly and omit both integration_id and task_list_key. For "
+            "another task list, include both."
         )
     if {
         "calendar_create_event",

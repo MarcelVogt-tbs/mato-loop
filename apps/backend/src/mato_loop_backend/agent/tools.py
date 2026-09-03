@@ -4851,7 +4851,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "create_automation",
-            "Create if asked. Put schedules for the same task in one automation. Set deliver_to_current_session=true for reminders to the user. Use cron+timezone or run_at alone; valid_until inclusively limits cron. Never set archive_after_success=true with multiple schedules.",
+            "Create if asked. Same task uses one automation. Reminders set deliver_to_current_session=true. Use cron+timezone or offset run_at; valid_until is cron-only. Multiple schedules forbid archive_after_success.",
             CreateAutomationArguments,
             _create_automation,
             group="automations",
@@ -4861,7 +4861,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "edit_automation",
-            "Edit an exact revision if asked. Use cron+timezone or run_at alone; valid_until inclusively limits cron. Archiving needs one run_at.",
+            "Edit exact revision. Use cron+timezone or offset run_at; valid_until is cron-only. Archive requires one run_at.",
             EditAutomationArguments,
             _edit_automation,
             group="automations",

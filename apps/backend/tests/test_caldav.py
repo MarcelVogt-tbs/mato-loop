@@ -368,6 +368,8 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
     assert "call calendar_query_events or calendar_create_event directly" in (
         effective.prompt_fragments[0]
     )
+    assert "omit both integration_id and calendar_key" in effective.prompt_fragments[0]
+    assert "For another calendar, include both" in effective.prompt_fragments[0]
     assert "copy eventToken, integrationId, and calendarKey" in effective.prompt_fragments[1]
     assert "mutation succeeds only" in effective.prompt_fragments[1]
     assert "copy taskToken, integrationId, and taskListKey" in effective.prompt_fragments[2]
@@ -380,6 +382,9 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
         required = tool.schema()["parameters"]["required"]
         assert "integration_id" not in required
         assert "calendar_key" not in required
+    assert "offset times and an exclusive range end" in effective.tools[
+        "calendar_query_events"
+    ].definition.description
 
     assert effective.tools["calendar_list_calendars"].default_arguments == {}
     assert effective.tools["calendar_list_calendars"].schema()["parameters"][
@@ -431,6 +436,13 @@ def test_active_default_task_list_is_bound_to_query_and_create_tools() -> None:
         fragment.startswith("A default task list is configured.")
         for fragment in effective.prompt_fragments
     )
+    task_fragment = next(
+        fragment
+        for fragment in effective.prompt_fragments
+        if fragment.startswith("A default task list is configured.")
+    )
+    assert "omit both integration_id and task_list_key" in task_fragment
+    assert "For another task list, include both" in task_fragment
     for name in ("tasks_query", "tasks_create", "tasks_create_many"):
         tool = effective.tools[name]
         assert tool.default_arguments == {
@@ -601,7 +613,9 @@ async def test_calendar_listing_remembers_resource_labels(monkeypatch) -> None:
         CalendarIntegrationArguments(integration_id=account.id), context
     )
 
-    assert json.loads(result.content)["calendars"][0]["name"] == "Privat"
+    payload = json.loads(result.content)
+    assert payload["integrationId"] == str(account.id)
+    assert payload["calendars"][0]["name"] == "Privat"
     assert tools.resource_labels == {
         str(account.id): {f"calendar:{'a' * 32}": "Privat"}
     }

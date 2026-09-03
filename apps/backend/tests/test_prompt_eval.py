@@ -54,7 +54,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 33
+    assert INVENTORY_VERSION == 34
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -845,6 +845,33 @@ def test_one_time_automation_evaluator_accepts_redundant_timezone() -> None:
             ),
         )
     )
+
+
+def test_evaluator_rejects_partial_bound_calendar_arguments() -> None:
+    case = _case("calendar_alternate_query_copies_binding")
+    arguments = {
+        "calendar_key": prompt_eval.ALTERNATE_CALENDAR_KEY,
+        "start": "2026-07-28T00:00:00+02:00",
+        "end": "2026-07-29T00:00:00+02:00",
+    }
+
+    assert any(
+        "invalid arguments" in failure
+        for failure in evaluate(
+            case,
+            ProviderResult(
+                tool_calls=[ToolCall("calendar", "calendar_query_events", arguments)]
+            ),
+        )
+    )
+
+    arguments["integration_id"] = str(prompt_eval.CALENDAR_INTEGRATION_ID)
+    assert evaluate(
+        case,
+        ProviderResult(
+            tool_calls=[ToolCall("calendar", "calendar_query_events", arguments)]
+        ),
+    ) == []
 
 
 def test_question_evaluator_checks_selection_payload_and_continuation() -> None:
@@ -2089,10 +2116,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 134
-    assert payload["contractCount"] == 338
-    assert "Cases: 204" in report
+    assert payload["contractCount"] == 340
+    assert "Cases: 206" in report
     assert "Semantic contracts: 134" in report
-    assert "All inventory rows: 338" in report
+    assert "All inventory rows: 340" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

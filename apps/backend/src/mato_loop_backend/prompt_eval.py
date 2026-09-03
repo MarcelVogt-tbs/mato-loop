@@ -80,11 +80,12 @@ CALENDAR_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000001")
 OPENSCAD_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000002")
 OPENSCAD_AGENT_ID = UUID("90000000-0000-4000-8000-000000000003")
 CALENDAR_KEY = f"calendar:{'a' * 32}"
+ALTERNATE_CALENDAR_KEY = f"calendar:{'c' * 32}"
 TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 33
+INVENTORY_VERSION = 34
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -872,6 +873,40 @@ CASES = (
         expected_no_tools=True,
     ),
     PromptCase(
+        id="calendar_alternate_query_copies_binding",
+        kind="general",
+        scope="first_attempt",
+        user="Welche Termine stehen morgen im Kalender Gemeinsam?",
+        tools=("calendar_list_calendars", "calendar_query_events"),
+        calendar_fixture=True,
+        continuation=_exchange(
+            "calendar_list_calendars",
+            {"integration_id": str(CALENDAR_INTEGRATION_ID)},
+            json.dumps(
+                {
+                    "integrationId": str(CALENDAR_INTEGRATION_ID),
+                    "calendars": [
+                        {"calendarKey": CALENDAR_KEY, "name": "Persönlich"},
+                        {
+                            "calendarKey": ALTERNATE_CALENDAR_KEY,
+                            "name": "Gemeinsam",
+                        },
+                    ],
+                    "contentIsUntrusted": True,
+                },
+                ensure_ascii=False,
+            ),
+        ),
+        expected_tool="calendar_query_events",
+        expected_tool_call_count=1,
+        expected_arguments={
+            "integration_id": str(CALENDAR_INTEGRATION_ID),
+            "calendar_key": ALTERNATE_CALENDAR_KEY,
+        },
+        argument_contains={"start": ("2026-07-28",)},
+        forbidden_tools=("calendar_list_calendars",),
+    ),
+    PromptCase(
         id="openscad_model_writes_self_contained_source",
         kind="general",
         scope="quality",
@@ -995,6 +1030,7 @@ CASES = (
                     "cron": "0 8 * * *",
                     "timezone": "Europe/Berlin",
                     "run_at": None,
+                    "valid_until": None,
                     "enabled": True,
                 }
             ],
@@ -1039,6 +1075,19 @@ CASES = (
         },
     ),
     PromptCase(
+        id="automation_flexible_times_use_valid_one_time_schedules",
+        kind="general",
+        scope="first_attempt",
+        user=(
+            "Erinnere mich morgen daran, bitte Patrick das Geld zu überweisen. "
+            "Irgendwann so gegen Mittag rum oder vormittags oder zweimal."
+        ),
+        tools=("memory_retrieve", "create_automation"),
+        expected_tool="create_automation",
+        expected_tool_call_count=1,
+        expected_arguments={"deliver_to_current_session": True},
+    ),
+    PromptCase(
         id="explicit_automation_edit_uses_revision",
         kind="general",
         user=(
@@ -1054,6 +1103,7 @@ CASES = (
             "name": "Tagesbericht",
             "task": "Erstelle den kompakten Tagesbericht",
             "enabled": True,
+            "skill_id": None,
             "output_mode": "current",
             "output_session_required": True,
             "copy_runtime_from_current_session": False,
@@ -1062,6 +1112,7 @@ CASES = (
                     "cron": "0 9 * * *",
                     "timezone": "Europe/Berlin",
                     "run_at": None,
+                    "valid_until": None,
                     "enabled": True,
                 }
             ],
@@ -4836,8 +4887,8 @@ _COMPACT_TOOL_DESCRIPTIONS = {
         "indicate video length."
     ),
     "create_automation": (
-        "Create an automation only on an explicit latest-message request. Put schedules for the same task "
-        "in one automation. Deliver reminders to the current session. Never archive multiple schedules."
+        "Create only on an explicit latest request. Same task in one automation. Deliver reminders to "
+        "the current session. Never archive multiple schedules."
     ),
     "edit_automation": "Replace an owned automation at an exact revision on an explicit latest-message request.",
     "tasks_create_many": "Create up to 50 tasks, skipping duplicate open titles.",
@@ -6318,11 +6369,15 @@ def _validate_tool_calls(
         if definition is None:
             continue
         try:
+            raw_arguments = call.arguments
+            if (
+                bound_tool is not None
+                and bound_tool.default_arguments
+                and bound_tool.default_arguments.keys().isdisjoint(raw_arguments)
+            ):
+                raw_arguments = {**bound_tool.default_arguments, **raw_arguments}
             definition.validate_arguments(
-                {
-                    **(bound_tool.default_arguments if bound_tool is not None else {}),
-                    **call.arguments,
-                }
+                raw_arguments
             )
         except ValidationError:
             failures.append(f"{call.name} returned invalid arguments")

@@ -968,11 +968,15 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     assert definitions["edit_automation"].actions[0].mutates
     assert definitions["run_automation"].actions[0].mutates
     assert definitions["delete_automation"].actions[0].mutates
-    assert "same task in one automation" in definitions["create_automation"].description
-    assert "reminders to the user" in definitions["create_automation"].description
-    assert "Never set archive_after_success=true with multiple schedules" in definitions["create_automation"].description
-    assert "cron+timezone or run_at alone" in definitions["create_automation"].description
-    assert "cron+timezone or run_at alone" in definitions["edit_automation"].description
+    assert "Same task uses one automation" in definitions["create_automation"].description
+    assert "Reminders set deliver_to_current_session=true" in definitions[
+        "create_automation"
+    ].description
+    assert "Multiple schedules forbid archive_after_success" in definitions[
+        "create_automation"
+    ].description
+    assert "cron+timezone or offset run_at" in definitions["create_automation"].description
+    assert "cron+timezone or offset run_at" in definitions["edit_automation"].description
     assert tool_registry.action_default("automation.read") == ToolExecutionPolicy.ASK
     assert tool_registry.action_default("automation.create") == ToolExecutionPolicy.ASK
     assert tool_registry.action_default("automation.update") == ToolExecutionPolicy.ASK
@@ -989,6 +993,8 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     schedule_schema = create["properties"]["schedules"]["items"]
     schedule_schema = create["$defs"][schedule_schema["$ref"].rsplit("/", 1)[-1]]
     assert "run_at" in schedule_schema["properties"]
+    assert "not with run_at" in schedule_schema["properties"]["valid_until"]["description"]
+    assert "One run_at only" in create["properties"]["archive_after_success"]["description"]
     edit = definitions["edit_automation"].schema()["parameters"]
     assert edit["properties"]["output_mode"]["enum"] == ["keep", "current", "none"]
     assert "expected_revision" in edit["required"]
@@ -1047,6 +1053,25 @@ def test_automation_schedule_arguments_accept_one_time_schedule() -> None:
             {
                 "cron": "0 8 * * *",
                 "run_at": "2026-08-21T10:30:00+02:00",
+            }
+        )
+
+    without_skill = tools_module.CreateAutomationArguments.model_validate(
+        {
+            "name": "Bericht",
+            "task": "Erstellen",
+            "skill_id": "null",
+            "schedules": [{"run_at": "2026-08-21T10:30:00+02:00"}],
+        }
+    )
+    assert without_skill.skill_id is None
+    with pytest.raises(ValueError):
+        tools_module.CreateAutomationArguments.model_validate(
+            {
+                "name": "Bericht",
+                "task": "Erstellen",
+                "skill_id": "none",
+                "schedules": [{"run_at": "2026-08-21T10:30:00+02:00"}],
             }
         )
     with pytest.raises(ValueError):

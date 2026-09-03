@@ -659,7 +659,10 @@ class AutomationScheduleArguments(ToolArguments):
         max_length=100,
     )
     run_at: datetime | None = None
-    valid_until: datetime | None = None
+    valid_until: datetime | None = Field(
+        default=None,
+        description="Cron only; not with run_at.",
+    )
     enabled: bool = True
 
     @field_validator("cron", "timezone")
@@ -702,7 +705,10 @@ class AutomationDefinitionArguments(ToolArguments):
     enabled: bool = True
     schedules: list[AutomationScheduleArguments] = Field(min_length=1, max_length=50)
     output_session_required: bool = False
-    archive_after_success: bool = False
+    archive_after_success: bool = Field(
+        default=False,
+        description="One run_at only.",
+    )
 
     @field_validator("name", "task")
     @classmethod
@@ -710,6 +716,11 @@ class AutomationDefinitionArguments(ToolArguments):
         if not (cleaned := value.strip()):
             raise ValueError("automation text must not be blank")
         return cleaned
+
+    @field_validator("skill_id", mode="before")
+    @classmethod
+    def normalize_null_skill_id(cls, value: Any) -> Any:
+        return None if value == "null" else value
 
     @model_validator(mode="after")
     def schedules_are_unique(self) -> AutomationDefinitionArguments:
