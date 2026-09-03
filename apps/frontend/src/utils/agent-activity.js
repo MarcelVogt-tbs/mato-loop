@@ -73,11 +73,23 @@ export function agentRunPresentation({
   stopping = false,
   activity = null,
   streamReasoning = null,
+  streamContextSummary = null,
   streamContent = '',
   transcript = null
 } = {}) {
   if (!running) return { showActivity: false, label: '', summary: '', announcement: '' }
 
+  const contextSummaryText = activity?.phase === 'compacting_context'
+    ? String(streamContextSummary?.content || '')
+      .trim()
+      .split(/\n\s*\n/)
+      .at(-1)
+      ?.replace(/\s+/g, ' ')
+      .trim() || ''
+    : ''
+  const contextSummaryLabel = contextSummaryText.length > 160
+    ? `…${contextSummaryText.slice(-159)}`
+    : contextSummaryText
   const toolItems = (transcript?.messages || []).flatMap((message) => (
     message.workHistory?.entries?.filter((entry) => entry.type === 'tool') || message.toolCalls || []
   ))
@@ -103,6 +115,7 @@ export function agentRunPresentation({
   const summary = approval?.title
     || question?.questions?.[0]?.question
     || (activeTool ? toolSummary(activeTool.tool) : '')
+    || contextSummaryLabel
     || ''
   let announcement = label
   if (approval) {
@@ -113,6 +126,8 @@ export function agentRunPresentation({
     announcement = 'Antwort erforderlich'
   } else if (streamContent) {
     announcement = 'Antwort wird erstellt'
+  } else if (contextSummaryLabel) {
+    announcement = 'Gesprächskontext wird verdichtet'
   } else if (streamReasoning || suppliedReasoningLabel) {
     announcement = 'Nachdenken'
   }

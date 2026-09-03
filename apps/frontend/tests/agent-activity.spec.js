@@ -77,6 +77,18 @@ describe('agent activity', () => {
     })
     expect(agentRunPresentation({
       running: true,
+      activity: { phase: 'compacting_context' },
+      streamContextSummary: {
+        content: 'Goal\nWeiterarbeiten\n\nFacts\nDer bisherige Kontext wird verdichtet'
+      }
+    })).toEqual({
+      showActivity: true,
+      label: 'Gesprächskontext wird verdichtet',
+      summary: 'Facts Der bisherige Kontext wird verdichtet',
+      announcement: 'Gesprächskontext wird verdichtet'
+    })
+    expect(agentRunPresentation({
+      running: true,
       activity,
       streamReasoning: { kind: 'summary', text: '**Ergebnisse prüfen**\nDetails' }
     })).toEqual({

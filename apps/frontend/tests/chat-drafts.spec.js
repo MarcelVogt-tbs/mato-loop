@@ -1175,11 +1175,23 @@ describe('chat drafts', () => {
     expect(chat.streamContextSummary).toEqual({
       content: 'Goal\nWeiterarbeiten', isFallback: false, status: 'streaming'
     })
+    expect(chat.activity.phase).toBe('compacting_context')
+
+    source.emit('context.summary.updated', {
+      summary: {
+        content: 'Goal\nWeiterarbeiten\n\nFacts\nDer Kontext wächst',
+        isFallback: false,
+        status: 'streaming'
+      }
+    })
+    expect(chat.streamContextSummary.content).toBe(
+      'Goal\nWeiterarbeiten\n\nFacts\nDer Kontext wächst'
+    )
 
     const summary = {
       id: 'summary-1',
       coveredThroughMessageId: 'message-1',
-      content: 'Goal\nWeiterarbeiten',
+      content: 'Goal\nWeiterarbeiten\n\nFacts\nDer Kontext wächst',
       isFallback: false,
       createdAt: '2026-08-30T10:00:00Z'
     }

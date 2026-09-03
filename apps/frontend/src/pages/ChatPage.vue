@@ -58,6 +58,7 @@
             :history="liveWorkHistory"
             :activity="chat.activity"
             :presentation="runPresentation"
+            :context-summary="chat.streamContextSummary"
             :warnings="chat.runWarnings"
             running
             class="chat-welcome__activity text-left q-mx-auto"
@@ -530,6 +531,7 @@ const runPresentation = computed(() => agentRunPresentation({
   stopping: chat.stopping,
   activity: chat.activity,
   streamReasoning: chat.streamReasoning,
+  streamContextSummary: chat.streamContextSummary,
   streamContent: chat.streamContent,
   transcript: transcript.value
 }))

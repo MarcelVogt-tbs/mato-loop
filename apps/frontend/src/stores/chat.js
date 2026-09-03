@@ -2154,6 +2154,7 @@ export const useChatStore = defineStore('chat', {
       })
       source.addEventListener('context.summary.updated', (event) => {
         if (this.eventSource !== source) return
+        if (this.activity.phase !== 'compacting_context') this.setActivity('compacting_context')
         const summary = JSON.parse(event.data).summary
         this.streamContextSummary = summary && typeof summary.content === 'string'
           ? summary
