@@ -567,13 +567,23 @@ class UpdateUserProfileArguments(ToolArguments):
             "Target current_model unless the user explicitly requests private, public, or both models."
         ),
     )
-    preferred_name: str | None = Field(default=None, max_length=20_000)
+    full_name: str | None = Field(
+        default=None,
+        max_length=20_000,
+        description="The user's complete name, not the name used to address them.",
+    )
+    preferred_name: str | None = Field(
+        default=None,
+        max_length=20_000,
+        description="The name to use when addressing the user.",
+    )
     form_of_address: str | None = Field(default=None, max_length=20_000)
     pronouns: str | None = Field(default=None, max_length=20_000)
     primary_language: str | None = Field(default=None, max_length=20_000)
     primary_residence: str | None = Field(default=None, max_length=20_000)
 
     @field_validator(
+        "full_name",
         "preferred_name",
         "form_of_address",
         "pronouns",
@@ -592,6 +602,7 @@ class UpdateUserProfileArguments(ToolArguments):
     def require_change(self) -> UpdateUserProfileArguments:
         if not self.model_fields_set.intersection(
             {
+                "full_name",
                 "preferred_name",
                 "form_of_address",
                 "pronouns",

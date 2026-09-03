@@ -198,6 +198,7 @@ function taskDisplayItems(tool) {
 }
 
 const PROFILE_FIELD_LABELS = {
+  full_name: 'Vollständiger Name',
   preferred_name: 'Bevorzugter Name',
   form_of_address: 'Anrede',
   pronouns: 'Pronomen',

@@ -11,7 +11,7 @@ Durable memory and prior-session retrieval are independent. A conversation does 
 
 Project instructions are a separate optional authoritative layer for deliberately maintained project rules and decisions. Automatic project awareness comes from the compact session index and bounded snippets of other sessions in that project; instructions do not replace the project history.
 
-The maintained user profile is separate from memory. Its preferred name, form of address, pronouns, primary language, and primary residence are projected independently of `memoryMode`, are never embedded or searchable, and appear between the assistant persona and project context. Each field can define a shared, private-model-only, or public-model-only value; a trust-specific value overrides the shared value. Exact case- and whitespace-normalized profile duplicates are excluded from memory projection and retrieval.
+The maintained user profile is separate from memory. Its full name, preferred name, form of address, pronouns, primary language, and primary residence are projected independently of `memoryMode`, are never embedded or searchable, and appear between the assistant persona and project context. Each field can define a shared, private-model-only, or public-model-only value; a trust-specific value overrides the shared value. Exact case- and whitespace-normalized profile duplicates are excluded from memory projection and retrieval.
 
 ## Access, Scope, and Trust
 
@@ -117,7 +117,7 @@ Create accepts `content`, `category`, and `audience`. Update accepts those field
 
 Memory settings accept `enabled`, `automaticDreamingEnabled`, `dreamingInstructions`, `dreamingIntervalMinutes`, `dreamingIdleMinutes`, `dreamingMaxBatchMessages`, `dreamingMaxCandidates`, `dreamingUpdatePolicy`, `dreamingRemovePolicy`, `automaticMemorySnippetLimit`, `automaticSessionSnippetLimit`, `recentSessionSnippetLimit`, and `automaticContextMaxTokens`. Settings responses additionally expose effective Dreaming availability fields. Partial updates reject null and unknown fields.
 
-The authenticated `/api/user-profile` API provides owner-scoped `GET` and partial `PATCH`. Changes are merged under the user-scoped settings lock; explicit null removes a value. The profile remains available to normal model requests when Memory is disabled. The host-controlled `update_user_profile` tool changes the same five fields only after an explicit latest-message request. Its separate `settings.user_profile.update` policy defaults to `ask`; the tool resolves the current model to its private or public trust scope and targets both scopes only when explicitly requested. Profile writes have no revision contract; the last completed settings-lock write wins.
+The authenticated `/api/user-profile` API provides owner-scoped `GET` and partial `PATCH`. Changes are merged under the user-scoped settings lock; explicit null removes a value. The profile remains available to normal model requests when Memory is disabled. The host-controlled `update_user_profile` tool changes the same six fields only after an explicit latest-message request. Its separate `settings.user_profile.update` policy defaults to `ask`; the tool resolves the current model to its private or public trust scope and targets both scopes only when explicitly requested. Profile writes have no revision contract; the last completed settings-lock write wins.
 
 ## Ownership and Availability
 

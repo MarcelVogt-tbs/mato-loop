@@ -255,6 +255,7 @@ describe('tool display', () => {
       name: 'update_user_profile',
       arguments: {
         model_scope: 'both_models',
+        full_name: 'Lara Beispiel',
         preferred_name: 'Lara',
         primary_residence: null
       }
@@ -265,9 +266,10 @@ describe('tool display', () => {
       icon: 'manage_accounts'
     })
     expect(toolPresentation(tool)).toEqual({
-      summary: '2 Profilfelder',
+      summary: '3 Profilfelder',
       items: [
         { label: 'Gilt für', value: 'Private und öffentliche Modelle', format: 'text' },
+        { label: 'Vollständiger Name', value: 'Lara Beispiel', format: 'text' },
         { label: 'Bevorzugter Name', value: 'Lara', format: 'text' },
         { label: 'Hauptwohnsitz', value: 'Entfernen', format: 'text' }
       ]

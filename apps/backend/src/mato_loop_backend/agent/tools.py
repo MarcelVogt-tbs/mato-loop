@@ -2237,6 +2237,7 @@ async def _update_agent_identity(
 
 
 _PROFILE_FIELD_LABELS = {
+    "full_name": "den vollständigen Namen",
     "preferred_name": "den bevorzugten Namen",
     "form_of_address": "die Anrede",
     "pronouns": "die Pronomen",

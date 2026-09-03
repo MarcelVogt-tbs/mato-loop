@@ -1298,6 +1298,7 @@ def test_memory_system_message_layout_keeps_dynamic_memory_separate() -> None:
     assert case.memory_text in current[2]["content"]
     assert case.memory_text not in candidate[0]["content"]
     assert case.memory_text in candidate[1]["content"]
+    assert '"fullName":"Mina Muster"' in candidate[0]["content"]
     assert '"preferredName":"Mina"' in candidate[0]["content"]
     assert "Compacted session history." in candidate[2]["content"]
     assert "PAULA" in candidate[2]["content"]
@@ -2158,10 +2159,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 134
-    assert payload["contractCount"] == 341
-    assert "Cases: 207" in report
+    assert payload["contractCount"] == 342
+    assert "Cases: 208" in report
     assert "Semantic contracts: 134" in report
-    assert "All inventory rows: 341" in report
+    assert "All inventory rows: 342" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

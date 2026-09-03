@@ -1674,6 +1674,7 @@ async def test_update_user_profile_uses_ask_policy_and_preserves_other_scope(
         {"policies": {"settings.user_profile.update": "ask"}}
     )
     profile = UserProfileSettings(
+        full_name={"both": "Ada Lovelace"},
         preferred_name={"both": "Ada"},
         primary_residence={"both": "Wien"},
     )
@@ -1690,7 +1691,11 @@ async def test_update_user_profile_uses_ask_policy_and_preserves_other_scope(
     call = ToolCall(
         id="profile",
         name="update_user_profile",
-        arguments={"preferred_name": "Grace", "primary_residence": None},
+        arguments={
+            "full_name": "Grace Hopper",
+            "preferred_name": "Grace",
+            "primary_residence": None,
+        },
     )
     context = _context(tmp_path, call)
     context.model_trust_level = TrustLevel.PRIVATE
@@ -1698,7 +1703,7 @@ async def test_update_user_profile_uses_ask_policy_and_preserves_other_scope(
     result = await tool_registry.execute(call, context)
 
     assert json.loads(result.content) == {
-        "updatedFields": ["preferred_name", "primary_residence"],
+        "updatedFields": ["full_name", "preferred_name", "primary_residence"],
         "modelScope": "private_models",
         "effectiveFrom": "next_run",
     }
@@ -1706,7 +1711,10 @@ async def test_update_user_profile_uses_ask_policy_and_preserves_other_scope(
     assert request.capability == "settings.user_profile.update"
     assert request.resource_type == "user_profile"
     assert "private Modelle" in request.summary
+    assert "vollständigen Namen" in request.summary
     saved = save.await_args.args[1]
+    assert saved.full_name.private_only == "Grace Hopper"
+    assert saved.full_name.public_only == "Ada Lovelace"
     assert saved.preferred_name.both is None
     assert saved.preferred_name.private_only == "Grace"
     assert saved.preferred_name.public_only == "Ada"
@@ -1756,7 +1764,10 @@ def test_update_user_profile_requires_a_field_and_rejects_blank_values() -> None
         arguments_model.model_validate({})
     with pytest.raises(ValidationError):
         arguments_model.model_validate({"preferred_name": "   "})
+    with pytest.raises(ValidationError):
+        arguments_model.model_validate({"full_name": "   "})
     assert arguments_model.model_validate({"preferred_name": None}).preferred_name is None
+    assert arguments_model.model_validate({"full_name": None}).full_name is None
 
 
 async def test_build_skill_uses_user_scoped_approval_and_persistence(

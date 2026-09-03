@@ -1173,12 +1173,23 @@ CASES = (
     PromptCase(
         id="explicit_user_profile_update_uses_tool",
         kind="general",
-        user="Merke in meinem Profil für private und öffentliche Modelle, dass ich Lara heiße.",
+        user="Merke in meinem Profil für private und öffentliche Modelle, dass du mich Lara nennen sollst.",
         tools=("update_user_profile",),
         expected_tool="update_user_profile",
         expected_arguments={
             "model_scope": "both_models",
             "preferred_name": "Lara",
+        },
+    ),
+    PromptCase(
+        id="explicit_full_name_update_uses_distinct_field",
+        kind="general",
+        user="Merke in meinem Profil für private Modelle: Mein vollständiger Name ist Lara Beispiel.",
+        tools=("update_user_profile",),
+        expected_tool="update_user_profile",
+        expected_arguments={
+            "model_scope": "private_models",
+            "full_name": "Lara Beispiel",
         },
     ),
     PromptCase(
@@ -1351,6 +1362,7 @@ CASES = (
         memory_scope={"total": 4, "pinned": 1},
         system_options={
             "user_profile": {
+                "fullName": "Mina Muster",
                 "preferredName": "Mina",
                 "formOfAddress": None,
                 "pronouns": None,
@@ -4097,6 +4109,7 @@ _SEMANTIC_CONTRACTS = (
         "identity",
         (
             "explicit_user_profile_update_uses_tool",
+            "explicit_full_name_update_uses_distinct_field",
             "quoted_user_profile_request_is_data",
         ),
     ),
