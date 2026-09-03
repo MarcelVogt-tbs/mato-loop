@@ -54,7 +54,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 34
+    assert INVENTORY_VERSION == 35
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -319,8 +319,8 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
         "calendar_create_event",
     ]
     assert "never ask in assistant text" in calendar_messages[0]["content"]
-    assert "Preserve each requested answer mode" in calendar_tools[0]["description"]
-    assert "A choice is never free_text" in calendar_tools[0]["description"]
+    assert "Copy every requested type exactly" in calendar_tools[0]["description"]
+    assert "Examples are not options" in calendar_tools[0]["description"]
     assert "Never use for commands, output, or permissions" in calendar_tools[0]["description"]
     assert "call alone" in calendar_tools[0]["description"]
     question_parameters = json.dumps(calendar_tools[0]["parameters"])
@@ -683,6 +683,48 @@ def test_skill_build_case_checks_compact_brief_not_generated_draft() -> None:
             ]
         ),
     ) == []
+
+
+def test_question_answer_mode_case_checks_discriminators() -> None:
+    case = _case("question_preserves_requested_answer_modes")
+    questions = [
+        {
+            "id": "text",
+            "type": "free_text",
+            "header": "Freitext",
+            "question": "Was möchtest du ergänzen?",
+        },
+        {
+            "id": "one",
+            "type": "single_choice",
+            "header": "Eine Auswahl",
+            "question": "Welche Option passt?",
+            "options": [{"label": "A"}, {"label": "B"}],
+        },
+        {
+            "id": "many",
+            "type": "multiple_choice",
+            "header": "Mehrere Auswahlen",
+            "question": "Welche Optionen passen?",
+            "options": [{"label": "A"}, {"label": "B"}],
+        },
+    ]
+
+    assert evaluate(
+        case,
+        ProviderResult(tool_calls=[ToolCall("question-modes", "question", {"questions": questions})]),
+    ) == []
+    questions[0]["type"] = "single_choice"
+    questions[0]["options"] = [{"label": "A"}, {"label": "B"}]
+    assert any(
+        "question types expected" in failure
+        for failure in evaluate(
+            case,
+            ProviderResult(
+                tool_calls=[ToolCall("question-modes", "question", {"questions": questions})]
+            ),
+        )
+    )
 
 
 def test_skill_build_cases_clarify_once_then_use_the_answers() -> None:
@@ -2116,10 +2158,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 134
-    assert payload["contractCount"] == 340
-    assert "Cases: 206" in report
+    assert payload["contractCount"] == 341
+    assert "Cases: 207" in report
     assert "Semantic contracts: 134" in report
-    assert "All inventory rows: 340" in report
+    assert "All inventory rows: 341" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

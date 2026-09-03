@@ -54,38 +54,39 @@ class QuestionBase(ToolArguments):
         return cleaned
 
 
-class ChoiceQuestion(QuestionBase):
-    options: list[QuestionOption] = Field(min_length=2, max_length=12)
+class QuestionItem(QuestionBase):
+    type: Literal["free_text", "single_choice", "multiple_choice"] = Field(
+        description=(
+            "free_text: text; single_choice: exactly one option; "
+            "multiple_choice: one or more options."
+        )
+    )
+    options: list[QuestionOption] = Field(
+        default_factory=list,
+        max_length=12,
+        description="Empty for free_text; 2-12 items for choices.",
+    )
     allow_custom: bool = Field(
         default=True,
         description="Allow one custom text answer; do not add an Other option.",
     )
+    placeholder: str | None = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
-    def options_are_unique(self) -> ChoiceQuestion:
+    def shape_matches_type(self) -> QuestionItem:
+        if self.type == "free_text":
+            if self.options:
+                raise ValueError("free-text question must not have options")
+            self.allow_custom = False
+            return self
+        if len(self.options) < 2:
+            raise ValueError("choice question requires at least two options")
+        if self.placeholder is not None:
+            raise ValueError("choice question must not have a placeholder")
         labels = [option.label for option in self.options]
         if len(labels) != len(set(labels)):
             raise ValueError("option labels must be unique")
         return self
-
-
-class SingleChoiceQuestion(ChoiceQuestion):
-    type: Literal["single_choice"]
-
-
-class MultipleChoiceQuestion(ChoiceQuestion):
-    type: Literal["multiple_choice"]
-
-
-class FreeTextQuestion(QuestionBase):
-    type: Literal["free_text"]
-    placeholder: str | None = Field(default=None, max_length=200)
-
-
-QuestionItem = Annotated[
-    SingleChoiceQuestion | MultipleChoiceQuestion | FreeTextQuestion,
-    Field(discriminator="type"),
-]
 
 
 class QuestionArguments(ToolArguments):

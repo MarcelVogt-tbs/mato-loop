@@ -955,7 +955,12 @@ async def _send_question_reply_prompt(
 ) -> str | None:
     if not _question_expects_text(envelope):
         return None
-    placeholder = envelope.questions[envelope.current_index].placeholder or "Antwort eingeben"
+    question = envelope.questions[envelope.current_index]
+    placeholder = (
+        question.placeholder
+        if question.type == "free_text" and question.placeholder
+        else "Antwort eingeben"
+    )
     sent = await bot.send_message(
         chat_id=chat_id,
         text="Antwort eingeben:",
@@ -1771,6 +1776,8 @@ async def reconcile_runs() -> int:
                 if run.status == "completed" and result is not None
                 else "Die Antwort wurde abgebrochen."
                 if run.status == "cancelled"
+                else "Die Antwort wurde durch einen Neustart unterbrochen."
+                if run.error == "agent.backendRestarted"
                 else "Der Agent-Auftrag konnte nicht abgeschlossen werden."
             )
             db.add(

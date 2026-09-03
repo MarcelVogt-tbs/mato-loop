@@ -634,10 +634,21 @@ async def test_immediate_user_cancel_persists_empty_interruption_marker(monkeypa
     execute_loop.assert_not_awaited()
 
 
-async def test_shutdown_cancel_does_not_persist_user_interruption(monkeypatch) -> None:
+async def test_shutdown_cancel_is_persisted_as_backend_restart(monkeypatch) -> None:
     run = AgentRun(id=uuid4(), session_id=uuid4(), status="running")
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = run
+    messages = []
+
+    async def get(model_type, _item_id):
+        return run if model_type is AgentRun else messages[0] if messages else None
+
+    def add(message) -> None:
+        message.id = uuid4()
+        messages.append(message)
+
+    db.get.side_effect = get
+    db.scalar.return_value = None
+    db.add.side_effect = add
     events = []
 
     async def execute_loop(_db, _run, _visible_response) -> None:
@@ -654,8 +665,15 @@ async def test_shutdown_cancel_does_not_persist_user_interruption(monkeypatch) -
     with pytest.raises(asyncio.CancelledError):
         await AgentRuntime._run(run.id)
 
-    db.add.assert_not_called()
-    assert [event["type"] for event in events] == ["run.started", "run.cancelled"]
+    assert len(messages) == 1
+    assert messages[0].error_code == "agent.backendRestarted"
+    assert run.status == "failed"
+    assert run.error == "agent.backendRestarted"
+    assert [event["type"] for event in events] == [
+        "run.started",
+        "message.completed",
+        "run.failed",
+    ]
 
 
 async def test_cancel_after_completed_response_does_not_add_interruption(monkeypatch) -> None:

@@ -113,17 +113,9 @@ from mato_loop_backend.agent.tool_arguments import (
 from mato_loop_backend.agent.tool_arguments import (
     AutomationDefinitionArguments as AutomationDefinitionArguments,
 )
-from mato_loop_backend.agent.tool_arguments import ChoiceQuestion as ChoiceQuestion
-from mato_loop_backend.agent.tool_arguments import FreeTextQuestion as FreeTextQuestion
-from mato_loop_backend.agent.tool_arguments import (
-    MultipleChoiceQuestion as MultipleChoiceQuestion,
-)
 from mato_loop_backend.agent.tool_arguments import QuestionBase as QuestionBase
 from mato_loop_backend.agent.tool_arguments import QuestionItem as QuestionItem
 from mato_loop_backend.agent.tool_arguments import QuestionOption as QuestionOption
-from mato_loop_backend.agent.tool_arguments import (
-    SingleChoiceQuestion as SingleChoiceQuestion,
-)
 from mato_loop_backend.agent.tool_arguments import ToolArguments as ToolArguments
 from mato_loop_backend.agent.tool_arguments import (
     validate_question_answers as validate_question_answers,
@@ -4474,11 +4466,10 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "question",
-            "Ask 1-5 blocking questions in one call. Preserve each requested answer mode: free_text "
-            "is unrestricted text without options; single_choice is exactly one of 2-12 labeled "
-            "options; multiple_choice is one or more of 2-12 labeled options. A choice is never "
-            "free_text. Descriptions are optional; allow_custom replaces Other. Put exact fallback "
-            "lists in default_answers. Never use for commands, output, or permissions; call alone.",
+            "Ask 1-5 questions. Copy every requested type exactly: free_text for text, "
+            "single_choice for exactly one option, multiple_choice for one or more. Examples are not "
+            "options. allow_custom replaces Other; default_answers are fallbacks. Never use for "
+            "commands, output, or permissions; call alone.",
             QuestionArguments,
             _question,
             group="agent",

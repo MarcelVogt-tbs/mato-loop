@@ -468,6 +468,29 @@ async def test_telegram_force_reply_prompts_for_question_text() -> None:
         for button in row
     ] == ["Antworten senden", "Ablehnen"]
 
+    custom_choice = MessagingQuestionEnvelope.model_validate(
+        {
+            **envelope.model_dump(mode="json", by_alias=True),
+            "questions": [
+                {
+                    "id": "format",
+                    "type": "single_choice",
+                    "header": "Format",
+                    "question": "Welches Format?",
+                    "options": [{"label": "Kurz"}, {"label": "Ausführlich"}],
+                    "allow_custom": True,
+                }
+            ],
+            "awaitingText": True,
+        }
+    )
+    bot.send_message.reset_mock()
+    assert await telegram._send_question_reply_prompt(bot, "789", custom_choice) == "43"
+    assert (
+        bot.send_message.await_args.kwargs["reply_markup"].input_field_placeholder
+        == "Antwort eingeben"
+    )
+
 
 async def test_telegram_unbound_text_during_question_gets_direct_guidance(
     monkeypatch,

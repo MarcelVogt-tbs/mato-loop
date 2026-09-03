@@ -85,7 +85,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 34
+INVENTORY_VERSION = 35
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -409,6 +409,7 @@ class PromptCase:
     openscad_fixture: bool = False
     question_concepts: tuple[tuple[str, ...], ...] = ()
     maximum_question_count: int | None = None
+    expected_question_types: tuple[str, ...] = ()
     memory_scope: dict[str, int] | None = None
     dreaming_assistant: str = "Acknowledged."
     dreaming_guidance: str | None = None
@@ -774,6 +775,20 @@ CASES = (
         tools=("question",),
         expected_no_tools=True,
         content_contains=("docker", "llama-server"),
+    ),
+    PromptCase(
+        id="question_preserves_requested_answer_modes",
+        kind="general",
+        user=(
+            "Stelle genau drei Rückfragen in einem Aufruf: zuerst eine Freitextfrage ohne "
+            "Antwortvorgaben, dann eine Single-Choice-Frage, bei der ich aus mehreren Optionen "
+            "genau eine auswähle, danach eine Multiple-Choice-Frage mit mehreren Antworten."
+        ),
+        tools=("question",),
+        expected_tool="question",
+        expected_tool_call_count=1,
+        expected_question_types=("free_text", "single_choice", "multiple_choice"),
+        maximum_question_count=3,
     ),
     PromptCase(
         id="calendar_missing_details_uses_question",
@@ -3752,6 +3767,7 @@ _SEMANTIC_CONTRACTS = (
         "tools",
         (
             "console_diagnostics_use_assistant_text",
+            "question_preserves_requested_answer_modes",
             "calendar_missing_details_uses_question",
             "complete_calendar_event_skips_question",
             "answered_calendar_questions_continue_action",
@@ -6516,6 +6532,15 @@ def evaluate(
                 ):
                     failures.append(
                         f"question returned more than {case.maximum_question_count} questions"
+                    )
+                actual_types = tuple(
+                    str(question.get("type", ""))
+                    for question in questions
+                    if isinstance(question, dict)
+                )
+                if case.expected_question_types and actual_types != case.expected_question_types:
+                    failures.append(
+                        f"question types expected {case.expected_question_types!r}, got {actual_types!r}"
                     )
                 headers = [
                     str(question.get("header", "")).strip().casefold()

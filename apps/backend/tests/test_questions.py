@@ -90,6 +90,16 @@ def test_question_contract_rejects_invalid_questions_and_oversized_answers() -> 
         QuestionAnswerRequest(answers={"topics": [str(index) for index in range(14)]})
 
 
+def test_question_schema_explains_answer_mode_discriminators() -> None:
+    properties = QuestionArguments.model_json_schema()["$defs"]["QuestionItem"]["properties"]
+
+    assert properties["type"]["enum"] == ["free_text", "single_choice", "multiple_choice"]
+    assert properties["type"]["description"] == (
+        "free_text: text; single_choice: exactly one option; multiple_choice: one or more options."
+    )
+    assert properties["options"]["description"] == "Empty for free_text; 2-12 items for choices."
+
+
 async def test_agent_question_push_is_sent_after_commit(monkeypatch) -> None:
     request_id = uuid4()
     session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")

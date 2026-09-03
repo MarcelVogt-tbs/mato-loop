@@ -1032,14 +1032,17 @@ class AgentRuntime:
                 except asyncio.CancelledError:
                     if run_completed:
                         raise
+                    user_cancelled = run_id in cls._user_cancelled_runs
                     await db.rollback()
                     await cls._terminalize_incomplete_tool_calls(db, session_id)
                     cancelled_run = await db.get(AgentRun, run_id)
                     interrupted_message = None
+                    error_message = None
+                    restart_error = None
                     if cancelled_run is not None:
-                        transition_run_status(cancelled_run, "cancelled")
                         cancelled_run.completed_at = datetime.now(UTC)
-                        if run_id in cls._user_cancelled_runs:
+                        if user_cancelled:
+                            transition_run_status(cancelled_run, "cancelled")
                             reasoning = dict(visible_response.reasoning or {}) or None
                             if reasoning is not None:
                                 reasoning["status"] = "interrupted"
@@ -1065,9 +1068,24 @@ class AgentRuntime:
                             db.add(interrupted_message)
                             await db.flush()
                             cancelled_run.result_message_id = interrupted_message.id
+                        else:
+                            restart_error = describe_error("agent.backendRestarted")
+                            transition_run_status(cancelled_run, "failed")
+                            cancelled_run.error = restart_error.code
+                            error_message = await cls._persist_error_message(
+                                db, cancelled_run, restart_error
+                            )
                         await cls._persist_run_duration(db, cancelled_run)
                         await db.commit()
-                    if interrupted_message is not None:
+                    if error_message is not None and restart_error is not None:
+                        await run_events.publish(
+                            run_id,
+                            {
+                                "type": "message.completed",
+                                "message": cls._error_message_event(error_message, restart_error),
+                            },
+                        )
+                    elif interrupted_message is not None:
                         await run_events.publish(
                             run_id,
                             {
@@ -1086,18 +1104,35 @@ class AgentRuntime:
                                 },
                             },
                         )
-                    await run_events.publish(
-                        run_id,
-                        {
-                            "type": "run.cancelled",
-                            "runId": str(run_id),
-                            **(
-                                run_timing_payload(cancelled_run)
-                                if cancelled_run is not None
-                                else {}
-                            ),
-                        },
-                    )
+                    if user_cancelled:
+                        await run_events.publish(
+                            run_id,
+                            {
+                                "type": "run.cancelled",
+                                "runId": str(run_id),
+                                **(
+                                    run_timing_payload(cancelled_run)
+                                    if cancelled_run is not None
+                                    else {}
+                                ),
+                            },
+                        )
+                    else:
+                        restart_error = restart_error or describe_error(
+                            "agent.backendRestarted"
+                        )
+                        await run_events.publish(
+                            run_id,
+                            {
+                                "type": "run.failed",
+                                "error": restart_error.payload(),
+                                **(
+                                    run_timing_payload(cancelled_run)
+                                    if cancelled_run is not None
+                                    else {}
+                                ),
+                            },
+                        )
                     raise
                 except Exception as exc:
                     if run_completed:
