@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 
 export const userProfileFields = [
+  'fullName',
   'preferredName',
   'formOfAddress',
   'pronouns',

@@ -32,22 +32,24 @@ def _user() -> UserAccount:
 def test_user_profile_defaults_overrides_serialization_and_hashes() -> None:
     assert UserProfileSettings.settings_scope == SettingsScope.USER
     profile = UserProfileSettings(
-        preferred_name={
-            "both": "  User's name is Ada.  ",
-            "privateOnly": "User's full name is Ada Lovelace.",
-        },
+        full_name={"privateOnly": "User's full name is Ada Lovelace."},
+        preferred_name={"both": "  User's name is Ada.  "},
         primary_language={"publicOnly": "User's primary language is English."},
     )
 
     assert user_profile_runtime_payload(profile, TrustLevel.PUBLIC) == {
+        "fullName": None,
         "preferredName": "User's name is Ada.",
         "formOfAddress": None,
         "pronouns": None,
         "primaryLanguage": "User's primary language is English.",
         "primaryResidence": None,
     }
-    assert user_profile_runtime_payload(profile, TrustLevel.PRIVATE)["preferredName"] == (
+    assert user_profile_runtime_payload(profile, TrustLevel.PRIVATE)["fullName"] == (
         "User's full name is Ada Lovelace."
+    )
+    assert user_profile_runtime_payload(profile, TrustLevel.PRIVATE)["preferredName"] == (
+        "User's name is Ada."
     )
     assert user_profile_runtime_payload(profile, TrustLevel.PRIVATE)["primaryLanguage"] is None
     assert user_profile_content_hashes(profile) == {
@@ -72,6 +74,7 @@ async def test_user_profile_api_merges_explicit_clears(
     user = _user()
     db = AsyncMock(spec=AsyncSession)
     current = UserProfileSettings(
+        full_name={"both": "Ada Lovelace"},
         preferred_name={"both": "User's name is Ada.", "privateOnly": "Private name."},
         pronouns={"both": "User uses she/her pronouns."},
     )
@@ -89,6 +92,7 @@ async def test_user_profile_api_merges_explicit_clears(
                     "privateOnly": None,
                 },
                 "pronouns": None,
+                "fullName": None,
             }
         ),
         user,
@@ -101,6 +105,11 @@ async def test_user_profile_api_merges_explicit_clears(
         "publicOnly": None,
     }
     assert result["pronouns"] == {
+        "both": None,
+        "privateOnly": None,
+        "publicOnly": None,
+    }
+    assert result["fullName"] == {
         "both": None,
         "privateOnly": None,
         "publicOnly": None,
@@ -120,3 +129,9 @@ async def test_user_profile_api_merges_explicit_clears(
 def test_user_profile_patch_requires_an_actual_change(payload) -> None:
     with pytest.raises(ValidationError):
         UserProfileChanges.model_validate(payload)
+
+
+def test_user_profile_defaults_full_name_for_existing_documents() -> None:
+    profile = UserProfileSettings.model_validate({"preferredName": {"both": "Ada"}})
+
+    assert profile.full_name == UserProfileFact()

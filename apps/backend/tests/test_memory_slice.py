@@ -1940,6 +1940,7 @@ def test_dreaming_system_prompt_remains_isolated_from_agent_context() -> None:
     assert "durable user-specific knowledge" in DREAMING_SYSTEM_PROMPT
     assert "retrieval-only memories" in DREAMING_SYSTEM_PROMPT
     assert "those belong to the maintained user profile" in DREAMING_SYSTEM_PROMPT
+    assert "user's full name" in DREAMING_SYSTEM_PROMPT
     assert "owned equipment or lasting technical capabilities" in DREAMING_SYSTEM_PROMPT
     assert "current tasks, implementation details, or work state" in DREAMING_SYSTEM_PROMPT
     assert "temporary or borrowed equipment" in DREAMING_SYSTEM_PROMPT

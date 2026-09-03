@@ -23,6 +23,7 @@ class UserProfileChanges(BaseModel):
         extra="forbid",
     )
 
+    full_name: UserProfileFact | None = None
     preferred_name: UserProfileFact | None = None
     form_of_address: UserProfileFact | None = None
     pronouns: UserProfileFact | None = None

@@ -27,6 +27,8 @@ const fieldLabels = {
   model_id: 'Die Modell-ID',
   modelId: 'Die Modell-ID',
   projectId: 'Das Projekt',
+  fullName: 'Der vollständige Name',
+  full_name: 'Der vollständige Name',
   preferredName: 'Der bevorzugte Name',
   formOfAddress: 'Die Anrede',
   pronouns: 'Die Pronomen',

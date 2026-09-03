@@ -971,6 +971,7 @@ class UserProfileSettings(SettingsDocument):
         extra="forbid",
     )
 
+    full_name: UserProfileFact = Field(default_factory=UserProfileFact)
     preferred_name: UserProfileFact = Field(default_factory=UserProfileFact)
     form_of_address: UserProfileFact = Field(default_factory=UserProfileFact)
     pronouns: UserProfileFact = Field(default_factory=UserProfileFact)

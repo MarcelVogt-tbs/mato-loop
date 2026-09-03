@@ -7,6 +7,7 @@ from typing import Any
 from mato_loop_backend.settings import TrustLevel, UserProfileFact, UserProfileSettings
 
 PROFILE_FIELDS = (
+    ("full_name", "fullName"),
     ("preferred_name", "preferredName"),
     ("form_of_address", "formOfAddress"),
     ("pronouns", "pronouns"),

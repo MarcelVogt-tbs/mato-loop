@@ -14,6 +14,7 @@ import {
 } from '../src/stores/user-profile'
 
 const profileResponse = {
+  fullName: { both: null, privateOnly: 'Ada Lovelace', publicOnly: null },
   preferredName: { both: 'Ada', privateOnly: null, publicOnly: 'A.' },
   formOfAddress: { both: 'du', privateOnly: null, publicOnly: null },
   pronouns: { both: null, privateOnly: 'sie/ihr', publicOnly: null },
@@ -54,8 +55,20 @@ describe('user profile store', () => {
 
     expect(api.get).toHaveBeenCalledWith('/user-profile', undefined)
     expect(profile.preferredName).toEqual(profileResponse.preferredName)
+    expect(profile.fullName.privateOnly).toBe('Ada Lovelace')
     expect(profile.primaryResidence.privateOnly).toBe('Berlin')
     expect(profile.loaded).toBe(true)
+  })
+
+  it('defaults fields missing from older profile responses', async () => {
+    const olderResponse = { ...profileResponse }
+    delete olderResponse.fullName
+    api.get.mockResolvedValue({ data: olderResponse })
+    const profile = useUserProfileStore()
+
+    await profile.fetchProfile()
+
+    expect(profile.fullName).toEqual({ both: null, privateOnly: null, publicOnly: null })
   })
 
   it('patches only supplied changes', async () => {
