@@ -2,7 +2,7 @@
 
 Unter **Einstellungen > Personalisierung** konfigurieren Sie Ihr Profil und die Identität des Assistenten.
 
-Der Tab **Über mich** enthält bevorzugten Namen, Anrede, Pronomen, Hauptsprache und Hauptwohnsitz. Diese Angaben werden unabhängig von Memory verwendet und können getrennte Werte für private und öffentliche Modelle haben. Wenn das entsprechende Tool aktiviert ist, kann der Agent einzelne Angaben auf ausdrücklichen Wunsch ändern oder entfernen. Die eigene Tool-Richtlinie legt fest, ob dafür eine Freigabe erforderlich ist.
+Im Tab **Über mich** fügen Sie Angaben aus einem festen Katalog hinzu, darunter vollständiger und bevorzugter Name, Anrede, Pronomen, Hauptsprache und Hauptwohnsitz. Der vollständige Name dient dem persönlichen Kontext; der bevorzugte Name bestimmt, wie der Assistent Sie anspricht. Diese Angaben werden unabhängig von Memory verwendet und können getrennte Werte für private und öffentliche Modelle haben. Wenn das entsprechende Tool aktiviert ist, kann der Agent einzelne Angaben auf ausdrücklichen Wunsch ändern oder entfernen. Die eigene Tool-Richtlinie legt fest, ob dafür eine Freigabe erforderlich ist.
 
 Der Tab **Assistent** enthält die Persona des Agenten.
 

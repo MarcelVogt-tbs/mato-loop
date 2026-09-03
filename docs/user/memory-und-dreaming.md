@@ -14,7 +14,7 @@ Provider- und Modelleinstellungen können den zulässigen Umgang mit öffentlich
 
 ## Über mich
 
-Unter **Einstellungen > Personalisierung > Über mich** pflegen Sie bevorzugten Namen, Anrede, Pronomen, Hauptsprache und Hauptwohnsitz. Diese Angaben sind kein Memory: Sie gelten unabhängig vom Memory-Modus, sind weder durchsuchbar noch Teil von Dreaming. Der Agent kann sie nur auf Ihre ausdrückliche Bitte über ein eigenes Tool ändern oder entfernen; die Tool-Richtlinie bestimmt, ob Sie die Änderung einzeln freigeben müssen.
+Unter **Einstellungen > Personalisierung > Über mich** fügen Sie Angaben aus einem festen Katalog hinzu und pflegen dort vollständigen und bevorzugten Namen, Anrede, Pronomen, Hauptsprache und Hauptwohnsitz. Diese Angaben sind kein Memory: Sie gelten unabhängig vom Memory-Modus, sind weder durchsuchbar noch Teil von Dreaming. Der Agent kann sie nur auf Ihre ausdrückliche Bitte über ein eigenes Tool ändern oder entfernen; die Tool-Richtlinie bestimmt, ob Sie die Änderung einzeln freigeben müssen.
 
 Für jede Angabe können Sie zwischen privaten und öffentlichen Modellen umschalten. Mit **Auch für öffentliche Modelle verwenden** übernimmt das öffentliche Feld den privaten Wert; andernfalls pflegen Sie beide Werte getrennt. Eine aktuelle direkte Aussage im Chat hat weiterhin Vorrang vor dem gepflegten Profil; das Profil hat Vorrang vor älteren Erinnerungen und Sessions.
 

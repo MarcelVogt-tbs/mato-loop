@@ -70,26 +70,35 @@
           <q-separator />
           <q-card-section>
             <q-form class="q-gutter-y-lg" @submit.prevent="save">
-              <div v-for="field in fields" :key="field.name">
-                <q-input
+              <div v-if="visibleFields.length" class="q-gutter-y-lg">
+                <UserProfileFieldEditor
+                  v-for="field in visibleFields"
+                  :key="field.name"
+                  :field="field"
                   :model-value="fieldValue(field.name)"
-                  outlined
-                  clearable
-                  maxlength="20000"
-                  :label="field.label"
+                  :shared="draft[field.name].shared"
+                  :audience="profileAudience"
                   :hint="fieldHint(field)"
-                  :disable="fieldDisabled(field.name)"
+                  :input-disabled="fieldDisabled(field.name)"
+                  :disabled="profile.loading || profile.saving || !profile.loaded"
                   @update:model-value="setFieldValue(field.name, $event)"
-                />
-                <q-checkbox
-                  v-if="profileAudience === 'private'"
-                  v-model="draft[field.name].shared"
-                  class="q-mt-sm"
-                  color="primary"
-                  label="Auch für öffentliche Modelle verwenden"
-                  :disable="profile.loading || profile.saving || !profile.loaded"
+                  @update:shared="draft[field.name].shared = $event"
+                  @remove="removeField(field)"
                 />
               </div>
+              <div v-else class="text-center app-muted q-py-lg">
+                <q-icon name="person_add" size="40px" />
+                <div class="text-body1 q-mt-sm">Noch keine persönlichen Angaben hinterlegt.</div>
+              </div>
+              <q-btn
+                outline
+                no-caps
+                color="primary"
+                icon="add"
+                label="Angabe hinzufügen"
+                :disable="profile.loading || profile.saving || !profile.loaded || !availableFields.length"
+                @click="addFieldDialogOpen = true"
+              />
               <button type="submit" class="hidden" aria-hidden="true" tabindex="-1" />
             </q-form>
           </q-card-section>
@@ -110,6 +119,39 @@
         </q-banner>
 
         <q-inner-loading :showing="profile.loading" />
+
+        <q-dialog
+          v-model="addFieldDialogOpen"
+          :maximized="$q.screen.lt.sm"
+          aria-labelledby="add-profile-field-title"
+        >
+          <q-card class="user-dialog app-surface">
+            <q-card-section class="row items-center no-wrap">
+              <div>
+                <div id="add-profile-field-title" class="text-h6">Angabe hinzufügen</div>
+                <div class="text-body2 app-muted">Wähle eine Angabe für dein persönliches Profil.</div>
+              </div>
+              <q-space />
+              <q-btn flat round dense icon="close" aria-label="Dialog schließen" v-close-popup />
+            </q-card-section>
+            <q-separator />
+            <q-list separator>
+              <q-item
+                v-for="field in availableFields"
+                :key="field.name"
+                clickable
+                v-ripple
+                @click="addField(field.name)"
+              >
+                <q-item-section avatar><q-icon :name="field.icon" color="primary" /></q-item-section>
+                <q-item-section>
+                  <q-item-label>{{ field.label }}</q-item-label>
+                  <q-item-label caption>{{ field.description }}</q-item-label>
+                </q-item-section>
+              </q-item>
+            </q-list>
+          </q-card>
+        </q-dialog>
       </q-tab-panel>
 
       <q-tab-panel name="assistant" class="q-pa-none">
@@ -123,6 +165,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
+import UserProfileFieldEditor from 'components/UserProfileFieldEditor.vue'
 import AgentIdentitySettingsPage from 'pages/settings/AgentIdentitySettingsPage.vue'
 import { useConfirm } from 'src/composables/confirm'
 import {
@@ -140,6 +183,8 @@ const router = useRouter()
 const { confirm } = useConfirm()
 const profile = useUserProfileStore()
 const profileAudience = ref('private')
+const addFieldDialogOpen = ref(false)
+const activeFieldNames = ref([])
 const draft = reactive(Object.fromEntries(
   userProfileFields.map((field) => [field, profileFactDraft()])
 ))
@@ -148,11 +193,12 @@ const savedDraft = reactive(Object.fromEntries(
 ))
 
 const fields = [
-  { name: 'preferredName', label: 'Bevorzugter Name', description: 'Wie dich der Assistent nennen soll.' },
-  { name: 'formOfAddress', label: 'Anrede', description: 'Zum Beispiel du, Sie oder eine andere gewünschte Anrede.' },
-  { name: 'pronouns', label: 'Pronomen', description: 'Pronomen, die der Assistent für dich verwenden soll.' },
-  { name: 'primaryLanguage', label: 'Bevorzugte Sprache', description: 'Die Sprache, in der du normalerweise angesprochen werden möchtest.' },
-  { name: 'primaryResidence', label: 'Hauptwohnsitz', description: 'Eine freiwillige Ortsangabe für regional passenden Kontext.' }
+  { name: 'fullName', icon: 'badge', label: 'Vollständiger Name', description: 'Dein vollständiger Name für persönlichen Kontext.' },
+  { name: 'preferredName', icon: 'record_voice_over', label: 'Bevorzugter Name', description: 'Wie dich der Assistent nennen soll.' },
+  { name: 'formOfAddress', icon: 'forum', label: 'Anrede', description: 'Zum Beispiel du, Sie oder eine andere gewünschte Anrede.' },
+  { name: 'pronouns', icon: 'person', label: 'Pronomen', description: 'Zum Beispiel er/ihm, sie/ihr, they/them oder keine.' },
+  { name: 'primaryLanguage', icon: 'translate', label: 'Bevorzugte Sprache', description: 'Die Sprache, in der du normalerweise angesprochen werden möchtest.' },
+  { name: 'primaryResidence', icon: 'home', label: 'Hauptwohnsitz', description: 'Eine freiwillige Ortsangabe für regional passenden Kontext.' }
 ]
 const audienceOptions = [
   { label: 'Private Modelle', value: 'private', icon: 'lock' },
@@ -162,6 +208,8 @@ const tab = computed({
   get: () => route.query.tab === 'assistant' ? 'assistant' : 'profile',
   set: (value) => router.replace({ query: { ...route.query, tab: value } })
 })
+const visibleFields = computed(() => fields.filter((field) => activeFieldNames.value.includes(field.name)))
+const availableFields = computed(() => fields.filter((field) => !activeFieldNames.value.includes(field.name)))
 const changes = computed(() => {
   const result = {}
   for (const field of userProfileFields) {
@@ -182,6 +230,27 @@ function assignDraft(value) {
     Object.assign(draft[field], next)
     Object.assign(savedDraft[field], next)
   }
+  activeFieldNames.value = fields
+    .filter((field) => Object.values(value[field.name] || {}).some((item) => item != null))
+    .map((field) => field.name)
+}
+
+function addField(field) {
+  if (!activeFieldNames.value.includes(field)) activeFieldNames.value.push(field)
+  addFieldDialogOpen.value = false
+}
+
+async function removeField(field) {
+  const current = draft[field.name]
+  if ((current.privateValue != null || current.publicValue != null) && !await confirm(
+    `Soll „${field.label}“ für private und öffentliche Modelle entfernt werden?`,
+    'Angabe entfernen?',
+    { okLabel: 'Entfernen' }
+  )) return
+  current.privateValue = null
+  current.publicValue = null
+  current.shared = false
+  activeFieldNames.value = activeFieldNames.value.filter((name) => name !== field.name)
 }
 
 function fieldValue(field) {
