@@ -84,7 +84,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 32
+INVENTORY_VERSION = 33
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -1018,6 +1018,25 @@ CASES = (
             "deliver_to_current_session": True,
         },
         argument_contains={"schedules": ("run_at", "2026-07-27")},
+    ),
+    PromptCase(
+        id="automation_multiple_times_use_one_automation",
+        kind="general",
+        scope="first_attempt",
+        user=(
+            "Erinnere mich morgen um 09:00 Uhr und um 12:00 Uhr daran, "
+            "Patrick das Geld zu überweisen."
+        ),
+        tools=("create_automation",),
+        expected_tool="create_automation",
+        expected_tool_call_count=1,
+        expected_arguments={"deliver_to_current_session": True},
+        argument_contains={
+            "schedules": (
+                "2026-07-28T09:00:00+02:00",
+                "2026-07-28T12:00:00+02:00",
+            )
+        },
     ),
     PromptCase(
         id="explicit_automation_edit_uses_revision",
@@ -4816,7 +4835,10 @@ _COMPACT_TOOL_DESCRIPTIONS = {
         "Analyze MP4 or WebM video and use the result. Do not repeat success; timeout does not "
         "indicate video length."
     ),
-    "create_automation": "Create an automation only on an explicit latest-message request.",
+    "create_automation": (
+        "Create an automation only on an explicit latest-message request. Put schedules for the same task "
+        "in one automation. Deliver reminders to the current session. Never archive multiple schedules."
+    ),
     "edit_automation": "Replace an owned automation at an exact revision on an explicit latest-message request.",
     "tasks_create_many": "Create up to 50 tasks, skipping duplicate open titles.",
 }

@@ -54,7 +54,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 32
+    assert INVENTORY_VERSION == 33
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -2089,10 +2089,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 134
-    assert payload["contractCount"] == 337
-    assert "Cases: 203" in report
+    assert payload["contractCount"] == 338
+    assert "Cases: 204" in report
     assert "Semantic contracts: 134" in report
-    assert "All inventory rows: 337" in report
+    assert "All inventory rows: 338" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

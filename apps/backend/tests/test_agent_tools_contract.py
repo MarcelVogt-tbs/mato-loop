@@ -968,6 +968,9 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     assert definitions["edit_automation"].actions[0].mutates
     assert definitions["run_automation"].actions[0].mutates
     assert definitions["delete_automation"].actions[0].mutates
+    assert "same task in one automation" in definitions["create_automation"].description
+    assert "reminders to the user" in definitions["create_automation"].description
+    assert "Never set archive_after_success=true with multiple schedules" in definitions["create_automation"].description
     assert "cron+timezone or run_at alone" in definitions["create_automation"].description
     assert "cron+timezone or run_at alone" in definitions["edit_automation"].description
     assert tool_registry.action_default("automation.read") == ToolExecutionPolicy.ASK

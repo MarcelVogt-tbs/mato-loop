@@ -4851,7 +4851,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "create_automation",
-            "Create if asked. Use cron+timezone or run_at alone; valid_until inclusively limits cron. Archiving needs one run_at.",
+            "Create if asked. Put schedules for the same task in one automation. Set deliver_to_current_session=true for reminders to the user. Use cron+timezone or run_at alone; valid_until inclusively limits cron. Never set archive_after_success=true with multiple schedules.",
             CreateAutomationArguments,
             _create_automation,
             group="automations",
