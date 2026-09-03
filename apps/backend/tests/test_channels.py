@@ -1106,13 +1106,20 @@ async def test_telegram_keeps_typing_active_while_draft_exists(monkeypatch) -> N
     assert calls.count("typing") >= 3
 
 
-async def test_telegram_keeps_approval_wait_visible_as_draft(monkeypatch) -> None:
+async def test_telegram_resumes_progress_after_approval(monkeypatch) -> None:
     drafts = []
+    typing_statuses = []
+    status = "waiting_approval"
 
     async def events():
+        nonlocal status
         yield {"type": "approval.created", "approval": {"summary": "secret"}}
-        await asyncio.sleep(0.01)
+        status = "running"
+        yield {"type": "run.timing", "activeDurationRunning": True}
         yield {"type": "run.completed"}
+
+    async def progress_target(_run_id):
+        return status, "token", 123, 456
 
     class FakeBot:
         async def __aenter__(self):
@@ -1122,7 +1129,7 @@ async def test_telegram_keeps_approval_wait_visible_as_draft(monkeypatch) -> Non
             return None
 
         async def send_chat_action(self, **_kwargs):
-            raise AssertionError("waiting approvals must not show typing")
+            typing_statuses.append(status)
 
         async def send_message_draft(self, **kwargs):
             drafts.append(kwargs["text"])
@@ -1131,7 +1138,7 @@ async def test_telegram_keeps_approval_wait_visible_as_draft(monkeypatch) -> Non
     monkeypatch.setattr(
         telegram,
         "_progress_target",
-        AsyncMock(return_value=("waiting_approval", "token", 123, 456)),
+        progress_target,
     )
     monkeypatch.setattr(telegram.run_events, "subscribe", lambda _run_id: events())
     monkeypatch.setattr(telegram, "Bot", lambda **_kwargs: FakeBot())
@@ -1139,13 +1146,23 @@ async def test_telegram_keeps_approval_wait_visible_as_draft(monkeypatch) -> Non
     await telegram._relay_run_progress(uuid4())
 
     assert drafts == ["Wartet auf Freigabe"]
+    assert typing_statuses == ["running"]
 
 
-async def test_telegram_stops_progress_when_question_prompt_is_ready(monkeypatch) -> None:
+async def test_telegram_resumes_progress_after_question(monkeypatch) -> None:
     drafts = []
+    typing_statuses = []
+    status = "waiting_input"
 
     async def events():
+        nonlocal status
         yield {"type": "question.created"}
+        status = "running"
+        yield {"type": "run.timing", "activeDurationRunning": True}
+        yield {"type": "run.completed"}
+
+    async def progress_target(_run_id):
+        return status, "token", 123, 456
 
     class FakeBot:
         async def __aenter__(self):
@@ -1155,7 +1172,7 @@ async def test_telegram_stops_progress_when_question_prompt_is_ready(monkeypatch
             return None
 
         async def send_chat_action(self, **_kwargs):
-            return None
+            typing_statuses.append(status)
 
         async def send_message_draft(self, **kwargs):
             drafts.append(kwargs["text"])
@@ -1163,7 +1180,7 @@ async def test_telegram_stops_progress_when_question_prompt_is_ready(monkeypatch
     monkeypatch.setattr(
         telegram,
         "_progress_target",
-        AsyncMock(return_value=("running", "token", 123, 456)),
+        progress_target,
     )
     monkeypatch.setattr(telegram.run_events, "subscribe", lambda _run_id: events())
     monkeypatch.setattr(telegram, "Bot", lambda **_kwargs: FakeBot())
@@ -1171,6 +1188,7 @@ async def test_telegram_stops_progress_when_question_prompt_is_ready(monkeypatch
     await telegram._relay_run_progress(uuid4())
 
     assert drafts == []
+    assert typing_statuses == ["running"]
 
 
 async def test_telegram_stops_progress_before_final_delivery(monkeypatch) -> None:

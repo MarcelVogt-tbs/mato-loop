@@ -1622,7 +1622,14 @@ async def _relay_run_progress(run_id: UUID) -> None:
                                 activity = ""
                                 draft_dirty = True
                         elif event_type == "question.created":
-                            return
+                            content = ""
+                            activity = ""
+                            draft_dirty = False
+                        elif (
+                            event_type == "run.timing"
+                            and event.get("activeDurationRunning") is True
+                        ):
+                            next_indicator_at = 0.0
                         elif not content:
                             next_activity = _progress_activity(event)
                             if next_activity is not None and next_activity != activity:
