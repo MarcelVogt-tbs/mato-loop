@@ -1040,6 +1040,19 @@ async def _process_question_interaction(
             interaction,
             source_external_message_id,
         )
+        if interaction.action == "select" and result.envelope is not None:
+            follow_up = (
+                "submit"
+                if result.envelope.current_index == len(result.envelope.questions) - 1
+                else "next"
+            )
+            result = await resolve_question_interaction(
+                db,
+                endpoint,
+                question_id,
+                QuestionInteraction(action=follow_up),
+                source_external_message_id,
+            )
         response = _question_result_text(result)
     except MessagingQuestionError:
         await db.rollback()
@@ -1188,7 +1201,7 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
                     source_message_id,
                 )
                 if token is not None:
-                    if result is not None:
+                    if result is not None and result.changed:
                         reply_message_id = await _update_question_message(
                             token,
                             chat_id,
@@ -1197,13 +1210,12 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
                             callback_query_id=callback_query_id,
                             response=response,
                         )
-                        if result.changed:
-                            await _track_question_messages(
-                                db,
-                                question_id,
-                                source_message_id,
-                                reply_message_id,
-                            )
+                        await _track_question_messages(
+                            db,
+                            question_id,
+                            source_message_id,
+                            reply_message_id,
+                        )
                     else:
                         try:
                             async with Bot(token=token) as bot:
@@ -1543,8 +1555,6 @@ def _progress_activity(event: dict) -> str | None:
         return reasoning_activity_label(reasoning if isinstance(reasoning, dict) else None)
     if event_type == "approval.created":
         return run_activity_label("waiting_approval")
-    if event_type == "question.created":
-        return run_activity_label("waiting_input")
     return None
 
 
@@ -1611,6 +1621,8 @@ async def _relay_run_progress(run_id: UUID) -> None:
                                 content += delta
                                 activity = ""
                                 draft_dirty = True
+                        elif event_type == "question.created":
+                            return
                         elif not content:
                             next_activity = _progress_activity(event)
                             if next_activity is not None and next_activity != activity:

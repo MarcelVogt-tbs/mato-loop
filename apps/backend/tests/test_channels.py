@@ -318,6 +318,52 @@ async def test_telegram_callback_resolves_question_interaction(monkeypatch) -> N
     assert inbox.status == "completed"
 
 
+@pytest.mark.parametrize(
+    ("question_count", "follow_up_action", "expected_status", "expected_response"),
+    [
+        (1, "submit", "answered", "Antworten gesendet."),
+        (2, "next", "pending", "Auswahl aktualisiert."),
+    ],
+)
+async def test_telegram_single_choice_advances_without_an_extra_tap(
+    monkeypatch,
+    question_count,
+    follow_up_action,
+    expected_status,
+    expected_response,
+) -> None:
+    question_id = uuid4()
+    first_result = SimpleNamespace(
+        envelope=SimpleNamespace(current_index=0, questions=[None] * question_count)
+    )
+    final_result = SimpleNamespace(status=expected_status)
+    inbox = SimpleNamespace(
+        id=uuid4(), status="processing", payload={"type": "callback_action"}
+    )
+    endpoint = SimpleNamespace(id=uuid4())
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = [inbox, endpoint]
+    resolve = AsyncMock(side_effect=[first_result, final_result])
+    monkeypatch.setattr(telegram, "resolve_question_interaction", resolve)
+
+    result, response = await telegram._process_question_interaction(
+        db,
+        inbox,
+        endpoint,
+        question_id,
+        QuestionInteraction(action="select", optionIndex=0),
+        "42",
+    )
+
+    assert result == final_result
+    assert response == expected_response
+    assert [call.args[3].action for call in resolve.await_args_list] == [
+        "select",
+        follow_up_action,
+    ]
+    assert inbox.status == "completed"
+
+
 async def test_telegram_direct_reply_answers_question_text(monkeypatch) -> None:
     endpoint = MessagingEndpoint(
         id=uuid4(),
@@ -1093,6 +1139,38 @@ async def test_telegram_keeps_approval_wait_visible_as_draft(monkeypatch) -> Non
     await telegram._relay_run_progress(uuid4())
 
     assert drafts == ["Wartet auf Freigabe"]
+
+
+async def test_telegram_stops_progress_when_question_prompt_is_ready(monkeypatch) -> None:
+    drafts = []
+
+    async def events():
+        yield {"type": "question.created"}
+
+    class FakeBot:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def send_chat_action(self, **_kwargs):
+            return None
+
+        async def send_message_draft(self, **kwargs):
+            drafts.append(kwargs["text"])
+
+    monkeypatch.setattr(
+        telegram,
+        "_progress_target",
+        AsyncMock(return_value=("running", "token", 123, 456)),
+    )
+    monkeypatch.setattr(telegram.run_events, "subscribe", lambda _run_id: events())
+    monkeypatch.setattr(telegram, "Bot", lambda **_kwargs: FakeBot())
+
+    await telegram._relay_run_progress(uuid4())
+
+    assert drafts == []
 
 
 async def test_telegram_stops_progress_before_final_delivery(monkeypatch) -> None:
