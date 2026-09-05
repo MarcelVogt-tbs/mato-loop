@@ -243,6 +243,7 @@ _REMOTE_ERROR_CODES = {
     "file.editTextNotUnique": "file.editTextNotUnique",
     "file.invalidEncoding": "file.invalidEncoding",
     "file.patchContextMismatch": "file.patchContextMismatch",
+    "file.patchIncomplete": "file.patchIncomplete",
     "file.tooLarge": "file.tooLarge",
     "git.addFailed": "git.operationFailed",
     "git.cloneFailed": "git.cloneFailed",

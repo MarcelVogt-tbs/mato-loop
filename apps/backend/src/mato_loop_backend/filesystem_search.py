@@ -50,8 +50,10 @@ class RootFileSearch:
                 part.startswith(".") for part in PurePosixPath(result).parts[len(base) :]
             ):
                 return False
+            if len(paths) >= MAX_SEARCH_RESULTS:
+                return True
             paths.append(result)
-            return len(paths) == MAX_SEARCH_RESULTS
+            return False
 
         return_code, truncated = await self._run(
             root,
@@ -84,8 +86,10 @@ class RootFileSearch:
     ) -> dict:
         base = self.root_files.path_parts(path)
         matches: list[dict[str, str | int]] = []
+        text_clipped = False
 
         def consume(record: bytes) -> bool:
+            nonlocal text_clipped
             try:
                 message = json.loads(record)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -98,10 +102,14 @@ class RootFileSearch:
             line = data.get("line_number")
             if result is None or not isinstance(text, str) or not isinstance(line, int) or line < 1:
                 return False
+            if len(matches) >= MAX_SEARCH_RESULTS:
+                return True
+            text = text.rstrip("\r\n")
             matches.append(
-                {"path": result, "line": line, "text": text.rstrip("\r\n")[:MAX_MATCH_TEXT]}
+                {"path": result, "line": line, "text": text[:MAX_MATCH_TEXT]}
             )
-            return len(matches) == MAX_SEARCH_RESULTS
+            text_clipped |= len(text) > MAX_MATCH_TEXT
+            return False
 
         arguments = [
             "--no-config",
@@ -122,7 +130,7 @@ class RootFileSearch:
         if return_code not in {0, 1} and not truncated:
             raise RootFileError("tool.executionFailed", "Grep search failed")
         matches.sort(key=lambda match: (match["path"], match["line"]))
-        return {"matches": matches, "truncated": truncated}
+        return {"matches": matches, "truncated": truncated or text_clipped}
 
     async def _run(
         self,

@@ -92,7 +92,7 @@ class FilesystemSearch:
                 return True
             paths.append(result)
             response_bytes += size
-            return len(paths) == MAX_RESULTS
+            return False
 
         return_code, truncated = await self._run(
             path,
@@ -125,9 +125,10 @@ class FilesystemSearch:
         base = _parts(path)
         matches: list[dict[str, str | int]] = []
         response_bytes = 32
+        text_clipped = False
 
         def consume(record: bytes) -> bool:
-            nonlocal response_bytes
+            nonlocal response_bytes, text_clipped
             try:
                 message = json.loads(record)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -147,17 +148,19 @@ class FilesystemSearch:
                 return False
             if len(matches) >= MAX_RESULTS:
                 return True
+            text = text.rstrip("\r\n")
             match = {
                 "path": result,
                 "line": line,
-                "text": text.rstrip("\r\n")[:MAX_MATCH_TEXT],
+                "text": text[:MAX_MATCH_TEXT],
             }
             size = len(json.dumps(match, ensure_ascii=False).encode("utf-8")) + 1
             if response_bytes + size > self.filesystem.max_response_bytes:
                 return True
             matches.append(match)
             response_bytes += size
-            return len(matches) == MAX_RESULTS
+            text_clipped |= len(text) > MAX_MATCH_TEXT
+            return False
 
         arguments = [
             "--no-config",
@@ -196,7 +199,7 @@ class FilesystemSearch:
         if return_code not in {0, 1} and not truncated:
             raise AgentError("operation.failed", "Grep search failed")
         matches.sort(key=lambda match: (match["path"], match["line"]))
-        return {"matches": matches, "truncated": truncated}
+        return {"matches": matches, "truncated": truncated or text_clipped}
 
     async def _run(
         self,

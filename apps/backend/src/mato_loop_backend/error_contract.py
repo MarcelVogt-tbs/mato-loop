@@ -88,6 +88,10 @@ _MESSAGES = {
     "file.invalidDestination": "The destination is invalid.",
     "file.operationTooLarge": "The file operation is too large.",
     "file.patchContextMismatch": "The patch context no longer matches the file.",
+    "file.patchIncomplete": (
+        "The patch did not complete. Files may have changed, including in the "
+        "failed operation. Reread the affected paths before retrying."
+    ),
     "file.omittedContent": "Omitted historical content cannot be written to a file.",
     "file.pathAlreadyExists": "The destination path already exists.",
     "file.notAFile": "The target is not a regular file.",

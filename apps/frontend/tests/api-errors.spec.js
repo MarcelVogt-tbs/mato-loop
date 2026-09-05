@@ -3,6 +3,16 @@ import { describe, expect, it } from 'vitest'
 import { apiErrorMessage, decodeBlobApiError, errorDescriptor } from '../src/utils/api-errors'
 
 describe('API error messages', () => {
+  it('warns that an incomplete patch may have mutated even its failed operation', () => {
+    expect(apiErrorMessage({ error: {
+      code: 'file.patchIncomplete',
+      message: 'private remote detail',
+      params: { completedOperations: 0, totalOperations: 2, failedOperationIndex: 0, path: '/tmp/first' }
+    } })).toBe(
+      'Der Patch wurde nicht vollständig ausgeführt. Dateien können bereits geändert worden sein, auch durch den fehlgeschlagenen Schritt. Lies die betroffenen Pfade vor einem erneuten Versuch erneut ein.'
+    )
+  })
+
   it('translates stable domain error codes', () => {
     expect(apiErrorMessage({ response: { data: { error: { code: 'auth.invalidCredentials' } } } })).toBe(
       'Benutzername oder Passwort ist ungültig.'

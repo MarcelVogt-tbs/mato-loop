@@ -34,6 +34,7 @@ from mato_loop_backend.agent.tools import (
     tool_registry,
 )
 from mato_loop_backend.attachments import AttachmentService
+from mato_loop_backend.filesystem_search import MAX_MATCH_TEXT, MAX_SEARCH_RESULTS, RootFileSearch
 from mato_loop_backend.integrations import (
     TranscriptResult,
     WebFetchError,
@@ -954,6 +955,88 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
             "enum"
         ] == ["files", "computer"]
         assert "exact new destination path" in schemas[name]["description"]
+
+
+def test_search_descriptions_explain_root_specific_exclusions_and_limits() -> None:
+    schemas = {item["name"]: item for item in tool_registry.schemas(IntegrationSettings())}
+    for name in ("glob", "grep"):
+        description = schemas[name]["description"]
+        assert "100" in description
+        assert "root=computer" in description
+        assert "root=files" in description
+        assert "ignores" in description
+        assert "truncated=true" in description
+        assert "symlinks" in description
+        assert not {"hidden", "ignored"} & schemas[name]["parameters"]["properties"].keys()
+    assert "Skip hidden/.git/symlinks" in schemas["glob"]["description"]
+    assert "root=files includes hidden" in schemas["grep"]["description"]
+    assert "2000 characters" in schemas["grep"]["description"]
+
+
+@pytest.mark.parametrize("extra", [False, True])
+async def test_files_search_result_limit_requires_an_extra_eligible_result(tmp_path, extra) -> None:
+    context = _context(tmp_path, ToolCall("search", "glob", {"root": "files", "pattern": "*.txt"}))
+    root = context.root_files._files_path()
+    for index in range(MAX_SEARCH_RESULTS + int(extra)):
+        (root / f"{index:03}.txt").write_text("match\n")
+    (root / ".git").mkdir()
+    (root / ".git" / "excluded.txt").write_text("match\n")
+    search = RootFileSearch(context.root_files)
+
+    glob = await search.glob(FileRoot.SESSION, ".", "*.txt")
+    grep = await search.grep(FileRoot.SESSION, ".", "match", "*.txt")
+
+    assert len(glob["paths"]) == MAX_SEARCH_RESULTS
+    assert len(grep["matches"]) == MAX_SEARCH_RESULTS
+    assert glob["truncated"] is extra
+    assert grep["truncated"] is extra
+
+
+@pytest.mark.parametrize("length", [MAX_MATCH_TEXT, MAX_MATCH_TEXT + 1])
+async def test_files_search_clips_text_without_stopping(tmp_path, length) -> None:
+    context = _context(tmp_path, ToolCall("search", "grep", {"root": "files", "pattern": "x+"}))
+    root = context.root_files._files_path()
+    (root / "long.txt").write_bytes(b"x" * length + b"\r\nx\n")
+
+    result = await RootFileSearch(context.root_files).grep(FileRoot.SESSION, ".", "x+", None)
+
+    assert result == {
+        "matches": [
+            {"path": "long.txt", "line": 1, "text": "x" * MAX_MATCH_TEXT},
+            {"path": "long.txt", "line": 2, "text": "x"},
+        ],
+        "truncated": length > MAX_MATCH_TEXT,
+    }
+
+
+async def test_files_search_preserves_hidden_ignored_binary_and_symlink_behavior(tmp_path) -> None:
+    context = _context(tmp_path, ToolCall("search", "grep", {"root": "files", "pattern": "needle"}))
+    root = context.root_files._files_path()
+    (root / "visible.py").write_text("needle\n")
+    (root / ".hidden.py").write_text("needle\n")
+    (root / ".hidden").mkdir()
+    (root / ".hidden" / "nested.py").write_text("needle\n")
+    (root / "ignored.py").write_text("needle\n")
+    (root / ".gitignore").write_text("ignored.py\n")
+    (root / ".git").mkdir()
+    (root / ".git" / "secret.py").write_text("needle\n")
+    (root / "binary.py").write_bytes(b"\0needle\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.py").write_text("needle\n")
+    (root / "escape").symlink_to(outside, target_is_directory=True)
+    (root / "link.py").symlink_to(outside / "secret.py")
+    search = RootFileSearch(context.root_files)
+
+    glob = await search.glob(FileRoot.SESSION, ".", "*.py")
+    assert glob == {"paths": ["binary.py", "ignored.py", "visible.py"], "truncated": False}
+    for include in (None, "*.py"):
+        grep = await search.grep(FileRoot.SESSION, ".", "needle", include)
+        expected = [".hidden.py", ".hidden/nested.py", "visible.py"]
+        if include:
+            expected.append("ignored.py")
+        assert [match["path"] for match in grep["matches"]] == sorted(expected)
+        assert grep["truncated"] is False
 
 
 def test_tool_catalog_exposes_types_but_model_schemas_do_not() -> None:

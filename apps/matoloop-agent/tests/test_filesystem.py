@@ -134,6 +134,117 @@ class FilesystemTests(unittest.TestCase):
             self.filesystem.edit(os.fspath(target), "current", "updated", False, "0" * 64)
         self.assertEqual(target.read_text(), "current\n")
 
+    def test_text_mutations_preserve_only_ordinary_modes_before_publication(self) -> None:
+        target = self.root / "script.sh"
+        for operation in ("write", "upsert", "edit", "patch"):
+            for mode in (0o755, 0o640, 0o6755):
+                with self.subTest(operation=operation, mode=oct(mode)):
+                    target.write_text("old\n")
+                    target.chmod(mode)
+                    revision = hashlib.sha256(target.read_bytes()).hexdigest()
+                    sync = os.fsync
+                    staged_modes = []
+
+                    def check_staged(fd, staged_modes=staged_modes, sync=sync):
+                        staged_modes.append(os.fstat(fd).st_mode & 0o7777)
+                        self.assertEqual(target.read_text(), "old\n")
+                        sync(fd)
+
+                    with patch.object(filesystem_module.os, "fsync", side_effect=check_staged):
+                        with patch.object(filesystem_module, "_fsync"):
+                            if operation == "write":
+                                self.filesystem.write(str(target), "new\n", revision)
+                            elif operation == "upsert":
+                                self.filesystem.upsert(str(target), "new\n")
+                            elif operation == "edit":
+                                self.filesystem.edit(str(target), "old", "new", False)
+                            else:
+                                self.filesystem.patch(
+                                    f"*** Begin Patch\n*** Update File: {target}\n"
+                                    "@@\n-old\n+new\n*** End Patch\n",
+                                    {str(target): revision},
+                                )
+                    self.assertEqual(staged_modes, [mode & 0o777])
+                    self.assertEqual(target.stat().st_mode & 0o7777, mode & 0o777)
+                    self.assertEqual(target.read_text(), "new\n")
+
+    def test_new_text_files_are_private(self) -> None:
+        for operation in ("write", "upsert", "patch"):
+            with self.subTest(operation=operation):
+                target = self.root / operation
+                previous_umask = os.umask(0o777)
+                try:
+                    if operation == "write":
+                        self.filesystem.write(str(target), "new\n", None)
+                    elif operation == "upsert":
+                        self.filesystem.upsert(str(target), "new\n")
+                    else:
+                        self.filesystem.patch(
+                            f"*** Begin Patch\n*** Add File: {target}\n+new\n*** End Patch\n",
+                            {},
+                        )
+                finally:
+                    os.umask(previous_umask)
+                self.assertEqual(target.stat().st_mode & 0o7777, 0o600)
+
+    def test_patch_execution_failure_reports_completed_operations_and_destination(self) -> None:
+        source = self.root / "source"
+        source.write_text("source\n")
+        destination = self.path("destination")
+        revision = hashlib.sha256(source.read_bytes()).hexdigest()
+        for failure in (AgentError("file.changed", "private detail"), OSError("private detail")):
+            with self.subTest(failure=type(failure).__name__):
+                added = self.root / type(failure).__name__
+                patch_text = (
+                    f"*** Begin Patch\n*** Add File: {added}\n+added\n"
+                    f"*** Update File: {source}\n*** Move to: {destination}\n"
+                    f"*** Add File: {self.path('later')}\n+later\n*** End Patch\n"
+                )
+                with patch.object(self.filesystem, "_move_revision", side_effect=failure):
+                    with self.assertRaises(AgentError) as caught:
+                        self.filesystem.patch(patch_text, {str(source): revision})
+                self.assertEqual(caught.exception.code, "file.patchIncomplete")
+                self.assertEqual(
+                    caught.exception.params,
+                    {
+                        "completedOperations": 1,
+                        "totalOperations": 3,
+                        "failedOperationIndex": 1,
+                        "path": str(source),
+                        "destination": destination,
+                    },
+                )
+                self.assertNotIn("private detail", str(caught.exception))
+                self.assertEqual(added.read_text(), "added\n")
+                self.assertFalse((self.root / "later").exists())
+
+    def test_patch_fsync_failure_after_first_publication_reports_uncertain_failed_operation(
+        self,
+    ) -> None:
+        first = self.root / "first"
+        second = self.root / "second"
+        patch_text = (
+            f"*** Begin Patch\n*** Add File: {first}\n+first\n"
+            f"*** Add File: {second}\n+second\n*** End Patch\n"
+        )
+        with patch.object(filesystem_module, "_fsync", side_effect=OSError("sync failed")):
+            with self.assertRaises(AgentError) as caught:
+                self.filesystem.patch(patch_text, {})
+        self.assertEqual(caught.exception.code, "file.patchIncomplete")
+        self.assertEqual(
+            caught.exception.params,
+            {
+                "completedOperations": 0,
+                "totalOperations": 2,
+                "failedOperationIndex": 0,
+                "path": str(first),
+            },
+        )
+        self.assertIn("including in the failed operation", str(caught.exception))
+        self.assertIn("Reread", str(caught.exception))
+        self.assertEqual(first.read_text(), "first\n")
+        self.assertFalse(second.exists())
+
     def test_patch_adds_updates_moves_and_deletes_files(self) -> None:
         updated = self.root / "updated.txt"
         moved = self.root / "moved.txt"
@@ -184,8 +295,10 @@ class FilesystemTests(unittest.TestCase):
 +changed
 *** End Patch
 """
-        with self.assertRaisesRegex(AgentError, "changed"):
+        with self.assertRaisesRegex(AgentError, "changed") as caught:
             self.filesystem.patch(patch_text, {os.fspath(target): "0" * 64})
+        self.assertEqual(caught.exception.code, "file.changed")
+        self.assertIsNone(caught.exception.params)
         self.assertFalse((self.root / "must-not-exist.txt").exists())
         self.assertEqual(target.read_text(), "current\n")
 

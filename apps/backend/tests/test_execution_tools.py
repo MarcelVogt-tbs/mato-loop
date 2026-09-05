@@ -336,6 +336,60 @@ async def test_apply_patch_resolves_paths_and_checks_each_permission(tmp_path) -
     ] == ["filesystem.write", "filesystem.write"]
 
 
+async def test_incomplete_patch_error_propagates_remote_params_through_registry(
+    tmp_path, monkeypatch,
+) -> None:
+    params = {
+        "completedOperations": 1,
+        "totalOperations": 2,
+        "failedOperationIndex": 1,
+        "path": "/home/user/project/source",
+        "destination": "/home/user/project/destination",
+    }
+    client = ExecutionClient(uuid4(), frozenset({"filesystem.patch"}), "/home/user/project")
+    request = AsyncMock(return_value=ResponseMessage.model_validate({
+        "type": "response",
+        "id": uuid4(),
+        "ok": False,
+        "error": {"code": "file.patchIncomplete", "params": params},
+    }))
+    monkeypatch.setattr(
+        "mato_loop_backend.execution.client.execution_agent_connections.request", request
+    )
+    call = ToolCall("patch", "apply_patch", {
+        "patch": "*** Begin Patch\n*** Add File: first\n+first\n"
+        "*** Update File: source\n*** Move to: destination\n*** End Patch\n",
+        "expectedSha256": {"source": "a" * 64},
+    })
+
+    result = await _tools(client.operations).execute(call, _context(tmp_path, call, client))
+
+    assert result.is_error
+    descriptor = json.loads(result.content)["error"]
+    assert descriptor["code"] == "file.patchIncomplete"
+    assert descriptor["params"] == params
+    assert "Reread the affected paths before retrying" in descriptor["message"]
+    request.assert_awaited_once()
+
+
+async def test_execution_error_params_are_validated_before_tool_serialization(tmp_path) -> None:
+    def fail(_arguments):
+        raise ExecutionClientError("file.patchIncomplete", {"invalid": object()})
+
+    client = FakeExecutionClient({"filesystem.patch": fail}, {"filesystem.patch"})
+    call = ToolCall("patch", "apply_patch", {
+        "patch": "*** Begin Patch\n*** Add File: first\n+first\n*** End Patch\n",
+        "expectedSha256": {},
+    })
+
+    result = await _tools(client.operations).execute(call, _context(tmp_path, call, client))
+
+    assert result.is_error
+    descriptor = json.loads(result.content)["error"]
+    assert descriptor["code"] == "file.patchIncomplete"
+    assert "params" not in descriptor
+
+
 def _shell_permission(client, classification="write", prefixes=None, directory=None):
     return PermissionRequest(
         capability=f"shell.{classification}",

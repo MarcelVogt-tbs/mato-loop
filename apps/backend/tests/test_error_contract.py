@@ -63,6 +63,13 @@ def test_changed_file_error_has_controlled_fallback() -> None:
     assert describe_error("file.changed").message == "The file changed since it was opened."
 
 
+def test_incomplete_patch_error_requires_rereading_even_the_failed_operation() -> None:
+    assert describe_error("file.patchIncomplete").message == (
+        "The patch did not complete. Files may have changed, including in the "
+        "failed operation. Reread the affected paths before retrying."
+    )
+
+
 def test_memory_approval_conflicts_have_controlled_fallbacks() -> None:
     assert (
         describe_error("approval.targetChanged").message

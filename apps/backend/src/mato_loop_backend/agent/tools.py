@@ -4543,7 +4543,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "glob",
-            "Find up to 100 paths recursively by glob pattern under an explicit root.",
+            "Glob files recursively, max 100. Skip hidden/.git/symlinks. "
+            "root=computer honors ignores; root=files overrides them. truncated=true: more/size limit.",
             GlobArguments,
             _glob,
             tool_type="shared",
@@ -4554,7 +4555,10 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "grep",
-            "Find up to 100 UTF-8 content matches recursively by regex and optional include glob.",
+            "Regex recursively; include glob; max 100 lines, 2000 characters/line. "
+            "Skip .git/binary/symlinks. root=computer skips hidden/ignored; "
+            "root=files includes hidden; include overrides ignores. "
+            "truncated=true: more/clipped text/size limit.",
             GrepArguments,
             _grep,
             tool_type="shared",

@@ -432,6 +432,7 @@ class Filesystem:
                 with os.fdopen(fd, "wb") as handle:
                     handle.write(data)
                     handle.flush()
+                    os.fchmod(handle.fileno(), metadata.st_mode & 0o777 if metadata else 0o600)
                     os.fsync(handle.fileno())
                 if expected_sha256 is None:
                     _rename_no_replace(parent, temporary, parent, name)
@@ -509,6 +510,7 @@ class Filesystem:
                 with os.fdopen(fd, "wb") as handle:
                     handle.write(data)
                     handle.flush()
+                    os.fchmod(handle.fileno(), metadata.st_mode & 0o777 if metadata else 0o600)
                     os.fsync(handle.fileno())
                 os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
                 _fsync(parent)
@@ -925,15 +927,32 @@ class Filesystem:
 
             results = []
             for item, content, digest, size in prepared:
-                if item.operation == "add":
-                    self.write(item.path, content, None)
-                elif item.operation == "delete":
-                    self._delete_revision(item.path, expected_sha256[item.path])
-                else:
-                    if item.hunks:
-                        self.write(item.path, content, expected_sha256[item.path])
+                try:
+                    if item.operation == "add":
+                        self.write(item.path, content, None)
+                    elif item.operation == "delete":
+                        self._delete_revision(item.path, expected_sha256[item.path])
+                    else:
+                        if item.hunks:
+                            self.write(item.path, content, expected_sha256[item.path])
+                        if item.destination is not None:
+                            self._move_revision(item.path, item.destination, digest)
+                except Exception as exc:
+                    # Index is zero-based; only fully returned operations count as completed.
+                    params: dict[str, str | bool | int | float] = {
+                        "completedOperations": len(results),
+                        "totalOperations": len(prepared),
+                        "failedOperationIndex": len(results),
+                        "path": item.path,
+                    }
                     if item.destination is not None:
-                        self._move_revision(item.path, item.destination, digest)
+                        params["destination"] = item.destination
+                    raise AgentError(
+                        "file.patchIncomplete",
+                        "The patch did not complete. Files may have changed, including in the "
+                        "failed operation. Reread the affected paths before retrying.",
+                        params,
+                    ) from exc
                 result = {"operation": item.operation, "path": item.path}
                 if item.destination is not None:
                     result["destination"] = item.destination

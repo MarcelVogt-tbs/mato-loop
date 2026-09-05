@@ -68,6 +68,7 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Symlinks must not bypass path boundaries.
 - Disallowed actions create persistent approval requests with `allow_once`, `allow_session`, or `deny`.
 - Never expose unfiltered external provider responses or exception text as API errors or toasts.
+- Heuristic `shell.read` classification and its possible side effects are an accepted workflow tradeoff, not an unresolved sandbox requirement. Follow the decision in `docs/architecture.md`; review enforcement regressions, and revisit the tradeoff only with new evidence or a changed threat model.
 
 ## Error Contract
 

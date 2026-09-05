@@ -178,6 +178,7 @@ const messages = {
   'process.inspectionChanged': () => 'Die erkannten Einstiegspfade haben sich vor der Ausführung geändert. Prüfe den Befehl erneut.',
   'file.changed': () => 'Die Datei wurde seit dem Öffnen geändert. Öffne sie erneut und übernimm deine Änderungen in die aktuelle Version.',
   'file.patchContextMismatch': () => 'Der Patch passt nicht mehr zum aktuellen Dateiinhalt. Lies die Datei erneut ein.',
+  'file.patchIncomplete': () => 'Der Patch wurde nicht vollständig ausgeführt. Dateien können bereits geändert worden sein, auch durch den fehlgeschlagenen Schritt. Lies die betroffenen Pfade vor einem erneuten Versuch erneut ein.',
   'file.activeDirty': () => 'Die Datei enthält ungespeicherte Änderungen und kann vom Agenten nicht überschrieben werden.',
   'file.directoryNotEmpty': () => 'Der Ordner ist nicht leer. Aktiviere das rekursive Löschen ausdrücklich.',
   'file.directoryNotFound': () => 'Der Ordner wurde im ausgewählten Datei-Root nicht gefunden.',

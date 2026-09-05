@@ -5203,8 +5203,16 @@ def _compact_schema_details(tool: dict[str, Any]) -> dict[str, Any]:
 
 _V2_TOOL_DESCRIPTIONS = {
     "read": "Read a directory, text, image, or exact files revision with optional pagination.",
-    "glob": "Find up to 100 paths recursively by glob pattern under an explicit root.",
-    "grep": "Find up to 100 UTF-8 content matches recursively by regex and optional include glob.",
+    "glob": (
+        "Glob files recursively, max 100. Skip hidden/.git/symlinks. "
+        "root=computer honors ignores; root=files overrides them. truncated=true: more/size limit."
+    ),
+    "grep": (
+        "Regex recursively; include glob; max 100 lines, 2000 characters/line. "
+        "Skip .git/binary/symlinks. root=computer skips hidden/ignored; "
+        "root=files includes hidden; include overrides ignores. "
+        "truncated=true: more/clipped text/size limit."
+    ),
     "provide_file": "Provide an exact files revision or fixed computer snapshot.",
     "write_file": "Write complete UTF-8 content to one file, creating or replacing it.",
     "create_directory": "Create one directory; its parent must exist.",

@@ -93,15 +93,46 @@ class SearchTests(unittest.IsolatedAsyncioTestCase):
             root = Path(temporary)
             for index in range(MAX_RESULTS + 1):
                 (root / f"{index:03}.txt").write_text("match\n")
-            (root / "long.txt").write_text("x" * (MAX_MATCH_TEXT + 10))
+            (root / "long.txt").write_text("x" * (MAX_MATCH_TEXT + 10) + "\nx\n")
             agent = MatoLoopAgent(configuration(root), "secret")
             result = await agent.search.grep(str(root), "match", None)
             self.assertEqual(len(result["matches"]), MAX_RESULTS)
             self.assertTrue(result["truncated"])
             long = await agent.search.grep(str(root), "x+", "long.txt")
             self.assertEqual(len(long["matches"][0]["text"]), MAX_MATCH_TEXT)
+            self.assertEqual([match["line"] for match in long["matches"]], [1, 2])
+            self.assertTrue(long["truncated"])
             with self.assertRaisesRegex(AgentError, "Invalid grep pattern"):
                 await agent.search.grep(str(root), "[", None)
+
+    async def test_result_limit_requires_an_extra_eligible_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            agent = MatoLoopAgent(configuration(root), "secret")
+            (root / ".hidden.txt").write_text("match\n")
+            (root / "ignored.txt").write_text("match\n")
+            (root / ".gitignore").write_text("ignored.txt\n")
+            for index in range(MAX_RESULTS):
+                (root / f"{index:03}.txt").write_text("match\n")
+            for extra in (False, True):
+                with self.subTest(extra=extra):
+                    if extra:
+                        (root / "extra.txt").write_text("match\n")
+                    glob = await agent.search.glob(str(root), "*.txt")
+                    grep = await agent.search.grep(str(root), "match", "*.txt")
+                    self.assertEqual(len(glob["paths"]), MAX_RESULTS)
+                    self.assertEqual(len(grep["matches"]), MAX_RESULTS)
+                    self.assertEqual(glob["truncated"], extra)
+                    self.assertEqual(grep["truncated"], extra)
+
+    async def test_match_text_limit_excludes_line_endings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "exact.txt").write_bytes(b"x" * MAX_MATCH_TEXT + b"\r\n")
+            agent = MatoLoopAgent(configuration(root), "secret")
+            result = await agent.search.grep(str(root), "x+", None)
+            self.assertEqual(result["matches"][0]["text"], "x" * MAX_MATCH_TEXT)
+            self.assertFalse(result["truncated"])
 
     async def test_path_limits_search_to_subtree_and_prefixes_results(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

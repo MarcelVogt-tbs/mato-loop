@@ -1151,7 +1151,7 @@ class ToolRegistry:
         ) as exc:
             return ToolResult.error(
                 exc.code,
-                params=exc.params if isinstance(exc, WebFetchError) else None,
+                params=exc.params if isinstance(exc, (WebFetchError, ExecutionClientError)) else None,
             )
         except ProviderError as exc:
             return ToolResult.error(exc.public_code, params=exc.params)
