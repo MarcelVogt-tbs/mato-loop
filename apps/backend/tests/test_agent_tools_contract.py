@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.agent.tools as tools_module
 import mato_loop_backend.integrations.registry as integration_registry
+from mato_loop_backend.agent.context import _projection_messages
 from mato_loop_backend.agent.permissions import PermissionDecision, PermissionRequest
 from mato_loop_backend.agent.tool_arguments import TaskArguments
 from mato_loop_backend.agent.tools import (
@@ -2604,6 +2605,147 @@ async def test_session_read_rejects_two_positions_before_database_access(tmp_pat
     context.db.scalars.assert_not_awaited()
 
 
+def _mock_tool_result_history(context, message, tool_name) -> None:
+    message.tool_call_id = "origin"
+    origin = Message(
+        id=uuid4(), session_id=context.session.id, role="assistant", content="",
+        tool_calls=[{"id": message.tool_call_id, "name": tool_name}],
+    )
+    context.db.scalar.return_value = message
+    context.db.scalars.return_value = Mock()
+    context.db.scalars.return_value.all.return_value = [origin, message]
+
+
+@pytest.mark.parametrize("tool_name", ["fetch_transcript", "webfetch"])
+async def test_session_tool_result_read_pages_survive_projection(tmp_path, tool_name) -> None:
+    call = ToolCall("read-result", "session_tool_result_read", {"message_id": str(uuid4())})
+    context = _context(tmp_path, call)
+    content = (
+        json.dumps({"kind": "transcript", "text": "transcript text " * 1000})
+        if tool_name == "fetch_transcript"
+        else "plain web content " * 1000
+    )
+    origin = Message(
+        id=uuid4(), session_id=context.session.id, role="assistant", content="",
+        tool_calls=[{"id": "reused", "name": tool_name}],
+    )
+    message = Message(
+        id=UUID(call.arguments["message_id"]), session_id=context.session.id,
+        role="tool", tool_call_id="reused", content=content, trust_level="public",
+    )
+    later = Message(
+        id=uuid4(), session_id=context.session.id, role="assistant", content="",
+        tool_calls=[{"id": "reused", "name": "memory_retrieve"}],
+    )
+    context.db.scalar.return_value = message
+    context.db.scalars.return_value = Mock()
+    context.db.scalars.return_value.all.return_value = [origin, message, later]
+    reader = Message(
+        id=uuid4(), session_id=context.session.id, role="assistant", content="",
+        tool_calls=[{"id": call.id, "name": call.name}], trust_level="public",
+    )
+    chunks = []
+    for offset in (0, 12_000):
+        call.arguments["offset"] = offset
+        result = await tool_registry.execute(call, context)
+        page = Message(
+            id=uuid4(), session_id=context.session.id, role="tool",
+            tool_call_id=call.id, content=result.content, trust_level="public",
+        )
+        projected = _projection_messages("System", None, [reader, page], TrustLevel.PUBLIC)
+        payload = json.loads(next(item["content"] for item in projected if item["role"] == "tool"))
+        assert payload["content"]
+        assert payload["toolName"] == tool_name
+        assert payload["offset"] == offset
+        assert payload["hasMore"] is (offset == 0)
+        assert payload["nextOffset"] == (12_000 if offset == 0 else None)
+        chunks.append(payload["content"])
+    expected = tools_module._sanitize_tool_result_reference_fields(content)
+    statement = context.db.scalars.await_args.args[0]
+    assert "messages.session_id =" in str(statement)
+    assert "ORDER BY messages.created_at, messages.id" in str(statement)
+    assert context.session.id in statement.compile().params.values()
+    assert len(chunks[0]) == 12_000
+    assert "".join(chunks) == expected
+    if tool_name == "fetch_transcript":
+        for chunk in chunks:
+            with pytest.raises(json.JSONDecodeError):
+                json.loads(chunk)
+
+
+@pytest.mark.parametrize("tool_name", ["memory_retrieve", "session_read", "session_tool_result_read"])
+async def test_session_tool_result_read_filters_complete_sensitive_results_before_paging(
+    tmp_path, tool_name,
+) -> None:
+    call = ToolCall("read-result", "session_tool_result_read", {"message_id": str(uuid4())})
+    context = _context(tmp_path, call)
+    content = json.dumps({"items": [
+        {"content": "private secret", "audience": "private_only"},
+        {"content": "public text " * 1400, "audience": "public_only"},
+    ]})
+    if tool_name == "session_read":
+        content = json.dumps({"messages": [
+            {"role": "tool", "toolName": "memory_retrieve", "content": content},
+        ]})
+    elif tool_name == "session_tool_result_read":
+        content = json.dumps({"toolName": "memory_retrieve", "content": content})
+    message = Message(
+        id=UUID(call.arguments["message_id"]), session_id=context.session.id,
+        role="tool", content=content, trust_level="public",
+    )
+    _mock_tool_result_history(context, message, tool_name)
+    # A later round reuses the ID for a non-sensitive tool.
+    context.db.scalars.return_value.all.return_value.append(Message(
+        id=uuid4(), session_id=context.session.id, role="assistant", content="",
+        tool_calls=[{"id": message.tool_call_id, "name": "webfetch"}],
+    ))
+    reader = Message(
+        id=uuid4(), session_id=context.session.id, role="assistant", content="",
+        tool_calls=[{"id": call.id, "name": call.name}], trust_level="public",
+    )
+    chunks = []
+    for offset in (0, 12_000):
+        call.arguments["offset"] = offset
+        result = await tool_registry.execute(call, context)
+        payload = json.loads(result.content)
+        assert payload["toolName"] == tool_name
+        assert "private secret" not in payload["content"]
+        assert "public text" in payload["content"]
+        chunks.append(payload["content"])
+        page = Message(
+            id=uuid4(), session_id=context.session.id, role="tool",
+            tool_call_id=call.id, content=result.content, trust_level="public",
+        )
+        # No serialized marker authorizes partial JSON after a trust change.
+        for target in (TrustLevel.PUBLIC, TrustLevel.PRIVATE):
+            projected = _projection_messages("System", None, [reader, page], target)
+            filtered = json.loads(next(item["content"] for item in projected if item["role"] == "tool"))
+            assert filtered["content"] == ""
+            assert filtered["redactedNestedToolResult"] is True
+    assert "redactedPrivateItems" in "".join(chunks)
+    json.loads("".join(chunks))
+
+
+@pytest.mark.parametrize("content", ["plain unknown", '{"toolName":"webfetch","content":"secret"}'])
+async def test_session_tool_result_read_rejects_unknown_provenance(tmp_path, content) -> None:
+    call = ToolCall("read-result", "session_tool_result_read", {"message_id": str(uuid4())})
+    context = _context(tmp_path, call)
+    message = Message(
+        id=UUID(call.arguments["message_id"]), session_id=context.session.id,
+        role="tool", content=content, trust_level="public",
+    )
+    _mock_tool_result_history(context, message, "webfetch")
+    records = context.db.scalars.return_value.all.return_value
+    records.insert(1, Message(
+        id=uuid4(), session_id=context.session.id, role="user", content="New turn",
+    ))
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata == {"errorCode": "session.messageNotFound"}
+    assert "secret" not in result.content
+
+
 async def test_session_tool_result_read_returns_bounded_continuation_chunks(tmp_path) -> None:
     message = Message(
         id=uuid4(),
@@ -2619,7 +2761,7 @@ async def test_session_tool_result_read_returns_bounded_continuation_chunks(tmp_
     )
     context = _context(tmp_path, call)
     message.session_id = context.session.id
-    context.db.scalar.return_value = message
+    _mock_tool_result_history(context, message, "webfetch")
 
     first = await tool_registry.execute(call, context)
     call.arguments["offset"] = 12_000
@@ -2632,6 +2774,7 @@ async def test_session_tool_result_read_returns_bounded_continuation_chunks(tmp_
         "offset": 0,
         "content": "a" * 12_000,
         "totalCharacters": 12_004,
+        "toolName": "webfetch",
         "hasMore": True,
         "nextOffset": 12_000,
         "contentIsUntrusted": True,
@@ -2641,6 +2784,7 @@ async def test_session_tool_result_read_returns_bounded_continuation_chunks(tmp_
         "offset": 12_000,
         "content": "rest",
         "totalCharacters": 12_004,
+        "toolName": "webfetch",
         "hasMore": False,
         "nextOffset": None,
         "contentIsUntrusted": True,
@@ -2682,7 +2826,7 @@ async def test_session_tool_result_read_exposes_attachment_references(tmp_path) 
     context = _context(tmp_path, call)
     message.session_id = context.session.id
     attachment.file_root_id = context.session.id
-    context.db.scalar.return_value = message
+    _mock_tool_result_history(context, message, "image_generate")
 
     result = await tool_registry.execute(call, context)
 
@@ -2740,7 +2884,7 @@ async def test_session_tool_result_read_redacts_public_memory_content(tmp_path) 
         ),
         trust_level=TrustLevel.PUBLIC.value,
     )
-    context.db.scalar.return_value = message
+    _mock_tool_result_history(context, message, "memory_retrieve")
 
     result = await tool_registry.execute(call, context)
 
@@ -2786,7 +2930,7 @@ async def test_session_tool_result_read_removes_reserved_reference_fields(tmp_pa
         ),
         trust_level=TrustLevel.PRIVATE.value,
     )
-    context.db.scalar.return_value = message
+    _mock_tool_result_history(context, message, "webfetch")
 
     result = await tool_registry.execute(call, context)
 

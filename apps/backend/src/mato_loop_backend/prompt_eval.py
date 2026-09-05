@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from mato_loop_backend.agent.context import (
     MEMORY_CONTEXT_CONTRACT,
+    _historical_tool_result,
     _local_time_prompt,
     compaction_messages,
     estimate_tokens,
@@ -38,7 +39,11 @@ from mato_loop_backend.agent.title_generation import (
     initial_title_output_budget,
     repair_title_output_budget,
 )
-from mato_loop_backend.agent.tools import EffectiveToolSet, tool_registry
+from mato_loop_backend.agent.tools import (
+    SESSION_TOOL_RESULT_CHUNK_CHARACTERS,
+    EffectiveToolSet,
+    tool_registry,
+)
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.memory.dreaming import (
@@ -85,7 +90,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 36
+INVENTORY_VERSION = 37
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -363,6 +368,7 @@ class PromptCase:
     compacted_summary: str | None = None
     history: tuple[dict[str, Any], ...] = ()
     continuation: tuple[dict[str, Any], ...] = ()
+    tool_result_steps: tuple[tuple[dict[str, Any], ...], ...] = ()
     tool_choice: Literal["auto", "required", "none"] = "auto"
     output_limit: int = NORMAL_OUTPUT_TOKENS
     expected_tool: str | None = None
@@ -380,6 +386,7 @@ class PromptCase:
     content_contains: tuple[str, ...] = ()
     content_contains_any: tuple[tuple[str, ...], ...] = ()
     content_exact_values: tuple[str, ...] = ()
+    content_json_options: tuple[dict[str, str], ...] = ()
     content_excludes: tuple[str, ...] = ()
     max_content_words: int | None = None
     forbidden_success_terms: tuple[str, ...] = ()
@@ -691,7 +698,106 @@ def _steering_cases(
     )
 
 
+TRANSCRIPT_ROLE_SOURCE = (
+    "Fiktives Interview, keine Aussage ueber reale Personen. Automatisches Transkript; "
+    "die Namensschreibung Kifi/KD ist unsicher. Rollen in dieser Geschichte: "
+    "Kifi/KD erzaehlt als Zeuge von ausserhalb des Autos. Suge sitzt als Beifahrer im Auto. "
+    "Es sind verschiedene Personen. Weitere Hintergruende werden nicht genannt."
+)
+TRANSCRIPT_ROLE_ANSWER = {"Erzaehler": "Kifi/KD", "Beifahrer": "Suge"}
+TRANSCRIPT_ROLE_FORMAT = (
+    'Antworte nur als JSON mit den Schluesseln "Erzaehler" und "Beifahrer". '
+    'Verwende die Namen aus der Quelle (die unsichere Schreibweise als "Kifi/KD") '
+    'oder "unklar", wenn die jeweilige Rolle nicht belegt ist.'
+)
+PAGED_TRANSCRIPT_SOURCE = (
+    "Fiktives automatisches Interviewtranskript. Rollen folgen erst nach der Einleitung.\n"
+    + "[Pause ohne Sprache]\n" * 600
+    + TRANSCRIPT_ROLE_SOURCE
+)
+
+
+def _transcript_read_steps(content: str) -> tuple[tuple[dict[str, Any], ...], ...]:
+    return tuple(
+        _exchange(
+            "session_tool_result_read",
+            {"message_id": str(TOOL_RESULT_MESSAGE_ID), "offset": offset},
+            json.dumps({
+                "messageId": str(TOOL_RESULT_MESSAGE_ID),
+                "offset": offset,
+                "content": content[offset:offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS],
+                "totalCharacters": len(content),
+                "hasMore": offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS < len(content),
+                "nextOffset": (
+                    offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS
+                    if offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS < len(content) else None
+                ),
+                "contentIsUntrusted": True,
+                "toolName": "fetch_transcript",
+            }),
+        )
+        for offset in range(0, len(content), SESSION_TOOL_RESULT_CHUNK_CHARACTERS)
+    )
+
+
 CASES = (
+    PromptCase(
+        id="automatic_transcript_preserves_distinct_roles",
+        kind="general",
+        scope="quality",
+        user="Wer erzaehlt und wer sitzt als Beifahrer im Auto? " + TRANSCRIPT_ROLE_FORMAT,
+        continuation=_exchange(
+            "fetch_transcript", {"url": "https://www.youtube.com/watch?v=evalRoles01"},
+            TRANSCRIPT_ROLE_SOURCE,
+        ),
+        expected_no_tools=True,
+        content_json_options=(
+            TRANSCRIPT_ROLE_ANSWER,
+            {"Erzaehler": "unklar", "Beifahrer": "Suge"},
+        ),
+    ),
+    PromptCase(
+        id="challenged_attribution_checks_source",
+        kind="general",
+        scope="quality",
+        user=(
+            "Du hast Kifi/KD zum Beifahrer gemacht. Stimmt das wirklich laut Quelle? "
+            "Pruefe das gespeicherte Transkript, statt Hintergruende zu erfinden. "
+            + TRANSCRIPT_ROLE_FORMAT
+        ),
+        tools=("session_tool_result_read",),
+        history=(
+            *_exchange(
+                "fetch_transcript", {"url": "https://www.youtube.com/watch?v=evalRoles01"},
+                _historical_tool_result(
+                    "fetch_transcript", TRANSCRIPT_ROLE_SOURCE, TOOL_RESULT_MESSAGE_ID,
+                ),
+            ),
+            {"role": "assistant", "content": "Kifi/KD sitzt als Beifahrer im Auto."},
+        ),
+        tool_result_steps=_transcript_read_steps(TRANSCRIPT_ROLE_SOURCE),
+        expected_no_tools=True,
+        content_json_options=(TRANSCRIPT_ROLE_ANSWER,),
+    ),
+    PromptCase(
+        id="historical_transcript_recovers_decisive_second_page",
+        kind="general",
+        scope="quality",
+        user="Wer erzaehlt und wer sitzt als Beifahrer im Auto? " + TRANSCRIPT_ROLE_FORMAT,
+        tools=("session_tool_result_read",),
+        history=_exchange(
+            "fetch_transcript", {"url": "https://www.youtube.com/watch?v=evalRoles01"},
+            _historical_tool_result(
+                "fetch_transcript", PAGED_TRANSCRIPT_SOURCE, TOOL_RESULT_MESSAGE_ID,
+            ),
+        ),
+        tool_result_steps=_transcript_read_steps(PAGED_TRANSCRIPT_SOURCE),
+        expected_no_tools=True,
+        content_json_options=(
+            TRANSCRIPT_ROLE_ANSWER,
+            {"Erzaehler": "unklar", "Beifahrer": "unklar"},
+        ),
+    ),
     # Existing 19 regression cases.
     PromptCase(
         id="stable_knowledge_avoids_search",
@@ -3872,6 +3978,15 @@ _SEMANTIC_CONTRACTS = (
         ),
     ),
     ContractCoverage(
+        "transcript.evidence_attribution_and_recovery",
+        "transcript",
+        (
+            "automatic_transcript_preserves_distinct_roles",
+            "challenged_attribution_checks_source",
+            "historical_transcript_recovers_decisive_second_page",
+        ),
+    ),
+    ContractCoverage(
         "transcript.remote_published_captions",
         "transcript",
         (
@@ -6596,6 +6711,18 @@ def evaluate(
             if signature in previous:
                 failures.append(f"repeated failed or denied call unchanged: {call.name}")
     folded_content = result.content.casefold()
+    if case.content_json_options:
+        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", result.content.strip())
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            failures.append("content is not the requested role JSON (format failure)")
+        else:
+            if isinstance(payload, dict) and "Erzähler" in payload and "Erzaehler" not in payload:
+                # Score the roles, not German umlaut transliteration in the field names.
+                payload["Erzaehler"] = payload.pop("Erzähler")
+            if payload not in case.content_json_options:
+                failures.append("content does not match an evidence-supported role assignment")
     if case.requires_negative_outcome and not _NEGATIVE_OUTCOME.search(
         _NEGATED_FAILURE.sub("", result.content)
     ):
@@ -7072,6 +7199,41 @@ async def _request_case(
         else (raw_result, [])
     )
     rounds = [raw_result]
+    if case.tool_result_steps:
+        request_failures = list(grouping_failures)
+        for step in case.tool_result_steps:
+            if not result.tool_calls:
+                # A missing source can justify an evidence gap, but not a guessed answer.
+                if result.content and '"unklar"' not in result.content:
+                    request_failures.append("role assignment returned before source recovery")
+                break
+            expected = step[0]["tool_calls"][0]
+            step_case = replace(
+                case,
+                expected_tool=expected["name"],
+                expected_arguments=expected["arguments"],
+                expected_tool_call_count=1,
+                expected_no_tools=False,
+                content_json_options=(),
+            )
+            request_failures.extend(evaluate(step_case, result, schema_variant))
+            if request_failures:
+                break
+            call = result.tool_calls[0]
+            messages.extend(_exchange(call.name, call.arguments, step[1]["content"], call.id))
+            messages[-2]["content"] = result.content
+            raw_result = await complete()
+            result, grouping_failures = (
+                normalize_grouped_result(raw_result)
+                if schema_variant == "grouped" else (raw_result, [])
+            )
+            request_failures.extend(grouping_failures)
+            rounds.append(raw_result)
+        usage = _combined_usage(rounds)
+        return (
+            replace(raw_result, usage=usage), replace(result, usage=usage),
+            request_failures, messages, tools, rounds,
+        )
     if not _uses_tool_driven_overview(case, message_layout):
         return raw_result, result, grouping_failures, messages, tools, rounds
 

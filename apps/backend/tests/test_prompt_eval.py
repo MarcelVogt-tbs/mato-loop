@@ -54,7 +54,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 36
+    assert INVENTORY_VERSION == 37
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -149,6 +149,97 @@ def test_every_builtin_tool_is_expected_by_a_live_case() -> None:
     }
 
     assert set(tool_registry._definitions) - set(PROJECT_CODING_TOOL_NAMES) <= covered
+
+
+def test_transcript_role_evaluator_checks_relationships_not_name_presence() -> None:
+    for case_id in (
+        "automatic_transcript_preserves_distinct_roles",
+        "challenged_attribution_checks_source",
+        "historical_transcript_recovers_decisive_second_page",
+    ):
+        case = _case(case_id)
+        assert evaluate(case, ProviderResult(content=json.dumps(
+            prompt_eval.TRANSCRIPT_ROLE_ANSWER,
+        ))) == []
+        assert evaluate(case, ProviderResult(
+            content='{"Erzähler":"Kifi/KD","Beifahrer":"Suge"}',
+        )) == []
+        for payload in (
+            None,
+            {"Erzaehler": "Suge", "Beifahrer": "Kifi/KD"},
+            {"Erzaehler": "Kifi/KD", "Beifahrer": "Kifi/KD"},
+            {**prompt_eval.TRANSCRIPT_ROLE_ANSWER, "Grund": "Geheimer Rollentausch"},
+        ):
+            assert evaluate(case, ProviderResult(content=json.dumps(payload)))
+        correction = json.dumps(prompt_eval.TRANSCRIPT_ROLE_ANSWER) + (
+            "\nKifi/KD ist nicht der Beifahrer; das ist Suge."
+        )
+        assert evaluate(case, ProviderResult(content=correction)) == [
+            "content is not the requested role JSON (format failure)"
+        ]
+
+    gap = ProviderResult(content='{"Erzaehler":"unklar","Beifahrer":"unklar"}')
+    assert evaluate(_case("historical_transcript_recovers_decisive_second_page"), gap) == []
+    assert evaluate(_case("challenged_attribution_checks_source"), gap)
+
+
+async def test_transcript_recovery_checks_reference_offset_and_final_roles(monkeypatch) -> None:
+    case = _case("historical_transcript_recovers_decisive_second_page")
+    steps = case.tool_result_steps
+    assert len(steps) == 2
+    reference = json.loads(case.history[-1]["content"])["toolResultReference"]
+    assert reference["arguments"] == steps[0][0]["tool_calls"][0]["arguments"]
+    first, second = (json.loads(step[1]["content"]) for step in steps)
+    assert "Suge" not in first["content"]
+    assert prompt_eval.TRANSCRIPT_ROLE_SOURCE in second["content"]
+    assert first["nextOffset"] == second["offset"] == 12_000
+    assert second["nextOffset"] is None
+    args = prompt_eval.parser().parse_args([])
+
+    for wrong_key in (None, "message_id", "offset"):
+        calls = [ToolCall(
+            f"read-{index}", "session_tool_result_read",
+            dict(step[0]["tool_calls"][0]["arguments"]),
+        ) for index, step in enumerate(steps)]
+        if wrong_key:
+            calls[1].arguments[wrong_key] = (
+                str(prompt_eval.DREAM_USER_MESSAGE_ID) if wrong_key == "message_id" else 0
+            )
+        responses = iter([
+            *(ProviderResult(tool_calls=[call], usage={"input_tokens": 10}) for call in calls),
+            ProviderResult(content=json.dumps(prompt_eval.TRANSCRIPT_ROLE_ANSWER)),
+        ])
+
+        async def complete(responses=responses, **kwargs):
+            return next(responses)
+
+        monkeypatch.setattr(prompt_eval, "chat_completions", complete)
+        raw, result, failures, messages, _tools, rounds = await prompt_eval._request_case(
+            args, case, "eval-model", "production", "current",
+        )
+        if wrong_key:
+            assert any(wrong_key in failure for failure in failures)
+            assert len(rounds) == 2
+        else:
+            assert failures == evaluate(case, result) == []
+            assert len(rounds) == 3
+            assert raw.usage["input_tokens"] == 20
+            assert json.loads(messages[-1]["content"]) == second
+
+    for content, should_pass in (
+        ('{"Erzaehler":"unklar","Beifahrer":"unklar"}', True),
+        (json.dumps(prompt_eval.TRANSCRIPT_ROLE_ANSWER), False),
+        ('{"Erzaehler":"Suge","Beifahrer":"Kifi/KD"}', False),
+    ):
+        async def complete(content=content, **kwargs):
+            return ProviderResult(content=content)
+
+        monkeypatch.setattr(prompt_eval, "chat_completions", complete)
+        _raw, result, failures, _messages, _tools, rounds = await prompt_eval._request_case(
+            args, case, "eval-model", "production", "current",
+        )
+        assert (not (failures + evaluate(case, result))) is should_pass
+        assert len(rounds) == 1
 
 
 def test_transcript_routing_uses_the_production_tool_contract() -> None:
@@ -2168,11 +2259,11 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     report = markdown_report(payload)
 
     assert payload["caseCount"] == len(CASES)
-    assert payload["semanticContractCount"] == 135
-    assert payload["contractCount"] == 344
-    assert "Cases: 209" in report
-    assert "Semantic contracts: 135" in report
-    assert "All inventory rows: 344" in report
+    assert payload["semanticContractCount"] == 136
+    assert payload["contractCount"] == 348
+    assert "Cases: 212" in report
+    assert "Semantic contracts: 136" in report
+    assert "All inventory rows: 348" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

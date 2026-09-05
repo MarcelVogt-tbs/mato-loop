@@ -1488,7 +1488,11 @@ def _target_tool_result(
         nested_tool_name = payload.get("toolName")
         if not isinstance(nested_tool_name, str):
             nested_tool_name = _inferred_tool_name(nested_content)
-        if nested_tool_name is None:
+        # Sensitive fragments cannot be revalidated, especially after a trust change.
+        if nested_tool_name is None or (
+            nested_tool_name in {"memory_retrieve", "session_read", "session_tool_result_read"}
+            and (payload.get("offset", 0) != 0 or payload.get("hasMore", False))
+        ):
             payload["content"] = ""
             payload["redactedNestedToolResult"] = True
             return json.dumps(payload, ensure_ascii=False)

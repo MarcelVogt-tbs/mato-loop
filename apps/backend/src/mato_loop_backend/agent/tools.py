@@ -19,7 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from mato_loop_backend.agent.context import (
-    _inferred_tool_name,
     _model_file_tool_result,
     _sanitize_tool_result_reference_fields,
     _shorten_evidence_output,
@@ -3082,7 +3081,18 @@ async def _session_tool_result_read(
     if message is None:
         return ToolResult.error("session.messageNotFound")
 
-    tool_name = _inferred_tool_name(message.content)
+    records = list(
+        (
+            await context.db.scalars(
+                select(Message)
+                .where(Message.session_id == context.session.id)
+                .order_by(Message.created_at, Message.id)
+            )
+        ).all()
+    )
+    tool_name = _tool_names_by_message_id(records).get(message.id)
+    if tool_name is None:
+        return ToolResult.error("session.messageNotFound")
     content = _target_tool_result(tool_name, message.content, context.memory_trust_level)
     content = _model_file_tool_result(content)
     content = _sanitize_tool_result_reference_fields(content)
@@ -3096,9 +3106,8 @@ async def _session_tool_result_read(
         "hasMore": has_more,
         "nextOffset": end if has_more else None,
         "contentIsUntrusted": True,
+        "toolName": tool_name,
     }
-    if tool_name is not None:
-        payload["toolName"] = tool_name
     if attachments := _attachment_items(message):
         payload["attachments"] = attachments
     return ToolResult.json(payload)

@@ -613,7 +613,11 @@ def test_projection_sanitizes_memory_inside_tool_result_read() -> None:
     assert "geteilt" in content
 
 
-def test_projection_redacts_untyped_partial_tool_result_read_content() -> None:
+@pytest.mark.parametrize("tool_name", [None, "memory_retrieve", "session_read", "session_tool_result_read"])
+@pytest.mark.parametrize("offset,has_more", [(0, True), (12_000, False)])
+def test_projection_redacts_partial_sensitive_or_untyped_tool_result_read_content(
+    tool_name, offset, has_more,
+) -> None:
     session = _session()
     assistant = _message(session.id, "assistant", "Ich lese einen Ausschnitt.")
     assistant.tool_calls = [
@@ -622,14 +626,20 @@ def test_projection_redacts_untyped_partial_tool_result_read_content() -> None:
     tool = _message(
         session.id,
         "tool",
-        json.dumps({"content": '{"items":[{"content":"öffentlich"'}),
+        json.dumps({
+            "toolName": tool_name,
+            "offset": offset,
+            "hasMore": has_more,
+            # A page can accidentally be valid JSON without its enclosing memory scope.
+            "content": '{"content":"private fragment"}' if tool_name else '{"items":[{"content":"private fragment"',
+        }),
     )
     tool.tool_call_id = "result-1"
 
     messages = _projection_messages("System", None, [assistant, tool], TrustLevel.PRIVATE)
 
     content = next(item for item in messages if item["role"] == "tool")["content"]
-    assert "öffentlich" not in content
+    assert "private fragment" not in content
     assert "redactedNestedToolResult" in content
 
 
