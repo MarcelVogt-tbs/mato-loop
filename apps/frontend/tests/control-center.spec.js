@@ -90,6 +90,7 @@ describe('control center store', () => {
 
   it('keeps global sections outside the integration manifest', () => {
     expect([...controlCenterGlobalSectionIds]).toEqual(['notifications', 'approvals'])
+    expect(controlCenterIntegrationIds.has('agent-coding')).toBe(true)
     expect(controlCenterIntegrationIds.has('notifications')).toBe(false)
     expect(controlCenterIntegrationIds.has('approvals')).toBe(false)
   })

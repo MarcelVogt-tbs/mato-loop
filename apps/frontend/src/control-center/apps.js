@@ -1,4 +1,5 @@
 import ApprovalCenterApp from 'components/ApprovalCenterApp.vue'
+import AgentCodingApp from 'components/AgentCodingApp.vue'
 import ComputerFileExplorerPanel from 'components/ComputerFileExplorerPanel.vue'
 import FileExplorerPanel from 'components/FileExplorerPanel.vue'
 import FileExplorerFooter from 'components/FileExplorerFooter.vue'
@@ -18,6 +19,7 @@ import {
 
 const components = {
   session: SessionApp,
+  'agent-coding': AgentCodingApp,
   files: FileExplorerPanel,
   'computer-files': ComputerFileExplorerPanel,
   'file-viewer': FileViewerApp,
