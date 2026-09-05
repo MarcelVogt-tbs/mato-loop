@@ -29,13 +29,15 @@ def configuration(root: Path) -> AgentConfig:
 
 @unittest.skipUnless(shutil.which("rg"), "ripgrep is required")
 class SearchTests(unittest.IsolatedAsyncioTestCase):
-    async def test_dispatches_glob_and_grep_with_ignore_and_hidden_semantics(self) -> None:
+    async def test_dispatches_glob_and_grep_without_hidden_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "src").mkdir()
             (root / "src" / "app.py").write_text("needle\n")
             (root / "src" / "app.txt").write_text("needle\n")
             (root / ".hidden.py").write_text("hidden needle\n")
+            (root / ".ssh").mkdir()
+            (root / ".ssh" / "secret.py").write_text("private needle\n")
             (root / "ignored.py").write_text("ignored needle\n")
             (root / "binary.py").write_bytes(b"\0binary needle\n")
             (root / ".gitignore").write_text("ignored.py\n")
@@ -82,7 +84,7 @@ class SearchTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 [(match["path"], match["line"]) for match in grep["matches"]],
-                [(str(root / ".hidden.py"), 1), (str(root / "src/app.py"), 1)],
+                [(str(root / "src/app.py"), 1)],
             )
             self.assertFalse(grep["truncated"])
 

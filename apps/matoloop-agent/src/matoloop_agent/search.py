@@ -162,10 +162,15 @@ class FilesystemSearch:
         arguments = [
             "--no-config",
             "--json",
-            "--hidden",
             "--no-require-git",
             "--no-follow",
             "--no-binary",
+            "--glob",
+            "!.*",
+            "--glob",
+            "!**/.*",
+            "--glob",
+            "!**/.*/**",
         ]
         if include is not None:
             arguments += [
