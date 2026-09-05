@@ -280,8 +280,9 @@ const warningItems = computed(() => [
   ...states.value.filter(({ status }) => status.name === 'interrupted'),
   ...entries.value.filter((entry) => entry.type === 'warning')
 ])
+const durationState = computed(() => props.running ? props.activity : props.history)
 const totalDuration = computed(() => {
-  const duration = activityDurationMs(props.history, props.running, now.value)
+  const duration = activityDurationMs(durationState.value, props.running, now.value)
   return duration === null ? null : formatActivityDuration(duration)
 })
 const headerTitle = computed(() => props.running
@@ -337,10 +338,10 @@ function updateTimer(running) {
 
 function syncTimer() {
   now.value = Date.now()
-  updateTimer(props.running && Boolean(props.history?.activeDurationUpdatedAt))
+  updateTimer(props.running && Boolean(durationState.value?.activeDurationUpdatedAt))
 }
 
-watch([() => props.running, () => props.history?.activeDurationUpdatedAt], ([running], [wasRunning]) => {
+watch([() => props.running, () => durationState.value?.activeDurationUpdatedAt], ([running], [wasRunning]) => {
   syncTimer()
   if (wasRunning && !running) {
     historyExpanded.value = false
