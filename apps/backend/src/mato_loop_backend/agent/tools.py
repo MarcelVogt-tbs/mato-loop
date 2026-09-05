@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import posixpath
-import shlex
 from datetime import datetime
 from io import BytesIO
 from typing import Any, Literal
@@ -37,6 +36,7 @@ from mato_loop_backend.agent.permissions import (
     agent_identity_permission,
     automation_collection_scope,
     automation_scope,
+    confidential_execution_path,
     execution_directory_permission,
     media_permission,
     memory_read_permission,
@@ -61,6 +61,7 @@ from mato_loop_backend.agent.tool_arguments import (
 )
 from mato_loop_backend.agent.tool_arguments import (
     AnalyzeVideoArguments,
+    ApplyPatchArguments,
     AutomationScheduleArguments,
     BuildSkillArguments,
     ChangeDirectoryArguments,
@@ -90,7 +91,6 @@ from mato_loop_backend.agent.tool_arguments import (
     MemoryRetrieveArguments,
     MemoryWriteArguments,
     MovePathArguments,
-    ProcessExecArguments,
     ProvideFileArguments,
     QuestionArguments,
     ReadArguments,
@@ -103,6 +103,7 @@ from mato_loop_backend.agent.tool_arguments import (
     SessionToolResultReadArguments,
     ShellRunArguments,
     SystemInfoArguments,
+    TaskArguments,
     TranscribeAudioArguments,
     UpdateAgentIdentityArguments,
     UpdateUserProfileArguments,
@@ -180,6 +181,7 @@ from mato_loop_backend.execution import (
     WorkspaceGlobResult,
     WorkspaceGrepResult,
     WorkspaceListResult,
+    WorkspacePatchResult,
     WorkspacePathResult,
     WorkspaceReadResult,
     WorkspaceStatResult,
@@ -270,7 +272,8 @@ async def _profile_tool_settings(context: ToolContext) -> ToolSettings:
         settings, _profile = await load_agent_profile_tools(
             context.db,
             context.session.user_id,
-            getattr(context.session, "agent_profile_id", None),
+            getattr(context, "agent_profile_id", None)
+            or getattr(context.session, "agent_profile_id", None),
             trust_level,
         )
     except AgentProfileUnavailable:
@@ -445,6 +448,7 @@ async def _workspace_request(
     | type[WorkspaceGlobResult]
     | type[WorkspaceGrepResult]
     | type[WorkspaceListResult]
+    | type[WorkspacePatchResult]
     | type[WorkspacePathResult]
     | type[WorkspaceReadResult]
     | type[WorkspaceStatResult]
@@ -932,10 +936,15 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
     if arguments.root == "workspace":
         result = await _workspace_request(
             context,
-            "filesystem.upsert",
+            "filesystem.write",
             {
                 "path": path,
                 "content": arguments.content,
+                **(
+                    {"expectedSha256": arguments.expected_sha256}
+                    if arguments.expected_sha256 is not None
+                    else {}
+                ),
             },
             WorkspaceWriteResult,
         )
@@ -946,16 +955,19 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
                 "root": arguments.root,
                 "written": result.path,
                 "sizeBytes": result.size,
+                "sha256": result.sha256,
             },
             file_actions=_workspace_file_action(
                 context, "write", result.path, result.size
             ),
         )
     written = await asyncio.to_thread(
-        context.root_files.upsert_text_file,
+        context.root_files.write_file,
         arguments.root,
         path,
         arguments.content,
+        mode="replace" if arguments.expected_sha256 is not None else "create",
+        expected_sha256=arguments.expected_sha256,
     )
     encoded = arguments.content.encode("utf-8")
     return ToolResult.json(
@@ -963,6 +975,7 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
             "root": arguments.root,
             "written": written,
             "sizeBytes": len(encoded),
+            "sha256": hashlib.sha256(encoded).hexdigest(),
         },
         file_actions=_regular_file_action(context, "write", arguments.root, written),
     )
@@ -1009,6 +1022,11 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
                 "oldText": arguments.old_text,
                 "newText": arguments.new_text,
                 "replaceAll": arguments.replace_all,
+                **(
+                    {"expectedSha256": arguments.expected_sha256}
+                    if arguments.expected_sha256 is not None
+                    else {}
+                ),
             },
             WorkspaceWriteResult,
         )
@@ -1019,6 +1037,7 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
                 "root": arguments.root,
                 "edited": result.path,
                 "sizeBytes": result.size,
+                "sha256": result.sha256,
             },
             file_actions=_workspace_file_action(
                 context, "write", result.path, result.size
@@ -1031,10 +1050,139 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
         arguments.old_text,
         arguments.new_text,
         replace_all=arguments.replace_all,
+        expected_sha256=arguments.expected_sha256,
+    )
+    edited_bytes = context.root_files.read_bytes(
+        arguments.root, edited, limit=context.root_files.max_editable_text_bytes
     )
     return ToolResult.json(
-        {"root": arguments.root, "edited": edited},
+        {
+            "root": arguments.root,
+            "edited": edited,
+            "sizeBytes": len(edited_bytes),
+            "sha256": hashlib.sha256(edited_bytes).hexdigest(),
+        },
         file_actions=_regular_file_action(context, "write", arguments.root, edited),
+    )
+
+
+def _workspace_patch(
+    context: ToolContext,
+    patch: str,
+    expected_sha256: dict[str, str],
+) -> tuple[str, dict[str, str], list[dict[str, str | None]]]:
+    operations: list[dict[str, str | None]] = []
+    rewritten = []
+    prefixes = {
+        "*** Add File: ": "add",
+        "*** Update File: ": "update",
+        "*** Delete File: ": "delete",
+    }
+    for line in patch.split("\n"):
+        matched = next((prefix for prefix in prefixes if line.startswith(prefix)), None)
+        if matched is not None:
+            path = _execution_path(context, line.removeprefix(matched))
+            operations.append(
+                {"operation": prefixes[matched], "path": path, "destination": None}
+            )
+            rewritten.append(f"{matched}{path}")
+        elif line.startswith("*** Move to: "):
+            if not operations or operations[-1]["operation"] != "update":
+                raise ExecutionClientError("tool.invalidArguments")
+            destination = _execution_path(
+                context, line.removeprefix("*** Move to: ")
+            )
+            operations[-1]["operation"] = "move"
+            operations[-1]["destination"] = destination
+            rewritten.append(f"*** Move to: {destination}")
+        else:
+            rewritten.append(line)
+    if not operations:
+        raise ExecutionClientError("tool.invalidArguments")
+    revisions: dict[str, str] = {}
+    for path, digest in expected_sha256.items():
+        absolute = _execution_path(context, path)
+        if absolute in revisions:
+            raise ExecutionClientError("tool.invalidArguments")
+        revisions[absolute] = digest
+    return "\n".join(rewritten), revisions, operations
+
+
+async def _apply_patch(
+    arguments: ApplyPatchArguments, context: ToolContext
+) -> ToolResult:
+    patch, revisions, operations = _workspace_patch(
+        context, arguments.patch, arguments.expected_sha256
+    )
+    for operation in operations:
+        source = str(operation["path"])
+        if operation["operation"] != "add" and await _active_file_is_dirty(
+            context, "workspace", source
+        ):
+            return ToolResult.error("file.activeDirty", field="patch")
+        requests = []
+        if operation["operation"] in {"delete", "move"}:
+            requests.append(
+                _filesystem_permission(
+                    context,
+                    root="workspace",
+                    path=source,
+                    capability="filesystem.delete",
+                    action_kind="apply_patch",
+                    action_label="Datei ändern",
+                )
+            )
+        if operation["operation"] in {"add", "update"}:
+            requests.append(
+                _filesystem_permission(
+                    context,
+                    root="workspace",
+                    path=source,
+                    capability="filesystem.write",
+                    action_kind="apply_patch",
+                    action_label="Datei ändern",
+                )
+            )
+        if operation["destination"] is not None:
+            requests.append(
+                _filesystem_permission(
+                    context,
+                    root="workspace",
+                    path=str(operation["destination"]),
+                    capability="filesystem.write",
+                    action_kind="apply_patch",
+                    action_label="Datei verschieben",
+                )
+            )
+        for request in requests:
+            if not await _allow(context, request):
+                return ToolResult.error("permission.denied")
+    result = await _workspace_request(
+        context,
+        "filesystem.patch",
+        {"patch": patch, "expectedSha256": revisions},
+        WorkspacePatchResult,
+    )
+    assert isinstance(result, WorkspacePatchResult)
+    if len(result.files) != len(operations) or any(
+        file.operation != operation["operation"]
+        or file.path != operation["path"]
+        or file.destination != operation["destination"]
+        for file, operation in zip(result.files, operations, strict=True)
+    ):
+        raise ExecutionClientError("executionAgent.protocolError")
+    file_actions = tuple(
+        _workspace_file_action(
+            context,
+            "move" if file.operation == "move" else "write",
+            file.destination or file.path,
+            file.size,
+        )[0]
+        for file in result.files
+        if file.operation != "delete"
+    )
+    return ToolResult.json(
+        result.model_dump(mode="json", by_alias=True), file_actions=file_actions
     )
 
 
@@ -1307,96 +1455,6 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
     )
 
 
-def _process_permission(
-    context: ToolContext,
-    arguments: dict[str, Any],
-) -> PermissionRequest:
-    client = _workspace_client(context)
-    warning = "Der Befehl kann Dateien verändern, Programme starten und Netzwerkdienste verwenden."
-    return PermissionRequest(
-        capability="process.execute",
-        resource_type="execution_process",
-        resource_scope=json.dumps(
-            {
-                "agentId": str(client.agent_id),
-                "currentDirectory": client.current_directory,
-                "program": str(arguments["program"]),
-                "args": [str(value) for value in arguments.get("args", [])],
-            },
-            ensure_ascii=True,
-            separators=(",", ":"),
-            sort_keys=True,
-        ),
-        action_kind="process_exec",
-        risk_level="high",
-        title="Prozess ausführen?",
-        summary=warning,
-        resource_display=client.current_directory or "Ausgewählter Computer",
-        approval_details={"warning": warning},
-        display_items=(
-            PermissionDisplayItem(
-                label="Programm", value=str(arguments["program"]), format="code"
-            ),
-            PermissionDisplayItem(
-                label="Parameter",
-                value=tuple(str(value) for value in arguments.get("args", [])),
-                format="list",
-            ),
-        ),
-        available_decisions=("allow_once", "deny"),
-    )
-
-
-async def _execute_process(
-    context: ToolContext, operation: str, arguments: dict[str, Any]
-) -> ToolResult:
-    client = _workspace_client(context)
-    mode = terminal_coordinator.mode_for(
-        user_id=context.session.user_id,
-        session_id=context.session.id,
-        agent_id=client.agent_id,
-        current_directory=client.current_directory,
-    )
-    if client.current_directory is None:
-        return ToolResult.error("permission.denied")
-    if mode != "confirm" and not await _directory_allowed(
-        context, client.current_directory, ask=True
-    ):
-        return ToolResult.error("permission.denied")
-    requested = {"program": arguments["program"], "args": arguments.get("args", [])}
-    executed = requested
-    if mode == "confirm":
-        decision = await terminal_coordinator.propose(
-            context.db,
-            user_id=context.session.user_id,
-            session_id=context.session.id,
-            run_id=context.run_id,
-            tool_call_id=context.tool_call.id,
-            tool="process_exec",
-            agent_id=client.agent_id,
-            current_directory=client.current_directory,
-            requested_arguments=requested,
-            command_line=shlex.join([requested["program"], *requested["args"]]),
-        )
-        if not decision.execute or decision.command_line is None:
-            if decision.explicit_denial:
-                context.user_denied = True
-                return ToolResult.error("permission.userDenied")
-            return ToolResult.error("terminal.disconnected")
-        tokens = shlex.split(decision.command_line)
-        executed = {"program": tokens[0], "args": tokens[1:]}
-    elif not await _allow(context, _process_permission(context, arguments)):
-        return ToolResult.error("permission.denied")
-    return await _run_process(
-        context,
-        operation,
-        {**executed, "currentDirectory": client.current_directory},
-        requested_arguments=requested,
-        executed_arguments=executed,
-        terminal_mode=mode,
-    )
-
-
 async def _run_process(
     context: ToolContext,
     operation: str,
@@ -1424,7 +1482,7 @@ async def _run_process(
         terminal_arguments = {
             key: value
             for key, value in arguments.items()
-            if key in {"command", "program", "args", "expectedInspectionRevision"}
+            if key in {"command", "expectedInspectionRevision"}
         }
         result = await terminal_coordinator.run(
             user_id=context.session.user_id,
@@ -1457,14 +1515,6 @@ async def _run_process(
                 "truncated": result.stdout_truncated or result.stderr_truncated,
             },
         }
-    )
-
-
-async def _process_exec(
-    arguments: ProcessExecArguments, context: ToolContext
-) -> ToolResult:
-    return await _execute_process(
-        context, "process.exec", {"program": arguments.program, "args": arguments.args}
     )
 
 
@@ -1560,6 +1610,13 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
             available_decisions=(
                 ("allow_once", "allow_session", "deny")
                 if prefixes
+                and not any(
+                    confidential_execution_path(path)
+                    for path in [
+                        client.current_directory,
+                        *(target.path for target in inspection.targets),
+                    ]
+                )
                 else ("allow_once", "deny")
             ),
         )
@@ -1661,66 +1718,54 @@ async def _ensure_webfetch_binding_is_current(context: ToolContext) -> None:
     context.tool_settings = current_tools
 
 
-async def _ensure_webfetch_capability_is_current(
-    context: ToolContext, capability: str
-) -> None:
+async def _ensure_webfetch_capability_is_current(context: ToolContext) -> None:
     await _ensure_webfetch_binding_is_current(context)
-    if not context.tool_settings.webfetch_resource_available(
-        capability
-    ) or tool_execution_policy(
+    if tool_execution_policy(
         context.tool_settings,
-        capability,
-        (
-            ToolExecutionPolicy.ASK
-            if capability == "network.fetch.private"
-            else ToolExecutionPolicy.AUTO
-        ),
+        "network.fetch",
+        ToolExecutionPolicy.AUTO,
     ) == ToolExecutionPolicy.DISABLED:
         raise WebFetchError("tool.unavailable")
 
 
 async def _authorize_webfetch_target(
-    context: ToolContext, url: str, private_target: bool
+    context: ToolContext, url: str
 ) -> None:
-    capability = (
-        "network.fetch.private" if private_target else "network.fetch.public"
-    )
-    await _ensure_webfetch_capability_is_current(context, capability)
+    await _ensure_webfetch_capability_is_current(context)
     policy = tool_execution_policy(
         context.tool_settings,
-        capability,
-        ToolExecutionPolicy.ASK if private_target else ToolExecutionPolicy.AUTO,
+        "network.fetch",
+        ToolExecutionPolicy.AUTO,
     )
     if policy == ToolExecutionPolicy.ASK and not await _allow(
-        context, webfetch_permission(url, private_target=private_target)
+        context, webfetch_permission(url)
     ):
         raise WebFetchError("permission.denied")
-    await _ensure_webfetch_capability_is_current(context, capability)
+    await _ensure_webfetch_capability_is_current(context)
     if policy != ToolExecutionPolicy.ASK and tool_execution_policy(
         context.tool_settings,
-        capability,
-        ToolExecutionPolicy.ASK if private_target else ToolExecutionPolicy.AUTO,
+        "network.fetch",
+        ToolExecutionPolicy.AUTO,
     ) == ToolExecutionPolicy.ASK:
-        if not await _allow(
-            context, webfetch_permission(url, private_target=private_target)
-        ):
+        if not await _allow(context, webfetch_permission(url)):
             raise WebFetchError("permission.denied")
-        await _ensure_webfetch_capability_is_current(context, capability)
+        await _ensure_webfetch_capability_is_current(context)
 
 
 async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolResult:
-
-    async def authorize_url(url: str, private_target: bool) -> None:
-        await _authorize_webfetch_target(context, url, private_target)
-
     await _ensure_webfetch_binding_is_current(context)
+    public_addresses_only = context.tool_settings.web_fetch.public_addresses_only
+
+    async def authorize_url(url: str) -> None:
+        await _authorize_webfetch_target(context, url)
+        if context.tool_settings.web_fetch.public_addresses_only != public_addresses_only:
+            raise WebFetchError("tool.unavailable")
+
     result = await fetch_web(
         arguments.url,
         format=arguments.format,
         timeout=arguments.timeout,
-        allow_private_targets=context.tool_settings.webfetch_resource_available(
-            "network.fetch.private"
-        ),
+        public_addresses_only=public_addresses_only,
         authorize_url=authorize_url,
         max_response_bytes=context.tool_settings.web_fetch.max_response_mib * 1024 * 1024,
         pdf_vision_handler=context.pdf_vision_handler,
@@ -1795,25 +1840,24 @@ async def _fetch_transcript(
 
         async def authorize_transcript() -> None:
             nonlocal approved
-            await _ensure_webfetch_capability_is_current(
-                context, "network.fetch.public"
-            )
+            await _ensure_webfetch_capability_is_current(context)
             if not approved and tool_execution_policy(
                 context.tool_settings,
-                "network.fetch.public",
+                "network.fetch",
                 ToolExecutionPolicy.AUTO,
             ) == ToolExecutionPolicy.ASK:
                 if not await _allow(context, transcript_permission(source_url)):
                     raise WebFetchError("permission.denied")
                 approved = True
-                await _ensure_webfetch_capability_is_current(
-                    context, "network.fetch.public"
-                )
+                await _ensure_webfetch_capability_is_current(context)
 
         await authorize_transcript()
+        public_addresses_only = context.tool_settings.web_fetch.public_addresses_only
 
         async def before_request(_url: str) -> None:
             await authorize_transcript()
+            if context.tool_settings.web_fetch.public_addresses_only != public_addresses_only:
+                raise WebFetchError("tool.unavailable")
 
         result = await fetch_youtube_transcript(
             source_url,
@@ -1822,6 +1866,7 @@ async def _fetch_transcript(
             * 1024
             * 1024,
             user_agent=context.tool_settings.web_fetch.user_agent,
+            public_addresses_only=public_addresses_only,
             before_request=before_request,
         )
     except (TranscriptError, WebFetchError) as exc:
@@ -1874,9 +1919,6 @@ def resolve_tool_execution_policy(
     capability: str,
     default: ToolExecutionPolicy = ToolExecutionPolicy.ASK,
     *,
-    allowed_policies: tuple[
-        ToolExecutionPolicy, ...
-    ] = ALL_TOOL_EXECUTION_POLICIES,
     integration_id: UUID | None = None,
     resource_key: str | None = None,
     hard_unavailable_capabilities: frozenset[str] = frozenset(),
@@ -1889,10 +1931,6 @@ def resolve_tool_execution_policy(
             return ToolPolicyResolution(
                 ToolExecutionPolicy.DISABLED, source, "invalid_policy"
             )
-        if policy not in allowed_policies:
-            return ToolPolicyResolution(
-                ToolExecutionPolicy.DISABLED, source, "policy_not_allowed"
-            )
         return ToolPolicyResolution(policy, source, "configured")
 
     permissions = settings.permissions
@@ -1900,7 +1938,14 @@ def resolve_tool_execution_policy(
     if configured is not None:
         resolution = resolve_value(configured, "global")
     else:
-        resolution = ToolPolicyResolution(default, "default", "static_default")
+        resolution = ToolPolicyResolution(
+            ToolExecutionPolicy.ASK
+            if settings.trust_level == TrustLevel.PUBLIC
+            and default == ToolExecutionPolicy.AUTO
+            else default,
+            "default",
+            "trust_default",
+        )
     if integration_id is not None:
         integration_policy = permissions.integration_policies.get(
             str(integration_id), {}
@@ -1933,7 +1978,6 @@ def resolve_tool_execution_policy(
         settings,
         capability,
         resolution.policy,
-        allowed_policies=allowed_policies,
         integration_id=integration_id,
         resource_key=resource_key,
         include_scoped=include_scoped,
@@ -1944,14 +1988,12 @@ def resolve_tool_execution_policy(
 
 
 def webfetch_available(settings: ToolSettings) -> bool:
-    return settings.tool_availability.get("webfetch", True) and any(
-        settings.webfetch_resource_available(capability)
-        and tool_execution_policy(settings, capability, default)
-        != ToolExecutionPolicy.DISABLED
-        for capability, default in (
-            ("network.fetch.public", ToolExecutionPolicy.AUTO),
-            ("network.fetch.private", ToolExecutionPolicy.ASK),
+    return (
+        settings.tool_availability.get("webfetch", True)
+        and tool_execution_policy(
+            settings, "network.fetch", ToolExecutionPolicy.AUTO
         )
+        != ToolExecutionPolicy.DISABLED
     )
 
 
@@ -1960,9 +2002,6 @@ def tool_execution_policy(
     capability: str,
     default: ToolExecutionPolicy = ToolExecutionPolicy.ASK,
     *,
-    allowed_policies: tuple[
-        ToolExecutionPolicy, ...
-    ] = ALL_TOOL_EXECUTION_POLICIES,
     integration_id: UUID | None = None,
     resource_key: str | None = None,
     hard_unavailable_capabilities: frozenset[str] = frozenset(),
@@ -1972,7 +2011,6 @@ def tool_execution_policy(
         settings,
         capability,
         default,
-        allowed_policies=allowed_policies,
         integration_id=integration_id,
         resource_key=resource_key,
         hard_unavailable_capabilities=hard_unavailable_capabilities,
@@ -2124,7 +2162,8 @@ async def _update_agent_identity(
         profile = await load_agent_profile(
             context.db,
             context.session.user_id,
-            getattr(context.session, "agent_profile_id", None),
+            getattr(context, "agent_profile_id", None)
+            or getattr(context.session, "agent_profile_id", None),
         )
     except AgentProfileUnavailable:
         return ToolResult.error("tool.unavailable")
@@ -2179,7 +2218,8 @@ async def _update_agent_identity(
         profile = await load_agent_profile(
             context.db,
             context.session.user_id,
-            context.session.agent_profile_id,
+            getattr(context, "agent_profile_id", None)
+            or getattr(context.session, "agent_profile_id", None),
         )
     except AgentProfileUnavailable:
         return ToolResult.error("tool.unavailable")
@@ -4119,6 +4159,12 @@ async def _question(arguments: QuestionArguments, context: ToolContext) -> ToolR
     )
 
 
+async def _task(arguments: TaskArguments, context: ToolContext) -> ToolResult:
+    if context.task_handler is None:
+        return ToolResult.error("tool.unavailable")
+    return await context.task_handler(arguments.prompt)
+
+
 async def _coding_project(context: ToolContext) -> Project | None:
     if context.session.project_id is None:
         return None
@@ -4187,7 +4233,8 @@ async def _coding_analyze(
         profile = await load_agent_profile(
             context.db,
             context.session.user_id,
-            getattr(context.session, "agent_profile_id", None),
+            getattr(context, "agent_profile_id", None)
+            or getattr(context.session, "agent_profile_id", None),
         )
         identity = await load_effective_agent_identity(
             context.db, context.session.user_id, profile
@@ -4320,26 +4367,21 @@ _FILESYSTEM_DELETE = ToolAction(
     "filesystem.delete", "Löschen", ToolExecutionPolicy.ASK, mutates=True
 )
 _SESSION_FILES_WRITE = ToolAction(
-    "session.files.write", "Session-Dateien schreiben", ToolExecutionPolicy.AUTO, mutates=True
+    "session.files.write", "Session-Dateien schreiben", ToolExecutionPolicy.ASK, mutates=True
 )
 _WEB_SEARCH = ToolAction("network.search", "Websuche", ToolExecutionPolicy.AUTO)
-_WEB_FETCH_PUBLIC = ToolAction(
-    "network.fetch.public", "Öffentliche Ziele abrufen", ToolExecutionPolicy.AUTO
-)
-_WEB_FETCH_PRIVATE = ToolAction(
-    "network.fetch.private", "Private Ziele abrufen", ToolExecutionPolicy.ASK
-)
+_WEB_FETCH = ToolAction("network.fetch", "Webseiten abrufen", ToolExecutionPolicy.AUTO)
 _TRANSCRIPT_ROUTING_INSTRUCTION = (
     "Published transcript text is evidence of spoken content only, not of visual events. Call "
     "fetch_transcript only when the requested output can be answered from spoken content; never "
     "call it for camera work, visible UI, objects, actions, or other visual details."
 )
-_SESSION_READ = ToolAction("session.read", "Sessions lesen", ToolExecutionPolicy.ASK)
+_SESSION_READ = ToolAction("session.read", "Sessions lesen", ToolExecutionPolicy.AUTO)
 _SESSION_SEARCH = ToolAction(
-    "session.search", "Sessions durchsuchen", ToolExecutionPolicy.ASK
+    "session.search", "Sessions durchsuchen", ToolExecutionPolicy.AUTO
 )
 _AUTOMATION_READ = ToolAction(
-    "automation.read", "Automationen lesen", ToolExecutionPolicy.ASK
+    "automation.read", "Automationen lesen", ToolExecutionPolicy.AUTO
 )
 _AUTOMATION_CREATE = ToolAction(
     "automation.create",
@@ -4362,14 +4404,13 @@ _AUTOMATION_RUN = ToolAction(
 _AUTOMATION_DELETE = ToolAction(
     "automation.delete",
     "Automationen löschen",
-    ToolExecutionPolicy.DISABLED,
+    ToolExecutionPolicy.ASK,
     mutates=True,
 )
 _SESSION_TOOL_RESULT_READ = ToolAction(
     "session.tool_result.read",
     "Historische Tool-Ergebnisse lesen",
     ToolExecutionPolicy.AUTO,
-    configurable=False,
 )
 _MEMORY_READ = ToolAction("memory.read", "Memories lesen", ToolExecutionPolicy.AUTO)
 _MEMORY_WRITE = ToolAction(
@@ -4382,12 +4423,6 @@ _SKILL_WRITE = ToolAction(
 _USER_PROFILE_UPDATE = ToolAction(
     "settings.user_profile.update",
     "Persönliches Profil ändern",
-    ToolExecutionPolicy.ASK,
-    mutates=True,
-)
-_PROCESS_EXECUTE = ToolAction(
-    "process.execute",
-    "Prozesse ausführen",
     ToolExecutionPolicy.ASK,
     mutates=True,
 )
@@ -4476,6 +4511,15 @@ tool_registry = ToolRegistry(
             group="agent",
             label="Rückfrage stellen",
             icon="help_outline",
+        ),
+        ToolDefinition(
+            "task",
+            "Delegate bounded read-only codebase exploration and return its findings.",
+            TaskArguments,
+            _task,
+            group="agent",
+            label="Codebasis erkunden",
+            icon="travel_explore",
         ),
         ToolDefinition(
             "read",
@@ -4625,10 +4669,7 @@ tool_registry = ToolRegistry(
             group="web",
             label="Webseite abrufen",
             icon="language",
-            actions=(_WEB_FETCH_PUBLIC, _WEB_FETCH_PRIVATE),
-            alternative_action_capabilities=frozenset(
-                {"network.fetch.public", "network.fetch.private"}
-            ),
+            actions=(_WEB_FETCH,),
         ),
         ToolDefinition(
             "fetch_transcript",
@@ -4643,7 +4684,7 @@ tool_registry = ToolRegistry(
             group="web",
             label="Untertitel abrufen",
             icon="subtitles",
-            actions=(_WEB_FETCH_PUBLIC,),
+            actions=(_WEB_FETCH,),
             prompt_fragments=(_TRANSCRIPT_ROUTING_INSTRUCTION,),
         ),
         ToolDefinition(
@@ -4680,7 +4721,7 @@ tool_registry = ToolRegistry(
                 ToolAction(
                     "media.generate.image",
                     "Bilder erzeugen",
-                    ToolExecutionPolicy.DISABLED,
+                    ToolExecutionPolicy.ASK,
                     mutates=True,
                 ),
             ),
@@ -4720,7 +4761,7 @@ tool_registry = ToolRegistry(
                 ToolAction(
                     "media.generate.speech",
                     "Sprache erzeugen",
-                    ToolExecutionPolicy.DISABLED,
+                    ToolExecutionPolicy.ASK,
                     mutates=True,
                 ),
             ),
@@ -4738,7 +4779,7 @@ tool_registry = ToolRegistry(
                 ToolAction(
                     "media.generate.audio",
                     "Audio erzeugen",
-                    ToolExecutionPolicy.DISABLED,
+                    ToolExecutionPolicy.ASK,
                     mutates=True,
                 ),
             ),
@@ -4757,7 +4798,7 @@ tool_registry = ToolRegistry(
                 ToolAction(
                     "media.transcribe.audio",
                     "Audio transkribieren",
-                    ToolExecutionPolicy.DISABLED,
+                    ToolExecutionPolicy.ASK,
                 ),
             ),
         ),
@@ -4976,6 +5017,23 @@ tool_registry = ToolRegistry(
     ],
     operation_definitions=[
         ToolDefinition(
+            "apply_patch",
+            "Apply one bounded patch to computer files in the current directory. Paths may be relative "
+            "or absolute. Include expectedSha256 for every updated, moved, or deleted source file; add "
+            "operations do not use a revision. Move operations cannot also edit content.",
+            ApplyPatchArguments,
+            _apply_patch,
+            tool_type="computer",
+            required_operation="filesystem.patch",
+            group="filesystem",
+            label="Patch anwenden",
+            icon="difference",
+            actions=(_FILESYSTEM_WRITE, _FILESYSTEM_DELETE),
+            alternative_action_capabilities=frozenset(
+                {"filesystem.write", "filesystem.delete"}
+            ),
+        ),
+        ToolDefinition(
             "get_system_info",
             "Get bounded basic information about the selected computer. This does not require a current directory.",
             SystemInfoArguments,
@@ -4998,19 +5056,6 @@ tool_registry = ToolRegistry(
             group="process",
             label="Verzeichnis wechseln",
             icon="drive_file_move",
-        ),
-        ToolDefinition(
-            "process_exec",
-            "Run one configured program alias with an argument array in the current computer directory. "
-            "The program is host-configured; never pass an executable path.",
-            ProcessExecArguments,
-            _process_exec,
-            tool_type="computer",
-            required_operation="process.exec",
-            group="process",
-            label="Prozess ausführen",
-            icon="terminal",
-            actions=(_PROCESS_EXECUTE,),
         ),
         ToolDefinition(
             "shell_run",

@@ -51,7 +51,6 @@ class AgentConfig(BaseModel):
     agent_id: str | None = Field(default=None, alias="agentId", pattern=UUID_PATTERN)
     home_directory: Path = Field(alias="homeDirectory")
     allow_insecure: bool = Field(default=False, alias="allowInsecure")
-    process_executables: dict[str, Path] = Field(default_factory=dict, alias="processExecutables")
     shell_executable: Path | None = Field(default=None, alias="shellExecutable")
     git_executable: Path | None = Field(default=None, alias="gitExecutable")
     openscad_executable: Path | None = Field(default=None, alias="openscadExecutable")
@@ -91,13 +90,6 @@ class AgentConfig(BaseModel):
             raise ValueError("homeDirectory must be an accessible directory")
         return canonical
 
-    @field_validator("process_executables")
-    @classmethod
-    def absolute_executables(cls, value: dict[str, Path]) -> dict[str, Path]:
-        if any(not alias or not path.is_absolute() for alias, path in value.items()):
-            raise ValueError("process executable aliases must be non-empty and paths absolute")
-        return value
-
     @field_validator("shell_executable", "git_executable", "openscad_executable")
     @classmethod
     def absolute_optional_executable(cls, value: Path | None) -> Path | None:
@@ -120,6 +112,8 @@ class AgentConfig(BaseModel):
     @classmethod
     def load(cls, path: Path) -> Self:
         data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            data.pop("processExecutables", None)
         config = cls.model_validate_json(json.dumps(data))
         config._data_directory = path.resolve().parent
         return config

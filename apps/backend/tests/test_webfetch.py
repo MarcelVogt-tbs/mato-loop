@@ -121,7 +121,7 @@ def test_canonicalizes_urls_and_redacts_query_values_for_display() -> None:
     assert "very-secret" not in displayed
 
 
-async def test_authorization_runs_after_normalization_and_dns_classification(monkeypatch) -> None:
+async def test_authorization_runs_after_normalization_and_resolution(monkeypatch) -> None:
     authorize = AsyncMock(side_effect=WebFetchError("permission.denied"))
     resolve = AsyncMock(return_value=(ipaddress.ip_address("8.8.8.8"),))
     monkeypatch.setattr(webfetch, "_resolve_addresses", resolve)
@@ -129,8 +129,45 @@ async def test_authorization_runs_after_normalization_and_dns_classification(mon
     assert await _error_code(
         fetch_web("HTTPS://ExAmPle.com", authorize_url=authorize)
     ) == "permission.denied"
-    authorize.assert_awaited_once_with("https://example.com/", False)
+    authorize.assert_awaited_once_with("https://example.com/")
     resolve.assert_awaited_once()
+
+
+async def test_authorization_runs_once_before_post_authorization_resolution(
+    monkeypatch,
+) -> None:
+    authorize = AsyncMock()
+    resolve = AsyncMock(
+        side_effect=[
+            (ipaddress.ip_address("8.8.8.8"),),
+            (ipaddress.ip_address("192.0.2.1"),),
+        ]
+    )
+    request = AsyncMock(
+        return_value=webfetch._Response(
+            status=200,
+            location=None,
+            content_type="text/plain",
+            charset=None,
+            content_disposition=None,
+            body=b"ok",
+        )
+    )
+    monkeypatch.setattr(webfetch, "_resolve_addresses", resolve)
+    monkeypatch.setattr(webfetch, "_request_once", request)
+
+    result = await fetch_web(
+        "https://example.com/",
+        public_addresses_only=False,
+        authorize_url=authorize,
+    )
+
+    assert result.content == "ok"
+    authorize.assert_awaited_once_with("https://example.com/")
+    assert resolve.await_count == 2
+    assert request.await_args.args[0].addresses == (
+        ipaddress.ip_address("192.0.2.1"),
+    )
 
 
 @pytest.mark.parametrize("timeout", [0, 121, True, "30"])
@@ -148,36 +185,70 @@ async def test_rejects_invalid_format() -> None:
 
 @pytest.mark.parametrize(
     "address",
-    ["169.254.169.254", "169.254.1.1", "100.100.100.200", "fd00:ec2::254"],
+    [
+        "169.254.169.254",
+        "169.254.1.1",
+        "100.100.100.200",
+        "fd00:ec2::254",
+        "fec0::1",
+        "192.0.2.1",
+        "100.64.0.1",
+        "224.0.0.1",
+        "0.0.0.0",
+    ],
 )
-async def test_metadata_and_link_local_are_never_allowlisted(address: str) -> None:
+async def test_default_rejects_every_non_public_address_class(address: str) -> None:
     rendered = f"[{address}]" if ":" in address else address
     url = f"http://{rendered}"
-    assert await _error_code(fetch_web(url, allow_private_targets=True)) == (
-        "webfetch.addressBlocked"
+    assert await _error_code(fetch_web(url)) == "webfetch.addressBlocked"
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "169.254.169.254",
+        "169.254.1.1",
+        "100.100.100.200",
+        "fd00:ec2::254",
+        "fec0::1",
+        "192.0.2.1",
+        "100.64.0.1",
+        "224.0.0.1",
+        "0.0.0.0",
+    ],
+)
+async def test_unrestricted_mode_accepts_non_public_address_classes(
+    monkeypatch, address: str
+) -> None:
+    request = AsyncMock(
+        return_value=webfetch._Response(
+            status=200,
+            location=None,
+            content_type="text/plain",
+            charset=None,
+            content_disposition=None,
+            body=b"ok",
+        )
     )
-
-
-async def test_ipv6_site_local_is_not_treated_as_public() -> None:
-    assert await _error_code(fetch_web("http://[fec0::1]")) == "webfetch.addressBlocked"
-
-
-@pytest.mark.parametrize("address", ["192.0.2.1", "100.64.0.1", "224.0.0.1", "0.0.0.0"])
-async def test_non_public_non_private_addresses_stay_blocked_when_allowlisted(address: str) -> None:
+    monkeypatch.setattr(webfetch, "_request_once", request)
     url = f"http://{address}"
-    assert await _error_code(fetch_web(url, allow_private_targets=True)) == (
-        "webfetch.addressBlocked"
-    )
+    if ":" in address:
+        url = f"http://[{address}]"
+
+    result = await fetch_web(url, public_addresses_only=False)
+
+    assert result.content == "ok"
+    request.assert_awaited_once()
 
 
-async def test_private_targets_require_the_hard_availability_cap() -> None:
+async def test_unrestricted_mode_accepts_reachable_loopback_target() -> None:
     async def responder(target: str, headers: dict[str, str]) -> bytes:
         return _response(b"ok", headers={"Content-Type": "text/plain"})
 
     async with _server(responder) as port:
         url = f"http://127.0.0.1:{port}/"
         assert await _error_code(fetch_web(url)) == "webfetch.addressBlocked"
-        result = await fetch_web(url, allow_private_targets=True)
+        result = await fetch_web(url, public_addresses_only=False)
 
     assert result.content == "ok"
 
@@ -206,7 +277,7 @@ async def test_dns_is_pinned_and_request_headers_are_safe(monkeypatch) -> None:
         monkeypatch.setattr(webfetch, "_resolve_addresses", resolve)
         result = await fetch_web(
             f"http://pinned.test:{port}/resource",
-            allow_private_targets=True,
+            public_addresses_only=False,
         )
 
     assert result.content == "pinned"
@@ -255,7 +326,7 @@ async def test_tls_failure_has_a_specific_safe_error(monkeypatch, caplog) -> Non
 async def test_redirects_are_resolved_and_each_origin_is_validated() -> None:
     authorized_urls: list[str] = []
 
-    async def authorize(url: str, _private_target: bool) -> None:
+    async def authorize(url: str) -> None:
         authorized_urls.append(url)
 
     async def destination(target: str, headers: dict[str, str]) -> bytes:
@@ -275,7 +346,7 @@ async def test_redirects_are_resolved_and_each_origin_is_validated() -> None:
             source_url = f"http://127.0.0.1:{source_port}/start"
             result = await fetch_web(
                 source_url,
-                allow_private_targets=True,
+                public_addresses_only=False,
                 authorize_url=authorize,
             )
 
@@ -289,7 +360,7 @@ async def test_redirects_are_resolved_and_each_origin_is_validated() -> None:
 
 
 async def test_approval_wait_does_not_consume_network_timeout() -> None:
-    async def authorize(_url: str, _private_target: bool) -> None:
+    async def authorize(_url: str) -> None:
         await asyncio.sleep(1.05)
 
     async def responder(target: str, headers: dict[str, str]) -> bytes:
@@ -299,7 +370,7 @@ async def test_approval_wait_does_not_consume_network_timeout() -> None:
         result = await fetch_web(
             f"http://127.0.0.1:{port}/",
             timeout=1,
-            allow_private_targets=True,
+            public_addresses_only=False,
             authorize_url=authorize,
         )
 
@@ -314,11 +385,11 @@ async def test_redirect_limit_and_invalid_redirect() -> None:
         return _response(status=302, headers={"Location": f"/{number + 1}"})
 
     async with _server(responder) as port:
-        assert await _error_code(fetch_web(f"{_origin(port)}/0", allow_private_targets=True)) == (
-            "webfetch.tooManyRedirects"
-        )
         assert await _error_code(
-            fetch_web(f"{_origin(port)}/missing", allow_private_targets=True)
+            fetch_web(f"{_origin(port)}/0", public_addresses_only=False)
+        ) == "webfetch.tooManyRedirects"
+        assert await _error_code(
+            fetch_web(f"{_origin(port)}/missing", public_addresses_only=False)
         ) == "webfetch.redirectInvalid"
 
 
@@ -335,7 +406,7 @@ async def test_raw_byte_transport_preserves_get_and_posts_without_redirect_repla
         origin = _origin(port)
         fetched = await request_web_bytes(
             f"{origin}/captions",
-            allow_private_targets=True,
+            public_addresses_only=False,
             max_response_bytes=100,
         )
         posted = await request_web_bytes(
@@ -343,7 +414,7 @@ async def test_raw_byte_transport_preserves_get_and_posts_without_redirect_repla
             method="POST",
             body=b'{"videoId":"abcdefghijk"}',
             request_content_type="application/json",
-            allow_private_targets=True,
+            public_addresses_only=False,
             max_response_bytes=100,
         )
         redirect_code = await _error_code(
@@ -352,7 +423,7 @@ async def test_raw_byte_transport_preserves_get_and_posts_without_redirect_repla
                 method="POST",
                 body=b"{}",
                 request_content_type="application/json",
-                allow_private_targets=True,
+                public_addresses_only=False,
                 max_response_bytes=100,
             )
         )
@@ -377,9 +448,9 @@ async def test_html_conversion_removes_active_content() -> None:
 
     async with _server(responder) as port:
         url = f"{_origin(port)}/page"
-        markdown_result = await fetch_web(url, allow_private_targets=True)
-        text_result = await fetch_web(url, format="text", allow_private_targets=True)
-        html_result = await fetch_web(url, format="html", allow_private_targets=True)
+        markdown_result = await fetch_web(url, public_addresses_only=False)
+        text_result = await fetch_web(url, format="text", public_addresses_only=False)
+        html_result = await fetch_web(url, format="html", public_addresses_only=False)
 
     assert "# Titel" in markdown_result.content
     assert f"({_origin(port)}/docs)" in markdown_result.content
@@ -404,7 +475,7 @@ async def test_plain_text_is_escaped_for_html() -> None:
 
     async with _server(responder) as port:
         result = await fetch_web(
-            f"{_origin(port)}/text", format="html", allow_private_targets=True
+            f"{_origin(port)}/text", format="html", public_addresses_only=False
         )
 
     assert result.content == "<pre>&lt;script&gt;alert(1)&lt;/script&gt;</pre>"
@@ -418,7 +489,7 @@ async def test_html_title_ignores_title_elements_outside_the_head() -> None:
 
     async with _server(responder) as port:
         result = await fetch_web(
-            f"{_origin(port)}/page", allow_private_targets=True
+            f"{_origin(port)}/page", public_addresses_only=False
         )
 
     assert result.title is None
@@ -434,9 +505,9 @@ async def test_active_markup_is_removed_or_escaped_from_markdown() -> None:
 
     async with _server(responder) as port:
         markdown_result = await fetch_web(
-            f"{_origin(port)}/markdown", allow_private_targets=True
+            f"{_origin(port)}/markdown", public_addresses_only=False
         )
-        plain_result = await fetch_web(f"{_origin(port)}/plain", allow_private_targets=True)
+        plain_result = await fetch_web(f"{_origin(port)}/plain", public_addresses_only=False)
 
     assert markdown_result.content == "beforeafter"
     assert plain_result.content == "before&lt;script&gt;alert(1)&lt;/script&gt;after"
@@ -456,7 +527,7 @@ async def test_supported_image_returns_bytes_and_safe_filename() -> None:
 
     async with _server(responder) as port:
         result = await fetch_web(
-            f"{_origin(port)}/fallback.png", allow_private_targets=True
+            f"{_origin(port)}/fallback.png", public_addresses_only=False
         )
 
     assert result.content_type == "image/png"
@@ -481,7 +552,7 @@ async def test_text_pdf_is_extracted_without_vision(monkeypatch) -> None:
     async with _server(responder) as port:
         result = await fetch_web(
             f"{_origin(port)}/manual.pdf",
-            allow_private_targets=True,
+            public_addresses_only=False,
             pdf_vision_handler=vision,
         )
 
@@ -509,7 +580,7 @@ async def test_text_pdf_can_return_selected_page_images(monkeypatch) -> None:
     async with _server(responder) as port:
         result = await fetch_web(
             f"{_origin(port)}/drawing.pdf",
-            allow_private_targets=True,
+            public_addresses_only=False,
             pdf_pages=(3, 2, 1, 2),
         )
 
@@ -542,11 +613,11 @@ async def test_scan_pdf_requires_vision_and_uses_rendered_pages(monkeypatch) -> 
     async with _server(responder) as port:
         url = f"{_origin(port)}/scan.pdf"
         assert await _error_code(
-            fetch_web(url, allow_private_targets=True)
+            fetch_web(url, public_addresses_only=False)
         ) == "webfetch.pdfVisionUnavailable"
         result = await fetch_web(
             url,
-            allow_private_targets=True,
+            public_addresses_only=False,
             pdf_vision_handler=vision,
             pdf_pages=(1,),
         )
@@ -568,7 +639,7 @@ async def test_blank_pdf_does_not_require_vision() -> None:
     async with _server(responder) as port:
         result = await fetch_web(
             f"{_origin(port)}/blank.pdf",
-            allow_private_targets=True,
+            public_addresses_only=False,
         )
 
     assert result.content == "--- Page 1 ---"
@@ -590,7 +661,7 @@ async def test_rejects_unsupported_or_spoofed_binary_content(
 
     async with _server(responder) as port:
         assert await _error_code(
-            fetch_web(f"{_origin(port)}/file", allow_private_targets=True)
+            fetch_web(f"{_origin(port)}/file", public_addresses_only=False)
         ) == code
 
 
@@ -610,7 +681,7 @@ async def test_content_length_is_rejected_before_body() -> None:
         assert await _error_code(
             fetch_web(
                 f"{_origin(port)}/large",
-                allow_private_targets=True,
+                public_addresses_only=False,
                 max_response_bytes=limit,
             )
         ) == "webfetch.responseTooLarge"
@@ -636,7 +707,7 @@ async def test_streamed_and_decompressed_bodies_are_limited(compressed: bool) ->
         assert await _error_code(
             fetch_web(
                 f"{_origin(port)}/large",
-                allow_private_targets=True,
+                public_addresses_only=False,
                 max_response_bytes=limit,
             )
         ) == "webfetch.responseTooLarge"
@@ -651,10 +722,10 @@ async def test_timeout_and_http_errors_have_stable_codes() -> None:
 
     async with _server(responder) as port:
         assert await _error_code(
-            fetch_web(f"{_origin(port)}/slow", timeout=1, allow_private_targets=True)
+            fetch_web(f"{_origin(port)}/slow", timeout=1, public_addresses_only=False)
         ) == "webfetch.timeout"
         with pytest.raises(WebFetchError) as exc_info:
-            await fetch_web(f"{_origin(port)}/missing", allow_private_targets=True)
+            await fetch_web(f"{_origin(port)}/missing", public_addresses_only=False)
 
     assert exc_info.value.code == "webfetch.requestFailed"
     assert exc_info.value.params == {"statusCode": 404}
@@ -676,7 +747,7 @@ async def test_http_error_status_is_returned_without_reading_large_body() -> Non
         with pytest.raises(WebFetchError) as exc_info:
             await fetch_web(
                 f"{_origin(port)}/missing",
-                allow_private_targets=True,
+                public_addresses_only=False,
             )
 
     assert exc_info.value.code == "webfetch.requestFailed"
@@ -695,7 +766,7 @@ async def test_accepted_response_is_not_treated_as_fetched_evidence() -> None:
         with pytest.raises(WebFetchError) as exc_info:
             await fetch_web(
                 f"{_origin(port)}/challenge",
-                allow_private_targets=True,
+                public_addresses_only=False,
             )
 
     assert exc_info.value.code == "webfetch.requestFailed"
@@ -732,7 +803,7 @@ async def test_download_file_returns_raw_bytes_and_derives_the_filename() -> Non
     async with _server(responder) as port:
         result = await webfetch.download_file(
             f"{_origin(port)}/redirect",
-            allow_private_targets=True,
+            public_addresses_only=False,
         )
 
     assert result.data == payload
@@ -751,11 +822,11 @@ async def test_download_file_names_files_from_the_url_when_no_header_is_sent() -
     async with _server(responder) as port:
         named = await webfetch.download_file(
             f"{_origin(port)}/docs/manual%20v2.pdf",
-            allow_private_targets=True,
+            public_addresses_only=False,
         )
         unnamed = await webfetch.download_file(
             f"{_origin(port)}/",
-            allow_private_targets=True,
+            public_addresses_only=False,
         )
 
     assert named.filename == "manual v2.pdf"
@@ -770,12 +841,12 @@ async def test_download_file_rejects_unsupported_types_and_oversized_bodies() ->
 
     async with _server(responder) as port:
         unsupported = await _error_code(
-            webfetch.download_file(f"{_origin(port)}/page", allow_private_targets=True)
+            webfetch.download_file(f"{_origin(port)}/page", public_addresses_only=False)
         )
         oversized = await _error_code(
             webfetch.download_file(
                 f"{_origin(port)}/sheet.pdf",
-                allow_private_targets=True,
+                public_addresses_only=False,
                 max_response_bytes=16,
             )
         )
@@ -817,19 +888,19 @@ async def test_download_file_resolves_opaque_types_by_extension() -> None:
 
     async with _server(responder) as port:
         from_path = await webfetch.download_file(
-            f"{_origin(port)}/files/sheet.pdf", allow_private_targets=True
+            f"{_origin(port)}/files/sheet.pdf", public_addresses_only=False
         )
         from_header = await webfetch.download_file(
-            f"{_origin(port)}/download", allow_private_targets=True
+            f"{_origin(port)}/download", public_addresses_only=False
         )
         rejected = await _error_code(
             webfetch.download_file(
-                f"{_origin(port)}/tool.exe", allow_private_targets=True
+                f"{_origin(port)}/tool.exe", public_addresses_only=False
             )
         )
         unnamed = await _error_code(
             webfetch.download_file(
-                f"{_origin(port)}/blob", allow_private_targets=True
+                f"{_origin(port)}/blob", public_addresses_only=False
             )
         )
 
@@ -851,7 +922,7 @@ async def test_opaque_downloads_still_verify_image_signatures() -> None:
     async with _server(responder) as port:
         code = await _error_code(
             webfetch.download_file(
-                f"{_origin(port)}/logo.png", allow_private_targets=True
+                f"{_origin(port)}/logo.png", public_addresses_only=False
             )
         )
 

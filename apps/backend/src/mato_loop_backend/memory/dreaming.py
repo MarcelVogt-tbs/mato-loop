@@ -1022,6 +1022,7 @@ class DreamingService:
             active = await db.scalar(
                 select(AgentRun.id).where(
                     AgentRun.session_id == session.id,
+                    AgentRun.parent_run_id.is_(None),
                     AgentRun.status.in_(["queued", "running", "waiting_approval", "waiting_input"]),
                 )
             )
@@ -1308,6 +1309,7 @@ class DreamingService:
         active = await db.scalar(
             select(AgentRun.id).where(
                 AgentRun.session_id == session.id,
+                AgentRun.parent_run_id.is_(None),
                 AgentRun.status.in_(["queued", "running", "waiting_approval", "waiting_input"]),
             )
         )

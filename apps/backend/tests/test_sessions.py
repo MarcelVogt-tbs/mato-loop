@@ -26,6 +26,7 @@ from mato_loop_backend.api.routes.sessions import (
     create_session,
     delete_session,
     download_attachment,
+    get_run,
     get_session,
     list_sessions,
     mark_session_read,
@@ -1153,6 +1154,29 @@ async def test_run_cancel_checks_session_hierarchy() -> None:
 
     with pytest.raises(ApiError) as exc_info:
         await cancel_run(session_id, run.id, user, db)
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.code == "session.runNotFound"
+
+
+@pytest.mark.parametrize("route", [get_run, cancel_run, stream_run_events])
+async def test_internal_child_run_is_not_publicly_accessible(route) -> None:
+    user = _user()
+    session_id = uuid4()
+    session = ChatSession(id=session_id, user_id=user.id, title="Test")
+    child = AgentRun(
+        id=uuid4(),
+        session_id=session_id,
+        parent_run_id=uuid4(),
+        status="running",
+        internal_request="Inspect",
+        internal_transcript=[],
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = [session, child]
+
+    with pytest.raises(ApiError) as exc_info:
+        await route(session_id, child.id, user, db)
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.code == "session.runNotFound"

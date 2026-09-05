@@ -18,7 +18,12 @@ from mato_loop_backend.integrations import (
     sanitize_url_for_display,
 )
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
-from mato_loop_backend.settings import ToolExecutionPolicy, ToolSettings, TrustLevel
+from mato_loop_backend.settings import (
+    PLAN_AGENT_PROFILE_ID,
+    ToolExecutionPolicy,
+    ToolSettings,
+    TrustLevel,
+)
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 
 
@@ -62,6 +67,17 @@ class PermissionRequest:
 
 _INTEGRATION_OPERATION_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _INTEGRATION_RESOURCE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,499}$")
+_CONFIDENTIAL_PATH_PARTS = frozenset({".ssh", ".gnupg", ".aws", ".azure", ".kube"})
+_CONFIDENTIAL_FILENAMES = frozenset({".env", ".netrc", ".npmrc", ".pypirc"})
+
+
+def confidential_execution_path(path: str) -> bool:
+    parsed = PurePosixPath(path)
+    return bool(
+        _CONFIDENTIAL_PATH_PARTS.intersection(parsed.parts)
+        or parsed.name in _CONFIDENTIAL_FILENAMES
+        or parsed.name.startswith(".env.")
+    )
 
 
 def integration_operation_scope(
@@ -315,7 +331,11 @@ def execution_directory_permission(
         summary=summary or f"Der Agent möchte das Verzeichnis {path} verwenden.",
         resource_display=path,
         use_integration_policy=False,
-        available_decisions=("allow_session", "deny"),
+        available_decisions=(
+            ("allow_once", "deny")
+            if confidential_execution_path(path)
+            else ("allow_once", "allow_session", "deny")
+        ),
     )
 
 
@@ -463,12 +483,10 @@ def memory_write_permission(
     )
 
 
-def webfetch_permission(url: str, *, private_target: bool = False) -> PermissionRequest:
+def webfetch_permission(url: str) -> PermissionRequest:
     canonical_url = canonicalize_url(url)
     return PermissionRequest(
-        capability=(
-            "network.fetch.private" if private_target else "network.fetch.public"
-        ),
+        capability="network.fetch",
         resource_type="url",
         resource_scope=hashlib.sha256(canonical_url.encode("utf-8")).hexdigest(),
         action_kind="webfetch",
@@ -482,7 +500,7 @@ def webfetch_permission(url: str, *, private_target: bool = False) -> Permission
 def transcript_permission(url: str) -> PermissionRequest:
     canonical_url = canonicalize_youtube_video_url(url)
     return PermissionRequest(
-        capability="network.fetch.public",
+        capability="network.fetch",
         resource_type="url",
         resource_scope=hashlib.sha256(canonical_url.encode("utf-8")).hexdigest(),
         action_kind="fetch_transcript",
@@ -873,37 +891,28 @@ class PermissionPolicy:
         if request.resource_type == "session" and request.capability == "session.read":
             try:
                 target_id = UUID(request.resource_scope)
-                if target_id == chat_session.id:
-                    return (
-                        PermissionDecision.DENY
-                        if policy == ToolExecutionPolicy.DISABLED
-                        else PermissionDecision.ALLOW
-                    )
-                target = await db.get(ChatSession, target_id)
-                if (
+                target = (
+                    chat_session
+                    if target_id == chat_session.id
+                    else await db.get(ChatSession, target_id)
+                )
+                if target is chat_session or (
                     chat_session.project_id is not None
                     and target is not None
                     and target.user_id == chat_session.user_id
                     and target.project_id == chat_session.project_id
                     and target.session_type == "chat"
                 ):
-                    return (
-                        PermissionDecision.DENY
-                        if policy == ToolExecutionPolicy.DISABLED
-                        else PermissionDecision.ALLOW
-                    )
+                    if policy == ToolExecutionPolicy.DISABLED:
+                        return PermissionDecision.DENY
+                    if policy == ToolExecutionPolicy.AUTO:
+                        return PermissionDecision.ALLOW
             except ValueError:
                 return PermissionDecision.DENY
 
         if request.resource_type == "session_collection":
             if request.resource_scope != "all":
                 return PermissionDecision.DENY
-            if chat_session.project_id is not None:
-                return (
-                    PermissionDecision.DENY
-                    if policy == ToolExecutionPolicy.DISABLED
-                    else PermissionDecision.ALLOW
-                )
 
         if request.resource_type == "project":
             try:
@@ -931,10 +940,12 @@ class PermissionPolicy:
                 or target.session_type != "chat"
             ):
                 return PermissionDecision.DENY
+            if policy == ToolExecutionPolicy.DISABLED:
+                return PermissionDecision.DENY
             return (
-                PermissionDecision.DENY
-                if policy == ToolExecutionPolicy.DISABLED
-                else PermissionDecision.ALLOW
+                PermissionDecision.ALLOW
+                if policy == ToolExecutionPolicy.AUTO
+                else PermissionDecision.ASK
             )
 
         if request.resource_type == "execution_directory":
@@ -961,7 +972,17 @@ class PermissionPolicy:
             )
             if selected_policy == "deny":
                 return PermissionDecision.DENY
-            if selected_policy == "auto":
+            workspace = (
+                PurePosixPath(chat_session.current_directory)
+                if chat_session.current_directory is not None
+                else None
+            )
+            inside_workspace = workspace is not None and _path_is_within(path, workspace)
+            if confidential_execution_path(str(path)):
+                return PermissionDecision.ASK
+            if policy == ToolExecutionPolicy.AUTO and inside_workspace:
+                return PermissionDecision.ALLOW
+            if workspace is None and selected_policy == "auto":
                 return PermissionDecision.ALLOW
             grants = list(
                 (
@@ -1013,7 +1034,15 @@ class PermissionPolicy:
             ]
             if policy == ToolExecutionPolicy.DISABLED or "deny" in filesystem_policies:
                 return PermissionDecision.DENY
-            if policy == ToolExecutionPolicy.AUTO and "ask" not in filesystem_policies:
+            workspace = PurePosixPath(scope["currentDirectory"])
+            target_paths = [PurePosixPath(path) for path in paths]
+            inside_workspace = all(_path_is_within(path, workspace) for path in target_paths)
+            confidential = any(
+                confidential_execution_path(str(path)) for path in target_paths
+            )
+            if confidential:
+                return PermissionDecision.ASK
+            if policy == ToolExecutionPolicy.AUTO and inside_workspace and scope["analysisComplete"]:
                 return PermissionDecision.ALLOW
             grants = list(
                 (
@@ -1037,7 +1066,7 @@ class PermissionPolicy:
             scope = _root_path_scope(request.resource_scope)
             if scope is None or root_files.session_id != chat_session.id:
                 return PermissionDecision.DENY
-            root, identity, _path = scope
+            root, identity, path = scope
             try:
                 current_identity = root_files.root_identity(root)
             except RootFileError:
@@ -1055,6 +1084,15 @@ class PermissionPolicy:
                 return PermissionDecision.DENY
             if policy == ToolExecutionPolicy.DISABLED:
                 return PermissionDecision.DENY
+            if (
+                agent_profile_id == PLAN_AGENT_PROFILE_ID
+                and request.capability == "session.files.write"
+                and (
+                    root != FileRoot.SESSION
+                    or path != PurePosixPath(f"plans/{chat_session.id}/plan.md")
+                )
+            ):
+                policy = ToolExecutionPolicy.DISABLED
             if policy in {None, ToolExecutionPolicy.AUTO}:
                 return PermissionDecision.ALLOW
 

@@ -119,6 +119,34 @@ async def test_startup_recovery_persists_one_error_message_per_active_run(monkey
     db.commit.assert_not_awaited()
 
 
+async def test_startup_recovery_keeps_child_failure_internal(monkeypatch) -> None:
+    child = AgentRun(
+        id=uuid4(),
+        session_id=uuid4(),
+        parent_run_id=uuid4(),
+        status="running",
+        trust_level="private",
+        internal_request="Inspect",
+        internal_transcript=[],
+    )
+    rows = Mock()
+    rows.all.return_value = [child]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = rows
+    terminalize = AsyncMock()
+    monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", terminalize)
+
+    recovered = await AgentRuntime.recover(db)
+
+    assert recovered == 1
+    assert child.status == "failed"
+    assert child.error == "agent.backendRestarted"
+    assert "agent.backendRestarted" in child.internal_result
+    assert child.result_message_id is None
+    db.add.assert_not_called()
+    terminalize.assert_not_awaited()
+
+
 async def test_startup_recovery_keeps_duration_completed_before_user_wait(monkeypatch) -> None:
     run = AgentRun(
         id=uuid4(),

@@ -85,7 +85,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 35
+INVENTORY_VERSION = 36
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -121,7 +121,6 @@ SlimmingVariant = Literal[
     "prompt-no-mermaid",
     "prompt-no-budgets",
     "prompt-no-transcript-duplicate",
-    "prompt-agent-web-routing",
     "prompt-atoms",
     "combined-lean",
     "combined-selective-lean",
@@ -153,7 +152,6 @@ SLIMMING_VARIANTS: tuple[SlimmingVariant, ...] = (
     "prompt-no-mermaid",
     "prompt-no-budgets",
     "prompt-no-transcript-duplicate",
-    "prompt-agent-web-routing",
     "prompt-atoms",
     "combined-lean",
     "combined-selective-lean",
@@ -736,6 +734,18 @@ CASES = (
         working_directory="/data/home/project",
         expected_tool="read",
         expected_arguments={"root": "computer", "path": "README.md"},
+    ),
+    PromptCase(
+        id="codebase_investigation_uses_explore_task",
+        kind="general",
+        user=(
+            "Untersuche die Codebasis: Wo werden Agent-Runs persistiert und welche Stellen prüfen "
+            "Dateisystem-Berechtigungen? Berichte nur deine Fundstellen."
+        ),
+        tools=("task", "read", "glob", "grep"),
+        working_directory="/data/home/project",
+        expected_tool="task",
+        argument_contains={"prompt": ("Agent", "Berechtigungen")},
     ),
     PromptCase(
         id="email_revision_replaces_same_path_with_exact_sha256",
@@ -3934,6 +3944,11 @@ _SEMANTIC_CONTRACTS = (
     ContractCoverage("file.glob", "file", ("glob_uses_session_root_and_path",)),
     ContractCoverage("file.grep", "file", ("grep_uses_session_root_path_and_include",)),
     ContractCoverage("file.read", "file", ("workspace_read_uses_exact_root",)),
+    ContractCoverage(
+        "agent.explore_task",
+        "tools",
+        ("codebase_investigation_uses_explore_task",),
+    ),
     ContractCoverage("file.provide", "file", ("provide_file_creates_download",)),
     ContractCoverage(
         "file.write",
@@ -4636,7 +4651,7 @@ def _general_offered_tools(case: PromptCase) -> EffectiveToolSet:
         and definition.required_operation is not None
         and (
             case.working_directory is not None
-            or definition.required_operation not in {"process.exec", "shell.run"}
+            or definition.required_operation != "shell.run"
         )
     }
     return tool_registry.effective(
@@ -5561,17 +5576,6 @@ def slimming_system_prompt(
     offered_names: frozenset[str],
     variant: SlimmingVariant,
 ) -> str:
-    if (
-        variant == "prompt-agent-web-routing"
-        and "shell_run" in offered_names
-        and {"web_search", "webfetch"} & offered_names
-    ):
-        marker = "Web research contract:"
-        rule = (
-            "Use web_search for discovery and webfetch for simple retrieval; prefer shell_run for raw "
-            "data, custom HTTP, pagination, multiple requests, or local processing."
-        )
-        return prompt.replace(marker, f"{marker} {rule}", 1)
     prompt_variant: SlimmingVariant = (
         "prompt-atoms"
         if variant in {"combined-lean", "combined-selective-lean"}

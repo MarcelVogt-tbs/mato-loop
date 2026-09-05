@@ -144,9 +144,9 @@ Providers, models, default-model settings, integrations, and tool settings have 
 
 Without additional configuration, `web_search` uses the built-in no-key metasearch. It is not an integration and uses `ddgs` to query available public search services. Additional SearXNG instances, the primary provider, and the optional fallback are managed under **Einstellungen > Integrationen** for the current instance or personal scope. The model supplies only the query and cannot override this host selection. Fallback is used only for transient primary-provider failures.
 
-`webfetch` is configured independently of SearXNG under **Einstellungen > Tools**. It fetches concrete HTTP(S) URLs as Markdown, text, or HTML and supports image responses up to 5 MiB. Public and private targets have separate trust-scoped policies and hard availability controls; private targets are unavailable by default. Models have no separate Webfetch override.
+`webfetch` is configured independently of SearXNG under **Einstellungen > Tools**. It fetches concrete HTTP(S) URLs as Markdown, text, or HTML and supports image responses up to 5 MiB. One trust-scoped policy controls all targets. An instance-wide restriction allows only public addresses by default; administrators may disable it to permit every HTTP(S) target reachable from the backend. Models have no separate Webfetch override.
 
-Webfetch follows redirects only after renewed validation, pins validated DNS targets, and blocks link-local, metadata, and other dangerous addresses. Durable fetched images and rendered PDF pages become revisioned managed files; textual results remain message content. Image-capable models receive current or explicitly referenced images transiently in the provider request; text-only models receive only safe metadata and available text derivatives.
+Webfetch follows redirects only after renewed authorization and resolution and pins validated DNS targets. With the public-address restriction enabled, it blocks link-local, metadata, and other non-public addresses. Durable fetched images and rendered PDF pages become revisioned managed files; textual results remain message content. Image-capable models receive current or explicitly referenced images transiently in the provider request; text-only models receive only safe metadata and available text derivatives.
 
 ## Working Directories
 

@@ -165,7 +165,7 @@
                       emit-value
                       map-options
                       :label="actionLabel(tool, action)"
-                      :options="actionPolicyOptions(action)"
+                      :options="POLICY_OPTIONS"
                       :hint="actionHint(tool, action)"
                       :disable="actionUnavailable(tool, action)"
                       persistent-hint
@@ -180,15 +180,6 @@
                     />
                   </div>
                 </div>
-
-                <q-banner
-                  v-if="tool.actions?.some((action) => action.capability === 'process.execute') && policyForm.policies['process.execute'] === 'auto'"
-                  rounded
-                  class="tool-settings-detail app-surface-tonal"
-                >
-                  <template #avatar><q-icon name="warning_amber" color="warning" /></template>
-                  Befehle werden ohne einzelne Freigabe mit den Rechten des Betriebssystembenutzers des Computers ausgeführt.
-                </q-banner>
 
                 <div v-if="tool.name === 'shell_run'" class="tool-settings-detail q-gutter-md">
                   <q-banner rounded class="app-surface-tonal">
@@ -299,20 +290,14 @@
                   </div>
                 </div>
 
-                <q-list v-if="tool.resources.length" bordered separator class="q-mt-md rounded-borders">
-                  <q-item v-for="resource in tool.resources" :key="resource.key" tag="label">
-                    <q-item-section avatar><q-icon name="lan" color="primary" /></q-item-section>
-                    <q-item-section>
-                      <q-item-label>{{ configurationResourceLabel(resource) }}</q-item-label>
-                      <q-item-label caption>Feste Ressource dieses Tools</q-item-label>
-                    </q-item-section>
-                    <q-item-section side>
-                      <q-toggle v-model="resource.available" color="primary" />
-                    </q-item-section>
-                  </q-item>
-                </q-list>
-
                 <div v-if="tool.name === 'webfetch'" class="tool-settings-detail row q-col-gutter-md">
+                  <div class="col-12">
+                    <q-toggle
+                      v-model="configurationForm.webFetch.publicAddressesOnly"
+                      color="primary"
+                      label="Nur öffentliche Adressen zulassen"
+                    />
+                  </div>
                   <div class="col-12 col-md-8">
                     <q-input
                       v-model.trim="configurationForm.webFetch.userAgent"
@@ -393,7 +378,6 @@ const mediaToolsByName = Object.fromEntries(mediaTools.map((item) => [item.name,
 const TOOL_DESCRIPTIONS = {
   get_system_info: 'Liest grundlegende Informationen zum ausgewählten Computer.',
   change_directory: 'Wechselt den persistenten aktuellen Ordner der Session.',
-  process_exec: 'Führt ein lokal konfiguriertes Programm mit Argumenten aus.',
   shell_run: 'Führt einen Shell-Befehl im aktuellen Ordner aus.',
   read: 'Liest Dateien aus einem erlaubten Bereich.',
   glob: 'Sucht Dateien anhand eines Pfadmusters.',
@@ -430,15 +414,18 @@ const TOOL_DESCRIPTIONS = {
 }
 const policyForm = reactive({
   policies: {},
-  generateImage: { policy: 'disabled', timeoutSeconds: 300 },
+  generateImage: { policy: 'ask', timeoutSeconds: 300 },
   editImage: { policy: 'ask', timeoutSeconds: 300 },
-  generateSpeech: { policy: 'disabled', timeoutSeconds: 300 },
-  generateAudio: { policy: 'disabled', timeoutSeconds: 300 },
-  transcribeAudio: { policy: 'disabled', timeoutSeconds: 300 },
+  generateSpeech: { policy: 'ask', timeoutSeconds: 300 },
+  generateAudio: { policy: 'ask', timeoutSeconds: 300 },
+  transcribeAudio: { policy: 'ask', timeoutSeconds: 300 },
   analyzeVideo: { policy: 'ask', timeoutSeconds: 1800 }
 })
 const shellPrefixText = reactive({ read: '', write: '' })
-const configurationForm = reactive({ groups: [], webFetch: { userAgent: '', maxResponseMiB: 64 } })
+const configurationForm = reactive({
+  groups: [],
+  webFetch: { userAgent: '', maxResponseMiB: 64, publicAddressesOnly: true }
+})
 const personalBlocked = computed(() => tab.value === 'policies'
   && tools.scope === 'personal'
   && !tools.personalSettingsEnabled)
@@ -479,11 +466,6 @@ function configurationRequestPayload() {
   const tools = configurationForm.groups.flatMap((group) => group.tools)
   return {
     toolAvailability: Object.fromEntries(tools.map((tool) => [tool.name, tool.available])),
-    resourceAvailability: Object.fromEntries(tools
-      .filter((tool) => tool.resources.length)
-      .map((tool) => [tool.name, Object.fromEntries(
-        tool.resources.map((resource) => [resource.key, resource.available])
-      )])),
     webFetch: { ...configurationForm.webFetch }
   }
 }
@@ -518,11 +500,6 @@ function fixedActions(tool) {
   return (tool.actions || []).filter((action) => !action.configurable)
 }
 
-function actionPolicyOptions(action) {
-  const allowed = action.allowedPolicies || POLICY_OPTIONS.map(({ value }) => value)
-  return POLICY_OPTIONS.filter(({ value }) => allowed.includes(value))
-}
-
 function actionLabel(tool, action) {
   return configurableActions(tool).length > 1 ? `${action.label}: Richtlinie` : 'Ausführungsrichtlinie'
 }
@@ -535,13 +512,6 @@ function actionHint(tool, action) {
   if (tool.available === false) return 'Das Tool wurde unter „Verfügbare Tools“ deaktiviert. Die Richtlinie bleibt gespeichert.'
   if (action.available === false) return 'Diese feste Ressource wurde technisch deaktiviert. Die Richtlinie bleibt gespeichert.'
   return policyHint(policyForm.policies[action.capability])
-}
-
-function configurationResourceLabel(resource) {
-  return {
-    'network.fetch.public': 'Öffentliche Adressen',
-    'network.fetch.private': 'Private Adressen'
-  }[resource.key] || resource.label
 }
 
 function policyLabel(policy) {

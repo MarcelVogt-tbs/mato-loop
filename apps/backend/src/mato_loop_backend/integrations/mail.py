@@ -29,7 +29,7 @@ from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
 MAIL_CREDENTIAL_KIND = "mail.password"
 _HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|[0-9A-Fa-f:]+)$")
 _PART_RE = re.compile(r"^[1-9][0-9]*(?:\.[1-9][0-9]*)*$")
-_READ = ToolAction("mail.read", "E-Mails lesen", ToolExecutionPolicy.ASK)
+_READ = ToolAction("mail.read", "E-Mails lesen", ToolExecutionPolicy.AUTO)
 _DRAFTS = ToolAction(
     "mail.drafts", "E-Mail-Entwürfe verwalten", ToolExecutionPolicy.ASK, mutates=True
 )
@@ -37,14 +37,12 @@ _SEND = ToolAction(
     "mail.send",
     "E-Mails senden",
     ToolExecutionPolicy.ASK,
-    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
     mutates=True,
 )
 _DELETE = ToolAction(
     "mail.delete",
     "E-Mails löschen",
     ToolExecutionPolicy.ASK,
-    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
     mutates=True,
 )
 

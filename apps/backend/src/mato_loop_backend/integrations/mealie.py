@@ -34,13 +34,13 @@ from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
 MEALIE_CREDENTIAL_KIND = "mealie.api_token"
 
 _ACCOUNTS_READ = ToolAction(
-    "mealie.accounts.read", "Mealie-Konten auflisten", ToolExecutionPolicy.ASK
+    "mealie.accounts.read", "Mealie-Konten auflisten", ToolExecutionPolicy.AUTO
 )
 _RECIPES_READ = ToolAction(
-    "recipes.read", "Rezepte lesen", ToolExecutionPolicy.ASK
+    "recipes.read", "Rezepte lesen", ToolExecutionPolicy.AUTO
 )
 _MEAL_PLAN_READ = ToolAction(
-    "meal_plan.read", "Essensplan lesen", ToolExecutionPolicy.ASK
+    "meal_plan.read", "Essensplan lesen", ToolExecutionPolicy.AUTO
 )
 _MEAL_PLAN_WRITE = ToolAction(
     "meal_plan.write", "Essensplan ändern", ToolExecutionPolicy.ASK, mutates=True
@@ -49,7 +49,6 @@ _MEAL_PLAN_DELETE = ToolAction(
     "meal_plan.delete",
     "Essensplan-Einträge löschen",
     ToolExecutionPolicy.ASK,
-    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
     mutates=True,
 )
 

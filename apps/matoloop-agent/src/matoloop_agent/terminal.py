@@ -347,9 +347,7 @@ class TerminalManager:
         current_directory: str,
         rows: int,
         columns: int,
-        program: str | None,
-        args: list[str],
-        command: str | None,
+        command: str,
         timeout: float | None,
         expected_inspection_revision: str | None,
         stream: StreamCallback,
@@ -360,8 +358,6 @@ class TerminalManager:
             raise AgentError("terminal.limitReached", "Too many terminals are open")
         argv, inspection = self.process.execution_argv(
             current_directory=current_directory,
-            program=program,
-            args=args,
             command=command,
             expected_inspection_revision=expected_inspection_revision,
         )

@@ -142,7 +142,7 @@ def test_effective_operations_require_a_current_directory() -> None:
             "filesystem.resolve",
             "filesystem.read",
             "integration.git.status",
-            "process.exec",
+            "shell.run",
         ]
     )
     assert _effective_execution_operations(run) == {"filesystem.resolve"}

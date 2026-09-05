@@ -125,6 +125,134 @@ class FilesystemTests(unittest.TestCase):
             with self.assertRaisesRegex(AgentError, "changed"):
                 self.filesystem.write(os.fspath(target), "agent", expected)
         self.assertEqual(target.read_text(), "concurrent")
+        self.assertFalse(any(path.name.startswith(".write-") for path in self.root.iterdir()))
+
+    def test_edit_rejects_a_stale_revision(self) -> None:
+        target = self.root / "app.py"
+        target.write_text("current\n")
+        with self.assertRaisesRegex(AgentError, "changed"):
+            self.filesystem.edit(os.fspath(target), "current", "updated", False, "0" * 64)
+        self.assertEqual(target.read_text(), "current\n")
+
+    def test_patch_adds_updates_moves_and_deletes_files(self) -> None:
+        updated = self.root / "updated.txt"
+        moved = self.root / "moved.txt"
+        deleted = self.root / "deleted.txt"
+        updated.write_text("one\ntwo\n")
+        moved.write_text("move me\n")
+        deleted.write_text("delete me\n")
+        revisions = {
+            os.fspath(path): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in (updated, moved, deleted)
+        }
+        patch_text = f"""*** Begin Patch
+*** Add File: {self.path("added.txt")}
++added
+*** Update File: {updated}
+@@
+-one
++ONE
+ two
+*** Update File: {moved}
+*** Move to: {self.path("renamed.txt")}
+*** Delete File: {deleted}
+*** End Patch
+"""
+
+        result = self.filesystem.patch(patch_text, revisions)
+
+        self.assertEqual((self.root / "added.txt").read_text(), "added\n")
+        self.assertEqual(updated.read_text(), "ONE\ntwo\n")
+        self.assertFalse(moved.exists())
+        self.assertEqual((self.root / "renamed.txt").read_text(), "move me\n")
+        self.assertFalse(deleted.exists())
+        self.assertEqual(
+            [item["operation"] for item in result["files"]],
+            ["add", "update", "move", "delete"],
+        )
+        self.assertEqual(result["files"][2]["destination"], self.path("renamed.txt"))
+
+    def test_patch_preflights_every_revision_before_mutating(self) -> None:
+        target = self.root / "target.txt"
+        target.write_text("current\n")
+        patch_text = f"""*** Begin Patch
+*** Add File: {self.path("must-not-exist.txt")}
++new
+*** Update File: {target}
+@@
+-current
++changed
+*** End Patch
+"""
+        with self.assertRaisesRegex(AgentError, "changed"):
+            self.filesystem.patch(patch_text, {os.fspath(target): "0" * 64})
+        self.assertFalse((self.root / "must-not-exist.txt").exists())
+        self.assertEqual(target.read_text(), "current\n")
+
+    def test_patch_rejects_move_with_hunks_before_mutating(self) -> None:
+        target = self.root / "target.txt"
+        target.write_text("current\n")
+        patch_text = f"""*** Begin Patch
+*** Update File: {target}
+*** Move to: {self.path("moved.txt")}
+@@
+-current
++changed
+*** End Patch
+"""
+        revision = hashlib.sha256(target.read_bytes()).hexdigest()
+
+        with self.assertRaisesRegex(AgentError, "Move cannot include update hunks"):
+            self.filesystem.patch(patch_text, {os.fspath(target): revision})
+
+        self.assertEqual(target.read_text(), "current\n")
+        self.assertFalse((self.root / "moved.txt").exists())
+
+    def test_patch_bounds_total_prepared_file_content(self) -> None:
+        first = self.root / "first.txt"
+        second = self.root / "second.txt"
+        first.write_text("a" * 600)
+        second.write_text("b" * 600)
+        patch_text = f"""*** Begin Patch
+*** Delete File: {first}
+*** Delete File: {second}
+*** End Patch
+"""
+        revisions = {
+            os.fspath(path): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in (first, second)
+        }
+
+        with self.assertRaisesRegex(AgentError, "operation limit"):
+            Filesystem(config(self.root, self.root / "data", maxTransferBytes=1024)).patch(
+                patch_text, revisions
+            )
+
+        self.assertTrue(first.exists())
+        self.assertTrue(second.exists())
+
+    def test_patch_rejects_symlinks_duplicate_paths_and_invalid_markers(self) -> None:
+        target = self.root / "target.txt"
+        target.write_text("safe\n")
+        link = self.root / "link.txt"
+        link.symlink_to(target)
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        patches = (
+            (
+                f"*** Begin Patch\n*** Delete File: {link}\n*** End Patch\n",
+                {os.fspath(link): digest},
+            ),
+            (
+                f"*** Begin Patch\n*** Add File: {self.path('same.txt')}\n+x\n"
+                f"*** Delete File: {self.path('same.txt')}\n*** End Patch\n",
+                {self.path("same.txt"): digest},
+            ),
+            ("*** Begin Patch\n*** Add File: relative\n+x\n*** End Patch\n", {}),
+        )
+        for patch_text, revisions in patches:
+            with self.subTest(patch=patch_text), self.assertRaises(AgentError):
+                self.filesystem.patch(patch_text, revisions)
+        self.assertEqual(target.read_text(), "safe\n")
 
     def test_cross_device_move_preserves_a_concurrently_replaced_source(self) -> None:
         source = self.root / "source.txt"

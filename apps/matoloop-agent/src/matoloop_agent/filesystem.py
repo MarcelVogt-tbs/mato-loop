@@ -10,6 +10,7 @@ import stat
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 from uuid import uuid4
@@ -41,6 +42,15 @@ if _renameat2 is not None:
         ctypes.c_uint,
     ]
     _renameat2.restype = ctypes.c_int
+
+
+@dataclass(frozen=True)
+class _PatchOperation:
+    operation: str
+    path: str
+    destination: str | None = None
+    content: str | None = None
+    hunks: tuple[tuple[str | None, tuple[str, ...], tuple[str, ...]], ...] = ()
 
 
 def _parts(value: str) -> tuple[str, ...]:
@@ -447,6 +457,7 @@ class Filesystem:
                             raise
                         try:
                             _rename_exchange(parent, temporary, parent, name)
+                            preserve_temporary = False
                         except BaseException:
                             raise
                         raise
@@ -519,6 +530,7 @@ class Filesystem:
         old_text: str,
         new_text: str,
         replace_all: bool,
+        expected_sha256: str | None = None,
     ) -> dict:
         if not old_text or old_text == new_text:
             raise AgentError("request.invalid", "Edit text must be non-empty and different")
@@ -537,6 +549,9 @@ class Filesystem:
                 content = data.decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise AgentError("file.invalidEncoding", "File is not UTF-8 text") from exc
+            digest = hashlib.sha256(data).hexdigest()
+            if expected_sha256 is not None and digest != expected_sha256:
+                raise AgentError("file.changed", "File changed since it was read")
 
             ending = "\r\n" if "\r\n" in content else "\n"
 
@@ -561,8 +576,370 @@ class Filesystem:
             return self.write(
                 path,
                 updated,
-                hashlib.sha256(data).hexdigest(),
+                digest,
             )
+
+    def _parse_patch(self, patch: str) -> list[_PatchOperation]:
+        if "\r" in patch or "\0" in patch:
+            raise AgentError("request.invalid", "Patch must use LF text")
+        if len(patch.encode("utf-8")) > min(self.max_transfer_bytes, 512 * 1024):
+            raise AgentError("operation.tooLarge", "Patch exceeds the operation limit")
+        lines = patch.split("\n")
+        if lines[-1] == "":
+            lines.pop()
+        if not lines or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
+            raise AgentError("request.invalid", "Patch markers are invalid")
+
+        operations: list[_PatchOperation] = []
+        index = 1
+        while index < len(lines) - 1:
+            header = lines[index]
+            index += 1
+            if header.startswith("*** Add File: "):
+                operation, path = "add", header.removeprefix("*** Add File: ")
+            elif header.startswith("*** Update File: "):
+                operation, path = "update", header.removeprefix("*** Update File: ")
+            elif header.startswith("*** Delete File: "):
+                operation, path = "delete", header.removeprefix("*** Delete File: ")
+            else:
+                raise AgentError("request.invalid", "Patch operation marker is invalid")
+            if len(path) > 4096:
+                raise AgentError("path.invalid", "Patch path is too long")
+            _parts(path)
+
+            destination = None
+            if (
+                operation == "update"
+                and index < len(lines) - 1
+                and lines[index].startswith("*** Move to: ")
+            ):
+                destination = lines[index].removeprefix("*** Move to: ")
+                index += 1
+                if len(destination) > 4096:
+                    raise AgentError("path.invalid", "Patch destination is too long")
+                _parts(destination)
+
+            body_start = index
+            while index < len(lines) - 1 and not lines[index].startswith("*** "):
+                index += 1
+            body = lines[body_start:index]
+            if operation == "add":
+                if any(not line.startswith("+") for line in body):
+                    raise AgentError("request.invalid", "Added file lines must start with +")
+                content = "\n".join(line[1:] for line in body) + ("\n" if body else "")
+                operations.append(_PatchOperation(operation, path, content=content))
+            elif operation == "delete":
+                if body:
+                    raise AgentError("request.invalid", "Delete operation cannot have a body")
+                operations.append(_PatchOperation(operation, path))
+            else:
+                hunks = []
+                body_index = 0
+                while body_index < len(body):
+                    marker = body[body_index]
+                    if marker != "@@" and not marker.startswith("@@ "):
+                        raise AgentError("request.invalid", "Update hunk marker is invalid")
+                    locator = marker[3:] if marker.startswith("@@ ") else None
+                    body_index += 1
+                    old: list[str] = []
+                    new: list[str] = []
+                    changed = False
+                    while body_index < len(body) and not body[body_index].startswith("@@"):
+                        line = body[body_index]
+                        body_index += 1
+                        if not line or line[0] not in " +-":
+                            raise AgentError("request.invalid", "Update hunk line is invalid")
+                        if line[0] in " -":
+                            old.append(line[1:])
+                        if line[0] in " +":
+                            new.append(line[1:])
+                        changed |= line[0] in "+-"
+                    if not old or not changed or old == new:
+                        raise AgentError("request.invalid", "Update hunk has no exact change")
+                    hunks.append((locator, tuple(old), tuple(new)))
+                if not hunks and destination is None:
+                    raise AgentError("request.invalid", "Update requires a hunk or move")
+                if hunks and destination is not None:
+                    raise AgentError("request.invalid", "Move cannot include update hunks")
+                operations.append(
+                    _PatchOperation(
+                        "move" if destination is not None else operation,
+                        path,
+                        destination=destination,
+                        hunks=tuple(hunks),
+                    )
+                )
+            if len(operations) > self.max_entries:
+                raise AgentError("operation.tooLarge", "Patch has too many operations")
+        if not operations:
+            raise AgentError("request.invalid", "Patch has no operations")
+        return operations
+
+    @staticmethod
+    def _apply_hunks(
+        content: str,
+        hunks: tuple[tuple[str | None, tuple[str, ...], tuple[str, ...]], ...],
+    ) -> str:
+        crlf = "\r\n" in content
+        lines = content.replace("\r\n", "\n").split("\n")
+        cursor = 0
+        for locator, old, new in hunks:
+            if locator is not None:
+                locations = [i for i in range(cursor, len(lines)) if lines[i] == locator]
+                if len(locations) != 1:
+                    raise AgentError("file.patchContextMismatch", "Patch locator is not unique")
+                cursor = locations[0] + 1
+            matches = [
+                i
+                for i in range(cursor, len(lines) - len(old) + 1)
+                if tuple(lines[i : i + len(old)]) == old
+            ]
+            if len(matches) != 1:
+                raise AgentError("file.patchContextMismatch", "Patch context is not unique")
+            position = matches[0]
+            lines[position : position + len(old)] = new
+            cursor = position + len(new)
+        updated = "\n".join(lines)
+        return updated.replace("\n", "\r\n") if crlf else updated
+
+    def _read_patch_file(self, path: str) -> tuple[str, bytes, str]:
+        with self._parent(path) as (parent, name, _):
+            fd, metadata = self._open_regular(parent, name)
+            with os.fdopen(fd, "rb") as current:
+                if metadata.st_size > self.max_file_bytes:
+                    raise AgentError("file.tooLarge", "File exceeds the patch limit")
+                data = current.read(self.max_file_bytes + 1)
+        if len(data) > self.max_file_bytes:
+            raise AgentError("file.tooLarge", "File exceeds the patch limit")
+        try:
+            content = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise AgentError("file.invalidEncoding", "File is not UTF-8 text") from exc
+        return content, data, hashlib.sha256(data).hexdigest()
+
+    def _path_must_be_absent(self, path: str) -> None:
+        with self._parent(path) as (parent, name, _):
+            try:
+                os.stat(name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                return
+        raise AgentError("path.exists", "Destination already exists")
+
+    def _delete_revision(self, path: str, expected_sha256: str) -> None:
+        with self._parent(path) as (parent, name, _):
+            current_fd, _ = self._open_regular(parent, name)
+            os.close(current_fd)
+            temporary = f".delete-{uuid4().hex}.tmp"
+            placeholder = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+                dir_fd=parent,
+            )
+            os.close(placeholder)
+            staged = os.stat(temporary, dir_fd=parent, follow_symlinks=False)
+            preserve_temporary = False
+            source_staged = False
+            try:
+                _rename_exchange(parent, temporary, parent, name)
+                source_staged = True
+                displaced_fd, _ = self._open_regular(parent, temporary)
+                with os.fdopen(displaced_fd, "rb") as displaced:
+                    digest = hashlib.file_digest(displaced, "sha256").hexdigest()
+                if digest != expected_sha256:
+                    preserve_temporary = True
+                    current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                    if (current.st_dev, current.st_ino) == (staged.st_dev, staged.st_ino):
+                        _rename_exchange(parent, temporary, parent, name)
+                        source_staged = False
+                        preserve_temporary = False
+                    raise AgentError("file.changed", "File changed since it was read")
+                os.unlink(temporary, dir_fd=parent)
+                try:
+                    current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                    if (current.st_dev, current.st_ino) == (staged.st_dev, staged.st_ino):
+                        os.unlink(name, dir_fd=parent)
+                except FileNotFoundError:
+                    pass
+                _fsync(parent)
+            except BaseException:
+                if source_staged:
+                    preserve_temporary = True
+                    try:
+                        current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                        if (current.st_dev, current.st_ino) == (staged.st_dev, staged.st_ino):
+                            _rename_exchange(parent, temporary, parent, name)
+                            preserve_temporary = False
+                    except OSError:
+                        pass
+                if not preserve_temporary:
+                    try:
+                        os.unlink(temporary, dir_fd=parent)
+                    except FileNotFoundError:
+                        pass
+                raise
+
+    def _move_revision(self, path: str, destination: str, expected_sha256: str) -> None:
+        source_parts = _parts(path)
+        destination_parts = _parts(destination)
+        with self._root_fd() as root:
+            source_parent = self._open_dir(root, source_parts[:-1])
+            destination_parent = self._open_dir(root, destination_parts[:-1])
+            temporary = f".move-{uuid4().hex}.tmp"
+            try:
+                placeholder = os.open(
+                    temporary,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    0o600,
+                    dir_fd=source_parent,
+                )
+                os.close(placeholder)
+                staged = os.stat(temporary, dir_fd=source_parent, follow_symlinks=False)
+                preserve_temporary = False
+                source_staged = False
+                try:
+                    _rename_exchange(source_parent, temporary, source_parent, source_parts[-1])
+                    source_staged = True
+                    displaced_fd, _ = self._open_regular(source_parent, temporary)
+                    with os.fdopen(displaced_fd, "rb") as displaced:
+                        digest = hashlib.file_digest(displaced, "sha256").hexdigest()
+                    if digest != expected_sha256:
+                        preserve_temporary = True
+                        current = os.stat(
+                            source_parts[-1], dir_fd=source_parent, follow_symlinks=False
+                        )
+                        if (current.st_dev, current.st_ino) == (staged.st_dev, staged.st_ino):
+                            _rename_exchange(
+                                source_parent, temporary, source_parent, source_parts[-1]
+                            )
+                            preserve_temporary = False
+                        raise AgentError("file.changed", "File changed since it was read")
+                    _rename_no_replace(
+                        source_parent,
+                        temporary,
+                        destination_parent,
+                        destination_parts[-1],
+                    )
+                    source_staged = False
+                    try:
+                        current = os.stat(
+                            source_parts[-1], dir_fd=source_parent, follow_symlinks=False
+                        )
+                        if (current.st_dev, current.st_ino) == (staged.st_dev, staged.st_ino):
+                            os.unlink(source_parts[-1], dir_fd=source_parent)
+                    except FileNotFoundError:
+                        pass
+                    _fsync(source_parent)
+                    if source_parent != destination_parent:
+                        _fsync(destination_parent)
+                except BaseException:
+                    if source_staged:
+                        try:
+                            current = os.stat(
+                                source_parts[-1], dir_fd=source_parent, follow_symlinks=False
+                            )
+                            if (current.st_dev, current.st_ino) == (staged.st_dev, staged.st_ino):
+                                _rename_exchange(
+                                    source_parent, temporary, source_parent, source_parts[-1]
+                                )
+                                preserve_temporary = False
+                        except OSError:
+                            preserve_temporary = True
+                    if not preserve_temporary:
+                        try:
+                            os.unlink(temporary, dir_fd=source_parent)
+                        except FileNotFoundError:
+                            pass
+                    raise
+            finally:
+                os.close(source_parent)
+                os.close(destination_parent)
+
+    def patch(self, patch: str, expected_sha256: dict[str, str]) -> dict:
+        operations = self._parse_patch(patch)
+        if len(expected_sha256) > self.max_entries:
+            raise AgentError("operation.tooLarge", "Patch has too many revisions")
+        for path, digest in expected_sha256.items():
+            if len(path) > 4096:
+                raise AgentError("path.invalid", "Patch revision path is too long")
+            _parts(path)
+            if len(digest) != 64 or any(
+                character not in "0123456789abcdef" for character in digest
+            ):
+                raise AgentError("request.invalid", "Patch revision is invalid")
+        revision_paths = {item.path for item in operations if item.operation != "add"}
+        if set(expected_sha256) != revision_paths:
+            raise AgentError("request.invalid", "Patch revisions do not match its source files")
+        touched = [
+            path
+            for item in operations
+            for path in (item.path, item.destination)
+            if path is not None
+        ]
+        if len(touched) != len(set(touched)):
+            raise AgentError("request.invalid", "Patch paths must be unique")
+
+        prepared = []
+        prepared_bytes = 0
+        with self._lock:
+            for item in operations:
+                if item.operation == "add":
+                    self._path_must_be_absent(item.path)
+                    content = item.content or ""
+                    encoded = content.encode("utf-8")
+                    if len(encoded) > self.max_file_bytes or "\0" in content:
+                        raise AgentError("file.tooLarge", "Added file exceeds the write limit")
+                    digest = hashlib.sha256(encoded).hexdigest()
+                else:
+                    content, data, digest = self._read_patch_file(item.path)
+                    if digest != expected_sha256[item.path]:
+                        raise AgentError("file.changed", "File changed since it was read")
+                    if item.operation in {"update", "move"}:
+                        content = self._apply_hunks(content, item.hunks)
+                        encoded = content.encode("utf-8")
+                        if len(encoded) > self.max_file_bytes or "\0" in content:
+                            raise AgentError(
+                                "file.tooLarge", "Patched file exceeds the write limit"
+                            )
+                        digest = hashlib.sha256(encoded).hexdigest()
+                    else:
+                        encoded = data
+                    if item.destination is not None:
+                        self._path_must_be_absent(item.destination)
+                        source_parent = os.stat(
+                            _path(_parts(item.path)[:-1]), follow_symlinks=False
+                        )
+                        destination_parent = os.stat(
+                            _path(_parts(item.destination)[:-1]), follow_symlinks=False
+                        )
+                        if source_parent.st_dev != destination_parent.st_dev:
+                            raise AgentError(
+                                "path.invalidDestination",
+                                "Patch moves must stay on one filesystem",
+                            )
+                size = len(encoded)
+                prepared_bytes += size
+                if prepared_bytes > self.max_transfer_bytes:
+                    raise AgentError("operation.tooLarge", "Patch files exceed the operation limit")
+                prepared.append((item, content, digest, size))
+
+            results = []
+            for item, content, digest, size in prepared:
+                if item.operation == "add":
+                    self.write(item.path, content, None)
+                elif item.operation == "delete":
+                    self._delete_revision(item.path, expected_sha256[item.path])
+                else:
+                    if item.hunks:
+                        self.write(item.path, content, expected_sha256[item.path])
+                    if item.destination is not None:
+                        self._move_revision(item.path, item.destination, digest)
+                result = {"operation": item.operation, "path": item.path}
+                if item.destination is not None:
+                    result["destination"] = item.destination
+                result.update({"sha256": digest, "size": size})
+                results.append(result)
+        return {"files": results}
 
     def mkdir(self, path: str, parents: bool) -> dict:
         parts = _parts(path)

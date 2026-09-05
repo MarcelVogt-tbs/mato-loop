@@ -272,11 +272,11 @@ async def load_effective_tools(
         ).model_dump()
     effective = ToolSettings.model_validate(data)
     effective.tool_availability = dict(instance.tool_availability)
-    effective.resource_availability = {
-        key: dict(value) for key, value in instance.resource_availability.items()
-    }
     effective.web_fetch.user_agent = instance.web_fetch.user_agent
     effective.web_fetch.max_response_mib = instance.web_fetch.max_response_mib
+    effective.web_fetch.public_addresses_only = (
+        instance.web_fetch.public_addresses_only
+    )
     return effective.select_trust(trust_level)
 
 

@@ -99,6 +99,14 @@ class ToolExecutionPolicy(StrEnum):
 
 DEFAULT_AGENT_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000001")
 DEFAULT_PERSONA_ID = UUID("00000000-0000-4000-8000-000000000002")
+PLAN_AGENT_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000003")
+BUILD_AGENT_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000004")
+BUILTIN_AGENT_PROFILE_NAMES = {
+    DEFAULT_AGENT_PROFILE_ID: "Allgemein",
+    PLAN_AGENT_PROFILE_ID: "Plan",
+    BUILD_AGENT_PROFILE_ID: "Build",
+}
+BUILTIN_AGENT_PROFILE_IDS = frozenset(BUILTIN_AGENT_PROFILE_NAMES)
 
 
 class PersonaProfile(BaseModel):
@@ -178,10 +186,50 @@ class AgentProfile(BaseModel):
 def default_agent_profile() -> AgentProfile:
     return AgentProfile(
         id=DEFAULT_AGENT_PROFILE_ID,
-        name="Allgemein",
+        name=BUILTIN_AGENT_PROFILE_NAMES[DEFAULT_AGENT_PROFILE_ID],
         description="Standardagent für Sessions ohne ausgewähltes Profil.",
         instructions="Follow the user's request and the selected persona.",
     )
+
+
+def plan_agent_profile() -> AgentProfile:
+    policies = {
+        "filesystem.write": ToolExecutionPolicy.DISABLED,
+        "filesystem.delete": ToolExecutionPolicy.DISABLED,
+        "session.files.write": ToolExecutionPolicy.AUTO,
+        "shell.write": ToolExecutionPolicy.DISABLED,
+        "git.stage": ToolExecutionPolicy.DISABLED,
+        "git.clone": ToolExecutionPolicy.DISABLED,
+        "git.commit": ToolExecutionPolicy.DISABLED,
+    }
+    return AgentProfile(
+        id=PLAN_AGENT_PROFILE_ID,
+        name=BUILTIN_AGENT_PROFILE_NAMES[PLAN_AGENT_PROFILE_ID],
+        description="Erstellt klare, umsetzbare Pläne, ohne Änderungen ungefragt auszuführen.",
+        instructions=(
+            "Create a clear, actionable plan. Inspect the relevant context, identify risks "
+            "and verification steps. Do not modify computer files or run commands classified "
+            "as writes."
+        ),
+        private_permissions=AgentProfilePermissions(policies=policies),
+        public_permissions=AgentProfilePermissions(policies=policies),
+    )
+
+
+def build_agent_profile() -> AgentProfile:
+    return AgentProfile(
+        id=BUILD_AGENT_PROFILE_ID,
+        name=BUILTIN_AGENT_PROFILE_NAMES[BUILD_AGENT_PROFILE_ID],
+        description="Setzt Aufgaben um und führt notwendige Änderungen selbstständig aus.",
+        instructions=(
+            "Implement the user's request. Inspect the relevant context, make the smallest "
+            "correct changes, and verify the result."
+        ),
+    )
+
+
+def default_agent_profiles() -> list[AgentProfile]:
+    return [default_agent_profile(), plan_agent_profile(), build_agent_profile()]
 
 
 def cap_agent_profile_policy(
@@ -189,7 +237,6 @@ def cap_agent_profile_policy(
     capability: str,
     baseline: ToolExecutionPolicy,
     *,
-    allowed_policies: tuple[ToolExecutionPolicy, ...] = tuple(ToolExecutionPolicy),
     integration_id: UUID | None = None,
     resource_key: str | None = None,
     include_scoped: bool = False,
@@ -197,7 +244,7 @@ def cap_agent_profile_policy(
     permissions = settings._agent_permissions
     if settings._agent_profile_unavailable:
         return ToolExecutionPolicy.DISABLED
-    if permissions is None or capability == "session.tool_result.read":
+    if permissions is None:
         return baseline
     profile_policy = permissions.policies.get(capability)
     if integration_id is not None:
@@ -230,8 +277,6 @@ def cap_agent_profile_policy(
         )
     if profile_policy is None:
         return baseline
-    if profile_policy not in allowed_policies:
-        return ToolExecutionPolicy.DISABLED
     return profile_policy
 
 
@@ -496,6 +541,12 @@ class WebFetchSettings(BaseModel):
         le=256,
         validation_alias=AliasChoices("max_response_mib", "maxResponseMiB"),
     )
+    public_addresses_only: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "public_addresses_only", "publicAddressesOnly"
+        ),
+    )
 
     @field_validator("user_agent", mode="before")
     @classmethod
@@ -533,7 +584,7 @@ class WebSearchToolSettings(BaseModel):
 
 
 class MediaToolSettings(BaseModel):
-    policy: ToolExecutionPolicy = ToolExecutionPolicy.DISABLED
+    policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK
     timeout_seconds: int = Field(
         default=300,
         ge=10,
@@ -593,7 +644,7 @@ class DefaultTaskListSettings(BaseModel):
 class ToolSettingsBase(SettingsDocument):
     _agent_permissions: AgentProfilePermissions | None = PrivateAttr(default=None)
     _agent_profile_unavailable: bool = PrivateAttr(default=False)
-    _trust_level: TrustLevel = PrivateAttr(default=TrustLevel.PUBLIC)
+    _trust_level: TrustLevel = PrivateAttr(default=TrustLevel.PRIVATE)
 
     private_permissions: AgentProfilePermissions = Field(
         default_factory=AgentProfilePermissions,
@@ -606,15 +657,6 @@ class ToolSettingsBase(SettingsDocument):
     tool_availability: dict[str, bool] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("tool_availability", "toolAvailability"),
-    )
-    resource_availability: dict[str, dict[str, bool]] = Field(
-        default_factory=lambda: {
-            "webfetch": {
-                "network.fetch.public": True,
-                "network.fetch.private": False,
-            }
-        },
-        validation_alias=AliasChoices("resource_availability", "resourceAvailability"),
     )
     resource_labels: dict[str, dict[str, str]] = Field(
         default_factory=dict,
@@ -679,14 +721,13 @@ class ToolSettingsBase(SettingsDocument):
             else self.public_permissions
         )
 
+    @property
+    def trust_level(self) -> TrustLevel:
+        return self._trust_level
+
     def select_trust(self, trust_level: TrustLevel) -> ToolSettingsBase:
         self._trust_level = trust_level
         return self
-
-    def webfetch_resource_available(self, capability: str) -> bool:
-        default = capability != "network.fetch.private"
-        return self.resource_availability.get("webfetch", {}).get(capability, default)
-
 
 class ToolSettings(ToolSettingsBase):
     settings_key = "tools"
@@ -707,7 +748,7 @@ class AgentProfilesSettings(SettingsDocument):
 
     personal_agents_enabled: bool = True
     profiles: list[AgentProfile] = Field(
-        default_factory=lambda: [default_agent_profile()], max_length=100
+        default_factory=default_agent_profiles, max_length=102
     )
 
 

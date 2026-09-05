@@ -32,7 +32,6 @@ def configuration(home: Path, *, shell: bool = True) -> AgentConfig:
             "backendUrl": "ws://localhost/api/execution-agents/connect",
             "agentId": AGENT_ID,
             "allowInsecure": True,
-            "processExecutables": {"sh": Path("/bin/sh")},
             "shellExecutable": Path("/bin/sh") if shell else None,
             "maxOutputBytes": 4096,
         }
@@ -112,7 +111,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
                 result = await terminal.close(terminal_id)
             self.assertEqual(result, {})
 
-    async def test_one_shot_commands_aliases_and_cancellation(self) -> None:
+    async def test_one_shot_commands_and_cancellation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             current = home / "workspace"
@@ -131,8 +130,6 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
                     current_directory=os.fspath(current),
                     rows=31,
                     columns=99,
-                    program=None,
-                    args=[],
                     command="pwd",
                     timeout=2,
                     expected_inspection_revision=None,
@@ -144,8 +141,6 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
                 current_directory=os.fspath(current),
                 rows=31,
                 columns=99,
-                program=None,
-                args=[],
                 command='printf \'__ENV__%s|%s|\' "$HOME" "$PWD"; stty size; exit 7',
                 timeout=2,
                 expected_inspection_revision=None,
@@ -175,8 +170,6 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
                     current_directory=os.fspath(current),
                     rows=24,
                     columns=80,
-                    program=None,
-                    args=[],
                     command="pwd",
                     timeout=2,
                     expected_inspection_revision=inspected["inspectionRevision"],
@@ -186,25 +179,12 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(os.fspath(current), "".join(data for _channel, data in output))
             environment = environment_builder(*build_environment.call_args.args)
             self.assertEqual(environment["HOME"], os.fspath(current))
-            self.assertEqual(environment["PATH"], "/usr/bin:/bin")
+            self.assertEqual(
+                environment["PATH"],
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            )
 
             await terminal.close(personal_id)
-
-            output.clear()
-            alias_result = await terminal.run(
-                terminal_id=TERMINAL_ID,
-                current_directory=os.fspath(current),
-                rows=24,
-                columns=80,
-                program="sh",
-                args=["-c", "printf alias"],
-                command=None,
-                timeout=2,
-                expected_inspection_revision=None,
-                stream=stream,
-            )
-            self.assertEqual(alias_result["exitCode"], 0)
-            self.assertEqual("".join(data for _channel, data in output), "alias")
 
             with self.assertRaises(AgentError):
                 await terminal.run(
@@ -212,8 +192,6 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
                     current_directory=os.fspath(current),
                     rows=24,
                     columns=80,
-                    program=None,
-                    args=[],
                     command="pwd",
                     timeout=2,
                     expected_inspection_revision="0" * 64,
@@ -226,8 +204,6 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
                     current_directory=os.fspath(current),
                     rows=24,
                     columns=80,
-                    program=None,
-                    args=[],
                     command="sleep 10",
                     timeout=20,
                     expected_inspection_revision=None,
@@ -247,8 +223,6 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
                         current_directory=os.fspath(current),
                         rows=24,
                         columns=80,
-                        program=None,
-                        args=[],
                         command="sleep 60",
                         timeout=3600,
                         expected_inspection_revision=None,
@@ -269,6 +243,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
             config = configuration(Path(temporary))
             agent = MatoLoopAgent(config, "secret")
             self.assertTrue(TERMINAL_OPERATIONS.issubset(agent.operations))
+            self.assertNotIn("process.exec", agent.operations)
             await agent.terminal.open(24, 80)
             await agent.terminal.close_all()
             self.assertEqual(agent.terminal._terminals, {})

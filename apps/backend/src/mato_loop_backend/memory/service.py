@@ -1337,6 +1337,7 @@ class MemoryService:
             .join(ChatSession, ChatSession.id == AgentRun.session_id)
             .where(
                 AgentRun.id == run_id,
+                AgentRun.parent_run_id.is_(None),
                 ChatSession.user_id == owner_id,
                 *( [AgentRun.session_id == session_id] if session_id is not None else [] ),
             )

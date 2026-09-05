@@ -19,16 +19,10 @@ const settings = (policy = 'ask') => ({
       label: 'Webfetch',
       source: { type: 'builtin' },
       available: false,
-      actions: [
-        { capability: 'network.fetch.public', configurable: true },
-        { capability: 'network.fetch.private', configurable: true }
-      ]
+      actions: [{ capability: 'network.fetch', configurable: true }]
     }]
   }],
-  policies: {
-    'network.fetch.public': policy,
-    'network.fetch.private': 'disabled'
-  },
+  policies: { 'network.fetch': policy },
   shellPrefixes: { read: [['cat']], write: [] },
   transcribeAudio: { policy: 'ask', timeoutSeconds: 180 }
 })
@@ -42,18 +36,11 @@ const configuration = {
       name: 'webfetch',
       label: 'Webfetch',
       icon: 'language',
-      available: true,
-      resources: [
-        { key: 'network.fetch.public', label: 'Öffentliche Ziele', available: true },
-        { key: 'network.fetch.private', label: 'Private Ziele', available: false }
-      ]
+      available: true
     }]
   }],
   toolAvailability: { webfetch: true },
-  resourceAvailability: {
-    webfetch: { 'network.fetch.public': true, 'network.fetch.private': false }
-  },
-  webFetch: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 32 }
+  webFetch: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 32, publicAddressesOnly: false }
 }
 
 describe('tool settings store', () => {
@@ -73,7 +60,7 @@ describe('tool settings store', () => {
     }))
 
     await store.fetchSettings()
-    await store.saveSettings({ policies: { 'network.fetch.public': 'auto' } })
+    await store.saveSettings({ policies: { 'network.fetch': 'auto' } })
 
     expect(api.get).toHaveBeenCalledWith('/tools/settings', {
       params: { scope: 'personal', trust: 'public' }
@@ -81,21 +68,18 @@ describe('tool settings store', () => {
     expect(api.put).toHaveBeenCalledWith(
       '/tools/settings',
       expect.objectContaining({
-        policies: {
-          'network.fetch.public': 'auto',
-          'network.fetch.private': 'disabled'
-        }
+        policies: { 'network.fetch': 'auto' }
       }),
       { params: { scope: 'personal', trust: 'public' } }
     )
-    expect(store.policies['network.fetch.public']).toBe('auto')
+    expect(store.policies['network.fetch']).toBe('auto')
     expect(store.groups[0].tools[0].available).toBe(false)
   })
 
   it('discards a late response from the previous trust branch', async () => {
     const requests = []
     api.get.mockImplementation((url, config) => url === '/tools/availability'
-      ? Promise.resolve({ data: { tools: {}, resources: {} } })
+      ? Promise.resolve({ data: { tools: {} } })
       : new Promise((resolve) => {
       requests.push({ trust: config.params.trust, resolve })
       }))
@@ -110,7 +94,7 @@ describe('tool settings store', () => {
     await privateLoad
 
     expect(store.trust).toBe('public')
-    expect(store.policies['network.fetch.public']).toBe('auto')
+    expect(store.policies['network.fetch']).toBe('auto')
     expect(store.loading).toBe(false)
   })
 
@@ -121,7 +105,7 @@ describe('tool settings store', () => {
     store.assignSettings(settings('ask'))
     store.loaded = true
 
-    const save = store.saveSettings({ policies: { 'network.fetch.public': 'auto' } })
+    const save = store.saveSettings({ policies: { 'network.fetch': 'auto' } })
     store.selectTrust('public')
     resolveSave({ data: settings('auto') })
 
@@ -136,9 +120,6 @@ describe('tool settings store', () => {
     const store = useToolSettingsStore()
     const payload = {
       toolAvailability: { webfetch: true },
-      resourceAvailability: {
-        webfetch: { 'network.fetch.public': true, 'network.fetch.private': false }
-      },
       webFetch: configuration.webFetch
     }
 
@@ -151,7 +132,18 @@ describe('tool settings store', () => {
     expect(store.configurationWebFetch).toEqual(configuration.webFetch)
   })
 
-  it('updates the loaded policy catalog after availability changes', () => {
+  it('defaults WebFetch to public addresses when the server omits the option', () => {
+    const store = useToolSettingsStore()
+
+    store.assignConfiguration({
+      ...configuration,
+      webFetch: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 32 }
+    })
+
+    expect(store.configurationWebFetch.publicAddressesOnly).toBe(true)
+  })
+
+  it('updates the loaded policy catalog after tool availability changes', () => {
     const store = useToolSettingsStore()
     store.assignSettings({
       ...settings(),
@@ -170,14 +162,10 @@ describe('tool settings store', () => {
 
     store.assignConfiguration({
       ...configuration,
-      toolAvailability: { webfetch: false },
-      resourceAvailability: {
-        webfetch: { 'network.fetch.public': false, 'network.fetch.private': false }
-      }
+      toolAvailability: { webfetch: false }
     })
 
     expect(store.groups[0].tools[0].available).toBe(false)
-    expect(store.groups[0].tools[0].actions.every((action) => action.available === false)).toBe(true)
     expect(store.transcribeAudio.timeoutSeconds).toBe(180)
   })
 
@@ -197,7 +185,7 @@ describe('tool settings store', () => {
   })
 
   it('keeps the narrow availability endpoint for dictation state', async () => {
-    api.get.mockResolvedValue({ data: { tools: { transcribe_audio: true }, resources: {} } })
+    api.get.mockResolvedValue({ data: { tools: { transcribe_audio: true } } })
     const store = useToolSettingsStore()
 
     await store.fetchAvailability()

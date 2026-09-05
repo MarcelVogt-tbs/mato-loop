@@ -447,13 +447,12 @@ update_agent() {
 }
 
 write_agent_config() {
-    local git_executable shell_executable python_executable openscad_executable
+    local git_executable shell_executable openscad_executable
     git_executable="$(command -v git || true)"
     shell_executable="$(command -v bash || true)"
-    python_executable="$(command -v python3 || true)"
     openscad_executable="$(command -v openscad || true)"
     python3 - "$DATA_DIR/config.json" "$WORKSPACE_DIR" "$BACKEND_URL" \
-        "$git_executable" "$shell_executable" "$python_executable" "$openscad_executable" <<'PY'
+        "$git_executable" "$shell_executable" "$openscad_executable" <<'PY'
 import json
 import os
 import sys
@@ -461,7 +460,7 @@ import tempfile
 from pathlib import Path
 
 path = Path(sys.argv[1])
-workspace, backend_url, git, shell, python, openscad = sys.argv[2:]
+workspace, backend_url, git, shell, openscad = sys.argv[2:]
 if path.is_symlink():
     raise SystemExit("Refusing symlinked config.json.")
 data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
@@ -476,11 +475,7 @@ if shell:
     data["shellExecutable"] = shell
 else:
     data.pop("shellExecutable", None)
-process_executables = data.setdefault("processExecutables", {})
-if python:
-    process_executables["python"] = python
-else:
-    process_executables.pop("python", None)
+data.pop("processExecutables", None)
 if openscad:
     data["openscadExecutable"] = openscad
 else:

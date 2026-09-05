@@ -2,8 +2,5 @@
   "homeDirectory": "/home/mato/workspace",
   "gitExecutable": "/usr/bin/git",
   "allowNetwork": true,
-  "processExecutables": {
-    "python": "/usr/bin/python3"
-  },
   "shellExecutable": "/bin/sh"
 }

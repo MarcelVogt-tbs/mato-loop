@@ -75,7 +75,7 @@ def _validate_shelf_keys(shelf_keys: list[str] | None) -> None:
 _READ = ToolAction(
     "knowledge.read",
     "Wissensdatenbank lesen",
-    ToolExecutionPolicy.ASK,
+    ToolExecutionPolicy.AUTO,
 )
 _WRITE = ToolAction(
     "knowledge.write",
@@ -87,7 +87,6 @@ _DELETE = ToolAction(
     "knowledge.delete",
     "Wissenseinträge löschen",
     ToolExecutionPolicy.ASK,
-    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
     mutates=True,
 )
 
@@ -400,7 +399,6 @@ def _disabled_book_keys(context: Any, instance: IntegrationInstance) -> set[str]
             tool_settings,
             "knowledge.read",
             action.default_policy,
-            allowed_policies=action.allowed_policies,
             integration_id=instance.id,
             resource_key=resource_key,
         )
@@ -1433,15 +1431,17 @@ async def _download_attachment_source(
         return ToolResult.error("tool.unavailable")
     settings = context.tool_settings.web_fetch
 
-    async def authorize_url(target: str, private_target: bool) -> None:
-        await _authorize_webfetch_target(context, target, private_target)
+    public_addresses_only = settings.public_addresses_only
+
+    async def authorize_url(target: str) -> None:
+        await _authorize_webfetch_target(context, target)
+        if context.tool_settings.web_fetch.public_addresses_only != public_addresses_only:
+            raise WebFetchError("tool.unavailable")
 
     try:
         downloaded = await download_file(
             url,
-            allow_private_targets=context.tool_settings.webfetch_resource_available(
-                "network.fetch.private"
-            ),
+            public_addresses_only=public_addresses_only,
             authorize_url=authorize_url,
             max_response_bytes=min(
                 settings.max_response_mib * 1024 * 1024, MAX_ATTACHMENT_BYTES

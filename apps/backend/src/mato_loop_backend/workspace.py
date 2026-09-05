@@ -961,12 +961,16 @@ class RootFileService:
         new_text: str,
         *,
         replace_all: bool = False,
+        expected_sha256: str | None = None,
     ) -> str:
         path = self.normalize_relative_path(relative_path)
         for _attempt in range(3):
             data = self.read_bytes(root, path, limit=self.max_editable_text_bytes + 1)
             if len(data) > self.max_editable_text_bytes:
                 raise RootFileError("file.tooLarge", "File is too large")
+            digest = hashlib.sha256(data).hexdigest()
+            if expected_sha256 is not None and digest != expected_sha256:
+                raise RootFileError("file.changed", "File changed since it was read")
             try:
                 content = data.decode("utf-8")
             except UnicodeDecodeError as exc:
@@ -991,7 +995,7 @@ class RootFileService:
                     root,
                     path,
                     updated,
-                    hashlib.sha256(data).hexdigest(),
+                    digest,
                 )
                 return path
             except RootFileError as exc:

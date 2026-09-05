@@ -1061,7 +1061,7 @@ async def get_run(
     if await _owned_session(db, session_id, user.id) is None:
         raise ApiError(404, "session.runNotFound")
     run = await db.get(AgentRun, run_id)
-    if run is None or run.session_id != session_id:
+    if run is None or run.session_id != session_id or run.parent_run_id is not None:
         raise ApiError(404, "session.runNotFound")
     return run_payload(run)
 
@@ -1079,7 +1079,7 @@ async def cancel_run(
     if await _owned_session(db, session_id, user.id) is None:
         raise ApiError(404, "session.runNotFound")
     run = await db.get(AgentRun, run_id)
-    if run is None or run.session_id != session_id:
+    if run is None or run.session_id != session_id or run.parent_run_id is not None:
         raise ApiError(404, "session.runNotFound")
     if run.status in {"completed", "failed", "cancelled"}:
         return run_payload(run)
@@ -1098,7 +1098,7 @@ async def stream_run_events(
     if await _owned_session(db, session_id, user.id) is None:
         raise ApiError(404, "session.runNotFound")
     run = await db.get(AgentRun, run_id)
-    if run is None or run.session_id != session_id:
+    if run is None or run.session_id != session_id or run.parent_run_id is not None:
         raise ApiError(404, "session.runNotFound")
     run_status = run.status
     run_error = run.error

@@ -44,6 +44,16 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             config = AgentConfig.load(path)
             self.assertEqual(config.data_dir, base)
 
+            path.write_text(
+                json.dumps(
+                    {
+                        "homeDirectory": os.fspath(base),
+                        "processExecutables": {"python": "/usr/bin/python3"},
+                    }
+                )
+            )
+            self.assertEqual(AgentConfig.load(path).home_directory, base)
+
             for removed in ("name", "roots", "dataDir"):
                 path.write_text(json.dumps({"homeDirectory": os.fspath(base), removed: "old"}))
                 with self.subTest(removed=removed), self.assertRaises(ValidationError):
@@ -88,12 +98,12 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("roots", hello)
             self.assertNotIn("dataDir", hello)
 
-    async def test_mutation_cancellation_returns_before_thread_outcome(self) -> None:
+    async def test_mutation_cancellation_waits_for_truthful_thread_outcome(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            agent = MatoLoopAgent(configuration(root), "secret")
             started = threading.Event()
             release = threading.Event()
+            received = {}
 
             def delayed_write(*_args) -> dict:
                 started.set()
@@ -104,7 +114,62 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                     "sha256": "a" * 64,
                 }
 
-            agent.filesystem.write = delayed_write
+            async def handler(websocket) -> None:
+                await websocket.recv()
+                await websocket.send(
+                    json.dumps({"type": "welcome", "protocolVersion": 1, "agentId": AGENT_ID})
+                )
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": "request",
+                            "id": REQUEST_ID,
+                            "operation": "filesystem.write",
+                            "arguments": {
+                                "path": os.fspath(root / "file.txt"),
+                                "content": "x",
+                            },
+                        }
+                    )
+                )
+                await asyncio.to_thread(started.wait, 1)
+                await websocket.send(json.dumps({"type": "cancel", "id": REQUEST_ID}))
+                try:
+                    with self.assertRaises(TimeoutError):
+                        await asyncio.wait_for(websocket.recv(), 0.05)
+                finally:
+                    release.set()
+                received.update(json.loads(await websocket.recv()))
+                await websocket.close()
+
+            async with websockets.serve(handler, "127.0.0.1", 0) as server:
+                port = server.sockets[0].getsockname()[1]
+                agent = MatoLoopAgent(
+                    configuration(
+                        root,
+                        backendUrl=f"ws://127.0.0.1:{port}/api/execution-agents/connect",
+                    ),
+                    "secret",
+                )
+                agent.filesystem.write = delayed_write
+                await agent._connect_once(asyncio.Event())
+
+            self.assertTrue(received["ok"])
+            self.assertEqual(received["result"]["sha256"], "a" * 64)
+
+    async def test_cancelled_mutation_reports_its_actual_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            agent = MatoLoopAgent(configuration(root), "secret")
+            started = threading.Event()
+            release = threading.Event()
+
+            def delayed_failure(*_args) -> dict:
+                started.set()
+                release.wait(2)
+                raise AgentError("file.changed", "changed")
+
+            agent.filesystem.write = delayed_failure
             request = Request.model_validate(
                 {
                     "type": "request",
@@ -116,11 +181,9 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             task = asyncio.create_task(agent.dispatch(request))
             await asyncio.to_thread(started.wait, 1)
             task.cancel()
-            try:
-                with self.assertRaises(asyncio.CancelledError):
-                    await task
-            finally:
-                release.set()
+            release.set()
+            with self.assertRaisesRegex(AgentError, "changed"):
+                await task
 
     async def test_dispatches_absolute_filesystem_operations(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

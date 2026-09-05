@@ -9,7 +9,6 @@ Standalone Linux agent for bounded filesystem, process, POSIX terminal, transfer
   "homeDirectory": "/home/mato/workspace",
   "gitExecutable": "/usr/bin/git",
   "allowNetwork": true,
-  "processExecutables": {"python": "/usr/bin/python3"},
   "shellExecutable": "/bin/sh"
 }
 ```

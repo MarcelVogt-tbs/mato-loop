@@ -112,7 +112,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     prompt_tokens = estimate_tokens(prompt, 4.0) + estimate_tokens(memory_prompt, 4.0)
     schema_tokens = estimate_tokens(schemas, 4.0)
 
-    assert len(schemas) == 49
+    assert len(schemas) == 51
     assert {"load_skill", "build_skill", "edit_skill"} <= {
         schema["name"] for schema in schemas
     }

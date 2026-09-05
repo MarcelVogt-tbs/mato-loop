@@ -107,6 +107,20 @@ class WorkspaceWriteResult(WorkspacePathResult):
     size: int = Field(ge=0)
 
 
+class WorkspacePatchFile(WorkspaceWriteResult):
+    operation: Literal["add", "update", "move", "delete"]
+    destination: str | None = None
+
+    @field_validator("destination")
+    @classmethod
+    def validate_destination(cls, value: str | None) -> str | None:
+        return _absolute_path(value) if value is not None else None
+
+
+class WorkspacePatchResult(ExecutionResult):
+    files: list[WorkspacePatchFile] = Field(min_length=1, max_length=1_000)
+
+
 class WorkspaceExportResult(ExecutionResult):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     size: int = Field(ge=0)
@@ -228,6 +242,7 @@ _REMOTE_ERROR_CODES = {
     "file.editTextNotFound": "file.editTextNotFound",
     "file.editTextNotUnique": "file.editTextNotUnique",
     "file.invalidEncoding": "file.invalidEncoding",
+    "file.patchContextMismatch": "file.patchContextMismatch",
     "file.tooLarge": "file.tooLarge",
     "git.addFailed": "git.operationFailed",
     "git.cloneFailed": "git.cloneFailed",
@@ -424,11 +439,11 @@ class ExecutionClient:
             if code == "operation.cancelled":
                 mapped_code = (
                     "process.interrupted"
-                    if operation.startswith(("process.", "shell.")) or operation == "terminal.run"
+                    if operation.startswith("shell.") or operation == "terminal.run"
                     else "tool.executionInterrupted"
                 )
             elif code == "operation.failed" and (
-                operation.startswith(("process.", "shell.")) or operation == "terminal.run"
+                operation.startswith("shell.") or operation == "terminal.run"
             ):
                 mapped_code = "process.failed"
             else:
@@ -460,6 +475,7 @@ __all__ = [
     "WorkspaceGlobResult",
     "WorkspaceGrepResult",
     "WorkspaceListResult",
+    "WorkspacePatchResult",
     "WorkspacePathResult",
     "WorkspaceReadResult",
     "WorkspaceStatResult",

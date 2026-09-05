@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import mato_loop_backend.agent.tools as tools_module
 import mato_loop_backend.integrations.registry as integration_registry
 from mato_loop_backend.agent.permissions import PermissionDecision, PermissionRequest
+from mato_loop_backend.agent.tool_arguments import TaskArguments
 from mato_loop_backend.agent.tools import (
     BoundTool,
     EffectiveToolSet,
@@ -113,6 +114,25 @@ async def test_sqlalchemy_tool_errors_reach_runtime_rollback() -> None:
         await ToolRegistry([definition]).execute(call, Mock())
 
 
+async def test_task_tool_has_bounded_prompt_and_delegates(tmp_path) -> None:
+    with pytest.raises(ValidationError):
+        TaskArguments(prompt="   ")
+    with pytest.raises(ValidationError):
+        TaskArguments(prompt="x" * 8_001)
+
+    call = ToolCall("task-1", "task", {"prompt": " Inspect auth "})
+    context = _context(tmp_path, call)
+    context.task_handler = AsyncMock(return_value=ToolResult("findings", {}))
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.content == "findings"
+    context.task_handler.assert_awaited_once_with("Inspect auth")
+    schema = next(item for item in tool_registry.schemas(IntegrationSettings()) if item["name"] == "task")
+    assert set(schema["parameters"]["properties"]) == {"prompt"}
+    assert schema["parameters"]["properties"]["prompt"]["maxLength"] == 8_000
+
+
 async def test_bound_tool_defaults_fill_only_fully_omitted_arguments(tmp_path) -> None:
     received = []
 
@@ -186,20 +206,15 @@ def _context(
     *,
     decision=PermissionDecision.ALLOW,
     web_fetch_policy=ToolExecutionPolicy.DISABLED,
-    allow_private_targets=False,
-    private_fetch_policy=ToolExecutionPolicy.ASK,
+    public_addresses_only=True,
 ) -> ToolContext:
     session = _session()
     storage = SessionStorage(tmp_path / "sessions")
     storage.provision(session.id)
     tool_settings = ToolSettings()
-    tool_settings.public_permissions.policies["network.fetch.public"] = web_fetch_policy
-    tool_settings.public_permissions.policies["network.fetch.private"] = (
-        private_fetch_policy
-    )
-    tool_settings.resource_availability["webfetch"]["network.fetch.private"] = bool(
-        allow_private_targets
-    )
+    tool_settings.private_permissions.policies["network.fetch"] = web_fetch_policy
+    tool_settings.public_permissions.policies["network.fetch"] = web_fetch_policy
+    tool_settings.web_fetch.public_addresses_only = public_addresses_only
     context = ToolContext(
         db=AsyncMock(spec=AsyncSession),
         run_id=uuid4(),
@@ -214,6 +229,7 @@ def _context(
         tool_settings=tool_settings,
     )
     context.db.scalar.return_value = Mock(data=tool_settings.model_dump(mode="json"))
+    context.model_trust_level = TrustLevel.PRIVATE
     return context
 
 
@@ -225,6 +241,7 @@ def _tool_settings(data: dict) -> ToolSettings:
         if key in values
     }
     if permissions:
+        values["privatePermissions"] = permissions
         values["publicPermissions"] = permissions
     return ToolSettings.model_validate(values)
 
@@ -248,6 +265,19 @@ async def test_missing_profile_reload_keeps_private_trust(monkeypatch, tmp_path)
         context.db, context.session.user_id, TrustLevel.PRIVATE
     )
     assert result._agent_profile_unavailable is True
+
+
+async def test_tool_reload_uses_run_profile_snapshot(monkeypatch, tmp_path) -> None:
+    call = ToolCall("read", "read", {"root": "files", "path": "note.md"})
+    context = _context(tmp_path, call)
+    context.session.agent_profile_id = uuid4()
+    context.agent_profile_id = uuid4()
+    load = AsyncMock(return_value=(ToolSettings(), None))
+    monkeypatch.setattr(tools_module, "load_agent_profile_tools", load)
+
+    await tools_module._profile_tool_settings(context)
+
+    assert load.await_args.args[2] == context.agent_profile_id
 
 
 def _shared_integration(name: str) -> IntegrationInstance:
@@ -977,11 +1007,11 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     ].description
     assert "cron+timezone or offset run_at" in definitions["create_automation"].description
     assert "cron+timezone or offset run_at" in definitions["edit_automation"].description
-    assert tool_registry.action_default("automation.read") == ToolExecutionPolicy.ASK
+    assert tool_registry.action_default("automation.read") == ToolExecutionPolicy.AUTO
     assert tool_registry.action_default("automation.create") == ToolExecutionPolicy.ASK
     assert tool_registry.action_default("automation.update") == ToolExecutionPolicy.ASK
     assert tool_registry.action_default("automation.run") == ToolExecutionPolicy.ASK
-    assert tool_registry.action_default("automation.delete") == ToolExecutionPolicy.DISABLED
+    assert tool_registry.action_default("automation.delete") == ToolExecutionPolicy.ASK
     for tool in catalog_tools.values():
         assert tool["actions"][0]["allowedPolicies"] == ["disabled", "ask", "auto"]
 
@@ -1265,7 +1295,7 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
 
     assert "write_file" in effective.tools
     assert "write_file" not in catalog
-    assert "generate_image" in catalog
+    assert "generate_image" not in catalog
     assert "memory_retrieve" in catalog
     assert "webfetch" in catalog
     assert "calendar_create_event" not in catalog
@@ -3545,24 +3575,21 @@ def test_tool_schemas_remove_annotative_titles_recursively() -> None:
 
 
 @pytest.mark.parametrize(
-    ("policy", "allowed_origins", "expected_asks"),
+    ("policy", "public_addresses_only", "expected_asks"),
     [
-        (ToolExecutionPolicy.ASK, (), 1),
-        (ToolExecutionPolicy.AUTO, (), 0),
-        (ToolExecutionPolicy.AUTO, ("https://example.com",), 1),
-        (ToolExecutionPolicy.AUTO, ("https://example.com",), 0),
+        (ToolExecutionPolicy.ASK, True, 1),
+        (ToolExecutionPolicy.AUTO, True, 0),
+        (ToolExecutionPolicy.AUTO, False, 0),
     ],
 )
 async def test_webfetch_applies_the_effective_policy(
-    tmp_path, monkeypatch, policy, allowed_origins, expected_asks
+    tmp_path, monkeypatch, policy, public_addresses_only, expected_asks
 ) -> None:
     fetch_kwargs = {}
 
     async def fake_fetch(url, **kwargs):
         fetch_kwargs.update(kwargs)
-        await kwargs["authorize_url"](
-            "https://example.com/page?token=secret", bool(allowed_origins)
-        )
+        await kwargs["authorize_url"]("https://example.com/page?token=secret")
         return WebFetchResult(
             final_url=url,
             content_type="text/plain",
@@ -3582,12 +3609,7 @@ async def test_webfetch_applies_the_effective_policy(
         tmp_path,
         call,
         web_fetch_policy=policy,
-        allow_private_targets=bool(allowed_origins),
-        private_fetch_policy=(
-            ToolExecutionPolicy.AUTO
-            if allowed_origins and expected_asks == 0
-            else ToolExecutionPolicy.ASK
-        ),
+        public_addresses_only=public_addresses_only,
     )
     context.tool_settings.web_fetch.user_agent = "ConfiguredBrowser/1.0"
     context.db.scalar.return_value.data = context.tool_settings.model_dump(mode="json")
@@ -3624,9 +3646,10 @@ async def test_webfetch_applies_the_effective_policy(
     assert fetch_kwargs["pdf_vision_handler"] is None
     assert fetch_kwargs["pdf_pages"] == []
     assert fetch_kwargs["user_agent"] == "ConfiguredBrowser/1.0"
+    assert fetch_kwargs["public_addresses_only"] is public_addresses_only
     if expected_asks:
         request = context.ask_handler.await_args.args[0]
-        assert request.capability in {"network.fetch.public", "network.fetch.private"}
+        assert request.capability == "network.fetch"
         assert request.resource_type == "url"
         assert "secret" not in request.summary
 
@@ -3692,7 +3715,7 @@ async def test_fetch_transcript_uses_one_video_approval_and_returns_evidence(
     assert calls[0][0] == "https://youtu.be/dQw4w9WgXcQ"
 
 
-async def test_fetch_transcript_rechecks_public_availability_before_each_request(
+async def test_fetch_transcript_rechecks_availability_before_each_request(
     tmp_path, monkeypatch
 ) -> None:
     continued = False
@@ -3704,14 +3727,7 @@ async def test_fetch_transcript_rechecks_public_availability_before_each_request
         raise AssertionError("Disabled transcript fetch must not continue")
 
     enabled = ToolSettings()
-    disabled = ToolSettings(
-        resource_availability={
-            "webfetch": {
-                "network.fetch.public": False,
-                "network.fetch.private": False,
-            }
-        }
-    )
+    disabled = ToolSettings(tool_availability={"webfetch": False})
     monkeypatch.setattr(tools_module, "fetch_youtube_transcript", fake_fetch)
     monkeypatch.setattr(
         tools_module,
@@ -3745,10 +3761,10 @@ async def test_fetch_transcript_requests_approval_when_policy_becomes_ask(
         )
 
     automatic = ToolSettings(
-        public_permissions={"policies": {"network.fetch.public": "auto"}}
+        private_permissions={"policies": {"network.fetch": "auto"}}
     )
     ask = ToolSettings(
-        public_permissions={"policies": {"network.fetch.public": "ask"}}
+        private_permissions={"policies": {"network.fetch": "ask"}}
     )
     monkeypatch.setattr(tools_module, "fetch_youtube_transcript", fake_fetch)
     monkeypatch.setattr(
@@ -3774,7 +3790,7 @@ async def test_webfetch_denial_stops_before_the_fetch_continues(tmp_path, monkey
 
     async def fake_fetch(url, **kwargs):
         nonlocal continued
-        await kwargs["authorize_url"](url, False)
+        await kwargs["authorize_url"](url)
         continued = True
         raise AssertionError("The request must not continue after denial")
 
@@ -3866,7 +3882,7 @@ async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch
     image = b"\x89PNG\r\n\x1a\ncontent"
 
     async def fake_fetch(url, **kwargs):
-        await kwargs["authorize_url"](url, False)
+        await kwargs["authorize_url"](url)
         return WebFetchResult(
             final_url=url,
             content_type="image/png",

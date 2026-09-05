@@ -54,7 +54,7 @@ def _source_constants(path: Path) -> set[str]:
 def test_inventory_is_complete_and_versioned() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 35
+    assert INVENTORY_VERSION == 36
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -186,34 +186,44 @@ def test_transcript_routing_uses_the_production_tool_contract() -> None:
     assert {tool["name"] for tool in webfetch_tools} == {"web_search", "webfetch"}
 
 
-def test_agent_web_routing_candidate_is_prompt_only_and_conditional() -> None:
+def test_agent_web_routing_production_prompt_is_conditional() -> None:
     case = _case("paginated_web_extraction_uses_shell")
-    baseline_messages, baseline_tools = build_case(case)
-    candidate_messages, candidate_tools = build_case(
-        case, slimming_variant="prompt-agent-web-routing"
+    messages, tools = build_case(case)
+    without_shell_messages, _without_shell_tools = build_case(
+        replace(
+            case,
+            tools=("web_search", "webfetch"),
+            system_options={
+                "execution_agent_name": "Evaluator",
+                "execution_agent_platform": "linux",
+                "execution_agent_connected": True,
+                "current_directory": case.working_directory,
+            },
+        )
     )
-    rule = "prefer shell_run for raw data"
+    rule = (
+        "Use web_search for discovery and webfetch for simple retrieval; prefer shell_run for raw "
+        "data, custom HTTP, pagination, multiple requests, or local processing."
+    )
 
-    assert baseline_tools == candidate_tools
-    assert {tool["name"] for tool in candidate_tools} == {
+    assert tools == prompt_eval._general_offered_tools(case).only(*case.tools).schemas()
+    assert {tool["name"] for tool in tools} == {
         "web_search",
         "webfetch",
         "shell_run",
     }
-    assert rule not in baseline_messages[0]["content"]
-    assert rule in candidate_messages[0]["content"]
-    assert len(candidate_messages[0]["content"]) - len(
-        baseline_messages[0]["content"]
-    ) < 250
-    assert "Selected computer context:" in candidate_messages[0]["content"]
-    assert '"name": "Evaluator"' in candidate_messages[0]["content"]
-    assert '"currentDirectory": "/data/home/project"' in candidate_messages[0]["content"]
-
-    web_only_messages, _tools = build_case(
-        _case("known_url_uses_webfetch"),
-        slimming_variant="prompt-agent-web-routing",
+    assert messages[0]["content"].count(rule) == 1
+    assert rule not in without_shell_messages[0]["content"]
+    growth = prompt_eval.estimate_tokens(messages[0]["content"], 4.0) - prompt_eval.estimate_tokens(
+        without_shell_messages[0]["content"], 4.0
     )
-    assert rule not in web_only_messages[0]["content"]
+    assert 35 <= growth <= 45
+
+    for missing_tool in ("web_search", "webfetch"):
+        conditional_messages, _tools = build_case(
+            replace(case, tools=tuple(name for name in case.tools if name != missing_tool))
+        )
+        assert rule not in conditional_messages[0]["content"]
 
 
 def test_agent_web_routing_cases_offer_real_production_schemas() -> None:
@@ -2158,11 +2168,11 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     report = markdown_report(payload)
 
     assert payload["caseCount"] == len(CASES)
-    assert payload["semanticContractCount"] == 134
-    assert payload["contractCount"] == 342
-    assert "Cases: 208" in report
-    assert "Semantic contracts: 134" in report
-    assert "All inventory rows: 342" in report
+    assert payload["semanticContractCount"] == 135
+    assert payload["contractCount"] == 344
+    assert "Cases: 209" in report
+    assert "Semantic contracts: 135" in report
+    assert "All inventory rows: 344" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

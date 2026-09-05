@@ -12,14 +12,21 @@ from mato_loop_backend.api.routes import agent_profiles as agent_profiles_module
 from mato_loop_backend.api.routes.agent_profiles import (
     AgentProfileRequest,
     _catalog_integration_policies,
+    _ensure_unique_name,
     _profile_from_request,
+    _profile_payload,
     _validate_permissions,
     agent_profile_integration_metadata,
+    delete_agent_profile,
+    update_agent_profile,
 )
 from mato_loop_backend.integrations.contracts import IntegrationResource
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.settings import (
+    BUILD_AGENT_PROFILE_ID,
     DEFAULT_AGENT_PROFILE_ID,
+    PLAN_AGENT_PROFILE_ID,
+    AgentIdentitySettings,
     AgentProfile,
     AgentProfilePermissions,
     AgentProfilesSettings,
@@ -29,18 +36,134 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
     UserAgentProfilesSettings,
+    default_agent_profiles,
     load_effective_agent_profiles,
 )
 
 
-def test_default_agent_inherits_tool_defaults() -> None:
-    profile = AgentProfilesSettings().profiles[0]
+def test_builtin_agent_profile_defaults() -> None:
+    profiles = AgentProfilesSettings().profiles
+    default, plan, build = profiles
 
-    assert profile.id == DEFAULT_AGENT_PROFILE_ID
-    assert profile.name == "Allgemein"
-    assert profile.persona_id is None
-    assert profile.private_permissions == AgentProfilePermissions()
-    assert profile.public_permissions == AgentProfilePermissions()
+    assert [profile.id for profile in profiles] == [
+        DEFAULT_AGENT_PROFILE_ID,
+        PLAN_AGENT_PROFILE_ID,
+        BUILD_AGENT_PROFILE_ID,
+    ]
+    assert [profile.name for profile in profiles] == ["Allgemein", "Plan", "Build"]
+    assert default.persona_id is None
+    assert default.private_permissions == AgentProfilePermissions()
+    assert default.public_permissions == AgentProfilePermissions()
+    assert plan.private_permissions == plan.public_permissions
+    assert plan.private_permissions.policies == {
+        "filesystem.write": ToolExecutionPolicy.DISABLED,
+        "filesystem.delete": ToolExecutionPolicy.DISABLED,
+        "session.files.write": ToolExecutionPolicy.AUTO,
+        "shell.write": ToolExecutionPolicy.DISABLED,
+        "git.stage": ToolExecutionPolicy.DISABLED,
+        "git.clone": ToolExecutionPolicy.DISABLED,
+        "git.commit": ToolExecutionPolicy.DISABLED,
+    }
+    assert build.private_permissions == build.public_permissions
+    assert build.private_permissions.policies == {}
+    assert not plan.private_permissions.integration_policies
+    assert not build.private_permissions.integration_policies
+
+
+def test_builtin_profiles_preserve_instance_custom_profile_capacity() -> None:
+    custom = [
+        AgentProfile(name=f"Custom {index}", instructions="Task")
+        for index in range(99)
+    ]
+
+    AgentProfilesSettings(profiles=[*default_agent_profiles(), *custom])
+    with pytest.raises(ValidationError):
+        AgentProfilesSettings(
+            profiles=[
+                *default_agent_profiles(),
+                *custom,
+                AgentProfile(name="One too many", instructions="Task"),
+            ]
+        )
+
+
+@pytest.mark.parametrize("name", ["allgemein", "DEFAULT", "pLaN", "BUILD"])
+def test_builtin_agent_profile_names_are_reserved_case_insensitively(name: str) -> None:
+    with pytest.raises(ApiError, match="agentProfile.defaultProtected"):
+        _ensure_unique_name(AgentProfilesSettings(), name)
+
+
+def test_agent_profile_payload_marks_only_builtins_as_protected() -> None:
+    identity = AgentIdentitySettings()
+
+    assert _profile_payload(
+        default_agent_profiles()[1], "instance", identity, None
+    )["protected"] is True
+    assert _profile_payload(
+        AgentProfile(name="Custom", instructions="Task"), "instance", identity, None
+    )["protected"] is False
+
+
+@pytest.mark.parametrize("profile_id", [PLAN_AGENT_PROFILE_ID, BUILD_AGENT_PROFILE_ID])
+async def test_plan_and_build_cannot_be_renamed_or_deleted(
+    monkeypatch, profile_id
+) -> None:
+    settings = AgentProfilesSettings()
+    user = UserAccount(
+        id=uuid4(), username="admin", password_hash="hash", is_admin=True
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+
+    with pytest.raises(ApiError, match="agentProfile.defaultProtected"):
+        await update_agent_profile(
+            profile_id,
+            AgentProfileRequest(name="Renamed", instructions="Task"),
+            user,
+            AsyncMock(),
+            scope="instance",
+        )
+    with pytest.raises(ApiError, match="agentProfile.defaultProtected"):
+        await delete_agent_profile(
+            profile_id,
+            user,
+            AsyncMock(),
+            scope="instance",
+        )
+
+
+@pytest.mark.parametrize("profile_id", [PLAN_AGENT_PROFILE_ID, BUILD_AGENT_PROFILE_ID])
+async def test_plan_and_build_allow_instruction_and_policy_edits(
+    monkeypatch, profile_id
+) -> None:
+    settings = AgentProfilesSettings()
+    profile = next(item for item in settings.profiles if item.id == profile_id)
+    replacement = profile.model_copy(
+        update={
+            "instructions": "Use the updated instructions.",
+            "private_permissions": AgentProfilePermissions(
+                policies={"filesystem.write": ToolExecutionPolicy.ASK}
+            ),
+        }
+    )
+    user = UserAccount(
+        id=uuid4(), username="admin", password_hash="hash", is_admin=True
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    monkeypatch.setattr(
+        agent_profiles_module, "_profile_from_request", AsyncMock(return_value=replacement)
+    )
+    monkeypatch.setattr(agent_profiles_module, "_response", AsyncMock(return_value={}))
+
+    await update_agent_profile(
+        profile_id,
+        AgentProfileRequest(name=profile.name, instructions="Use the updated instructions."),
+        user,
+        AsyncMock(),
+        scope="instance",
+    )
+
+    assert next(item for item in settings.profiles if item.id == profile_id) == replacement
 
 
 def test_agent_profile_migration_installs_inheriting_default_profile() -> None:

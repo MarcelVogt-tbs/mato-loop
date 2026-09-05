@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shlex
 import signal
 import stat
@@ -11,17 +12,171 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+import tree_sitter_bash
+from tree_sitter import Language, Node, Parser
+
 from .config import AgentConfig
 from .filesystem import AgentError, Filesystem, _parts
 
 StreamCallback = Callable[[str, str], Awaitable[None]]
 
-_READ_ONLY_EXECUTABLES = {
+_BASH_LANGUAGE = Language(tree_sitter_bash.language())
+_ALWAYS_WRITES = {
+    "chgrp",
+    "chmod",
+    "chown",
+    "cp",
+    "install",
+    "kill",
+    "ln",
+    "mkdir",
+    "mkfifo",
+    "mknod",
+    "mount",
+    "mv",
+    "reboot",
+    "rm",
+    "rmdir",
+    "shutdown",
+    "tee",
+    "touch",
+    "truncate",
+    "umount",
+    "unlink",
+}
+_WRITE_SUBCOMMANDS = {
+    "apt": {"autoremove", "full-upgrade", "install", "purge", "remove", "upgrade"},
+    "apt-get": {"autoremove", "dist-upgrade", "install", "purge", "remove", "upgrade"},
+    "bun": {"add", "install", "link", "remove", "update"},
+    "cargo": {"add", "build", "clean", "fix", "install", "remove", "update"},
+    "docker": {
+        "build",
+        "commit",
+        "compose",
+        "container",
+        "exec",
+        "image",
+        "kill",
+        "login",
+        "logout",
+        "network",
+        "pull",
+        "push",
+        "restart",
+        "rm",
+        "rmi",
+        "run",
+        "start",
+        "stop",
+        "system",
+        "tag",
+        "volume",
+    },
+    "git": {
+        "add",
+        "am",
+        "apply",
+        "bisect",
+        "checkout",
+        "cherry-pick",
+        "clean",
+        "clone",
+        "commit",
+        "fetch",
+        "gc",
+        "init",
+        "merge",
+        "mv",
+        "pull",
+        "push",
+        "rebase",
+        "reset",
+        "restore",
+        "revert",
+        "rm",
+        "switch",
+    },
+    "go": {"build", "clean", "generate", "get", "install", "mod", "work"},
+    "kubectl": {
+        "annotate",
+        "apply",
+        "attach",
+        "autoscale",
+        "cordon",
+        "create",
+        "delete",
+        "drain",
+        "edit",
+        "exec",
+        "expose",
+        "label",
+        "patch",
+        "replace",
+        "rollout",
+        "run",
+        "scale",
+        "set",
+        "taint",
+        "uncordon",
+    },
+    "npm": {"add", "ci", "install", "link", "remove", "uninstall", "update"},
+    "pip": {"install", "uninstall"},
+    "pip3": {"install", "uninstall"},
+    "pnpm": {"add", "deploy", "install", "link", "remove", "self-update", "update"},
+    "systemctl": {
+        "daemon-reload",
+        "disable",
+        "edit",
+        "enable",
+        "isolate",
+        "kill",
+        "mask",
+        "reenable",
+        "reload",
+        "restart",
+        "revert",
+        "set-default",
+        "start",
+        "stop",
+        "unmask",
+    },
+    "yarn": {"add", "install", "link", "remove", "set", "unlink", "upgrade"},
+}
+_FIND_WRITE_ACTIONS = {
+    "-delete",
+    "-exec",
+    "-execdir",
+    "-fls",
+    "-fprint",
+    "-fprint0",
+    "-fprintf",
+    "-ok",
+    "-okdir",
+}
+_CURL_WRITE_OPTIONS = {
+    "--data",
+    "--data-ascii",
+    "--data-binary",
+    "--data-raw",
+    "--data-urlencode",
+    "--form",
+    "--form-string",
+    "--output",
+    "--remote-name",
+    "--remote-name-all",
+    "--upload-file",
+    "-F",
+    "-O",
+    "-T",
+    "-d",
+    "-o",
+}
+_MUTATING_HTTP_METHODS = {"DELETE", "PATCH", "POST", "PUT"}
+_READ_PATH_COMMANDS = {
     "cat",
     "cmp",
     "head",
     "ls",
-    "pwd",
     "readlink",
     "realpath",
     "sha256sum",
@@ -29,37 +184,16 @@ _READ_ONLY_EXECUTABLES = {
     "tail",
     "wc",
 }
-_READ_ONLY_PATH_OPTION_EXECUTABLES = {"realpath"}
-_READ_ONLY_OPTION_VALUES = {
+_OPTIONS_WITH_VALUES = {
     "cmp": {"-i", "--ignore-initial", "-n", "--bytes"},
     "head": {"-c", "--bytes", "-n", "--lines"},
     "ls": {"-I", "--ignore", "-w", "--width"},
     "realpath": {"--relative-base", "--relative-to"},
     "stat": {"-c", "--format", "--printf"},
-    "tail": {
-        "-c",
-        "--bytes",
-        "-n",
-        "--lines",
-        "--max-unchanged-stats",
-        "--pid",
-        "-s",
-        "--sleep-interval",
-    },
+    "tail": {"-c", "--bytes", "-n", "--lines", "--pid", "-s", "--sleep-interval"},
 }
-_READ_ONLY_PATH_OPTIONS = {
-    "realpath": {"--relative-base", "--relative-to"},
-}
-_INTERPRETERS = {
-    "bash",
-    "dash",
-    "node",
-    "perl",
-    "python",
-    "python3",
-    "ruby",
-    "sh",
-}
+_OUTPUT_REDIRECT = re.compile(r"^\s*(?:\d+)?\s*(&>>|&>|>>|>\||<>|>&|>|<<-?|<<<|<&|<)")
+_INTERPRETERS = {"bash", "dash", "node", "perl", "python", "python3", "ruby", "sh"}
 _PREFIX_ARITY = {
     ("aws",): 3,
     ("az",): 3,
@@ -94,6 +228,238 @@ _PREFIX_ARITY = {
     ("yarn",): 2,
     ("yarn", "run"): 3,
 }
+
+
+def _option_present(arguments: list[str], options: set[str]) -> bool:
+    return any(
+        argument in options
+        or any(option.startswith("--") and argument.startswith(option + "=") for option in options)
+        for argument in arguments
+    )
+
+
+def _short_option_present(arguments: list[str], options: set[str]) -> bool:
+    return any(
+        argument.startswith(option) and argument != option
+        for argument in arguments
+        for option in options
+        if option.startswith("-") and not option.startswith("--")
+    )
+
+
+def _subcommand(arguments: list[str], value_options: set[str]) -> str | None:
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            return arguments[index + 1] if index + 1 < len(arguments) else None
+        if argument in value_options:
+            index += 2
+            continue
+        if argument.startswith("-"):
+            index += 1
+            continue
+        return argument
+    return None
+
+
+def _definitely_writes(tokens: list[str]) -> bool:
+    executable = Path(tokens[0]).name
+    arguments = tokens[1:]
+    if executable in _ALWAYS_WRITES:
+        return True
+    if executable in _WRITE_SUBCOMMANDS:
+        value_options = (
+            {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
+            if executable == "git"
+            else {"--cache", "--prefix", "--registry", "--userconfig"}
+            if executable in {"npm", "pnpm", "yarn"}
+            else set()
+        )
+        subcommand = _subcommand(arguments, value_options)
+        if subcommand in _WRITE_SUBCOMMANDS[executable]:
+            return True
+        if executable == "git":
+            if subcommand == "branch":
+                remaining = arguments[arguments.index(subcommand) + 1 :]
+                if any(
+                    option in remaining
+                    for option in {
+                        "--contains",
+                        "--format",
+                        "--list",
+                        "--merged",
+                        "--no-contains",
+                        "--no-merged",
+                        "--show-current",
+                    }
+                ):
+                    return False
+                return any(
+                    option in remaining
+                    for option in {
+                        "-c",
+                        "-C",
+                        "-d",
+                        "-D",
+                        "-m",
+                        "-M",
+                        "--copy",
+                        "--delete",
+                        "--edit-description",
+                        "--move",
+                        "--set-upstream-to",
+                        "--unset-upstream",
+                    }
+                ) or any(not argument.startswith("-") for argument in remaining)
+            if subcommand == "tag":
+                remaining = arguments[arguments.index(subcommand) + 1 :]
+                if any(option in remaining for option in {"-l", "--list"}):
+                    return False
+                return any(
+                    option in remaining
+                    for option in {"-a", "-d", "-f", "-s", "--delete", "--force", "--sign"}
+                ) or any(not argument.startswith("-") for argument in remaining)
+            if subcommand == "config":
+                if any(
+                    option in arguments
+                    for option in {"--unset", "--unset-all", "--rename-section", "--remove-section"}
+                ):
+                    return True
+                if any(
+                    option in arguments
+                    for option in {"--get", "--get-all", "--get-regexp", "--list", "-l"}
+                ):
+                    return False
+                values = [
+                    argument
+                    for argument in arguments[arguments.index(subcommand) + 1 :]
+                    if not argument.startswith("-")
+                ]
+                return len(values) > 1
+            if subcommand == "remote":
+                nested = _subcommand(arguments[arguments.index(subcommand) + 1 :], set())
+                return nested not in {None, "get-url", "show"}
+            if subcommand == "stash":
+                nested = _subcommand(arguments[arguments.index(subcommand) + 1 :], set())
+                return nested not in {"list", "show"}
+            if subcommand == "worktree":
+                nested = _subcommand(arguments[arguments.index(subcommand) + 1 :], set())
+                return nested in {"add", "lock", "move", "prune", "remove", "repair", "unlock"}
+    if executable == "curl":
+        if _option_present(arguments, _CURL_WRITE_OPTIONS) or _short_option_present(
+            arguments, {"-F", "-O", "-T", "-d", "-o"}
+        ):
+            return True
+        for index, argument in enumerate(arguments):
+            if argument in {"-X", "--request"} and index + 1 < len(arguments):
+                return arguments[index + 1].upper() in _MUTATING_HTTP_METHODS
+            if argument.startswith("-X") and argument != "-X":
+                return argument[2:].upper() in _MUTATING_HTTP_METHODS
+            if argument.startswith("--request="):
+                return argument.partition("=")[2].upper() in _MUTATING_HTTP_METHODS
+    if executable == "dd" and any(argument.startswith("of=") for argument in arguments):
+        return True
+    if executable == "find" and any(argument in _FIND_WRITE_ACTIONS for argument in arguments):
+        return True
+    if executable in {"perl", "sed"} and any(
+        argument == "-i"
+        or (argument.startswith("-i") and not argument.startswith("--"))
+        or argument.startswith("--in-place")
+        for argument in arguments
+    ):
+        return True
+    if executable == "sort" and _option_present(arguments, {"-o", "--output"}):
+        return True
+    if executable == "printf" and (
+        _option_present(arguments, {"-v"})
+        or _short_option_present(arguments, {"-v"})
+        or any(
+            re.search(
+                r"%(?:\d+\$)?[-+ #0']*(?:\*|\d+)?(?:\.(?:\*|\d+))?"
+                r"(?:hh|h|ll|l|j|z|t|L)?n",
+                argument,
+            )
+            for argument in arguments
+        )
+    ):
+        return True
+    if executable == "wget":
+        return "--spider" not in arguments and not any(
+            argument in {"-O", "--output-document"}
+            and index + 1 < len(arguments)
+            and arguments[index + 1] == "-"
+            for index, argument in enumerate(arguments)
+        )
+    return False
+
+
+def _path_operands(tokens: list[str]) -> list[tuple[str, str, bool]]:
+    executable = Path(tokens[0]).name
+    arguments = tokens[1:]
+    if tokens[0] in {".", "source"}:
+        return [(arguments[0], "source", True)] if arguments else []
+    if executable == "find":
+        paths = []
+        for argument in arguments:
+            if argument.startswith("-") or argument in {"!", "(", ")"}:
+                break
+            paths.append((argument, "path", True))
+        return paths
+    if executable == "git":
+        return [
+            (arguments[index + 1], "path", True)
+            for index, argument in enumerate(arguments[:-1])
+            if argument == "-C"
+        ]
+    if executable in _INTERPRETERS or executable.startswith("python"):
+        if any(argument in {"-c", "--command", "-e", "--eval"} for argument in arguments):
+            return []
+        script = next((argument for argument in arguments if not argument.startswith("-")), None)
+        return [(script, "script", True)] if script else []
+    if executable not in _READ_PATH_COMMANDS:
+        return []
+    operands = []
+    skip_next = False
+    for argument in arguments:
+        if skip_next:
+            skip_next = False
+            continue
+        option = argument.split("=", 1)[0]
+        if option in _OPTIONS_WITH_VALUES.get(executable, set()):
+            skip_next = "=" not in argument
+            continue
+        if argument.startswith("-"):
+            continue
+        operands.append((argument, "path", True))
+    return operands
+
+
+def _nodes(root: Node, node_type: str) -> list[Node]:
+    result: list[Node] = []
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type == node_type:
+            result.append(node)
+        stack.extend(reversed(node.children))
+    return result
+
+
+def _node_text(source: bytes, node: Node) -> str:
+    return source[node.start_byte : node.end_byte].decode("utf-8")
+
+
+def _command_tokens(source: bytes, node: Node) -> list[str] | None:
+    parts = []
+    for index, child in enumerate(node.children):
+        if node.field_name_for_child(index) in {"name", "argument"}:
+            parts.append(_node_text(source, child))
+    try:
+        tokens = shlex.split(" ".join(parts), comments=False, posix=True)
+    except ValueError:
+        return None
+    return tokens or None
 
 
 def _command_prefix(tokens: list[str]) -> list[str] | None:
@@ -135,10 +501,6 @@ def _command_prefix(tokens: list[str]) -> list[str] | None:
 class ProcessRunner:
     def __init__(self, config: AgentConfig, filesystem: Filesystem) -> None:
         try:
-            self.executables = {
-                alias: self._resolve_executable(path)
-                for alias, path in config.process_executables.items()
-            }
             self.shell = (
                 self._resolve_executable(config.shell_executable)
                 if config.shell_executable is not None
@@ -183,7 +545,6 @@ class ProcessRunner:
             classification = (
                 "read"
                 if analysis_complete
-                and command_units
                 and all(unit["classification"] == "read" for unit in command_units)
                 else "write"
             )
@@ -198,45 +559,15 @@ class ProcessRunner:
             return result
 
         current = self.filesystem.resolve_directory(current_directory)["path"]
-        if any(
-            character in command
-            for character in ("$", "`", "\n", "\r", "*", "?", "[", "{", "}", "~")
-        ):
+        if not command.strip():
             return result()
-        lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&")
-        lexer.whitespace_split = True
-        try:
-            tokens = list(lexer)
-        except ValueError:
-            return result()
-        if not tokens:
+        source = command.encode("utf-8")
+        tree = Parser(_BASH_LANGUAGE).parse(source)
+        if tree.root_node.has_error:
             return result()
 
-        units: list[list[str]] = [[]]
-        for token in tokens:
-            if token in {";", "|", "||", "&&"}:
-                if not units[-1]:
-                    return result()
-                units.append([])
-                continue
-            if (
-                token
-                and all(character in "();<>|&" for character in token)
-                and token
-                not in {
-                    "<",
-                    ">",
-                    ">>",
-                }
-            ):
-                return result()
-            units[-1].append(token)
-        if not units[-1]:
-            if tokens[-1] != ";":
-                return result()
-            units.pop()
-
-        targets = []
+        targets: list[dict] = []
+        seen_targets: set[tuple[str, str]] = set()
 
         def add(path: str, kind: str, *, must_exist: bool) -> bool:
             try:
@@ -244,221 +575,83 @@ class ProcessRunner:
             except AgentError:
                 return False
             target["kind"] = "directory" if target.pop("targetKind", None) == "directory" else kind
+            key = (target["path"], target["kind"])
+            if key in seen_targets:
+                return True
+            seen_targets.add(key)
             targets.append(target)
             return True
 
-        parsed: list[tuple[list[str], list[tuple[str, str, bool]]]] = []
-        for unit in units:
-            arguments: list[str] = []
-            redirections: list[tuple[str, str, bool]] = []
-            index = 0
-            while index < len(unit):
-                token = unit[index]
-                descriptor = bool(
-                    token.isdigit()
-                    and index + 1 < len(unit)
-                    and unit[index + 1] in {"<", ">", ">>"}
-                )
-                if descriptor:
-                    index += 1
-                    token = unit[index]
-                if token in {"<", ">", ">>"}:
-                    if index + 1 >= len(unit) or unit[index + 1] in {"<", ">", ">>"}:
-                        return result()
-                    redirections.append((token, unit[index + 1], descriptor))
-                    index += 2
-                    continue
-                arguments.append(token)
-                index += 1
-            if not arguments:
-                return result()
-            parsed.append((arguments, redirections))
-
-        reserved = {
-            "case",
-            "coproc",
-            "do",
-            "done",
-            "elif",
-            "else",
-            "esac",
-            "fi",
-            "for",
-            "function",
-            "if",
-            "in",
-            "select",
-            "then",
-            "time",
-            "until",
-            "while",
-        }
-        if any(
-            arguments[0] in reserved
-            or (
-                "=" in arguments[0]
-                and arguments[0].split("=", 1)[0].replace("_", "a").isalnum()
-                and not arguments[0][0].isdigit()
-            )
-            for arguments, _redirections in parsed
-        ):
+        command_nodes = _nodes(tree.root_node, "command")
+        if len(command_nodes) > 64:
             return result()
-
-        commands = []
-        for arguments, _redirections in parsed:
-            command_unit = {"tokens": arguments, "classification": "write"}
-            prefix = _command_prefix(arguments)
+        commands: list[dict] = []
+        for node in command_nodes:
+            tokens = _command_tokens(source, node)
+            if tokens is None or len(tokens) > 256 or any(len(token) > 1_024 for token in tokens):
+                return result(targets=targets, commands=commands)
+            command_unit = {
+                "tokens": tokens,
+                "classification": "write" if _definitely_writes(tokens) else "read",
+            }
+            prefix = _command_prefix(tokens)
             if prefix is not None:
                 command_unit["prefix"] = prefix
             commands.append(command_unit)
-        complete: list[bool] = []
-        for unit_index, (arguments, redirections) in enumerate(parsed):
-            executable = arguments[0]
-            executable_name = ""
-            read_only_executable = False
-            unit_complete = False
-            argument_index = 1
-            if executable in {".", "source"}:
-                if len(arguments) < 2 or not add(arguments[1], "source", must_exist=True):
-                    return result(targets=targets, commands=commands)
-                argument_index = 2
-            else:
-                resolved_executable = self._trusted_executable(executable, current)
-                if resolved_executable is not None:
-                    if "/" in executable and not add(executable, "executable", must_exist=True):
-                        return result(targets=targets, commands=commands)
-                    executable_name = resolved_executable.name
-                    read_only_executable = (
-                        executable_name in _READ_ONLY_EXECUTABLES
-                        and resolved_executable.parent
-                        in {Path("/bin").resolve(), Path("/usr/bin").resolve()}
-                    )
-                    unit_complete = read_only_executable
-                    if executable_name in _INTERPRETERS or executable_name.startswith("python"):
-                        while argument_index < len(arguments) and arguments[
-                            argument_index
-                        ].startswith("-"):
-                            argument_index += 1
-                        if argument_index < len(arguments):
-                            if not add(arguments[argument_index], "script", must_exist=True):
-                                return result(targets=targets, commands=commands)
-                            argument_index += 1
 
-            output_redirection = False
-            descriptor_redirection = False
-            for operator, target, descriptor in redirections:
-                output_redirection |= operator != "<"
-                descriptor_redirection |= descriptor
-                if not add(
-                    target,
-                    "input" if operator == "<" else "output",
-                    must_exist=operator == "<",
+        for redirect in _nodes(tree.root_node, "file_redirect"):
+            text = _node_text(source, redirect)
+            match = _OUTPUT_REDIRECT.match(text)
+            if match is None:
+                return result(targets=targets, commands=commands)
+            operator = match.group(1)
+            try:
+                destination_parts = shlex.split(text[match.end() :].strip(), posix=True)
+            except ValueError:
+                return result(targets=targets, commands=commands)
+            destination = destination_parts[0] if len(destination_parts) == 1 else ""
+            descriptor_only = operator in {">&", "<&"} and destination.lstrip("&").isdigit()
+            writes = (
+                ">" in operator
+                and operator not in {">&"}
+                or (operator == ">&" and not descriptor_only)
+            )
+            if not writes:
+                if (
+                    operator == "<"
+                    and destination
+                    and not add(destination, "input", must_exist=True)
                 ):
                     return result(targets=targets, commands=commands)
+                continue
+            if commands:
+                commands[0]["classification"] = "write"
+            if (
+                destination
+                and not descriptor_only
+                and not add(destination, "output", must_exist=False)
+            ):
+                return result(targets=targets, commands=commands)
 
-            if executable_name == "git":
-                index = 1
-                while index < len(arguments):
-                    if arguments[index] == "-C":
-                        if index + 1 >= len(arguments) or not add(
-                            arguments[index + 1], "path", must_exist=True
-                        ):
-                            return result(targets=targets, commands=commands)
-                        index += 2
-                    else:
-                        index += 1
+        for command_unit in commands:
+            tokens = command_unit["tokens"]
+            if "/" in tokens[0] and not add(tokens[0], "executable", must_exist=True):
+                return result(targets=targets, commands=commands)
+            for path, kind, must_exist in _path_operands(tokens):
+                if not add(path, kind, must_exist=must_exist):
+                    return result(targets=targets, commands=commands)
+            for token in tokens[1:]:
+                if (
+                    token.startswith("-")
+                    or "://" in token
+                    or any(character in token for character in "$`*?[]{}~")
+                    or not token.startswith(("/", "./", "../"))
+                ):
+                    continue
+                if not add(token, "path", must_exist=False):
+                    return result(targets=targets, commands=commands)
 
-            if not read_only_executable:
-                for token in arguments[argument_index:]:
-                    if "/" in token and not add(token, "path", must_exist=True):
-                        return result(targets=targets, commands=commands)
-
-            read_only = read_only_executable and executable not in {".", "source"}
-            if read_only:
-                operands = []
-                after_options = False
-                index = 1
-                while index < len(arguments):
-                    token = arguments[index]
-                    if token == "--":
-                        after_options = True
-                        index += 1
-                        continue
-                    if not after_options and token.startswith("-"):
-                        if (
-                            (
-                                executable_name == "ls"
-                                and (
-                                    (not token.startswith("--") and "L" in token[1:])
-                                    or token.startswith("--dere")
-                                )
-                            )
-                            or (
-                                executable_name == "tail"
-                                and (
-                                    (not token.startswith("--") and {"f", "F"} & set(token[1:]))
-                                    or token.startswith(("--f", "--retry"))
-                                )
-                            )
-                            or (executable_name == "wc" and token.startswith("--f"))
-                            or (
-                                executable_name == "sha256sum"
-                                and (
-                                    (not token.startswith("--") and "c" in token[1:])
-                                    or token.startswith("--c")
-                                )
-                            )
-                        ):
-                            read_only = False
-                            unit_complete = False
-                            index += 1
-                            continue
-                        option = token.split("=", 1)[0]
-                        if (
-                            option in _READ_ONLY_OPTION_VALUES.get(executable_name, set())
-                            and "=" not in token
-                        ):
-                            if index + 1 >= len(arguments):
-                                read_only = False
-                                unit_complete = False
-                                break
-                            value = arguments[index + 1]
-                            if option in _READ_ONLY_PATH_OPTIONS.get(
-                                executable_name, set()
-                            ) and not add(value, "path", must_exist=True):
-                                read_only = False
-                                unit_complete = False
-                                break
-                            index += 2
-                            continue
-                        if executable_name in _READ_ONLY_PATH_OPTION_EXECUTABLES and "=" in token:
-                            if not add(token.split("=", 1)[1], "path", must_exist=True):
-                                read_only = False
-                                unit_complete = False
-                                break
-                        index += 1
-                        continue
-                    operands.append(token)
-                    index += 1
-                if executable_name == "pwd" and operands:
-                    read_only = False
-                else:
-                    for operand in operands:
-                        if not add(operand, "path", must_exist=True):
-                            read_only = False
-                            unit_complete = False
-                            break
-
-            if output_redirection or descriptor_redirection:
-                read_only = False
-            commands[unit_index]["classification"] = "read" if read_only else "write"
-            complete.append(unit_complete)
-
-        return result(
-            targets=targets,
-            commands=commands,
-            analysis_complete=all(complete),
-        )
+        return result(targets=targets, commands=commands, analysis_complete=True)
 
     @staticmethod
     def _inspection_revision(result: dict) -> str:
@@ -485,17 +678,10 @@ class ProcessRunner:
         self,
         *,
         current_directory: str,
-        program: str | None,
-        args: list[str],
-        command: str | None,
+        command: str,
         expected_inspection_revision: str | None = None,
     ) -> tuple[list[str], dict | None]:
         inspection = None
-        if command is None:
-            executable_path = self.executables.get(program or "")
-            if executable_path is None:
-                raise AgentError("process.notAllowed", "Program alias is not configured")
-            return [os.fspath(executable_path), *args], inspection
         if self.shell is None:
             raise AgentError("process.notAllowed", "Shell execution is disabled")
         if expected_inspection_revision is not None:
@@ -507,14 +693,13 @@ class ProcessRunner:
                 raise AgentError("process.inspectionChanged", "Shell inspection changed")
         if inspection is not None and inspection.get("readOnly") is True:
             commands = inspection.get("commands", [])
-            simple = not any(character in command for character in "();<>|&")
+            simple = not any(character in command for character in "();<>|&$`*?[]{}~\n\r")
             tokens = shlex.split(command, comments=True)
             if simple and len(commands) == 1 and tokens == commands[0].get("tokens"):
                 current = self.filesystem.resolve_directory(current_directory)["path"]
                 executable = self._trusted_executable(tokens[0], current)
-                if executable is None:
-                    raise AgentError("process.inspectionChanged", "Shell inspection changed")
-                return [os.fspath(executable), *tokens[1:]], inspection
+                if executable is not None:
+                    return [os.fspath(executable), *tokens[1:]], inspection
         return [os.fspath(self.shell), "-c", command], inspection
 
     @staticmethod
@@ -522,28 +707,20 @@ class ProcessRunner:
         return {
             "HOME": home,
             "LANG": os.environ.get("LANG", "C.UTF-8"),
-            "PATH": (
-                "/usr/bin:/bin"
-                if inspection is not None and inspection.get("readOnly") is True
-                else "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-            ),
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         }
 
     async def exec(
         self,
         *,
         current_directory: str,
-        program: str | None,
-        args: list[str],
-        command: str | None,
+        command: str,
         timeout: float | None,
         stream: StreamCallback,
         expected_inspection_revision: str | None = None,
     ) -> dict:
         argv, inspection = self.execution_argv(
             current_directory=current_directory,
-            program=program,
-            args=args,
             command=command,
             expected_inspection_revision=expected_inspection_revision,
         )

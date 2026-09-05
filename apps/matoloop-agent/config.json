@@ -4,8 +4,5 @@
   "gitExecutable": "/usr/bin/git",
   "openscadExecutable": "/usr/bin/openscad",
   "allowNetwork": true,
-  "processExecutables": {
-    "python": "/usr/local/bin/python"
-  },
   "shellExecutable": "/bin/sh"
 }

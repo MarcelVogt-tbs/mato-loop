@@ -151,12 +151,31 @@ class EditArguments(PathArguments):
     old_text: str = Field(alias="oldText", min_length=1)
     new_text: str = Field(alias="newText")
     replace_all: bool = Field(default=False, alias="replaceAll")
+    expected_sha256: str | None = Field(
+        default=None, alias="expectedSha256", pattern=r"^[0-9a-f]{64}$"
+    )
 
     @model_validator(mode="after")
     def different_text(self):
         if self.old_text == self.new_text:
             raise ValueError("oldText and newText must differ")
         return self
+
+
+class PatchArguments(StrictModel):
+    patch: str = Field(min_length=1, max_length=512 * 1024)
+    expected_sha256: dict[str, Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]] = Field(
+        alias="expectedSha256", max_length=1000
+    )
+
+    @field_validator("expected_sha256")
+    @classmethod
+    def absolute_revision_paths(cls, value: dict[str, str]) -> dict[str, str]:
+        for path in value:
+            if len(path) > 4096:
+                raise ValueError("revision path is too long")
+            _absolute_path(path)
+        return value
 
 
 class MkdirArguments(PathArguments):
@@ -202,12 +221,6 @@ class HostDirectoryArguments(StrictModel):
     current_directory: str = Field(alias="currentDirectory", min_length=1, max_length=4096)
 
     _cwd_is_absolute = field_validator("current_directory")(_absolute_path)
-
-
-class ProcessArguments(HostDirectoryArguments):
-    program: str = Field(min_length=1, max_length=128)
-    args: list[str] = Field(default_factory=list, max_length=256)
-    timeout_seconds: float | None = Field(default=None, alias="timeoutSeconds", gt=0, le=3600)
 
 
 class ShellArguments(HostDirectoryArguments):
@@ -278,25 +291,11 @@ class TerminalCloseArguments(TerminalIdArguments):
 class TerminalRunArguments(HostDirectoryArguments, TerminalIdArguments):
     rows: int = Field(ge=1, le=1000)
     columns: int = Field(ge=1, le=1000)
-    command: str | None = Field(default=None, min_length=1, max_length=256 * 1024)
-    program: str | None = Field(default=None, min_length=1, max_length=128)
-    args: list[Annotated[str, Field(max_length=65_536)]] = Field(
-        default_factory=list, max_length=256
-    )
+    command: str = Field(min_length=1, max_length=256 * 1024)
     timeout_seconds: float | None = Field(default=None, alias="timeoutSeconds", gt=0, le=3600)
     expected_inspection_revision: str | None = Field(
         default=None, alias="expectedInspectionRevision", pattern=r"^[0-9a-f]{64}$"
     )
-
-    @model_validator(mode="after")
-    def one_execution_form(self):
-        if (self.command is None) == (self.program is None):
-            raise ValueError("exactly one of command or program is required")
-        if self.command is not None and "args" in self.model_fields_set:
-            raise ValueError("args require program")
-        if self.program is not None and self.expected_inspection_revision is not None:
-            raise ValueError("expectedInspectionRevision requires command")
-        return self
 
 
 GitPath = Annotated[str, Field(min_length=1, max_length=1000, pattern=r"^[^\x00]+$")]
@@ -449,6 +448,7 @@ ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "filesystem.write": WriteArguments,
     "filesystem.upsert": UpsertArguments,
     "filesystem.edit": EditArguments,
+    "filesystem.patch": PatchArguments,
     "filesystem.mkdir": MkdirArguments,
     "filesystem.rename": RenameArguments,
     "filesystem.delete": DeleteArguments,
@@ -456,7 +456,6 @@ ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "filesystem.move": CopyMoveArguments,
     "filesystem.import": ImportArguments,
     "filesystem.export": ExportArguments,
-    "process.exec": ProcessArguments,
     "shell.run": ShellArguments,
     "shell.inspect": ShellInspectArguments,
     "terminal.open": TerminalOpenArguments,

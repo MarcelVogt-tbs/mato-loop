@@ -77,6 +77,7 @@ class ChatHistoryService:
             select(AgentRun)
             .where(
                 AgentRun.session_id == session_id,
+                AgentRun.parent_run_id.is_(None),
                 AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
             )
             .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())

@@ -122,6 +122,7 @@ async def _quiesce_user_jobs(db: AsyncSession, user_id: UUID) -> None:
             await db.scalars(
                 select(AgentRun.id).where(
                     AgentRun.session_id.in_(session_ids),
+                    AgentRun.parent_run_id.is_(None),
                     AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
                 )
             )

@@ -51,7 +51,7 @@ _WEEKDAYS = (
 _READ = ToolAction(
     "calendar.read",
     "Kalender lesen",
-    ToolExecutionPolicy.ASK,
+    ToolExecutionPolicy.AUTO,
 )
 _WRITE = ToolAction(
     "calendar.write",
@@ -63,13 +63,12 @@ _DELETE = ToolAction(
     "calendar.delete",
     "Kalendereinträge löschen",
     ToolExecutionPolicy.ASK,
-    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
     mutates=True,
 )
 _TASKS_READ = ToolAction(
     "tasks.read",
     "Aufgaben lesen",
-    ToolExecutionPolicy.ASK,
+    ToolExecutionPolicy.AUTO,
 )
 _TASKS_WRITE = ToolAction(
     "tasks.write",
@@ -81,7 +80,6 @@ _TASKS_DELETE = ToolAction(
     "tasks.delete",
     "Aufgaben löschen",
     ToolExecutionPolicy.ASK,
-    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
     mutates=True,
 )
 _CALENDAR_CAPABILITIES = frozenset(

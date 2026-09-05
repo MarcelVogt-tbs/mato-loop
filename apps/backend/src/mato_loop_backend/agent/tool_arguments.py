@@ -24,6 +24,17 @@ class ToolArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class TaskArguments(ToolArguments):
+    prompt: str = Field(min_length=1, max_length=8_000)
+
+    @field_validator("prompt")
+    @classmethod
+    def prompt_must_not_be_blank(cls, value: str) -> str:
+        if not (cleaned := value.strip()):
+            raise ValueError("prompt must not be blank")
+        return cleaned
+
+
 class QuestionOption(ToolArguments):
     label: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=500)
@@ -189,6 +200,9 @@ class WriteFileArguments(ToolArguments):
     root: Literal["session", "workspace"]
     path: str = Field(min_length=1, max_length=1_000)
     content: str = Field(max_length=1_000_000)
+    expected_sha256: str | None = Field(
+        default=None, alias="expectedSha256", pattern=r"^[0-9a-f]{64}$"
+    )
 
 
 class EditFileArguments(ToolArguments):
@@ -197,6 +211,9 @@ class EditFileArguments(ToolArguments):
     old_text: str = Field(min_length=1, max_length=1_000_000, alias="oldText")
     new_text: str = Field(max_length=1_000_000, alias="newText")
     replace_all: bool = Field(default=False, alias="replaceAll")
+    expected_sha256: str | None = Field(
+        default=None, alias="expectedSha256", pattern=r"^[0-9a-f]{64}$"
+    )
 
     @model_validator(mode="after")
     def require_change(self) -> EditFileArguments:
@@ -208,6 +225,26 @@ class EditFileArguments(ToolArguments):
 class CreateDirectoryArguments(ToolArguments):
     root: Literal["session", "workspace"]
     path: str = Field(min_length=1, max_length=1_000)
+
+
+class ApplyPatchArguments(ToolArguments):
+    patch: str = Field(min_length=1, max_length=512 * 1024)
+    expected_sha256: dict[
+        Annotated[str, Field(min_length=1, max_length=4_096)],
+        Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")],
+    ] = Field(default_factory=dict, alias="expectedSha256", max_length=1_000)
+
+    @field_validator("patch")
+    @classmethod
+    def validate_patch_envelope(cls, value: str) -> str:
+        if (
+            "\r" in value
+            or "\0" in value
+            or not value.startswith("*** Begin Patch\n")
+            or value.rstrip("\n").split("\n")[-1] != "*** End Patch"
+        ):
+            raise ValueError("patch must use the apply_patch envelope and LF text")
+        return value
 
 
 class DeletePathArguments(ToolArguments):
@@ -225,17 +262,6 @@ class CopyPathArguments(ToolArguments):
 
 class MovePathArguments(CopyPathArguments):
     pass
-
-
-class ProcessExecArguments(ToolArguments):
-    program: str = Field(
-        min_length=1,
-        max_length=128,
-        description="Configured program alias, never an executable path.",
-    )
-    args: list[Annotated[str, Field(max_length=10_000)]] = Field(
-        default_factory=list, max_length=256
-    )
 
 
 class ShellRunArguments(ToolArguments):

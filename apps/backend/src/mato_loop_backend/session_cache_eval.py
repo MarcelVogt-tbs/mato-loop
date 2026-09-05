@@ -360,6 +360,7 @@ class SessionCacheEvaluator:
                 .join(ChatSession, ChatSession.id == AgentRun.session_id)
                 .where(
                     ChatSession.user_id == user.id,
+                    AgentRun.parent_run_id.is_(None),
                     AgentRun.status.in_(ACTIVE_RUN_STATUSES),
                 )
             )
@@ -611,7 +612,10 @@ class SessionCacheEvaluator:
                     (
                         await db.scalars(
                             select(AgentRun)
-                            .where(AgentRun.session_id == session.id)
+                            .where(
+                                AgentRun.session_id == session.id,
+                                AgentRun.parent_run_id.is_(None),
+                            )
                             .order_by(AgentRun.created_at, AgentRun.id)
                         )
                     ).all()

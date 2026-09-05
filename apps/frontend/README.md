@@ -62,7 +62,7 @@ Quasar dialogs are used when additional input or multiple domain decisions are r
 - Write visible user-facing text in German.
 - Stores manage server state; components coordinate presentation and user interaction.
 - Display effective runtime state, not only stored desired values.
-- Display Webfetch policies separately for public and private targets; instance-controlled tool and target availability remain hard boundaries.
+- Display the unified Webfetch policy and the instance-controlled public-address restriction as separate controls.
 - Attachment URLs must be authenticated internal MatoLoop paths. External URLs and `v-html` are forbidden for tool results.
 - Render assistant responses only through the central Markdown component. It disables raw HTML, sanitizes generated HTML, and is the only permitted `v-html` exception.
 - The Markdown component renders KaTeX-supported LaTeX with `$...$`, `$$...$$`, `\(...\)`, and `\[...\]`. Trust-dependent KaTeX commands are disabled; required styles remain confined to generated KaTeX subtrees.

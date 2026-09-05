@@ -247,15 +247,8 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
     ):
         assert tools[name].resource_argument == "book_key"
     actions = {action.capability: action for action in BOOKSTACK_ADAPTER.resource_actions}
-    assert [item.value for item in actions["knowledge.read"].allowed_policies] == [
-        "disabled",
-        "ask",
-        "auto",
-    ]
-    assert [item.value for item in actions["knowledge.delete"].allowed_policies] == [
-        "disabled",
-        "ask",
-    ]
+    assert actions["knowledge.read"].default_policy == ToolExecutionPolicy.AUTO
+    assert actions["knowledge.delete"].default_policy == ToolExecutionPolicy.ASK
 
 
 async def test_account_list_uses_only_bound_active_bookstack_snapshot() -> None:
@@ -931,7 +924,7 @@ async def test_attachment_from_url_is_downloaded_and_uploaded(monkeypatch) -> No
 
     async def download_file(url, **_kwargs):
         assert url == "https://example.test/sheet.pdf"
-        await _kwargs["authorize_url"](url, False)
+        await _kwargs["authorize_url"](url)
         return DownloadedFile(
             final_url=url,
             content_type="application/pdf",

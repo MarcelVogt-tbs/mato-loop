@@ -299,6 +299,7 @@ async def delete_project(
                 await db.scalars(
                     select(AgentRun.id).where(
                         AgentRun.session_id.in_(current_session_ids),
+                        AgentRun.parent_run_id.is_(None),
                         AgentRun.status.in_(ACTIVE_STATUSES),
                     )
                 )

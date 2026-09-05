@@ -47,7 +47,7 @@ from .protocol import (
     OpenScadDiscoverArguments,
     OpenScadRenderArguments,
     OpenScadTestArguments,
-    ProcessArguments,
+    PatchArguments,
     ReadArguments,
     RenameArguments,
     Request,
@@ -85,7 +85,17 @@ def serialize_message(message, max_bytes: int = MAX_WIRE_BYTES) -> str:
 
 
 async def _run_mutation(function: Callable, *args, **kwargs) -> dict[str, Any]:
-    return await asyncio.to_thread(function, *args, **kwargs)
+    worker = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # A thread cannot be stopped safely. Its real result remains the terminal outcome.
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                pass
+        return worker.result()
 
 
 class MatoLoopAgent:
@@ -113,8 +123,6 @@ class MatoLoopAgent:
         self.openscad = OpenScadRunner(config, self.filesystem, self.cache, self.transfer)
         self._access_key = access_key
         operations = set(ARGUMENT_MODELS)
-        if not self.process.executables:
-            operations.remove("process.exec")
         if self.process.shell is None:
             operations.remove("shell.run")
         if not self.terminal.available:
@@ -259,6 +267,13 @@ class MatoLoopAgent:
                 arguments.old_text,
                 arguments.new_text,
                 arguments.replace_all,
+                arguments.expected_sha256,
+            )
+        if isinstance(arguments, PatchArguments):
+            return await _run_mutation(
+                self.filesystem.patch,
+                arguments.patch,
+                arguments.expected_sha256,
             )
         if isinstance(arguments, MkdirArguments):
             return await _run_mutation(
@@ -354,20 +369,6 @@ class MatoLoopAgent:
                 return await _run_mutation(self.cache.store, arguments.artifact, handle)
             finally:
                 await asyncio.to_thread(export.__exit__, None, None, None)
-        if isinstance(arguments, ProcessArguments):
-            if stream is None:
-
-                async def stream(_channel: str, _data: str) -> None:
-                    return None
-
-            return await self.process.exec(
-                current_directory=arguments.current_directory,
-                program=arguments.program,
-                args=arguments.args,
-                command=None,
-                timeout=arguments.timeout_seconds,
-                stream=stream,
-            )
         if isinstance(arguments, ShellArguments):
             if stream is None:
 
@@ -376,8 +377,6 @@ class MatoLoopAgent:
 
             return await self.process.exec(
                 current_directory=arguments.current_directory,
-                program=None,
-                args=[],
                 command=arguments.command,
                 timeout=arguments.timeout_seconds,
                 stream=stream,
@@ -420,8 +419,6 @@ class MatoLoopAgent:
                 current_directory=arguments.current_directory,
                 rows=arguments.rows,
                 columns=arguments.columns,
-                program=arguments.program,
-                args=arguments.args,
                 command=arguments.command,
                 timeout=arguments.timeout_seconds,
                 expected_inspection_revision=arguments.expected_inspection_revision,

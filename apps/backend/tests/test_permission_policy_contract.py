@@ -38,11 +38,13 @@ from mato_loop_backend.models import AgentRun, ChatSession, ExecutionAgent, Perm
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
+    PLAN_AGENT_PROFILE_ID,
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
+    TrustLevel,
 )
 from mato_loop_backend.workspace import RootFileService
 
@@ -73,7 +75,7 @@ def _tool_settings(data: dict) -> ToolSettings:
         if key in values
     }
     values["publicPermissions"] = permissions
-    return ToolSettings.model_validate(values)
+    return ToolSettings.model_validate(values).select_trust(TrustLevel.PUBLIC)
 
 
 def _root_files(tmp_path, session: ChatSession) -> RootFileService:
@@ -148,6 +150,39 @@ def test_root_path_grant_matches_only_same_root_identity_and_subtree(tmp_path) -
     )
 
 
+async def test_plan_profile_only_auto_writes_its_canonical_plan(tmp_path) -> None:
+    session = _session()
+    root_files = _root_files(tmp_path, session)
+    db = _db_with_grants()
+    expected = _path_request(
+        root_files,
+        f"plans/{session.id}/plan.md",
+        capability="session.files.write",
+    )
+    other = _path_request(
+        root_files,
+        "notes.md",
+        capability="session.files.write",
+    )
+
+    assert await PermissionPolicy.evaluate(
+        db,
+        session,
+        expected,
+        root_files,
+        ToolExecutionPolicy.AUTO,
+        agent_profile_id=PLAN_AGENT_PROFILE_ID,
+    ) == PermissionDecision.ALLOW
+    assert await PermissionPolicy.evaluate(
+        db,
+        session,
+        other,
+        root_files,
+        ToolExecutionPolicy.AUTO,
+        agent_profile_id=PLAN_AGENT_PROFILE_ID,
+    ) == PermissionDecision.DENY
+
+
 def test_execution_directory_grant_matches_only_same_agent_subtree(tmp_path) -> None:
     session = _session()
     root_files = _root_files(tmp_path, session)
@@ -209,6 +244,66 @@ async def test_execution_filesystem_policy_uses_home_boundary(
     )
 
     assert await PermissionPolicy.evaluate(db, session, request, root_files) == expected
+
+
+async def test_current_directory_is_the_auto_workspace_boundary(tmp_path) -> None:
+    session = _session(user_id=uuid4(), current_directory="/srv/project")
+    root_files = _root_files(tmp_path, session)
+    agent = ExecutionAgent(
+        id=uuid4(),
+        user_id=session.user_id,
+        alias="Desktop",
+        home_directory="/home/user",
+        home_filesystem_policy="auto",
+        external_filesystem_policy="ask",
+    )
+    db = _db_with_grants()
+    db.scalar.return_value = agent
+
+    inside = execution_directory_permission(
+        agent.id, "/srv/project/src/app.py", capability="filesystem.write"
+    )
+    outside = execution_directory_permission(
+        agent.id, "/home/user/notes.txt", capability="filesystem.write"
+    )
+
+    assert await PermissionPolicy.evaluate(
+        db, session, inside, root_files, ToolExecutionPolicy.AUTO
+    ) == PermissionDecision.ALLOW
+    assert await PermissionPolicy.evaluate(
+        db, session, outside, root_files, ToolExecutionPolicy.AUTO
+    ) == PermissionDecision.ASK
+
+
+async def test_confidential_workspace_paths_always_require_one_time_approval(
+    tmp_path,
+) -> None:
+    session = _session(user_id=uuid4(), current_directory="/home/user/project")
+    root_files = _root_files(tmp_path, session)
+    agent = ExecutionAgent(
+        id=uuid4(),
+        user_id=session.user_id,
+        alias="Desktop",
+        home_directory="/home/user",
+        home_filesystem_policy="auto",
+        external_filesystem_policy="ask",
+    )
+    request = execution_directory_permission(
+        agent.id, "/home/user/project/.env", capability="filesystem.read"
+    )
+    grant = PermissionGrant(
+        session_id=session.id,
+        capability=request.capability,
+        resource_type=request.resource_type,
+        resource_scope=request.resource_scope,
+    )
+    db = _db_with_grants(grant)
+    db.scalar.return_value = agent
+
+    assert request.available_decisions == ("allow_once", "deny")
+    assert await PermissionPolicy.evaluate(
+        db, session, request, root_files, ToolExecutionPolicy.AUTO
+    ) == PermissionDecision.ASK
 
 
 async def test_automation_scopes_are_canonical_current_session_and_revision_exact(
@@ -577,17 +672,12 @@ async def test_runtime_ignores_override_after_resource_contract_removal(
     AgentRuntime._request_approval.assert_not_awaited()
 
 
-def test_integration_policy_precedence_allowed_modes_and_hard_limits() -> None:
+def test_integration_policy_precedence_and_hard_limits() -> None:
     integration_id = uuid4()
     action = ToolAction(
         "tasks.read",
         "Aufgaben lesen",
-        ToolExecutionPolicy.ASK,
-        allowed_policies=(
-            ToolExecutionPolicy.DISABLED,
-            ToolExecutionPolicy.ASK,
-            ToolExecutionPolicy.AUTO,
-        ),
+        ToolExecutionPolicy.AUTO,
     )
     settings = _tool_settings(
         {
@@ -607,14 +697,12 @@ def test_integration_policy_precedence_allowed_modes_and_hard_limits() -> None:
         settings,
         action.capability,
         action.default_policy,
-        allowed_policies=action.allowed_policies,
         integration_id=integration_id,
     )
     resource = resolve_tool_execution_policy(
         settings,
         action.capability,
         action.default_policy,
-        allowed_policies=action.allowed_policies,
         integration_id=integration_id,
         resource_key="project:main",
     )
@@ -622,7 +710,6 @@ def test_integration_policy_precedence_allowed_modes_and_hard_limits() -> None:
         settings,
         action.capability,
         action.default_policy,
-        allowed_policies=action.allowed_policies,
         integration_id=integration_id,
         resource_key="project:main",
         hard_unavailable_capabilities=frozenset({action.capability}),
@@ -658,18 +745,16 @@ def test_integration_policy_precedence_allowed_modes_and_hard_limits() -> None:
         "tasks.delete",
         "Aufgaben löschen",
         ToolExecutionPolicy.ASK,
-        allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
     )
     settings.permissions.policies[restricted.capability] = ToolExecutionPolicy.AUTO
-    failed_closed = resolve_tool_execution_policy(
+    automatic = resolve_tool_execution_policy(
         settings,
         restricted.capability,
         restricted.default_policy,
-        allowed_policies=restricted.allowed_policies,
     )
-    assert (failed_closed.policy, failed_closed.reason) == (
-        ToolExecutionPolicy.DISABLED,
-        "policy_not_allowed",
+    assert (automatic.policy, automatic.reason) == (
+        ToolExecutionPolicy.AUTO,
+        "configured",
     )
 
     settings.permissions.policies[action.capability] = ToolExecutionPolicy.ASK
@@ -777,7 +862,7 @@ async def test_legacy_global_path_permission_is_hard_denied(tmp_path) -> None:
     ) == PermissionDecision.DENY
 
 
-async def test_current_session_read_is_allowed_without_querying_grants(tmp_path) -> None:
+async def test_current_session_read_honors_automatic_policy(tmp_path) -> None:
     session = _session()
     db = _db_with_grants()
 
@@ -786,6 +871,7 @@ async def test_current_session_read_is_allowed_without_querying_grants(tmp_path)
         session,
         session_permission(session.id),
         _root_files(tmp_path, session),
+        ToolExecutionPolicy.AUTO,
     )
 
     assert decision == PermissionDecision.ALLOW
@@ -807,7 +893,7 @@ async def test_other_session_read_requires_approval_without_matching_grant(tmp_p
     db.scalars.assert_awaited_once()
 
 
-async def test_same_project_session_reads_are_automatic_but_can_be_disabled(tmp_path) -> None:
+async def test_same_project_session_reads_honor_policy(tmp_path) -> None:
     project_id = uuid4()
     session = _session(user_id=uuid4(), project_id=project_id, session_type="chat")
     target = _session(user_id=session.user_id, project_id=project_id, session_type="chat")
@@ -823,10 +909,14 @@ async def test_same_project_session_reads_are_automatic_but_can_be_disabled(tmp_
     )
 
     assert await PermissionPolicy.evaluate(
-        db, session, session_permission(target.id), root_files
+        db,
+        session,
+        session_permission(target.id),
+        root_files,
+        ToolExecutionPolicy.AUTO,
     ) == PermissionDecision.ALLOW
     assert await PermissionPolicy.evaluate(
-        db, session, path_request, root_files
+        db, session, path_request, root_files, ToolExecutionPolicy.AUTO
     ) == PermissionDecision.ALLOW
     assert await PermissionPolicy.evaluate(
         db,
@@ -1074,7 +1164,7 @@ def test_webfetch_permission_hashes_the_full_canonical_url_and_redacts_summary()
     equivalent = webfetch_permission("https://example.com/path?token=secret")
     other_query = webfetch_permission("https://example.com/path?token=other")
 
-    assert first.capability == "network.fetch.public"
+    assert first.capability == "network.fetch"
     assert first.resource_type == "url"
     assert first.resource_scope == equivalent.resource_scope
     assert first.resource_scope != other_query.resource_scope

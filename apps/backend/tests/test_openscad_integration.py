@@ -238,7 +238,7 @@ def test_openscad_prompt_fragment_covers_the_source_render_verify_workflow() -> 
     ).casefold()
 
     for requirement in (
-        "use render_openscad, not shell_run or process_exec",
+        "use render_openscad, not shell_run",
         "render output=preview",
         "source in assistant text is not a file",
         "create each new .scad model with write_file",

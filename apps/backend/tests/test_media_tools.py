@@ -34,6 +34,7 @@ from mato_loop_backend.settings import (
     AiSettings,
     IntegrationSettings,
     SettingsStore,
+    ToolExecutionPolicy,
     ToolSettings,
 )
 from mato_loop_backend.settings.models import (
@@ -167,8 +168,11 @@ async def test_disabled_media_tool_is_rejected_before_provider(
 ) -> None:
     call = ToolCall(id="image", name="generate_image", arguments={"prompt": "Test"})
     tool_context = context(tmp_path, call)
+    tool_context.tool_settings.generate_image.policy = ToolExecutionPolicy.DISABLED
     mock_settings_load(
-        monkeypatch, ToolSettings(), media_settings(ModelCapability.IMAGE_GENERATION)
+        monkeypatch,
+        ToolSettings(generate_image={"policy": "disabled"}),
+        media_settings(ModelCapability.IMAGE_GENERATION),
     )
     generate = AsyncMock(side_effect=AssertionError("Provider must not be called"))
     monkeypatch.setattr(MediaService, "generate_image", generate)
@@ -532,7 +536,14 @@ async def test_edit_image_sends_authorized_private_sources_to_public_target(
     tool_context = context(tmp_path, call)
     ai, chat = codex_edit_settings()
     tool_context.model_id = chat.id
-    tools = ToolSettings.model_validate({"editImage": {"policy": "auto"}})
+    tools = ToolSettings.model_validate(
+        {
+            "editImage": {"policy": "auto"},
+            "publicPermissions": {
+                "policies": {"media.edit.image": "auto"}
+            },
+        }
+    )
     mock_settings_load(monkeypatch, tools, ai)
     tool_context.db.get.return_value = SimpleNamespace(user_id=None)
     message = Message(
@@ -590,7 +601,11 @@ async def test_policy_revocation_during_approval_stops_media_service(
         if settings_type is AiSettings:
             return ai
         tool_loads += 1
-        return ask_settings if tool_loads == 1 else ToolSettings()
+        return (
+            ask_settings
+            if tool_loads == 1
+            else ToolSettings(generate_image={"policy": "disabled"})
+        )
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
     generate = AsyncMock(side_effect=AssertionError("Provider must not be called"))
@@ -605,7 +620,12 @@ async def test_policy_revocation_during_approval_stops_media_service(
 
 async def test_auto_media_tool_returns_typed_attachment(tmp_path, monkeypatch) -> None:
     settings = ToolSettings.model_validate(
-        {"generateSpeech": {"policy": "auto", "timeoutSeconds": 125}}
+        {
+            "generateSpeech": {"policy": "auto", "timeoutSeconds": 125},
+            "publicPermissions": {
+                "policies": {"media.generate.speech": "auto"}
+            },
+        }
     )
     call = ToolCall(id="speech", name="generate_speech", arguments={"text": "Hallo"})
     tool_context = context(tmp_path, call)

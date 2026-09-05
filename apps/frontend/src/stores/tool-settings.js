@@ -1,12 +1,16 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 
-const defaultMediaPolicy = () => ({ policy: 'disabled', timeoutSeconds: 300 })
+const defaultMediaPolicy = () => ({ policy: 'ask', timeoutSeconds: 300 })
 const defaultImageEditPolicy = () => ({ policy: 'ask', timeoutSeconds: 300 })
 const defaultVideoAnalysisPolicy = () => ({ policy: 'ask', timeoutSeconds: 1800 })
 const defaultAgentIdentityPolicy = () => ({ policy: 'ask' })
 const defaultShellPrefixes = () => ({ read: [], write: [] })
-const defaultConfigurationWebFetch = () => ({ userAgent: '', maxResponseMiB: 64 })
+const defaultConfigurationWebFetch = () => ({
+  userAgent: '',
+  maxResponseMiB: 64,
+  publicAddressesOnly: true
+})
 
 function settingsPayload(state) {
   return {
@@ -45,7 +49,6 @@ export const useToolSettingsStore = defineStore('tool-settings', {
     updateAgentIdentity: defaultAgentIdentityPolicy(),
     transcribeAudioAvailable: true,
     toolAvailability: {},
-    resourceAvailability: {},
     scope: 'instance',
     trust: 'private',
     personalSettingsEnabled: true,
@@ -229,10 +232,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       this.configurationGroups = Array.isArray(data?.groups)
         ? data.groups.map((group) => ({
             ...group,
-            tools: (group.tools || []).map((tool) => ({
-              ...tool,
-              resources: (tool.resources || []).map((resource) => ({ ...resource }))
-            }))
+            tools: (group.tools || []).map((tool) => ({ ...tool }))
           }))
         : []
       this.configurationWebFetch = {
@@ -240,24 +240,17 @@ export const useToolSettingsStore = defineStore('tool-settings', {
         ...data?.webFetch
       }
       this.assignAvailability({
-        tools: data?.toolAvailability,
-        resources: data?.resourceAvailability
+        tools: data?.toolAvailability
       })
     },
     assignAvailability(data) {
       this.toolAvailability = { ...data?.tools }
-      this.resourceAvailability = Object.fromEntries(
-        Object.entries(data?.resources || {}).map(([tool, resources]) => [tool, { ...resources }])
-      )
       this.groups = this.groups.map((group) => ({
         ...group,
         tools: group.tools.map((tool) => ({
           ...tool,
           available: this.toolAvailability[tool.name] !== false,
-          actions: (tool.actions || []).map((action) => ({
-            ...action,
-            available: this.resourceAvailability[tool.name]?.[action.capability] !== false
-          }))
+          actions: (tool.actions || []).map((action) => ({ ...action }))
         }))
       }))
       this.transcribeAudioAvailable = this.toolAvailability.transcribe_audio !== false
@@ -274,11 +267,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
             .map((tool) => ({
               ...tool,
               available: tool.available !== false && this.toolAvailability[tool.name] !== false,
-              actions: (tool.actions || []).map((action) => ({
-                ...action,
-                available: action.available !== false
-                  && this.resourceAvailability[tool.name]?.[action.capability] !== false
-              }))
+              actions: (tool.actions || []).map((action) => ({ ...action }))
             }))
         }))
         .filter((group) => group.tools.length)

@@ -25,6 +25,7 @@ from mato_loop_backend.execution import (
     ExecutionClientError,
     ProcessResult,
     ShellInspectResult,
+    WorkspacePatchResult,
     WorkspaceReadResult,
     WorkspaceWriteResult,
     transfer_tickets,
@@ -86,12 +87,11 @@ def _tools(operations):
     )
 
 
-def test_process_tools_cannot_select_execution_targets() -> None:
-    tools = _tools({"process.exec", "shell.run"})
-    process = next(item for item in tools.schemas() if item["name"] == "process_exec")
+def test_shell_tool_cannot_select_execution_targets() -> None:
+    tools = _tools({"shell.run"})
     shell = next(item for item in tools.schemas() if item["name"] == "shell_run")
-    assert set(process["parameters"]["properties"]) == {"program", "args"}
     assert set(shell["parameters"]["properties"]) == {"command"}
+    assert all(item["name"] != "process_exec" for item in tools.schemas())
 
 
 async def test_execution_client_forwards_exact_arguments_without_context(monkeypatch) -> None:
@@ -239,6 +239,103 @@ async def test_workspace_read_dispatches_absolute_filesystem_path(tmp_path) -> N
     )
 
 
+async def test_workspace_write_uses_compare_and_swap_operation(tmp_path) -> None:
+    call = ToolCall(
+        "write",
+        "write_file",
+        {
+            "root": "workspace",
+            "path": "README.md",
+            "content": "updated\n",
+            "expectedSha256": "a" * 64,
+        },
+    )
+    client = FakeExecutionClient(
+        {
+            "filesystem.write": WorkspaceWriteResult(
+                path="/home/user/project/README.md",
+                sha256="b" * 64,
+                size=8,
+            )
+        },
+        {"filesystem.write"},
+    )
+    context = _context(tmp_path, call, client)
+
+    result = await _tools(client.operations).execute(call, context)
+
+    assert not result.is_error
+    assert client.requests == [
+        (
+            "filesystem.write",
+            {
+                "path": "/home/user/project/README.md",
+                "content": "updated\n",
+                "expectedSha256": "a" * 64,
+            },
+        )
+    ]
+
+
+async def test_apply_patch_resolves_paths_and_checks_each_permission(tmp_path) -> None:
+    patch = """*** Begin Patch
+*** Update File: README.md
+@@
+-old
++new
+*** Add File: src/new.py
++value = 1
+*** End Patch
+"""
+    call = ToolCall(
+        "patch",
+        "apply_patch",
+        {"patch": patch, "expectedSha256": {"README.md": "a" * 64}},
+    )
+    client = FakeExecutionClient(
+        {
+            "filesystem.patch": WorkspacePatchResult(
+                files=[
+                    {
+                        "operation": "update",
+                        "path": "/home/user/project/README.md",
+                        "sha256": "b" * 64,
+                        "size": 4,
+                    },
+                    {
+                        "operation": "add",
+                        "path": "/home/user/project/src/new.py",
+                        "sha256": "c" * 64,
+                        "size": 10,
+                    },
+                ]
+            )
+        },
+        {"filesystem.patch"},
+    )
+    context = _context(tmp_path, call, client)
+
+    result = await _tools(client.operations).execute(call, context)
+
+    assert not result.is_error
+    assert client.requests == [
+        (
+            "filesystem.patch",
+            {
+                "patch": patch.replace(
+                    "README.md", "/home/user/project/README.md"
+                ).replace("src/new.py", "/home/user/project/src/new.py"),
+                "expectedSha256": {
+                    "/home/user/project/README.md": "a" * 64
+                },
+            },
+        )
+    ]
+    assert [
+        request.args[0].capability for request in context.ask_handler.await_args_list
+    ] == ["filesystem.write", "filesystem.write"]
+
+
 def _shell_permission(client, classification="write", prefixes=None, directory=None):
     return PermissionRequest(
         capability=f"shell.{classification}",
@@ -368,7 +465,7 @@ async def test_shell_dispatches_with_inspection_classification(tmp_path) -> None
 
 
 async def test_shell_labels_incomplete_inspection_as_unverified(tmp_path) -> None:
-    call = ToolCall("shell", "shell_run", {"command": "printf '%s\\n' test"})
+    call = ToolCall("shell", "shell_run", {"command": "unknown-command --inspect"})
     client = FakeExecutionClient(
         {
             "shell.inspect": ShellInspectResult(
@@ -409,31 +506,6 @@ async def test_shell_labels_incomplete_inspection_as_unverified(tmp_path) -> Non
         "shellAnalysisComplete": False,
         "shellPrefixes": [],
     }
-
-
-async def test_terminal_auto_keeps_policy_and_uses_terminal_run(tmp_path, monkeypatch) -> None:
-    call = ToolCall("process", "process_exec", {"program": "python", "args": ["-V"]})
-    client = FakeExecutionClient({}, {"process.exec", "terminal.run"})
-    context = _context(tmp_path, call, client)
-    monkeypatch.setattr(terminal_coordinator, "mode_for", lambda **_kwargs: "auto")
-    run = AsyncMock(
-        return_value=ProcessResult(
-            exit_code=0,
-            timed_out=False,
-            duration_ms=1,
-            stdout_bytes=0,
-            stderr_bytes=0,
-            stdout_truncated=False,
-            stderr_truncated=False,
-        )
-    )
-    monkeypatch.setattr(terminal_coordinator, "run", run)
-
-    result = await _tools(client.operations).execute(call, context)
-
-    assert not result.is_error
-    assert context.ask_handler.await_count == 2
-    assert run.await_args.kwargs["arguments"] == {"program": "python", "args": ["-V"]}
 
 
 async def test_terminal_confirm_reinspects_edited_shell_and_reports_execution(
@@ -487,42 +559,6 @@ async def test_terminal_confirm_reinspects_edited_shell_and_reports_execution(
     assert payload["requestedArguments"] == {"command": "cat README.md"}
     assert payload["executedArguments"] == {"command": "cat pyproject.toml"}
     assert payload["userEdited"] is True
-
-
-async def test_terminal_confirm_process_uses_shlex_and_distinguishes_unavailable_from_denial(
-    tmp_path, monkeypatch
-) -> None:
-    call = ToolCall("process", "process_exec", {"program": "python", "args": ["one"]})
-    client = FakeExecutionClient({}, {"process.exec", "terminal.run"})
-    context = _context(tmp_path, call, client)
-    monkeypatch.setattr(terminal_coordinator, "mode_for", lambda **_kwargs: "confirm")
-    evaluate = AsyncMock(side_effect=AssertionError("confirm must bypass policy"))
-    monkeypatch.setattr(PermissionPolicy, "evaluate", evaluate)
-    propose = AsyncMock(return_value=TerminalDecision(True, "python 'two words'"))
-    monkeypatch.setattr(terminal_coordinator, "propose", propose)
-    run = AsyncMock(
-        return_value=ProcessResult(
-            exit_code=0,
-            timed_out=False,
-            duration_ms=1,
-            stdout_bytes=0,
-            stderr_bytes=0,
-            stdout_truncated=False,
-            stderr_truncated=False,
-        )
-    )
-    monkeypatch.setattr(terminal_coordinator, "run", run)
-
-    result = await _tools(client.operations).execute(call, context)
-
-    assert propose.await_args.kwargs["command_line"] == "python one"
-    assert run.await_args.kwargs["arguments"] == {
-        "program": "python",
-        "args": ["two words"],
-    }
-    assert json.loads(result.content)["userEdited"] is True
-    assert context.ask_handler.await_count == 0
-    assert evaluate.await_count == 0
 
     context.user_denied = False
     propose.return_value = TerminalDecision(False)

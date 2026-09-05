@@ -75,6 +75,7 @@ VideoAnalysisHandler = Callable[
     Awaitable[dict[str, Any]],
 ]
 VideoAnalysisTargetResolver = Callable[[int], ResolvedVideoModel | None]
+TaskHandler = Callable[[str], Awaitable["ToolResult"]]
 PolicyResolver = Callable[..., ToolExecutionPolicy]
 CapabilityResolver = Callable[..., set[str]]
 
@@ -191,6 +192,7 @@ class ToolContext:
     model_id: UUID | None = None
     model_trust_level: TrustLevel = TrustLevel.PUBLIC
     agent_persona_id: UUID | None = None
+    agent_profile_id: UUID | None = None
     bound_resource: IntegrationResource | None = None
     skill_state: RunSkillState = field(default_factory=RunSkillState)
     skill_draft_handler: SkillDraftHandler | None = None
@@ -198,6 +200,7 @@ class ToolContext:
     user_denied: bool = False
     execution_client: ExecutionClient | None = None
     session_read_cursors: dict[UUID, UUID | None] = field(default_factory=dict)
+    task_handler: TaskHandler | None = None
 
     async def ask(self, request: PermissionRequest) -> PermissionDecision:
         if self.user_denied:
@@ -272,16 +275,14 @@ def _actions_enabled(
     if not tool_settings.tool_availability.get(definition.name, True):
         return False
     enabled = {
-        action.capability: policy_resolver(
-            tool_settings,
-            action.capability,
-            action.default_policy,
-            allowed_policies=action.allowed_policies,
-            include_scoped=True,
-        )
-        != ToolExecutionPolicy.DISABLED
-        and tool_settings.webfetch_resource_available(action.capability)
-        for action in definition.actions
+            action.capability: policy_resolver(
+                tool_settings,
+                action.capability,
+                action.default_policy,
+                include_scoped=True,
+            )
+            != ToolExecutionPolicy.DISABLED
+            for action in definition.actions
     }
     alternatives = definition.alternative_action_capabilities
     return all(
@@ -812,16 +813,13 @@ class ToolRegistry:
                         tool_settings,
                         action.capability,
                         action.default_policy,
-                        allowed_policies=action.allowed_policies,
                     )
                     .value,
                     "configurable": action.configurable,
                     "allowedPolicies": [
-                        policy.value for policy in action.allowed_policies
+                        policy.value for policy in ToolExecutionPolicy
                     ],
-                    "available": tool_settings.resource_availability.get(
-                        definition.name, {}
-                    ).get(action.capability, True),
+                    "available": True,
                 }
                 for action in definition.actions
             ]
@@ -1007,7 +1005,7 @@ class ToolRegistry:
                 context.tool_settings, _profile = await load_agent_profile_tools(
                     context.db,
                     context.session.user_id,
-                    context.session.agent_profile_id,
+                    context.agent_profile_id or context.session.agent_profile_id,
                     context.model_trust_level,
                 )
             except AgentProfileUnavailable:

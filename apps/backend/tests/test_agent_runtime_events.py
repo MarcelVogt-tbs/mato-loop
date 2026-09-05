@@ -29,13 +29,17 @@ from mato_loop_backend.providers.base import (
     PublicReasoning,
     ToolCall,
 )
+from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
     AiSettings,
+    IntegrationSettings,
     SettingsStore,
+    ToolSettings,
     TrustLevel,
 )
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+from mato_loop_backend.workspace import RootFileService
 
 
 def test_run_timing_sums_active_segments_and_excludes_user_waits() -> None:
@@ -145,6 +149,158 @@ async def test_runtime_rejects_inactive_user() -> None:
 
     with pytest.raises(AgentRunError, match="auth.accountDisabled"):
         await AgentRuntime._ensure_user_active(db, uuid4())
+
+
+async def test_plan_directory_accepts_first_canonical_write(tmp_path) -> None:
+    session_id = uuid4()
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session_id)
+    root_files = RootFileService(session_id, session_storage=storage)
+
+    await runtime_module._ensure_plan_directory(root_files, session_id)
+    await runtime_module._ensure_plan_directory(root_files, session_id)
+
+    path = f"plans/{session_id}/plan.md"
+    assert root_files.write_file("session", path, "# Plan") == path
+
+
+async def test_explore_child_persists_isolated_read_only_transcript(monkeypatch) -> None:
+    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="model")
+    profile_id = uuid4()
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
+    parent = AgentRun(
+        id=uuid4(),
+        session_id=session.id,
+        status="running",
+        model_config_id=model.id,
+        model_name="Model",
+        agent_profile_id=profile_id,
+        trust_level="public",
+        execution_operations=[],
+    )
+    db = AsyncMock(spec=AsyncSession)
+    persisted = []
+
+    def add(item) -> None:
+        if item.id is None:
+            item.id = uuid4()
+        persisted.append(item)
+
+    db.add.side_effect = add
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(return_value=AgentRuntimeSettings()),
+    )
+    requests = []
+
+    async def complete(_db, **kwargs):
+        requests.append(kwargs)
+        if len(requests) == 1:
+            return ProviderResult(
+                tool_calls=[
+                    ToolCall("glob-1", "glob", {"root": "files", "pattern": "**/*.py"})
+                ]
+            )
+        return ProviderResult(content="Found the runtime in `agent/runtime.py`.")
+
+    monkeypatch.setattr(runtime_module.ProviderService, "complete", complete)
+    execute = AsyncMock(return_value=runtime_module.ToolResult("agent/runtime.py", {}))
+    monkeypatch.setattr(runtime_module.tool_registry, "_execute_definition", execute)
+
+    result = await AgentRuntime._run_explore_child(
+        db,
+        parent,
+        session,
+        "Find the runtime",
+        model=model,
+        provider=provider,
+        tool_settings=ToolSettings(),
+        integration_settings=IntegrationSettings(),
+        root_files=RootFileService(session.id),
+        profile_instructions="Be concise.",
+    )
+
+    child = persisted[0]
+    assert result.content == "Found the runtime in `agent/runtime.py`."
+    assert child.parent_run_id == parent.id
+    assert child.session_id == parent.session_id
+    assert child.agent_profile_id == profile_id
+    assert child.input_message_id is None and child.result_message_id is None
+    assert child.status == "completed"
+    assert child.internal_result == result.content
+    assert [tool["name"] for tool in requests[0]["tools"]] == ["read", "glob", "grep"]
+    assert [item["role"] for item in child.internal_transcript] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    assert execute.await_args.args[0].name == "glob"
+    assert execute.await_args.args[1].task_handler is None
+
+
+async def test_explore_child_is_cancelled_with_parent_task(monkeypatch) -> None:
+    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="model")
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
+    parent = AgentRun(
+        id=uuid4(),
+        session_id=session.id,
+        status="running",
+        model_config_id=model.id,
+        trust_level="public",
+        execution_operations=[],
+    )
+    db = AsyncMock(spec=AsyncSession)
+    child = None
+
+    def add(item) -> None:
+        nonlocal child
+        if item.id is None:
+            item.id = uuid4()
+        child = item
+
+    db.add.side_effect = add
+    db.get.side_effect = lambda *_args, **_kwargs: child
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(return_value=AgentRuntimeSettings()),
+    )
+    entered = asyncio.Event()
+
+    async def complete(_db, **_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(runtime_module.ProviderService, "complete", complete)
+    task = asyncio.create_task(
+        AgentRuntime._run_explore_child(
+            db,
+            parent,
+            session,
+            "Inspect",
+            model=model,
+            provider=provider,
+            tool_settings=ToolSettings(),
+            integration_settings=IntegrationSettings(),
+            root_files=RootFileService(session.id),
+            profile_instructions="",
+        )
+    )
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert child is not None
+    assert child.status == "cancelled"
+    assert child.parent_run_id == parent.id
+    assert child.internal_result is not None
+    assert child.id not in AgentRuntime._tasks
 
 
 @pytest.mark.parametrize(
@@ -785,6 +941,17 @@ def test_edit_file_text_is_fully_redacted_before_persistence() -> None:
     assert arguments["oldText"] == {"characters": 16, "redacted": True}
     assert arguments["newText"] == {"characters": 16, "redacted": True}
     assert "private" not in str(arguments)
+
+
+def test_apply_patch_content_is_fully_redacted_before_persistence() -> None:
+    patch = "*** Begin Patch\n*** Add File: secret.txt\n+secret\n*** End Patch\n"
+
+    arguments = _safe_tool_arguments(
+        "apply_patch", {"patch": patch, "expectedSha256": {}}
+    )
+
+    assert arguments["patch"] == {"characters": len(patch), "redacted": True}
+    assert "secret" not in str(arguments)
 
 
 def test_qr_code_content_is_fully_redacted_before_persistence() -> None:

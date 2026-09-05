@@ -103,10 +103,10 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "filesystem.edit",
         "filesystem.copy",
         "filesystem.move",
+        "filesystem.patch",
         "filesystem.import",
         "filesystem.export",
         "filesystem.upsert",
-        "process.exec",
         "shell.run",
         "cache.ensure",
         "cache.export",
@@ -214,11 +214,12 @@ async def test_latest_connection_replaces_old_and_disconnects_are_classified() -
     assert disconnect_error_code("filesystem.write", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("filesystem.upsert", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("filesystem.edit", True) == "executionAgent.outcomeUnknown"
+    assert disconnect_error_code("filesystem.patch", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("filesystem.rename", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("integration.git.clone", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("integration.git.add", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("integration.git.commit", True) == "executionAgent.outcomeUnknown"
-    assert disconnect_error_code("process.exec", True) == "process.outcomeUnknown"
+    assert disconnect_error_code("shell.run", True) == "process.outcomeUnknown"
 
 
 async def test_replacement_cannot_miss_request_waiting_to_send() -> None:
@@ -312,10 +313,10 @@ async def test_default_timeout_is_bounded_and_cancels_request() -> None:
     assert manager.request_ids(hello.agent_id) == ()
 
 
-async def test_dispatched_mutation_and_process_timeouts_have_unknown_outcomes() -> None:
+async def test_dispatched_mutation_and_shell_timeouts_have_unknown_outcomes() -> None:
     for operation, expected_code in (
         ("filesystem.write", "executionAgent.outcomeUnknown"),
-        ("process.exec", "process.outcomeUnknown"),
+        ("shell.run", "process.outcomeUnknown"),
     ):
         manager = ExecutionAgentConnectionManager(default_timeout=0.01)
         websocket = FakeWebSocket()

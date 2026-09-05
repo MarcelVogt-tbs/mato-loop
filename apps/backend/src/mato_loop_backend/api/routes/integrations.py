@@ -528,12 +528,11 @@ def _access_payload(
         {
             "capability": action.capability,
             "label": action.label,
-            "allowedPolicies": [policy.value for policy in action.allowed_policies],
+            "allowedPolicies": [policy.value for policy in ToolExecutionPolicy],
             "globalPolicy": resolve_tool_execution_policy(
                 tools,
                 action.capability,
                 action.default_policy,
-                allowed_policies=action.allowed_policies,
             ).policy.value,
             "integrationPolicy": (
                 integration_policies[action.capability].value
@@ -544,7 +543,6 @@ def _access_payload(
                 tools,
                 action.capability,
                 action.default_policy,
-                allowed_policies=action.allowed_policies,
                 integration_id=instance.id,
             ).policy.value,
         }
@@ -574,7 +572,6 @@ def _access_payload(
                         tools,
                         action.capability,
                         action.default_policy,
-                        allowed_policies=action.allowed_policies,
                         integration_id=instance.id,
                         resource_key=resource.key,
                         hard_unavailable_capabilities=(
@@ -1763,7 +1760,6 @@ async def update_integration_access(
     resource_keys = {resource.key for resource in resources}
     resources_by_key = {resource.key: resource for resource in resources}
     capabilities = {action.capability for action in resource_actions}
-    actions = {action.capability: action for action in resource_actions}
     if set(payload.resources) - resource_keys:
         raise ApiError(422, "validation.invalidChoice", field="resources")
     if any(set(policies) - capabilities for policies in payload.resources.values()):
@@ -1807,18 +1803,6 @@ async def update_integration_access(
         )
     ):
         raise ApiError(422, "validation.invalidChoice", field="default_task_list_key")
-    if payload.policies is not None and any(
-        policy not in actions[capability].allowed_policies
-        for capability, policy in payload.policies.items()
-    ):
-        raise ApiError(422, "validation.invalidChoice", field="policies")
-    if any(
-        policy not in actions[capability].allowed_policies
-        for policies in payload.resources.values()
-        for capability, policy in policies.items()
-    ):
-        raise ApiError(422, "validation.invalidChoice", field="resources")
-
     current_integrations, current_owner_id = await _load_scoped_integrations(
         db, scope, user, for_update=True, mutation=True
     )

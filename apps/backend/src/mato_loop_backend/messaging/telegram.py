@@ -721,6 +721,7 @@ async def _command(
             await db.scalar(
                 select(AgentRun.id).where(
                     AgentRun.session_id == endpoint.current_session_id,
+                    AgentRun.parent_run_id.is_(None),
                     AgentRun.status.in_(("queued", "running", "waiting_approval", "waiting_input")),
                 )
             )

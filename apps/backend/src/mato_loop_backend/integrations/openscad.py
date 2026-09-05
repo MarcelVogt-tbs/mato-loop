@@ -830,7 +830,7 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
     )
 
 
-_CAD_RENDER = ToolAction("cad.render", "CAD rendern", ToolExecutionPolicy.AUTO)
+_CAD_RENDER = ToolAction("cad.render", "CAD rendern", ToolExecutionPolicy.ASK)
 _FILESYSTEM_READ = ToolAction("filesystem.read", "Lesen", ToolExecutionPolicy.AUTO)
 
 OPENSCAD_TOOL = ToolContribution(
@@ -862,7 +862,7 @@ def _contributions(_instance: IntegrationInstance) -> IntegrationContributions:
     return IntegrationContributions(
         prompt_fragments=(
             "OpenSCAD file workflow:\n"
-            "- Use render_openscad, not shell_run or process_exec, for every render. Create each new "
+            "- Use render_openscad, not shell_run, for every render. Create each new "
             ".scad model with write_file; source in assistant text is not a file. Revise the exact returned "
             "path with edit_file instead of creating versioned copies.\n"
             "- Use the user's explicit safe path and exact .scad basename. The source entrypoint must "

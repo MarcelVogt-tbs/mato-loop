@@ -356,7 +356,11 @@ async def session_detail_payload(
     )
     active_run = await db.scalar(
         select(AgentRun)
-        .where(AgentRun.session_id == item.id, AgentRun.status.in_(ACTIVE_RUN_STATUSES))
+        .where(
+            AgentRun.session_id == item.id,
+            AgentRun.parent_run_id.is_(None),
+            AgentRun.status.in_(ACTIVE_RUN_STATUSES),
+        )
         .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
         .limit(1)
     )
@@ -541,6 +545,7 @@ async def duplicate_submission_response(
         .join(ChatSession, ChatSession.id == AgentRun.session_id)
         .where(
             AgentRun.id == run_id,
+            AgentRun.parent_run_id.is_(None),
             ChatSession.user_id == user_id,
             ChatSession.session_type == "chat",
         )
@@ -642,6 +647,7 @@ async def list_sessions(
         select(AgentRun.status)
         .where(
             AgentRun.session_id == ChatSession.id,
+            AgentRun.parent_run_id.is_(None),
             AgentRun.status.in_(ACTIVE_RUN_STATUSES),
         )
         .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
@@ -916,6 +922,7 @@ async def send_message(
     active = await db.scalar(
         select(AgentRun).where(
             AgentRun.session_id == session_id,
+            AgentRun.parent_run_id.is_(None),
             AgentRun.status.in_(ACTIVE_RUN_STATUSES),
         )
     )
@@ -993,6 +1000,7 @@ async def update_session(
         active = await db.scalar(
             select(AgentRun.id).where(
                 AgentRun.session_id == session_id,
+                AgentRun.parent_run_id.is_(None),
                 AgentRun.status.in_(ACTIVE_RUN_STATUSES),
             )
         )
@@ -1366,6 +1374,7 @@ async def delete_session(
             await db.scalars(
                 select(AgentRun).where(
                     AgentRun.session_id == session_id,
+                    AgentRun.parent_run_id.is_(None),
                     AgentRun.status.in_(ACTIVE_RUN_STATUSES),
                 )
             )

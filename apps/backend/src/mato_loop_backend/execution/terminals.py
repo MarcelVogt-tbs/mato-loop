@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import shlex
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -63,7 +62,7 @@ class _Proposal:
     session_id: UUID
     run_id: UUID
     tool_call_id: str
-    tool: Literal["shell_run", "process_exec"]
+    tool: Literal["shell_run"]
     agent_id: UUID
     current_directory: str
     requested_arguments: dict[str, Any]
@@ -195,7 +194,7 @@ class TerminalCoordinator:
         session_id: UUID,
         run_id: UUID,
         tool_call_id: str,
-        tool: Literal["shell_run", "process_exec"],
+        tool: Literal["shell_run"],
         agent_id: UUID,
         current_directory: str,
         requested_arguments: dict[str, Any],
@@ -514,13 +513,6 @@ class TerminalCoordinator:
             or any(ord(character) < 32 and character not in "\t\n" for character in command_line)
         ):
             raise ValueError("terminal.commandInvalid")
-        if tool == "process_exec":
-            try:
-                tokens = shlex.split(command_line)
-            except ValueError as exc:
-                raise ValueError("terminal.commandInvalid") from exc
-            if not tokens:
-                raise ValueError("terminal.commandInvalid")
 
 
 terminal_coordinator = TerminalCoordinator()

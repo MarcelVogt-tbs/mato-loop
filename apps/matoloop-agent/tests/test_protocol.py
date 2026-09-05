@@ -43,7 +43,7 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(ValidationError):
                 validate_arguments(request)
 
-    def test_copy_move_and_process_paths_are_strict(self) -> None:
+    def test_copy_move_paths_are_strict_and_process_exec_is_unsupported(self) -> None:
         copy = Request.model_validate(
             {
                 "type": "request",
@@ -65,10 +65,35 @@ class ProtocolTests(unittest.TestCase):
                 "arguments": {"currentDirectory": "/workspace", "program": "python"},
             }
         )
-        self.assertEqual(validate_arguments(process).current_directory, "/workspace")
-        process.arguments["rootId"] = AGENT_ID
-        with self.assertRaises(ValidationError):
+        with self.assertRaises(ValueError, msg="unsupported operation"):
             validate_arguments(process)
+
+    def test_patch_requires_absolute_revision_paths_and_bounded_strict_fields(self) -> None:
+        request = Request.model_validate(
+            {
+                "type": "request",
+                "id": REQUEST_ID,
+                "operation": "filesystem.patch",
+                "arguments": {
+                    "patch": "*** Begin Patch\n*** Delete File: /workspace/old\n*** End Patch\n",
+                    "expectedSha256": {"/workspace/old": "a" * 64},
+                },
+            }
+        )
+        arguments = validate_arguments(request)
+        self.assertEqual(arguments.expected_sha256["/workspace/old"], "a" * 64)
+        for revisions in (
+            {"workspace/old": "a" * 64},
+            {"/workspace/../old": "a" * 64},
+            {"/workspace/old": "A" * 64},
+        ):
+            request.arguments["expectedSha256"] = revisions
+            with self.subTest(revisions=revisions), self.assertRaises(ValidationError):
+                validate_arguments(request)
+
+        request.arguments = {"patch": "x" * (512 * 1024 + 1), "expectedSha256": {}}
+        with self.assertRaises(ValidationError):
+            validate_arguments(request)
 
     def test_git_pathspecs_remain_relative_and_openscad_source_is_absolute(self) -> None:
         git = Request.model_validate(
@@ -146,7 +171,7 @@ class ProtocolTests(unittest.TestCase):
             ):
                 arguments(operation, values)
 
-    def test_terminal_run_requires_exactly_one_execution_form(self) -> None:
+    def test_terminal_run_requires_a_shell_command(self) -> None:
         base = {
             "terminalId": AGENT_ID,
             "currentDirectory": "/workspace",
@@ -164,11 +189,6 @@ class ProtocolTests(unittest.TestCase):
             }
         )
         self.assertEqual(validate_arguments(command).command, "pwd")
-        program = command.model_copy(
-            update={"arguments": {**base, "program": "python", "args": ["--version"]}}
-        )
-        self.assertEqual(validate_arguments(program).args, ["--version"])
-
         for values in (
             {
                 **{key: value for key, value in base.items() if key != "rows"},
@@ -177,9 +197,8 @@ class ProtocolTests(unittest.TestCase):
             {**base, "columns": 1001, "command": "pwd"},
             {**base, "command": "pwd", "program": "python"},
             {**base, "command": "pwd", "args": []},
-            {**base, "command": "pwd", "args": ["extra"]},
-            {**base, "program": "python", "expectedInspectionRevision": "a" * 64},
-            {**base, "program": "python", "currentDirectory": "relative"},
+            {**base, "currentDirectory": "relative", "command": "pwd"},
+            base,
         ):
             command.arguments = values
             with self.subTest(values=list(values)), self.assertRaises(ValidationError):

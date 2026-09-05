@@ -28,6 +28,8 @@ from mato_loop_backend.settings import (
     TrustLevel,
     UserToolSettings,
     WebFetchSettings,
+    build_agent_profile,
+    plan_agent_profile,
 )
 
 
@@ -75,7 +77,7 @@ def test_root_specific_write_policies_keep_shared_tools_available(
                 "filesystem.write": workspace_policy,
             }
         }
-    )
+    ).select_trust(TrustLevel.PUBLIC)
 
     tools = tool_registry.effective(
         IntegrationSettings(), tool_settings=settings
@@ -101,7 +103,9 @@ def test_agent_profile_policy_controls_available_global_capability(
     profile: ToolExecutionPolicy,
     expected: ToolExecutionPolicy,
 ) -> None:
-    settings = ToolSettings(public_permissions={"policies": {"filesystem.read": baseline}})
+    settings = ToolSettings(
+        public_permissions={"policies": {"filesystem.read": baseline}}
+    ).select_trust(TrustLevel.PUBLIC)
     settings._agent_permissions = AgentProfilePermissions(
         policies={"filesystem.read": profile}
     )
@@ -116,12 +120,76 @@ def test_agent_profile_policy_controls_available_global_capability(
 def test_agent_profile_missing_capability_inherits_live_default() -> None:
     settings = ToolSettings(
         public_permissions={"policies": {"filesystem.read": ToolExecutionPolicy.AUTO}}
-    )
+    ).select_trust(TrustLevel.PUBLIC)
     settings._agent_permissions = AgentProfilePermissions()
 
     assert (
         resolve_tool_execution_policy(settings, "filesystem.read").policy
         == ToolExecutionPolicy.AUTO
+    )
+
+
+@pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
+def test_plan_profile_disables_computer_changes(trust: TrustLevel) -> None:
+    profile = plan_agent_profile()
+    settings = ToolSettings().select_trust(trust)
+    settings._agent_permissions = (
+        profile.private_permissions
+        if trust == TrustLevel.PRIVATE
+        else profile.public_permissions
+    )
+
+    for capability in (
+        "filesystem.write",
+        "filesystem.delete",
+        "shell.write",
+        "git.stage",
+        "git.clone",
+        "git.commit",
+    ):
+        assert (
+            resolve_tool_execution_policy(settings, capability).policy
+            == ToolExecutionPolicy.DISABLED
+        )
+    assert (
+        resolve_tool_execution_policy(
+            settings, "shell.read", ToolExecutionPolicy.AUTO
+        ).policy
+        == (
+            ToolExecutionPolicy.AUTO
+            if trust == TrustLevel.PRIVATE
+            else ToolExecutionPolicy.ASK
+        )
+    )
+    assert (
+        resolve_tool_execution_policy(settings, "session.files.write").policy
+        == ToolExecutionPolicy.AUTO
+    )
+
+
+@pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
+def test_build_profile_inherits_write_approval(trust: TrustLevel) -> None:
+    profile = build_agent_profile()
+    settings = ToolSettings().select_trust(trust)
+    settings._agent_permissions = (
+        profile.private_permissions
+        if trust == TrustLevel.PRIVATE
+        else profile.public_permissions
+    )
+
+    for capability in ("filesystem.write", "filesystem.delete", "shell.write"):
+        assert (
+            resolve_tool_execution_policy(settings, capability).policy
+            == ToolExecutionPolicy.ASK
+        )
+    assert (
+        resolve_tool_execution_policy(
+            settings,
+            "git.commit",
+            ToolExecutionPolicy.ASK,
+            integration_id=uuid4(),
+        ).policy
+        == ToolExecutionPolicy.ASK
     )
 
 
@@ -134,7 +202,7 @@ def test_agent_profile_overrides_scoped_defaults_but_not_hard_limits() -> None:
                 str(integration_id): {"calendar.write": ToolExecutionPolicy.DISABLED}
             },
         },
-    )
+    ).select_trust(TrustLevel.PUBLIC)
     settings._agent_permissions = AgentProfilePermissions(
         integration_policies={
             str(integration_id): {"calendar.write": ToolExecutionPolicy.AUTO}
@@ -169,7 +237,7 @@ def test_agent_profile_inherits_live_resource_default() -> None:
                 }
             },
         },
-    )
+    ).select_trust(TrustLevel.PUBLIC)
     settings._agent_permissions = AgentProfilePermissions()
 
     assert (
@@ -199,7 +267,7 @@ def test_agent_profile_inherits_live_resource_default() -> None:
 def test_unavailable_agent_profile_fails_closed() -> None:
     settings = ToolSettings(
         public_permissions={"policies": {"filesystem.read": ToolExecutionPolicy.AUTO}}
-    )
+    ).select_trust(TrustLevel.PUBLIC)
     settings._agent_profile_unavailable = True
 
     assert (
@@ -212,7 +280,7 @@ def test_agent_profile_scoped_capability_is_offered_and_resolved_for_its_target(
     integration_id = uuid4()
     settings = ToolSettings(
         public_permissions={"policies": {"mail.read": ToolExecutionPolicy.AUTO}}
-    )
+    ).select_trust(TrustLevel.PUBLIC)
     settings._agent_permissions = AgentProfilePermissions(
         policies={"mail.read": ToolExecutionPolicy.DISABLED},
         integration_policies={str(integration_id): {"mail.read": ToolExecutionPolicy.ASK}},
@@ -244,14 +312,14 @@ def test_agent_profile_scoped_capability_is_offered_and_resolved_for_its_target(
 
 def test_agent_profile_can_override_webfetch_capability() -> None:
     settings = ToolSettings(
-        public_permissions={"policies": {"network.fetch.public": "disabled"}}
-    )
+        public_permissions={"policies": {"network.fetch": "disabled"}}
+    ).select_trust(TrustLevel.PUBLIC)
     settings._agent_permissions = AgentProfilePermissions(
-        policies={"network.fetch.public": "auto"}
+        policies={"network.fetch": "auto"}
     )
 
     assert (
-        resolve_tool_execution_policy(settings, "network.fetch.public").policy
+        resolve_tool_execution_policy(settings, "network.fetch").policy
         == ToolExecutionPolicy.AUTO
     )
 
@@ -283,51 +351,19 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
                 "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
             ),
             "maxResponseMiB": 64,
+            "publicAddressesOnly": True,
         },
-        "generateImage": {"policy": "disabled", "timeoutSeconds": 300},
+        "generateImage": {"policy": "ask", "timeoutSeconds": 300},
         "editImage": {"policy": "ask", "timeoutSeconds": 300},
-        "generateSpeech": {"policy": "disabled", "timeoutSeconds": 300},
-        "generateAudio": {"policy": "disabled", "timeoutSeconds": 300},
-        "transcribeAudio": {"policy": "disabled", "timeoutSeconds": 300},
+        "generateSpeech": {"policy": "ask", "timeoutSeconds": 300},
+        "generateAudio": {"policy": "ask", "timeoutSeconds": 300},
+        "transcribeAudio": {"policy": "ask", "timeoutSeconds": 300},
         "analyzeVideo": {"policy": "ask", "timeoutSeconds": 1800},
         "updateAgentIdentity": {"policy": "ask"},
     }
-    assert result["policies"] == {
-        "filesystem.read": "auto",
-        "session.files.write": "auto",
-        "filesystem.write": "ask",
-        "filesystem.delete": "ask",
-        "network.search": "auto",
-        "network.fetch.public": "auto",
-        "network.fetch.private": "ask",
-        "media.generate.image": "disabled",
-        "media.edit.image": "ask",
-        "media.generate.speech": "disabled",
-        "media.generate.audio": "disabled",
-        "media.transcribe.audio": "disabled",
-        "media.analyze.video": "ask",
-        "session.read": "ask",
-        "session.search": "ask",
-        "memory.write": "ask",
-        "memory.read": "auto",
-        "skills.load": "auto",
-        "skills.write": "ask",
-        "settings.agent_identity.update": "ask",
-        "settings.user_profile.update": "ask",
-        "system.info": "auto",
-        "process.execute": "ask",
-        "shell.read": "auto",
-        "shell.write": "ask",
-        "automation.read": "ask",
-        "automation.create": "ask",
-        "automation.update": "ask",
-        "automation.run": "ask",
-        "automation.delete": "disabled",
-        "coding.analyze": "ask",
-        "coding.plan.create": "ask",
-        "coding.plan.read": "auto",
-        "coding.execute.enqueue": "ask",
-    }
+    assert set(result["policies"].values()) == {"ask"}
+    assert "network.fetch" in result["policies"]
+    assert "session.tool_result.read" in result["policies"]
     assert result["shellPrefixes"] == {"read": [], "write": []}
     assert [group["id"] for group in result["groups"]] == [
         "filesystem",
@@ -354,10 +390,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
     assert {
         action["capability"]: action["available"]
         for action in webfetch["actions"]
-    } == {
-        "network.fetch.public": True,
-        "network.fetch.private": False,
-    }
+    } == {"network.fetch": True}
     session_tools = next(group for group in result["groups"] if group["id"] == "sessions")
     discovery = {
         tool["name"]: tool["actions"][0]["capability"]
@@ -372,12 +405,19 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
 
 def test_tool_configuration_uses_frontend_webfetch_field_names() -> None:
     result = tool_configuration_payload(
-        ToolSettings(web_fetch={"userAgent": "MatoLoop/1.0", "maxResponseMiB": 32})
+        ToolSettings(
+            web_fetch={
+                "userAgent": "MatoLoop/1.0",
+                "maxResponseMiB": 32,
+                "publicAddressesOnly": False,
+            }
+        )
     )
 
     assert result["webFetch"] == {
         "userAgent": "MatoLoop/1.0",
         "maxResponseMiB": 32,
+        "publicAddressesOnly": False,
     }
 
 
@@ -392,15 +432,7 @@ async def test_tool_availability_exposes_hard_caps(monkeypatch) -> None:
         SimpleNamespace(id=uuid4(), is_admin=False), _db()
     )
 
-    assert result == {
-        "tools": {},
-        "resources": {
-            "webfetch": {
-                "network.fetch.public": True,
-                "network.fetch.private": False,
-            }
-        },
-    }
+    assert result == {"tools": {}}
 
 
 async def test_personal_tool_settings_gate(monkeypatch) -> None:
@@ -499,15 +531,15 @@ async def test_put_tool_settings_saves_only_selected_branch(monkeypatch) -> None
         "read": [["cat"]],
         "write": [["git", "status"]],
     }
-    assert saved.generate_image.policy == "disabled"
+    assert saved.generate_image.policy == "ask"
     assert saved.generate_image.timeout_seconds == 600
     assert saved.edit_image.policy == "ask"
     assert saved.edit_image.timeout_seconds == 450
-    assert saved.generate_speech.policy == "disabled"
+    assert saved.generate_speech.policy == "ask"
     assert saved.generate_speech.timeout_seconds == 120
-    assert saved.generate_audio.policy == "disabled"
+    assert saved.generate_audio.policy == "ask"
     assert saved.generate_audio.timeout_seconds == 900
-    assert saved.transcribe_audio.policy == "disabled"
+    assert saved.transcribe_audio.policy == "ask"
     assert saved.transcribe_audio.timeout_seconds == 180
     assert saved.update_agent_identity.policy == "ask"
     assert saved.public_permissions.policies["filesystem.delete"] == "ask"

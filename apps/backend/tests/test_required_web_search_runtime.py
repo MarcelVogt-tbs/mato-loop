@@ -234,7 +234,9 @@ async def _runtime_setup(
             MemorySettings: MemorySettings(enabled=False),
             IntegrationSettings: integration_settings or IntegrationSettings(),
             SkillsSettings: skills or SkillsSettings(),
-            ToolSettings: ToolSettings(),
+            ToolSettings: ToolSettings(
+                public_permissions={"policies": {"skills.load": "auto"}}
+            ),
             UserProfileSettings: UserProfileSettings(),
         }[settings_type]
 
@@ -1844,7 +1846,7 @@ async def test_cancelled_dispatched_workspace_write_stops_without_waiting(
     )
     run.execution_agent_id = uuid4()
     run.current_directory_snapshot = "/home/user/project"
-    run.execution_operations = ["filesystem.upsert"]
+    run.execution_operations = ["filesystem.write"]
     dispatched = asyncio.Event()
 
     async def request(

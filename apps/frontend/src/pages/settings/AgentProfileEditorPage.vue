@@ -101,7 +101,7 @@
                 autofocus
                 maxlength="80"
                 label="Name"
-                :disable="isDefault"
+                :disable="isProtected"
                 :rules="[requiredRule]"
                 lazy-rules
               />
@@ -214,7 +214,7 @@
                       emit-value
                       map-options
                       :label="audience.label"
-                      :options="policyOptions(action, baselinePolicy(audience.value, action.capability))"
+                      :options="policyOptions(baselinePolicy(audience.value, action.capability))"
                       :disable="action.available === false"
                       :hint="`Wirksam: ${policyLabel(effectiveGlobalPolicy(audience.value, action.capability))}`"
                       :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
@@ -276,7 +276,7 @@
                             map-options
                             :label="audience.label"
                             :disable="!integration.enabled"
-                            :options="policyOptions(action, inheritedIntegrationPolicy(audience.value, integration.id, action))"
+                            :options="policyOptions(inheritedIntegrationPolicy(audience.value, integration.id, action))"
                             :hint="`Wirksam: ${policyLabel(effectiveIntegrationPolicy(audience.value, integration.id, action.capability))}`"
                             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                             persistent-hint
@@ -319,7 +319,7 @@
                               map-options
                               :label="audience.label"
                               :disable="!integration.enabled || resource.hardUnavailableCapabilities.includes(action.capability)"
-                              :options="policyOptions(action, inheritedResourcePolicy(audience.value, integration.id, resource, action.capability))"
+                              :options="policyOptions(inheritedResourcePolicy(audience.value, integration.id, resource, action.capability))"
                               :hint="resourcePolicyHint(audience.value, integration.id, resource, action.capability)"
                               :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                               persistent-hint
@@ -410,7 +410,7 @@ const personaOptions = computed(() => [
 const policyLabels = { disabled: 'Deaktiviert', ask: 'Nachfragen', auto: 'Automatisch' }
 const clone = (value) => JSON.parse(JSON.stringify(value))
 const isCreate = computed(() => route.name === 'settings-agent-create')
-const isDefault = computed(() => editingAgent.value?.id === agents.defaultAgentProfileId)
+const isProtected = computed(() => editingAgent.value?.protected === true)
 const blocked = computed(() => scope.value === 'personal' && !agents.personalAgentsEnabled)
 const dirty = computed(() => Boolean(savedPayload.value) && JSON.stringify(requestPayload()) !== savedPayload.value)
 const policyIntegrations = computed(() => agents.integrations.filter((item) => item.supportsPolicies))
@@ -546,10 +546,10 @@ function inheritedResourcePolicy(audience, integrationId, resource, capability) 
     || baselinePolicy(audience, capability)
 }
 
-function policyOptions(action, inherited) {
+function policyOptions(inherited) {
   return [
     { label: `Erben: ${policyLabel(inherited)}`, value: 'inherit' },
-    ...(action.allowedPolicies || []).map((value) => ({ label: policyLabel(value), value }))
+    ...['disabled', 'ask', 'auto'].map((value) => ({ label: policyLabel(value), value }))
   ]
 }
 

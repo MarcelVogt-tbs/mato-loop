@@ -102,9 +102,6 @@ class ToolConfigurationRequest(BaseModel):
     tool_availability: dict[str, bool] = Field(
         validation_alias=AliasChoices("toolAvailability", "tool_availability")
     )
-    resource_availability: dict[str, dict[str, bool]] = Field(
-        validation_alias=AliasChoices("resourceAvailability", "resource_availability")
-    )
     web_fetch: WebFetchSettings = Field(
         validation_alias=AliasChoices("webFetch", "web_fetch")
     )
@@ -129,6 +126,7 @@ def tool_settings_payload(
         "webFetch": {
             "userAgent": settings.web_fetch.user_agent,
             "maxResponseMiB": settings.web_fetch.max_response_mib,
+            "publicAddressesOnly": settings.web_fetch.public_addresses_only,
         },
         "generateImage": {
             "policy": tool_execution_policy(
@@ -181,27 +179,13 @@ def tool_configuration_payload(settings: ToolSettings) -> dict:
     for group in groups:
         for tool in group["tools"]:
             tool["available"] = settings.tool_availability.get(tool["name"], True)
-            if tool["name"] == "webfetch":
-                tool["resources"] = [
-                    {
-                        "key": capability,
-                        "label": label,
-                        "available": settings.resource_availability.get(
-                            "webfetch", {}
-                        ).get(capability, default),
-                    }
-                    for capability, label, default in (
-                        ("network.fetch.public", "Öffentliche Ziele", True),
-                        ("network.fetch.private", "Private Ziele", False),
-                    )
-                ]
     return {
         "groups": groups,
         "toolAvailability": settings.tool_availability,
-        "resourceAvailability": settings.resource_availability,
         "webFetch": {
             "userAgent": settings.web_fetch.user_agent,
             "maxResponseMiB": settings.web_fetch.max_response_mib,
+            "publicAddressesOnly": settings.web_fetch.public_addresses_only,
         },
     }
 
@@ -242,7 +226,6 @@ async def get_tool_availability(
     settings = await load_effective_tools(db, user.id)
     return {
         "tools": settings.tool_availability,
-        "resources": settings.resource_availability,
     }
 
 
@@ -272,18 +255,7 @@ async def update_tool_configuration(
     }
     if set(payload.tool_availability) - known_tools:
         raise ApiError(422, "validation.invalidChoice", field="toolAvailability")
-    expected_resources = {
-        "webfetch": {"network.fetch.public", "network.fetch.private"}
-    }
-    if set(payload.resource_availability) != set(expected_resources) or any(
-        set(resources) != expected_resources[tool_name]
-        for tool_name, resources in payload.resource_availability.items()
-    ):
-        raise ApiError(422, "validation.invalidChoice", field="resourceAvailability")
     settings.tool_availability = dict(payload.tool_availability)
-    settings.resource_availability = {
-        key: dict(value) for key, value in payload.resource_availability.items()
-    }
     settings.web_fetch = payload.web_fetch
     await SettingsStore.save(db, settings)
     await db.commit()
@@ -330,24 +302,6 @@ async def update_tool_settings(
         }
         unknown = set(payload.policies) - configurable
         if unknown:
-            raise ApiError(422, "validation.invalidChoice", field="policies")
-        allowed: dict[str, set[ToolExecutionPolicy]] = {}
-        for group in groups:
-            for tool in group["tools"]:
-                for action in tool["actions"]:
-                    if not action["configurable"]:
-                        continue
-                    modes = {
-                        ToolExecutionPolicy(value)
-                        for value in action["allowedPolicies"]
-                    }
-                    allowed.setdefault(action["capability"], modes).intersection_update(
-                        modes
-                    )
-        if any(
-            policy not in allowed[capability]
-            for capability, policy in payload.policies.items()
-        ):
             raise ApiError(422, "validation.invalidChoice", field="policies")
         settings.permissions.policies = dict(payload.policies)
     await SettingsStore.save(db, settings, user_id=owner_id)

@@ -187,10 +187,10 @@ async def test_terminal_stale_proposal_does_not_execute() -> None:
             session_id=session.id,
             run_id=run.id,
             tool_call_id="call-1",
-            tool="process_exec",
+            tool="shell_run",
             agent_id=agent_id,
             current_directory=session.current_directory,
-            requested_arguments={"program": "python", "args": []},
+            requested_arguments={"command": "python"},
             command_line="python",
         )
     )
@@ -332,10 +332,10 @@ async def test_terminal_deny_and_pending_cancellation_clear_proposal() -> None:
             session_id=session.id,
             run_id=run.id,
             tool_call_id="call-2",
-            tool="process_exec",
+            tool="shell_run",
             agent_id=agent_id,
             current_directory=session.current_directory,
-            requested_arguments={"program": "python", "args": []},
+            requested_arguments={"command": "python"},
             command_line="python",
         )
     )
@@ -426,7 +426,7 @@ async def test_terminal_run_uses_distinct_ids_dimensions_and_strict_control_targ
         tool_call_id="call-2",
         agent_id=agent_id,
         current_directory=session.current_directory,
-        arguments={"program": "python", "args": []},
+        arguments={"command": "python"},
         confirm=True,
         on_event=None,
     )
@@ -465,7 +465,7 @@ async def test_terminal_run_cancellation_clears_active_command() -> None:
             tool_call_id="call-1",
             agent_id=agent_id,
             current_directory=session.current_directory,
-            arguments={"program": "python", "args": []},
+            arguments={"command": "python"},
             confirm=True,
             on_event=None,
         )
@@ -502,7 +502,7 @@ async def test_terminal_run_start_notification_failure_clears_active_command() -
             tool_call_id="call-1",
             agent_id=agent_id,
             current_directory=session.current_directory,
-            arguments={"program": "python", "args": []},
+            arguments={"command": "python"},
             confirm=True,
             on_event=None,
         )

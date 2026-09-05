@@ -18,6 +18,8 @@ from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.models import ChatSession, UserAccount
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
+    BUILTIN_AGENT_PROFILE_IDS,
+    BUILTIN_AGENT_PROFILE_NAMES,
     DEFAULT_AGENT_PROFILE_ID,
     AgentIdentitySettings,
     AgentProfile,
@@ -113,6 +115,7 @@ def _profile_payload(
     return {
         **profile.model_dump(mode="json", by_alias=True),
         "scope": scope,
+        "protected": profile.id in BUILTIN_AGENT_PROFILE_IDS,
         "resolvedPersonaId": str(resolved.id),
         "resolvedPersonaName": resolved.name,
     }
@@ -227,9 +230,7 @@ def _catalog_policies(groups: list[dict]) -> dict[str, set[ToolExecutionPolicy]]
             for action in tool["actions"]:
                 if not action["configurable"]:
                     continue
-                modes = {
-                    ToolExecutionPolicy(value) for value in action["allowedPolicies"]
-                }
+                modes = set(ToolExecutionPolicy)
                 allowed.setdefault(action["capability"], modes).intersection_update(
                     modes
                 )
@@ -251,10 +252,7 @@ def _catalog_integration_policies(
                 for action in tool["actions"]:
                     if not action["configurable"]:
                         continue
-                    modes = {
-                        ToolExecutionPolicy(value)
-                        for value in action["allowedPolicies"]
-                    }
+                    modes = set(ToolExecutionPolicy)
                     allowed.setdefault(
                         action["capability"], modes
                     ).intersection_update(modes)
@@ -379,7 +377,15 @@ def _ensure_unique_name(
     exclude_id: UUID | None = None,
 ) -> None:
     folded = name.strip().casefold()
-    if folded in {"allgemein", "default"} and exclude_id != DEFAULT_AGENT_PROFILE_ID:
+    reserved_id = next(
+        (
+            profile_id
+            for profile_id, builtin_name in BUILTIN_AGENT_PROFILE_NAMES.items()
+            if builtin_name.casefold() == folded
+        ),
+        DEFAULT_AGENT_PROFILE_ID if folded == "default" else None,
+    )
+    if reserved_id is not None and exclude_id != reserved_id:
         raise ApiError(409, "agentProfile.defaultProtected")
     if any(
         profile.id != exclude_id and profile.name.casefold() == folded
@@ -450,7 +456,7 @@ async def create_agent_profile(
     settings, owner_id = await _load_scoped(db, scope, user, for_update=True)
     profile = await _profile_from_request(db, user, owner_id, payload)
     _ensure_unique_name(settings, profile.name)
-    limit = 20 if owner_id is not None else 100
+    limit = 20 if owner_id is not None else 102
     if len(settings.profiles) >= limit:
         raise ApiError(409, "agentProfile.limitReached")
     settings.profiles.append(profile)
@@ -480,7 +486,8 @@ async def update_agent_profile(
     )
     if index is None:
         raise ApiError(404, "agentProfile.notFound")
-    if profile_id == DEFAULT_AGENT_PROFILE_ID and payload.name != "Allgemein":
+    builtin_name = BUILTIN_AGENT_PROFILE_NAMES.get(profile_id)
+    if builtin_name is not None and payload.name != builtin_name:
         raise ApiError(409, "agentProfile.defaultProtected", field="name")
     replacement = await _profile_from_request(
         db,
@@ -508,7 +515,7 @@ async def delete_agent_profile(
     profile = next((item for item in settings.profiles if item.id == profile_id), None)
     if profile is None:
         raise ApiError(404, "agentProfile.notFound")
-    if profile_id == DEFAULT_AGENT_PROFILE_ID:
+    if profile_id in BUILTIN_AGENT_PROFILE_IDS:
         raise ApiError(409, "agentProfile.defaultProtected")
     referenced = await db.scalar(
         select(ChatSession.id).where(

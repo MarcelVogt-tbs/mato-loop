@@ -293,35 +293,25 @@ def _normalized_address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Add
     return address
 
 
-def _validate_address(
-    address: ipaddress.IPv4Address | ipaddress.IPv6Address, *, private_allowed: bool
-) -> None:
-    if address in _METADATA_ADDRESSES or address.is_link_local:
-        raise _error("addressBlocked")
-    if address.is_multicast or address.is_unspecified:
-        raise _error("addressBlocked")
-    if address.is_loopback:
-        if private_allowed:
-            return
-        raise _error("addressBlocked")
-    if any(address in network for network in _PRIVATE_NETWORKS if address.version == network.version):
-        if private_allowed:
-            return
-        raise _error("addressBlocked")
-    if address.is_reserved or not address.is_global:
-        raise _error("addressBlocked")
-
-
-def _target_is_private(target: _Target) -> bool:
-    return any(
-        address.is_loopback
+def _address_is_public(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return not (
+        address in _METADATA_ADDRESSES
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_unspecified
+        or address.is_loopback
         or any(
             address in network
             for network in _PRIVATE_NETWORKS
             if address.version == network.version
         )
-        for address in target.addresses
+        or address.is_reserved
+        or not address.is_global
     )
+
+
+def _target_is_private(target: _Target) -> bool:
+    return any(not _address_is_public(address) for address in target.addresses)
 
 
 async def _resolve_addresses(
@@ -351,14 +341,16 @@ async def _resolve_addresses(
 
 async def _validate_target(
     value: str,
-    allow_private_targets: bool,
+    public_addresses_only: bool,
 ) -> _Target:
     url, host, port = _parse_url(value)
     if url.path == "/":
         url = url.with_path("/", keep_query=True)
     addresses = await _resolve_addresses(host, port)
-    for address in addresses:
-        _validate_address(address, private_allowed=allow_private_targets)
+    if public_addresses_only and any(
+        not _address_is_public(address) for address in addresses
+    ):
+        raise _error("addressBlocked")
     return _Target(url=url, host=host, port=port, addresses=addresses)
 
 
@@ -802,8 +794,8 @@ async def _build_result(
 async def _follow_redirects(
     url: str,
     timeout: float,
-    allow_private_targets: bool,
-    authorize_url: Callable[[str, bool], Awaitable[None]] | None,
+    public_addresses_only: bool,
+    authorize_url: Callable[[str], Awaitable[None]] | None,
     max_response_bytes: int,
     user_agent: str,
     accept: str,
@@ -819,24 +811,14 @@ async def _follow_redirects(
         current_url = canonicalize_url(current_url)
         started = loop.time()
         async with asyncio.timeout(max(remaining, 0.001)):
-            target = await _validate_target(current_url, allow_private_targets)
+            target = await _validate_target(current_url, public_addresses_only)
         remaining -= loop.time() - started
-        private_target = _target_is_private(target)
         if authorize_url is not None:
-            await authorize_url(current_url, private_target)
+            await authorize_url(current_url)
             started = loop.time()
             async with asyncio.timeout(max(remaining, 0.001)):
-                target = await _validate_target(current_url, allow_private_targets)
+                target = await _validate_target(current_url, public_addresses_only)
             remaining -= loop.time() - started
-            if _target_is_private(target) != private_target:
-                private_target = _target_is_private(target)
-                await authorize_url(current_url, private_target)
-                started = loop.time()
-                async with asyncio.timeout(max(remaining, 0.001)):
-                    target = await _validate_target(current_url, allow_private_targets)
-                    if _target_is_private(target) != private_target:
-                        raise _error("addressBlocked")
-                remaining -= loop.time() - started
         started = loop.time()
         async with asyncio.timeout(max(remaining, 0.001)):
             response = await _request_once(
@@ -892,8 +874,8 @@ async def request_web_bytes(
     request_content_type: str | None = None,
     accept: str = "*/*",
     timeout: float = 30,
-    allow_private_targets: bool = False,
-    authorize_url: Callable[[str, bool], Awaitable[None]] | None = None,
+    public_addresses_only: bool = True,
+    authorize_url: Callable[[str], Awaitable[None]] | None = None,
     max_response_bytes: int = MAX_RESPONSE_BYTES,
     user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
 ) -> WebFetchBytesResult:
@@ -916,7 +898,7 @@ async def request_web_bytes(
         target, response, _remaining = await _follow_redirects(
             url,
             timeout,
-            allow_private_targets,
+            public_addresses_only,
             authorize_url,
             max_response_bytes,
             user_agent,
@@ -986,8 +968,8 @@ def _resolve_download_type(
 async def download_file(
     url: str,
     timeout: float = 30,
-    allow_private_targets: bool = False,
-    authorize_url: Callable[[str, bool], Awaitable[None]] | None = None,
+    public_addresses_only: bool = True,
+    authorize_url: Callable[[str], Awaitable[None]] | None = None,
     max_response_bytes: int = MAX_RESPONSE_BYTES,
     user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
 ) -> DownloadedFile:
@@ -1001,7 +983,7 @@ async def download_file(
         target, response, _remaining = await _follow_redirects(
             url,
             timeout,
-            allow_private_targets,
+            public_addresses_only,
             authorize_url,
             max_response_bytes,
             user_agent,
@@ -1034,8 +1016,8 @@ async def fetch_web(
     url: str,
     format: str = "markdown",
     timeout: float = 30,
-    allow_private_targets: bool = False,
-    authorize_url: Callable[[str, bool], Awaitable[None]] | None = None,
+    public_addresses_only: bool = True,
+    authorize_url: Callable[[str], Awaitable[None]] | None = None,
     max_response_bytes: int = MAX_RESPONSE_BYTES,
     pdf_vision_handler: PdfVisionHandler | None = None,
     pdf_pages: tuple[int, ...] | list[int] = (),
@@ -1057,7 +1039,7 @@ async def fetch_web(
         target, response, remaining = await _follow_redirects(
             url,
             timeout,
-            allow_private_targets,
+            public_addresses_only,
             authorize_url,
             max_response_bytes,
             user_agent,

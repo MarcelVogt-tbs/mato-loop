@@ -124,10 +124,8 @@ def _stage_authorizer(
     path: str,
     video_id: str,
     before_request: Callable[[str], Awaitable[None]] | None,
-) -> Callable[[str, bool], Awaitable[None]]:
-    async def authorize(value: str, private_target: bool) -> None:
-        if private_target:
-            raise _error("responseInvalid")
+) -> Callable[[str], Awaitable[None]]:
+    async def authorize(value: str) -> None:
         _internal_url(value, path=path, video_id=video_id)
         if before_request is not None:
             await before_request(value)
@@ -293,6 +291,7 @@ async def fetch_youtube_transcript(
     timeout: float = 30,
     max_response_bytes: int = _CAPTION_MAX_BYTES,
     user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
+    public_addresses_only: bool = True,
     before_request: Callable[[str], Awaitable[None]] | None = None,
 ) -> TranscriptResult:
     source_url = canonicalize_youtube_video_url(url)
@@ -304,6 +303,7 @@ async def fetch_youtube_transcript(
                 watch_url,
                 accept="text/html",
                 timeout=timeout,
+                public_addresses_only=public_addresses_only,
                 authorize_url=_stage_authorizer(
                     path="/watch", video_id=video_id, before_request=before_request
                 ),
@@ -327,6 +327,7 @@ async def fetch_youtube_transcript(
                     request_content_type="application/json",
                     accept="application/json",
                     timeout=timeout,
+                    public_addresses_only=public_addresses_only,
                     authorize_url=_stage_authorizer(
                         path="/youtubei/v1/player",
                         video_id=video_id,
@@ -360,6 +361,7 @@ async def fetch_youtube_transcript(
                 caption_url,
                 accept="application/xml, text/xml",
                 timeout=timeout,
+                public_addresses_only=public_addresses_only,
                 authorize_url=_stage_authorizer(
                     path="/api/timedtext",
                     video_id=video_id,

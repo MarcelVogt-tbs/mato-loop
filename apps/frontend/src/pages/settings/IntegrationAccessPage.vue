@@ -153,7 +153,7 @@
                 emit-value
                 map-options
                 :label="actionLabel(action)"
-                :options="policyOptions(action, action.globalPolicy)"
+                :options="policyOptions(action.globalPolicy)"
                 :hint="`Wirksam: ${policyLabel(action.effectiveIntegrationPolicy)}`"
                 :disable="adapterBlocked"
                 persistent-hint
@@ -195,7 +195,7 @@
                   emit-value
                   map-options
                   :label="actionLabel(action)"
-                  :options="policyOptions(action, action.effectiveIntegrationPolicy)"
+                  :options="policyOptions(action.effectiveIntegrationPolicy)"
                   :hint="effectiveHint(resource, action)"
                   :disable="adapterBlocked || resource.hardUnavailableCapabilities.includes(action.capability)"
                   persistent-hint
@@ -327,12 +327,12 @@ function actionLabel(action) {
   }[action.capability] || action.label
 }
 
-function policyOptions(action, inheritedPolicy) {
+function policyOptions(inheritedPolicy) {
   return [
     { label: `Erben: ${policyLabel(inheritedPolicy)}`, value: 'inherit' },
-    ...action.allowedPolicies
-      .filter((policy) => policy !== 'inherit')
-      .map((policy) => ({ label: policyLabel(policy), value: policy }))
+    ...['disabled', 'ask', 'auto'].map((policy) => ({
+      label: policyLabel(policy), value: policy
+    }))
   ]
 }
 

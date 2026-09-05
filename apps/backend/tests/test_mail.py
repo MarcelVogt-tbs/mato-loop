@@ -75,16 +75,8 @@ def test_mail_config_and_adapter_allow_only_encrypted_transports_and_account_pol
     actions = {action.capability: action for action in MAIL_ADAPTER.resource_actions}
     assert MAIL_ADAPTER.resource_loader is None
     assert set(actions) == {"mail.read", "mail.drafts", "mail.send", "mail.delete"}
-    assert actions["mail.read"].allowed_policies == tuple(ToolExecutionPolicy)
-    assert actions["mail.drafts"].allowed_policies == tuple(ToolExecutionPolicy)
-    assert actions["mail.send"].allowed_policies == (
-        ToolExecutionPolicy.DISABLED,
-        ToolExecutionPolicy.ASK,
-    )
-    assert actions["mail.delete"].allowed_policies == (
-        ToolExecutionPolicy.DISABLED,
-        ToolExecutionPolicy.ASK,
-    )
+    assert actions["mail.read"].default_policy == ToolExecutionPolicy.AUTO
+    assert all(action.default_policy == ToolExecutionPolicy.ASK for action in actions.values() if action.mutates)
     read_tools = {
         "mail_list_accounts",
         "mail_list_folders",

@@ -237,6 +237,7 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_li
         web_fetch=WebFetchSettings(
             user_agent="Instance Agent",
             max_response_mib=7,
+            public_addresses_only=False,
         ),
     )
     personal = UserToolSettings(
@@ -250,6 +251,7 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_li
         web_fetch=WebFetchSettings(
             user_agent="Personal Agent",
             max_response_mib=99,
+            public_addresses_only=True,
         ),
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
@@ -260,6 +262,7 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_li
     assert effective.permissions.policies == {"instance": "ask", "personal": "auto"}
     assert effective.web_fetch.user_agent == "Instance Agent"
     assert effective.web_fetch.max_response_mib == 7
+    assert effective.web_fetch.public_addresses_only is False
     assert effective.web_search.primary_provider == "searxng:personal"
     assert effective.default_calendar == personal.default_calendar
     assert effective.resource_labels == personal.resource_labels

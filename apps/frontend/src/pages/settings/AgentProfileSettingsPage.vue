@@ -89,7 +89,7 @@
                 color="negative"
                 icon="delete_outline"
                 :aria-label="`${agent.name} löschen`"
-                :disable="personalBlocked || agent.id === agents.defaultAgentProfileId"
+                :disable="personalBlocked || agent.protected"
                 @click="removeAgent(agent)"
               ><q-tooltip>Löschen</q-tooltip></q-btn>
             </div>

@@ -207,7 +207,6 @@ const operationLabels = {
   'filesystem.rename': 'Pfade umbenennen',
   'filesystem.stat': 'Dateiinformationen lesen',
   'filesystem.write': 'Dateien bearbeiten',
-  'process.exec': 'Prozesse ausführen',
   'shell.run': 'Shell-Befehle ausführen',
   'shell.inspect': 'Shell-Konfiguration prüfen',
   'system.info': 'Systeminformationen lesen'

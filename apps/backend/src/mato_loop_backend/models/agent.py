@@ -30,12 +30,24 @@ class AgentRun(Base):
         CheckConstraint(
             "trust_level IN ('public', 'private')", name="trust_level_valid"
         ),
+        CheckConstraint("parent_run_id IS NULL OR parent_run_id <> id", name="parent_not_self"),
+        CheckConstraint(
+            "(parent_run_id IS NULL AND internal_request IS NULL AND internal_transcript IS NULL "
+            "AND internal_result IS NULL) OR (parent_run_id IS NOT NULL AND input_message_id IS NULL "
+            "AND result_message_id IS NULL AND internal_request IS NOT NULL "
+            "AND internal_transcript IS NOT NULL)",
+            name="internal_run_shape_valid",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     session_id: Mapped[UUID] = mapped_column(
         ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    parent_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    agent_profile_id: Mapped[UUID | None] = mapped_column(nullable=True)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="queued", index=True)
     input_message_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("messages.id", ondelete="SET NULL", use_alter=True), nullable=True, unique=True
@@ -60,6 +72,11 @@ class AgentRun(Base):
     execution_operations: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
+    internal_request: Mapped[str | None] = mapped_column(Text, nullable=True)
+    internal_transcript: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    internal_result: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     active_duration_ms: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")

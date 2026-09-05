@@ -18,13 +18,13 @@ Der Fallback wird nur bei vorübergehenden Fehlern des primären Providers verwe
 
 ## Webseiten abrufen
 
-`webfetch` ruft eine konkrete HTTP- oder HTTPS-Adresse ab und ist unabhängig von der Websuche konfiguriert. Unter **Einstellungen > Tools > Richtlinien** gelten für öffentliche und private Adressen jeweils die normalen Tool-Richtlinien:
+`webfetch` ruft eine konkrete HTTP- oder HTTPS-Adresse ab und ist unabhängig von der Websuche konfiguriert. Unter **Einstellungen > Tools > Richtlinien** gilt dafür eine einheitliche Tool-Richtlinie:
 
 - **Deaktiviert**
 - **Nachfragen**
 - **Automatisch**
 
-Die Richtlinien werden getrennt für private und öffentliche Modelle gespeichert. Administratoren legen unter **Verfügbare Tools** zusätzlich fest, ob öffentliche beziehungsweise private Adressen technisch verfügbar sind. Weiterleitungen und Zieladressen werden erneut geprüft. Metadaten- und andere gefährliche Netzwerkziele bleiben unabhängig von der Richtlinie blockiert.
+Die Richtlinie wird getrennt für private und öffentliche Modelle gespeichert. Administratoren legen unter **Verfügbare Tools** zusätzlich fest, ob Webfetch verfügbar ist und ob nur öffentliche Adressen zulässig sind. Diese Adressbeschränkung ist standardmäßig aktiv. Wird sie deaktiviert, darf Webfetch jedes vom Backend erreichbare HTTP(S)-Ziel aufrufen, einschließlich privater, lokaler und Metadaten-Adressen. Weiterleitungen werden erneut autorisiert und ihre Zieladressen erneut aufgelöst und gebunden.
 
 ## Veröffentlichte Untertitel
 
