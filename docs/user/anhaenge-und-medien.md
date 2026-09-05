@@ -18,17 +18,15 @@ Externe Markdown-Bilder werden nicht automatisch geladen. Sie entscheiden je Urs
 
 Der Agent kann QR-Codes lokal und ohne Bildgenerator als scannbare PNG-Datei erzeugen. Zum Lesen hängen Sie ein Bild mit einem QR-Code an und formulieren einen kurzen Auftrag. Die Verarbeitung findet lokal statt; QR-Bilder und codierte Inhalte werden dafür nicht an einen Medienprovider gesendet.
 
-## Diktat
+## Voice Messages
 
-Mit der Mikrofonschaltfläche nehmen Sie Sprache direkt im Browser auf. Die Aufnahme endet spätestens nach fünf Minuten und wird als direkte Benutzeraktion an das konfigurierte Standardmodell für Transkription übertragen. Dafür erscheint auch bei der Tool-Richtlinie **Nachfragen** keine separate Freigabekarte. Der erkannte Text wird in den aktuellen Entwurf eingefügt.
+Use the microphone button to record a voice message in the browser. Recording requires microphone permission and stops automatically after five minutes. Select **Als Sprachnachricht anhängen** to add the recording to the draft, where you can listen to it or remove it before sending. Multiple recordings can be attached within the normal attachment limits.
 
-Bei einem Fehler können Sie die Aufnahme erneut verarbeiten, als Anhang übernehmen, herunterladen oder verwerfen.
+Sending persists the original audio as a normal message attachment. The shared runtime then uses the configured transcription model to add recognized text to the message. This is a direct user request, so the **Nachfragen** tool policy does not create a separate approval card. Automatic transcription requires enabled audio transcription and an available default transcription model; recording and sending audio do not. Failed or unavailable transcription leaves the original audio intact.
 
-Voraussetzungen sind:
+Sent recordings have an audio player and an original-file download. Only the original audio is stored permanently. Transcription and playback fallback generate a transient WAV from the verified original when needed, without adding a duplicate file to the session. Older WAV companions remain stored to preserve existing file references, but are no longer needed for audio playback or transcription. The model can access the attachment again later, including for another transcription. Taking a message back into the draft preserves the audio; an already included successful transcript is not automatically appended again on resend.
 
-- aktivierte Audiotranskription unter **Einstellungen > Tools**
-- ein verfügbares Standardmodell für Transkription
-- Browserfreigabe für das Mikrofon
+If an attachment limit prevents adding a recording, it remains available for another attempt, download, or explicit discard. Switching sessions preserves completed recordings in their original draft. Unsent recordings remain browser-memory drafts, not server-side session files; queued messages use the persistent browser outbox. Recordings discarded by older transcription-only behavior are not restored retroactively.
 
 ## Mediengenerierung
 

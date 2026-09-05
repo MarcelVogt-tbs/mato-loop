@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import logging
 import secrets
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -25,7 +26,6 @@ from mato_loop_backend.agent.question_decisions import QuestionDecisionError
 from mato_loop_backend.agent.runtime import AgentRunError, AgentRuntime
 from mato_loop_backend.attachment_processing import (
     AttachmentProcessingError,
-    process_attachment,
 )
 from mato_loop_backend.attachments import (
     AttachmentError,
@@ -73,7 +73,6 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.providers.base import ProviderError
-from mato_loop_backend.providers.media import MediaService
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 from mato_loop_backend.settings import (
@@ -81,7 +80,6 @@ from mato_loop_backend.settings import (
     InstanceLimits,
     SettingsStore,
     load_effective_ai,
-    load_effective_tools,
 )
 
 logger = logging.getLogger(__name__)
@@ -523,24 +521,15 @@ async def _poll(endpoint_id: UUID, owner: str) -> None:
 
 async def _download_media(
     db: AsyncSession, endpoint: MessagingEndpoint, media: list[dict]
-) -> tuple[list[AttachmentInput], str]:
+) -> list[AttachmentInput]:
     if not media:
-        return [], ""
+        return []
     limits = await SettingsStore.load(db, InstanceLimits)
     if len(media) > limits.max_attachments_per_message:
         raise TelegramServiceError("validation.tooManyItems")
     token = await endpoint_token(db, endpoint)
-    tools = (
-        await load_effective_tools(db, endpoint.user_id)
-        if any(item.get("kind") == "voice" for item in media)
-        else None
-    )
-    if tools is not None and not tools.tool_availability.get("transcribe_audio", True):
-        raise TelegramServiceError("tool.unavailable")
     await db.commit()
     attachments = []
-    transcript = ""
-    voice_wav: bytes | None = None
     declared_total = 0
     total = 0
     async with Bot(token=token) as bot:
@@ -570,34 +559,11 @@ async def _download_media(
             except AttachmentError as exc:
                 raise TelegramServiceError(exc.code) from exc
             if item.get("kind") == "voice":
-                processed = await asyncio.to_thread(
-                    process_attachment,
-                    data,
-                    kind="audio",
-                    mime_type=attachment.mime_type,
-                    filename=attachment.filename or "voice.ogg",
-                    limits=processing_limits(limits),
-                )
-                wav = processed.derived_files.get("audio.wav") if processed else None
-                if not wav:
+                if attachment.kind != "audio":
                     raise TelegramServiceError("channel.invalidResponse")
-                if tools is None:
-                    raise TelegramServiceError("tool.unavailable")
-                voice_wav = wav
-            else:
-                attachments.append(attachment)
-    if voice_wav is not None and tools is not None:
-        result = await MediaService.transcribe_audio(
-            db,
-            audio=voice_wav,
-            language=None,
-            timeout=tools.transcribe_audio.timeout_seconds,
-            user_id=endpoint.user_id,
-        )
-        transcript = result.text.strip()
-        if not transcript:
-            raise TelegramServiceError("channel.invalidResponse")
-    return attachments, transcript
+                attachment = replace(attachment, metadata={"voiceMessage": True})
+            attachments.append(attachment)
+    return attachments
 
 
 async def _new_session(
@@ -1392,13 +1358,10 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
             await db.commit()
             return existing_run.id
         try:
-            attachments, transcript = await _download_media(
+            attachments = await _download_media(
                 db, endpoint, list(inbox.payload.get("media") or [])
             )
             content = text.strip()
-            if transcript:
-                separator = "" if not content or content[-1].isspace() else " "
-                content = f"{content}{separator}{transcript}"
             if len(content) > MESSAGE_CONTENT_MAX_LENGTH:
                 raise TelegramServiceError("validation.tooLong")
             session = await db.get(ChatSession, endpoint.current_session_id) if endpoint.current_session_id else None

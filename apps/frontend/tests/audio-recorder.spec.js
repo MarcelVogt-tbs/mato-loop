@@ -142,5 +142,28 @@ describe('audio recorder lifecycle', () => {
     expect(mocks.track.stop).toHaveBeenCalled()
     expect(mocks.context.close).toHaveBeenCalled()
     expect(mocks.processor.disconnect).toHaveBeenCalled()
+    expect(recorder.autoStoppedFile.value.type).toBe('audio/wav')
+    expect(recorder.autoStoppedFile.value.name).toMatch(/^sprachnachricht-.*\.wav$/)
+  })
+
+  it('keeps finalization busy while closing audio resources and retains the stopped file after cancellation', async () => {
+    const mocks = audioMocks()
+    const closing = deferred()
+    mocks.context.close.mockReturnValue(closing.promise)
+    const recorder = createAudioRecorder({
+      mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(mocks.stream) },
+      AudioContextClass: mocks.AudioContextClass
+    })
+    await recorder.startRecording()
+    mocks.processor.onaudioprocess({
+      inputBuffer: { numberOfChannels: 1, length: 16, getChannelData: () => new Float32Array(16) }
+    })
+    const stopped = recorder.stopRecording()
+    expect(recorder.finalizing.value).toBe(true)
+    await expect(recorder.startRecording()).resolves.toBe(false)
+    await recorder.cancelRecording()
+    closing.resolve()
+    expect((await stopped).type).toBe('audio/wav')
+    expect(recorder.finalizing.value).toBe(false)
   })
 })

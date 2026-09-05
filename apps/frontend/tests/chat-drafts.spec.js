@@ -14,7 +14,7 @@ const { api } = vi.hoisted(() => ({
 vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 
-import { MAX_ATTACHMENT_DRAFT_BYTES, useChatStore } from '../src/stores/chat'
+import { buildAttachmentFormData, MAX_ATTACHMENT_DRAFT_BYTES, useChatStore } from '../src/stores/chat'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { controlCenterIntegrationIds } from 'src/control-center/manifest'
 import { useQuestionStore } from '../src/stores/questions'
@@ -689,7 +689,7 @@ describe('chat drafts', () => {
     expect(chat.activeAttachmentDraft).toHaveLength(0)
   })
 
-  it('limits attachment drafts across sessions and does not preview non-images', () => {
+  it('limits attachment drafts across sessions and previews only admitted audio files', () => {
     const createObjectURL = vi.fn()
     global.URL = { createObjectURL, revokeObjectURL: vi.fn() }
     const chat = useChatStore()
@@ -707,7 +707,7 @@ describe('chat drafts', () => {
     chat.current = { id: 'session-4' }
     expect(chat.addAttachmentFiles([{ name: 'zwei.wav', type: 'audio/wav', size: 1 }]).error)
       .toContain('256 MiB')
-    expect(createObjectURL).not.toHaveBeenCalled()
+    expect(createObjectURL).toHaveBeenCalledTimes(4)
   })
 
   it('creates image previews and revokes them when removing or clearing drafts', () => {
@@ -2529,7 +2529,11 @@ describe('chat drafts', () => {
     expect(api.get.mock.calls.some(([url]) => url === '/sessions/session-1')).toBe(false)
   })
 
-  it('restores persisted attachments before undoing the message', async () => {
+  it.each([
+    [false, undefined], [true, undefined], [true, 'pending'], [true, 'failed'], [true, 'completed']
+  ])('restores persisted attachments before undoing the message (voice: %s, status: %s)', async (voiceMessage, voiceTranscriptionStatus) => {
+    const filename = voiceMessage ? 'aufnahme.wav' : 'notiz.txt'
+    const mimeType = voiceMessage ? 'audio/wav' : 'text/plain'
     const sessionId = '11111111-1111-4111-8111-111111111111'
     const messageId = '22222222-2222-4222-8222-222222222222'
     const attachmentId = '33333333-3333-4333-8333-333333333333'
@@ -2554,7 +2558,7 @@ describe('chat drafts', () => {
       id: messageId,
       role: 'user',
       content: 'Mit Datei',
-      attachments: [{ id: attachmentId, url, filename: 'notiz.txt', mimeType: 'text/plain' }]
+      attachments: [{ id: attachmentId, url, filename, mimeType, metadata: { voiceMessage, voiceTranscriptionStatus } }]
     }
     chat.current = { id: sessionId, messages: [message] }
     chat.selectedSessionId = sessionId
@@ -2567,8 +2571,47 @@ describe('chat drafts', () => {
       suppressErrorToast: true
     })
     expect(chat.activeAttachmentDraft).toHaveLength(1)
-    expect(chat.activeAttachmentDraft[0].file.name).toBe('notiz.txt')
-    expect(chat.activeAttachmentDraft[0].file.type).toBe('text/plain')
+    expect(chat.activeAttachmentDraft[0].file.name).toBe(filename)
+    expect(chat.activeAttachmentDraft[0].file.type).toBe(mimeType)
+    expect(chat.activeAttachmentDraft[0].voiceMessage).toBe(voiceMessage && voiceTranscriptionStatus !== 'completed')
+    const payload = JSON.parse(buildAttachmentFormData({ content: chat.activeDraft }, chat.activeAttachmentDraft).get('payload'))
+    expect(payload.voiceAttachmentIndices).toEqual(voiceMessage && voiceTranscriptionStatus !== 'completed' ? [0] : [])
+  })
+
+  it('refreshes a transcribed user message without promoting or clearing the assistant stream', async () => {
+    global.EventSource = EventSourceMock
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [{ id: 'user-1', role: 'user', content: '' }] }
+    chat.selectedSessionId = 'session-1'
+    chat.watchRun('session-1', 'run-1')
+    const source = EventSourceMock.instances[0]
+    chat.streamContent = 'Unfinished assistant response'
+    chat.streamReasoning = { text: 'Reasoning' }
+    const phase = chat.activity.phase
+    api.get.mockResolvedValue({ data: {
+      id: 'session-1',
+      messages: [{ id: 'user-1', role: 'user', content: 'Transcript', attachments: [{ metadata: { voiceTranscriptionStatus: 'completed' } }] }]
+    } })
+
+    source.emit('message.updated', { messageId: 'user-1' })
+    await vi.waitFor(() => expect(chat.current.messages[0].content).toBe('Transcript'))
+    expect(chat.current.messages).toHaveLength(1)
+    expect(chat.current.messages[0].attachments[0].metadata.voiceTranscriptionStatus).toBe('completed')
+    expect(chat.streamContent).toBe('Unfinished assistant response')
+    expect(chat.streamReasoning).toEqual({ text: 'Reasoning' })
+    expect(chat.activity.phase).toBe(phase)
+    api.get.mockClear()
+    chat.current = { id: 'session-2', messages: [] }
+    chat.selectedSessionId = 'session-2'
+    source.emit('message.updated', { messageId: 'user-1' })
+    await Promise.resolve()
+    expect(api.get).not.toHaveBeenCalled()
+    chat.current = { id: 'session-1', messages: [] }
+    chat.selectedSessionId = 'session-1'
+    chat.eventSource = null
+    source.emit('message.updated', { messageId: 'user-1' })
+    await Promise.resolve()
+    expect(api.get).not.toHaveBeenCalled()
   })
 
   it('keeps history and draft when undo fails', async () => {

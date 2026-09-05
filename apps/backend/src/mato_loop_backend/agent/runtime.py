@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -180,6 +181,7 @@ from mato_loop_backend.settings import (
     load_effective_agent_identity,
     load_effective_ai,
     load_effective_integrations,
+    load_effective_tools,
 )
 from mato_loop_backend.settings.models import (
     PLAN_AGENT_PROFILE_ID,
@@ -1023,6 +1025,69 @@ class AgentRuntime:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     @classmethod
+    async def _transcribe_voice_messages(cls, db: AsyncSession, run: AgentRun) -> None:
+        if run.input_message_id is None:
+            return
+        message = await db.get(
+            Message, run.input_message_id, options=(selectinload(Message.attachments),)
+        )
+        if message is None or message.role != "user" or message.session_id != run.session_id:
+            return
+        voices = [
+            attachment for attachment in message.attachments
+            if attachment.kind == "audio"
+            and (attachment.metadata_json or {}).get("voiceMessage") is True
+            and not (attachment.metadata_json or {}).get("voiceTranscriptionStatus")
+        ]
+        if not voices:
+            return
+        chat_session = await db.get(ChatSession, run.session_id)
+        if chat_session is None:
+            raise AgentRunError("session.notFound")
+        user_id = chat_session.user_id
+        service = AttachmentService()
+        for attachment in voices:
+            await cls._ensure_user_active(db, user_id)
+            tools = await load_effective_tools(db, user_id)
+            await db.commit()
+            text = ""
+            status = "unavailable"
+            # A marked recording is a user transcription request, like direct dictation.
+            # Model-initiated transcription still uses the normal permission loop.
+            if tools.tool_availability.get("transcribe_audio", True):
+                status = "failed"
+                try:
+                    audio = await service.read_audio(attachment, run.session_id)
+                    result = await MediaService.transcribe_audio(
+                        db, audio=audio, language=None,
+                        timeout=tools.transcribe_audio.timeout_seconds, user_id=user_id,
+                    )
+                    text = result.text.strip()
+                    if not text or len(message.content) + len(text) + 2 > 200_000:
+                        text = ""
+                    else:
+                        status = "completed"
+                except SQLAlchemyError:
+                    raise
+                except Exception as exc:
+                    logger.warning(
+                        "Voice transcription failed for attachment %s (%s)",
+                        attachment.id, type(exc).__name__,
+                    )
+            await cls._ensure_user_active(db, user_id, for_update=True)
+            if text:
+                message.content = "\n\n".join(part for part in (message.content, text) if part)
+                await EpisodeIndexService.enqueue(db, message)
+            # Commit the text and terminal status together; run retries never append twice.
+            attachment.metadata_json = {
+                **attachment.metadata_json, "voiceTranscriptionStatus": status,
+            }
+            await db.commit()
+            await run_events.publish(
+                run.id, {"type": "message.updated", "messageId": str(message.id)}
+            )
+
+    @classmethod
     async def _run(cls, run_id: UUID) -> None:
         try:
             async with AsyncSessionFactory() as db:
@@ -1053,6 +1118,7 @@ class AgentRuntime:
                             **run_timing_payload(run),
                         },
                     )
+                    await cls._transcribe_voice_messages(db, run)
                     await cls._execute_loop(db, run, visible_response)
                     transition_run_status(run, "completed")
                     run.completed_at = datetime.now(UTC)

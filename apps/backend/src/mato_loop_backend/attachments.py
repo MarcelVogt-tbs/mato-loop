@@ -262,6 +262,7 @@ def _safe_metadata(metadata: dict | None) -> dict:
             "sourceAttachmentIds",
             "sourceSha256",
             "targetTrustLevel",
+            "voiceMessage",
         }:
             continue
         if isinstance(value, str):
@@ -575,7 +576,8 @@ class AttachmentService:
             width, height = validated_image.width, validated_image.height
         elif kind in {"audio", "video", "text", "document"}:
             try:
-                processed = process_attachment(
+                processed = await asyncio.to_thread(
+                    process_attachment,
                     data,
                     kind=kind,
                     mime_type=mime_type,
@@ -589,7 +591,7 @@ class AttachmentService:
             mime_type = processed.mime_type
             duration_ms = processed.duration_ms
             width, height = processed.width, processed.height
-            derived_files = processed.derived_files
+            derived_files = {} if kind == "audio" else processed.derived_files
             safe_metadata.update(processed.metadata)
             safe_metadata["format"] = processed.format
             if kind == "audio":
@@ -826,21 +828,26 @@ class AttachmentService:
             data = await asyncio.to_thread(path.read_bytes)
         except OSError as exc:
             raise AttachmentError("attachment.notFound") from exc
-        companion = self._verified_companion_bytes(attachment, session_id)
-        if companion is not None:
-            data = companion
         try:
-            validated = validate_audio(
+            processed = await asyncio.to_thread(
+                process_attachment,
                 data,
-                "audio/wav",
-                max_bytes=ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES,
-                limits=AttachmentProcessingLimits(max_audio_duration_seconds=3_600),
+                kind="audio",
+                mime_type=attachment.mime_type,
+                filename=attachment.filename or "audio",
+                limits=AttachmentProcessingLimits(
+                    max_media_bytes=ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES,
+                    max_audio_duration_seconds=3_600,
+                ),
             )
-        except AttachmentError as exc:
+        except AttachmentProcessingError as exc:
             raise AttachmentError("attachment.notFound") from exc
-        if attachment.duration_ms is not None and validated.duration_ms != attachment.duration_ms:
+        if processed is None or (
+            attachment.duration_ms is not None
+            and processed.duration_ms != attachment.duration_ms
+        ):
             raise AttachmentError("attachment.notFound")
-        return data
+        return processed.derived_files.get("audio.wav", data)
 
     async def read_image(self, attachment: MessageAttachment, session_id: UUID) -> bytes:
         if (

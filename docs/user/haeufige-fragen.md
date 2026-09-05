@@ -12,9 +12,9 @@ Prüfen Sie, ob ein verbundener Computer und ein absoluter aktueller Ordner gew�
 
 Provider und Modell müssen aktiviert sein. Das Modell muss außerdem verfügbar sein und die benötigte Chatfähigkeit besitzen.
 
-## Warum kann ich kein Diktat starten?
+## Why Can I Not Record or Transcribe a Voice Message?
 
-Audiotranskription muss als Tool aktiviert und ein verfügbares Standardmodell für Transkription gewählt sein. Zusätzlich benötigt der Browser Zugriff auf das Mikrofon.
+Recording requires browser microphone access. Audio transcription must be enabled and an available default transcription model selected only for automatic transcription after sending. Without transcription, you can still record, send, and play the original audio attachment.
 
 ## Warum fragt MatoLoop trotz automatischer Tools nach einer Freigabe?
 

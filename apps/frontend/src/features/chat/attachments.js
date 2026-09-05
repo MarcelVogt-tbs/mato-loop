@@ -24,7 +24,7 @@ export function attachmentKind(file) {
 }
 
 export function attachmentPreviewUrl(file) {
-  if (attachmentKind(file) !== 'image' || typeof globalThis.URL?.createObjectURL !== 'function') {
+  if (!['image', 'audio'].includes(attachmentKind(file)) || typeof globalThis.URL?.createObjectURL !== 'function') {
     return null
   }
   try {
@@ -50,7 +50,10 @@ export async function downloadMessageAttachmentFiles(message) {
 
 export function buildAttachmentFormData(payload, attachments) {
   const formData = new FormData()
-  formData.append('payload', JSON.stringify(payload))
+  const voiceAttachmentIndices = attachments.flatMap((attachment, index) => (
+    attachment.voiceMessage === true ? [index] : []
+  ))
+  formData.append('payload', JSON.stringify({ ...payload, voiceAttachmentIndices }))
   for (const attachment of attachments) {
     formData.append('attachments', attachment.file, attachment.file.name || attachment.name || 'datei')
   }

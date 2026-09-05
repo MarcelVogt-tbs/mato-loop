@@ -15,6 +15,7 @@ from pydantic import (
 )
 
 from mato_loop_backend.agent.run_timing import run_timing_payload
+from mato_loop_backend.attachment_processing import claimed_audio_format
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.integrations import WebFetchError, canonicalize_url
 from mato_loop_backend.message_content import canonical_assistant_content
@@ -492,6 +493,19 @@ def message_payload(item: Message, *, retry_available: bool = False) -> dict[str
                 "url": (
                     f"/api/sessions/{item.session_id}/messages/{item.id}"
                     f"/attachments/{attachment.id}"
+                ),
+                **(
+                    {
+                        "playbackUrl": (
+                            f"/api/sessions/{item.session_id}/messages/{item.id}"
+                            f"/attachments/{attachment.id}?playback=true"
+                        ),
+                        "playbackMimeType": "audio/wav",
+                    }
+                    if attachment.kind == "audio"
+                    and attachment.processing_status == "ready"
+                    and claimed_audio_format(attachment.mime_type, "") not in {None, "wav"}
+                    else {}
                 ),
             }
             for attachment in item.attachments

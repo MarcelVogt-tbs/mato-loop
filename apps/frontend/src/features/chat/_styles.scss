@@ -393,6 +393,14 @@
   flex: 0 0 68px;
 }
 
+.composer-attachment--audio {
+  height: auto;
+}
+
+.body--dark .composer-attachment--audio audio {
+  color-scheme: dark;
+}
+
 .composer-attachment__preview {
   width: 100%;
   height: 100%;

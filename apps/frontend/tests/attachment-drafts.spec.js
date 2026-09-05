@@ -38,6 +38,8 @@ describe('attachment drafts', () => {
     expect(attachmentDraftLabel({ kind: 'file', file: { name: 'bericht.pdf' } })).toBe('PDF-Datei')
     expect(attachmentDraftIcon({ kind: 'file', mimeType: 'application/pdf' })).toBe('picture_as_pdf')
     expect(attachmentDraftIcon({ kind: 'audio' })).toBe('audio_file')
+    expect(attachmentDraftLabel({ kind: 'audio', voiceMessage: true })).toBe('Sprachnachricht')
+    expect(attachmentDraftLabel({ kind: 'audio' })).toBe('Audio')
     expect(attachmentDraftLabel({ kind: 'video' })).toBe('Video')
     expect(attachmentDraftIcon({ kind: 'video' })).toBe('video_file')
   })

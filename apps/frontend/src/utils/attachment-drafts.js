@@ -37,6 +37,7 @@ export function clipboardAttachmentFiles(event, now = new Date()) {
 }
 
 export function attachmentDraftLabel(attachment) {
+  if (attachment?.voiceMessage === true) return 'Sprachnachricht'
   if (attachment?.kind === 'image') return 'Bild'
   if (attachment?.kind === 'audio') return 'Audio'
   if (attachment?.kind === 'video') return 'Video'

@@ -645,6 +645,7 @@ class MediaService:
             active_model_id=active_model_id,
             user_id=user_id,
         )
+        await db.commit()
         text = await lemonade.transcribe_audio(
             base_url=resolved.base_url,
             api_key=resolved.api_key,

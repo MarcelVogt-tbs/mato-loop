@@ -83,11 +83,13 @@ export function createAudioRecorder({
   AudioContextClass = globalThis.window?.AudioContext || globalThis.window?.webkitAudioContext,
   now = () => performance.now(),
   maxDurationMs = MAX_RECORDING_DURATION_MS,
+  onAutoStopped = null,
   setTimer = globalThis.setInterval,
   clearTimer = globalThis.clearInterval
 } = {}) {
   const starting = ref(false)
   const recording = ref(false)
+  const finalizing = ref(false)
   const durationMs = ref(0)
   const limitReached = ref(false)
   const autoStoppedFile = ref(null)
@@ -122,6 +124,7 @@ export function createAudioRecorder({
     if (stoppingPromise) return stoppingPromise
     const resources = active
     if (!recording.value || !resources?.context) return null
+    finalizing.value = true
     recording.value = false
     starting.value = false
     generation += 1
@@ -139,7 +142,7 @@ export function createAudioRecorder({
       await cleanup(resources)
       resources.chunks = []
       const wav = encodePcmWav(samples, resources.context.sampleRate)
-      return new File([wav], `diktat-${new Date().toISOString().replace(/[:.]/g, '-')}.wav`, {
+      return new File([wav], `sprachnachricht-${new Date().toISOString().replace(/[:.]/g, '-')}.wav`, {
         type: 'audio/wav'
       })
     })()
@@ -148,6 +151,7 @@ export function createAudioRecorder({
       return await stoppingPromise
     } finally {
       stoppingPromise = null
+      finalizing.value = false
     }
   }
 
@@ -156,7 +160,8 @@ export function createAudioRecorder({
     limitReached.value = true
     durationMs.value = maxDurationMs
     void stopRecording().then((file) => {
-      if (!disposed && file) autoStoppedFile.value = file
+      if (file) onAutoStopped?.(file)
+      if (!disposed && file && !onAutoStopped) autoStoppedFile.value = file
     }).catch(() => {})
   }
 
@@ -274,6 +279,7 @@ export function createAudioRecorder({
   return {
     starting,
     recording,
+    finalizing,
     durationMs,
     limitReached,
     autoStoppedFile,
@@ -285,8 +291,8 @@ export function createAudioRecorder({
   }
 }
 
-export function useAudioRecorder() {
-  const recorder = createAudioRecorder()
+export function useAudioRecorder(options) {
+  const recorder = createAudioRecorder(options)
   onBeforeUnmount(() => {
     void recorder.dispose()
   })

@@ -82,8 +82,8 @@
             <q-tooltip>Herunterladen</q-tooltip>
           </q-btn>
         </div>
-        <audio v-if="attachment.safeUrl && audioMimeTypeSupported(attachment.mimeType)" controls preload="metadata">
-          <source :src="attachment.safeUrl" :type="attachment.mimeType">
+        <audio v-if="attachment.audioSources.some((source) => audioMimeTypeSupported(source.type))" controls preload="metadata">
+          <source v-for="source in attachment.audioSources" :key="source.src" :src="source.src" :type="source.type">
           Dein Browser kann diese Audiodatei nicht wiedergeben.
         </audio>
         <q-banner v-else-if="!attachment.safeUrl" dense rounded class="app-surface-tonal text-caption q-mt-sm">

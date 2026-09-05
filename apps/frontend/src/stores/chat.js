@@ -618,10 +618,18 @@ export const useChatStore = defineStore('chat', {
       else this.drafts.newSession.message = message
       this.persistDrafts()
     },
-    addAttachmentFiles(files) {
+    addAttachmentFiles(files, {
+      sessionId = this.current?.id || null,
+      projectId = this.sessionsProjectId,
+      voiceMessage = false
+    } = {}) {
       const limits = useInstanceLimitsStore()
       const incoming = Array.from(files || [])
-      if (this.activeAttachmentDraft.length + incoming.length > limits.maxAttachmentsPerMessage) {
+      const scope = sessionScopeKey(projectId)
+      const existing = sessionId
+        ? this.attachmentDrafts.sessionMessages[sessionId] || []
+        : this.attachmentDrafts.newSessions[scope] || []
+      if (existing.length + incoming.length > limits.maxAttachmentsPerMessage) {
         return { added: 0, error: `Du kannst höchstens ${limits.maxAttachmentsPerMessage} Dateien pro Nachricht anhängen.` }
       }
       for (const file of incoming) {
@@ -633,7 +641,7 @@ export const useChatStore = defineStore('chat', {
         }
       }
       const incomingBytes = incoming.reduce((total, file) => total + file.size, 0)
-      const messageBytes = this.activeAttachmentDraft.reduce(
+      const messageBytes = existing.reduce(
         (total, attachment) => total + (Number(attachment.file?.size) || 0),
         0
       )
@@ -654,16 +662,19 @@ export const useChatStore = defineStore('chat', {
           error: 'Dateianhänge dürfen über alle Sessions zusammen höchstens 256 MiB belegen.'
         }
       }
-      if (this.current && !this.attachmentDrafts.sessionMessages[this.current.id]) {
-        this.attachmentDrafts.sessionMessages[this.current.id] = []
+      if (sessionId) this.attachmentDrafts.sessionMessages[sessionId] = existing
+      else {
+        this.attachmentDrafts.newSessions[scope] = existing
+        if (scope === sessionScopeKey(this.sessionsProjectId)) this.attachmentDrafts.newSession = existing
       }
-      const target = this.activeAttachmentDraft
+      const target = existing
       for (const file of incoming) {
         target.push({
           id: globalThis.crypto?.randomUUID?.() || `attachment-${Date.now()}-${target.length}`,
           file: markRaw(file),
           kind: attachmentKind(file),
           mimeType: normalizedMimeType(file),
+          voiceMessage: voiceMessage === true,
           objectUrl: attachmentPreviewUrl(file)
         })
       }
@@ -767,13 +778,15 @@ export const useChatStore = defineStore('chat', {
         ? 'Dateianhänge dürfen über alle Sessions zusammen höchstens 256 MiB belegen.'
         : null
     },
-    replaceAttachmentFiles(files, sessionId) {
+    replaceAttachmentFiles(files, sessionId, attachments = []) {
       this.clearAttachmentDraft(sessionId)
       const target = files.map((file, index) => ({
         id: globalThis.crypto?.randomUUID?.() || `attachment-${Date.now()}-${index}`,
         file: markRaw(file),
         kind: attachmentKind(file),
         mimeType: normalizedMimeType(file),
+        voiceMessage: (attachments[index]?.voiceMessage === true || attachments[index]?.metadata?.voiceMessage === true)
+          && attachments[index]?.metadata?.voiceTranscriptionStatus !== 'completed',
         objectUrl: attachmentPreviewUrl(file)
       }))
       if (sessionId) this.attachmentDrafts.sessionMessages[sessionId] = target
@@ -782,19 +795,24 @@ export const useChatStore = defineStore('chat', {
         this.attachmentDrafts.newSessions[sessionScopeKey(this.sessionsProjectId)] = target
       }
     },
-    getAudioDictation(sessionId = null) {
+    getAudioDictation(sessionId = null, projectId = this.sessionsProjectId) {
       return sessionId
         ? this.audioDictations.sessionMessages[sessionId] || null
-        : this.audioDictations.newSession
+        : this.audioDictations.newSessions[sessionScopeKey(projectId)] || null
     },
-    setAudioDictation(entry, sessionId = null) {
-      const value = entry ? { ...entry, file: markRaw(entry.file) } : null
+    setAudioDictation(entry, sessionId = null, projectId = this.sessionsProjectId) {
+      const value = entry ? {
+        ...entry,
+        ...(entry.file ? { file: markRaw(entry.file) } : {}),
+        ...(entry.files ? { files: entry.files.map((file) => markRaw(file)) } : {})
+      } : null
       if (sessionId) {
         if (value) this.audioDictations.sessionMessages[sessionId] = value
         else delete this.audioDictations.sessionMessages[sessionId]
       } else {
-        this.audioDictations.newSession = value
-        this.audioDictations.newSessions[sessionScopeKey(this.sessionsProjectId)] = value
+        const scope = sessionScopeKey(projectId)
+        if (scope === sessionScopeKey(this.sessionsProjectId)) this.audioDictations.newSession = value
+        this.audioDictations.newSessions[scope] = value
       }
     },
     resetNewDraft(projectId = this.sessionsProjectId) {
@@ -1445,10 +1463,10 @@ export const useChatStore = defineStore('chat', {
           if (!data && ambiguous && !mutationKnownUnchanged) {
             if (deletesSession) {
               this.drafts.newSession = { message: message.content, options }
-              this.replaceAttachmentFiles(files, null)
+              this.replaceAttachmentFiles(files, null, message.attachments)
             } else {
               this.drafts.sessionMessages[session.id] = message.content
-              this.replaceAttachmentFiles(files, session.id)
+              this.replaceAttachmentFiles(files, session.id, message.attachments)
             }
             this.persistDrafts()
           }
@@ -1482,12 +1500,12 @@ export const useChatStore = defineStore('chat', {
             this.selectedSessionId = null
           }
           this.drafts.newSession = { message: data.draft.content, options }
-          this.replaceAttachmentFiles(files, null)
+          this.replaceAttachmentFiles(files, null, message.attachments)
         } else {
           if (stillSelected) this.applySessionResult(updatedSession)
           else this.updateSessionSummary(updatedSession)
           this.drafts.sessionMessages[session.id] = data.draft.content
-          this.replaceAttachmentFiles(files, session.id)
+          this.replaceAttachmentFiles(files, session.id, message.attachments)
           if (stillSelected && !recoveredSession) {
             void this.refreshSession(session.id).catch(() => {})
           }
@@ -1620,7 +1638,8 @@ export const useChatStore = defineStore('chat', {
           file: attachment.file,
           name: attachment.file.name || 'datei',
           kind: attachment.kind,
-          mimeType: attachment.mimeType
+          mimeType: attachment.mimeType,
+          voiceMessage: attachment.voiceMessage === true
         })),
         options: sessionId ? null : sanitizedSessionOptions({ ...this.drafts.newSession.options }),
         controlCenter: sessionId ? null : controlCenterRequestState(useControlCenterStore()),
@@ -1679,8 +1698,7 @@ export const useChatStore = defineStore('chat', {
       const sessionId = entry.sessionId || null
       if (sessionId) this.drafts.sessionMessages[sessionId] = entry.content
       else this.drafts.newSession.message = entry.content
-      this.replaceAttachmentFiles(entry.attachments.map((attachment) => attachment.file), sessionId)
-      this.setAudioDictation(null, sessionId)
+      this.replaceAttachmentFiles(entry.attachments.map((attachment) => attachment.file), sessionId, entry.attachments)
       this.persistDrafts()
       return entry
     },
@@ -1957,6 +1975,8 @@ export const useChatStore = defineStore('chat', {
           data.session,
           ...list.items.filter((item) => item.id !== session.id)
         ])
+        const recordings = this.getAudioDictation(null, projectId)
+        if (recordings) this.setAudioDictation(recordings, session.id)
         this.resetNewDraft(projectId)
         if (stillSelected) {
           this.current = session
@@ -2231,6 +2251,10 @@ export const useChatStore = defineStore('chat', {
         this.streamReasoning = null
         this.streamContextSummary = null
       }
+      source.addEventListener('message.updated', () => {
+        if (this.eventSource !== source || this.current?.id !== sessionId) return
+        void this.refreshSession(sessionId).catch(() => {})
+      })
       source.addEventListener('message.completed', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)

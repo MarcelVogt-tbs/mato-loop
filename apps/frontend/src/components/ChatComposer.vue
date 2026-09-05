@@ -26,7 +26,7 @@
         <div v-if="recording" class="composer-recording app-surface-tonal q-mb-sm">
           <div class="row items-center q-gutter-sm">
             <q-icon name="fiber_manual_record" color="negative" class="composer-recording__pulse" />
-            <span class="text-weight-medium">Diktat läuft</span>
+            <span class="text-weight-medium">Aufnahme läuft</span>
             <span class="text-caption app-muted">{{ recordingDuration }}</span>
             <q-space />
             <q-btn
@@ -37,7 +37,7 @@
               icon="close"
               label="Abbrechen"
               type="button"
-              @click="cancelDictation"
+              @click="cancelVoiceRecording"
             />
             <q-btn
               unelevated
@@ -45,40 +45,41 @@
               no-caps
               color="primary"
               icon="stop"
-              label="Stoppen und transkribieren"
+              label="Als Sprachnachricht anhängen"
               type="button"
-              @click="finishDictation"
+              @click="finishVoiceRecording"
             />
           </div>
           <div class="text-caption app-muted q-mt-xs">
-            Die Aufnahme wird als PCM-WAV transkribiert. Nach fünf Minuten stoppt sie automatisch.
+            Die Aufnahme bleibt als Audio erhalten und wird beim Senden transkribiert.
+            Nach fünf Minuten stoppt sie automatisch.
           </div>
         </div>
         <q-banner v-else-if="starting" dense rounded class="app-surface-tonal q-mb-sm">
           <template #avatar><q-spinner color="primary" size="22px" /></template>
           Mikrofon wird gestartet ...
         </q-banner>
-        <q-banner v-else-if="transcribing" dense rounded class="app-surface-tonal q-mb-sm">
+        <q-banner v-else-if="finalizing" dense rounded class="app-surface-tonal q-mb-sm">
           <template #avatar><q-spinner color="primary" size="22px" /></template>
-          Diktat wird transkribiert ...
+          Aufnahme wird vorbereitet ...
         </q-banner>
         <q-banner
-          v-else-if="currentDictation?.status === 'failed'"
+          v-if="currentDictation?.files?.length"
           dense
           rounded
           class="composer-dictation-failed app-surface-tonal q-mb-sm"
         >
           <template #avatar><q-icon name="record_voice_over" color="warning" /></template>
-          <div class="text-weight-medium">Diktat ist noch nicht transkribiert</div>
-          <div class="text-caption app-muted">{{ currentDictation.message }}</div>
-          <template #action>
+          <div class="text-weight-medium">Noch nicht angehängte Aufnahmen</div>
+          <div class="text-caption app-muted">Die Aufnahmen bleiben bis zum Anhängen oder Verwerfen hier erhalten.</div>
+          <div v-for="file in currentDictation.files" :key="file.name" class="q-mt-sm">
+            <div class="text-caption ellipsis">{{ file.name }}</div>
             <div class="composer-dictation-actions row q-gutter-xs">
-              <q-btn flat dense no-caps icon="refresh" label="Erneut versuchen" @click="retryDictation" />
-              <q-btn flat dense no-caps icon="attach_file" label="Als Anhang" @click="attachDictation" />
-              <q-btn flat dense no-caps icon="download" label="Herunterladen" @click="downloadDictation" />
-              <q-btn flat dense no-caps color="negative" icon="delete_outline" label="Verwerfen" @click="discardDictation" />
+              <q-btn flat dense no-caps icon="attach_file" label="Anhängen" :disable="inputDisabled" @click="attachRecording(file, audioScope)" />
+              <q-btn flat dense no-caps icon="download" label="Herunterladen" @click="downloadRecording(file)" />
+              <q-btn flat dense no-caps color="negative" icon="delete_outline" label="Verwerfen" @click="discardRecording(file)" />
             </div>
-          </template>
+          </div>
         </q-banner>
         <div class="chat-composer__footer row items-center q-gutter-xs">
           <SessionSettingsFields
@@ -165,7 +166,7 @@
               icon="attach_file"
               type="button"
               aria-label="Dateien anhängen"
-              :disable="inputDisabled || starting || recording || transcribing"
+              :disable="inputDisabled || starting || recording || finalizing"
               @click="attachmentInput?.click()"
             >
               <q-tooltip>Dateien anhängen</q-tooltip>
@@ -176,12 +177,12 @@
               dense
               icon="mic"
               type="button"
-              aria-label="Diktat starten"
-              :loading="starting || transcribing"
-              :disable="inputDisabled || starting || recording || transcribing || !micAvailable"
-              @click="startDictation"
+              aria-label="Sprachnachricht aufnehmen"
+              :loading="starting || finalizing"
+              :disable="inputDisabled || starting || recording || finalizing"
+              @click="startVoiceRecording"
             >
-              <q-tooltip>{{ micUnavailableReason || 'Diktat starten' }}</q-tooltip>
+              <q-tooltip>{{ transcriptionUnavailableReason || 'Sprachnachricht aufnehmen, Transkription beim Senden' }}</q-tooltip>
             </q-btn>
             <q-btn
               v-if="running"
@@ -224,10 +225,9 @@ import ComposerAttachments from 'components/ComposerAttachments.vue'
 import SessionSettingsFields from 'components/SessionSettingsFields.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useChatStore } from 'stores/chat'
-import { useInstanceLimitsStore } from 'stores/instance-limits'
 import { useProviderStore } from 'stores/providers'
 import { useToolSettingsStore } from 'stores/tool-settings'
-import { api } from 'src/boot/axios'
+import { useConfirm } from 'src/composables/confirm'
 import { recorderErrorMessage, useAudioRecorder } from 'src/composables/audio-recorder'
 import { clipboardAttachmentFiles } from 'src/utils/attachment-drafts'
 import { formatAttachmentDuration } from 'src/utils/attachments'
@@ -248,28 +248,38 @@ const emit = defineEmits(['add-attachments', 'remove-attachment', 'send', 'stop'
 const $q = useQuasar()
 const identity = useAgentIdentityStore()
 const chat = useChatStore()
-const instanceLimits = useInstanceLimitsStore()
 const providers = useProviderStore()
 const toolSettings = useToolSettingsStore()
 const input = ref(null)
 const attachmentInput = ref(null)
 const settingsFields = ref(null)
 const settingsOpen = ref(false)
-let transcriptionRequest = null
+const { confirm } = useConfirm()
+let recordingScope = null
+let finishingRequest = null
+let unmounted = false
 const {
   starting,
   recording,
+  finalizing,
   durationMs: recordingDurationMs,
-  limitReached,
-  autoStoppedFile,
   startRecording,
   stopRecording,
-  cancelRecording,
-  clearAutoStoppedFile
-} = useAudioRecorder()
-const dictationKey = computed(() => props.session?.id || null)
-const currentDictation = computed(() => chat.getAudioDictation(dictationKey.value))
-const transcribing = computed(() => currentDictation.value?.status === 'transcribing')
+  cancelRecording
+} = useAudioRecorder({
+  onAutoStopped(file) {
+    retainRecording(file, recordingScope)
+    if (!unmounted) {
+      $q.notify({ type: 'info', message: 'Die maximale Aufnahmedauer ist erreicht. Die Aufnahme wurde vorbereitet.' })
+    }
+  }
+})
+const audioScope = computed(() => ({
+  sessionId: props.session?.id || null,
+  projectId: chat.sessionsProjectId,
+  ownerUserId: chat.draftOwnerUserId
+}))
+const currentDictation = computed(() => chat.getAudioDictation(audioScope.value.sessionId, audioScope.value.projectId))
 const recordingDuration = computed(() => formatAttachmentDuration(recordingDurationMs.value) || '0:00')
 const effectiveModelId = computed(() => props.session?.modelId || providers.defaultModelId)
 const selectedModelConfig = computed(() => providers.models.find((model) => (
@@ -281,20 +291,19 @@ const transcriptionModelAvailable = computed(() => (
   && providers.capabilityOptions('audio_transcription')
     .some((option) => option.value === providers.audioTranscriptionModelId)
 ))
-const micUnavailableReason = computed(() => {
+const transcriptionUnavailableReason = computed(() => {
   if (toolSettings.loading || !toolSettings.loaded && !toolSettings.loadFailed) {
-    return 'Die Diktateinstellungen werden geladen.'
+    return 'Sprachnachricht aufnehmen; Transkriptionseinstellungen werden geladen.'
   }
-  if (toolSettings.loadFailed) return 'Die Diktateinstellungen konnten nicht geladen werden.'
+  if (toolSettings.loadFailed) return 'Sprachnachricht aufnehmen; automatische Transkription derzeit nicht verfügbar.'
   if (!toolSettings.transcribeAudioAvailable) {
-    return 'Audiotranskription ist in den Tool-Einstellungen deaktiviert.'
+    return 'Sprachnachricht aufnehmen; automatische Transkription ist deaktiviert.'
   }
   if (!transcriptionModelAvailable.value) {
-    return 'Es ist kein verfügbares Standardmodell für Audiotranskription eingerichtet.'
+    return 'Sprachnachricht aufnehmen; kein Transkriptionsmodell verfügbar.'
   }
   return ''
 })
-const micAvailable = computed(() => !micUnavailableReason.value)
 const interactionDisabled = computed(() => (
   !props.session || props.disabled || props.running || props.pendingCount > 0
 ))
@@ -306,7 +315,7 @@ const sendDisabled = computed(() => (
   || (props.running && !props.queueMode)
   || starting.value
   || recording.value
-  || transcribing.value
+  || finalizing.value
   || !modelSupportsTools.value
   || (!props.draft.trim() && !props.attachments.length)
 ))
@@ -331,8 +340,9 @@ function handlePaste(event) {
   emit('add-attachments', files)
 }
 
-async function startDictation() {
-  if (!micAvailable.value) return
+async function startVoiceRecording() {
+  if (inputDisabled.value || starting.value || recording.value || finalizing.value) return
+  recordingScope = { ...audioScope.value }
   try {
     await startRecording()
   } catch (error) {
@@ -340,131 +350,106 @@ async function startDictation() {
   }
 }
 
-async function cancelDictation() {
-  await cancelRecording()
+async function cancelVoiceRecording() {
+  const scope = recordingScope
+  if (!await confirm('Die laufende Aufnahme wird verworfen.', 'Aufnahme abbrechen?')) return
+  if (scope !== recordingScope) return
+  await cancelAudioActivity()
   input.value?.focus()
 }
 
-async function finishDictation() {
-  const file = await stopRecording().catch(() => null)
-  if (!file) {
-    $q.notify({ type: 'negative', message: 'Das Diktat konnte nicht verarbeitet werden.' })
-    return
-  }
-  await transcribeDictation(file, dictationKey.value)
+function finishVoiceRecording() {
+  if (finishingRequest) return finishingRequest
+  if (!recording.value) return finalizing.value ? stopRecording().catch(() => {}) : Promise.resolve()
+  const scope = recordingScope
+  finishingRequest = (async () => {
+    try {
+      const file = await stopRecording()
+      if (file) retainRecording(file, scope)
+    } catch {
+      $q.notify({ type: 'negative', message: 'Die Aufnahme konnte nicht verarbeitet werden.' })
+    } finally {
+      finishingRequest = null
+      input.value?.focus()
+    }
+  })()
+  return finishingRequest
 }
 
-async function transcribeDictation(file, key) {
-  const controller = new AbortController()
-  transcriptionRequest?.controller.abort()
-  transcriptionRequest = { controller, key }
-  chat.setAudioDictation({ file, status: 'transcribing', message: '' }, key)
-  try {
-    if (file.size > instanceLimits.maxUploadBytes) {
-      chat.setAudioDictation({
-        file,
-        status: 'failed',
-        message: `Das Diktat ist größer als ${instanceLimits.maxUploadMib} MiB und kann nicht übertragen werden.`
-      }, key)
-      return
-    }
-    const formData = new FormData()
-    formData.append('audio', file, file.name)
-    const { data } = await api.post('/media/transcriptions', formData, { signal: controller.signal })
-    if (controller.signal.aborted || dictationKey.value !== key) return
-    const transcript = typeof data?.text === 'string' ? data.text.trim() : ''
-    if (transcript) {
-      const separator = props.draft && !/\s$/.test(props.draft) ? ' ' : ''
-      emit('update:draft', `${props.draft}${separator}${transcript}`)
-      chat.setAudioDictation(null, key)
-    } else {
-      chat.setAudioDictation({ file, status: 'failed', message: 'Keine Sprache erkannt.' }, key)
-      $q.notify({ type: 'negative', message: 'Keine Sprache erkannt.' })
-    }
-  } catch (error) {
-    if (controller.signal.aborted) {
-      if (chat.getAudioDictation(key)?.status === 'transcribing') {
-        chat.setAudioDictation({
-          file,
-          status: 'failed',
-          message: 'Die Transkription wurde beim Sessionwechsel angehalten.'
-        }, key)
-      }
-    } else {
-      chat.setAudioDictation({
-        file,
-        status: 'failed',
-        message: 'Die Transkription ist fehlgeschlagen. Das Diktat bleibt erhalten.'
-      }, key)
-    }
-    if (!controller.signal.aborted && !error?.config) {
-      $q.notify({ type: 'negative', message: 'Das Diktat konnte nicht verarbeitet werden.' })
-    }
-  } finally {
-    if (transcriptionRequest?.controller === controller) transcriptionRequest = null
-    input.value?.focus()
-  }
+function retainRecording(file, scope) {
+  if (!scope || scope.discarded || scope.ownerUserId !== chat.draftOwnerUserId) return
+  const files = chat.getAudioDictation(scope.sessionId, scope.projectId)?.files || []
+  if (files.includes(file)) return
+  chat.setAudioDictation({ files: [...files, file] }, scope.sessionId, scope.projectId)
+  if (!unmounted) attachRecording(file, scope)
 }
 
-function retryDictation() {
-  if (currentDictation.value?.file) {
-    void transcribeDictation(currentDictation.value.file, dictationKey.value)
-  }
+function removeRecoveryFile(file, scope) {
+  const files = (chat.getAudioDictation(scope.sessionId, scope.projectId)?.files || []).filter((item) => item !== file)
+  chat.setAudioDictation(files.length ? { files } : null, scope.sessionId, scope.projectId)
 }
 
-function attachDictation() {
-  const entry = currentDictation.value
-  if (!entry?.file) return
-  chat.setAudioDictation(null, dictationKey.value)
-  emit('add-attachments', [entry.file], (result) => {
-    if (result?.error) chat.setAudioDictation(entry, dictationKey.value)
-  })
+function attachRecording(file, scope) {
+  emit('add-attachments', [file], (result) => {
+    if (result?.added === 1 && scope.ownerUserId === chat.draftOwnerUserId) removeRecoveryFile(file, scope)
+  }, { ...scope, voiceMessage: true })
 }
 
-function downloadDictation() {
-  const file = currentDictation.value?.file
+function downloadRecording(file) {
   if (!file || typeof URL?.createObjectURL !== 'function') return
   const url = URL.createObjectURL(file)
   const link = document.createElement('a')
   link.href = url
-  link.download = file.name || 'diktat.wav'
+  link.download = file.name || 'sprachnachricht.wav'
   link.click()
   URL.revokeObjectURL(url)
 }
 
-function discardDictation() {
-  chat.setAudioDictation(null, dictationKey.value)
+async function discardRecording(file) {
+  const scope = { ...audioScope.value }
+  if (!await confirm('Die Aufnahme wird unwiderruflich entfernt.', 'Aufnahme verwerfen?')) return
+  if (scope.ownerUserId !== chat.draftOwnerUserId) return
+  removeRecoveryFile(file, scope)
   input.value?.focus()
 }
 
 async function cancelAudioActivity() {
-  transcriptionRequest?.controller.abort()
+  if (recordingScope) recordingScope.discarded = true
   await cancelRecording()
 }
 
-watch(autoStoppedFile, (file) => {
-  if (!file) return
-  const key = dictationKey.value
-  clearAutoStoppedFile()
-  if (limitReached.value) {
-    $q.notify({ type: 'info', message: 'Die maximale Aufnahmedauer ist erreicht. Das Diktat wird transkribiert.' })
+async function prepareAudioNavigation() {
+  if (starting.value) await cancelAudioActivity()
+  else await finishVoiceRecording()
+}
+
+chat.$onAction(({ name, args, after }) => {
+  if (name === 'clearAllAttachmentDrafts') void cancelAudioActivity()
+  if (name === 'deleteSession' && args[0] === recordingScope?.sessionId) {
+    const scope = recordingScope
+    after(() => {
+      scope.discarded = true
+      if (scope === recordingScope) void cancelAudioActivity()
+    })
   }
-  void transcribeDictation(file, key)
+  if (name === 'removeProjectScope' && args[0] === recordingScope?.projectId) {
+    void cancelAudioActivity()
+  }
 })
 
-watch(dictationKey, (key, previousKey) => {
-  if (key === previousKey) return
-  if (transcriptionRequest?.key === previousKey) transcriptionRequest.controller.abort()
-  if (starting.value || recording.value) void cancelRecording()
-})
+watch([() => props.session?.id, () => chat.sessionsProjectId, () => chat.draftOwnerUserId], () => {
+  if (recordingScope?.ownerUserId !== chat.draftOwnerUserId) void cancelAudioActivity()
+  else void prepareAudioNavigation()
+}, { flush: 'sync' })
 
 onBeforeUnmount(() => {
-  transcriptionRequest?.controller.abort()
+  unmounted = true
 })
 
 defineExpose({
   focus: () => input.value?.focus(),
   cancelAudioActivity,
-  hasAudioActivity: () => starting.value || recording.value || transcribing.value
+  prepareAudioNavigation,
+  hasAudioActivity: () => starting.value || recording.value || finalizing.value
 })
 </script>

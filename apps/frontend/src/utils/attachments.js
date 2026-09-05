@@ -268,7 +268,14 @@ export function supportedAttachments(attachments) {
       metadata: attachment.metadata && typeof attachment.metadata === 'object' && !Array.isArray(attachment.metadata)
         ? attachment.metadata
         : {},
-      safeUrl
+      safeUrl,
+      audioSources: attachment.kind === 'audio' ? [
+        ...(safeUrl ? [{ src: safeUrl, type: mimeType }] : []),
+        ...(safeUrl && attachment.playbackUrl === `${safeUrl}?playback=true`
+          && attachment.playbackMimeType === 'audio/wav'
+          ? [{ src: attachment.playbackUrl, type: 'audio/wav' }]
+          : [])
+      ] : []
     }]
   })
 }

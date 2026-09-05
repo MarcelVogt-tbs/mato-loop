@@ -20,6 +20,7 @@ import { useControlCenterStore } from '../src/stores/control-center'
 import { useQuestionStore } from '../src/stores/questions'
 import { useWorkspaceStore } from '../src/stores/workspace'
 import { clearChatOutbox, loadChatOutbox } from '../src/utils/chat-outbox'
+import { buildAttachmentFormData } from '../src/features/chat/attachments'
 
 const originalURL = globalThis.URL
 
@@ -94,6 +95,58 @@ describe('chat message queue', () => {
     expect(chat.activeAttachmentDraft).toEqual([])
     expect(global.URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview')
     expect(chat.queuedSendReady).toBe(false)
+  })
+
+  it('preserves voice markers through IndexedDB, failed sends, retry and restore', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.running = true
+    const audio = new File(['wav'], 'voice.wav', { type: 'audio/wav' })
+    chat.addAttachmentFiles([audio])
+    chat.addAttachmentFiles([audio], { voiceMessage: true })
+    chat.addAttachmentFiles([audio], { voiceMessage: true })
+    const entry = await chat.queueMessage('')
+    expect((await loadChatOutbox('user-1'))[0].attachments.map((item) => item.voiceMessage))
+      .toEqual([false, true, true])
+
+    setActivePinia(createPinia())
+    const restored = useChatStore()
+    restored.setDraftOwner('user-1')
+    await restored.outboxLoadPromise
+    restored.cancelQueueDrain()
+    activeSession(restored)
+    api.post.mockRejectedValueOnce({ response: { status: 422 } })
+    await restored.drainOutbox()
+    expect(JSON.parse(api.post.mock.calls.at(-1)[1].get('payload')).voiceAttachmentIndices).toEqual([1, 2])
+    expect(restored.activeQueuedMessages[0].attachments[1].voiceMessage).toBe(true)
+
+    restored.setAudioDictation({ files: [audio] }, 'session-1')
+    await restored.restoreQueuedMessage(entry.id)
+    expect(restored.getAudioDictation('session-1').files).toHaveLength(1)
+    expect(restored.activeAttachmentDraft.map((item) => item.voiceMessage)).toEqual([false, true, true])
+    expect(restored.activeAttachmentDraft.every((item) => item.objectUrl === 'blob:preview')).toBe(true)
+    const form = buildAttachmentFormData({ voiceAttachmentIndices: [0] }, restored.activeAttachmentDraft.slice(1))
+    expect(JSON.parse(form.get('payload')).voiceAttachmentIndices).toEqual([0, 1])
+    vi.spyOn(restored, 'watchRun').mockImplementation(() => {})
+    api.post.mockResolvedValueOnce({ data: { message: { id: 'sent' }, runId: 'run-1' } })
+    await restored.send('')
+    expect(JSON.parse(api.post.mock.calls.at(-1)[1].get('payload')).voiceAttachmentIndices).toEqual([1, 2])
+    expect(restored.activeQueuedMessages).toEqual([])
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview')
+  })
+
+  it('retains rejected recordings when sending the first message creates a session', async () => {
+    const chat = useChatStore()
+    const audio = new File(['wav'], 'rejected.wav', { type: 'audio/wav' })
+    chat.setAudioDictation({ files: [audio] })
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+    vi.spyOn(useControlCenterStore(), 'attachCreatedSession').mockResolvedValue(null)
+    api.post.mockResolvedValue({
+      data: { session: { id: 'session-1' }, message: { id: 'sent' }, runId: 'run-1' }
+    })
+    await chat.startSession('Text')
+    expect(chat.getAudioDictation('session-1').files[0]).toBe(audio)
+    expect(chat.getAudioDictation()).toBeNull()
   })
 
   it('keeps an idle submission queued until the server accepts it', async () => {

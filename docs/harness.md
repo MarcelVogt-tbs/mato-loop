@@ -179,7 +179,7 @@ The following independent cases are automated when their symbols are introduced.
 | `RESEARCH-11` | Model searches current, latest, or today information | Prompt uses frozen local timestamp | Query omits a year or derives it from timestamp; explicit historical and exact-name years remain. |
 | `FILE-06` | Backend tool returns durable bytes | Tool result persists | A managed file revision and an exact message reference persist together. |
 | `FILE-07` | Historical message references a file revision | File is edited, moved, or deleted later | The reference still resolves to the original bytes. |
-| `ATTACH-01` | User uploads a message attachment and a companion is created | Both persist | Both are revisioned managed files and the message stores exact references. |
+| `ATTACH-01` | User uploads a message attachment | Original persists; text/document companions persist | Managed files retain exact revision references. Audio WAV conversion is transient for transcription and playback fallback; no new audio companion is stored. Legacy companions remain intact for existing references. |
 | `ATTACH-02` | Active model supports image input | Next request builds | The current or referenced image is transferred transiently, never logged as Base64. |
 | `ATTACH-03` | Active model lacks image input | Tool returns an image | The managed file remains available and the model receives only a text marker. |
 | `SESSION-01` | Run in session A | Session-read tool reads A | `Context.ask` creates no approval. |

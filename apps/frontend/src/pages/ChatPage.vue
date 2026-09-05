@@ -705,9 +705,9 @@ async function retryMessage(message) {
 
 async function loadRouteSession() {
   const sessionId = routeSessionId.value
-  const request = chat.loadSession(sessionId).catch(() => null)
-  await composer.value?.cancelAudioActivity?.()
-  await request
+  await composer.value?.prepareAudioNavigation?.()
+  if (routeSessionId.value !== sessionId) return
+  await chat.loadSession(sessionId).catch(() => null)
   if (chat.selectedSessionId !== sessionId || chat.loadError) return
   await reconcileRouteProject()
   const requestedApp = typeof route.query.controlCenter === 'string'
@@ -847,8 +847,8 @@ async function flushQueuedMessage() {
   await request
 }
 
-function addAttachmentFiles(files, done) {
-  const result = chat.addAttachmentFiles(files)
+function addAttachmentFiles(files, done, options) {
+  const result = chat.addAttachmentFiles(files, options)
   if (result.error) $q.notify({ type: 'negative', message: result.error })
   done?.(result)
 }

@@ -744,7 +744,7 @@ async def test_telegram_connection_test_releases_database_before_probe(monkeypat
     db.commit.assert_awaited_once()
 
 
-async def test_telegram_voice_uses_dictation_pipeline_without_attachment(
+async def test_telegram_voice_download_preserves_original_and_marks_recording(
     monkeypatch,
 ) -> None:
     endpoint = MessagingEndpoint(
@@ -779,26 +779,13 @@ async def test_telegram_voice_uses_dictation_pipeline_without_attachment(
             assert db.commit.await_count == 1
             return RemoteFile()
 
-    tools = SimpleNamespace(
-        tool_availability={"transcribe_audio": True},
-        transcribe_audio=SimpleNamespace(timeout_seconds=30),
-    )
-    transcribe = AsyncMock(return_value=SimpleNamespace(text="  Gesprochener Text  "))
     monkeypatch.setattr(
         telegram.SettingsStore, "load", AsyncMock(return_value=InstanceLimits())
     )
     monkeypatch.setattr(telegram, "endpoint_token", AsyncMock(return_value="token"))
     monkeypatch.setattr(telegram, "Bot", lambda **_kwargs: FakeBot())
     monkeypatch.setattr(telegram, "classify_attachment", Mock(return_value=attachment))
-    monkeypatch.setattr(
-        telegram,
-        "process_attachment",
-        Mock(return_value=SimpleNamespace(derived_files={"audio.wav": b"wav"})),
-    )
-    monkeypatch.setattr(telegram, "load_effective_tools", AsyncMock(return_value=tools))
-    monkeypatch.setattr(telegram.MediaService, "transcribe_audio", transcribe)
-
-    attachments, transcript = await telegram._download_media(
+    attachments = await telegram._download_media(
         db,
         endpoint,
         [
@@ -812,18 +799,13 @@ async def test_telegram_voice_uses_dictation_pipeline_without_attachment(
         ],
     )
 
-    assert attachments == []
-    assert transcript == "Gesprochener Text"
-    transcribe.assert_awaited_once_with(
-        db,
-        audio=b"wav",
-        language=None,
-        timeout=30,
-        user_id=endpoint.user_id,
-    )
+    assert len(attachments) == 1
+    assert attachments[0].data == source
+    assert attachments[0].mime_type == "audio/ogg"
+    assert attachments[0].metadata == {"voiceMessage": True}
 
 
-async def test_telegram_voice_transcript_becomes_plain_user_text(monkeypatch) -> None:
+async def test_telegram_forwards_voice_attachment_and_unchanged_text(monkeypatch) -> None:
     session = ChatSession(
         id=uuid4(), user_id=uuid4(), title="Test", session_type="chat"
     )
@@ -870,19 +852,21 @@ async def test_telegram_voice_transcript_becomes_plain_user_text(monkeypatch) ->
             return None
 
     start = AsyncMock(return_value=run)
+    attachments = [AttachmentInput(
+        b"original", "audio/ogg", "voice.ogg", "audio", {"voiceMessage": True}
+    )]
     monkeypatch.setattr(telegram, "AsyncSessionFactory", SessionContext)
     monkeypatch.setattr(
         telegram, "channel_provider_allowed", AsyncMock(return_value=True)
     )
     monkeypatch.setattr(
-        telegram, "_download_media", AsyncMock(return_value=([], "gesprochener Text"))
+        telegram, "_download_media", AsyncMock(return_value=attachments)
     )
     monkeypatch.setattr(telegram.AgentRuntime, "start", start)
 
     assert await telegram.process_inbox(inbox.id) == run.id
-    assert start.await_args.args[2] == "Bitte gesprochener Text"
-    assert start.await_args.kwargs["attachments"] == []
-    assert "Transkription" not in start.await_args.args[2]
+    assert start.await_args.args[2] == "Bitte"
+    assert start.await_args.kwargs["attachments"] is attachments
 
 
 async def test_telegram_progress_target_copies_state_before_rollback(monkeypatch) -> None:

@@ -298,12 +298,21 @@ def message_dict(
         metadata = attachment.metadata_json or {}
         companion_path = metadata.get("companionFilePath")
         companion = (
-            f", companion {companion_path}" if isinstance(companion_path, str) else ""
+            f", companion {companion_path}"
+            if attachment.kind != "audio" and isinstance(companion_path, str)
+            else ""
         )
+        voice = ""
+        if metadata.get("voiceMessage") is True:
+            voice = ", user voice recording"
+            if metadata.get("voiceTranscriptionStatus") == "completed":
+                voice += ", transcript included in user text"
+            else:
+                voice += ", automatic transcript unavailable; do not infer spoken words"
         attachment_markers.append(
             f"[Session attachment: ID {attachment.id}, file "
             f"{attachment.filename or 'attachment'}, kind {attachment.kind}, "
-            f"MIME {attachment.mime_type}, path {attachment.file_path}{companion}{duration}]"
+            f"MIME {attachment.mime_type}, path {attachment.file_path}{companion}{duration}{voice}]"
         )
     if include_attachment_markers and attachment_markers:
         if message.role == "user" and not content.strip():
@@ -691,7 +700,11 @@ def general_system_prompt(
             "not downloads. Use its card."
         )
     if "transcribe_audio" in offered_tool_names:
-        parts.append("transcribe_audio uses the verified PCM audio derivative automatically.")
+        parts.append(
+            "transcribe_audio uses the verified PCM audio derivative automatically. "
+            "For voice recordings with transcripts included in user text, respond to that text; "
+            "do not transcribe again unless requested."
+        )
     if "memory_write" in offered_tool_names:
         parts.append(
             "Call memory_write in the same turn only when the latest user message explicitly asks to "

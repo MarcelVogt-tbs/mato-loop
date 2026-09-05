@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -15,12 +16,13 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import (
     AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
+    StrictInt,
     ValidationError,
     model_validator,
 )
@@ -333,6 +335,9 @@ class SessionCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     content: str = Field(max_length=200_000)
+    voice_attachment_indices: list[StrictInt] = Field(
+        default_factory=list, alias="voiceAttachmentIndices"
+    )
     run_id: UUID | None = None
     project_id: UUID | None = None
     model_id: UUID | None = None
@@ -372,6 +377,9 @@ class SendMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     content: str = Field(max_length=200_000)
+    voice_attachment_indices: list[StrictInt] = Field(
+        default_factory=list, alias="voiceAttachmentIndices"
+    )
     run_id: UUID | None = None
     active_file: ActiveFileRequest | None = Field(
         default=None, validation_alias=AliasChoices("active_file", "activeFile")
@@ -420,13 +428,19 @@ def _attachment_api_error(exc: AttachmentError) -> ApiError:
 
 
 async def _attachment_uploads(
-    files: list[UploadFile], settings: InstanceLimits | None = None
+    files: list[UploadFile], settings: InstanceLimits | None = None,
+    voice_attachment_indices: list[int] | None = None,
 ) -> list[AttachmentInput]:
     settings = settings or InstanceLimits()
     if not files:
         raise ApiError(422, "validation.required", field="attachments")
     attachments = []
     try:
+        indices = voice_attachment_indices or []
+        if len(set(indices)) != len(indices) or any(
+            type(index) is not int or not 0 <= index < len(files) for index in indices
+        ):
+            raise ApiError(422, "validation.invalid", field="voiceAttachmentIndices")
         if len(files) > settings.max_attachments_per_message:
             raise ApiError(
                 422,
@@ -452,6 +466,12 @@ async def _attachment_uploads(
                         limits=limits,
                     )
                 )
+                if index in indices:
+                    if attachments[-1].kind != "audio":
+                        raise ApiError(422, "validation.invalid", field="voiceAttachmentIndices")
+                    attachments[-1] = replace(
+                        attachments[-1], metadata={"voiceMessage": True}
+                    )
             except AttachmentError as exc:
                 if exc.code == "attachment.invalidImage":
                     filename = safe_filename(upload.filename)
@@ -633,6 +653,8 @@ async def create_session(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
+    if payload.voice_attachment_indices:
+        raise ApiError(422, "validation.invalid", field="voiceAttachmentIndices")
     return await _create_session(payload, user, db)
 
 
@@ -654,7 +676,9 @@ async def create_session_with_attachments(
             request,
             user,
             db,
-            await _attachment_uploads(attachments, instance_limits),
+            await _attachment_uploads(
+                attachments, instance_limits, request.voice_attachment_indices
+            ),
         )
     except AttachmentError as exc:
         raise _attachment_api_error(exc) from exc
@@ -953,7 +977,8 @@ async def download_attachment(
     attachment_id: UUID,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> FileResponse:
+    playback: bool = False,
+) -> Response:
     attachment = await db.scalar(
         select(MessageAttachment)
         .join(Message, Message.id == MessageAttachment.message_id)
@@ -972,6 +997,17 @@ async def download_attachment(
     if attachment is None:
         raise ApiError(404, "attachment.notFound")
     try:
+        if playback:
+            return Response(
+                await AttachmentService().read_audio(attachment, session_id),
+                media_type="audio/wav",
+                headers={
+                    "Content-Disposition": "inline",
+                    "X-Content-Type-Options": "nosniff",
+                    "Cross-Origin-Resource-Policy": "same-origin",
+                    "Cache-Control": "private, no-store",
+                },
+            )
         path = await AttachmentService().verified_path(attachment, session_id)
     except AttachmentError as exc:
         logger.warning("Attachment file for existing metadata was not found")
@@ -1020,6 +1056,8 @@ async def send_message(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, Any]:
+    if payload.voice_attachment_indices:
+        raise ApiError(422, "validation.invalid", field="voiceAttachmentIndices")
     return await _send_message(session_id, payload, user, db)
 
 
@@ -1045,7 +1083,9 @@ async def send_message_with_attachments(
             request,
             user,
             db,
-            await _attachment_uploads(attachments, instance_limits),
+            await _attachment_uploads(
+                attachments, instance_limits, request.voice_attachment_indices
+            ),
         )
     except AttachmentError as exc:
         raise _attachment_api_error(exc) from exc

@@ -3,22 +3,27 @@ import json
 import logging
 import wave
 from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import Headers, UploadFile
 
 from mato_loop_backend.agent import AgentRuntime
+from mato_loop_backend.agent import runtime as runtime_module
+from mato_loop_backend.agent.context import message_dict
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import sessions as sessions_route
 from mato_loop_backend.api.routes.media import create_transcription
-from mato_loop_backend.attachments import AttachmentError, AttachmentInput
-from mato_loop_backend.models import ChatSession, UserAccount
-from mato_loop_backend.providers import TranscriptionResult
+from mato_loop_backend.attachments import AttachmentError, AttachmentInput, AttachmentService
+from mato_loop_backend.models import AgentRun, ChatSession, Message, UserAccount
+from mato_loop_backend.providers import TranscriptionResult, lemonade
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.media import MediaService
+from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import InstanceLimits, SettingsStore, ToolSettings
 
 
@@ -116,7 +121,8 @@ async def test_direct_transcription_rejects_unavailable_tool(monkeypatch) -> Non
     transcribe.assert_not_awaited()
 
 
-async def test_session_multipart_routes_forward_attachments_without_text(monkeypatch) -> None:
+@pytest.mark.parametrize("project_id", [None, str(uuid4())])
+async def test_session_multipart_routes_forward_attachments_without_text(monkeypatch, project_id) -> None:
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)
     create = AsyncMock(return_value={"created": True})
@@ -126,8 +132,10 @@ async def test_session_multipart_routes_forward_attachments_without_text(monkeyp
     monkeypatch.setattr(
         SettingsStore, "load", AsyncMock(return_value=InstanceLimits())
     )
-    create_payload = json.dumps({"content": ""})
-    send_payload = json.dumps({"content": ""})
+    create_payload = json.dumps({
+        "content": "", "voiceAttachmentIndices": [0], "project_id": project_id,
+    })
+    send_payload = json.dumps({"content": "", "voiceAttachmentIndices": [0]})
 
     result = await sessions_route.create_session_with_attachments(
         create_payload, [upload()], user, db
@@ -147,6 +155,170 @@ async def test_session_multipart_routes_forward_attachments_without_text(monkeyp
     assert created_audio.kind == "audio"
     assert created_audio.mime_type == "audio/wav"
     assert sent_audio.filename == "aufnahme.wav"
+    assert created_audio.metadata == sent_audio.metadata == {"voiceMessage": True}
+
+
+@pytest.mark.parametrize("indices", [[0, 0], [-1], [1]])
+async def test_voice_indices_reject_duplicates_and_out_of_range(indices) -> None:
+    audio = upload()
+    with pytest.raises(ApiError) as error:
+        await sessions_route._attachment_uploads([audio], voice_attachment_indices=indices)
+    assert error.value.code == "validation.invalid"
+    assert error.value.field == "voiceAttachmentIndices"
+    assert audio.file.closed
+
+
+@pytest.mark.parametrize("indices", [[True], ["0"], [0.5], None])
+@pytest.mark.parametrize("model", [sessions_route.SessionCreateRequest, sessions_route.SendMessageRequest])
+def test_voice_indices_require_integer_list(indices, model) -> None:
+    with pytest.raises(ApiError) as error:
+        sessions_route._multipart_payload(
+            json.dumps({"content": "", "voiceAttachmentIndices": indices}), model
+        )
+    assert error.value.code == "validation.invalid"
+    assert error.value.field == "voiceAttachmentIndices"
+
+
+async def test_voice_marker_rejects_non_audio_and_leaves_regular_audio_unmarked() -> None:
+    text = UploadFile(BytesIO(b"hello"), filename="note.txt")
+    with pytest.raises(ApiError) as error:
+        await sessions_route._attachment_uploads([text], voice_attachment_indices=[0])
+    assert error.value.code == "validation.invalid"
+    assert error.value.field == "voiceAttachmentIndices"
+    assert (await sessions_route._attachment_uploads([upload()]))[0].metadata is None
+
+
+@pytest.mark.parametrize("outcome", [
+    "success", "empty", "failure", "unavailable", "no_model", "attachment_error",
+    "os_error", "timeout", "runtime_error", "cancelled", "database_error",
+    "owner_disabled_before", "owner_disabled_during", "status_commit_error",
+])
+async def test_common_voice_transcription_preserves_persisted_audio_and_is_idempotent(
+    tmp_path, monkeypatch, caplog, outcome,
+) -> None:
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session.id)
+    service = AttachmentService(storage)
+    message = Message(id=uuid4(), session_id=session.id, role="user", content="Bitte")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = session
+    voice = await service.create_attachment(
+        db, message, wav_bytes(), "audio/wav", kind="audio", filename="voice.wav",
+        metadata={"voiceMessage": True}, position=0,
+    )
+    regular = await service.create_attachment(
+        db, message, wav_bytes(), "audio/wav", kind="audio", filename="upload.wav", position=1,
+    )
+    message.attachments = [voice, regular]
+    await db.commit()
+    assert voice.metadata_json["voiceMessage"] is True
+    original_path = await service.verified_path(voice, session.id)
+    run = AgentRun(id=uuid4(), session_id=session.id, input_message_id=message.id)
+
+    async def get(model, _id, **_kwargs):
+        return message if model is Message else session
+
+    async def transcribe(_db, **kwargs):
+        assert db.commit.await_count >= 2
+        assert kwargs["audio"] == await service.read_audio(voice, session.id)
+        assert kwargs["user_id"] == session.user_id
+        assert original_path.read_bytes() == wav_bytes()
+        errors = {
+            "attachment_error": AttachmentError("attachment.notFound"),
+            "os_error": OSError("secret-provider-response"),
+            "timeout": TimeoutError("secret-provider-response"),
+            "runtime_error": RuntimeError("secret-provider-response"),
+            "cancelled": asyncio.CancelledError(),
+            "database_error": SQLAlchemyError("secret-provider-response"),
+        }
+        if outcome in errors:
+            raise errors[outcome]
+        if outcome == "owner_disabled_during":
+            db.scalar.return_value = False
+            return TranscriptionResult("Must not be persisted")
+        if outcome in {"failure", "no_model"}:
+            raise ProviderError(
+                "secret-provider-response", code=(
+                    "provider.timeout" if outcome == "failure"
+                    else "provider.modelCapabilityUnavailable"
+                ),
+            )
+        return TranscriptionResult("  Gesprochener Text  " if outcome == "success" else "  ")
+
+    db.get.side_effect = get
+    db.scalar.return_value = outcome != "owner_disabled_before"
+    monkeypatch.setattr(runtime_module, "AttachmentService", lambda: service)
+    monkeypatch.setattr(runtime_module, "load_effective_tools", AsyncMock(return_value=ToolSettings(
+        tool_availability={"transcribe_audio": outcome != "unavailable"},
+    )))
+    enqueue = AsyncMock()
+    monkeypatch.setattr(runtime_module.EpisodeIndexService, "enqueue", enqueue)
+    transcription = AsyncMock(side_effect=transcribe)
+    monkeypatch.setattr(MediaService, "transcribe_audio", transcription)
+    events = []
+
+    async def publish(run_id, event):
+        assert db.commit.await_count == 3
+        assert voice.metadata_json["voiceTranscriptionStatus"]
+        events.append((run_id, event))
+
+    monkeypatch.setattr(runtime_module.run_events, "publish", publish)
+    if outcome == "status_commit_error":
+        db.commit.side_effect = [None, SQLAlchemyError("commit failed")]
+
+    terminal_errors = {
+        "cancelled": asyncio.CancelledError,
+        "database_error": SQLAlchemyError,
+        "owner_disabled_before": runtime_module.AgentRunError,
+        "owner_disabled_during": runtime_module.AgentRunError,
+        "status_commit_error": SQLAlchemyError,
+    }
+    if outcome in terminal_errors:
+        with pytest.raises(terminal_errors[outcome]) as error:
+            await AgentRuntime._transcribe_voice_messages(db, run)
+        if outcome.startswith("owner_disabled"):
+            assert str(error.value) == "auth.accountDisabled"
+        assert transcription.await_count == (0 if outcome == "owner_disabled_before" else 1)
+        assert original_path.read_bytes() == wav_bytes()
+        assert message.content == "Bitte"
+        if outcome != "status_commit_error":
+            assert "voiceTranscriptionStatus" not in voice.metadata_json
+        assert events == []
+        return
+
+    await AgentRuntime._transcribe_voice_messages(db, run)
+    await AgentRuntime._transcribe_voice_messages(db, run)
+
+    assert transcription.await_count == (0 if outcome == "unavailable" else 1)
+    assert original_path.read_bytes() == wav_bytes()
+    assert "voiceMessage" not in regular.metadata_json
+    assert "voiceTranscriptionStatus" not in regular.metadata_json
+    assert message.content == ("Bitte\n\nGesprochener Text" if outcome == "success" else "Bitte")
+    assert voice.metadata_json["voiceTranscriptionStatus"] == (
+        "completed" if outcome == "success" else "unavailable" if outcome == "unavailable" else "failed"
+    )
+    projected = message_dict(message)["content"]
+    assert f"ID {voice.id}" in projected
+    assert voice.file_path in projected
+    assert ("transcript included in user text" in projected) == (outcome == "success")
+    assert enqueue.await_count == (1 if outcome == "success" else 0)
+    assert "secret-provider-response" not in caplog.text
+    assert events == [(run.id, {"type": "message.updated", "messageId": str(message.id)})]
+
+
+async def test_transcription_releases_model_lookup_transaction_before_provider_io(monkeypatch) -> None:
+    db = AsyncMock(spec=AsyncSession)
+    resolved = SimpleNamespace(base_url="http://media", api_key=None, model=SimpleNamespace(model_id="stt"))
+    monkeypatch.setattr(MediaService, "resolve_model", AsyncMock(return_value=resolved))
+
+    async def transcribe(**_kwargs):
+        db.commit.assert_awaited_once()
+        return "Spoken text"
+
+    monkeypatch.setattr(lemonade, "transcribe_audio", transcribe)
+    result = await MediaService.transcribe_audio(db, audio=wav_bytes(), user_id=uuid4())
+    assert result.text == "Spoken text"
 
 
 async def test_session_multipart_retries_skip_attachment_classification(monkeypatch) -> None:
