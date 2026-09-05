@@ -1384,7 +1384,11 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
         context,
         root=arguments.source_root,
         path=arguments.source_path,
-        capability="filesystem.delete",
+        capability=(
+            "session.files.write"
+            if arguments.source_root == "session"
+            else "filesystem.delete"
+        ),
         action_kind="move_path",
         action_label="Quelle verschieben",
     )
@@ -1934,6 +1938,9 @@ def resolve_tool_execution_policy(
 
     permissions = settings.permissions
     configured = permissions.policies.get(capability)
+    # Preserve saved read rules until a session-specific rule replaces them.
+    if configured is None and capability == "session.files.read":
+        configured = permissions.policies.get("filesystem.read")
     if configured is not None:
         resolution = resolve_value(configured, "global")
     else:
@@ -1941,6 +1948,7 @@ def resolve_tool_execution_policy(
             ToolExecutionPolicy.ASK
             if settings.trust_level == TrustLevel.PUBLIC
             and default == ToolExecutionPolicy.AUTO
+            and capability not in {"session.files.read", "session.files.write"}
             else default,
             "default",
             "trust_default",
@@ -4375,8 +4383,11 @@ _FILESYSTEM_WRITE = ToolAction(
 _FILESYSTEM_DELETE = ToolAction(
     "filesystem.delete", "Löschen", ToolExecutionPolicy.ASK, mutates=True
 )
+_SESSION_FILES_READ = ToolAction(
+    "session.files.read", "Session-Dateien lesen", ToolExecutionPolicy.AUTO
+)
 _SESSION_FILES_WRITE = ToolAction(
-    "session.files.write", "Session-Dateien schreiben", ToolExecutionPolicy.ASK, mutates=True
+    "session.files.write", "Session-Dateien schreiben", ToolExecutionPolicy.AUTO, mutates=True
 )
 _WEB_SEARCH = ToolAction("network.search", "Websuche", ToolExecutionPolicy.AUTO)
 _WEB_FETCH = ToolAction("network.fetch", "Webseiten abrufen", ToolExecutionPolicy.AUTO)
@@ -4539,7 +4550,10 @@ tool_registry = ToolRegistry(
             group="filesystem",
             label="Pfad lesen",
             icon="description",
-            actions=(_FILESYSTEM_READ,),
+            actions=(_SESSION_FILES_READ, _FILESYSTEM_READ),
+            alternative_action_groups=(
+                frozenset({"session.files.read", "filesystem.read"}),
+            ),
         ),
         ToolDefinition(
             "glob",
@@ -4551,7 +4565,10 @@ tool_registry = ToolRegistry(
             group="filesystem",
             label="Dateien suchen",
             icon="folder_open",
-            actions=(_FILESYSTEM_READ,),
+            actions=(_SESSION_FILES_READ, _FILESYSTEM_READ),
+            alternative_action_groups=(
+                frozenset({"session.files.read", "filesystem.read"}),
+            ),
         ),
         ToolDefinition(
             "grep",
@@ -4565,7 +4582,10 @@ tool_registry = ToolRegistry(
             group="filesystem",
             label="Dateiinhalte durchsuchen",
             icon="manage_search",
-            actions=(_FILESYSTEM_READ,),
+            actions=(_SESSION_FILES_READ, _FILESYSTEM_READ),
+            alternative_action_groups=(
+                frozenset({"session.files.read", "filesystem.read"}),
+            ),
         ),
         ToolDefinition(
             "provide_file",
@@ -4576,7 +4596,10 @@ tool_registry = ToolRegistry(
             group="filesystem",
             label="Datei bereitstellen",
             icon="download",
-            actions=(_FILESYSTEM_READ,),
+            actions=(_SESSION_FILES_READ, _FILESYSTEM_READ),
+            alternative_action_groups=(
+                frozenset({"session.files.read", "filesystem.read"}),
+            ),
         ),
         ToolDefinition(
             "write_file",
@@ -4588,8 +4611,8 @@ tool_registry = ToolRegistry(
             label="Datei schreiben",
             icon="edit_document",
             actions=(_SESSION_FILES_WRITE, _FILESYSTEM_WRITE),
-            alternative_action_capabilities=frozenset(
-                {"session.files.write", "filesystem.write"}
+            alternative_action_groups=(
+                frozenset({"session.files.write", "filesystem.write"}),
             ),
         ),
         ToolDefinition(
@@ -4602,8 +4625,8 @@ tool_registry = ToolRegistry(
             label="Datei bearbeiten",
             icon="edit_note",
             actions=(_SESSION_FILES_WRITE, _FILESYSTEM_WRITE),
-            alternative_action_capabilities=frozenset(
-                {"session.files.write", "filesystem.write"}
+            alternative_action_groups=(
+                frozenset({"session.files.write", "filesystem.write"}),
             ),
         ),
         ToolDefinition(
@@ -4616,8 +4639,8 @@ tool_registry = ToolRegistry(
             label="Ordner erstellen",
             icon="create_new_folder",
             actions=(_SESSION_FILES_WRITE, _FILESYSTEM_WRITE),
-            alternative_action_capabilities=frozenset(
-                {"session.files.write", "filesystem.write"}
+            alternative_action_groups=(
+                frozenset({"session.files.write", "filesystem.write"}),
             ),
         ),
         ToolDefinition(
@@ -4640,9 +4663,13 @@ tool_registry = ToolRegistry(
             group="filesystem",
             label="Pfad kopieren",
             icon="content_copy",
-            actions=(_FILESYSTEM_READ, _SESSION_FILES_WRITE, _FILESYSTEM_WRITE),
-            alternative_action_capabilities=frozenset(
-                {"session.files.write", "filesystem.write"}
+            actions=(
+                _SESSION_FILES_READ, _FILESYSTEM_READ,
+                _SESSION_FILES_WRITE, _FILESYSTEM_WRITE,
+            ),
+            alternative_action_groups=(
+                frozenset({"session.files.read", "filesystem.read"}),
+                frozenset({"session.files.write", "filesystem.write"}),
             ),
         ),
         ToolDefinition(
@@ -4655,8 +4682,9 @@ tool_registry = ToolRegistry(
             label="Pfad verschieben",
             icon="drive_file_move",
             actions=(_FILESYSTEM_DELETE, _SESSION_FILES_WRITE, _FILESYSTEM_WRITE),
-            alternative_action_capabilities=frozenset(
-                {"session.files.write", "filesystem.write"}
+            alternative_action_groups=(
+                frozenset({"session.files.write", "filesystem.delete"}),
+                frozenset({"session.files.write", "filesystem.write"}),
             ),
         ),
         ToolDefinition(
@@ -5042,8 +5070,8 @@ tool_registry = ToolRegistry(
             label="Patch anwenden",
             icon="difference",
             actions=(_FILESYSTEM_WRITE, _FILESYSTEM_DELETE),
-            alternative_action_capabilities=frozenset(
-                {"filesystem.write", "filesystem.delete"}
+            alternative_action_groups=(
+                frozenset({"filesystem.write", "filesystem.delete"}),
             ),
         ),
         ToolDefinition(
@@ -5083,7 +5111,7 @@ tool_registry = ToolRegistry(
             label="Shell-Befehl ausführen",
             icon="terminal",
             actions=(_SHELL_READ, _SHELL_WRITE),
-            alternative_action_capabilities=frozenset({"shell.read", "shell.write"}),
+            alternative_action_groups=(frozenset({"shell.read", "shell.write"}),),
         ),
     ],
 )

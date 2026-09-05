@@ -57,6 +57,7 @@ class ToolContribution:
     label: str | None = None
     icon: str = "extension"
     actions: tuple[ToolAction, ...] = ()
+    alternative_action_groups: tuple[frozenset[str], ...] = ()
     integration_id: str | None = None
     integration_ids: tuple[str, ...] = ()
     instance_argument: str | None = None

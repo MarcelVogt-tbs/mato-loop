@@ -64,6 +64,13 @@ class PermissionRequest:
         "deny",
     )
 
+    @property
+    def grant_capabilities(self) -> tuple[str, ...]:
+        # Managed reads previously shared filesystem.read grants.
+        if self.resource_type == "root_path" and self.capability == "session.files.read":
+            return (self.capability, "filesystem.read")
+        return (self.capability,)
+
 
 _INTEGRATION_OPERATION_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _INTEGRATION_RESOURCE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,499}$")
@@ -216,7 +223,11 @@ def path_permission(
         sort_keys=True,
     )
     return PermissionRequest(
-        capability=capability,
+        capability=(
+            "session.files.read"
+            if selected_root == FileRoot.SESSION and capability == "filesystem.read"
+            else capability
+        ),
         resource_type="root_path",
         resource_scope=scope,
         action_kind=action_kind,
@@ -248,7 +259,7 @@ def project_session_path_permission(
         sort_keys=True,
     )
     return PermissionRequest(
-        capability="filesystem.read",
+        capability="session.files.read",
         resource_type="project_session_path",
         resource_scope=scope,
         action_kind=action_kind,
@@ -927,7 +938,9 @@ class PermissionPolicy:
 
         if request.resource_type == "project_session_path":
             scope = _project_session_path_scope(request.resource_scope)
-            if scope is None or request.capability != "filesystem.read":
+            if scope is None or request.capability not in {
+                "filesystem.read", "session.files.read"
+            }:
                 return PermissionDecision.DENY
             project_id, target_id, _path = scope
             target = await db.get(ChatSession, target_id)
@@ -1079,6 +1092,7 @@ class PermissionPolicy:
                 "filesystem.read",
                 "filesystem.write",
                 "filesystem.delete",
+                "session.files.read",
                 "session.files.write",
             }:
                 return PermissionDecision.DENY
@@ -1096,7 +1110,7 @@ class PermissionPolicy:
             if policy in {None, ToolExecutionPolicy.AUTO}:
                 return PermissionDecision.ALLOW
 
-        elif request.capability.startswith("filesystem."):
+        elif request.capability.startswith(("filesystem.", "session.files.")):
             return PermissionDecision.DENY
 
         if policy == ToolExecutionPolicy.DISABLED:
@@ -1109,7 +1123,7 @@ class PermissionPolicy:
                 await db.scalars(
                     select(PermissionGrant).where(
                         PermissionGrant.session_id == chat_session.id,
-                        PermissionGrant.capability == request.capability,
+                        PermissionGrant.capability.in_(request.grant_capabilities),
                         PermissionGrant.resource_type == request.resource_type,
                         *grant_binding_conditions(),
                     )
@@ -1127,7 +1141,10 @@ class PermissionPolicy:
         request: PermissionRequest,
         root_files: RootFileService,
     ) -> bool:
-        if grant.capability != request.capability or grant.resource_type != request.resource_type:
+        if (
+            grant.capability not in request.grant_capabilities
+            or grant.resource_type != request.resource_type
+        ):
             return False
         if request.resource_type == "root_path":
             resource = _root_path_scope(request.resource_scope)

@@ -832,6 +832,9 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
 
 _CAD_RENDER = ToolAction("cad.render", "CAD rendern", ToolExecutionPolicy.ASK)
 _FILESYSTEM_READ = ToolAction("filesystem.read", "Lesen", ToolExecutionPolicy.AUTO)
+_SESSION_FILES_READ = ToolAction(
+    "session.files.read", "Session-Dateien lesen", ToolExecutionPolicy.AUTO
+)
 
 OPENSCAD_TOOL = ToolContribution(
     name="render_openscad",
@@ -844,7 +847,8 @@ OPENSCAD_TOOL = ToolContribution(
     handler=render_openscad,
     label="OpenSCAD-Modell rendern",
     icon="view_in_ar",
-    actions=(_CAD_RENDER, _FILESYSTEM_READ),
+    actions=(_CAD_RENDER, _FILESYSTEM_READ, _SESSION_FILES_READ),
+    alternative_action_groups=(frozenset({"filesystem.read", "session.files.read"}),),
     authorization_factory=_authorization,
     execution_operation="integration.openscad.render",
     execution_config_arguments=("binaryPath",),

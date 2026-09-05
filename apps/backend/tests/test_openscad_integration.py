@@ -3,6 +3,7 @@ import json
 import math
 import struct
 import zipfile
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -206,8 +207,12 @@ def test_openscad_binary_path_matches_the_agent_wire_contract(path) -> None:
         OpenScadConfig(binaryPath=path)
 
 
+@pytest.mark.parametrize(
+    ("root", "read_capability"),
+    [("session", "session.files.read"), ("workspace", "filesystem.read")],
+)
 def test_openscad_source_read_does_not_inherit_the_integration_policy(
-    tmp_path: Path,
+    tmp_path: Path, root: str, read_capability: str
 ) -> None:
     instance = _instance()
     context = _tool_context(instance)
@@ -216,14 +221,29 @@ def test_openscad_source_read_does_not_inherit_the_integration_policy(
     context.root_files = RootFileService(
         context.session.id, session_storage=storage
     )
-    render, read = OPENSCAD_ADAPTER.execution_tools[0].authorization_factory(
-        OpenScadRenderArguments(root="session", path="model.scad"),
+    context.execution_client.current_directory = "/home/user/project"
+    definition = tool_registry._contributed_definition(OPENSCAD_ADAPTER.execution_tools[0])
+    render, read = definition.authorization_factory(
+        OpenScadRenderArguments(root=root, path="model.scad"),
         context,
     )
 
     assert render.use_integration_policy is True
-    assert read.capability == "filesystem.read"
+    assert read.capability == read_capability
     assert read.use_integration_policy is False
+    capabilities = {render.capability, read.capability}
+    assert capabilities == {"cad.render", read_capability}
+    assert definition.actions_satisfied(capabilities)
+    assert not definition.actions_satisfied({read.capability})
+    assert not definition.actions_satisfied({render.capability})
+    assert not definition.actions_satisfied(capabilities | {"filesystem.write"})
+
+    strict = replace(definition, alternative_action_groups=())
+    declared = {action.capability for action in strict.actions}
+    assert strict.actions_satisfied(declared)
+    assert not strict.actions_satisfied(capabilities)
+    assert not strict.actions_satisfied(declared - {"cad.render"})
+    assert not strict.actions_satisfied(declared | {"filesystem.write"})
 
 
 def test_openscad_prompt_fragment_covers_the_source_render_verify_workflow() -> None:

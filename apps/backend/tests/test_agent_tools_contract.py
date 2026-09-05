@@ -18,7 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import mato_loop_backend.agent.tools as tools_module
 import mato_loop_backend.integrations.registry as integration_registry
 from mato_loop_backend.agent.context import _projection_messages
-from mato_loop_backend.agent.permissions import PermissionDecision, PermissionRequest
+from mato_loop_backend.agent.permissions import (
+    PermissionDecision,
+    PermissionPolicy,
+    PermissionRequest,
+)
+from mato_loop_backend.agent.runtime import _tool_policy
 from mato_loop_backend.agent.tool_arguments import TaskArguments
 from mato_loop_backend.agent.tools import (
     BoundTool,
@@ -1422,6 +1427,61 @@ def test_policy_disabled_integration_tool_points_to_integration_settings(monkeyp
     )
 
 
+@pytest.mark.parametrize("trust", list(TrustLevel))
+async def test_session_file_operations_only_ask_for_deletion(tmp_path, trust) -> None:
+    context = _context(tmp_path, ToolCall("setup", "write_file", {}))
+    context.tool_settings = ToolSettings().select_trust(trust)
+    context.model_trust_level = trust
+    context.db.scalar.return_value = None
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[]))
+    decisions = []
+
+    async def authorize(request):
+        policy = _tool_policy(context.tool_settings, context.integration_settings, request)
+        decision = await PermissionPolicy.evaluate(
+            context.db, context.session, request, context.root_files, policy,
+            trust_level=trust,
+        )
+        decisions.append(decision)
+        return decision
+
+    context.ask_handler = authorize
+    effective = tool_registry.effective(
+        context.integration_settings, tool_settings=context.tool_settings
+    )
+    operations = [
+        ("write_file", {"root": "files", "path": "note.txt", "content": "before"}),
+        ("read", {"root": "files", "path": "note.txt"}),
+        ("glob", {"root": "files", "pattern": "*.txt"}),
+        ("grep", {"root": "files", "pattern": "before"}),
+        ("provide_file", {"root": "files", "path": "note.txt"}),
+        ("edit_file", {
+            "root": "files", "path": "note.txt", "oldText": "before", "newText": "after",
+        }),
+        ("create_directory", {"root": "files", "path": "output"}),
+        ("copy_path", {
+            "source_root": "files", "source_path": "note.txt",
+            "destination_root": "files", "destination_path": "output/copy.txt",
+        }),
+        ("move_path", {
+            "source_root": "files", "source_path": "output/copy.txt",
+            "destination_root": "files", "destination_path": "output/moved.txt",
+        }),
+        ("delete_path", {"root": "files", "path": "output/moved.txt"}),
+    ]
+    for name, arguments in operations:
+        context.tool_call = ToolCall(name, name, arguments)
+        decisions.clear()
+        result = await effective.execute(context.tool_call, context)
+        deleting = name == "delete_path"
+        assert result.is_error is deleting, (name, result.content)
+        assert decisions == [
+            PermissionDecision.ASK if deleting else PermissionDecision.ALLOW
+        ] * (2 if name in {"copy_path", "move_path"} else 1)
+
+    assert context.root_files.read_file("session", "output/moved.txt").content == "1: after"
+
+
 def test_global_policy_removes_tools_requiring_a_disabled_action() -> None:
     settings = _tool_settings(
         {"policies": {"filesystem.delete": "disabled"}}
@@ -1436,7 +1496,7 @@ def test_global_policy_removes_tools_requiring_a_disabled_action() -> None:
     }
 
     assert "delete_path" not in offered
-    assert "move_path" not in offered
+    assert "move_path" in offered
     assert "write_file" in offered
 
 

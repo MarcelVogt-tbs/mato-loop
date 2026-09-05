@@ -247,6 +247,8 @@ def cap_agent_profile_policy(
     if permissions is None:
         return baseline
     profile_policy = permissions.policies.get(capability)
+    if profile_policy is None and capability == "session.files.read":
+        profile_policy = permissions.policies.get("filesystem.read")
     if integration_id is not None:
         profile_policy = permissions.integration_policies.get(
             str(integration_id), {}

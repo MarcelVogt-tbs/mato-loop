@@ -150,6 +150,29 @@ def test_root_path_grant_matches_only_same_root_identity_and_subtree(tmp_path) -
     )
 
 
+async def test_managed_read_reuses_saved_filesystem_grant(tmp_path) -> None:
+    session = _session()
+    root_files = _root_files(tmp_path, session)
+    request = _path_request(root_files, "notes.txt")
+    assert request.capability == "session.files.read"
+    grant = PermissionGrant(
+        session_id=session.id,
+        capability="filesystem.read",
+        resource_type=request.resource_type,
+        resource_scope=request.resource_scope,
+    )
+    db = _db_with_grants(grant)
+    assert await PermissionPolicy.evaluate(
+        db, session, request, root_files, ToolExecutionPolicy.ASK
+    ) == PermissionDecision.ALLOW
+    assert list(db.scalars.await_args.args[0].compile().params.values()).count(
+        ["session.files.read", "filesystem.read"]
+    ) == 1
+    assert await PermissionPolicy.evaluate(
+        db, session, request, root_files, ToolExecutionPolicy.DISABLED
+    ) == PermissionDecision.DENY
+
+
 async def test_plan_profile_only_auto_writes_its_canonical_plan(tmp_path) -> None:
     session = _session()
     root_files = _root_files(tmp_path, session)

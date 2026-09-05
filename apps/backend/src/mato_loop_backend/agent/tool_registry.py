@@ -248,7 +248,7 @@ class ToolDefinition:
     label: str | None = None
     icon: str = "build"
     actions: tuple[ToolAction, ...] = ()
-    alternative_action_capabilities: frozenset[str] = frozenset()
+    alternative_action_groups: tuple[frozenset[str], ...] = ()
     instance_argument: str | None = None
     resource_argument: str | None = None
     releases_private_data: bool = False
@@ -266,6 +266,15 @@ class ToolDefinition:
     def validate_arguments(self, value: object) -> BaseModel:
         return self.arguments_model.model_validate(internal_file_roots(value))
 
+    def actions_satisfied(self, capabilities: set[str]) -> bool:
+        declared = {action.capability for action in self.actions}
+        alternatives = frozenset().union(*self.alternative_action_groups)
+        return (
+            capabilities <= declared
+            and declared - alternatives <= capabilities
+            and all(capabilities & group for group in self.alternative_action_groups)
+        )
+
 
 def _actions_enabled(
     definition: ToolDefinition,
@@ -275,19 +284,17 @@ def _actions_enabled(
     if not tool_settings.tool_availability.get(definition.name, True):
         return False
     enabled = {
-            action.capability: policy_resolver(
-                tool_settings,
-                action.capability,
-                action.default_policy,
-                include_scoped=True,
-            )
-            != ToolExecutionPolicy.DISABLED
-            for action in definition.actions
+        action.capability
+        for action in definition.actions
+        if policy_resolver(
+            tool_settings,
+            action.capability,
+            action.default_policy,
+            include_scoped=True,
+        )
+        != ToolExecutionPolicy.DISABLED
     }
-    alternatives = definition.alternative_action_capabilities
-    return all(
-        value for capability, value in enabled.items() if capability not in alternatives
-    ) and (not alternatives or any(enabled.get(capability, False) for capability in alternatives))
+    return definition.actions_satisfied(enabled)
 
 
 def _remove_schema_titles(value: Any) -> None:
@@ -506,6 +513,7 @@ class ToolRegistry:
             label=contribution.label,
             icon=contribution.icon,
             actions=contribution.actions,
+            alternative_action_groups=contribution.alternative_action_groups,
             instance_argument=contribution.instance_argument,
             resource_argument=contribution.resource_argument,
             releases_private_data=contribution.releases_private_data,
@@ -1109,7 +1117,9 @@ class ToolRegistry:
                         for request in requests
                     )
                 declared = {action.capability for action in definition.actions}
-                if {request.capability for request in requests} != declared:
+                if not definition.actions_satisfied(
+                    {request.capability for request in requests}
+                ):
                     return ToolResult.error("tool.unavailable")
                 for request in requests:
                     if not await self._allow(context, request):

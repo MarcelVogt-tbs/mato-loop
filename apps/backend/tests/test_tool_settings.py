@@ -90,6 +90,106 @@ def test_root_specific_write_policies_keep_shared_tools_available(
 
 
 @pytest.mark.parametrize(
+    ("disabled", "read_available", "copy_available", "move_available"),
+    [
+        ((), True, True, True),
+        (("filesystem.read", "filesystem.write", "filesystem.delete"), True, True, True),
+        (("session.files.read", "session.files.write"), True, True, True),
+        (("session.files.read", "filesystem.write"), True, True, True),
+        (("filesystem.read", "session.files.write"), True, True, True),
+        (("session.files.write", "filesystem.write"), True, False, False),
+        (("session.files.read", "filesystem.read"), False, False, True),
+        (("session.files.write", "filesystem.delete"), True, True, False),
+    ],
+)
+def test_root_specific_read_and_transfer_availability(
+    disabled: tuple[str, ...],
+    read_available: bool,
+    copy_available: bool,
+    move_available: bool,
+) -> None:
+    settings = ToolSettings(
+        public_permissions={
+            "policies": {
+                capability: (
+                    ToolExecutionPolicy.DISABLED
+                    if capability in disabled
+                    else ToolExecutionPolicy.AUTO
+                )
+                for capability in (
+                    "session.files.read",
+                    "filesystem.read",
+                    "session.files.write",
+                    "filesystem.write",
+                    "filesystem.delete",
+                )
+            }
+        }
+    ).select_trust(TrustLevel.PUBLIC)
+
+    tools = tool_registry.effective(
+        IntegrationSettings(), tool_settings=settings
+    ).tools
+
+    for name in ("read", "glob", "grep", "provide_file"):
+        assert (name in tools) is read_available
+    assert ("copy_path" in tools) is copy_available
+    assert ("move_path" in tools) is move_available
+    assert ("delete_path" in tools) is ("filesystem.delete" not in disabled)
+
+
+@pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
+@pytest.mark.parametrize("capability", ["session.files.read", "session.files.write"])
+def test_session_file_defaults_and_saved_policies(
+    trust: TrustLevel, capability: str
+) -> None:
+    settings = ToolSettings().select_trust(trust)
+    default = tool_registry.action_default(capability)
+
+    assert default == ToolExecutionPolicy.AUTO
+    assert resolve_tool_execution_policy(settings, capability, default).policy == default
+    for policy in ToolExecutionPolicy:
+        settings.permissions.policies[capability] = policy
+        assert resolve_tool_execution_policy(settings, capability, default).policy == policy
+
+
+@pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
+@pytest.mark.parametrize(
+    ("global_policies", "profile_policies", "expected"),
+    [
+        ({"filesystem.read": "ask"}, {}, "ask"),
+        ({"filesystem.read": "disabled"}, {}, "disabled"),
+        ({"filesystem.read": "auto"}, {}, "auto"),
+        ({"filesystem.read": "disabled", "session.files.read": "auto"}, {}, "auto"),
+        ({"filesystem.read": "auto", "session.files.read": "disabled"}, {}, "disabled"),
+        ({}, {"filesystem.read": "disabled"}, "disabled"),
+        ({"session.files.read": "disabled"}, {"filesystem.read": "auto"}, "auto"),
+        ({"session.files.read": "auto"}, {"filesystem.read": "ask"}, "ask"),
+        ({}, {"filesystem.read": "disabled", "session.files.read": "auto"}, "auto"),
+        ({}, {"filesystem.read": "auto", "session.files.read": "disabled"}, "disabled"),
+    ],
+)
+def test_session_file_read_inherits_saved_filesystem_policy_per_level(
+    trust: TrustLevel,
+    global_policies: dict[str, str],
+    profile_policies: dict[str, str],
+    expected: str,
+) -> None:
+    settings = ToolSettings(
+        private_permissions={"policies": global_policies},
+        public_permissions={"policies": global_policies},
+    ).select_trust(trust)
+    settings._agent_permissions = AgentProfilePermissions(policies=profile_policies)
+
+    assert (
+        resolve_tool_execution_policy(
+            settings, "session.files.read", ToolExecutionPolicy.AUTO
+        ).policy
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
     ("baseline", "profile", "expected"),
     [
         (ToolExecutionPolicy.ASK, ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO),
@@ -361,7 +461,16 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "analyzeVideo": {"policy": "ask", "timeoutSeconds": 1800},
         "updateAgentIdentity": {"policy": "ask"},
     }
-    assert set(result["policies"].values()) == {"ask"}
+    assert {
+        capability
+        for capability, policy in result["policies"].items()
+        if policy == "auto"
+    } == {"session.files.read", "session.files.write"}
+    assert all(
+        policy == "ask"
+        for capability, policy in result["policies"].items()
+        if capability not in {"session.files.read", "session.files.write"}
+    )
     assert "network.fetch" in result["policies"]
     assert "session.tool_result.read" in result["policies"]
     assert result["shellPrefixes"] == {"read": [], "write": []}
