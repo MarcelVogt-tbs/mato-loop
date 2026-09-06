@@ -151,7 +151,6 @@ async def test_cached_context_revalidation_preserves_rank_and_current_scope() ->
     assert "memories.audience" in statement
 
     session_id = uuid4()
-    project_id = uuid4()
     stale_session_id = uuid4()
     reference = EpisodeReference(
         session_id=session_id,
@@ -189,7 +188,6 @@ async def test_cached_context_revalidation_preserves_rank_and_current_scope() ->
         [reference, stale_reference],
         owner_id=owner_id,
         current_session_id=uuid4(),
-        project_id=project_id,
         full_sessions_only=True,
     )
 
@@ -206,7 +204,7 @@ async def test_cached_context_revalidation_preserves_rank_and_current_scope() ->
     ]
     statement = str(db.execute.await_args.args[0])
     assert "chat_sessions.user_id" in statement
-    assert "chat_sessions.project_id" in statement
+    assert "chat_sessions.project_id" not in statement
     assert "chat_sessions.memory_mode" in statement
     assert "messages.generation_status" in statement
 
@@ -253,7 +251,6 @@ def test_episode_ranking_deduplicates_sessions_without_destination_trust_filter(
         for item in _candidate_filters(
             owner_id=uuid4(),
             current_session_id=uuid4(),
-            project_id=None,
             readable_by=TrustLevel.PUBLIC,
         )
     )
@@ -262,22 +259,23 @@ def test_episode_ranking_deduplicates_sessions_without_destination_trust_filter(
         for item in _candidate_filters(
             owner_id=uuid4(),
             current_session_id=uuid4(),
-            project_id=None,
             readable_by=TrustLevel.PRIVATE,
         )
     )
     assert "messages.trust_level" not in public_sql
     assert "messages.trust_level" not in private_sql
     assert "private_integration_data_used" not in public_sql
+    for sql in (public_sql, private_sql):
+        assert "chat_sessions.user_id" in sql
+        assert "chat_sessions.id !=" in sql
+        assert "chat_sessions.project_id" not in sql
 
     global_sql = " ".join(
         str(item)
         for item in _candidate_filters(
             owner_id=uuid4(),
             current_session_id=None,
-            project_id=None,
             readable_by=TrustLevel.PRIVATE,
-            all_projects=True,
         )
     )
     assert "chat_sessions.user_id" in global_sql
@@ -290,9 +288,9 @@ def test_episode_ranking_deduplicates_sessions_without_destination_trust_filter(
         for item in _candidate_filters(
             owner_id=uuid4(),
             current_session_id=uuid4(),
-            project_id=None,
             readable_by=TrustLevel.PRIVATE,
             full_sessions_only=True,
         )
     )
     assert "chat_sessions.memory_mode" in automatic_sql
+    assert "chat_sessions.project_id" not in automatic_sql

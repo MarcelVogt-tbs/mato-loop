@@ -9,7 +9,7 @@ MatoLoop projects four memory layers into a normal project model request:
 
 Durable memory and prior-session retrieval are independent. A conversation does not need to be processed by Dreaming before it can be found as prior-session context.
 
-Project instructions are a separate optional authoritative layer for deliberately maintained project rules and decisions. Automatic project awareness comes from the compact session index and bounded snippets of other sessions in that project; instructions do not replace the project history.
+Project instructions are a separate optional authoritative layer for deliberately maintained project rules and decisions. Automatic project awareness comes from the compact project-local session index, complemented by bounded snippets of other owned sessions across all projects and standalone sessions; instructions do not replace the project history.
 
 The maintained user profile is separate from memory. Its full name, preferred name, form of address, pronouns, primary language, and primary residence are projected independently of `memoryMode`, are never embedded or searchable, and appear between the assistant persona and project context. Each field can define a shared, private-model-only, or public-model-only value; a trust-specific value overrides the shared value. Exact case- and whitespace-normalized profile duplicates are excluded from memory projection and retrieval.
 
@@ -23,7 +23,7 @@ Each session has a mutable `memoryMode`:
 
 The owner memory switch and effective provider and model memory policies can further restrict model-facing memory. Tool support affects memory tools and Dreaming, but not host-side automatic retrieval. The authenticated UI can still search and manage durable memories while these switches are off. Authenticated global session search and explicit permission-controlled `session_browse`, `session_search`, and `session_read` also continue to cover owned `read_only` and `disabled` sessions.
 
-Automatic prior-session retrieval uses only other `full` chat sessions in the same project scope. Project sessions remain inside their project; standalone sessions use standalone sources. The current receiving session may be `full` or `read_only`. Retrieval filters by owner and excludes the current session before ranking. A project request additionally receives up to ten recent eligible `full` sessions from the same project, ordered by their latest eligible message. Each index item contains only its bounded title and exact `session_read` arguments for that latest message, never message content. Selecting the model is the release decision for already authorized session messages; durable-memory audience filtering remains independent.
+Automatic relevant and recent prior-session retrieval uses only other `full` chat sessions owned by the same user, across all projects and standalone sessions regardless of the receiving session's project membership. Explicit `session_search` and `session_browse` use the same owner-wide scope without the automatic `full` source requirement. The current receiving session may be `full` or `read_only`. Retrieval filters by owner and excludes the current session before ranking. A project request additionally receives up to ten recent eligible `full` sessions from the same project, ordered by their latest eligible message. This index and the project sidebar remain project-local. Each index item contains only its bounded title and exact `session_read` arguments for that latest message, never message content. Selecting the model is the release decision for already authorized session messages; durable-memory audience filtering remains independent.
 
 Durable memories and prior-session snippets are untrusted data, never instructions. Conflict priority is:
 
@@ -38,7 +38,7 @@ Durable memories and prior-session snippets are untrusted data, never instructio
 
 Every eligible normal turn builds one query of at most 2,000 characters from the latest user message. When that message is short, the query includes the previous user message as follow-up context. The host computes at most one query embedding and shares it across searches for unpinned durable memories and relevant prior sessions. Memory source provenance does not affect automatic eligibility. Both searches combine PostgreSQL FTS and local cosine ranking; unavailable or invalid embeddings fall back to FTS.
 
-The ranked results are cached across tool rounds in one agent run to avoid repeated embedding work. Before every later model request, the host reloads pins and revalidates cached automatic memories against current owner, audience, pin, and source state and cached episode references against current owner, project, and source-session mode.
+The ranked results are cached across tool rounds in one agent run to avoid repeated embedding work. Before every later model request, the host reloads pins and revalidates cached automatic memories against current owner, audience, pin, and source state and cached episode references against current owner, current-session exclusion, and source-session mode, without a project-membership filter.
 
 The configurable fixed quotas default to:
 
@@ -46,7 +46,7 @@ The configurable fixed quotas default to:
 - three relevant prior-session snippets through `automaticSessionSnippetLimit`;
 - two recent-session snippets for first-turn bootstrap or explicit recent-session overview through `recentSessionSnippetLimit`.
 
-An explicit request not to use memory or prior context, and detected requests that only transform supplied text, suppress automatic snippets. The first turn and explicit recent-session overview may add recent snippets; relevance retrieval still uses the same turn query. Duplicate source sessions are removed. Project requests prioritize relevant snippets from distinct project sessions, then non-overlapping recent snippets, then unpinned memories. Standalone requests retain the smaller single relevant-session maximum and give recent snippets precedence.
+An explicit request not to use memory or prior context, and detected requests that only transform supplied text, suppress automatic snippets. The first turn and explicit recent-session overview may add recent snippets; relevance retrieval still uses the same turn query. Duplicate source sessions are removed. Project requests prioritize relevant snippets from distinct owned sessions, then non-overlapping recent snippets, then unpinned memories. Standalone requests retain the smaller single relevant-session maximum and give recent snippets precedence.
 
 The complete serialized automatic payload shares one configurable budget, `automaticContextMaxTokens`, defaulting to 1,024 tokens and capped at 10% of usable model input. Usable input is the context window minus maximum output and the safety reserve. The host converts that token limit with the model's characters-per-token estimate and truncates or omits automatic snippets to fit. The project-session index uses at most 2,000 characters and half this automatic budget. Fixed quotas are maxima, not guarantees.
 
@@ -74,7 +74,7 @@ The authenticated Memory UI retains full search, filtering, create, edit, pin or
 
 Chunking is deterministic and paragraph-aware. Each chunk has generated PostgreSQL FTS and a local E5 vector tied to its content and embedding profile. Persistence replaces eligible message chunks in the same transaction, making FTS available immediately; vector generation remains asynchronous. Undo and session deletion remove derived chunks through canonical-message cascades, and reconciliation repairs missing or stale index data.
 
-Hybrid ranking selects at most one primary anchor per source session. Authenticated global search deliberately differs from model-facing retrieval: it remains owner-scoped but spans the owner's permitted project scope and memory modes according to the UI search contract.
+Hybrid ranking selects at most one primary anchor per source session. Authenticated global search has the same owner-wide project scope as model-facing retrieval, including standalone sessions. Eligibility still differs: UI search may include the current session and all memory modes, while automatic retrieval requires other `full` source sessions and explicit session tools retain their permission checks.
 
 ## Dreaming
 

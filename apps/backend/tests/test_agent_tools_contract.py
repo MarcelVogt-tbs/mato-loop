@@ -2692,10 +2692,13 @@ async def test_session_read_invalid_cursor_returns_safe_retry_arguments(
     ("name", "result_key"),
     [("session_browse", "sessions"), ("session_search", "results")],
 )
+@pytest.mark.parametrize("project_session", [True, False])
 async def test_session_discovery_returns_private_anchor_for_direct_read(
-    tmp_path, name: str, result_key: str
+    tmp_path, name: str, result_key: str, project_session: bool
 ) -> None:
-    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Projekt Aurora")
+    session = ChatSession(
+        id=uuid4(), user_id=uuid4(), project_id=uuid4(), title="Projekt Aurora"
+    )
     message_id = uuid4()
     message_at = datetime(2026, 7, 20, 10, tzinfo=UTC)
     call = ToolCall(
@@ -2705,6 +2708,7 @@ async def test_session_discovery_returns_private_anchor_for_direct_read(
     )
     context = _context(tmp_path, call)
     context.memory_trust_level = TrustLevel.PRIVATE
+    context.session.project_id = uuid4() if project_session else None
     session.user_id = context.session.user_id
     rows = Mock()
     rows.all.return_value = [
@@ -2735,6 +2739,7 @@ async def test_session_discovery_returns_private_anchor_for_direct_read(
     statement = context.db.execute.await_args.args[0]
     assert "chat_sessions.user_id" in str(statement)
     assert "chat_sessions.id !=" in str(statement)
+    assert "chat_sessions.project_id" not in str(statement.whereclause)
 
 
 async def test_session_browse_shows_public_derived_titles_to_public_models(

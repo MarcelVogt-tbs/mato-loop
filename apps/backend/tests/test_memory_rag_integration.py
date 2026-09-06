@@ -228,6 +228,97 @@ async def test_episode_rag_is_immediate_without_embedding_or_dreaming() -> None:
         await db.rollback()
 
 
+@pytest.mark.parametrize("receiver_project", ["A", None], ids=["project-A", "standalone"])
+@pytest.mark.parametrize("full_sessions_only", [True, False], ids=["automatic", "unrestricted"])
+async def test_episode_retrieval_searches_owned_sessions_across_projects(
+    receiver_project: str | None, full_sessions_only: bool
+) -> None:
+    marker = f"Episodescope{uuid4().hex}"
+    async with AsyncSessionFactory() as db:
+        owner = UserAccount(username=f"scope-{uuid4().hex}", password_hash="test")
+        foreign_owner = UserAccount(username=f"foreign-{uuid4().hex}", password_hash="test")
+        db.add_all([owner, foreign_owner])
+        await db.flush()
+        projects = {name: Project(user_id=owner.id, name=name) for name in ("A", "B")}
+        db.add_all(projects.values())
+        await db.flush()
+        current = ChatSession(
+            user_id=owner.id,
+            project_id=projects[receiver_project].id if receiver_project else None,
+        )
+        sources = [
+            ChatSession(
+                user_id=owner.id,
+                project_id=project_id,
+                memory_mode=mode,
+            )
+            for project_id in (projects["A"].id, projects["B"].id, None)
+            for mode in ("full", "read_only", "disabled")
+        ]
+        foreign = ChatSession(user_id=foreign_owner.id)
+        db.add_all([current, foreign, *sources])
+        await db.flush()
+        for index, session in enumerate([*sources, foreign, current], start=1):
+            message = Message(
+                session_id=session.id,
+                role="user",
+                content=marker,
+                created_at=datetime(2026, 8, index, tzinfo=UTC),
+            )
+            db.add(message)
+            await db.flush()
+            assert await EpisodeIndexService.enqueue(db, message) == 1
+
+        lexical = await EpisodeRetrievalService.retrieve(
+            db,
+            owner_id=owner.id,
+            current_session_id=current.id,
+            readable_by=TrustLevel.PUBLIC,
+            query=marker,
+            semantic_enabled=False,
+            anchor_only=True,
+            full_sessions_only=full_sessions_only,
+            limit=10,
+        )
+        recent = await EpisodeRetrievalService.recent(
+            db,
+            owner_id=owner.id,
+            current_session_id=current.id,
+            readable_by=TrustLevel.PUBLIC,
+            full_sessions_only=full_sessions_only,
+            limit=10,
+        )
+
+        expected_ids = [
+            session.id
+            for session in reversed(sources)
+            if not full_sessions_only or session.memory_mode == "full"
+        ]
+        assert lexical.strategy == MemoryRetrievalStrategy.LEXICAL
+        assert recent.strategy == MemoryRetrievalStrategy.BROWSE
+        for result in (lexical, recent):
+            assert [item.session_id for item in result.references] == expected_ids
+
+        for change in ("initial", "move_project", "disable"):
+            if change == "move_project":
+                sources[0].project_id = projects["B"].id
+            elif change == "disable":
+                sources[0].memory_mode = "disabled"
+                if full_sessions_only:
+                    expected_ids.remove(sources[0].id)
+            await db.flush()
+            for result in (lexical, recent):
+                validated = await EpisodeRetrievalService.revalidate(
+                    db,
+                    result.references,
+                    owner_id=owner.id,
+                    current_session_id=current.id,
+                    full_sessions_only=full_sessions_only,
+                )
+                assert [item.session_id for item in validated] == expected_ids, change
+        await db.rollback()
+
+
 async def test_local_rag_falls_back_to_postgres_fts(monkeypatch) -> None:
     content = f"Fallbackkennung {uuid4().hex}"
     query = content.split()[-1]

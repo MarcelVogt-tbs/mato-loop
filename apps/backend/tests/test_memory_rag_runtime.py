@@ -599,6 +599,25 @@ async def test_cached_automatic_context_is_revalidated_without_reembedding(
         project_session=True,
     )
     MemoryService.automatic_context_by_ids.return_value = []
+    episodes = [
+        EpisodeReference(
+            session_id=uuid4(),
+            project_id=project_id,
+            session_title="Deployment",
+            anchor_message_id=uuid4(),
+            anchor_created_at=datetime.now(UTC),
+            anchor_role="user",
+            anchor_content="Deployment context from another session.",
+            excerpt=(),
+        )
+        for project_id in (uuid4(), None)
+    ]
+    EpisodeRetrievalService.retrieve.return_value = EpisodeRetrieval(
+        references=episodes[:1], strategy=MemoryRetrievalStrategy.HYBRID
+    )
+    EpisodeRetrievalService.recent.return_value = EpisodeRetrieval(
+        references=episodes[1:], strategy=MemoryRetrievalStrategy.BROWSE
+    )
 
     await AgentRuntime._execute_loop(db, run)
 
@@ -607,6 +626,17 @@ async def test_cached_automatic_context_is_revalidated_without_reembedding(
     MemoryService.automatic_context_by_ids.assert_awaited_once()
     assert relevant.content in projections[0]["memory_context"]
     assert relevant.content not in projections[1]["memory_context"]
+    EpisodeRetrievalService.retrieve.assert_awaited_once()
+    EpisodeRetrievalService.recent.assert_awaited_once()
+    assert EpisodeRetrievalService.revalidate.await_count == 2
+    for call, episode in zip(
+        EpisodeRetrievalService.revalidate.await_args_list, episodes, strict=True
+    ):
+        assert call.args[1] == [episode]
+        assert "project_id" not in call.kwargs
+        assert call.kwargs["full_sessions_only"] is True
+        for projection in projections:
+            assert str(episode.session_id) in projection["memory_context"]
 
 
 async def test_project_session_uses_configured_relevant_session_limit(monkeypatch) -> None:
@@ -634,7 +664,7 @@ async def test_project_session_uses_configured_relevant_session_limit(monkeypatc
     await AgentRuntime._execute_loop(db, run)
 
     assert EpisodeRetrievalService.retrieve.await_args.kwargs["limit"] == 3
-    assert EpisodeRetrievalService.retrieve.await_args.kwargs["project_id"] is not None
+    assert "project_id" not in EpisodeRetrievalService.retrieve.await_args.kwargs
     assert EpisodeRetrievalService.retrieve.await_args.kwargs["full_sessions_only"] is True
     EpisodeRetrievalService.project_index.assert_awaited_once_with(
         db,

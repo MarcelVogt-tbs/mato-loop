@@ -94,9 +94,7 @@ def _candidate_filters(
     *,
     owner_id: UUID,
     current_session_id: UUID | None,
-    project_id: UUID | None,
     readable_by: TrustLevel,
-    all_projects: bool = False,
     full_sessions_only: bool = False,
 ) -> list[object]:
     filters = [
@@ -106,8 +104,6 @@ def _candidate_filters(
     ]
     if current_session_id is not None:
         filters.append(ChatSession.id != current_session_id)
-    if not all_projects:
-        filters.append(ChatSession.project_id == project_id)
     if full_sessions_only:
         filters.append(ChatSession.memory_mode == "full")
     return filters
@@ -224,7 +220,6 @@ class EpisodeRetrievalService:
         *,
         owner_id: UUID,
         current_session_id: UUID,
-        project_id: UUID | None,
         full_sessions_only: bool = False,
     ) -> list[EpisodeReference]:
         if not references:
@@ -247,7 +242,6 @@ class EpisodeRetrievalService:
             ChatSession.user_id == owner_id,
             ChatSession.id != current_session_id,
             ChatSession.session_type == "chat",
-            ChatSession.project_id == project_id,
             *_eligible_filters(),
         ]
         if full_sessions_only:
@@ -277,7 +271,6 @@ class EpisodeRetrievalService:
         *,
         owner_id: UUID,
         current_session_id: UUID,
-        project_id: UUID | None = None,
         readable_by: TrustLevel,
         limit: int = 2,
         excerpt_messages: int = 6,
@@ -302,7 +295,6 @@ class EpisodeRetrievalService:
                 *_candidate_filters(
                     owner_id=owner_id,
                     current_session_id=current_session_id,
-                    project_id=project_id,
                     readable_by=readable_by,
                     full_sessions_only=full_sessions_only,
                 )
@@ -346,7 +338,6 @@ class EpisodeRetrievalService:
         *,
         owner_id: UUID,
         current_session_id: UUID | None,
-        project_id: UUID | None = None,
         readable_by: TrustLevel,
         query: str,
         limit: int = 5,
@@ -356,7 +347,6 @@ class EpisodeRetrievalService:
         excerpt_messages: int = 6,
         latest_messages: int = 0,
         max_excerpt_characters: int = 6_000,
-        all_projects: bool = False,
         anchor_only: bool = False,
         full_sessions_only: bool = False,
     ) -> EpisodeRetrieval:
@@ -374,9 +364,7 @@ class EpisodeRetrievalService:
         filters = _candidate_filters(
             owner_id=owner_id,
             current_session_id=current_session_id,
-            project_id=project_id,
             readable_by=readable_by,
-            all_projects=all_projects,
             full_sessions_only=full_sessions_only,
         )
         title_trust = _title_trust().label("title_trust")

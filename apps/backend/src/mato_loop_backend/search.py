@@ -106,7 +106,6 @@ class GlobalSearchService:
             query=cleaned_query,
             limit=limit,
             max_semantic_distance=0.25,
-            all_projects=True,
             anchor_only=True,
         )
         project_ids = {

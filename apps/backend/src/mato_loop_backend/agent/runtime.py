@@ -1676,7 +1676,6 @@ class AgentRuntime:
                                     db,
                                     owner_id=chat_session.user_id,
                                     current_session_id=chat_session.id,
-                                    project_id=chat_session.project_id,
                                     readable_by=model_trust_level,
                                     query=rag_query,
                                     limit=(
@@ -1707,7 +1706,6 @@ class AgentRuntime:
                                     db,
                                     owner_id=chat_session.user_id,
                                     current_session_id=chat_session.id,
-                                    project_id=chat_session.project_id,
                                     readable_by=model_trust_level,
                                     limit=memory_settings.recent_session_snippet_limit,
                                     excerpt_messages=4,
@@ -1731,7 +1729,6 @@ class AgentRuntime:
                                 automatic_relevant_episodes or [],
                                 owner_id=chat_session.user_id,
                                 current_session_id=chat_session.id,
-                                project_id=chat_session.project_id,
                                 full_sessions_only=True,
                             )
                         )[: memory_settings.automatic_session_snippet_limit]
@@ -1741,7 +1738,6 @@ class AgentRuntime:
                                 automatic_recent_episodes or [],
                                 owner_id=chat_session.user_id,
                                 current_session_id=chat_session.id,
-                                project_id=chat_session.project_id,
                                 full_sessions_only=True,
                             )
                         )[: memory_settings.recent_session_snippet_limit]

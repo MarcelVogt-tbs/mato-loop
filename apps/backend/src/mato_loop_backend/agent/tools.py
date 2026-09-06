@@ -3279,7 +3279,6 @@ async def _session_browse(
                 ChatSession.user_id == context.session.user_id,
                 ChatSession.id != context.session.id,
                 ChatSession.session_type == "chat",
-                ChatSession.project_id == context.session.project_id,
             )
             .order_by(messages.c.created_at.desc(), ChatSession.id.desc())
             .limit(arguments.limit)
@@ -3334,7 +3333,6 @@ async def _session_search(
                 ChatSession.user_id == context.session.user_id,
                 ChatSession.id != context.session.id,
                 ChatSession.session_type == "chat",
-                ChatSession.project_id == context.session.project_id,
                 or_(*match_conditions),
             )
             .order_by(

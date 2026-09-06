@@ -80,7 +80,6 @@ async def test_global_search_combines_owned_projects_titles_and_message_hits(
         query="database",
         limit=10,
         max_semantic_distance=0.25,
-        all_projects=True,
         anchor_only=True,
     )
     for call in db.execute.await_args_list:
