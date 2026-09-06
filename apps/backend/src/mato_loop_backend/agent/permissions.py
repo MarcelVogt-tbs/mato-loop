@@ -1098,6 +1098,8 @@ class PermissionPolicy:
                 return PermissionDecision.DENY
             if policy == ToolExecutionPolicy.DISABLED:
                 return PermissionDecision.DENY
+            if request.capability == "filesystem.delete":
+                policy = ToolExecutionPolicy.ASK
             if (
                 agent_profile_id == PLAN_AGENT_PROFILE_ID
                 and request.capability == "session.files.write"

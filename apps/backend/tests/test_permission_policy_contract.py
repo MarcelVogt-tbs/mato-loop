@@ -206,6 +206,32 @@ async def test_plan_profile_only_auto_writes_its_canonical_plan(tmp_path) -> Non
     ) == PermissionDecision.DENY
 
 
+@pytest.mark.parametrize("trust_level", list(TrustLevel))
+@pytest.mark.parametrize("policy", [None, *ToolExecutionPolicy])
+async def test_managed_deletion_asks_but_honors_grants_and_disabled(
+    tmp_path, trust_level, policy
+) -> None:
+    session = _session()
+    root_files = _root_files(tmp_path, session)
+    request = _path_request(root_files, "output.txt", capability="filesystem.delete")
+    assert not request.force_ask
+    assert "allow_session" in request.available_decisions
+    disabled = policy == ToolExecutionPolicy.DISABLED
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(), session, request, root_files, policy, trust_level=trust_level
+    ) == (PermissionDecision.DENY if disabled else PermissionDecision.ASK)
+    grant = PermissionGrant(
+        session_id=session.id,
+        capability=request.capability,
+        resource_type=request.resource_type,
+        resource_scope=request.resource_scope,
+        trust_level=trust_level.value,
+    )
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(grant), session, request, root_files, policy, trust_level=trust_level
+    ) == (PermissionDecision.DENY if disabled else PermissionDecision.ALLOW)
+
+
 def test_execution_directory_grant_matches_only_same_agent_subtree(tmp_path) -> None:
     session = _session()
     root_files = _root_files(tmp_path, session)
