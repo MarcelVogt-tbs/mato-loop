@@ -5,6 +5,7 @@ import errno
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import shutil
 import stat
@@ -21,6 +22,8 @@ from typing import BinaryIO, TextIO
 from uuid import UUID, uuid4
 
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -569,20 +572,6 @@ class RootFileService:
                 ancestor = links[ancestor]["sourceFileId"]
         return links
 
-    def _derived_revision(self, file_id: str, reference: int | str) -> int | None:
-        if isinstance(reference, int):
-            return reference
-        history = self._history_for_id(UUID(file_id))
-        if history:
-            for key, revision in history[1].get("runReceipts", {}).items():
-                if key.endswith("/" + reference):
-                    return revision
-            owner = history[1].get("run", {})
-            if owner.get("runId") == reference and owner.get("state") == "final":
-                return owner["revision"]
-            return next((item["revision"] for item in history[1]["revisions"] if item.get("runId") == reference), None)
-        return None
-
     def _complete_derived_binding(self, file_id: str, run_id: str, revision: int | None) -> None:
         for child, link in self._derived_links().items():
             changed = False
@@ -654,7 +643,7 @@ class RootFileService:
             self._fsync_directory(directory)
             self._fsync_directory(directory.parent)
 
-    def _purge_owned_files(self, file_ids: set[str], *, validate_only: bool = False) -> None:
+    def _purge_owned_files(self, file_ids: set[str]) -> None:
         """Delete explicit identities, descendants first; never infer ownership from paths."""
         links = self._derived_links()
         pending = [(file_id, False) for file_id in file_ids]
@@ -684,8 +673,6 @@ class RootFileService:
                     if not (stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
                         raise RootFileError("file.changed", "Owned file is no longer a regular file")
                 targets[file_id] = target
-        if validate_only:
-            return
         for file_id in ordered:
             if file_id in histories:
                 target = targets[file_id]
@@ -700,86 +687,6 @@ class RootFileService:
             if file_id in links:
                 path = self._revisions_path() / ".ownership" / f"{file_id}.json"
                 path.unlink()
-                self._fsync_directory(path.parent)
-
-    def _prune_derived_files(self, source_id: str, retained_revisions: set[int], *, validate_only: bool = False) -> None:
-        if not validate_only:
-            # Reject any invalid or busy branch before deleting its siblings.
-            self._prune_derived_files(source_id, retained_revisions, validate_only=True)
-        history = self._history_for_id(UUID(source_id))
-        if history:
-            directory, index = history
-            for item in index["revisions"]:
-                if item["revision"] in retained_revisions:
-                    continue
-                data = self._read_private_file(directory / str(item["revision"]))
-                if hashlib.sha256(data).hexdigest() != item["sha256"]:
-                    raise RootFileError("file.revisionInvalid", "Invalid removed revision")
-                derivatives = directory / "derived"
-                if derivatives.exists() or derivatives.is_symlink():
-                    self._ensure_directory(derivatives)
-                    derivative = derivatives / str(item["revision"])
-                    if derivative.exists() or derivative.is_symlink():
-                        self._ensure_directory(derivative)
-        for child_id, link in self._derived_links().items():
-            if link["sourceFileId"] != source_id:
-                continue
-            kept = [binding for binding in link["bindings"]
-                    if self._derived_revision(source_id, binding["source"]) in retained_revisions]
-            if len(kept) == len(link["bindings"]):
-                continue
-            if not kept:
-                self._purge_owned_files({child_id}, validate_only=validate_only)
-                continue
-            kept_refs = {self._derived_revision(child_id, item["derived"]) or item["derived"] for item in kept}
-            removed_refs = {self._derived_revision(child_id, item["derived"]) or item["derived"]
-                            for item in link["bindings"] if item not in kept} - kept_refs
-            history = self._history_for_id(UUID(child_id))
-            if history:
-                directory, index = history
-                self._assert_available(index["path"], allow_own=False)
-                derivatives = directory / "derived"
-                if derivatives.exists() or derivatives.is_symlink():
-                    self._ensure_directory(derivatives)
-                survivors = [item for item in index["revisions"] if item["revision"] not in removed_refs]
-                if not survivors:
-                    raise RootFileError("file.changed", "Retained derivation has no published revision")
-                if len(survivors) != len(index["revisions"]):
-                    target = self._ensure_no_symlinks(self._files_path(), self._parts(index["path"]))
-                    current_data = self._read_private_file(target)
-                    self._assert_revision_preconditions(index, current_data, UUID(child_id), index["currentRevision"], None)
-                    selected = next((item for item in survivors if item["revision"] == index["currentRevision"]), survivors[-1])
-                    data = self._read_private_file(directory / str(selected["revision"]))
-                    if hashlib.sha256(data).hexdigest() != selected["sha256"]:
-                        raise RootFileError("file.revisionInvalid", "Invalid derived file revision")
-                    self._prune_derived_files(child_id, {item["revision"] for item in survivors}, validate_only=validate_only)
-                    if validate_only:
-                        continue
-                    try:
-                        if selected["revision"] != index["currentRevision"]:
-                            self._replace_private_file(target, data)
-                            self._fsync_directory(target.parent)
-                        self._replace_private_file(directory / "index.json", self._index_bytes({
-                            **{key: value for key, value in index.items() if key != "run"},
-                            "currentRevision": selected["revision"], "revisions": survivors,
-                        }))
-                        self._fsync_directory(directory)
-                    except BaseException:
-                        self._replace_private_file(target, current_data)
-                        self._replace_private_file(directory / "index.json", self._index_bytes(index))
-                        self._fsync_directory(target.parent)
-                        self._fsync_directory(directory)
-                        raise
-                if validate_only:
-                    continue
-                for reference in removed_refs:
-                    if isinstance(reference, int):
-                        (directory / str(reference)).unlink(missing_ok=True)
-                        SessionStorage._remove_path(directory / "derived" / str(reference))
-                    self._fsync_directory(directory)
-            if not validate_only:
-                path = self._revisions_path() / ".ownership" / f"{child_id}.json"
-                self._replace_private_file(path, self._index_bytes({**link, "bindings": kept}))
                 self._fsync_directory(path.parent)
 
     def _write_run_file(
@@ -1028,7 +935,10 @@ class RootFileService:
         try:
             self._operation_state.locked = True
             for trash in self._revisions_path().glob(".delete-owned-*"):
-                SessionStorage._remove_path(trash)
+                try:
+                    SessionStorage._remove_path(trash)
+                except OSError:
+                    logger.warning("File trash cleanup deferred", exc_info=True)
             yield
         finally:
             self._operation_state.locked = False
@@ -1860,51 +1770,20 @@ class RootFileService:
             history = self._history_for_id(file_id)
             if history is None:
                 return
-            directory, index = history
+            _directory, index = history
             self._assert_available(index["path"], allow_own=False)
             revisions = index["revisions"]
             if not revisions:
                 return
             if revision != index["currentRevision"] or revision != revisions[-1]["revision"]:
                 return
-            target = self._ensure_no_symlinks(
-                self._files_path(), self._parts(index["path"])
-            )
             if len(revisions) == 1:
                 self.delete_path(FileRoot.SESSION, index["path"], recursive=False)
                 return
-            previous = revisions[-2]
-            previous_data = self._read_private_file(directory / str(previous["revision"]))
-            if hashlib.sha256(previous_data).hexdigest() != previous["sha256"]:
-                raise RootFileError("file.revisionInvalid", "Invalid previous revision")
-            old_data = self._read_private_file(target)
-            self._prune_derived_files(str(file_id), {item["revision"] for item in revisions[:-1]})
-            old_index = self._read_private_file(directory / "index.json")
-            index = {key: value for key, value in index.items() if key != "run"}
-            temporary = target.parent / f".{target.name}.{uuid4().hex}.tmp"
-            index_temporary = directory / f".index.{uuid4().hex}.tmp"
-            try:
-                self._write_private_file(temporary, previous_data)
-                self._write_private_file(
-                    index_temporary,
-                    self._index_bytes(
-                        {
-                            **index,
-                            "currentRevision": previous["revision"],
-                            "revisions": revisions[:-1],
-                        }
-                    ),
-                )
-                os.replace(temporary, target)
-                os.replace(index_temporary, directory / "index.json")
-                (directory / str(revision)).unlink()
-                shutil.rmtree(directory / "derived" / str(revision), ignore_errors=True)
-            except BaseException:
-                temporary.unlink(missing_ok=True)
-                index_temporary.unlink(missing_ok=True)
-                self._replace_private_file(target, old_data)
-                self._replace_private_file(directory / "index.json", old_index)
-                raise
+            self.restore_revision(
+                index["path"], revisions[-2]["revision"],
+                expected_file_id=file_id, expected_current_revision=revision,
+            )
 
     @staticmethod
     def _assert_revision_preconditions(
@@ -1969,7 +1848,6 @@ class RootFileService:
             selected_data = self._read_private_file(directory / str(revision))
             if hashlib.sha256(selected_data).hexdigest() != selected["sha256"]:
                 raise RootFileError("file.revisionInvalid", "Invalid revision history")
-            self._prune_derived_files(str(file_id), {item["revision"] for item in index["revisions"] if item["revision"] <= revision})
             if revision == index["currentRevision"]:
                 return RevisionMutationResult(False, file_id, revision, selected["sha256"])
 
@@ -2005,6 +1883,9 @@ class RootFileService:
                         }
                     ),
                 )
+                derivatives = directory / "derived"
+                if derivatives.exists() or derivatives.is_symlink():
+                    self._ensure_directory(derivatives)
                 for item in later:
                     source = directory / str(item["revision"])
                     metadata = self._metadata(source)
@@ -2027,20 +1908,31 @@ class RootFileService:
                 index_replaced = True
                 os.replace(temporary, target)
                 target_replaced = True
+                self._fsync_directory(target.parent)
+                self._fsync_directory(directory)
+                self._fsync_directory(staged_revisions)
+                self._fsync_directory(staged_derivatives)
             except BaseException:
-                temporary.unlink(missing_ok=True)
-                index_temporary.unlink(missing_ok=True)
                 if target_replaced:
                     self._replace_private_file(target, current_data)
                 if index_replaced:
                     self._replace_private_file(directory / "index.json", old_index)
                 for source, staged in reversed(moved):
                     staged.rename(source)
+                self._fsync_directory(target.parent)
+                self._fsync_directory(directory)
+                temporary.unlink(missing_ok=True)
+                index_temporary.unlink(missing_ok=True)
                 shutil.rmtree(trash, ignore_errors=True)
                 raise
-            shutil.rmtree(trash)
-            self._fsync_directory(target.parent)
-            self._fsync_directory(directory)
+            # Only committed trash is eligible for cleanup on later file operations.
+            try:
+                disposable = revisions_root / f".delete-owned-{uuid4().hex}"
+                trash.rename(disposable)
+                self._fsync_directory(revisions_root)
+                shutil.rmtree(disposable)
+            except OSError:
+                logger.warning("Restored file; revision trash cleanup deferred", exc_info=True)
             return RevisionMutationResult(False, file_id, revision, selected["sha256"])
 
     def replace_text_file(

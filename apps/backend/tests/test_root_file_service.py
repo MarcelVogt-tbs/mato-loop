@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import shutil
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
@@ -868,7 +869,8 @@ def test_ownership_is_single_parent_acyclic_and_identity_based(tmp_path: Path) -
     assert service._derived_links() == {}
 
 
-def test_source_restore_prunes_only_later_owned_companion_revisions(tmp_path: Path) -> None:
+@pytest.mark.parametrize("discard", [False, True])
+def test_source_restore_preserves_companion_files_and_histories(tmp_path: Path, discard: bool) -> None:
     service, root = make_service(tmp_path)
     service.write_file(FileRoot.SESSION, "report.pdf", "source one")
     service.write_file(FileRoot.SESSION, "report.md", "child one")
@@ -883,45 +885,79 @@ def test_source_restore_prunes_only_later_owned_companion_revisions(tmp_path: Pa
     later = service.working_revision("later-only.md").file_id
     service.register_derived_file(source, later)
     service.write_file(FileRoot.SESSION, "unowned.md", "not a companion")
-    service.restore_revision("report.pdf", 1, **revision_preconditions(service, "report.pdf"))
-    assert service.read_bytes(FileRoot.SESSION, "report.md", limit=100) == b"child one"
-    assert [item.revision for item in service.list_revisions("report.md")] == [1]
-    assert not (root / "revisions" / str(child) / "2").exists()
-    assert not (root / "revisions" / str(child) / "derived" / "2").exists()
-    assert not (root / "files" / "later-only.md").exists()
+    links = service._derived_links()
+    if discard:
+        service.discard_output_revision(source, 2)
+    else:
+        service.restore_revision("report.pdf", 1, **revision_preconditions(service, "report.pdf"))
+    assert service.read_bytes(FileRoot.SESSION, "report.pdf", limit=100) == b"source one"
+    assert [item.revision for item in service.list_revisions("report.pdf")] == [1]
+    assert service.read_bytes(FileRoot.SESSION, "report.md", limit=100) == b"child two"
+    assert [item.revision for item in service.list_revisions("report.md")] == [2, 1]
+    assert (root / "revisions" / str(child) / "2").read_bytes() == b"child two"
+    assert (root / "revisions" / str(child) / "derived" / "2" / "preview.txt").read_bytes() == b"later preview"
+    assert (root / "files" / "later-only.md").read_bytes() == b"later only"
     assert (root / "files" / "unowned.md").read_bytes() == b"not a companion"
+    assert service._derived_links() == links
     service.upsert_text_file(FileRoot.SESSION, "report.md", "child three")
     assert service.working_revision("report.md").revision == 3
+    service.delete_path(FileRoot.SESSION, "report.pdf", recursive=False)
+    assert not (root / "files" / "report.md").exists()
+    assert not (root / "files" / "later-only.md").exists()
 
 
-@pytest.mark.parametrize("failure", ["busy", "descendant", "hash", "sourceDerivative"])
-def test_rejected_restore_keeps_all_owned_siblings_and_source(tmp_path: Path, monkeypatch, failure: str) -> None:
+@pytest.mark.parametrize("discard", [False, True])
+@pytest.mark.parametrize("failure", ["write", "index", "target", "fsync_file", "fsync_history", "fsync_staged"])
+def test_restore_io_failure_keeps_file_history_caches_and_companions(
+    tmp_path: Path, monkeypatch, failure: str, discard: bool,
+) -> None:
     service, root = make_service(tmp_path)
     service.write_file(FileRoot.SESSION, "source", "one")
     service.upsert_text_file(FileRoot.SESSION, "source", "two")
     source = service.working_revision("source").file_id
-    for name in ("first", "second", "descendant"):
-        service.write_file(FileRoot.SESSION, name, name)
-    ids = {name: service.working_revision(name).file_id for name in ("first", "second", "descendant")}
-    service.register_derived_file(source, ids["first"])
-    if failure == "hash":
-        service.register_derived_file(source, ids["second"], source_revision=1, derived_revision=1)
-        service.upsert_text_file(FileRoot.SESSION, "second", "later")
-    service.register_derived_file(source, ids["second"])
-    service.register_derived_file(ids["second"], ids["descendant"])
-    links = service._derived_links()
-    # Ensure the removable sibling precedes the failing branch on every filesystem.
-    monkeypatch.setattr(service, "_derived_links", lambda: {str(ids[name]): links[str(ids[name])] for name in ids})
-    if failure in {"busy", "descendant"}:
-        run_service(service, uuid4()).upsert_text_file(FileRoot.SESSION, "second" if failure == "busy" else "descendant", "busy")
-    elif failure == "hash":
-        (root / "revisions" / str(ids["second"]) / "1").write_bytes(b"corrupt")
-    else:
-        (root / "revisions" / str(source) / "derived").mkdir()
-        (root / "revisions" / str(source) / "derived" / "2").write_bytes(b"not a directory")
+    service.write_file(FileRoot.SESSION, "companion", "must survive")
+    service.register_derived_file(source, service.working_revision("companion").file_id)
+    service.write_revision_derivatives(source, 2, {"preview.txt": b"current preview"})
     before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
-    with pytest.raises(RootFileError):
-        service.restore_revision("source", 1, **revision_preconditions(service, "source"))
+    failed = False
+    original_write, original_replace, original_fsync = service._write_private_file, os.replace, service._fsync_directory
+
+    def write(path, data):
+        nonlocal failed
+        if failure == "write" and not failed:
+            failed = True
+            raise OSError("injected write failure")
+        return original_write(path, data)
+
+    def replace(src, dst, *args, **kwargs):
+        nonlocal failed
+        selected = root / "files" / "source" if failure == "target" else root / "revisions" / str(source) / "index.json"
+        if failure in {"index", "target"} and Path(dst) == selected and not failed:
+            failed = True
+            raise OSError("injected replace failure")
+        return original_replace(src, dst, *args, **kwargs)
+
+    def fsync(path):
+        nonlocal failed
+        selected = (
+            failure == "fsync_file" and path == root / "files"
+            or failure == "fsync_history" and path == root / "revisions" / str(source)
+            or failure == "fsync_staged" and path.name == "derived" and path.parent.name.startswith(".restore-")
+        )
+        if selected and not failed:
+            failed = True
+            raise OSError("injected fsync failure")
+        return original_fsync(path)
+
+    monkeypatch.setattr(service, "_write_private_file", write)
+    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(service, "_fsync_directory", fsync)
+    with pytest.raises(OSError, match="injected"):
+        if discard:
+            service.discard_output_revision(source, 2)
+        else:
+            service.restore_revision("source", 1, **revision_preconditions(service, "source"))
+    assert failed
     assert {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()} == before
     assert service.working_revision("source").revision == 2
 
@@ -940,9 +976,78 @@ def test_restore_preserves_unmapped_child_edits_and_shared_derivations(tmp_path:
     service.register_derived_file(source, shared)
     service.upsert_text_file(FileRoot.SESSION, "child", "independent edit")
     service.restore_revision("source", 1, **revision_preconditions(service, "source"))
-    assert [item.revision for item in service.list_revisions("child")] == [3, 1]
+    assert [item.revision for item in service.list_revisions("child")] == [3, 2, 1]
     assert service.read_bytes(FileRoot.SESSION, "child", limit=100) == b"independent edit"
     assert service.read_bytes(FileRoot.SESSION, "shared", limit=100) == b"same"
+
+
+def test_restore_does_not_interfere_with_companion_run(tmp_path: Path) -> None:
+    service, _root = make_service(tmp_path)
+    service.write_file(FileRoot.SESSION, "source", "one")
+    service.upsert_text_file(FileRoot.SESSION, "source", "two")
+    service.write_file(FileRoot.SESSION, "child", "one")
+    service.register_derived_file(service.working_revision("source").file_id, service.working_revision("child").file_id)
+    working = run_service(service, uuid4())
+    working.upsert_text_file(FileRoot.SESSION, "child", "work in progress")
+
+    service.restore_revision("source", 1, **revision_preconditions(service, "source"))
+
+    assert service.read_bytes(FileRoot.SESSION, "child", limit=100) == b"work in progress"
+    assert service.pending_run_ids() == (working.run_id,)
+    assert service.finalize_run(working.run_id)[0].revision == 2
+
+
+def test_restore_cleanup_failure_is_success_and_retried(tmp_path: Path, monkeypatch, caplog) -> None:
+    service, root = make_service(tmp_path)
+    service.write_file(FileRoot.SESSION, "source", "one")
+    service.upsert_text_file(FileRoot.SESSION, "source", "two")
+    original = shutil.rmtree
+
+    def fail_cleanup(path, *args, **kwargs):
+        if Path(path).name.startswith(".delete-owned-"):
+            raise OSError("injected cleanup failure")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", fail_cleanup)
+    result = service.restore_revision("source", 1, **revision_preconditions(service, "source"))
+
+    assert result.current_revision == 1
+    assert (root / "files" / "source").read_bytes() == b"one"
+    assert [item.revision for item in service.list_revisions("source")] == [1]
+    assert list((root / "revisions").glob(".delete-owned-*"))
+    assert "revision trash cleanup deferred" in caplog.text
+    monkeypatch.setattr(shutil, "rmtree", original)
+    service.list_revisions("source")
+    assert not list((root / "revisions").glob(".delete-owned-*"))
+
+
+def test_failed_restore_rollback_keeps_recovery_bytes(tmp_path: Path, monkeypatch) -> None:
+    service, root = make_service(tmp_path)
+    service.write_file(FileRoot.SESSION, "source", "one")
+    service.upsert_text_file(FileRoot.SESSION, "source", "two")
+    history = root / "revisions" / str(service.working_revision("source").file_id)
+    original = os.replace
+    index_replaced = False
+
+    def fail_replace(src, dst, *args, **kwargs):
+        nonlocal index_replaced
+        if Path(dst) == root / "files" / "source":
+            raise OSError("injected target failure")
+        if Path(dst) == history / "index.json":
+            if index_replaced:
+                raise OSError("injected rollback failure")
+            index_replaced = True
+        return original(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(OSError, match="rollback failure"):
+        service.restore_revision("source", 1, **revision_preconditions(service, "source"))
+
+    service.session_usage()
+    trash = next((root / "revisions").glob(".restore-*"))
+    assert (trash / "revisions" / "2").read_bytes() == b"two"
+    assert (root / "files" / "source").read_bytes() == b"two"
+    assert not list((root / "revisions").glob(".delete-owned-*"))
 
 
 def test_run_derivation_bindings_resolve_after_restart_and_finalization(tmp_path: Path) -> None:
@@ -957,9 +1062,10 @@ def test_run_derivation_bindings_resolve_after_restart_and_finalization(tmp_path
     working.register_derived_file(source, child)
     published.finalize_run(working.run_id)
     restarted = RootFileService(published.session_id, session_storage=published.session_storage)
+    links = restarted._derived_links()
     restarted.restore_revision("source", 1, **revision_preconditions(restarted, "source"))
-    assert restarted.read_bytes(FileRoot.SESSION, "child", limit=100) == b"one"
-    assert restarted._derived_links()[str(child)]["bindings"] == [{"source": 1, "derived": 1}]
+    assert restarted.read_bytes(FileRoot.SESSION, "child", limit=100) == b"two"
+    assert restarted._derived_links() == links
 
 
 def test_verified_backfill_revision_pairs_are_idempotent_and_quota_checked(tmp_path: Path) -> None:
@@ -1000,7 +1106,8 @@ def test_companion_deletion_rejects_symlinked_parent_without_touching_outside(tm
     assert (root / "files" / "source.pdf").read_bytes() == b"source"
 
 
-def test_companion_restore_does_not_follow_derivative_directory_symlink(tmp_path: Path) -> None:
+@pytest.mark.parametrize("own_cache", [False, True])
+def test_restore_does_not_follow_derivative_directory_symlink(tmp_path: Path, own_cache: bool) -> None:
     service, root = make_service(tmp_path)
     service.write_file(FileRoot.SESSION, "source", "one")
     service.write_file(FileRoot.SESSION, "child", "one")
@@ -1012,10 +1119,14 @@ def test_companion_restore_does_not_follow_derivative_directory_symlink(tmp_path
     outside = tmp_path / "outside"
     (outside / "2").mkdir(parents=True)
     (outside / "2" / "keep").write_bytes(b"safe")
-    (root / "revisions" / str(child) / "derived").symlink_to(outside, target_is_directory=True)
-    with pytest.raises(RootFileError) as symlink:
+    (root / "revisions" / str(source if own_cache else child) / "derived").symlink_to(outside, target_is_directory=True)
+    if own_cache:
+        with pytest.raises(RootFileError) as symlink:
+            service.restore_revision("source", 1, **revision_preconditions(service, "source"))
+        assert symlink.value.code == "file.symlinkForbidden"
+        assert service.working_revision("source").revision == 2
+    else:
         service.restore_revision("source", 1, **revision_preconditions(service, "source"))
-    assert symlink.value.code == "file.symlinkForbidden"
+        assert service.working_revision("source").revision == 1
     assert (outside / "2" / "keep").read_bytes() == b"safe"
-    assert service.working_revision("source").revision == 2
     assert service.working_revision("child").revision == 2
