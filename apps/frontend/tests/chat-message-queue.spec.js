@@ -638,7 +638,7 @@ describe('chat message queue', () => {
     chat.current = { id: 'session-project', projectId: 'project-1', messages: [] }
     chat.selectedSessionId = 'session-project'
     chat.running = true
-    const projectEntry = await chat.queueMessage('Projekt löschen')
+    await chat.queueMessage('Projekt löschen')
     chat.current = { id: 'session-other', projectId: 'project-2', messages: [] }
     chat.selectedSessionId = 'session-other'
     const otherEntry = await chat.queueMessage('Andere Queue')
@@ -652,7 +652,6 @@ describe('chat message queue', () => {
     expect(chat.queuedMessages['session-other']).toHaveLength(1)
     expect(scheduleQueueDrain).toHaveBeenCalledWith(0)
     expect((await loadChatOutbox('user-1')).map((entry) => entry.id)).toEqual([otherEntry.id])
-    expect((await loadChatOutbox('user-1')).some((entry) => entry.id === projectEntry.id)).toBe(false)
   })
 
   it('restores the persistent queue when session deletion fails', async () => {

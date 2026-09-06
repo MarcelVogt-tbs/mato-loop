@@ -284,17 +284,6 @@ def test_memory_schema_has_no_pin_kind_contract() -> None:
             pinKind="preferred_name",
         )
 
-    assert "pin_kind" not in MemoryRecord.__table__.columns
-    assert all(
-        "pin_kind" not in str(item.sqltext)
-        for item in MemoryRecord.__table__.constraints
-        if hasattr(item, "sqltext")
-    )
-    assert all(
-        "pin_kind" not in {column.name for column in item.columns}
-        for item in MemoryRecord.__table__.indexes
-    )
-
 
 async def test_memory_crud_and_dedupe_queries_bind_each_owner() -> None:
     first_owner = uuid4()
@@ -656,7 +645,6 @@ def test_memory_write_arguments_require_explicit_update_target() -> None:
 
     assert valid.category == MemoryCategory.FACT
     assert valid.pin is False
-    assert "retrieval_level" not in type(valid).model_fields
     with pytest.raises(ValidationError):
         MemoryWriteArguments.model_validate(
             {"content": "Der Nutzer kommt aus Ascholding.", "category": "identity"}
@@ -995,7 +983,6 @@ def test_memory_payload_contains_camel_case_provenance() -> None:
     assert payload["sourceType"] == "dreaming"
     assert payload["pinned"] is True
     assert payload["audience"] == "private_only"
-    assert "pinKind" not in payload
     assert payload["category"] == "fact"
     assert payload["seenAt"] == seen_at.isoformat()
     assert payload["sourceSession"] == {"id": str(session.id), "title": "Quelle"}

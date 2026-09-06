@@ -1114,7 +1114,6 @@ def test_provider_payload_contains_discovery_fields_in_camel_case() -> None:
 
     payload = _settings_payload(AiSettings(providers=[provider], models=[model]))
 
-    assert "enabled" not in payload
     assert payload["providers"][0]["modelsLastSyncedAt"] is None
     assert payload["providers"][0]["trustLevel"] == "private"
     assert payload["providers"][0]["pseudonymizationEnabled"] is True
@@ -1123,8 +1122,6 @@ def test_provider_payload_contains_discovery_fields_in_camel_case() -> None:
     assert payload["models"][0]["lastSeenAt"] is None
     assert payload["models"][0]["discoveryMetadata"] == {}
     assert payload["models"][0]["supportsImageInput"] is True
-    assert "webfetchPolicy" not in payload["models"][0]
-    assert "effectiveWebfetchPolicy" not in payload["models"][0]
     assert payload["models"][0]["trustLevel"] is None
     assert payload["models"][0]["effectiveTrustLevel"] == "private"
     assert payload["models"][0]["pseudonymizationEnabled"] is None
@@ -1139,7 +1136,6 @@ def test_provider_payload_contains_discovery_fields_in_camel_case() -> None:
     assert payload["compactionModelId"] is None
     assert payload["titleGenerationModelId"] is None
     assert payload["titleVisionFallbackEnabled"] is True
-    assert "compressionModelId" not in payload["models"][0]
 
 
 def test_default_models_request_enables_title_vision_fallback_by_default() -> None:

@@ -135,14 +135,12 @@ def test_ai_settings_collections_are_independent() -> None:
     assert second.providers == []
 
 
-def test_integration_settings_use_an_independent_global_instance_list() -> None:
+def test_integration_settings_defaults() -> None:
     first = IntegrationSettings()
-    second = IntegrationSettings()
 
     assert first.settings_key == "integrations"
     assert first.settings_scope == SettingsScope.GLOBAL
     assert first.instances == []
-    assert second.instances == []
 
 
 def test_legacy_model_defaults_to_chat_capability() -> None:

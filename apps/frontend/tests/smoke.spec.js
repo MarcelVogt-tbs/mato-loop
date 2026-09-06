@@ -48,7 +48,6 @@ describe('MatoLoop frontend scaffold', () => {
     expect(settingsRoutes.find((route) => route.name === 'settings-channels')?.meta).toEqual({
       settingsLabel: 'Kanäle', settingsIcon: 'forum'
     })
-    expect(settingsRoutes.some((route) => route.name === 'settings-account')).toBe(false)
     expect(settingsRoutes.find((route) => route.name === 'settings-approvals')?.redirect).toEqual({
       name: 'chat', query: { controlCenter: 'approvals' }
     })

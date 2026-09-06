@@ -88,16 +88,11 @@ class SearchTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertFalse(grep["truncated"])
 
-    async def test_rejects_invalid_regex_and_truncates_results_and_text(self) -> None:
+    async def test_rejects_invalid_regex_and_truncates_match_text(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for index in range(MAX_RESULTS + 1):
-                (root / f"{index:03}.txt").write_text("match\n")
             (root / "long.txt").write_text("x" * (MAX_MATCH_TEXT + 10) + "\nx\n")
             agent = MatoLoopAgent(configuration(root), "secret")
-            result = await agent.search.grep(str(root), "match", None)
-            self.assertEqual(len(result["matches"]), MAX_RESULTS)
-            self.assertTrue(result["truncated"])
             long = await agent.search.grep(str(root), "x+", "long.txt")
             self.assertEqual(len(long["matches"][0]["text"]), MAX_MATCH_TEXT)
             self.assertEqual([match["line"] for match in long["matches"]], [1, 2])

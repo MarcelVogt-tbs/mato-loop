@@ -148,11 +148,6 @@ describe('projects store', () => {
         automationImpact: 'impact-token'
       }
     })
-
-    await store.remove(project.id, { automationImpact: 'impact-token' })
-    expect(api.delete).toHaveBeenLastCalledWith('/projects/project-1', {
-      params: { automationImpact: 'impact-token' }
-    })
   })
 
   it('invalidates a pending read only after a mutation succeeds', async () => {

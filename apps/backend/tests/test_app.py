@@ -100,13 +100,11 @@ def test_web_push_config_requires_authentication() -> None:
     assert response.json()["error"]["code"] == "auth.notAuthenticated"
 
 
-def test_general_attachment_routes_replace_audio_only_routes() -> None:
+def test_general_attachment_routes_are_registered() -> None:
     paths = app.openapi()["paths"]
 
     assert "/api/sessions/with-attachments" in paths
     assert "/api/sessions/{session_id}/messages/with-attachments" in paths
-    assert "/api/sessions/with-audio" not in paths
-    assert "/api/sessions/{session_id}/messages/with-audio" not in paths
 
 
 def test_static_paths_cannot_escape_static_root(tmp_path: Path) -> None:

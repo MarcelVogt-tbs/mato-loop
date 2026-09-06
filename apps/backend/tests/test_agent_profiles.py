@@ -181,7 +181,6 @@ def test_agent_profile_migration_installs_inheriting_default_profile() -> None:
     assert profile["persona"] == ""
     assert profile["private_permissions"]["policies"] == {}
     assert profile["public_permissions"]["policies"] == {}
-    assert not hasattr(migration, "_reset_tool_policies")
 
 
 def test_policy_migration_splits_trust_branches_and_webfetch_targets() -> None:

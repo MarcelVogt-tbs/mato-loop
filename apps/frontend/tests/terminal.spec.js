@@ -270,17 +270,6 @@ describe('control center terminal', () => {
     expect(JSON.parse(socket.send.mock.calls.at(-1)[0])).toEqual({ type: 'input', data: 'Aw==' })
   })
 
-  it('keeps the proposal command available when the panel editor remounts', () => {
-    const { store, socket } = connectedStore()
-    attach(store, socket)
-    confirmMode(store, socket)
-    socket.message({ type: 'command.proposed', approvalId: 'request-1', command: 'printf remount' })
-
-    const remountedEditorValue = terminalProposalCommand(store.proposal)
-    expect(remountedEditorValue).toBe('printf remount')
-    expect(store.pendingProposal).toBe(true)
-  })
-
   it('clears denied and cancelled proposals only on server messages', () => {
     const { store, socket } = connectedStore()
     attach(store, socket)

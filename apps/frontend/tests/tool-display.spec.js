@@ -409,7 +409,6 @@ describe('tool display', () => {
     expect(parsed.text).toContain('private')
     expect(parsed.text).toContain('pinned')
     expect(parsed.text).toContain('private_only')
-    expect(parsed.text).not.toContain('pinKind')
     expect(parsed.text).toContain('cursor_updated_at')
   })
 

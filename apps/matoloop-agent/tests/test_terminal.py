@@ -73,8 +73,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
             try:
                 command = b"printf '__HOME__%s\\n' \"$PWD\"; VALUE=kept\n"
                 await terminal.write(terminal_id, base64.b64encode(command).decode())
-                output = await self._read_until(terminal, terminal_id, f"__HOME__{home}".encode())
-                self.assertIn(f"__HOME__{home}".encode(), output)
+                await self._read_until(terminal, terminal_id, f"__HOME__{home}".encode())
 
                 await terminal.write(
                     terminal_id,
@@ -86,8 +85,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
                     terminal_id,
                     base64.b64encode(b"printf '__RAW__\\001\\002\\377__END__\\n'\n").decode(),
                 )
-                raw = await self._read_until(terminal, terminal_id, b"\x01\x02\xff")
-                self.assertIn(b"\x01\x02\xff", raw)
+                await self._read_until(terminal, terminal_id, b"\x01\x02\xff")
 
                 self.assertEqual(
                     await terminal.resize(terminal_id, 33, 101),

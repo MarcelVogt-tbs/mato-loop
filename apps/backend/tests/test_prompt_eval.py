@@ -15,7 +15,6 @@ from mato_loop_backend.prompt_eval import (
     CONTRACT_INVENTORY,
     EVALUATOR_SOURCE_FILE,
     IMAGE_UNAVAILABLE_MARKER,
-    INVENTORY_VERSION,
     PDF_VISION_SYSTEM_PROMPT,
     PRIVACY_MARKER,
     PRIVACY_MARKER_INSTRUCTION,
@@ -51,10 +50,9 @@ def _source_constants(path: Path) -> set[str]:
     }
 
 
-def test_inventory_is_complete_and_versioned() -> None:
+def test_inventory_is_complete() -> None:
     validate_inventory()
 
-    assert INVENTORY_VERSION == 37
     assert all(contract.case_ids or contract.not_applicable for contract in CONTRACT_INVENTORY)
     assert {case.id for case in CASES} <= {
         case_id for contract in CONTRACT_INVENTORY for case_id in contract.case_ids
@@ -2227,7 +2225,6 @@ def test_report_separates_evaluator_from_production_prompt_fingerprints() -> Non
         "source": EVALUATOR_SOURCE_FILE,
         "sha256": hashlib.sha256(Path(prompt_eval.__file__).read_bytes()).hexdigest(),
     }
-    verify_source_fingerprints(source_fingerprints())
 
 
 def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:

@@ -45,17 +45,13 @@ def _agent(user_id=None, **values):
     )
 
 
-def test_execution_session_models_keep_only_absolute_directory_snapshots() -> None:
+def test_execution_session_models_define_agent_foreign_keys_and_jsonb_operations() -> None:
     session_agent_fk = next(iter(ChatSession.__table__.c.preferred_execution_agent_id.foreign_keys))
     run_agent_fk = next(iter(AgentRun.__table__.c.execution_agent_id.foreign_keys))
     assert session_agent_fk.ondelete == run_agent_fk.ondelete == "SET NULL"
     assert AgentRun.__table__.c.execution_operations.type.compile(
         dialect=postgresql.dialect()
     ) == "JSONB"
-    assert "preferred_root_id" not in ChatSession.__table__.c
-    assert "working_directory" not in ChatSession.__table__.c
-    assert "execution_root_id" not in AgentRun.__table__.c
-    assert "working_directory_snapshot" not in AgentRun.__table__.c
 
 
 async def test_preferences_require_an_executor_for_current_directory() -> None:
@@ -194,8 +190,6 @@ async def test_session_payload_reports_connected_operations(monkeypatch) -> None
     )
     payload = await _session_payload(db, session)
     assert payload["preferredExecutionAgentId"] == str(agent.id)
-    assert "preferredRootId" not in payload
-    assert "workingDirectory" not in payload
     assert payload["workspaceContext"] == {
         "executionAgentId": str(agent.id),
         "connected": True,

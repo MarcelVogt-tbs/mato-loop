@@ -281,8 +281,6 @@ def test_runtime_snapshot_contains_only_validated_session_binding() -> None:
     )
     assert snapshot["currentDirectory"] == "/advertised/project"
     assert snapshot["agentProfileId"] == str(agent_profile_id)
-    assert "preferredRootId" not in snapshot
-    assert "workingDirectory" not in snapshot
     assert "workspacePath" not in snapshot
 
 

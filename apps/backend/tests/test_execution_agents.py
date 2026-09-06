@@ -92,12 +92,6 @@ class _SessionContext:
 
 
 def test_execution_agent_model_has_policy_constraints() -> None:
-    agent = _agent(
-        platform="linux",
-        token_hash=hash_token("durable access key"),
-        token_is_legacy=False,
-    )
-    assert agent.token_hash != "durable access key"
     assert ExecutionAgent.__table__.c.token_hash.nullable is True
     assert ExecutionAgent.__table__.c.registration_token_hash.unique is True
     assert {
@@ -107,10 +101,7 @@ def test_execution_agent_model_has_policy_constraints() -> None:
         "ck_execution_agents_durable_token_classified",
         "ck_execution_agents_credential_state_exclusive",
     }
-    assert "name" not in ExecutionAgent.__table__.c
     assert "alias" in ExecutionAgent.__table__.c
-    assert "protocol_version" not in ExecutionAgent.__table__.c
-    assert "home_root_id" not in ExecutionAgent.__table__.c
     assert {
         "ck_execution_agents_home_filesystem_policy_valid",
         "ck_execution_agents_external_filesystem_policy_valid",

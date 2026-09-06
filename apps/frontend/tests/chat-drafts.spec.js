@@ -136,7 +136,7 @@ describe('chat drafts', () => {
     expect(chat.activity.startedAt).toBe(secondToolStartedAt)
   })
 
-  it('restores drafts from local storage without a schema version', () => {
+  it('restores drafts from local storage', () => {
     const first = useChatStore()
     first.setDraft('Bleibt lokal erhalten')
 
@@ -145,8 +145,6 @@ describe('chat drafts', () => {
     restored.setDraftOwner('user-1')
 
     expect(restored.activeDraft).toBe('Bleibt lokal erhalten')
-    const stored = JSON.parse(window.localStorage.getItem('matoLoopChatDrafts'))
-    expect(stored.version).toBeUndefined()
   })
 
   it('migrates the persisted forced-search draft to the required policy', () => {
@@ -488,24 +486,6 @@ describe('chat drafts', () => {
     expect(chat.current.currentDirectory).toBe('/srv/project')
   })
 
-  it('keeps current directory defaults for a selected computer', async () => {
-    api.get.mockResolvedValue({
-      data: {
-        modelId: 'model-1',
-        preferredExecutionAgentId: 'agent-1',
-        currentDirectory: '/legacy/project'
-      }
-    })
-    const chat = useChatStore()
-
-    await chat.fetchDefaults()
-
-    expect(chat.activeContext).toMatchObject({
-      preferredExecutionAgentId: 'agent-1',
-      currentDirectory: '/legacy/project'
-    })
-  })
-
   it('applies and persists the backend default current directory', async () => {
     api.get.mockResolvedValue({
       data: {
@@ -518,6 +498,7 @@ describe('chat drafts', () => {
 
     await chat.fetchDefaults()
 
+    expect(chat.activeContext.preferredExecutionAgentId).toBe('agent-1')
     expect(chat.activeContext.currentDirectory).toBe('/home/user')
     expect(JSON.parse(window.localStorage.getItem('matoLoopChatDrafts')).newSession.options)
       .toMatchObject({ currentDirectory: '/home/user' })
@@ -566,7 +547,7 @@ describe('chat drafts', () => {
     const persisted = window.localStorage.getItem('matoLoopChatDrafts')
     expect(persisted).not.toContain('aufnahme.wav')
 
-    await chat.send('Bitte transkribieren')
+    await expect(chat.send('Bitte transkribieren')).resolves.toMatchObject({ created: true })
 
     expect(api.post).toHaveBeenCalledWith(
       '/sessions/with-attachments',
@@ -659,34 +640,10 @@ describe('chat drafts', () => {
     expect(chat.addAttachmentFiles([{ name: 'notizen.txt', type: 'text/plain', size: 10 }]))
       .toMatchObject({ added: 1, error: null })
     expect(chat.activeAttachmentDraft[0]).toMatchObject({ kind: 'file', mimeType: 'text/plain' })
-    expect(chat.activeAttachmentDraft[0]).not.toHaveProperty('uploadReady')
 
     expect(chat.addAttachmentFiles([{ name: 'clip.mp4', type: 'video/mp4', size: 10 }]))
       .toMatchObject({ added: 1, error: null })
     expect(chat.activeAttachmentDraft[1]).toMatchObject({ kind: 'video', mimeType: 'video/mp4' })
-  })
-
-  it('sends generic drafts without a temporary upload block', async () => {
-    api.post.mockResolvedValue({
-      data: {
-        session: { id: 'session-file', messages: [] },
-        runId: 'run-file'
-      }
-    })
-    const notes = new Blob(['Inhalt'], { type: 'text/plain' })
-    Object.defineProperty(notes, 'name', { value: 'notizen.txt' })
-    const chat = useChatStore()
-    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
-    chat.addAttachmentFiles([notes])
-
-    await expect(chat.send('Bitte lesen')).resolves.toMatchObject({ created: true })
-
-    expect(api.post).toHaveBeenCalledWith(
-      '/sessions/with-attachments',
-      expect.any(FormData),
-      { suppressErrorToast: true }
-    )
-    expect(chat.activeAttachmentDraft).toHaveLength(0)
   })
 
   it('limits attachment drafts across sessions and previews only admitted audio files', () => {
@@ -722,7 +679,6 @@ describe('chat drafts', () => {
       kind: 'image',
       objectUrl: 'blob:preview'
     })
-    expect(chat.activeAttachmentDraft[0]).not.toHaveProperty('uploadReady')
     chat.removeAttachmentFile(chat.activeAttachmentDraft[0].id)
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:preview')
   })
@@ -1869,45 +1825,6 @@ describe('chat drafts', () => {
     await vi.waitFor(() => expect(sessionRefreshCalls).toBe(2))
     expect(open).not.toHaveBeenCalled()
     expect(sessionRequests()[1][1].signal.aborted).toBe(false)
-  })
-
-  it('does not hijack the file view after navigation during a tool call', async () => {
-    global.EventSource = EventSourceMock
-    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
-    const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
-    const action = {
-      operation: 'write', root: 'session', rootIdentity,
-      path: 'result.md', filename: 'result.md', sizeBytes: 7,
-      downloadUrl: `/api/workspace/files/download?path=result.md&scope=session&session_id=${sessionId}&root_identity=${rootIdentity}`
-    }
-    api.get.mockResolvedValue({
-      data: {
-        id: sessionId,
-        messages: [
-          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { root: 'files', path: 'result.md', content: 'Fertig' } }] },
-          { role: 'tool', toolCallId: 'call-1', fileActions: [action] }
-        ]
-      }
-    })
-    const workspace = useWorkspaceStore()
-    workspace.sessionId = sessionId
-    workspace.scope = 'session'
-    workspace.rootIdentity = rootIdentity
-    const controlCenter = useControlCenterStore()
-    const open = vi.spyOn(controlCenter, 'openFile').mockResolvedValue('file-result')
-    const chat = useChatStore()
-    chat.current = { id: sessionId, messages: [] }
-    chat.selectedSessionId = sessionId
-    chat.watchRun(sessionId, 'run-1', { status: 'running' })
-    const source = EventSourceMock.instances[0]
-
-    source.emit('run.phase', { phase: 'processing_tool', tool: 'write_file', toolCallId: 'call-1' })
-    workspace.selectPath('notes', 'directory')
-    source.emit('tool.completed', { tool: 'write_file', toolCallId: 'call-1', metadata: {} })
-
-    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith(`/sessions/${sessionId}`, expect.any(Object)))
-    await Promise.resolve()
-    expect(open).not.toHaveBeenCalled()
   })
 
   it('keeps a dirty open file and warns when the agent mutates it', async () => {

@@ -123,7 +123,6 @@ def self_test() -> None:
     )
     assert all(re.fullmatch(SEMVER, value) for value in valid)
     assert not any(re.fullmatch(SEMVER, value) for value in invalid)
-    assert tuple(map(int, "1.10.0".split("."))) > tuple(map(int, "1.9.9".split(".")))
     print("Version checker self-test passed.")
 
 

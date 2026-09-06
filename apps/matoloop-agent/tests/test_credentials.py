@@ -57,9 +57,6 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
             "http://localhost:6020/api/execution-agents/pair",
         )
 
-    def test_old_environment_variable_is_ignored(self) -> None:
-        self.assertIsNone(select_pairing_token(None, {"MATO_EXECUTION_AGENT_PAIRING_TOKEN": "old"}))
-
     async def test_pair_persists_finalized_state_with_secure_modes_and_binding(self) -> None:
         received = {}
 

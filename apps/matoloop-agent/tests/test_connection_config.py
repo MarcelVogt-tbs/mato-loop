@@ -191,7 +191,6 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             agent = MatoLoopAgent(configuration(root), "secret")
             path = os.fspath(root / "app.txt")
             self.assertIn("filesystem.upsert", agent.operations)
-            self.assertNotIn("workspace.upsert", agent.operations)
             await agent.dispatch(
                 Request.model_validate(
                     {
