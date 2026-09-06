@@ -1252,7 +1252,9 @@ describe('chat drafts', () => {
     expect(watchRun).not.toHaveBeenCalled()
   })
 
-  it('moves a continued session to the top after persisting its new message', async () => {
+  it.each([
+    [null, true], [null, false], ['project-1', true], ['project-1', false]
+  ])('promotes a continued session in scope %s (already listed: %s)', async (projectId, listed) => {
     api.post.mockResolvedValue({
       data: {
         runId: 'run-1',
@@ -1266,12 +1268,15 @@ describe('chat drafts', () => {
     })
     const chat = useChatStore()
     vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
-    setSessions(chat, [
-      { id: 'session-2', lastMessageAt: '2026-07-24T14:00:00Z' },
-      { id: 'session-1', lastMessageAt: '2026-07-20T12:00:00Z' }
-    ])
+    const list = chat.ensureSessionList(projectId)
+    list.loaded = true
+    list.items = [
+      { id: 'session-2', projectId, lastMessageAt: '2026-07-24T14:00:00Z' },
+      ...(listed ? [{ id: 'session-1', projectId, lastMessageAt: '2026-07-20T12:00:00Z' }] : [])
+    ]
     chat.current = {
       id: 'session-1',
+      projectId,
       lastMessageAt: '2026-07-20T12:00:00Z',
       userRequestCount: 3,
       messages: []
@@ -1280,10 +1285,51 @@ describe('chat drafts', () => {
 
     await chat.sendToCurrent('Neue Nachricht')
 
-    expect(chat.sessions.map((session) => session.id)).toEqual(['session-1', 'session-2'])
-    expect(chat.sessions[0].lastMessageAt).toBe('2026-07-24T15:00:00Z')
+    expect(list.items.map((session) => session.id)).toEqual(['session-1', 'session-2'])
+    expect(list.items[0].lastMessageAt).toBe('2026-07-24T15:00:00Z')
+    expect(list.items[0]).not.toHaveProperty('messages')
     expect(chat.current.lastMessageAt).toBe('2026-07-24T15:00:00Z')
     expect(chat.current.userRequestCount).toBe(4)
+  })
+
+  it.each([null, 'project-1'])('syncs loaded and refreshed chat activity in scope %s without promoting visits', async (projectId) => {
+    const chat = useChatStore()
+    const list = chat.ensureSessionList(projectId)
+    list.loaded = true
+    const oldSession = { id: 'session-1', projectId, lastMessageAt: '2026-07-20T12:00:00Z' }
+    list.items = [
+      { id: 'pinned', projectId, pinned: true, lastMessageAt: '2026-07-01T12:00:00Z' },
+      { id: 'session-2', projectId, lastMessageAt: '2026-07-24T14:00:00Z' },
+      oldSession
+    ]
+    chat.sessionCatalog = [...list.items]
+    api.get.mockResolvedValue({ data: { ...oldSession, messages: [], activeRun: null } })
+
+    await chat.loadSession('session-1')
+
+    expect(list.items.map((session) => session.id)).toEqual(['pinned', 'session-2', 'session-1'])
+    const recentSession = {
+      ...oldSession,
+      lastMessageAt: '2026-07-24T15:00:00Z',
+      messages: [{ id: 'reply', role: 'assistant', createdAt: '2026-07-24T15:00:00Z' }],
+      activeRun: null,
+      contextSummaries: []
+    }
+    api.get.mockResolvedValue({ data: recentSession })
+
+    await chat.refreshSession('session-1')
+
+    expect(list.items.map((session) => session.id)).toEqual(['pinned', 'session-1', 'session-2'])
+    expect(chat.sessionCatalog.map((session) => session.id)).toEqual(['pinned', 'session-1', 'session-2'])
+    expect(list.items[1].lastMessageAt).toBe(recentSession.lastMessageAt)
+    expect(chat.sessionCatalog[1].lastMessageAt).toBe(recentSession.lastMessageAt)
+    expect(list.items[1]).not.toHaveProperty('messages')
+    expect(list.items[1]).not.toHaveProperty('contextSummaries')
+    expect(list.items[1]).not.toHaveProperty('activeRun')
+
+    list.items[1] = oldSession
+    await chat.loadSession('session-1')
+    expect(list.items[1].lastMessageAt).toBe(recentSession.lastMessageAt)
   })
 
   it('does not navigate back to a late new-session response', async () => {
@@ -2191,6 +2237,38 @@ describe('chat drafts', () => {
     })
     expect(chat.sessions).toEqual([])
     expect(chat.current.projectId).toBe('project-2')
+  })
+
+  it.each([
+    [null, 'project-2'], ['project-1', 'project-2'], ['project-1', null]
+  ])('preserves chat recency when moving from %s to %s', async (sourceId, targetId) => {
+    const chat = useChatStore()
+    const session = {
+      id: 'session-1', projectId: sourceId,
+      createdAt: '2026-07-01T12:00:00Z', lastMessageAt: '2026-07-24T15:00:00Z'
+    }
+    const source = chat.ensureSessionList(sourceId)
+    source.loaded = true
+    source.items = [session]
+    const target = chat.ensureSessionList(targetId)
+    target.loaded = true
+    target.items = [
+      { id: 'session-2', projectId: targetId, lastMessageAt: '2026-07-24T16:00:00Z' },
+      { id: 'session-3', projectId: targetId, lastMessageAt: '2026-07-24T14:00:00Z' }
+    ]
+    chat.sessionCatalog = [...target.items, session]
+    const { lastMessageAt, ...patchResult } = session
+    api.patch.mockResolvedValue({ data: {
+      ...patchResult, projectId: targetId, updatedAt: '2026-07-25T12:00:00Z'
+    } })
+
+    await chat.moveSession(session.id, targetId)
+
+    expect(source.items).toEqual([])
+    expect(target.items.map((item) => item.id)).toEqual(['session-2', 'session-1', 'session-3'])
+    expect(target.items[1].lastMessageAt).toBe(lastMessageAt)
+    expect(chat.sessionCatalog.map((item) => item.id)).toEqual(['session-2', 'session-1', 'session-3'])
+    expect(chat.sessionCatalog[1].lastMessageAt).toBe(lastMessageAt)
   })
 
   it('rebinds queued session files when a standalone session joins a project', async () => {

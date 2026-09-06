@@ -1080,7 +1080,7 @@ export const useChatStore = defineStore('chat', {
         const session = (await api.get(`/sessions/${id}`, { signal: controller.signal })).data
         if (this.selectedSessionId !== id || this.sessionLoadVersion !== loadVersion) return
         controlCenter.syncSession(session)
-        this.current = session
+        this.applySessionResult(session)
         void this.markSessionRead(session).catch(() => {})
         if (session.activeRun && this.runId !== session.activeRun.id) {
           this.watchRun(id, session.activeRun.id, session.activeRun)
@@ -1119,7 +1119,7 @@ export const useChatStore = defineStore('chat', {
               )
               session.nextMessageCursor = this.current.nextMessageCursor
             }
-            this.current = session
+            this.applySessionResult(session)
             void this.markSessionRead(session).catch(() => {})
             this.loadError = null
             if (session.activeRun && this.runId !== session.activeRun.id) {
@@ -1268,6 +1268,7 @@ export const useChatStore = defineStore('chat', {
     async moveSession(id, projectId) {
       const catalogHadSession = this.sessionCatalog.some((session) => session.id === id)
       const { data } = await api.patch(`/sessions/${id}`, { project_id: projectId || null })
+      const summary = { ...this.findCachedSession(id), ...data }
       const queued = this.queuedMessages[id] || []
       for (const entry of queued) {
         entry.projectId = projectId || null
@@ -1296,11 +1297,11 @@ export const useChatStore = defineStore('chat', {
       }
       if (targetList?.loaded) {
         targetList.version += 1
-        targetList.items = sortSessions([data, ...targetList.items])
+        targetList.items = sortSessions([summary, ...targetList.items])
       }
       if (catalogHadSession) {
         this.sessionCatalogVersion += 1
-        this.sessionCatalog = sortSessions([data, ...this.sessionCatalog])
+        this.sessionCatalog = sortSessions([summary, ...this.sessionCatalog])
       }
       if (this.current?.id === id) this.current = { ...this.current, ...data }
       return data
@@ -1389,13 +1390,11 @@ export const useChatStore = defineStore('chat', {
       delete summary.messages
       delete summary.contextSummaries
       delete summary.activeRun
+      this.updateCachedSession(session.id, (item) => ({ ...item, ...summary }))
       const list = this.sessionLists[sessionScopeKey(summary.projectId)]
-      if (!list?.loaded) return
-      const existing = list.items.some((item) => item.id === session.id)
+      if (!list?.loaded || list.items.some((item) => item.id === session.id)) return
       list.version += 1
-      list.items = sortSessions(existing
-        ? list.items.map((item) => item.id === session.id ? { ...item, ...summary } : item)
-        : [...list.items, summary])
+      list.items = sortSessions([...list.items, summary])
     },
     applySessionResult(session) {
       this.current = session
@@ -2050,10 +2049,7 @@ export const useChatStore = defineStore('chat', {
           }
           if (data.message.createdAt) {
             session.lastMessageAt = data.message.createdAt
-            this.updateCachedSession(session.id, (item) => ({
-              ...item,
-              lastMessageAt: data.message.createdAt
-            }))
+            this.updateSessionSummary(session)
           }
         }
         if (clearDraft) {
