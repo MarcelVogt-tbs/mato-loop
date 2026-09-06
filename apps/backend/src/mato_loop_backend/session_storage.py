@@ -172,6 +172,37 @@ class SessionStorage:
             return self.sessions_dir / str(normalized)
         return self._project_sessions_dir(project_id) / str(normalized)
 
+    def pending_run_ids(
+        self, session_id: UUID | str, project_id: UUID | str | None = None,
+    ) -> tuple[UUID, ...]:
+        """Discover this session's pending owners in the logical root's revision indexes."""
+        session_id = self.normalize_session_id(session_id)
+        root = self.logical_root_path(session_id, project_id, require_exists=True)
+        runs = set()
+        for entry in (root / "revisions").iterdir():
+            if entry.name.startswith("."):
+                continue
+            self._validate_directory(entry)
+            manifest = entry / "index.json"
+            if not manifest.exists() and not manifest.is_symlink():
+                continue
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                with os.fdopen(os.open(manifest, flags), "rb") as handle:
+                    if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                        raise ValueError("Invalid revision index")
+                    owner = json.load(handle).get("run")
+                if owner:
+                    run_id = self.normalize_session_id(owner["runId"])
+                    owner_session = self.normalize_session_id(owner["sessionId"])
+                    if owner["state"] not in {"pending", "publishing", "final"}:
+                        raise ValueError("Invalid run state")
+                    if owner_session == session_id and owner["state"] != "final":
+                        runs.add(run_id)
+            except (OSError, KeyError, TypeError, ValueError) as exc:
+                raise SessionStorageError("file.revisionInvalid", "Invalid run ownership") from exc
+        return tuple(sorted(runs, key=str))
+
     def _located_paths(self, session_id: UUID | str) -> list[Path]:
         normalized = self.normalize_session_id(session_id)
         paths = []
@@ -580,6 +611,8 @@ class SessionStorage:
         descriptors = self._acquire_locks(source, project_root)
         receipt: SessionMoveReceipt | None = None
         try:
+            if self.pending_run_ids(session_id):
+                raise SessionStorageError("file.changed", "Session has pending run files")
             if target.exists() or target.is_symlink():
                 raise SessionStorageError(
                     "sessionStorage.sessionAlreadyExists", "Session storage already exists"
@@ -674,6 +707,8 @@ class SessionStorage:
                 source,
                 changed=False,
             )
+        if normalized_source is not None and self.pending_run_ids(normalized, normalized_source):
+            raise SessionStorageError("file.changed", "Session has pending run files")
         if normalized_source is None and normalized_target is not None:
             return self._stage_standalone_import(
                 normalized, normalized_target, quota_bytes=quota_bytes

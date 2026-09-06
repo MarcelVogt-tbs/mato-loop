@@ -391,3 +391,62 @@ def test_project_storage_rejects_symlinked_project_root(tmp_path: Path) -> None:
         storage.provision(uuid4(), project_id)
 
     assert symlinked.value.code == "sessionStorage.invalidDirectory"
+
+
+@pytest.mark.parametrize("project", [False, True])
+def test_reconcile_preserves_live_files_and_discovers_pending_owners(tmp_path: Path, project: bool) -> None:
+    from mato_loop_backend.workspace import FileRoot, RootFileService
+
+    storage = SessionStorage(tmp_path / "sessions")
+    session_id, run_id = uuid4(), uuid4()
+    project_id = uuid4() if project else None
+    storage.provision(session_id, project_id)
+    working = RootFileService(
+        session_id, session_storage=storage, project_id=project_id, run_id=run_id,
+    )
+    working.write_file(FileRoot.SESSION, "draft.txt", "retained")
+    storage.reconcile({session_id: project_id}, stale_staging_after_seconds=0)
+    restarted = SessionStorage(tmp_path / "sessions")
+    assert restarted.pending_run_ids(session_id, project_id) == (run_id,)
+    root = storage.logical_root_path(session_id, project_id)
+    assert root.joinpath("files/draft.txt").read_bytes() == b"retained"
+    assert not root.joinpath("revisions/.runs").exists()
+    with pytest.raises(SessionStorageError) as pending:
+        restarted.move_session(session_id, project_id, uuid4())
+    assert pending.value.code == "file.changed"
+    service = RootFileService(session_id, session_storage=restarted, project_id=project_id)
+    assert service.finalize_run(run_id)[0].revision == 1
+    assert restarted.pending_run_ids(session_id, project_id) == ()
+
+
+def test_pending_project_runs_are_session_bound(tmp_path: Path) -> None:
+    from mato_loop_backend.workspace import FileRoot, RootFileService
+
+    storage = SessionStorage(tmp_path / "sessions")
+    first, second, project, run = uuid4(), uuid4(), uuid4(), uuid4()
+    storage.provision(first, project)
+    storage.provision(second, project)
+    service = RootFileService(first, session_storage=storage, project_id=project, run_id=run)
+    service.write_file(FileRoot.SESSION, "live.txt", "content")
+    assert storage.pending_run_ids(first, project) == (run,)
+    assert storage.pending_run_ids(second, project) == ()
+    storage.move_session(second, project, None)
+    assert service.read_bytes(FileRoot.SESSION, "live.txt", limit=100) == b"content"
+
+
+def test_session_move_preserves_explicit_derived_ownership(tmp_path: Path) -> None:
+    from mato_loop_backend.workspace import FileRoot, RootFileService
+
+    storage = SessionStorage(tmp_path / "sessions")
+    session_id, project_id = uuid4(), uuid4()
+    storage.provision(session_id)
+    service = RootFileService(session_id, session_storage=storage)
+    service.write_file(FileRoot.SESSION, "source.pdf", "source")
+    service.write_file(FileRoot.SESSION, "source.md", "companion")
+    source, child = (service.working_revision(path).file_id for path in ("source.pdf", "source.md"))
+    service.register_derived_file(source, child)
+    storage.move_session(session_id, None, project_id)
+    moved = RootFileService(session_id, session_storage=storage, project_id=project_id)
+    assert moved._derived_links()[str(child)]["sourceFileId"] == str(source)
+    moved.delete_path(FileRoot.SESSION, "source.pdf", recursive=False)
+    assert moved.list_entries(FileRoot.SESSION).entries == ()

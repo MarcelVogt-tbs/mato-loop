@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import stat
+import threading
 import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -68,6 +69,18 @@ class FileRevision:
     sha256: str
     created_at: str
     current: bool
+
+
+@dataclass(frozen=True, slots=True)
+class WorkingFileRevision:
+    file_id: UUID
+    run_id: UUID
+    path: str
+    size_bytes: int
+    sha256: str
+    created_at: str
+    revision: int | None = None
+    current: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,7 +340,10 @@ def _rename_at(
     source: str,
     destination: str,
     error: type[RootFileError],
+    *,
+    destination_descriptor: int | None = None,
 ) -> os.stat_result:
+    destination_descriptor = parent_descriptor if destination_descriptor is None else destination_descriptor
     try:
         metadata = os.stat(source, dir_fd=parent_descriptor, follow_symlinks=False)
     except FileNotFoundError as exc:
@@ -336,14 +352,14 @@ def _rename_at(
         raise error("file.symlinkForbidden", "Symlinks cannot be renamed")
     if not (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)):
         raise error("file.unsupportedType", "Unsupported file type")
-    if source == destination:
+    if source == destination and parent_descriptor == destination_descriptor:
         return metadata
     if _RENAME_AT2 is None:
         raise OSError(errno.ENOSYS, "renameat2 is unavailable")
     result = _RENAME_AT2(
         parent_descriptor,
         os.fsencode(source),
-        parent_descriptor,
+        destination_descriptor,
         os.fsencode(destination),
         _RENAME_NOREPLACE,
     )
@@ -355,7 +371,8 @@ def _rename_at(
             raise error("file.pathNotFound", "Path not found")
         raise OSError(error_number, os.strerror(error_number))
     os.fsync(parent_descriptor)
-    return os.stat(destination, dir_fd=parent_descriptor, follow_symlinks=False)
+    os.fsync(destination_descriptor)
+    return os.stat(destination, dir_fd=destination_descriptor, follow_symlinks=False)
 
 
 def _open_regular_file(
@@ -410,6 +427,7 @@ class RootFileService:
         *,
         session_storage: SessionStorage | None = None,
         project_id: UUID | None = None,
+        run_id: UUID | None = None,
         session_quota_bytes: int | None = None,
         max_editable_text_bytes: int = MAX_EDITABLE_TEXT_BYTES,
     ) -> None:
@@ -419,6 +437,10 @@ class RootFileService:
         if project_id is not None and not isinstance(project_id, UUID):
             raise TypeError("project_id must be supplied by the host as a UUID")
         self.project_id = project_id
+        if run_id is not None and not isinstance(run_id, UUID):
+            raise TypeError("run_id must be supplied by the host as a UUID")
+        self.run_id = run_id
+        self._operation_state = threading.local()
         self.session_storage = session_storage or SessionStorage()
         if session_quota_bytes is not None:
             self.SESSION_QUOTA_BYTES = session_quota_bytes
@@ -513,6 +535,437 @@ class RootFileService:
         self._ensure_directory(path)
         return path
 
+    def _derived_links(self) -> dict[str, dict]:
+        directory = self._revisions_path() / ".ownership"
+        if not directory.exists() and not directory.is_symlink():
+            return {}
+        self._ensure_directory(directory)
+        links = {}
+        for path in directory.glob("*.json"):
+            try:
+                child = str(UUID(path.stem))
+                link = json.loads(self._read_private_file(path))
+                if child != path.stem or str(UUID(link["sourceFileId"])) != link["sourceFileId"]:
+                    raise ValueError("Invalid ownership identity")
+                if not isinstance(link["bindings"], list) or not link["bindings"]:
+                    raise ValueError("Missing derivation bindings")
+                for binding in link["bindings"]:
+                    for key in ("source", "derived"):
+                        value = binding[key]
+                        if type(value) is int and value >= 1:
+                            continue
+                        if not isinstance(value, str) or str(UUID(value)) != value:
+                            raise ValueError("Invalid derivation reference")
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RootFileError("file.revisionInvalid", "Invalid derived file ownership") from exc
+            links[child] = link
+        for child in links:
+            seen = {child}
+            ancestor = links[child]["sourceFileId"]
+            while ancestor in links:
+                if ancestor in seen:
+                    raise RootFileError("file.revisionInvalid", "Cyclic derived file ownership")
+                seen.add(ancestor)
+                ancestor = links[ancestor]["sourceFileId"]
+        return links
+
+    def _derived_revision(self, file_id: str, reference: int | str) -> int | None:
+        if isinstance(reference, int):
+            return reference
+        history = self._history_for_id(UUID(file_id))
+        if history:
+            for key, revision in history[1].get("runReceipts", {}).items():
+                if key.endswith("/" + reference):
+                    return revision
+            owner = history[1].get("run", {})
+            if owner.get("runId") == reference and owner.get("state") == "final":
+                return owner["revision"]
+            return next((item["revision"] for item in history[1]["revisions"] if item.get("runId") == reference), None)
+        return None
+
+    def _complete_derived_binding(self, file_id: str, run_id: str, revision: int | None) -> None:
+        for child, link in self._derived_links().items():
+            changed = False
+            for binding in link["bindings"]:
+                for key, identity in (("source", link["sourceFileId"]), ("derived", child)):
+                    if identity == file_id and binding[key] == run_id and revision is not None:
+                        binding[key] = revision
+                        changed = True
+            if changed:
+                target = self._revisions_path() / ".ownership" / f"{child}.json"
+                self._replace_private_file(target, self._index_bytes(link))
+                self._fsync_directory(target.parent)
+
+    def register_derived_file(
+        self, source_file_id: UUID, derived_file_id: UUID, *,
+        source_revision: int | None = None, derived_revision: int | None = None,
+    ) -> None:
+        """Register single-owner provenance. Explicit revision pairs support verified backfills."""
+        if not isinstance(source_file_id, UUID) or not isinstance(derived_file_id, UUID):
+            raise TypeError("File IDs must be supplied by the host as UUIDs")
+        if (source_revision is None) != (derived_revision is None):
+            raise RootFileError("file.revisionNotFound", "Both derivation revisions are required")
+        with self._session_operation_lock(FileRoot.SESSION):
+            links = self._derived_links()
+            source_id, child_id = str(source_file_id), str(derived_file_id)
+            link = links.get(child_id, {"sourceFileId": source_id, "bindings": []})
+            if link["sourceFileId"] != source_id:
+                raise RootFileError("file.changed", "Derived file already has another owner")
+            ancestor = source_id
+            seen = {child_id}
+            while True:
+                if ancestor in seen:
+                    raise RootFileError("file.changed", "Derived file ownership must not contain cycles")
+                seen.add(ancestor)
+                if ancestor not in links:
+                    break
+                ancestor = links[ancestor]["sourceFileId"]
+            binding = {}
+            for key, file_id, explicit in (
+                ("source", source_file_id, source_revision),
+                ("derived", derived_file_id, derived_revision),
+            ):
+                history = self._history_for_id(file_id)
+                if history is None or history[1].get("deleted", False):
+                    raise RootFileError("file.revisionNotFound", "Derived file reference not found")
+                self._assert_available(history[1]["path"])
+                owner = history[1].get("run", {})
+                if explicit is None and owner and owner["state"] != "final":
+                    binding[key] = owner["runId"]
+                    continue
+                revision = explicit if explicit is not None else history[1]["currentRevision"]
+                if type(revision) is not int or not any(item["revision"] == revision for item in history[1]["revisions"]):
+                    raise RootFileError("file.revisionNotFound", "Derived file revision not found")
+                self._ensure_no_symlinks(self._root_path(FileRoot.SESSION) / "files", self._parts(history[1]["path"]))
+                data = self._read_private_file(history[0] / str(revision))
+                item = next(item for item in history[1]["revisions"] if item["revision"] == revision)
+                if hashlib.sha256(data).hexdigest() != item["sha256"]:
+                    raise RootFileError("file.revisionInvalid", "Invalid derivation revision content")
+                binding[key] = revision
+            if binding in link["bindings"]:
+                return
+            directory = self._revisions_path() / ".ownership"
+            directory.mkdir(mode=0o700, exist_ok=True)
+            self._ensure_directory(directory)
+            target = directory / f"{child_id}.json"
+            content = self._index_bytes({**link, "bindings": [*link["bindings"], binding]})
+            self._assert_session_quota(len(content), replaced_bytes=target.stat().st_size if target.exists() else 0)
+            self._replace_private_file(target, content)
+            self._fsync_directory(directory)
+            self._fsync_directory(directory.parent)
+
+    def _purge_owned_files(self, file_ids: set[str], *, validate_only: bool = False) -> None:
+        """Delete explicit identities, descendants first; never infer ownership from paths."""
+        links = self._derived_links()
+        pending = [(file_id, False) for file_id in file_ids]
+        ordered = []
+        seen = set()
+        while pending:
+            file_id, visited = pending.pop()
+            if visited:
+                ordered.append(file_id)
+                continue
+            if file_id in seen:
+                continue
+            seen.add(file_id)
+            pending.append((file_id, True))
+            pending.extend((child, False) for child, link in links.items() if link["sourceFileId"] == file_id)
+        histories = {index["fileId"]: (directory, index) for directory, index in self._revision_indexes()}
+        targets = {}
+        for file_id in ordered:
+            if file_id in histories:
+                self._assert_available(histories[file_id][1]["path"])
+                target = self._ensure_no_symlinks(
+                    self._root_path(FileRoot.SESSION) / "files", self._parts(histories[file_id][1]["path"]),
+                    allow_missing_final=True, allow_final_symlink=True,
+                )
+                if target.exists() or target.is_symlink():
+                    mode = self._metadata(target).st_mode
+                    if not (stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
+                        raise RootFileError("file.changed", "Owned file is no longer a regular file")
+                targets[file_id] = target
+        if validate_only:
+            return
+        for file_id in ordered:
+            if file_id in histories:
+                target = targets[file_id]
+                target.unlink(missing_ok=True)
+                self._fsync_directory(target.parent)
+                history = histories[file_id][0]
+                trash = history.parent / f".delete-owned-{uuid4().hex}"
+                history.rename(trash)
+                self._fsync_directory(history.parent)
+                shutil.rmtree(trash)
+                self._fsync_directory(history.parent)
+            if file_id in links:
+                path = self._revisions_path() / ".ownership" / f"{file_id}.json"
+                path.unlink()
+                self._fsync_directory(path.parent)
+
+    def _prune_derived_files(self, source_id: str, retained_revisions: set[int], *, validate_only: bool = False) -> None:
+        if not validate_only:
+            # Reject any invalid or busy branch before deleting its siblings.
+            self._prune_derived_files(source_id, retained_revisions, validate_only=True)
+        history = self._history_for_id(UUID(source_id))
+        if history:
+            directory, index = history
+            for item in index["revisions"]:
+                if item["revision"] in retained_revisions:
+                    continue
+                data = self._read_private_file(directory / str(item["revision"]))
+                if hashlib.sha256(data).hexdigest() != item["sha256"]:
+                    raise RootFileError("file.revisionInvalid", "Invalid removed revision")
+                derivatives = directory / "derived"
+                if derivatives.exists() or derivatives.is_symlink():
+                    self._ensure_directory(derivatives)
+                    derivative = derivatives / str(item["revision"])
+                    if derivative.exists() or derivative.is_symlink():
+                        self._ensure_directory(derivative)
+        for child_id, link in self._derived_links().items():
+            if link["sourceFileId"] != source_id:
+                continue
+            kept = [binding for binding in link["bindings"]
+                    if self._derived_revision(source_id, binding["source"]) in retained_revisions]
+            if len(kept) == len(link["bindings"]):
+                continue
+            if not kept:
+                self._purge_owned_files({child_id}, validate_only=validate_only)
+                continue
+            kept_refs = {self._derived_revision(child_id, item["derived"]) or item["derived"] for item in kept}
+            removed_refs = {self._derived_revision(child_id, item["derived"]) or item["derived"]
+                            for item in link["bindings"] if item not in kept} - kept_refs
+            history = self._history_for_id(UUID(child_id))
+            if history:
+                directory, index = history
+                self._assert_available(index["path"], allow_own=False)
+                derivatives = directory / "derived"
+                if derivatives.exists() or derivatives.is_symlink():
+                    self._ensure_directory(derivatives)
+                survivors = [item for item in index["revisions"] if item["revision"] not in removed_refs]
+                if not survivors:
+                    raise RootFileError("file.changed", "Retained derivation has no published revision")
+                if len(survivors) != len(index["revisions"]):
+                    target = self._ensure_no_symlinks(self._files_path(), self._parts(index["path"]))
+                    current_data = self._read_private_file(target)
+                    self._assert_revision_preconditions(index, current_data, UUID(child_id), index["currentRevision"], None)
+                    selected = next((item for item in survivors if item["revision"] == index["currentRevision"]), survivors[-1])
+                    data = self._read_private_file(directory / str(selected["revision"]))
+                    if hashlib.sha256(data).hexdigest() != selected["sha256"]:
+                        raise RootFileError("file.revisionInvalid", "Invalid derived file revision")
+                    self._prune_derived_files(child_id, {item["revision"] for item in survivors}, validate_only=validate_only)
+                    if validate_only:
+                        continue
+                    try:
+                        if selected["revision"] != index["currentRevision"]:
+                            self._replace_private_file(target, data)
+                            self._fsync_directory(target.parent)
+                        self._replace_private_file(directory / "index.json", self._index_bytes({
+                            **{key: value for key, value in index.items() if key != "run"},
+                            "currentRevision": selected["revision"], "revisions": survivors,
+                        }))
+                        self._fsync_directory(directory)
+                    except BaseException:
+                        self._replace_private_file(target, current_data)
+                        self._replace_private_file(directory / "index.json", self._index_bytes(index))
+                        self._fsync_directory(target.parent)
+                        self._fsync_directory(directory)
+                        raise
+                if validate_only:
+                    continue
+                for reference in removed_refs:
+                    if isinstance(reference, int):
+                        (directory / str(reference)).unlink(missing_ok=True)
+                        SessionStorage._remove_path(directory / "derived" / str(reference))
+                    self._fsync_directory(directory)
+            if not validate_only:
+                path = self._revisions_path() / ".ownership" / f"{child_id}.json"
+                self._replace_private_file(path, self._index_bytes({**link, "bindings": kept}))
+                self._fsync_directory(path.parent)
+
+    def _write_run_file(
+        self, path: str, data: bytes, *, expected_sha256: str | None = None,
+    ) -> FileRevision | WorkingFileRevision:
+        path = self.normalize_relative_path(path)
+        self._assert_mutable(FileRoot.SESSION, self._parts(path))
+        if len(data) > self.MAX_OPERATION_BYTES:
+            raise RootFileError("file.tooLarge", "File is too large")
+        with self._session_operation_lock(FileRoot.SESSION):
+            self._assert_available(path)
+            target = self._ensure_no_symlinks(self._files_path(), self._parts(path), allow_missing_final=True)
+            current = self._read_private_file(target) if target.exists() else None
+            current_hash = hashlib.sha256(current).hexdigest() if current is not None else None
+            if expected_sha256 is None and current_hash is not None:
+                raise RootFileError("file.pathAlreadyExists", "Destination path already exists")
+            if expected_sha256 is not None and current_hash != expected_sha256:
+                raise RootFileError("file.changed", "File changed since it was read")
+            history = self._history_for_path(path)
+            if history:
+                directory, index = history
+                staged = directory
+            else:
+                staged, directory, index = self._stage_initial_history(
+                    path, current if current is not None else data, baseline=current is not None,
+                )
+            try:
+                owner = index.get("run")
+                if (owner and owner["runId"] == str(self.run_id) and owner["state"] != "pending") or (
+                    f"{self.session_id}/{self.run_id}" in index.get("runReceipts", {})
+                ) or any(item.get("runId") == str(self.run_id) for item in index["revisions"]):
+                    raise RootFileError("file.changed", "Run file is finalized")
+                if history and current == data and index["currentRevision"] is not None and (not owner or owner["state"] == "final"):
+                    return self.working_revision(path)
+                if not owner or owner["state"] == "final":
+                    if owner:
+                        self._complete_derived_binding(index["fileId"], owner["runId"], owner["revision"])
+                    owner = {
+                        "sessionId": str(self.session_id), "runId": str(self.run_id),
+                        "state": "pending", "initialSha256": current_hash,
+                    }
+                # Staged baseline bytes already count toward usage; reserve the final
+                # snapshot and index growth before publishing history or live bytes.
+                owner = {**owner, "reserveBytes": max(len(current or b""), len(data)) + 1024}
+                updated = {**index, "run": owner}
+                old_index = self._read_private_file(staged / "index.json")
+                old_reserve = index.get("run", {}).get("reserveBytes", 0) if history else 0
+                self._assert_session_quota(
+                    len(data) + len(self._index_bytes(updated)) + owner["reserveBytes"],
+                    replaced_bytes=len(current or b"") + len(old_index) + old_reserve,
+                )
+                self._replace_private_file(staged / "index.json", self._index_bytes(updated))
+                self._fsync_directory(staged)
+                if not history:
+                    staged.rename(directory)
+                self._fsync_directory(directory.parent)
+            finally:
+                if not history and staged.exists():
+                    shutil.rmtree(staged)
+            # The durable owner precedes the atomic replacement. Recovery snapshots
+            # whichever complete live version survived, never a second byte store.
+            with _directory_descriptor(self._files_path(), self._parts(path)[:-1], RootFileError) as descriptor:
+                temporary, _ = _stage_upload(descriptor, target.name, BytesIO(data), max_bytes=self.MAX_OPERATION_BYTES)
+                try:
+                    if current is None:
+                        _publish_upload(descriptor, temporary, target.name)
+                    else:
+                        os.replace(temporary, target.name, src_dir_fd=descriptor, dst_dir_fd=descriptor)
+                        os.fsync(descriptor)
+                finally:
+                    try:
+                        os.unlink(temporary, dir_fd=descriptor)
+                    except FileNotFoundError:
+                        pass
+            return self.working_revision(path)
+
+    def working_revision(self, relative_path: str) -> FileRevision | WorkingFileRevision:
+        """Return current metadata; pending references use run_id, never a revision number."""
+        path = self.normalize_relative_path(relative_path)
+        with self._session_operation_lock(FileRoot.SESSION):
+            history = self._history_for_path(path)
+            if history and (owner := history[1].get("run")) and owner["state"] != "final":
+                with self.open_file(FileRoot.SESSION, path) as handle:
+                    metadata = os.fstat(handle.fileno())
+                    digest = hashlib.file_digest(handle, "sha256").hexdigest()
+                return WorkingFileRevision(
+                    UUID(history[1]["fileId"]), UUID(owner["runId"]), path,
+                    metadata.st_size, digest, datetime.fromtimestamp(metadata.st_mtime, UTC).isoformat(),
+                )
+        revisions = self.list_revisions(path)
+        current = next((item for item in revisions if item.current), None)
+        if current is None:
+            raise RootFileError("file.revisionNotFound", "Revision not found")
+        return current
+
+    def pending_run_ids(self) -> tuple[UUID, ...]:
+        return self.session_storage.pending_run_ids(self.session_id, self.project_id)
+
+    def open_working_file(
+        self, file_id: UUID, *, expected_sha256: str | None = None,
+    ) -> BinaryIO:
+        """Read live bytes by identity, checking the caller's content hash."""
+        if self.run_id is None:
+            raise RootFileError("file.revisionNotFound", "A run-bound reference is required")
+        with self._session_operation_lock(FileRoot.SESSION):
+            history = self._history_for_id(file_id)
+            if history:
+                index = history[1]
+                owner = index.get("run", {})
+                if owner.get("runId") != str(self.run_id) or owner.get("sessionId") != str(self.session_id):
+                    raise RootFileError("file.revisionNotFound", "Working file not found")
+                handle = self.open_file(FileRoot.SESSION, index["path"])
+                try:
+                    if expected_sha256 is not None and hashlib.file_digest(handle, "sha256").hexdigest() != expected_sha256:
+                        raise RootFileError("file.changed", "Working file changed")
+                    handle.seek(0)
+                    return handle
+                except BaseException:
+                    handle.close()
+                    raise
+        raise RootFileError("file.revisionNotFound", "Working file not found")
+
+    def finalize_run(self, run_id: UUID) -> tuple[FileRevision, ...]:
+        """Snapshot live bytes once per changed file; replay publication intents on retry."""
+        if not isinstance(run_id, UUID):
+            raise TypeError("run_id must be supplied by the host as a UUID")
+        results = []
+        with self._session_operation_lock(FileRoot.SESSION):
+            for directory, index in self._revision_indexes():
+                owner = index.get("run", {})
+                if owner.get("runId") == str(run_id) and owner.get("sessionId") == str(self.session_id):
+                    if owner["state"] != "final":
+                        target = self._ensure_no_symlinks(self._files_path(), self._parts(index["path"]), allow_missing_final=True)
+                        if not target.exists():
+                            if index["revisions"] or owner["initialSha256"] is not None:
+                                raise RootFileError("file.changed", "Run file was removed outside storage")
+                            shutil.rmtree(directory)
+                            self._fsync_directory(directory.parent)
+                            continue
+                        data = self._read_private_file(target)
+                        item = owner.get("publication")
+                        if item is None:
+                            current = next((item for item in index["revisions"] if item["revision"] == index["currentRevision"]), None)
+                            digest = hashlib.sha256(data).hexdigest()
+                            unchanged = digest == (current["sha256"] if current else owner["initialSha256"])
+                            if not unchanged:
+                                item = {**self._revision_item(index["maxRevision"] + 1, data),
+                                        "runId": str(run_id), "sessionId": str(self.session_id)}
+                                self._assert_session_quota(
+                                    len(data) + 1024, replaced_bytes=owner["reserveBytes"],
+                                )
+                                owner = {**owner, "state": "publishing", "publication": item}
+                                index = {**index, "run": owner}
+                                self._replace_private_file(directory / "index.json", self._index_bytes(index))
+                                self._fsync_directory(directory)
+                        if item is not None:
+                            blob = directory / str(item["revision"])
+                            if blob.exists() or blob.is_symlink():
+                                snapshot = self._read_private_file(blob)
+                                if hashlib.sha256(snapshot).hexdigest() != item["sha256"]:
+                                    raise RootFileError("file.revisionInvalid", "Invalid publication snapshot")
+                            else:
+                                if hashlib.sha256(data).hexdigest() != item["sha256"]:
+                                    raise RootFileError("file.changed", "File changed during publication")
+                                self._replace_private_file(blob, data)
+                                self._fsync_directory(directory)
+                            index = {**index, "currentRevision": item["revision"], "maxRevision": item["revision"],
+                                     "revisions": [*index["revisions"], item]}
+                        owner = {"runId": str(run_id), "sessionId": str(self.session_id),
+                                 "state": "final", "revision": index["currentRevision"]}
+                        index = {**index, "run": owner, "runReceipts": {
+                            **index.get("runReceipts", {}), f"{self.session_id}/{run_id}": index["currentRevision"],
+                        }}
+                        self._replace_private_file(directory / "index.json", self._index_bytes(index))
+                        self._fsync_directory(directory)
+                    self._complete_derived_binding(index["fileId"], str(run_id), owner["revision"])
+                for item in index["revisions"]:
+                    if (item.get("runId") == str(run_id) and item.get("sessionId") == str(self.session_id)) or (
+                        index.get("runReceipts", {}).get(f"{self.session_id}/{run_id}") == item["revision"]
+                    ):
+                        results.append(FileRevision(
+                            UUID(index["fileId"]), item["revision"], index["path"],
+                            item["sizeBytes"], item["sha256"], item["createdAt"], item["revision"] == index["currentRevision"],
+                        ))
+        return tuple(sorted(results, key=lambda item: str(item.file_id)))
+
     def _revisions_path(self) -> Path:
         path = self._root_path(FileRoot.SESSION) / "revisions"
         self._ensure_directory(path)
@@ -546,6 +999,9 @@ class RootFileService:
     def _session_operation_lock(
         self, *roots: FileRoot
     ) -> Iterator[None]:
+        if getattr(self._operation_state, "locked", False):
+            yield
+            return
         flags = (
             os.O_RDONLY
             | getattr(os, "O_DIRECTORY", 0)
@@ -570,8 +1026,12 @@ class RootFileService:
                 "file.sessionNotProvisioned", "File root is unavailable"
             ) from exc
         try:
+            self._operation_state.locked = True
+            for trash in self._revisions_path().glob(".delete-owned-*"):
+                SessionStorage._remove_path(trash)
             yield
         finally:
+            self._operation_state.locked = False
             for descriptor in reversed(descriptors):
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
                 os.close(descriptor)
@@ -631,6 +1091,7 @@ class RootFileService:
         self, additional_bytes: int, *, replaced_bytes: int = 0
     ) -> None:
         used_bytes = self._session_usage()
+        used_bytes += sum(index.get("run", {}).get("reserveBytes", 0) for _, index in self._revision_indexes())
         if used_bytes - replaced_bytes + additional_bytes > self.SESSION_QUOTA_BYTES:
             raise RootFileError(
                 "file.sessionQuotaExceeded", "Session storage limit has been reached"
@@ -660,6 +1121,7 @@ class RootFileService:
     def _resolve_destination(self, root: FileRoot | str, relative_path: str) -> Path:
         parts = self._parts(relative_path)
         self._assert_mutable(root, parts)
+        self._assert_available(self._relative_path(parts))
         if not parts:
             raise RootFileError("file.rootMutationForbidden", "A file root is immutable")
         root_path = self._files_path(root)
@@ -669,6 +1131,18 @@ class RootFileService:
         if target.exists() or target.is_symlink():
             raise RootFileError("file.pathAlreadyExists", "Destination path already exists")
         return target
+
+    def _assert_available(self, path: str, *, allow_own: bool = True) -> None:
+        """Check file/subtree ownership while holding the logical root lock."""
+        for _, index in self._revision_indexes():
+            owner = index.get("run")
+            if not owner or owner["state"] == "final":
+                continue
+            owned_path = index["path"]
+            if path == owned_path or path.startswith(owned_path + "/") or owned_path.startswith(path + "/"):
+                if not (allow_own and owner["runId"] == str(self.run_id)
+                        and owner["sessionId"] == str(self.session_id)):
+                    raise RootFileError("file.changed", "File is owned by an active run")
 
     @staticmethod
     def _assert_mutable(root: FileRoot | str, parts: tuple[str, ...]) -> None:
@@ -877,7 +1351,11 @@ class RootFileService:
         parts = self._parts(relative_path)
         self._assert_mutable(selected_root, parts)
         encoded_content = content.encode("utf-8")
+        if self.run_id is not None:
+            self._write_run_file(self._relative_path(parts), encoded_content)
+            return self._relative_path(parts)
         with self._session_operation_lock(selected_root):
+            self._assert_available(self._relative_path(parts))
             root_path = self._files_path(selected_root)
             parent = self._ensure_no_symlinks(root_path, parts[:-1])
             self._ensure_directory(parent, code="file.parentNotFound")
@@ -1023,11 +1501,9 @@ class RootFileService:
                 valid = (
                     str(file_id) == directory.name == index["fileId"]
                     and path == index["path"]
+                    and path != "."
                     and isinstance(index.get("deleted", False), bool)
-                    and isinstance(current, int)
-                    and current >= 1
                     and isinstance(items, list)
-                    and items
                     and all(
                         isinstance(item, dict)
                         and isinstance(item.get("revision"), int)
@@ -1041,19 +1517,57 @@ class RootFileService:
                     )
                     and [item["revision"] for item in items]
                     == sorted({item["revision"] for item in items})
-                    and any(item["revision"] == current for item in items)
+                    and (current is None and not items or type(current) is int and any(item["revision"] == current for item in items))
                     and (
                         "maxRevision" not in index
                         or isinstance(index["maxRevision"], int)
                         and not isinstance(index["maxRevision"], bool)
-                        and index["maxRevision"] >= max(item["revision"] for item in items)
+                        and index["maxRevision"] >= max((item["revision"] for item in items), default=0)
                     )
                 )
             except (KeyError, OSError, TypeError, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
                 raise RootFileError("file.revisionInvalid", "Invalid revision history") from exc
             if not valid:
                 raise RootFileError("file.revisionInvalid", "Invalid revision history")
-            index.setdefault("maxRevision", max(item["revision"] for item in items))
+            try:
+                for key, revision in index.get("runReceipts", {}).items():
+                    session_id, run_id = key.split("/")
+                    if (str(UUID(session_id)) != session_id or str(UUID(run_id)) != run_id
+                            or type(revision) is not int or not any(item["revision"] == revision for item in items)):
+                        raise ValueError("Invalid run receipt")
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise RootFileError("file.revisionInvalid", "Invalid run receipt") from exc
+            owner = index.get("run")
+            if owner is not None:
+                try:
+                    valid_owner = (
+                        isinstance(owner["runId"], str) and str(UUID(owner["runId"])) == owner["runId"]
+                        and isinstance(owner["sessionId"], str) and str(UUID(owner["sessionId"])) == owner["sessionId"]
+                        and owner["state"] in {"pending", "publishing", "final"}
+                        and type(owner.get("reserveBytes", 0)) is int
+                        and owner.get("reserveBytes", 0) >= 0
+                    )
+                    if owner["state"] != "final":
+                        initial = owner["initialSha256"]
+                        valid_owner = valid_owner and owner["reserveBytes"] >= 1024 and (
+                            initial is None or isinstance(initial, str) and len(initial) == 64
+                        )
+                    if owner["state"] == "publishing":
+                        item = owner["publication"]
+                        valid_owner = valid_owner and (
+                            type(item["revision"]) is int and item["revision"] == index["maxRevision"] + 1
+                            and isinstance(item["sha256"], str) and len(item["sha256"]) == 64
+                            and type(item["sizeBytes"]) is int and item["sizeBytes"] >= 0
+                            and isinstance(item["createdAt"], str)
+                            and item["runId"] == owner["runId"] and item["sessionId"] == owner["sessionId"]
+                        )
+                    if owner["state"] == "final":
+                        valid_owner = valid_owner and (owner["revision"] is None or any(item["revision"] == owner["revision"] for item in items))
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise RootFileError("file.revisionInvalid", "Invalid run ownership") from exc
+                if not valid_owner:
+                    raise RootFileError("file.revisionInvalid", "Invalid run ownership")
+            index.setdefault("maxRevision", max((item["revision"] for item in items), default=0))
             result.append((directory, index))
         return result
 
@@ -1088,9 +1602,13 @@ class RootFileService:
 
     @staticmethod
     def _index_bytes(index: dict) -> bytes:
+        if "runReceipts" in index:
+            # Every history truncation invalidates receipts for removed revisions.
+            retained = {item["revision"] for item in index["revisions"]}
+            index = {**index, "runReceipts": {key: revision for key, revision in index["runReceipts"].items() if revision in retained}}
         return json.dumps(index, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
 
-    def _stage_initial_history(self, path: str, data: bytes) -> tuple[Path, Path, dict]:
+    def _stage_initial_history(self, path: str, data: bytes, *, baseline: bool = False) -> tuple[Path, Path, dict]:
         revisions = self._revisions_path()
         file_id = uuid4()
         target = revisions / str(file_id)
@@ -1104,8 +1622,14 @@ class RootFileService:
             "maxRevision": 1,
             "revisions": [item],
         }
+        if self.run_id is not None and not baseline:
+            index.update(currentRevision=None, maxRevision=0, revisions=[], run={
+                "sessionId": str(self.session_id), "runId": str(self.run_id),
+                "state": "pending", "initialSha256": None, "reserveBytes": len(data) + 1024,
+            })
         try:
-            self._write_private_file(staged / "1", data)
+            if self.run_id is None or baseline:
+                self._write_private_file(staged / "1", data)
             self._write_private_file(staged / "index.json", self._index_bytes(index))
         except BaseException:
             shutil.rmtree(staged, ignore_errors=True)
@@ -1115,7 +1639,7 @@ class RootFileService:
     def _publish_initial_history(self, path: str, data: bytes) -> tuple[Path, dict]:
         staged, target, index = self._stage_initial_history(path, data)
         try:
-            self._assert_session_quota(0)
+            self._assert_session_quota(index.get("run", {}).get("reserveBytes", 0))
             staged.rename(target)
             self._fsync_directory(target.parent)
         except BaseException:
@@ -1251,7 +1775,7 @@ class RootFileService:
                 current=revision == index["currentRevision"],
             )
 
-    def create_output_file(self, filename: str, data: bytes) -> FileRevision:
+    def create_output_file(self, filename: str, data: bytes) -> FileRevision | WorkingFileRevision:
         name = validate_upload_filename(filename)
         stem = PurePosixPath(name).stem or "output"
         suffix = PurePosixPath(name).suffix
@@ -1262,10 +1786,10 @@ class RootFileService:
             BytesIO(data),
             max_bytes=self.MAX_OPERATION_BYTES,
         )
-        revision = self.list_revisions(path)[0]
+        revision = self.working_revision(path)
         return revision
 
-    def append_output_revision(self, file_id: UUID, data: bytes) -> FileRevision:
+    def append_output_revision(self, file_id: UUID, data: bytes) -> FileRevision | WorkingFileRevision:
         if not data or len(data) > self.MAX_OPERATION_BYTES:
             raise RootFileError("file.tooLarge", "File is too large")
         with self._session_operation_lock(FileRoot.SESSION):
@@ -1274,8 +1798,13 @@ class RootFileService:
                 raise RootFileError("file.revisionNotFound", "Revision not found")
             directory, index = history
             path = index["path"]
+            self._assert_available(path)
             target = self._ensure_no_symlinks(self._files_path(), self._parts(path))
             current = self._read_private_file(target)
+            if self.run_id is not None:
+                return self._write_run_file(path, data, expected_sha256=hashlib.sha256(current).hexdigest())
+            if data == current and index["currentRevision"] is not None:
+                return self.working_revision(path)
             revision = index["maxRevision"] + 1
             item = self._revision_item(revision, data)
             revision_target = directory / str(revision)
@@ -1325,25 +1854,33 @@ class RootFileService:
         )
 
     def discard_output_revision(self, file_id: UUID, revision: int) -> None:
+        if self.run_id is not None:
+            raise RootFileError("file.changed", "Runs must not discard published revisions")
         with self._session_operation_lock(FileRoot.SESSION):
             history = self._history_for_id(file_id)
             if history is None:
                 return
             directory, index = history
+            self._assert_available(index["path"], allow_own=False)
             revisions = index["revisions"]
+            if not revisions:
+                return
             if revision != index["currentRevision"] or revision != revisions[-1]["revision"]:
                 return
             target = self._ensure_no_symlinks(
                 self._files_path(), self._parts(index["path"])
             )
             if len(revisions) == 1:
-                target.unlink(missing_ok=True)
-                shutil.rmtree(directory, ignore_errors=True)
+                self.delete_path(FileRoot.SESSION, index["path"], recursive=False)
                 return
             previous = revisions[-2]
             previous_data = self._read_private_file(directory / str(previous["revision"]))
+            if hashlib.sha256(previous_data).hexdigest() != previous["sha256"]:
+                raise RootFileError("file.revisionInvalid", "Invalid previous revision")
             old_data = self._read_private_file(target)
+            self._prune_derived_files(str(file_id), {item["revision"] for item in revisions[:-1]})
             old_index = self._read_private_file(directory / "index.json")
+            index = {key: value for key, value in index.items() if key != "run"}
             temporary = target.parent / f".{target.name}.{uuid4().hex}.tmp"
             index_temporary = directory / f".index.{uuid4().hex}.tmp"
             try:
@@ -1378,10 +1915,11 @@ class RootFileService:
         expected_current_sha256: str | None,
     ) -> dict:
         current = next(
-            item
-            for item in index["revisions"]
-            if item["revision"] == index["currentRevision"]
+            (item for item in index["revisions"] if item["revision"] == index["currentRevision"]),
+            None,
         )
+        if current is None:
+            raise RootFileError("file.revisionNotFound", "Revision not found")
         current_sha256 = hashlib.sha256(current_data).hexdigest()
         if current_sha256 != current["sha256"]:
             raise RootFileError("file.revisionInvalid", "Current revision does not match file")
@@ -1408,6 +1946,7 @@ class RootFileService:
         path = self.normalize_relative_path(relative_path)
         self._assert_mutable(FileRoot.SESSION, self._parts(path))
         with self._session_operation_lock(FileRoot.SESSION):
+            self._assert_available(path, allow_own=False)
             history = self._history_for_path(path)
             if history is None:
                 raise RootFileError("file.changed", "File changed since it was read")
@@ -1427,12 +1966,13 @@ class RootFileService:
             )
             if selected is None:
                 raise RootFileError("file.revisionNotFound", "Revision not found")
-            if revision == index["currentRevision"]:
-                return RevisionMutationResult(False, file_id, revision, selected["sha256"])
-
             selected_data = self._read_private_file(directory / str(revision))
             if hashlib.sha256(selected_data).hexdigest() != selected["sha256"]:
                 raise RootFileError("file.revisionInvalid", "Invalid revision history")
+            self._prune_derived_files(str(file_id), {item["revision"] for item in index["revisions"] if item["revision"] <= revision})
+            if revision == index["currentRevision"]:
+                return RevisionMutationResult(False, file_id, revision, selected["sha256"])
+
             later = [
                 item for item in index["revisions"] if item["revision"] > revision
             ]
@@ -1443,6 +1983,7 @@ class RootFileService:
             staged_revisions.mkdir(mode=0o700, parents=True)
             staged_derivatives.mkdir(mode=0o700)
             old_index = self._read_private_file(directory / "index.json")
+            index = {key: value for key, value in index.items() if key != "run"}
             temporary = target.parent / f".{target.name}.{uuid4().hex}.tmp"
             index_temporary = directory / f".index.{uuid4().hex}.tmp"
             moved: list[tuple[Path, Path]] = []
@@ -1519,7 +2060,12 @@ class RootFileService:
             raise RootFileError("file.tooLarge", "File is too large")
         if "\0" in content:
             raise RootFileError("file.invalidEncoding", "File is not editable UTF-8 text")
+        if self.run_id is not None:
+            return self._write_run_file(
+                self._relative_path(parts), encoded, expected_sha256=expected_revision,
+            ).sha256
         with self._session_operation_lock(selected_root):
+            self._assert_available(self._relative_path(parts))
             target = self._ensure_no_symlinks(self._files_path(selected_root), parts)
             metadata = self._metadata(target)
             if not stat.S_ISREG(metadata.st_mode):
@@ -1530,6 +2076,8 @@ class RootFileService:
             path = self._relative_path(parts)
             history = self._history_for_path(path)
             new_digest = hashlib.sha256(encoded).hexdigest()
+            if current == encoded:
+                return new_digest
             if history is None:
                 file_id = uuid4()
                 history_directory = self._revisions_path() / str(file_id)
@@ -1553,11 +2101,9 @@ class RootFileService:
             else:
                 history_directory, index = history
                 current_item = next(
-                    item
-                    for item in index["revisions"]
-                    if item["revision"] == index["currentRevision"]
+                    (item for item in index["revisions"] if item["revision"] == index["currentRevision"]), None,
                 )
-                if current_item["sha256"] != hashlib.sha256(current).hexdigest():
+                if current_item is not None and current_item["sha256"] != expected_revision:
                     raise RootFileError("file.revisionInvalid", "Current revision does not match file")
                 revision = index["maxRevision"] + 1
                 next_index = {
@@ -1624,7 +2170,18 @@ class RootFileService:
         self._assert_mutable(selected_root, parts)
         if not parts:
             raise RootFileError("file.rootMutationForbidden", "A file root is immutable")
+        if self.run_id is not None:
+            source.seek(0)
+            data = source.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                raise RootFileError("file.tooLarge", "File is too large")
+            working = self._write_run_file(self._relative_path(parts), data)
+            return RootFileEntry(
+                parts[-1], working.path, "file", len(data),
+                datetime.fromisoformat(working.created_at).timestamp(),
+            )
         with self._session_operation_lock(selected_root):
+            self._assert_available(self._relative_path(parts))
             try:
                 anchor, anchored_parts = self._anchored_parts(
                     selected_root, parts[:-1]
@@ -1710,9 +2267,8 @@ class RootFileService:
         if not parts:
             raise RootFileError("file.rootMutationForbidden", "A file root is immutable")
         with self._session_operation_lock(selected_root):
-            anchor, anchored_parts = self._anchored_parts(
-                selected_root, parts[:-1]
-            )
+            self._resolve_destination(selected_root, relative_path)
+            anchor, anchored_parts = self._root_path(selected_root) / "files", parts[:-1]
             created = False
             try:
                 with _directory_descriptor(
@@ -1744,6 +2300,10 @@ class RootFileService:
 
     def _rewrite_history_paths(self, source: str, destination: str) -> None:
         histories = self._histories_under(source)
+        self._assert_session_quota(sum(
+            len(self._index_bytes({**index, "path": destination + index["path"][len(source):]}))
+            - len(self._index_bytes(index)) for _, index in histories
+        ))
         written: list[tuple[Path, bytes]] = []
         try:
             for directory, index in histories:
@@ -1755,6 +2315,7 @@ class RootFileService:
                 )
                 os.replace(temporary, directory / "index.json")
                 written.append((directory, old))
+                self._fsync_directory(directory)
         except BaseException:
             for directory, old in written:
                 self._replace_private_file(directory / "index.json", old)
@@ -1770,26 +2331,13 @@ class RootFileService:
         destination_parts = (*parts[:-1], name)
         self._assert_mutable(selected_root, destination_parts)
         with self._session_operation_lock(selected_root):
-            anchor, anchored_parts = self._anchored_parts(
-                selected_root, parts[:-1]
-            )
-            with _directory_descriptor(
-                anchor, anchored_parts, RootFileError
-            ) as descriptor:
-                metadata = _rename_at(
-                    descriptor, parts[-1], name, RootFileError
-                )
             source_path = self._relative_path(parts)
             destination_path = self._relative_path(destination_parts)
+            self._assert_available(source_path)
+            self._assert_available(destination_path)
             if source_path != destination_path:
-                try:
-                    self._rewrite_history_paths(source_path, destination_path)
-                except BaseException:
-                    os.rename(
-                        self._files_path(selected_root) / destination_path,
-                        self._files_path(selected_root) / source_path,
-                    )
-                    raise
+                self.move_path(selected_root, source_path, selected_root, destination_path)
+            metadata = self._metadata(self.resolve(selected_root, destination_path))
         is_directory = stat.S_ISDIR(metadata.st_mode)
         return RootFileEntry(
             name=name,
@@ -1810,14 +2358,23 @@ class RootFileService:
         parts = self._parts(relative_path)
         self._assert_mutable(selected_root, parts)
         with self._session_operation_lock(selected_root):
+            self._assert_available(self._relative_path(parts))
             root_path = self._files_path(selected_root)
             target = self._ensure_no_symlinks(
-                root_path, parts, allow_final_symlink=True
+                root_path, parts, allow_final_symlink=True, allow_missing_final=True
             )
+            path = self._relative_path(parts)
+            histories = self._histories_under(path)
+            source_ids = {index["fileId"] for _, index in histories}
+            if not target.exists() and not target.is_symlink():
+                if source_ids:
+                    self._purge_owned_files(source_ids)
+                    return
+                raise RootFileError("file.pathNotFound", "Path not found")
             metadata = self._metadata(target)
             if stat.S_ISDIR(metadata.st_mode) and not recursive and any(target.iterdir()):
                 raise RootFileError("file.directoryNotEmpty", "Directory is not empty")
-            path = self._relative_path(parts)
+            self._purge_owned_files({child for child, link in self._derived_links().items() if link["sourceFileId"] in source_ids})
             histories = self._histories_under(path)
             revisions_root = self._revisions_path()
             trash = revisions_root / f".delete-{uuid4().hex}"
@@ -1839,6 +2396,11 @@ class RootFileService:
                 shutil.rmtree(trash, ignore_errors=True)
                 raise
             shutil.rmtree(trash)
+            for file_id in source_ids:
+                (self._revisions_path() / ".ownership" / f"{file_id}.json").unlink(missing_ok=True)
+            ownership = self._revisions_path() / ".ownership"
+            if ownership.exists():
+                self._fsync_directory(ownership)
             self._fsync_directory(target.parent)
             self._fsync_directory(revisions_root)
 
@@ -1973,48 +2535,27 @@ class RootFileService:
         source_parts = self._parts(source_path)
         self._assert_mutable(selected_source_root, source_parts)
         destination_parts = self._parts(destination_path)
+        self._assert_mutable(selected_destination_root, destination_parts)
+        source_path = self._relative_path(source_parts)
+        destination_path = self._relative_path(destination_parts)
+        if destination_parts[:len(source_parts)] == source_parts:
+            raise RootFileError("file.invalidDestination", "Destination is inside the source")
         with self._session_operation_lock(selected_source_root, selected_destination_root):
-            source = self._ensure_no_symlinks(
-                self._files_path(selected_source_root), source_parts
-            )
-            source_usage = self._operation_usage(source)
+            self._assert_available(source_path)
+            self._operation_usage(self.resolve(selected_source_root, source_path))
             destination = self._resolve_destination(
                 selected_destination_root, destination_path
             )
+            source = self.resolve(selected_source_root, source_path)
+            with _directory_descriptor(self._files_path(), source_parts[:-1], RootFileError) as source_fd:
+                with _directory_descriptor(self._files_path(), destination_parts[:-1], RootFileError) as destination_fd:
+                    _rename_at(source_fd, source.name, destination.name, RootFileError,
+                               destination_descriptor=destination_fd)
             try:
-                destination.relative_to(source)
-            except ValueError:
-                pass
-            else:
-                raise RootFileError(
-                    "file.invalidDestination", "Destination is inside the source"
-                )
-
-            if selected_destination_root is FileRoot.SESSION:
-                additional_bytes = (
-                    0
-                    if selected_source_root is FileRoot.SESSION
-                    else source_usage.bytes
-                )
-                self._assert_session_quota(additional_bytes)
-            current_usage = self._operation_usage(source)
-            if selected_destination_root is FileRoot.SESSION:
-                additional_bytes = (
-                    0
-                    if selected_source_root is FileRoot.SESSION
-                    else current_usage.bytes
-                )
-                self._assert_session_quota(additional_bytes)
-            source_logical = self._relative_path(source_parts)
-            destination_logical = self._relative_path(destination_parts)
-            try:
-                source.rename(destination)
-                self._rewrite_history_paths(source_logical, destination_logical)
+                self._rewrite_history_paths(source_path, destination_path)
             except BaseException:
-                if destination.exists() and not source.exists():
-                    destination.rename(source)
+                destination.rename(source)
                 raise
             self._fsync_directory(source.parent)
-            if source.parent != destination.parent:
-                self._fsync_directory(destination.parent)
-        return self._relative_path(destination_parts)
+            self._fsync_directory(destination.parent)
+        return destination_path
