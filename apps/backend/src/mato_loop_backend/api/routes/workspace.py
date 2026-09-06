@@ -683,6 +683,18 @@ async def preview_file(
     except RootFileError as exc:
         raise _context_error(exc) from exc
 
+    return await _preview_bytes(data, suffix, image_preview_bytes, text_preview_bytes)
+
+
+async def _preview_bytes(
+    data: bytes, suffix: str, image_preview_bytes: int, text_preview_bytes: int
+) -> dict:
+    if suffix == ".stl":
+        try:
+            await asyncio.to_thread(validate_binary_stl, data)
+        except ValueError:
+            return {"kind": "none", "reason": "unsupported"}
+        return {"kind": "stl", "mimeType": "model/stl"}
     mime_type = image_mime_type(data)
     if mime_type is not None:
         if len(data) > image_preview_bytes:
@@ -811,8 +823,11 @@ async def list_file_revisions(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     path: str,
     session_id: UUID,
+    root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
 ) -> dict:
-    context = await _file_context(FileScope.SESSION, session_id, user, db)
+    context = await _file_context(
+        FileScope.SESSION, session_id, user, db, root_identity=root_identity
+    )
     assert context.root_files is not None
     try:
         revisions = await asyncio.to_thread(context.root_files.list_revisions, path)
@@ -840,34 +855,83 @@ async def preview_file_revision(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     path: str,
     session_id: UUID,
+    root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
+    file_id: UUID | None = None,
 ) -> dict:
-    context = await _file_context(FileScope.SESSION, session_id, user, db)
+    context = await _file_context(
+        FileScope.SESSION, session_id, user, db, root_identity=root_identity
+    )
     assert context.root_files is not None
+    suffix = PurePosixPath(path).suffix.casefold()
+    max_bytes = max(
+        context.instance_limits.max_image_preview_bytes,
+        context.instance_limits.max_editable_text_bytes,
+    )
+    if suffix == ".stl":
+        max_bytes = _STL_PREVIEW_BYTES
     try:
-        handle = await asyncio.to_thread(context.root_files.open_revision, path, revision)
+        if file_id is not None:
+            metadata = await asyncio.to_thread(context.root_files.file_revision, file_id, revision)
+            suffix = PurePosixPath(metadata.path).suffix.casefold()
+            if suffix == ".stl":
+                max_bytes = _STL_PREVIEW_BYTES
+        handle = await asyncio.to_thread(
+            context.root_files.open_revision_by_id if file_id else context.root_files.open_revision,
+            file_id or path, revision,
+        )
         with handle:
-            data = handle.read(context.instance_limits.max_editable_text_bytes + 1)
+            data = handle.read(max_bytes + 1)
     except RootFileError as exc:
         raise _context_error(exc) from exc
-    if len(data) > context.instance_limits.max_editable_text_bytes:
+    if len(data) > max_bytes:
         return {"kind": "none", "reason": "tooLarge"}
+    return await _preview_bytes(
+        data, suffix, context.instance_limits.max_image_preview_bytes,
+        context.instance_limits.max_editable_text_bytes,
+    )
+
+
+@router.get("/files/revisions/{revision}/content")
+async def content_file_revision(
+    revision: int,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    path: str,
+    session_id: UUID,
+    root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
+    file_id: UUID | None = None,
+) -> Response:
+    context = await _file_context(
+        FileScope.SESSION, session_id, user, db, root_identity=root_identity
+    )
+    assert context.root_files is not None
     try:
-        content = data.decode("utf-8", errors="strict")
-    except UnicodeDecodeError:
-        return {"kind": "none", "reason": "unsupported"}
-    if "\0" in content:
-        return {"kind": "none", "reason": "unsupported"}
-    suffix = PurePosixPath(path).suffix.casefold()
-    return {
-        "kind": (
-            "openscad"
-            if suffix == ".scad"
-            else "markdown" if suffix in _MARKDOWN_SUFFIXES else "text"
-        ),
-        "content": content,
-        "encoding": "utf-8",
-        "revision": hashlib.sha256(data).hexdigest(),
-    }
+        metadata = await asyncio.to_thread(
+            context.root_files.file_revision, file_id, revision
+        ) if file_id else None
+        suffix = PurePosixPath(metadata.path if metadata else path).suffix.casefold()
+        max_bytes = (
+            _STL_PREVIEW_BYTES if suffix == ".stl"
+            else context.instance_limits.max_image_preview_bytes
+        )
+        handle = await asyncio.to_thread(
+            context.root_files.open_revision_by_id if file_id else context.root_files.open_revision,
+            file_id or path, revision,
+        )
+        with handle:
+            data = handle.read(max_bytes + 1)
+    except RootFileError as exc:
+        raise _context_error(exc) from exc
+    if len(data) > max_bytes:
+        raise ApiError(415, "file.previewUnavailable")
+    preview = await _preview_bytes(data, suffix, max_bytes, 0)
+    if preview["kind"] not in {"image", "stl"}:
+        raise ApiError(415, "file.previewUnavailable")
+    mime_type = preview["mimeType"]
+    return Response(
+        content=data, media_type=mime_type,
+        headers=_SVG_RESPONSE_HEADERS if mime_type == "image/svg+xml" else _FILE_RESPONSE_HEADERS,
+    )
 
 
 @router.get("/files/revisions/{revision}/download")
@@ -877,11 +941,18 @@ async def download_file_revision(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     path: str,
     session_id: UUID,
+    root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
+    file_id: UUID | None = None,
 ) -> StreamingResponse:
-    context = await _file_context(FileScope.SESSION, session_id, user, db)
+    context = await _file_context(
+        FileScope.SESSION, session_id, user, db, root_identity=root_identity
+    )
     assert context.root_files is not None
     try:
-        handle = await asyncio.to_thread(context.root_files.open_revision, path, revision)
+        handle = await asyncio.to_thread(
+            context.root_files.open_revision_by_id if file_id else context.root_files.open_revision,
+            file_id or path, revision,
+        )
     except RootFileError as exc:
         raise _context_error(exc) from exc
     filename = PurePosixPath(path).name or "download"
@@ -907,9 +978,10 @@ async def restore_file_revision(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
     session_id: UUID,
+    root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
 ) -> RevisionMutationResponse:
     context = await _file_context(
-        FileScope.SESSION, session_id, user, db, for_update=True
+        FileScope.SESSION, session_id, user, db, for_update=True, root_identity=root_identity
     )
     assert context.root_files is not None
     try:

@@ -1396,6 +1396,34 @@ def test_message_payload_keeps_session_file_action_url_exact() -> None:
     }
 
 
+@pytest.mark.parametrize("pending,hidden", [(True, False), (False, True), (True, True), (False, False)])
+def test_message_payload_exposes_only_final_surviving_run_outputs(pending, hidden) -> None:
+    session_id, run_id = uuid4(), uuid4()
+    message = Message(
+        id=uuid4(), session_id=session_id, role="tool", content="{}",
+        provider_data={"_matoloop": {
+            "runId": str(run_id), "fileOutputsPending": pending, "fileOutputsHidden": hidden,
+            "pendingAttachments": [{"private": "never-public"}],
+            "fileActions": [{
+                "operation": "write", "root": "session", "rootIdentity": str(session_id),
+                "path": "result.txt", "filename": "result.txt", "sizeBytes": 7,
+            }],
+        }},
+        attachments=[MessageAttachment(
+            id=uuid4(), kind="file", file_id=uuid4(), file_root_id=session_id,
+            file_revision=1, file_path="result.txt", filename="result.txt",
+        )],
+    )
+    payload = message_payload(message)
+    assert payload["runId"] == str(run_id)
+    assert bool(payload["fileActions"]) is (not pending and not hidden)
+    assert bool(payload["attachments"]) is (not pending and not hidden)
+    assert "pendingAttachments" not in str(payload)
+    assert "never-public" not in str(payload)
+    message.provider_data["_matoloop"]["runId"] = "invalid"
+    assert "runId" not in message_payload(message)
+
+
 def test_message_payload_rejects_workspace_snapshot_fields_on_session_actions() -> None:
     session_id = uuid4()
     action = {
@@ -2176,6 +2204,28 @@ def test_control_center_state_accepts_a_session_file_tab() -> None:
     assert request.control_center.tabs[0].app_id == "session"
     assert request.control_center.tabs[1].file_target is not None
     assert request.control_center.tabs[1].file_target.path == "notes/plan.md"
+
+
+def test_historical_file_targets_require_read_only_identity_and_revision() -> None:
+    from mato_loop_backend.api.routes.sessions import ControlCenterFileTarget
+    from mato_loop_backend.sessions.serialization import _control_center_tab_payload
+
+    target = {
+        "scope": "session", "path": "notes.md", "name": "notes.md",
+        "root_identity": str(uuid4()), "file_id": str(uuid4()), "revision": 3,
+        "read_only": True,
+    }
+    parsed = ControlCenterFileTarget.model_validate(target)
+    serialized = _control_center_tab_payload({
+        "tab_id": f"file-{uuid4()}", "app_id": "file-viewer", "kind": "file",
+        "pinned": False, "file_target": parsed.model_dump(),
+    })["fileTarget"]
+    assert serialized["fileId"] == target["file_id"]
+    assert serialized["revision"] == 3
+    assert serialized["readOnly"] is True
+    for invalid in ({"read_only": False}, {"file_id": None}, {"revision": None}, {"revision": 0}):
+        with pytest.raises(ValueError):
+            ControlCenterFileTarget.model_validate({**target, **invalid})
 
 
 def test_control_center_state_preserves_twenty_legacy_tabs_when_adding_session() -> None:

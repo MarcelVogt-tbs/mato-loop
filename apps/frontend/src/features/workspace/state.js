@@ -40,7 +40,7 @@ export function replaceCachedEntry(store, entry) {
 }
 
 export function requireWritableContext(store) {
-  if (store.toolContext) throw new Error('Historical workspace snapshots are read-only')
+  if (store.toolContext || store.viewedEntry?.revision != null) throw new Error('Historical workspace snapshots are read-only')
 }
 
 export function persistedFileView(store) {

@@ -60,6 +60,10 @@ function normalizedFileTarget(value) {
     ? value.name
     : value.path.split('/').filter(Boolean).at(-1)
   if (!name) return null
+  if (value.revision != null && (
+    value.scope !== 'session' || !Number.isSafeInteger(value.revision) || value.revision < 1
+    || typeof value.fileId !== 'string' || !value.fileId
+  )) return null
   if (value.scope === 'session') {
     if (typeof value.rootIdentity !== 'string' || !value.rootIdentity) return null
     return {
@@ -67,7 +71,8 @@ function normalizedFileTarget(value) {
       path: value.path,
       name,
       rootIdentity: value.rootIdentity,
-      readOnly: value.readOnly === true
+      readOnly: value.revision != null || value.readOnly === true,
+      ...(value.revision != null ? { fileId: value.fileId, revision: value.revision } : {})
     }
   }
   if (
@@ -216,7 +221,11 @@ export function controlCenterRequestState(state) {
               root_identity: tab.fileTarget.rootIdentity,
               execution_agent_id: tab.fileTarget.executionAgentId,
               current_directory: tab.fileTarget.currentDirectory,
-              read_only: tab.fileTarget.readOnly === true
+              read_only: tab.fileTarget.readOnly === true,
+              ...(tab.fileTarget.revision != null ? {
+                file_id: tab.fileTarget.fileId,
+                revision: tab.fileTarget.revision
+              } : {})
             }
           }
         : {})
@@ -450,13 +459,15 @@ export const useControlCenterStore = defineStore('control-center', {
         target.scope,
         target.rootIdentity || target.executionAgentId,
         target.currentDirectory || null,
-        target.path
+        target.revision != null ? target.fileId : target.path,
+        target.revision ?? null
       ])
       const existing = this.tabs.find((tab) => tab.kind === 'file' && JSON.stringify([
         tab.fileTarget.scope,
         tab.fileTarget.rootIdentity || tab.fileTarget.executionAgentId,
         tab.fileTarget.currentDirectory || null,
-        tab.fileTarget.path
+        tab.fileTarget.revision != null ? tab.fileTarget.fileId : tab.fileTarget.path,
+        tab.fileTarget.revision ?? null
       ]) === sourceKey)
       if (existing) {
         await this.activate(existing.tabId)
@@ -507,6 +518,11 @@ export const useControlCenterStore = defineStore('control-center', {
               ...tab,
               fileTarget: {
                 ...destinationTarget,
+                ...(tab.fileTarget.revision != null ? {
+                  fileId: tab.fileTarget.fileId,
+                  revision: tab.fileTarget.revision,
+                  readOnly: true
+                } : {}),
                 path,
                 name: path.split('/').filter(Boolean).at(-1)
               }

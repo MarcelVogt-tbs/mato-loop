@@ -153,7 +153,11 @@ def _public_file_actions(item: Message) -> list[dict[str, Any]]:
         return []
     runtime_data = item.provider_data.get("_matoloop")
     raw_actions = runtime_data.get("fileActions") if isinstance(runtime_data, dict) else None
-    if not isinstance(raw_actions, list) or len(raw_actions) > 1:
+    if isinstance(runtime_data, dict) and (
+        runtime_data.get("fileOutputsPending") or runtime_data.get("fileOutputsHidden")
+    ):
+        return []
+    if not isinstance(raw_actions, list):
         return []
     actions = []
     for raw_action in raw_actions:
@@ -399,6 +403,8 @@ def _control_center_tab_payload(tab: dict[str, Any]) -> dict[str, Any]:
                     "executionAgentId": target.get("execution_agent_id"),
                     "currentDirectory": target.get("current_directory"),
                     "readOnly": bool(target.get("read_only", False)),
+                    **({"fileId": target["file_id"], "revision": target["revision"]}
+                       if target.get("revision") is not None else {}),
                 }
             }
             if isinstance(target, dict)
@@ -424,6 +430,15 @@ def _control_center_file_view_payload(
 
 
 def message_payload(item: Message, *, retry_available: bool = False) -> dict[str, Any]:
+    runtime_data = (item.provider_data or {}).get("_matoloop", {})
+    run_id = runtime_data.get("runId") if isinstance(runtime_data, dict) else None
+    try:
+        run_id = str(UUID(run_id)) if isinstance(run_id, str) else None
+    except ValueError:
+        run_id = None
+    outputs_hidden = item.role == "tool" and isinstance(runtime_data, dict) and (
+        runtime_data.get("fileOutputsPending") or runtime_data.get("fileOutputsHidden")
+    )
     error = (
         describe_error(item.error_code, params=item.error_params)
         if item.error_code
@@ -451,6 +466,7 @@ def message_payload(item: Message, *, retry_available: bool = False) -> dict[str
         "warnings": _public_warnings(item),
         "research": _public_research_payload(item),
         "fileActions": _public_file_actions(item),
+        **({"runId": run_id} if item.role == "tool" and run_id is not None else {}),
         "sourceType": (
             "automationRun"
             if isinstance(source, dict) and source.get("type") == "automationRun"
@@ -509,6 +525,7 @@ def message_payload(item: Message, *, retry_available: bool = False) -> dict[str
                 ),
             }
             for attachment in item.attachments
+            if not outputs_hidden
         ],
         "createdAt": item.created_at.isoformat() if item.created_at else None,
     }

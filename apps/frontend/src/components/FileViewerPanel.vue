@@ -18,7 +18,7 @@
     <q-toolbar class="file-viewer__toolbar q-px-md">
       <q-toolbar-title id="file-viewer-title" class="text-subtitle1 text-weight-bold ellipsis">{{ viewerName }}</q-toolbar-title>
       <q-btn-toggle
-        v-if="preview.kind === 'openscad'"
+        v-if="preview.kind === 'openscad' && !historical"
         class="file-viewer__view-toggle"
         :model-value="workspace.editorActive ? 'source' : openScadView"
         unelevated
@@ -29,7 +29,7 @@
         @update:model-value="setOpenScadView"
       />
       <q-btn
-        v-if="preview.kind === 'openscad' && !workspace.editorActive"
+        v-if="preview.kind === 'openscad' && !historical && !workspace.editorActive"
         class="file-viewer__export-stl"
         unelevated
         no-caps
@@ -72,7 +72,7 @@
         <q-tooltip>In neuem Tab öffnen</q-tooltip>
       </q-btn>
       <q-btn
-        v-if="preview.kind === 'markdown' && !workspace.editorActive"
+        v-if="preview.kind === 'markdown' && !historical && !workspace.editorActive"
         class="file-icon-action"
         flat
         round
@@ -98,7 +98,7 @@
         <q-tooltip>Inhalt kopieren</q-tooltip>
       </q-btn>
       <q-btn
-        v-if="entry && workspace.scope === 'session' && !workspace.toolContext && !workspace.editorActive"
+        v-if="entry && !historical && workspace.scope === 'session' && !workspace.toolContext && !workspace.editorActive"
         class="file-icon-action"
         flat
         round
@@ -126,6 +126,10 @@
       </q-btn>
     </q-toolbar>
     <q-separator />
+    <q-banner v-if="historical" dense class="app-surface-tonal">
+      Version {{ entry.revision }} · Schreibgeschützt.
+      <template v-if="preview.kind === 'openscad'">Historische OpenSCAD-Versionen zeigen nur den Quelltext. Abhängige Dateien werden nicht historisch gerendert.</template>
+    </q-banner>
 
     <div v-if="workspace.editorActive && editable" class="col column no-wrap file-viewer__editor">
       <div v-if="saveError" class="file-save-error q-ma-sm q-pa-sm" role="alert">
@@ -215,7 +219,6 @@
       v-model="revisionsOpen"
       :maximized="$q.screen.lt.sm"
       aria-labelledby="file-revisions-title"
-      @hide="clearRevisionPreview"
     >
       <q-card class="file-revisions-dialog app-surface column no-wrap">
         <q-toolbar>
@@ -237,7 +240,6 @@
               :key="revisionId(revision)"
               clickable
               v-ripple
-              :active="selectedRevisionId === revisionId(revision)"
               @click="previewRevision(revision)"
             >
               <q-item-section avatar><q-icon name="description" /></q-item-section>
@@ -260,23 +262,6 @@
               </q-item-section>
             </q-item>
           </q-list>
-          <q-separator v-if="selectedRevisionId" />
-          <div v-if="revisionPreviewLoading" class="q-pa-xl text-center"><q-spinner color="primary" /></div>
-          <div v-else-if="selectedRevisionId" class="q-pa-md">
-            <div class="row items-center q-mb-sm">
-              <div class="text-subtitle2">Vorschau</div>
-              <q-space />
-              <q-btn
-                v-if="textualPreview(revisionPreview)"
-                flat round dense icon="content_copy"
-                aria-label="Versionsinhalt kopieren"
-                @click="copyPreview(revisionPreview)"
-              ><q-tooltip>Inhalt kopieren</q-tooltip></q-btn>
-              <q-btn flat no-caps icon="download" label="Herunterladen" @click="downloadRevision" />
-            </div>
-            <pre v-if="textualPreview(revisionPreview)" class="file-viewer__text">{{ revisionPreview.content }}</pre>
-            <div v-else class="app-muted">Für diese Version ist keine Textvorschau verfügbar.</div>
-          </div>
         </q-card-section>
       </q-card>
     </q-dialog>
@@ -294,6 +279,7 @@ import WorkspaceFileEditor from 'components/WorkspaceFileEditor.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { apiErrorMessage, errorDescriptor } from 'src/utils/api-errors'
 import { useWorkspaceStore } from 'stores/workspace'
+import { useControlCenterStore } from 'stores/control-center'
 
 defineOptions({ name: 'FileViewerPanel' })
 
@@ -309,6 +295,8 @@ const $q = useQuasar()
 const router = useRouter()
 const { confirm } = useConfirm()
 const workspace = useWorkspaceStore()
+const controlCenter = useControlCenterStore()
+const historical = computed(() => props.entry?.revision != null)
 const viewerRoot = ref(null)
 const editButton = ref(null)
 const loading = ref(false)
@@ -327,9 +315,6 @@ const openScadError = ref(null)
 const openScadUrl = ref('')
 const revisionsOpen = ref(false)
 const revisionsLoading = ref(false)
-const selectedRevisionId = ref(null)
-const revisionPreviewLoading = ref(false)
-const revisionPreview = ref(null)
 const restoringRevisionId = ref(null)
 let renderController
 let renderVersion = 0
@@ -338,14 +323,20 @@ let exportVersion = 0
 let previewVersion = 0
 const directImage = computed(() => props.image?.url ? props.image : null)
 const directModel = computed(() => props.model?.url ? props.model : null)
-const viewerName = computed(() => props.entry?.name || directModel.value?.name || '')
+const viewerName = computed(() => (props.entry?.name || directModel.value?.name || '')
+  + (historical.value ? ` · Version ${props.entry.revision}` : ''))
 const draft = computed({
   get: () => workspace.editorDraft ?? '',
   set: (value) => workspace.updateEditorDraft(value, preview.value.content)
 })
-const imageUrl = computed(() => props.entry?.path ? workspace.fileUrl('content', props.entry.path) : '')
+const imageUrl = computed(() => props.entry?.path
+  ? historical.value
+    ? workspace.revisionDownloadUrl(props.entry.path, props.entry.revision, props.entry.fileId, 'content')
+    : workspace.fileUrl('content', props.entry.path)
+  : '')
 const editable = computed(() => (
   props.entry?.path
+  && !historical.value
   && !workspace.toolContext
   && ['text', 'markdown', 'openscad'].includes(preview.value.kind)
   && workspace.operationAvailable('filesystem.write')
@@ -358,7 +349,7 @@ const canRestoreRevision = computed(() => Boolean(
 ))
 const canDownload = computed(() => Boolean(directModel.value) || workspace.operationAvailable('filesystem.export'))
 const stlUrl = computed(() => directModel.value?.url
-  || (props.entry?.path ? workspace.fileUrl('content', props.entry.path) : ''))
+  || imageUrl.value)
 const openScadViewOptions = computed(() => [
   {
     label: $q.screen.gt.xs ? 'Quelltext' : undefined,
@@ -412,7 +403,7 @@ async function loadPreview() {
   const version = ++previewVersion
   clearOpenScadRender()
   clearOpenScadExport()
-  openScadView.value = 'model'
+  openScadView.value = historical.value ? 'source' : 'model'
   preview.value = { kind: 'none', reason: 'unsupported' }
   loadError.value = null
   if (directModel.value) {
@@ -435,12 +426,14 @@ async function loadPreview() {
   await nextTick()
   viewerRoot.value?.focus()
   try {
-    const result = await workspace.preview(props.entry.path)
+    const result = historical.value
+      ? await workspace.revisionPreview(props.entry.path, props.entry.revision, props.entry.fileId)
+      : await workspace.preview(props.entry.path)
     if (version === previewVersion && result) {
       preview.value = result
       imageLoading.value = result.kind === 'image' && loadedImageUrl.value !== imageUrl.value
       if (workspace.editorDraft === null) workspace.editorDraft = result.content || ''
-      if (result.kind === 'openscad') void renderOpenScad()
+      if (result.kind === 'openscad' && !historical.value) void renderOpenScad()
     }
   } catch (error) {
     if (version === previewVersion) loadError.value = error
@@ -494,29 +487,17 @@ async function openRevisions() {
 }
 
 async function previewRevision(revision) {
-  const id = revisionId(revision)
-  const path = props.entry?.path
-  selectedRevisionId.value = id
-  revisionPreviewLoading.value = true
-  revisionPreview.value = null
-  try {
-    const result = await workspace.revisionPreview(path, id)
-    if (
-      !revisionsOpen.value
-      || props.entry?.path !== path
-      || selectedRevisionId.value !== id
-      || !result
-    ) return
-    revisionPreview.value = result
-  } catch {
-    if (props.entry?.path === path && selectedRevisionId.value === id) {
-      selectedRevisionId.value = null
-    }
-  } finally {
-    if (props.entry?.path === path && selectedRevisionId.value === id) {
-      revisionPreviewLoading.value = false
-    }
-  }
+  const target = workspace.fileTarget(props.entry)
+  if (!target) return
+  const tabId = await controlCenter.openFile({
+    ...target,
+    ...(!isCurrentRevision(revision) ? {
+      fileId: revisionState.value.fileId,
+      revision: revisionId(revision),
+      readOnly: true
+    } : {})
+  })
+  if (tabId) revisionsOpen.value = false
 }
 
 async function restoreRevision(revision) {
@@ -524,6 +505,7 @@ async function restoreRevision(revision) {
   const path = props.entry?.path
   const contextVersion = workspace.contextVersion
   const viewVersion = workspace.viewVersion
+  const expectedState = revisionState.value
   const accepted = await confirm(
     `Soll Version ${revisionLabel(revision)} wiederhergestellt werden? Alle späteren Versionen werden dauerhaft gelöscht. Verknüpfte Dateien in älteren Nachrichten sind danach möglicherweise nicht mehr verfügbar.`,
     'Version wiederherstellen?',
@@ -537,26 +519,12 @@ async function restoreRevision(revision) {
   ) return
   restoringRevisionId.value = id
   try {
-    const result = await workspace.restoreRevision(path, id)
+    const result = await workspace.restoreRevision(path, id, expectedState)
     if (!result) return
-    clearRevisionPreview()
     $q.notify({ type: 'positive', message: 'Version wiederhergestellt.' })
   } finally {
     restoringRevisionId.value = null
   }
-}
-
-function downloadRevision() {
-  const anchor = document.createElement('a')
-  anchor.href = workspace.revisionDownloadUrl(props.entry.path, selectedRevisionId.value)
-  anchor.download = props.entry.name
-  anchor.click()
-}
-
-function clearRevisionPreview() {
-  selectedRevisionId.value = null
-  revisionPreview.value = null
-  revisionPreviewLoading.value = false
 }
 
 function startEditing() {
@@ -578,6 +546,7 @@ async function setOpenScadView(view) {
 }
 
 async function renderOpenScad() {
+  if (historical.value) return
   if (!props.entry?.path || openScadUrl.value || renderingOpenScad.value || workspace.editorDirty) return
   clearOpenScadRender()
   const version = ++renderVersion
@@ -602,6 +571,7 @@ async function renderOpenScad() {
 }
 
 async function exportOpenScad() {
+  if (historical.value) return
   if (
     !props.entry?.path || renderingOpenScad.value || exportingOpenScad.value
     || workspace.editorDirty
@@ -707,6 +677,13 @@ async function loadLatestForConflict() {
 }
 
 function download() {
+  if (historical.value) {
+    const anchor = document.createElement('a')
+    anchor.href = workspace.revisionDownloadUrl(props.entry.path, props.entry.revision, props.entry.fileId)
+    anchor.download = props.entry.name
+    anchor.click()
+    return
+  }
   if (!directModel.value) {
     workspace.download(props.entry.path)
     return
@@ -737,6 +714,8 @@ function imageLoaded() {
 watch(
   [
     () => props.entry?.path,
+    () => props.entry?.revision,
+    () => props.entry?.fileId,
     () => directModel.value?.url,
     () => workspace.scope,
     () => workspace.sessionId,

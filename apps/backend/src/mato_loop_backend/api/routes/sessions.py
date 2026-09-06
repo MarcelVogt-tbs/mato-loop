@@ -134,9 +134,18 @@ class ControlCenterFileTarget(BaseModel):
     execution_agent_id: str | None = Field(default=None, min_length=36, max_length=36)
     current_directory: str | None = Field(default=None, min_length=1, max_length=4_096)
     read_only: bool = False
+    file_id: str | None = Field(default=None, min_length=36, max_length=36)
+    revision: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def validate_target(self) -> ControlCenterFileTarget:
+        if self.revision is not None or self.file_id is not None:
+            if (
+                self.scope != "session" or not self.read_only
+                or self.revision is None or self.file_id is None
+                or str(UUID(self.file_id)) != self.file_id
+            ):
+                raise ValueError("historical targets require a read-only session file identity and revision")
         if self.scope == "session":
             service = RootFileService(UUID(int=0))
             try:

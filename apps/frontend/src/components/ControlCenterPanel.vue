@@ -274,6 +274,7 @@ function content(contentId) {
 
 function tabLabel(tab) {
   if (tab.kind === 'file') return tab.fileTarget.name
+    + (tab.fileTarget.revision != null ? ` · Version ${tab.fileTarget.revision}` : '')
   if (['terminal', 'computer-files'].includes(tab.appId)) {
     const agent = executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
     return agent?.alias ? `${content(tab.appId).label} · ${agent.alias}` : content(tab.appId).label

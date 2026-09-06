@@ -353,6 +353,29 @@ describe('control center store', () => {
     expect(store.activeAppId).toBe('files')
   })
 
+  it('keys historical tabs by root, file identity and revision independently of the current file', async () => {
+    const store = useControlCenterStore()
+    const target = {
+      scope: 'session', path: 'notes.md', name: 'notes.md',
+      rootIdentity: '550e8400-e29b-41d4-a716-446655440000',
+      fileId: '550e8400-e29b-41d4-a716-446655440001', revision: 1
+    }
+    const historical = await store.openFile(target)
+    expect(store.activeTab.fileTarget.readOnly).toBe(true)
+    expect(await store.openFile({ ...target, path: 'renamed.md' })).toBe(historical)
+    expect(await store.openFile({ ...target, revision: 2 })).not.toBe(historical)
+    expect(await store.openFile({ ...target, revision: null })).not.toBe(historical)
+    expect(await store.openFile({ ...target, rootIdentity: '550e8400-e29b-41d4-a716-446655440002' })).not.toBe(historical)
+    expect(store.fileTabs).toHaveLength(4)
+    await store.rebindFileTargets(target, 'renamed.md')
+    expect(store.fileTabs.find((tab) => tab.tabId === historical).fileTarget).toMatchObject({
+      path: 'renamed.md', fileId: target.fileId, revision: 1, readOnly: true
+    })
+    await store.rebindFileTargets({ ...target, path: 'renamed.md' })
+    expect(store.fileTabs).toHaveLength(1)
+    expect(store.fileTabs[0].fileTarget.rootIdentity).not.toBe(target.rootIdentity)
+  })
+
   it('defers integration shortcuts until authoritative session state is loaded', async () => {
     const store = useControlCenterStore()
     store.bindSession({

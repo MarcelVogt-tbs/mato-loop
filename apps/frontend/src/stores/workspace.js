@@ -304,7 +304,10 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.selectedPath = target.path
       this.directoryPath = parentPath(target.path)
       this.selectedKind = 'file'
-      this.viewedEntry = { kind: 'file', name: target.name, path: target.path }
+      this.viewedEntry = {
+        kind: 'file', name: target.name, path: target.path,
+        ...(target.revision != null ? { revision: target.revision, fileId: target.fileId } : {})
+      }
       const saved = this.fileTabStates[tab.tabId]
       if (saved) {
         if (saved.path && saved.path !== target.path) {
@@ -368,6 +371,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
     startFileTabEdit(tabId) {
+      if (useControlCenterStore().fileTabs.find((tab) => tab.tabId === tabId)?.fileTarget.revision != null) return
       if (this.activeFileTabId === tabId) {
         this.editorActive = true
         return
@@ -429,6 +433,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.persistView()
     },
     startEdit(content) {
+      requireWritableContext(this)
       this.editorActive = true
       this.editorDirty = false
       this.editorDraft = content
@@ -470,6 +475,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         || !activeFileVisible
         || controlCenter.sessionId !== this.sessionId
         || this.toolContext
+        || this.viewedEntry?.revision != null
         || !path
         || this.selectedPath !== path
         || !SHA256_PATTERN.test(sha256 || '')
@@ -745,42 +751,53 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (this.scope !== 'session' || this.toolContext || !this.sessionId) return null
       const contextVersion = this.contextVersion
       const { data } = await api.get('/workspace/files/revisions', {
-        params: { path, session_id: this.sessionId }
+        params: this.readRequestParams({ path })
       })
       if (contextVersion !== this.contextVersion || this.viewedEntry?.path !== path) return null
       this.fileRevisions[path] = data
       return data
     },
-    async revisionPreview(path, revision) {
+    async revisionPreview(path, revision, fileId = null) {
       if (this.scope !== 'session' || this.toolContext || !this.sessionId) return null
       return (await api.get(`/workspace/files/revisions/${revision}/preview`, {
-        params: { path, session_id: this.sessionId }
+        params: this.readRequestParams({ path, ...(fileId ? { file_id: fileId } : {}) })
       })).data
     },
-    revisionDownloadUrl(path, revision) {
+    revisionDownloadUrl(path, revision, fileId = null, action = 'download') {
       if (this.scope !== 'session' || this.toolContext || !this.sessionId) return ''
-      const params = new URLSearchParams({ path, session_id: this.sessionId })
-      return `/api/workspace/files/revisions/${revision}/download?${params}`
+      const params = new URLSearchParams(this.readRequestParams({ path, ...(fileId ? { file_id: fileId } : {}) }))
+      return `/api/workspace/files/revisions/${revision}/${action}?${params}`
     },
-    async restoreRevision(path, revision) {
+    async restoreRevision(path, revision, state = this.fileRevisions[path] || {}) {
       requireWritableContext(this)
       const storageSessionId = this.managedStorageSessionId()
       const contextVersion = this.contextVersion
       const viewVersion = this.viewVersion
       const sessionId = this.sessionId
-      const state = this.fileRevisions[path] || {}
       const { data } = await api.post(`/workspace/files/revisions/${revision}/restore`, {
         path,
         file_id: state.fileId,
-        expected_current_revision: state.items?.find((item) => item.current)?.revision
+        expected_current_revision: state.items?.find((item) => item.current)?.revision,
+        expected_current_sha256: state.items?.find((item) => item.current)?.sha256
       }, {
-        params: { session_id: sessionId }
+        params: this.readRequestParams()
       })
       if (
         contextVersion !== this.contextVersion
         || viewVersion !== this.viewVersion
         || sessionId !== this.sessionId
       ) return null
+      const controlCenter = useControlCenterStore()
+      const removedTabs = controlCenter.fileTabs.filter((tab) => (
+        tab.fileTarget.scope === 'session'
+        && tab.fileTarget.rootIdentity === this.rootIdentity
+        && tab.fileTarget.fileId === state.fileId
+        && tab.fileTarget.revision > revision
+      ))
+      for (const tab of removedTabs) {
+        await controlCenter.closeFile(tab.tabId)
+        this.discardFileTab(tab.tabId)
+      }
       await Promise.allSettled([
         this.preview(path),
         this.loadRevisions(path),
@@ -833,6 +850,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       return data
     },
     async renderOpenScad(path, expectedRevision, signal, output = 'preview') {
+      if (this.viewedEntry?.revision != null) return null
       if (!this.operationAvailable('filesystem.read')) return null
       const { data, headers } = await api.post('/workspace/files/openscad/render', {
         path,
