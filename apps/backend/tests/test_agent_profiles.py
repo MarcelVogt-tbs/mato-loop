@@ -56,18 +56,33 @@ def test_builtin_agent_profile_defaults() -> None:
     assert default.public_permissions == AgentProfilePermissions()
     assert plan.private_permissions == plan.public_permissions
     assert plan.private_permissions.policies == {
+        "filesystem.read": ToolExecutionPolicy.AUTO,
         "filesystem.write": ToolExecutionPolicy.DISABLED,
         "filesystem.delete": ToolExecutionPolicy.DISABLED,
         "session.files.write": ToolExecutionPolicy.AUTO,
+        "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.DISABLED,
         "git.stage": ToolExecutionPolicy.DISABLED,
         "git.clone": ToolExecutionPolicy.DISABLED,
         "git.commit": ToolExecutionPolicy.DISABLED,
     }
     assert build.private_permissions == build.public_permissions
-    assert build.private_permissions.policies == {}
+    assert build.private_permissions.policies == {
+        "filesystem.read": ToolExecutionPolicy.AUTO,
+        "shell.read": ToolExecutionPolicy.AUTO,
+    }
     assert not plan.private_permissions.integration_policies
     assert not build.private_permissions.integration_policies
+
+
+def test_saved_coding_profiles_do_not_receive_new_read_defaults() -> None:
+    saved = AgentProfilesSettings().model_dump(mode="json")
+    for profile in saved["profiles"][1:]:
+        for branch in ("private_permissions", "public_permissions"):
+            profile[branch]["policies"].pop("filesystem.read")
+            profile[branch]["policies"]["shell.read"] = "ask"
+
+    assert AgentProfilesSettings.model_validate(saved).model_dump(mode="json") == saved
 
 
 def test_builtin_profiles_preserve_instance_custom_profile_capacity() -> None:

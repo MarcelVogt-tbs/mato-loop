@@ -335,6 +335,189 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                         "write",
                     )
 
+    def test_inspection_reads_compose_file_and_quoted_docker_template(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            compose = root / "temp-compose.yaml"
+            compose.write_text("services: {}\n")
+            config = configuration(root)
+            runner = ProcessRunner(config, Filesystem(config))
+            command = (
+                f"cat {compose} && "
+                "docker inspect lemonade-server --format '{{json .Config.Labels}}'"
+            )
+
+            inspected = runner.inspect_shell(command, os.fspath(root))
+            self.assertTrue(inspected["analysisComplete"])
+            self.assertTrue(inspected["readOnly"])
+            self.assertEqual(inspected["classification"], "read")
+            self.assertEqual(
+                inspected["commands"],
+                [
+                    {
+                        "tokens": ["cat", os.fspath(compose)],
+                        "prefix": ["cat"],
+                        "classification": "read",
+                    },
+                    {
+                        "tokens": [
+                            "docker",
+                            "inspect",
+                            "lemonade-server",
+                            "--format",
+                            "{{json .Config.Labels}}",
+                        ],
+                        "prefix": ["docker", "inspect"],
+                        "classification": "read",
+                    },
+                ],
+            )
+            self.assertEqual([target["path"] for target in inspected["targets"]], [str(compose)])
+            runner.execution_argv(
+                current_directory=str(root),
+                command=command,
+                expected_inspection_revision=inspected["inspectionRevision"],
+            )
+            compose.write_text("services: {lemonade-server: {image: lemonade}}\n")
+            with self.assertRaises(AgentError) as raised:
+                runner.execution_argv(
+                    current_directory=str(root),
+                    command=command,
+                    expected_inspection_revision=inspected["inspectionRevision"],
+                )
+            self.assertEqual(raised.exception.code, "process.inspectionChanged")
+            compose.unlink()
+            compose.symlink_to(root / "missing.yaml")
+            rejected = runner.inspect_shell(command, str(root))
+            self.assertFalse(rejected["analysisComplete"])
+            self.assertFalse(rejected["readOnly"])
+
+    def test_docker_operations_and_option_aware_prefixes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "compose.yaml").write_text("services: {}\n")
+            config = configuration(root)
+            runner = ProcessRunner(config, Filesystem(config))
+            for group, reads, writes in (
+                ("", "ps logs inspect images info version", "run exec build pull rm"),
+                (
+                    "compose",
+                    "ps logs config ls images top events port version",
+                    "up down run exec build pull watch",
+                ),
+                (
+                    "container",
+                    "ls ps inspect logs top stats port diff wait",
+                    "run exec rm start stop prune",
+                ),
+                ("image", "ls inspect history", "build rm pull push prune tag"),
+                ("network", "ls inspect", "create connect disconnect rm prune"),
+                ("volume", "ls inspect", "create rm prune update"),
+                ("system", "df events info", "prune"),
+            ):
+                for options in (
+                    "",
+                    "--context foo",
+                    "--context=foo --debug",
+                    "-cfoo -Hunix:///var/run/docker.sock",
+                    "--config config-dir --log-level debug --tlsverify",
+                    "--context compose",
+                ):
+                    group_options = (
+                        (
+                            "",
+                            "--progress plain -f ./compose.yaml",
+                            "--progress=plain -f./compose.yaml",
+                            "--ansi never --env-file .env --parallel 2 --profile dev "
+                            "-p project --project-directory .",
+                            "--file config --project-name ps --compatibility",
+                            "--",
+                        )
+                        if group == "compose"
+                        else ("",)
+                    )
+                    for extra in group_options:
+                        for operation in (reads + " " + writes).split():
+                            command = f"docker {options} {group} {extra} {operation}"
+                            with self.subTest(command=command):
+                                inspected = runner.inspect_shell(command, str(root))
+                                classification = "read" if operation in reads.split() else "write"
+                                self.assertTrue(inspected["analysisComplete"])
+                                self.assertEqual(inspected["classification"], classification)
+                                self.assertEqual(inspected["readOnly"], classification == "read")
+                                self.assertEqual(
+                                    inspected["commands"][0]["classification"], classification
+                                )
+                                self.assertEqual(
+                                    inspected["commands"][0]["prefix"],
+                                    ["docker", *([group] if group else []), operation],
+                                )
+
+            for command, classification, prefix in (
+                ("docker -DHunix:///var/run/docker.sock ps", "read", ["docker", "ps"]),
+                ("docker -Dc foo compose ps", "read", ["docker", "compose", "ps"]),
+                ("docker -DDc foo compose down", "write", ["docker", "compose", "down"]),
+                ("docker -DD ps", "read", ["docker", "ps"]),
+            ):
+                with self.subTest(command=command):
+                    inspected = runner.inspect_shell(command, str(root))
+                    self.assertTrue(inspected["analysisComplete"])
+                    self.assertEqual(inspected["classification"], classification)
+                    self.assertEqual(inspected["readOnly"], classification == "read")
+                    self.assertEqual(inspected["commands"][0]["prefix"], prefix)
+
+            for output in (
+                "--output out.yaml",
+                "--output=out.yaml",
+                "-o out.yaml",
+                "-oout.yaml",
+                "-o=out.yaml",
+                "--lock-image-digests",
+            ):
+                command = (
+                    "docker --context foo compose --progress plain -f ./compose.yaml "
+                    f"config {output}"
+                )
+                with self.subTest(command=command):
+                    inspected = runner.inspect_shell(command, str(root))
+                    self.assertTrue(inspected["analysisComplete"])
+                    self.assertEqual(inspected["classification"], "write")
+                    self.assertEqual(
+                        inspected["commands"][0]["prefix"], ["docker", "compose", "config"]
+                    )
+
+            for command in ("docker", "docker --help", "docker --version", "docker -v"):
+                with self.subTest(command=command):
+                    inspected = runner.inspect_shell(command, str(root))
+                    self.assertTrue(inspected["analysisComplete"])
+                    self.assertTrue(inspected["readOnly"])
+                    self.assertNotIn("prefix", inspected["commands"][0])
+
+            for command in (
+                "docker --unknown value compose ps",
+                "docker -DXHunix:///var/run/docker.sock ps",
+                "docker -D-context foo compose ps",
+                "docker -Dc",
+                "docker --context",
+                "docker compose -f",
+                "docker compose --unknown value ps",
+                "docker compose",
+                "docker system",
+            ):
+                with self.subTest(command=command):
+                    inspected = runner.inspect_shell(command, str(root))
+                    self.assertEqual(inspected["classification"], "write")
+                    self.assertNotIn("prefix", inspected["commands"][0])
+
+            for group in ("compose", "container", "image", "network", "volume", "system"):
+                command = f"docker {group} future-operation"
+                with self.subTest(command=command):
+                    inspected = runner.inspect_shell(command, str(root))
+                    self.assertEqual(inspected["classification"], "write")
+                    self.assertEqual(
+                        inspected["commands"][0]["prefix"], ["docker", group, "future-operation"]
+                    )
+
     def test_inspection_prefixes_are_token_based_and_writes_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

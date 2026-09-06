@@ -1,7 +1,7 @@
 import hashlib
 import json
 from io import BytesIO
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -10,6 +10,7 @@ from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionPolicy,
     PermissionRequest,
+    execution_directory_permission,
     shell_command_scope,
     shell_prefix_allowed,
 )
@@ -34,7 +35,14 @@ from mato_loop_backend.execution.protocol import ResponseMessage
 from mato_loop_backend.execution.terminals import TerminalDecision, terminal_coordinator
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
 from mato_loop_backend.providers.base import ToolCall
-from mato_loop_backend.settings import IntegrationSettings, ToolExecutionPolicy, ToolSettings
+from mato_loop_backend.settings import (
+    IntegrationSettings,
+    ToolExecutionPolicy,
+    ToolSettings,
+    TrustLevel,
+    build_agent_profile,
+    plan_agent_profile,
+)
 from mato_loop_backend.workspace import RootFileService, SessionStorage
 
 
@@ -390,7 +398,7 @@ async def test_execution_error_params_are_validated_before_tool_serialization(tm
     assert "params" not in descriptor
 
 
-def _shell_permission(client, classification="write", prefixes=None, directory=None):
+def _shell_permission(client, classification="write", prefixes=None, directory=None, paths=None):
     return PermissionRequest(
         capability=f"shell.{classification}",
         resource_type="shell_command",
@@ -399,7 +407,7 @@ def _shell_permission(client, classification="write", prefixes=None, directory=N
             directory or client.current_directory,
             classification,
             prefixes or [],
-            [],
+            paths or [],
             True,
         ),
         action_kind="shell_run",
@@ -472,6 +480,50 @@ async def test_disabled_shell_zone_is_a_hard_boundary(tmp_path) -> None:
     assert decision == PermissionDecision.DENY
     statement = context.db.scalar.await_args.args[0]
     assert statement.get_execution_options()["populate_existing"] is True
+
+
+@pytest.mark.parametrize("profile_factory", [plan_agent_profile, build_agent_profile])
+@pytest.mark.parametrize("capability", ["filesystem.read", "shell.read"])
+@pytest.mark.parametrize(
+    ("path", "filesystem_policy", "expected"),
+    [
+        ("/home/user/project/README.md", "auto", PermissionDecision.ALLOW),
+        ("/opt/lemonade/docker-compose.yaml", "auto", PermissionDecision.ASK),
+        ("/home/user/project/.env", "auto", PermissionDecision.ASK),
+        ("/home/user/project/README.md", "deny", PermissionDecision.DENY),
+    ],
+)
+async def test_coding_profile_auto_reads_keep_path_boundaries(
+    tmp_path, profile_factory, capability, path, filesystem_policy, expected
+) -> None:
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, ToolCall("read", "read", {}), client)
+    context.db.scalar.return_value = ExecutionAgent(
+        id=client.agent_id,
+        user_id=context.session.user_id,
+        home_directory="/home/user",
+        home_filesystem_policy=filesystem_policy,
+        external_filesystem_policy="ask",
+        home_shell_enabled=True,
+        external_shell_enabled=True,
+    )
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[]))
+    profile = profile_factory()
+    settings = ToolSettings().select_trust(TrustLevel.PUBLIC)
+    settings._agent_permissions = profile.public_permissions
+    if capability == "shell.read":
+        request = _shell_permission(
+            client, classification="read", prefixes=[["cat"]], paths=[path]
+        )
+    else:
+        request = execution_directory_permission(client.agent_id, path, capability=capability)
+    policy = _tool_policy(settings, IntegrationSettings(), request)
+
+    assert policy == ToolExecutionPolicy.AUTO
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session, request, context.root_files, policy,
+        agent_profile_id=profile.id, trust_level=TrustLevel.PUBLIC,
+    ) == expected
 
 
 async def test_shell_dispatches_with_inspection_classification(tmp_path) -> None:

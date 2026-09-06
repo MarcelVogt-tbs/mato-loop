@@ -12,6 +12,7 @@ from mato_loop_backend.api.routes import auth as auth_routes
 from mato_loop_backend.auth import local as local_auth
 from mato_loop_backend.models import LoginSession, UserAccount
 from mato_loop_backend.security import create_login_session, require_admin, require_user
+from mato_loop_backend.settings import AgentProfilesSettings, SettingsStore
 
 
 def _user(*, active: bool = True, admin: bool = False) -> UserAccount:
@@ -29,6 +30,9 @@ async def test_setup_locks_before_check_and_creates_first_admin(monkeypatch) -> 
     db = AsyncMock(spec=AsyncSession)
     db.execute.side_effect = lambda _statement: events.append("lock")
     db.scalar.side_effect = lambda _statement: events.append("count") or 0
+    save = AsyncMock(side_effect=lambda *_args: events.append("profiles"))
+    monkeypatch.setattr(SettingsStore, "save", save)
+    db.commit.side_effect = lambda: events.append("commit")
     monkeypatch.setattr(auth_routes, "hash_password", lambda _password: "hashed")
     monkeypatch.setattr(
         auth_routes,
@@ -44,7 +48,8 @@ async def test_setup_locks_before_check_and_creates_first_admin(monkeypatch) -> 
     )
 
     user = db.add.call_args.args[0]
-    assert events == ["lock", "count"]
+    assert events == ["lock", "count", "profiles", "commit"]
+    save.assert_awaited_once_with(db, AgentProfilesSettings())
     assert user.username == "admin"
     assert user.is_admin and user.is_active
     assert result["isAdmin"] is True
@@ -66,9 +71,11 @@ async def test_setup_rejects_whitespace_before_locking() -> None:
     db.execute.assert_not_awaited()
 
 
-async def test_setup_lock_serializes_completed_setup() -> None:
+async def test_setup_lock_serializes_completed_setup(monkeypatch) -> None:
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = 1
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
 
     with pytest.raises(ApiError) as exc_info:
         await auth_routes.setup(
@@ -79,6 +86,7 @@ async def test_setup_lock_serializes_completed_setup() -> None:
 
     assert exc_info.value.code == "auth.setupCompleted"
     assert "pg_advisory_xact_lock" in str(db.execute.await_args.args[0])
+    save.assert_not_awaited()
     db.commit.assert_not_awaited()
 
 

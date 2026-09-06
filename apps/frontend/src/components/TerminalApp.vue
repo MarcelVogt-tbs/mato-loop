@@ -168,7 +168,7 @@ function createXterm(host) {
   Terminal.strings.promptLabel = 'Terminaleingabe'
   Terminal.strings.tooMuchOutput = 'Zu viel Ausgabe für die vollständige Sprachausgabe. Navigiere zeilenweise, um alles zu lesen.'
   const instance = new Terminal({
-    convertEol: false,
+    convertEol: terminal.attached,
     cursorBlink: false,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
     fontSize: 14,
@@ -216,6 +216,7 @@ function updateCursorState() {
 function redrawTerminal() {
   if (!xterm) return
   xterm.reset()
+  xterm.options.convertEol = terminal.attached
   xterm.write(activeBuffer.value)
   updateCursorState()
 }
@@ -261,12 +262,12 @@ watch(() => terminal.personalBuffer, (value, previous = '') => {
   if (!xterm || switchingView || activeView.value !== 'personal') return
   if (value.startsWith(previous)) xterm.write(value.slice(previous.length))
   else redrawTerminal()
-})
+}, { flush: 'post' })
 watch(() => terminal.agentBuffer, (value, previous = '') => {
   if (!xterm || switchingView || activeView.value !== 'agent') return
   if (value.startsWith(previous)) xterm.write(value.slice(previous.length))
   else redrawTerminal()
-})
+}, { flush: 'post' })
 watch(() => terminal.attached, (attached) => {
   switchingView = true
   if (attached) terminal.syncAgentOutput(chat.current?.messages, chat.processOutputs)

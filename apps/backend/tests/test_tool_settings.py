@@ -29,6 +29,7 @@ from mato_loop_backend.settings import (
     UserToolSettings,
     WebFetchSettings,
     build_agent_profile,
+    default_agent_profiles,
     plan_agent_profile,
 )
 
@@ -255,19 +256,31 @@ def test_plan_profile_disables_computer_changes(trust: TrustLevel) -> None:
             == ToolExecutionPolicy.DISABLED
         )
     assert (
-        resolve_tool_execution_policy(
-            settings, "shell.read", ToolExecutionPolicy.AUTO
-        ).policy
-        == (
-            ToolExecutionPolicy.AUTO
-            if trust == TrustLevel.PRIVATE
-            else ToolExecutionPolicy.ASK
-        )
-    )
-    assert (
         resolve_tool_execution_policy(settings, "session.files.write").policy
         == ToolExecutionPolicy.AUTO
     )
+
+
+@pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
+def test_only_coding_profiles_default_to_automatic_public_computer_reads(trust) -> None:
+    for profile in default_agent_profiles():
+        settings = ToolSettings().select_trust(trust)
+        settings._agent_permissions = (
+            profile.private_permissions if trust == TrustLevel.PRIVATE else profile.public_permissions
+        )
+        for capability in ("filesystem.read", "shell.read"):
+            expected = (
+                ToolExecutionPolicy.ASK
+                if profile.name == "Allgemein" and trust == TrustLevel.PUBLIC
+                else ToolExecutionPolicy.AUTO
+            )
+            assert resolve_tool_execution_policy(
+                settings, capability, tool_registry.action_default(capability)
+            ).policy == expected
+            settings._agent_permissions.policies[capability] = ToolExecutionPolicy.ASK
+            assert resolve_tool_execution_policy(
+                settings, capability, tool_registry.action_default(capability)
+            ).policy == ToolExecutionPolicy.ASK
 
 
 @pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])

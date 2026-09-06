@@ -194,9 +194,11 @@ def default_agent_profile() -> AgentProfile:
 
 def plan_agent_profile() -> AgentProfile:
     policies = {
+        "filesystem.read": ToolExecutionPolicy.AUTO,
         "filesystem.write": ToolExecutionPolicy.DISABLED,
         "filesystem.delete": ToolExecutionPolicy.DISABLED,
         "session.files.write": ToolExecutionPolicy.AUTO,
+        "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.DISABLED,
         "git.stage": ToolExecutionPolicy.DISABLED,
         "git.clone": ToolExecutionPolicy.DISABLED,
@@ -205,7 +207,10 @@ def plan_agent_profile() -> AgentProfile:
     return AgentProfile(
         id=PLAN_AGENT_PROFILE_ID,
         name=BUILTIN_AGENT_PROFILE_NAMES[PLAN_AGENT_PROFILE_ID],
-        description="Erstellt klare, umsetzbare Pläne, ohne Änderungen ungefragt auszuführen.",
+        description=(
+            "Plant ohne erkannte Schreibaktionen. Liest im Arbeitsverzeichnis automatisch, "
+            "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
+        ),
         instructions=(
             "Create a clear, actionable plan. Inspect the relevant context, identify risks "
             "and verification steps. Do not modify computer files or run commands classified "
@@ -217,14 +222,23 @@ def plan_agent_profile() -> AgentProfile:
 
 
 def build_agent_profile() -> AgentProfile:
+    policies = {
+        "filesystem.read": ToolExecutionPolicy.AUTO,
+        "shell.read": ToolExecutionPolicy.AUTO,
+    }
     return AgentProfile(
         id=BUILD_AGENT_PROFILE_ID,
         name=BUILTIN_AGENT_PROFILE_NAMES[BUILD_AGENT_PROFILE_ID],
-        description="Setzt Aufgaben um und führt notwendige Änderungen selbstständig aus.",
+        description=(
+            "Setzt Aufgaben um und prüft Ergebnisse. Liest im Arbeitsverzeichnis automatisch, "
+            "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
+        ),
         instructions=(
             "Implement the user's request. Inspect the relevant context, make the smallest "
             "correct changes, and verify the result."
         ),
+        private_permissions=AgentProfilePermissions(policies=policies),
+        public_permissions=AgentProfilePermissions(policies=policies),
     )
 
 

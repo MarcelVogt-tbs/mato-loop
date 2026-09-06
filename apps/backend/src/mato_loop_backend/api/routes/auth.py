@@ -19,6 +19,7 @@ from mato_loop_backend.security import (
     remove_login_session,
     require_user,
 )
+from mato_loop_backend.settings import AgentProfilesSettings, SettingsStore
 
 router = APIRouter(prefix="/auth")
 config = get_runtime_config()
@@ -106,6 +107,8 @@ async def setup(
     )
     if (await db.scalar(select(func.count(UserAccount.id)))) != 0:
         raise ApiError(status.HTTP_409_CONFLICT, "auth.setupCompleted")
+    # Historical migrations seed profiles; only first-time setup installs current defaults.
+    await SettingsStore.save(db, AgentProfilesSettings())
     user = UserAccount(
         username=username,
         password_hash=hash_password(payload.password),

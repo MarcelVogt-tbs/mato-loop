@@ -142,6 +142,14 @@ _WRITE_SUBCOMMANDS = {
     },
     "yarn": {"add", "install", "link", "remove", "set", "unlink", "upgrade"},
 }
+_DOCKER_READ_SUBCOMMANDS = {
+    "compose": {"config", "events", "images", "logs", "ls", "port", "ps", "top", "version"},
+    "container": {"diff", "inspect", "logs", "ls", "port", "ps", "stats", "top", "wait"},
+    "image": {"history", "inspect", "ls"},
+    "network": {"inspect", "ls"},
+    "volume": {"inspect", "ls"},
+    "system": {"df", "events", "info"},
+}
 _FIND_WRITE_ACTIONS = {
     "-delete",
     "-exec",
@@ -200,12 +208,6 @@ _PREFIX_ARITY = {
     ("bun",): 2,
     ("bun", "run"): 3,
     ("cargo",): 2,
-    ("docker",): 2,
-    ("docker", "compose"): 3,
-    ("docker", "container"): 3,
-    ("docker", "image"): 3,
-    ("docker", "network"): 3,
-    ("docker", "volume"): 3,
     ("gcloud",): 3,
     ("gh",): 3,
     ("git",): 2,
@@ -263,11 +265,93 @@ def _subcommand(arguments: list[str], value_options: set[str]) -> str | None:
     return None
 
 
+def _docker_command(arguments: list[str]) -> tuple[list[str], list[str]] | None:
+    # Classification and reusable prefixes must agree on the operation, not option values.
+    semantic = ["docker"]
+    value_options = {
+        "--config",
+        "--context",
+        "-c",
+        "--host",
+        "-H",
+        "--log-level",
+        "-l",
+        "--tlscacert",
+        "--tlscert",
+        "--tlskey",
+    }
+    flags = {"--debug", "-D", "--help", "-h", "--tls", "--tlsverify", "--version", "-v"}
+    while arguments:
+        argument = arguments[0]
+        # Peel known boolean short flags before handling an optional value-taking option.
+        while len(argument) > 2 and argument[:2] in flags and argument[2] not in "=-":
+            argument = "-" + argument[2:]
+        option = argument.partition("=")[0]
+        if argument == "--":
+            arguments = arguments[1:]
+            if not arguments:
+                return None
+        elif argument in value_options:
+            if len(arguments) < 2:
+                return None
+            arguments = arguments[2:]
+            continue
+        elif (
+            option in value_options
+            or option in flags
+            or _short_option_present([argument], value_options)
+        ):
+            arguments = arguments[1:]
+            continue
+        elif argument.startswith("-"):
+            # Unknown option arity cannot yield a trustworthy operation or prefix.
+            return None
+        semantic.append(arguments[0])
+        arguments = arguments[1:]
+        if len(semantic) == 3 or semantic[1] not in _DOCKER_READ_SUBCOMMANDS:
+            return semantic, arguments
+        if semantic[1] == "compose":
+            value_options |= {
+                "--ansi",
+                "--env-file",
+                "--file",
+                "-f",
+                "--parallel",
+                "--profile",
+                "--progress",
+                "--project-directory",
+                "--project-name",
+                "-p",
+            }
+            flags |= {"--all-resources", "--compatibility", "--dry-run"}
+    return (semantic, arguments) if len(semantic) == 1 else None
+
+
 def _definitely_writes(tokens: list[str]) -> bool:
     executable = Path(tokens[0]).name
     arguments = tokens[1:]
     if executable in _ALWAYS_WRITES:
         return True
+    if executable == "docker":
+        command = _docker_command(arguments)
+        if command is None:
+            return True
+        semantic, remaining = command
+        if len(semantic) == 1:
+            return False
+        group = semantic[1]
+        if group in _DOCKER_READ_SUBCOMMANDS:
+            if semantic[2] not in _DOCKER_READ_SUBCOMMANDS[group]:
+                return True
+            return (
+                group == "compose"
+                and semantic[2] == "config"
+                and (
+                    _option_present(remaining, {"--output", "-o", "--lock-image-digests"})
+                    or _short_option_present(remaining, {"-o"})
+                )
+            )
+        return group in _WRITE_SUBCOMMANDS["docker"]
     if executable in _WRITE_SUBCOMMANDS:
         value_options = (
             {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
@@ -467,6 +551,9 @@ def _command_prefix(tokens: list[str]) -> list[str] | None:
         return None
     executable = tokens[0]
     arguments = tokens[1:]
+    if executable == "docker":
+        command = _docker_command(arguments)
+        return command[0] if command is not None and len(command[0]) > 1 else None
     if executable in {"eval", "exec"} or (
         (executable in _INTERPRETERS or executable.startswith("python"))
         and any(option in arguments for option in {"-c", "--command", "-e", "--eval"})
