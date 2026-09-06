@@ -14,7 +14,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.file_roots import model_file_roots
-from mato_loop_backend.attachments import AttachmentError, AttachmentService
+from mato_loop_backend.attachments import (
+    AttachmentError,
+    AttachmentService,
+    latest_image_references,
+    model_attachments,
+)
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.memory.service import memory_visible_to
 from mato_loop_backend.models import ChatSession, ContextSummary, Message
@@ -285,7 +290,7 @@ def message_dict(
     provider_data.pop("_matoloop", None)
     provider_data = _model_provider_file_roots(provider_data)
     attachment_markers = []
-    for attachment in message.attachments:
+    for attachment in model_attachments(message):
         if attachment.duration_ms is not None:
             hours, remainder = divmod(attachment.duration_ms, 3_600_000)
             minutes, remainder = divmod(remainder, 60_000)
@@ -331,7 +336,9 @@ def message_dict(
             if remaining <= 0 or attachment.kind not in {"text", "document"}:
                 continue
             try:
-                text = service.read_derived_text(attachment, message.session_id)
+                text = service.read_derived_text(
+                    attachment, message.session_id, current_only=True
+                )
             except AttachmentError:
                 continue
             excerpt = text[:remaining]
@@ -370,9 +377,10 @@ def message_dict(
                 ),
                 "file_id": str(attachment.file_id) if attachment.file_id else None,
                 "file_revision": attachment.file_revision,
+                **({"run_id": str(attachment.run_id)} if getattr(attachment, "run_id", None) else {}),
                 "file_path": attachment.file_path,
             }
-            for attachment in message.attachments
+            for attachment in model_attachments(message)
             if attachment.kind == "image"
         ],
     }
@@ -977,6 +985,7 @@ def _projection_messages(
     memory_context: str | None = None,
     include_attachment_text: bool = False,
     available_records: list[Message] | None = None,
+    attachment_service: AttachmentService | None = None,
     characters_per_token: float = 4.0,
     historical_tool_output_tokens: int = 2_000,
     current_turn_tool_output_tokens: int | None = None,
@@ -1030,6 +1039,7 @@ def _projection_messages(
             )
         projected = message_dict(
             item,
+            attachment_service=attachment_service,
             include_attachment_text=(
                 include_attachment_text
                 and item.id == latest_user_id
@@ -1102,7 +1112,9 @@ def _projection_messages(
         if historical_references:
             messages[0]["attachments"] = historical_references
     _repair_tool_pairs(messages)
-    return messages
+    return latest_image_references(
+        messages, run_id=attachment_service.run_id if attachment_service is not None else None
+    )
 
 
 def _historical_tool_result(
@@ -1766,6 +1778,7 @@ class ContextManager:
         required_image_ids: tuple[str, ...] = (),
         memory_context: str | None = None,
         live_tool_calls: dict[UUID, list[dict[str, Any]]] | None = None,
+        attachment_service: AttachmentService | None = None,
     ) -> ContextProjection:
         records = [item for item in records if item.error_code is None]
         input_budget = (
@@ -1810,6 +1823,7 @@ class ContextManager:
                 target_trust_level,
                 memory_context=memory_context,
                 include_attachment_text=not tool_schemas,
+                attachment_service=attachment_service,
                 available_records=records,
                 characters_per_token=characters_per_token,
                 historical_tool_output_tokens=settings.historical_tool_output_tokens,

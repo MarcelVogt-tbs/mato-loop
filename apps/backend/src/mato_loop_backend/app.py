@@ -17,6 +17,7 @@ from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.request_body_limit import MediaRequestBodyLimitMiddleware
 from mato_loop_backend.api.router import api_router
+from mato_loop_backend.attachments import AttachmentService
 from mato_loop_backend.automations import AutomationScheduler, AutomationService
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
@@ -37,6 +38,7 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.project_coding import CodingScheduler
 from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.settings import InstanceLimits, SettingsStore
 
 runtime_config = get_runtime_config()
 logger = logging.getLogger(__name__)
@@ -79,6 +81,8 @@ async def lifespan(_app: FastAPI):
     runtime_config.secrets_dir.mkdir(parents=True, exist_ok=True)
     try:
         async with AsyncSessionFactory() as db:
+            attachments = AttachmentService(settings=await SettingsStore.load(db, InstanceLimits))
+            await attachments.backfill_derived_files(db)
             await AgentRuntime.recover(db)
             await db.commit()
             await AutomationService.recover(db)
@@ -123,6 +127,8 @@ async def lifespan(_app: FastAPI):
                     len(reconciliation.restored),
                     len(reconciliation.trashed),
                 )
+            if reconciliation.restored:
+                await attachments.backfill_derived_files(db)
             removed_legacy_files = await asyncio.to_thread(
                 session_storage.cleanup_legacy_attachment_storage,
                 session_locations,

@@ -135,7 +135,8 @@ def test_user_attachment_excerpt_is_untrusted_and_strictly_budgeted() -> None:
     message.attachments = [attachment]
 
     class TextService:
-        def read_derived_text(self, _attachment, _session_id):
+        def read_derived_text(self, _attachment, _session_id, *, current_only=False):
+            assert current_only
             return "x" * (MAX_ATTACHMENT_EXCERPT_CHARACTERS + 100)
 
     projected = message_dict(

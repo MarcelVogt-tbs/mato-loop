@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
-from urllib.parse import parse_qs, urlparse
 from uuid import UUID, uuid4
 
 import pytest
@@ -24,7 +23,7 @@ from mato_loop_backend.agent.permissions import (
     PermissionRequest,
 )
 from mato_loop_backend.agent.runtime import _tool_policy
-from mato_loop_backend.agent.tool_arguments import TaskArguments
+from mato_loop_backend.agent.tool_arguments import ReadArguments, TaskArguments
 from mato_loop_backend.agent.tools import (
     BoundTool,
     EffectiveToolSet,
@@ -446,9 +445,41 @@ async def test_read_qr_code_uses_current_session_image_and_source_trust(
 
     assert json.loads(result.content) == {"codes": [content]}
     assert result.trust_level == TrustLevel.PRIVATE
-    read_image.assert_awaited_once_with(attachment, context.session.id)
+    read_image.assert_awaited_once_with(attachment, context.session.id, current_only=True)
     statement = context.db.scalar.await_args.args[0]
     assert context.session.id in statement.compile().params.values()
+
+
+async def test_read_qr_code_rejects_stale_attachment_id(tmp_path, monkeypatch) -> None:
+    attachment_id = uuid4()
+    call = ToolCall(
+        id="qr-read", name="read_qr_code", arguments={"attachment_id": str(attachment_id)}
+    )
+    context = _context(tmp_path, call)
+    data = tools_module._qr_code_png("original")
+    revision = context.root_files.create_output_file("qr.png", data)
+    attachment = MessageAttachment(
+        id=attachment_id,
+        kind="image",
+        processing_status="ready",
+        mime_type="image/png",
+        size_bytes=revision.size_bytes,
+        sha256=revision.sha256,
+        file_root_id=context.session.id,
+        file_id=revision.file_id,
+        file_revision=revision.revision,
+        file_path=revision.path,
+    )
+    context.db.scalar.return_value = attachment
+    monkeypatch.setattr(
+        AttachmentService, "_root_files", lambda *_args, **_kwargs: context.root_files
+    )
+    context.root_files.append_output_revision(revision.file_id, tools_module._qr_code_png("new"))
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata == {"errorCode": "attachment.notFound"}
+    assert await AttachmentService().read_image(attachment, context.session.id) == data
 
 
 async def test_read_qr_code_rejects_unknown_session_attachment(tmp_path) -> None:
@@ -459,6 +490,7 @@ async def test_read_qr_code_rejects_unknown_session_attachment(tmp_path) -> None
     )
     context = _context(tmp_path, read_call)
     context.db.scalar.return_value = None
+    context.db.scalars.return_value.all = lambda: []
 
     result = await tool_registry.execute(read_call, context)
 
@@ -937,9 +969,9 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
         assert "path" in parameters["properties"]
     assert schemas["read"]["parameters"]["properties"]["offset"]["default"] == 1
     assert schemas["read"]["parameters"]["properties"]["limit"]["default"] == 1000
-    assert schemas["read"]["parameters"]["properties"]["revision"]["anyOf"][0][
-        "minimum"
-    ] == 1
+    assert "revision" not in schemas["read"]["parameters"]["properties"]
+    with pytest.raises(ValidationError):
+        ReadArguments(root="session", path="notes.txt", revision=1)
     assert schemas["glob"]["parameters"]["properties"]["path"]["default"] == "."
     assert schemas["grep"]["parameters"]["properties"]["path"]["default"] == "."
     assert "pattern" in schemas["glob"]["parameters"]["required"]
@@ -1944,8 +1976,9 @@ def test_update_user_profile_requires_a_field_and_rejects_blank_values() -> None
     assert arguments_model.model_validate({"full_name": None}).full_name is None
 
 
+@pytest.mark.parametrize("project_scope", [False, True])
 async def test_build_skill_uses_user_scoped_approval_and_persistence(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, project_scope
 ) -> None:
     tool_settings = ToolSettings()
     skills = SkillsSettings()
@@ -1962,6 +1995,32 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
         arguments={"brief": "Create a reusable API research workflow."},
     )
     context = _context(tmp_path, call)
+    storage = context.root_files.session_storage
+    if project_scope:
+        context.session.project_id = uuid4()
+        storage.move_session(context.session.id, None, context.session.project_id)
+    context.root_files = RootFileService(
+        context.session.id,
+        project_id=context.session.project_id,
+        session_storage=storage,
+        run_id=context.run_id,
+        session_quota_bytes=17 * 1024 * 1024,
+        max_editable_text_bytes=321 * 1024,
+    )
+    ui_files = RootFileService(
+        context.session.id,
+        project_id=context.session.project_id,
+        session_storage=storage,
+    )
+    context.root_files.write_file("session", "agent-private.txt", "unfinished work")
+    draft_services = []
+
+    def approval_files(*args, **kwargs):
+        service = RootFileService(*args, **kwargs)
+        draft_services.append(service)
+        return service
+
+    monkeypatch.setattr(tools_module, "RootFileService", approval_files)
     context.skill_draft_handler = AsyncMock(
         return_value=SkillDraft(
             name="API research",
@@ -1972,6 +2031,18 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
 
     async def approve_edited_draft(request):
         draft_file = request.approval_details["draftFile"]
+        assert context.root_files.run_id == context.run_id
+        assert (
+            json.loads(
+                ui_files.read_bytes(
+                    "session",
+                    draft_file["path"],
+                    limit=tools_module.SKILL_DRAFT_MAX_BYTES,
+                )
+            )["name"]
+            == "API research"
+        )
+        assert ui_files.list_revisions("agent-private.txt") == ()
         edited = json.dumps(
             {
                 "name": "API checks",
@@ -1979,13 +2050,11 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
                 "instructions": "Call the available API tool and verify its response.",
             }
         )
-        context.approval_resolution["expected_revision"] = (
-            context.root_files.replace_text_file(
-                "session",
-                draft_file["path"],
-                edited,
-                draft_file["initialRevision"],
-            )
+        context.approval_resolution["expected_revision"] = ui_files.replace_text_file(
+            "session",
+            draft_file["path"],
+            edited,
+            draft_file["initialRevision"],
         )
         return PermissionDecision.ALLOW
 
@@ -2004,19 +2073,26 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
     assert request.approval_details["skillPreview"]["name"] == "API research"
     draft_file = request.approval_details["draftFile"]
     assert draft_file["path"].startswith("skill-draft-")
-    draft_bytes = context.root_files.read_bytes(
+    draft_bytes = ui_files.read_bytes(
         "session", draft_file["path"], limit=tools_module.SKILL_DRAFT_MAX_BYTES
     )
-    assert context.approval_resolution["expected_revision"] == hashlib.sha256(
-        draft_bytes
-    ).hexdigest()
+    assert (
+        context.approval_resolution["expected_revision"] == hashlib.sha256(draft_bytes).hexdigest()
+    )
+    assert skills.skills[0].model_dump(exclude={"id"}) == json.loads(draft_bytes)
     assert draft_file["initialRevision"] != context.approval_resolution["expected_revision"]
+    assert len(draft_services) == 1
+    assert draft_services[0].run_id is None
+    assert draft_services[0].root_identity("session") == context.root_files.root_identity("session")
+    assert draft_services[0].SESSION_QUOTA_BYTES == context.root_files.SESSION_QUOTA_BYTES
+    assert draft_services[0].max_editable_text_bytes == context.root_files.max_editable_text_bytes
+    assert len(ui_files.list_revisions(draft_file["path"])) == 2
+    assert ui_files.list_revisions("agent-private.txt") == ()
+    context.root_files.write_file("session", "after-approval.txt", "run remains open")
     save.assert_awaited_once()
 
 
-async def test_build_skill_rejects_a_draft_changed_after_approval(
-    monkeypatch, tmp_path
-) -> None:
+async def test_build_skill_rejects_a_draft_changed_after_approval(monkeypatch, tmp_path) -> None:
     skills = SkillsSettings()
 
     async def load_settings(_db, settings_type, **_kwargs):
@@ -2031,6 +2107,13 @@ async def test_build_skill_rejects_a_draft_changed_after_approval(
         arguments={"brief": "Create an API workflow."},
     )
     context = _context(tmp_path, call)
+    ui_files = context.root_files
+    context.root_files = RootFileService(
+        context.session.id,
+        session_storage=ui_files.session_storage,
+        run_id=context.run_id,
+    )
+    context.root_files.write_file("session", "agent-private.txt", "unfinished work")
     context.skill_draft_handler = AsyncMock(
         return_value=SkillDraft(
             name="API research",
@@ -2041,8 +2124,12 @@ async def test_build_skill_rejects_a_draft_changed_after_approval(
 
     async def approve_then_change(request):
         draft = request.approval_details["draftFile"]
+        initial = ui_files.read_bytes(
+            "session", draft["path"], limit=tools_module.SKILL_DRAFT_MAX_BYTES
+        )
+        assert hashlib.sha256(initial).hexdigest() == draft["initialRevision"]
         context.approval_resolution["expected_revision"] = draft["initialRevision"]
-        context.root_files.write_file(
+        ui_files.write_file(
             "session",
             draft["path"],
             '{"name":"Changed","description":"Changed","instructions":"Changed"}',
@@ -2058,6 +2145,8 @@ async def test_build_skill_rejects_a_draft_changed_after_approval(
     assert result.is_error
     assert result.metadata["errorCode"] == "file.changed"
     assert skills.skills == []
+    assert ui_files.list_revisions("agent-private.txt") == ()
+    context.root_files.write_file("session", "after-approval.txt", "run remains open")
     save.assert_not_awaited()
 
 
@@ -3627,13 +3716,11 @@ async def test_provide_file_supports_session_files(tmp_path) -> None:
     result = await tool_registry.execute(call, context)
 
     payload = json.loads(result.content)
-    query = parse_qs(urlparse(payload["downloadUrl"]).query)
     assert payload["filename"] == "report.pdf"
     assert payload["root"] == "files"
     assert payload["sizeBytes"] == 6
-    assert payload["revision"] == 1
-    assert query["session_id"] == [str(context.session.id)]
-    assert "scope" not in query
+    assert not {"revision", "downloadUrl", "fileId", "runId"} & payload.keys()
+    assert payload["path"] == "report.pdf"
     assert result.attachments[0].file_id is not None
     assert result.attachments[0].file_revision == 1
     assert result.attachments[0].file_path == "report.pdf"

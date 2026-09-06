@@ -10,6 +10,7 @@ import pytest
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.context import message_dict
 from mato_loop_backend.attachments import (
     MAX_FILE_ATTACHMENT_BYTES,
     MAX_IMAGE_ATTACHMENT_BYTES,
@@ -264,12 +265,17 @@ async def test_attachment_reads_exact_revision_only_in_current_root(tmp_path: Pa
     root_files = RootFileService(
         session_id, project_id=project_id, session_storage=sessions
     )
+    assert await service.read_image(attachment, session_id, current_only=True) == original
     newer = image_bytes("JPEG")
     root_files.append_output_revision(attachment.file_id, newer)
 
     assert await service.read_image(attachment, session_id) == original
+    with pytest.raises(AttachmentError, match="attachment.notFound"):
+        await service.read_image(attachment, session_id, current_only=True)
 
     sessions.move_session(session_id, project_id, None)
+    with pytest.raises(AttachmentError, match="attachment.notFound"):
+        await service.read_image(attachment, session_id, current_only=True)
     with pytest.raises(AttachmentError, match="attachment.notFound"):
         await service.read_image(attachment, session_id)
 
@@ -302,6 +308,53 @@ async def test_validated_text_reuses_source_revision_as_processing_input(
     assert service.read_derived_text(attachment, session_id) == "plain text"
     files = sessions.session_path(session_id) / "files" / "attachments" / str(attachment.id)
     assert [path.name for path in files.iterdir()] == ["notes.txt"]
+
+
+@pytest.mark.parametrize("change_companion", [False, True])
+async def test_model_context_rejects_stale_source_or_companion(
+    tmp_path: Path, change_companion: bool
+) -> None:
+    session_id = uuid4()
+    sessions = provisioned_storage(tmp_path, session_id)
+    message = Message(id=uuid4(), session_id=session_id, role="user", content="Inspect")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [chat_session(session_id), None]
+    service = AttachmentService(sessions)
+    attachment = await service.create_attachment(
+        db, message, b"original text", "text/plain", kind="text", filename="notes.txt"
+    )
+    message.attachments = [attachment]
+    root_files = RootFileService(session_id, session_storage=sessions)
+    companion = root_files.create_output_file("companion.txt", b"original text")
+    attachment.metadata_json = service._companion_metadata(session_id, companion)
+    assert service.read_derived_text(attachment, session_id, current_only=True) == "original text"
+    root_files.append_output_revision(
+        companion.file_id if change_companion else attachment.file_id, b"replacement text"
+    )
+    assert service.read_derived_text(attachment, session_id) == "original text"
+    with pytest.raises(AttachmentError, match="attachment.notFound"):
+        service.read_derived_text(attachment, session_id, current_only=True)
+    projected = message_dict(message, include_attachment_text=True, attachment_service=service)
+    assert "original text" not in projected["content"]
+    assert "replacement text" not in projected["content"]
+
+
+async def test_model_audio_rejects_old_identity_but_human_read_keeps_original(tmp_path: Path) -> None:
+    session_id = uuid4()
+    sessions = provisioned_storage(tmp_path, session_id)
+    message = Message(id=uuid4(), session_id=session_id, role="user", content="Audio")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [chat_session(session_id), None]
+    service = AttachmentService(sessions)
+    original = audio_bytes()
+    attachment = await service.create_audio(db, message, original, "audio/wav")
+    assert await service.read_audio(attachment, session_id, current_only=True) == original
+    RootFileService(session_id, session_storage=sessions).append_output_revision(
+        attachment.file_id, audio_bytes(frames=160)
+    )
+    assert await service.read_audio(attachment, session_id) == original
+    with pytest.raises(AttachmentError, match="attachment.notFound"):
+        await service.read_audio(attachment, session_id, current_only=True)
 
 
 async def test_processing_companion_is_unavailable_after_source_deletion(

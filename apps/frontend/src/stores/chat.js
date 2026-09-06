@@ -41,7 +41,8 @@ import { agentActivityDisplayKey } from 'src/utils/agent-activity'
 import { errorDescriptor } from 'src/utils/api-errors'
 import {
   managedSessionFileTarget,
-  toolFileActions
+  toolFileActions,
+  toolOutputAttachments
 } from 'src/utils/attachments'
 import {
   clearChatOutbox,
@@ -2097,7 +2098,51 @@ export const useChatStore = defineStore('chat', {
       if (!run.reconnecting) this.reconnectAttempts = 0
       this.eventSource?.close()
       const source = new EventSource(`/api/sessions/${sessionId}/runs/${runId}/events`)
-      const toolViewContexts = new Map()
+      const workspace = useWorkspaceStore()
+      const controlCenter = useControlCenterStore()
+      const outputView = run.outputView || {
+        viewVersion: workspace.viewVersion,
+        controlCenterOpen: controlCenter.open,
+        activeContentId: controlCenter.activeContentId
+      }
+      const openFinalOutputs = async (session) => {
+        if (!session || session.activeRun || this.current?.id !== sessionId || this.selectedSessionId !== sessionId) return
+        const actions = new Map()
+        for (const message of session.messages || []) {
+          if (message.role !== 'tool' || message.runId !== runId) continue
+          const tool = session.messages.flatMap((item) => item.toolCalls || []).find((item) => item.id === message.toolCallId)
+          for (const action of [
+            ...toolFileActions(message),
+            ...toolOutputAttachments(tool, message.attachments).map((attachment) => managedSessionFileTarget(attachment, sessionId)).filter(Boolean)
+          ]) {
+            const target = workspace.fileTargetFromAction(action)
+            if (target) {
+              const key = JSON.stringify([target.scope, target.rootIdentity || target.executionAgentId, target.path])
+              actions.delete(key)
+              actions.set(key, target)
+            }
+          }
+        }
+        const shouldOpen = workspace.viewVersion === outputView.viewVersion
+          && controlCenter.open === outputView.controlCenterOpen
+          && controlCenter.activeContentId === outputView.activeContentId
+        for (const target of actions.values()) {
+          if (this.current?.id !== sessionId || this.selectedSessionId !== sessionId || this.running) return
+          const sameOpenFile = workspace.viewedEntry?.path === target.path
+            && workspace.viewedEntry?.revision == null
+            && workspace.scope === target.scope
+            && (target.scope === 'session' ? workspace.rootIdentity === target.rootIdentity
+              : (workspace.toolContext?.executionAgentId || workspace.workspaceContext?.executionAgentId) === target.executionAgentId)
+          workspace.noteFileTabMutations(controlCenter.fileTabsForTarget(target)
+            .filter((tab) => tab.fileTarget.revision == null && (!sameOpenFile || tab.tabId !== workspace.activeFileTabId)).map((tab) => tab.tabId))
+          if (sameOpenFile) {
+            workspace.noteFileMutation(target.path)
+            continue
+          }
+          if (shouldOpen) await controlCenter.openFile(target)
+        }
+        if (actions.size) void workspace.refreshStorageUsage(sessionId)
+      }
       let finished = false
       this.eventSource = markRaw(source)
       this.runSessionId = sessionId
@@ -2138,15 +2183,6 @@ export const useChatStore = defineStore('chat', {
       source.addEventListener('run.phase', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
-        if (payload.phase === 'processing_tool' && payload.toolCallId && !toolViewContexts.has(payload.toolCallId)) {
-          const workspace = useWorkspaceStore()
-          const controlCenter = useControlCenterStore()
-          toolViewContexts.set(payload.toolCallId, {
-            viewVersion: workspace.viewVersion,
-            controlCenterOpen: controlCenter.open,
-            activeContentId: controlCenter.activeContentId
-          })
-        }
         this.setActivity(payload.phase, payload)
       })
       source.addEventListener('session.title.updated', (event) => {
@@ -2276,18 +2312,14 @@ export const useChatStore = defineStore('chat', {
         const payload = JSON.parse(event.data)
         const refresh = this.refreshSession(sessionId)
         void refresh?.then(async (session) => {
-          const start = toolViewContexts.get(payload.toolCallId)
-          toolViewContexts.delete(payload.toolCallId)
           if (!session || this.current?.id !== sessionId) return
           const result = session.messages?.find((message) => (
             message.role === 'tool' && message.toolCallId === payload.toolCallId
           ))
           const workspace = useWorkspaceStore()
-          const fileAction = toolFileActions(result)[0]
           const attachmentAction = result?.attachments
             ?.map((attachment) => managedSessionFileTarget(attachment, sessionId))
             .find(Boolean)
-          const action = fileAction || attachmentAction
           const toolCall = session.messages
             ?.flatMap((message) => message.toolCalls || [])
             .find((item) => item.id === payload.toolCallId)
@@ -2333,7 +2365,6 @@ export const useChatStore = defineStore('chat', {
               removedTabs.forEach((tabId) => workspace.discardFileTab(tabId))
             }
           }
-          if (!start) return
           const sourceMatchesOpenFile = ['delete_path', 'move_path'].includes(payload.tool)
             && workspace.viewedEntry?.path
             && (workspace.viewedEntry.path === sourcePath
@@ -2343,26 +2374,6 @@ export const useChatStore = defineStore('chat', {
             && ((sourceRoot === 'files' && workspace.scope === 'session')
               || (sourceRoot === 'computer' && workspace.scope === 'filesystem'))
           if (sourceMatchesOpenFile) workspace.noteFileMutation(workspace.viewedEntry.path)
-          if (!action) return
-          const sameOpenFile = workspace.viewedEntry?.path === action.path
-            && (action.root !== 'session' || workspace.rootIdentity === action.rootIdentity)
-            && !workspace.toolContext
-            && ((action.root === 'session' && workspace.scope === 'session')
-              || (action.root === 'workspace' && workspace.scope === 'filesystem'))
-          if (sameOpenFile) {
-            workspace.noteFileMutation(action.path)
-            return
-          }
-          const shouldOpen = fileAction || attachmentAction.fileRevision === 1
-          if (!shouldOpen) return
-          const controlCenter = useControlCenterStore()
-          if (
-            workspace.viewVersion !== start.viewVersion
-            || controlCenter.open !== start.controlCenterOpen
-            || controlCenter.activeContentId !== start.activeContentId
-          ) return
-          const target = workspace.fileTargetFromAction(action)
-          if (target) await controlCenter.openFile(target)
         }).catch(() => {})
         if (FILESYSTEM_MUTATION_TOOLS.has(payload.tool) && !payload.metadata?.errorCode) {
           const workspace = useWorkspaceStore()
@@ -2445,6 +2456,7 @@ export const useChatStore = defineStore('chat', {
         this.setSessionRunStatus(sessionId, null)
         if (!this.historyActionPending) {
           void this.refreshSession(sessionId)
+            .then(openFinalOutputs)
             .catch(() => {})
             .finally(() => {
               this.cancelQueueDrain()
@@ -2480,7 +2492,7 @@ export const useChatStore = defineStore('chat', {
         if (!this.cancelRequested) this.setActivity('reconnecting')
         this.reconnectAttempts += 1
 
-        const stopDisconnectedRun = () => {
+        const stopDisconnectedRun = (terminal = false) => {
           if (this.runId !== runId) return
           clearTimeout(this.reconnectTimer)
           this.reconnectTimer = null
@@ -2492,7 +2504,9 @@ export const useChatStore = defineStore('chat', {
           this.streamModelName = null
           this.clearActivity()
           this.setSessionRunStatus(sessionId, null)
-          void this.refreshSession(sessionId).catch(() => {})
+          void this.refreshSession(sessionId).then((session) => {
+            if (terminal) return openFinalOutputs(session)
+          }).catch(() => {})
           this.refreshSessions()
           useApprovalStore().fetchPending()
           void useQuestionStore().fetchPending().catch(() => {})
@@ -2505,7 +2519,7 @@ export const useChatStore = defineStore('chat', {
           }
           this.reconnectTimer = setTimeout(() => {
             if (this.selectedSessionId !== sessionId || this.runId !== runId) return
-            this.watchRun(sessionId, runId, { ...runState, reconnecting: true })
+            this.watchRun(sessionId, runId, { ...runState, reconnecting: true, outputView })
           }, this.reconnectAttempts * 1000)
         }
 
@@ -2517,7 +2531,7 @@ export const useChatStore = defineStore('chat', {
           if (['queued', 'running', 'waiting_approval', 'waiting_input'].includes(data.status)) {
             scheduleReconnect(data)
           } else {
-            stopDisconnectedRun()
+            stopDisconnectedRun(true)
           }
         } catch {
           scheduleReconnect({ createdAt: this.activity.startedAt })

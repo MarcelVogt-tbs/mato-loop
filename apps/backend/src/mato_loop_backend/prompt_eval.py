@@ -5202,7 +5202,7 @@ def _compact_schema_details(tool: dict[str, Any]) -> dict[str, Any]:
 
 
 _V2_TOOL_DESCRIPTIONS = {
-    "read": "Read a directory, text, image, or exact files revision with optional pagination.",
+    "read": "Read a current directory, text, or image with optional pagination.",
     "glob": (
         "Glob files recursively, max 100. Skip hidden/.git/symlinks. "
         "root=computer honors ignores; root=files overrides them. truncated=true: more/size limit."

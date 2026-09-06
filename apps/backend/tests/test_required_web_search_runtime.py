@@ -277,6 +277,7 @@ async def _runtime_setup(
 
     monkeypatch.setattr(SettingsStore, "load", load_settings)
     monkeypatch.setattr(AgentRuntime, "_records", AsyncMock(return_value=records))
+    monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     monkeypatch.setattr(ContextManager, "build", build_context)
     monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))
     monkeypatch.setattr(
@@ -599,10 +600,8 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
         async def create_attachment(self, _db, _message, _data, _mime_type, **kwargs):
             return SimpleNamespace(id=generated_id, kind=kwargs["kind"])
 
-        async def discard(self, _attachment, _session_id):
-            return None
-
-        async def read_image(self, attachment, _session_id):
+        async def read_image(self, attachment, _session_id, *, current_only=False):
+            assert current_only is True
             return (attachment.filename or "image").encode()
 
     monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
@@ -672,8 +671,8 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
             },
         ],
     }
-    assert requests[3]["required_image_ids"] == (str(generated_id),)
-    assert projections[2]["required_image_ids"] == (str(generated_id),)
+    assert requests[3]["required_image_ids"] == ()
+    assert projections[2]["required_image_ids"] == ()
     render_message = next(
         call.args[0]
         for call in db.add.call_args_list
@@ -781,10 +780,8 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
         async def create_attachment(self, _db, _message, _data, _mime_type, **kwargs):
             return SimpleNamespace(id=generated_id, kind=kwargs["kind"])
 
-        async def discard(self, _attachment, _session_id):
-            return None
-
-        async def read_image(self, attachment, _session_id):
+        async def read_image(self, attachment, _session_id, *, current_only=False):
+            assert current_only is True
             return f"reference-{attachment.position}".encode()
 
     monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
@@ -911,9 +908,6 @@ async def test_private_openscad_source_uses_public_active_vision_model(monkeypat
         async def create_attachment(self, _db, _message, _data, _mime_type, **kwargs):
             return SimpleNamespace(id=uuid4(), kind=kwargs["kind"])
 
-        async def discard(self, _attachment, _session_id):
-            return None
-
     monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
     monkeypatch.setattr(
         tool_registry,
@@ -970,9 +964,6 @@ async def test_failed_active_openscad_verifier_does_not_fallback_and_counts_budg
         async def create_attachment(self, _db, _message, _data, _mime_type, **kwargs):
             return SimpleNamespace(id=generated_id, kind=kwargs["kind"])
 
-        async def discard(self, _attachment, _session_id):
-            return None
-
     async def complete(_db, **kwargs):
         requests.append(kwargs)
         if len(requests) == 1:
@@ -1012,7 +1003,7 @@ async def test_failed_active_openscad_verifier_does_not_fallback_and_counts_budg
         "local-model",
     ]
     assert requests[1]["tool_choice"] == "none"
-    assert requests[2]["required_image_ids"] == (str(generated_id),)
+    assert requests[2]["required_image_ids"] == ()
     assert [
         event["modelRequest"]
         for event in events
@@ -1086,9 +1077,6 @@ async def test_each_successful_openscad_preview_runs_a_verifier(monkeypatch) -> 
 
         async def create_attachment(self, _db, _message, _data, _mime_type, **kwargs):
             return SimpleNamespace(id=uuid4(), kind=kwargs["kind"])
-
-        async def discard(self, _attachment, _session_id):
-            return None
 
     monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
     monkeypatch.setattr(
@@ -1805,6 +1793,8 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
     )
     assert tool_message.provider_data == {
         "_matoloop": {
+            "runId": str(run.id),
+            "fileOutputsPending": True,
             "fileActions": [
                 {
                     "operation": "write",

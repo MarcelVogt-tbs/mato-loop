@@ -562,7 +562,7 @@ async def test_title_generation_routes_current_images_in_one_request(
     if title_supports_images or fallback_enabled:
         assert len(image_inputs) == 1
         assert image_inputs[0].trust_level == "private"
-        attachment_service.read_image.assert_awaited_once_with(image, session.id)
+        attachment_service.read_image.assert_awaited_once_with(image, session.id, current_only=True)
     else:
         assert image_inputs == []
         attachment_service.read_image.assert_not_awaited()

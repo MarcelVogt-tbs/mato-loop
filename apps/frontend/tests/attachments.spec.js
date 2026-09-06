@@ -189,6 +189,7 @@ describe('persisted attachments', () => {
     }
 
     expect(toolFileActions({ fileActions: [action] })).toEqual([{ ...action, sessionId }])
+    expect(toolFileActions({ fileActions: [action, action] })).toHaveLength(2)
   })
 
   it('derives an open target only for a newly managed session file', () => {
@@ -320,13 +321,14 @@ describe('persisted attachments', () => {
   it('hides OpenSCAD previews only from the visible tool output', () => {
     const attachments = [
       { id: 'model', kind: 'file', mimeType: 'model/stl', url },
+      { id: 'off', kind: 'file', mimeType: 'model/vnd.off', filename: 'preview.off', url },
       { id: 'preview', kind: 'image', mimeType: 'image/png', url }
     ]
 
     expect(toolOutputAttachments({ name: 'render_openscad' }, attachments))
       .toEqual([expect.objectContaining({ id: 'model' })])
-    expect(toolOutputAttachments({ name: 'other_tool' }, attachments)).toHaveLength(2)
-    expect(attachments).toHaveLength(2)
+    expect(toolOutputAttachments({ name: 'other_tool' }, attachments)).toHaveLength(3)
+    expect(attachments).toHaveLength(3)
   })
 
   it('hides PDF pages fetched for agent inspection from visible tool output', () => {

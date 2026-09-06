@@ -28,8 +28,13 @@ class _SessionContext:
         return None
 
 
-async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypatch) -> None:
+@pytest.mark.parametrize("restored", [False, True])
+async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypatch, restored) -> None:
     db = AsyncMock(spec=AsyncSession)
+    order = []
+    backfill = AsyncMock(side_effect=lambda _db: order.append("backfill"))
+    monkeypatch.setattr(app_module.AttachmentService, "backfill_derived_files", backfill)
+    monkeypatch.setattr(app_module.SettingsStore, "load", AsyncMock(return_value=app_module.InstanceLimits()))
     attachments = Mock()
     attachments.all.return_value = []
     db.scalars.return_value = attachments
@@ -38,7 +43,7 @@ async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypat
     db.execute.return_value = rows
     engine = Mock(dispose=AsyncMock())
     monkeypatch.setattr(app_module, "AsyncSessionFactory", lambda: _SessionContext(db))
-    recover_runs = AsyncMock()
+    recover_runs = AsyncMock(side_effect=lambda _db: order.append("recover"))
     monkeypatch.setattr(AgentRuntime, "recover", recover_runs)
     monkeypatch.setattr(app_module.AutomationService, "recover", AsyncMock())
     monkeypatch.setattr(app_module, "engine", engine)
@@ -57,7 +62,11 @@ async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypat
     monkeypatch.setattr(app_module.AutomationScheduler, "stop", AsyncMock())
     monkeypatch.setattr(app_module.embedding_client, "close", AsyncMock())
     session_storage = Mock()
-    session_storage.reconcile.return_value = Mock(provisioned=(), restored=(), trashed=())
+    def reconcile(*_args, **_kwargs):
+        order.append("reconcile")
+        return Mock(provisioned=(), restored=(uuid4(),) if restored else (), trashed=())
+
+    session_storage.reconcile.side_effect = reconcile
     monkeypatch.setattr(app_module, "SessionStorage", Mock(return_value=session_storage))
 
     async with app_module.lifespan(None):
@@ -75,6 +84,7 @@ async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypat
     approval_params = list(approval_update.compile().params.values())
 
     recover_runs.assert_awaited_once_with(db)
+    assert order == ["backfill", "recover", "reconcile", *(["backfill"] if restored else [])]
     episode_recover.assert_awaited_once_with(db)
     episode_reconcile.assert_awaited_once_with(db, retry_failed=True)
     assert {"expired", "pending", "agent_action"}.issubset(approval_params)
@@ -87,6 +97,7 @@ async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypat
 
 
 async def test_startup_recovery_persists_one_error_message_per_active_run(monkeypatch) -> None:
+    monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     run = AgentRun(
         id=uuid4(),
         session_id=uuid4(),
@@ -97,7 +108,7 @@ async def test_startup_recovery_persists_one_error_message_per_active_run(monkey
     rows = Mock()
     rows.all.return_value = [run]
     db = AsyncMock(spec=AsyncSession)
-    db.scalars.return_value = rows
+    db.scalars.side_effect = [rows, Mock(all=Mock(return_value=[]))]
     db.scalar.return_value = None
     db.add.side_effect = lambda message: setattr(message, "id", uuid4())
     terminalize = AsyncMock()
@@ -114,12 +125,13 @@ async def test_startup_recovery_persists_one_error_message_per_active_run(monkey
     assert message.error_params is None
     assert message.content == ""
     assert not message.provider_data
-    terminalize.assert_awaited_once_with(db, run.session_id)
+    terminalize.assert_awaited_once_with(db, run.session_id, run_id=run.id)
     db.flush.assert_awaited()
     db.commit.assert_not_awaited()
 
 
 async def test_startup_recovery_keeps_child_failure_internal(monkeypatch) -> None:
+    monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     child = AgentRun(
         id=uuid4(),
         session_id=uuid4(),
@@ -132,7 +144,7 @@ async def test_startup_recovery_keeps_child_failure_internal(monkeypatch) -> Non
     rows = Mock()
     rows.all.return_value = [child]
     db = AsyncMock(spec=AsyncSession)
-    db.scalars.return_value = rows
+    db.scalars.side_effect = [rows, Mock(all=Mock(return_value=[]))]
     terminalize = AsyncMock()
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", terminalize)
 
@@ -148,6 +160,7 @@ async def test_startup_recovery_keeps_child_failure_internal(monkeypatch) -> Non
 
 
 async def test_startup_recovery_keeps_duration_completed_before_user_wait(monkeypatch) -> None:
+    monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     run = AgentRun(
         id=uuid4(),
         session_id=uuid4(),
@@ -160,7 +173,7 @@ async def test_startup_recovery_keeps_duration_completed_before_user_wait(monkey
     rows.all.return_value = [run]
     messages = []
     db = AsyncMock(spec=AsyncSession)
-    db.scalars.return_value = rows
+    db.scalars.side_effect = [rows, Mock(all=Mock(return_value=[]))]
     db.scalar.return_value = None
     db.add.side_effect = lambda message: (
         setattr(message, "id", uuid4()),

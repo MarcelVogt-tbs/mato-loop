@@ -9,7 +9,6 @@ import posixpath
 from datetime import datetime
 from io import BytesIO
 from typing import Any, Literal
-from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
 import zxingcpp
@@ -161,6 +160,7 @@ from mato_loop_backend.attachments import (
     MAX_FILE_ATTACHMENT_BYTES,
     AttachmentError,
     AttachmentService,
+    model_attachments,
 )
 from mato_loop_backend.automations import (
     AutomationError,
@@ -479,6 +479,7 @@ async def _project_read_files(
         RootFileService(
             target.id,
             project_id=target.project_id,
+            run_id=context.root_files.run_id,
             session_storage=context.root_files.session_storage,
             session_quota_bytes=context.root_files.SESSION_QUOTA_BYTES,
             max_editable_text_bytes=context.root_files.max_editable_text_bytes,
@@ -510,9 +511,7 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
         else root_files.normalize_relative_path(arguments.path)
     )
     kind: str
-    if arguments.revision is not None:
-        kind = "file"
-    elif arguments.root == "workspace":
+    if arguments.root == "workspace":
         stat_result = await _workspace_request(
             context,
             "filesystem.stat",
@@ -566,18 +565,12 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
     if kind != "file":
         return ToolResult.error("file.unsupportedType")
     if arguments.root == "session" and target_session_id == context.session.id:
-        selected_revision = next(
-            (
-                revision
-                for revision in root_files.list_revisions(normalized_path)
-                if (
-                    revision.revision == arguments.revision
-                    if arguments.revision is not None
-                    else revision.current
-                )
-            ),
-            None,
-        )
+        try:
+            selected_revision = root_files.working_revision(normalized_path)
+        except RootFileError as exc:
+            if exc.code != "file.revisionNotFound":
+                raise
+            selected_revision = None
         revision_filter = and_(
             selected_revision is not None,
             MessageAttachment.file_id
@@ -597,7 +590,11 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
             .join(Message, Message.id == MessageAttachment.message_id)
             .where(*filters)
         )
-        if isinstance(attachment, MessageAttachment):
+        if selected_revision is not None and selected_revision.revision is None:
+            attachment = next((item for item in await AttachmentService(run_id=root_files.run_id).pending_for_run(context.db, context.session.id)
+                               if item.file_id == selected_revision.file_id and item.sha256 == selected_revision.sha256
+                               and item.kind == "image"), None)
+        if attachment is not None:
             return ToolResult.json(
                 {
                     "root": "session",
@@ -608,11 +605,6 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
                         "kind": "image",
                         "mimeType": attachment.mime_type,
                     },
-                    **(
-                        {"revision": arguments.revision}
-                        if arguments.revision is not None
-                        else {}
-                    ),
                     "contentIsUntrusted": True,
                 }
             )
@@ -629,20 +621,11 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
             WorkspaceReadResult,
         )
     else:
-        result = (
-            root_files.read_revision(
-                arguments.path,
-                arguments.revision,
-                offset=arguments.offset,
-                limit=arguments.limit,
-            )
-            if arguments.revision is not None
-            else root_files.read_file(
-                arguments.root,
-                arguments.path,
-                offset=arguments.offset,
-                limit=arguments.limit,
-            )
+        result = root_files.read_file(
+            arguments.root,
+            arguments.path,
+            offset=arguments.offset,
+            limit=arguments.limit,
         )
     content = result.content
     notices = []
@@ -668,11 +651,6 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
             "nextOffset": result.next_offset,
             "truncatedLines": list(result.truncated_lines),
             "sha256": result.sha256,
-            **(
-                {"revision": arguments.revision}
-                if arguments.revision is not None
-                else {}
-            ),
         },
     )
 
@@ -817,17 +795,12 @@ async def _provide_file(
         )
         return result
 
-    revision = next(
-        (item for item in root_files.list_revisions(path) if item.current), None
-    )
-    if revision is None:
+    try:
+        revision = root_files.working_revision(path)
+    except RootFileError:
         return ToolResult.error("file.notAFile", field="path")
     if revision.size_bytes == 0:
         return ToolResult.error("attachment.empty")
-    download_url = (
-        f"/api/workspace/files/revisions/{revision.revision}/download?"
-        + urlencode({"path": path, "session_id": str(target_session_id)})
-    )
     result = ToolResult.json(
         {
             "root": arguments.root,
@@ -836,9 +809,6 @@ async def _provide_file(
             "filename": path.rsplit("/", 1)[-1],
             "sizeBytes": revision.size_bytes,
             "sha256": revision.sha256,
-            "fileId": str(revision.file_id),
-            "revision": revision.revision,
-            "downloadUrl": download_url,
         },
         metadata={"providedFile": True},
     )
@@ -1948,7 +1918,12 @@ def resolve_tool_execution_policy(
             ToolExecutionPolicy.ASK
             if settings.trust_level == TrustLevel.PUBLIC
             and default == ToolExecutionPolicy.AUTO
-            and capability not in {"session.files.read", "session.files.write"}
+            and capability not in {
+                "session.files.read",
+                "session.files.write",
+                "network.fetch",
+                "network.search",
+            }
             else default,
             "default",
             "trust_default",
@@ -2411,8 +2386,16 @@ async def _save_skill_draft(
     draft_bytes = serialize_skill_draft(draft).encode("utf-8")
     initial_revision = hashlib.sha256(draft_bytes).hexdigest()
     draft_path = f"skill-draft-{draft_id}.json"
+    # Host approval documents must be editable through the normal API before the run ends.
+    draft_files = RootFileService(
+        context.root_files.session_id,
+        project_id=context.root_files.project_id,
+        session_storage=context.root_files.session_storage,
+        session_quota_bytes=context.root_files.SESSION_QUOTA_BYTES,
+        max_editable_text_bytes=context.root_files.max_editable_text_bytes,
+    )
     try:
-        entry = context.root_files.create_file(
+        entry = draft_files.create_file(
             FileRoot.SESSION,
             draft_path,
             BytesIO(draft_bytes),
@@ -2471,7 +2454,7 @@ async def _save_skill_draft(
         "expected_revision", initial_revision
     )
     try:
-        current_bytes = context.root_files.read_bytes(
+        current_bytes = draft_files.read_bytes(
             FileRoot.SESSION,
             draft_path,
             limit=SKILL_DRAFT_MAX_BYTES,
@@ -2677,20 +2660,15 @@ def _read_qr_codes(data: bytes) -> list[str]:
 async def _read_qr_code(
     arguments: ReadQrCodeArguments, context: ToolContext
 ) -> ToolResult:
-    attachment = await context.db.scalar(
-        select(MessageAttachment)
-        .join(Message, Message.id == MessageAttachment.message_id)
-        .options(joinedload(MessageAttachment.message))
-        .where(
-            MessageAttachment.id == arguments.attachment_id,
-            MessageAttachment.kind == "image",
-            Message.session_id == context.session.id,
-        )
+    attachment = await AttachmentService(run_id=context.run_id).resolve(
+        context.db, context.session.id, arguments.attachment_id, kind="image"
     )
     if attachment is None:
         return ToolResult.error("attachment.notFound")
     try:
-        data = await AttachmentService().read_image(attachment, context.session.id)
+        data = await AttachmentService(run_id=context.run_id).read_image(
+            attachment, context.session.id, current_only=True
+        )
         codes = await asyncio.to_thread(_read_qr_codes, data)
     except AttachmentError:
         return ToolResult.error("attachment.notFound")
@@ -2715,20 +2693,9 @@ async def _edit_image(
     if not _media_target_matches_binding(context, target):
         return ToolResult.error("tool.unavailable")
     target_trust_level = target.model.trust_level or target.provider.trust_level
-    attachments = list(
-        (
-            await context.db.scalars(
-                select(MessageAttachment)
-                .join(Message, Message.id == MessageAttachment.message_id)
-                .options(joinedload(MessageAttachment.message))
-                .where(
-                    MessageAttachment.id.in_(arguments.attachment_ids),
-                    MessageAttachment.kind == "image",
-                    Message.session_id == context.session.id,
-                )
-            )
-        ).all()
-    )
+    service = AttachmentService(run_id=context.run_id)
+    attachments = [item for attachment_id in arguments.attachment_ids
+                   if (item := await service.resolve(context.db, context.session.id, attachment_id, kind="image")) is not None]
     by_id = {attachment.id: attachment for attachment in attachments}
     if len(by_id) != len(arguments.attachment_ids):
         return ToolResult.error("attachment.notFound")
@@ -2760,13 +2727,14 @@ async def _edit_image(
         source_attachment_ids=tuple(authorization_source_ids),
     ):
         return error
-    service = AttachmentService()
     try:
         images = []
         for attachment in ordered:
             images.append(
                 (
-                    await service.read_image(attachment, context.session.id),
+                    await service.read_image(
+                        attachment, context.session.id, current_only=True
+                    ),
                     attachment.mime_type,
                 )
             )
@@ -2867,20 +2835,15 @@ async def _transcribe_audio(
 ) -> ToolResult:
     if error := await _authorize_media(context, "media.transcribe.audio"):
         return error
-    attachment = await context.db.scalar(
-        select(MessageAttachment)
-        .join(Message, Message.id == MessageAttachment.message_id)
-        .options(joinedload(MessageAttachment.message))
-        .where(
-            MessageAttachment.id == arguments.attachment_id,
-            MessageAttachment.kind == "audio",
-            Message.session_id == context.session.id,
-        )
+    attachment = await AttachmentService(run_id=context.run_id).resolve(
+        context.db, context.session.id, arguments.attachment_id, kind="audio"
     )
     if attachment is None:
         return ToolResult.error("attachment.notFound")
     try:
-        audio = await AttachmentService().read_audio(attachment, context.session.id)
+        audio = await AttachmentService(run_id=context.run_id).read_audio(
+            attachment, context.session.id, current_only=True
+        )
     except AttachmentError:
         return ToolResult.error("attachment.notFound")
     result = await MediaService.transcribe_audio(
@@ -3024,7 +2987,7 @@ def _attachment_items(message: Message) -> list[dict[str, Any]]:
             "fileId": str(attachment.file_id) if attachment.file_id else None,
             "fileRevision": attachment.file_revision,
         }
-        for attachment in message.attachments
+        for attachment in model_attachments(message, include_pending=False)
     ]
 
 
@@ -4542,7 +4505,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "read",
-            "Read a directory, text, image, or exact files revision with optional pagination.",
+            "Read a current directory, text, or image with optional pagination.",
             ReadArguments,
             _read,
             tool_type="shared",

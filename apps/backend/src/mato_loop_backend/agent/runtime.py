@@ -103,6 +103,7 @@ from mato_loop_backend.attachments import (
     AttachmentInput,
     AttachmentService,
     image_mime_type,
+    model_attachments,
 )
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
@@ -161,6 +162,7 @@ from mato_loop_backend.providers.base import (
 from mato_loop_backend.providers.media import MediaService, available_media_capabilities
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
+from mato_loop_backend.session_storage import SessionStorageError
 from mato_loop_backend.settings import (
     AgentProfileUnavailable,
     AgentRuntimeSettings,
@@ -1057,7 +1059,7 @@ class AgentRuntime:
             if tools.tool_availability.get("transcribe_audio", True):
                 status = "failed"
                 try:
-                    audio = await service.read_audio(attachment, run.session_id)
+                    audio = await service.read_audio(attachment, run.session_id, current_only=True)
                     result = await MediaService.transcribe_audio(
                         db, audio=audio, language=None,
                         timeout=tools.transcribe_audio.timeout_seconds, user_id=user_id,
@@ -1120,6 +1122,7 @@ class AgentRuntime:
                     )
                     await cls._transcribe_voice_messages(db, run)
                     await cls._execute_loop(db, run, visible_response)
+                    await cls._finalize_run_files(db, run)
                     transition_run_status(run, "completed")
                     run.completed_at = datetime.now(UTC)
                     await cls._persist_run_duration(db, run)
@@ -1140,12 +1143,13 @@ class AgentRuntime:
                         raise
                     user_cancelled = run_id in cls._user_cancelled_runs
                     await db.rollback()
-                    await cls._terminalize_incomplete_tool_calls(db, session_id)
+                    await cls._terminalize_incomplete_tool_calls(db, session_id, run_id=run_id)
                     cancelled_run = await db.get(AgentRun, run_id)
                     interrupted_message = None
                     error_message = None
                     restart_error = None
                     if cancelled_run is not None:
+                        await cls._finalize_run_files(db, cancelled_run, tolerate_conflict=True)
                         cancelled_run.completed_at = datetime.now(UTC)
                         if user_cancelled:
                             transition_run_status(cancelled_run, "cancelled")
@@ -1251,9 +1255,10 @@ class AgentRuntime:
                     failure_committed = False
                     try:
                         await db.rollback()
-                        await cls._terminalize_incomplete_tool_calls(db, session_id)
+                        await cls._terminalize_incomplete_tool_calls(db, session_id, run_id=run_id)
                         failed_run = await db.get(AgentRun, run_id)
                         if failed_run is not None:
+                            await cls._finalize_run_files(db, failed_run, tolerate_conflict=True)
                             transition_run_status(failed_run, "failed")
                             failed_run.error = public_error.code
                             failed_run.completed_at = datetime.now(UTC)
@@ -1402,7 +1407,6 @@ class AgentRuntime:
         openscad_source_review_pending: tuple[str, str] | None = None
         openscad_source_review_retries = 0
         openscad_source_review_finalization_pending = False
-        openscad_preview_image_id: str | None = None
         memory_write_pending = False
         memory_write_retries = 0
         memory_write_outcome: str | None = None
@@ -1481,11 +1485,9 @@ class AgentRuntime:
                 chat_session, memory_settings, provider, model
             )
             records = await cls._records(db, chat_session.id)
-            required_image_ids = (
-                (openscad_preview_image_id,) if openscad_preview_image_id is not None else ()
-            )
             root_files = RootFileService(
                 chat_session.id,
+                run_id=run.id,
                 project_id=chat_session.project_id,
                 session_quota_bytes=instance_limits.session_quota_bytes,
                 max_editable_text_bytes=instance_limits.max_editable_text_bytes,
@@ -2071,8 +2073,9 @@ class AgentRuntime:
                         model=model,
                         target_trust_level=model_trust_level,
                         settings=runtime_settings,
+                        attachment_service=AttachmentService(settings=instance_limits, run_id=run.id),
                         summarize=summarize,
-                        required_image_ids=required_image_ids,
+                        required_image_ids=(),
                         live_tool_calls=live_tool_calls,
                     )
                     memory_text = candidate_text
@@ -2248,6 +2251,12 @@ class AgentRuntime:
                     providerAttemptTotal=total,
                 )
 
+            for projected_message in projection.messages:
+                projected_message["attachments"] = [
+                    {**attachment, "run_id": str(run.id)}
+                    for attachment in projected_message.get("attachments", [])
+                    if attachment.get("run_id") in {None, str(run.id)}
+                ]
             result = await ProviderService.complete(
                 db,
                 provider=provider,
@@ -2271,14 +2280,13 @@ class AgentRuntime:
                 target_trust_level=model_trust_level,
                 pseudonymization_enabled=run_pseudonymization_enabled,
                 prompt_cache_key=str(chat_session.id),
-                required_image_ids=required_image_ids,
+                required_image_ids=(),
                 reasoning_effort=(
                     ReasoningEffort.NONE
                     if empty_response_retries > 0 and can_disable_reasoning
                     else chat_session.reasoning_effort
                 ),
             )
-            openscad_preview_image_id = None
             provider_duration_ms = max(
                 0, round((time.monotonic() - provider_started_at) * 1_000)
             )
@@ -2476,6 +2484,7 @@ class AgentRuntime:
                 ]
             if not normalized_calls:
                 run.result_message_id = assistant.id
+                await cls._finalize_run_files(db, run)
             await EpisodeIndexService.enqueue(db, assistant)
             await db.commit()
             if not normalized_calls:
@@ -3446,12 +3455,12 @@ class AgentRuntime:
                             references = []
                             reference_inputs = []
                             if contact_sheet is not None and verification_target is not None:
-                                attachment_service = AttachmentService()
+                                attachment_service = AttachmentService(run_id=run.id)
                                 image_bytes = len(contact_sheet)
                                 attachment_records = {
                                     str(attachment.id): (attachment, record.trust_level)
                                     for record in records
-                                    for attachment in record.attachments
+                                    for attachment in model_attachments(record)
                                 }
                                 selected_references = select_provider_images(
                                     projection.messages,
@@ -3473,7 +3482,7 @@ class AgentRuntime:
                                     attachment, attachment_trust = record
                                     try:
                                         reference = await attachment_service.read_image(
-                                            attachment, chat_session.id
+                                            attachment, chat_session.id, current_only=True
                                         )
                                     except AttachmentError:
                                         continue
@@ -3571,9 +3580,29 @@ class AgentRuntime:
                                         exc_info=True,
                                     )
                             render_payload["visualVerification"] = verification
-                            if contact_sheet is not None and not model.supports_image_input:
-                                image_handled_for_text_model = True
-                            tool_result_content = json.dumps(render_payload, ensure_ascii=False)
+                        # Preview bytes are consumed by inline verification, not session artifacts.
+                        tool_attachments = ()
+                        tool_file_actions = ()
+                        render_payload = render_payload if isinstance(render_payload, dict) else {}
+                        tool_result_content = json.dumps(
+                            {
+                                **{
+                                    key: render_payload[key]
+                                    for key in (
+                                        "output",
+                                        "diagnostics",
+                                        "diagnosticsTruncated",
+                                        "geometryMetadata",
+                                        "previewLayout",
+                                        "visualVerification",
+                                    )
+                                    if key in render_payload
+                                },
+                                "previewInternal": True,
+                                "note": "Preview files are internal and were not saved. Use the SCAD source and verification diagnostics.",
+                            },
+                            ensure_ascii=False,
+                        )
                     if (
                         any(attachment.kind == "image" for attachment in tool_attachments)
                         and not model.supports_image_input
@@ -3591,6 +3620,8 @@ class AgentRuntime:
                     provider_data=(
                         {
                             "_matoloop": {
+                                "runId": str(run.id),
+                                "fileOutputsPending": True,
                                 "fileActions": [
                                         {
                                             "operation": action.operation,
@@ -3616,22 +3647,17 @@ class AgentRuntime:
                                     ]
                             }
                         }
-                        if tool_file_actions
-                        else {}
                     ),
                 )
                 db.add(tool_message)
-                created_attachments = []
                 attachments_committed = False
-                attachment_commit_started = False
                 try:
                     await db.flush()
-                    attachment_service = AttachmentService(settings=instance_limits)
+                    attachment_service = AttachmentService(settings=instance_limits, run_id=run.id)
                     for position, attachment in enumerate(tool_attachments):
                         if (
                             attachment.file_root_id is not None
                             and attachment.file_id is not None
-                            and attachment.file_revision is not None
                             and attachment.file_path is not None
                         ):
                             await attachment_service.create_reference(
@@ -3647,11 +3673,10 @@ class AgentRuntime:
                                 metadata=attachment.metadata,
                             )
                         else:
-                            created_attachments.append(
-                                await attachment_service.create_attachment(
-                                    db,
-                                    tool_message,
-                                    attachment.data,
+                            await attachment_service.create_attachment(
+                                db,
+                                tool_message,
+                                attachment.data,
                                 attachment.mime_type,
                                 kind=attachment.kind,
                                 filename=attachment.filename,
@@ -3659,11 +3684,9 @@ class AgentRuntime:
                                 metadata=attachment.metadata,
                                 category=attachment.category,
                                 purpose="artifact",
-                                    source_file_root_id=attachment.file_root_id,
-                                    file_id=attachment.file_id,
-                                )
+                                source_file_root_id=attachment.file_root_id,
+                                file_id=attachment.file_id,
                             )
-                    attachment_commit_started = True
                     commit_task = asyncio.create_task(db.commit())
                     try:
                         await asyncio.shield(commit_task)
@@ -3679,9 +3702,6 @@ class AgentRuntime:
                     attachments_committed = True
                 except AttachmentError as exc:
                     await db.rollback()
-                    attachment_service = AttachmentService()
-                    for attachment in created_attachments:
-                        await attachment_service.discard(attachment, chat_session.id)
                     tool_result_content = json.dumps(
                         error_payload(exc.code, fallback_code="tool.executionFailed"),
                         ensure_ascii=False,
@@ -3693,18 +3713,13 @@ class AgentRuntime:
                         content=tool_result_content,
                         tool_call_id=call.id,
                         trust_level=tool_trust_level.value,
+                        provider_data={"_matoloop": {"runId": str(run.id), "fileOutputsPending": True}},
                     )
                     db.add(tool_message)
                     await db.commit()
                 except BaseException:
                     if not attachments_committed:
                         await db.rollback()
-                        if not attachment_commit_started:
-                            attachment_service = AttachmentService()
-                            for attachment in created_attachments:
-                                await attachment_service.discard(
-                                    attachment, chat_session.id
-                                )
                     raise
                 error_code = metadata.get("errorCode")
                 if not isinstance(error_code, str):
@@ -3744,14 +3759,6 @@ class AgentRuntime:
                             openscad_render_pending = False
                         if not openscad_render_pending:
                             openscad_render_retries = 0
-                            openscad_preview_image_id = next(
-                                (
-                                    str(attachment.id)
-                                    for attachment in created_attachments
-                                    if attachment.kind == "image"
-                                ),
-                                None,
-                            )
                             if (
                                 was_pending
                                 and isinstance(rendered_root, str)
@@ -3773,7 +3780,6 @@ class AgentRuntime:
                         if isinstance(root, str) and isinstance(path, str):
                             openscad_pending_paths.add((root, path))
                         openscad_source_review_pending = None
-                        openscad_preview_image_id = None
                     elif call.name == "read" and (
                         openscad_source_review_pending
                         == (
@@ -4166,7 +4172,7 @@ class AgentRuntime:
 
     @staticmethod
     async def _terminalize_incomplete_tool_calls(
-        db: AsyncSession, session_id: UUID
+        db: AsyncSession, session_id: UUID, *, run_id: UUID
     ) -> None:
         assistant = await db.scalar(
             select(Message)
@@ -4209,6 +4215,7 @@ class AgentRuntime:
                     content=content,
                     tool_call_id=tool_call_id,
                     trust_level=assistant.trust_level,
+                    provider_data={"_matoloop": {"runId": str(run_id), "fileOutputsPending": True}},
                 )
                 for tool_call_id in missing
             ]
@@ -4277,29 +4284,49 @@ class AgentRuntime:
         }
 
     @classmethod
+    async def _finalize_run_files(
+        cls, db: AsyncSession, run: AgentRun, *, tolerate_conflict: bool = False
+    ) -> None:
+        session = await db.get(ChatSession, run.session_id)
+        if session is None:
+            return
+        try:
+            limits = await SettingsStore.load(db, InstanceLimits)
+            await AttachmentService(settings=limits).finalize_run(db, session, run.id)
+        except (AttachmentError, RootFileError, SessionStorageError, OSError):
+            if not tolerate_conflict:
+                raise
+            logger.exception(
+                "Run %s file finalization failed; attachment publication remains pending", run.id
+            )
+
+    @classmethod
     async def recover(cls, db: AsyncSession) -> int:
         runs = list(
             (
                 await db.scalars(
                     select(AgentRun)
-                    .where(AgentRun.status.in_(["queued", "running", "waiting_approval", "waiting_input"]))
+                    .where(
+                        AgentRun.status.in_(
+                            ["queued", "running", "waiting_approval", "waiting_input"]
+                        )
+                    )
                     .with_for_update()
                 )
             ).all()
         )
         error = describe_error("agent.backendRestarted")
         for run in runs:
+            await cls._finalize_run_files(db, run, tolerate_conflict=True)
             duration_complete = run.status != "running"
             if run.parent_run_id is not None:
                 run.active_started_at = None
                 transition_run_status(run, "failed")
                 run.error = error.code
-                run.internal_result = json.dumps(
-                    {"error": error.payload()}, ensure_ascii=False
-                )
+                run.internal_result = json.dumps({"error": error.payload()}, ensure_ascii=False)
                 run.completed_at = datetime.now(UTC)
                 continue
-            await cls._terminalize_incomplete_tool_calls(db, run.session_id)
+            await cls._terminalize_incomplete_tool_calls(db, run.session_id, run_id=run.id)
             run.active_started_at = None
             transition_run_status(run, "failed")
             run.error = error.code
@@ -4307,6 +4334,36 @@ class AgentRuntime:
             await cls._persist_error_message(db, run, error)
             if duration_complete:
                 await cls._persist_run_duration(db, run)
+        sessions = (await db.scalars(select(ChatSession))).all()
+        recovered = {run.id for run in runs}
+        for session in sessions:
+            files = RootFileService(session.id, project_id=session.project_id)
+            try:
+                pending_ids = set(await asyncio.to_thread(files.pending_run_ids))
+            except SessionStorageError as exc:
+                if exc.code != "sessionStorage.sessionNotFound":
+                    logger.warning(
+                        "Cannot discover pending run files for session %s (%s)", session.id, exc.code
+                    )
+                pending_ids = set()
+            pending_messages = (
+                await db.scalars(
+                    select(Message).where(
+                        Message.session_id == session.id,
+                        Message.provider_data["_matoloop"]["fileOutputsPending"].astext == "true",
+                    )
+                )
+            ).all()
+            for message in pending_messages:
+                state = (message.provider_data or {}).get("_matoloop", {})
+                if state.get("pendingAttachments") or state.get("fileActions"):
+                    pending_ids.add(UUID(state["runId"]))
+            for run_id in pending_ids:
+                if run_id in recovered:
+                    continue
+                run = await db.get(AgentRun, run_id)
+                if run is not None and run.session_id == session.id:
+                    await cls._finalize_run_files(db, run, tolerate_conflict=True)
         await db.flush()
         return len(runs)
 
@@ -4561,7 +4618,7 @@ class AgentRuntime:
                             continue
                         try:
                             image = await attachment_service.read_image(
-                                attachment, session_id
+                                attachment, session_id, current_only=True
                             )
                         except AttachmentError:
                             continue

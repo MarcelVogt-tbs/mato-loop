@@ -159,9 +159,16 @@ async def test_plan_directory_accepts_first_canonical_write(tmp_path) -> None:
 
     await runtime_module._ensure_plan_directory(root_files, session_id)
     await runtime_module._ensure_plan_directory(root_files, session_id)
+    assert root_files.run_id is None
+    assert root_files.path_kind("session", f"plans/{session_id}") == "directory"
 
     path = f"plans/{session_id}/plan.md"
-    assert root_files.write_file("session", path, "# Plan") == path
+    run_id = uuid4()
+    working = RootFileService(session_id, session_storage=storage, run_id=run_id)
+    assert working.write_file("session", path, "# Plan") == path
+    assert root_files.list_revisions(path) == ()
+    working.finalize_run(run_id)
+    assert root_files.read_bytes("session", path, limit=100) == b"# Plan"
 
 
 async def test_explore_child_persists_isolated_read_only_transcript(monkeypatch) -> None:
@@ -614,6 +621,7 @@ def test_unknown_runtime_exception_has_safe_descriptor() -> None:
 
 
 async def test_run_failure_persists_structured_message_before_terminal_event(monkeypatch) -> None:
+    monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     run = AgentRun(
         id=uuid4(),
         session_id=uuid4(),
@@ -708,6 +716,7 @@ async def test_automation_run_does_not_emit_a_second_session_push(monkeypatch) -
 
 
 async def test_user_cancel_persists_visible_response_before_terminal_event(monkeypatch) -> None:
+    monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     run = AgentRun(
         id=uuid4(),
         session_id=uuid4(),
@@ -762,6 +771,7 @@ async def test_user_cancel_persists_visible_response_before_terminal_event(monke
 
 
 async def test_immediate_user_cancel_persists_empty_interruption_marker(monkeypatch) -> None:
+    monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     run = AgentRun(id=uuid4(), session_id=uuid4(), status="queued")
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = run
@@ -833,6 +843,7 @@ async def test_shutdown_cancel_is_persisted_as_backend_restart(monkeypatch) -> N
 
 
 async def test_cancel_after_completed_response_does_not_add_interruption(monkeypatch) -> None:
+    monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     run = AgentRun(id=uuid4(), session_id=uuid4(), status="running")
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = run

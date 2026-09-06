@@ -4,18 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import re
 import unicodedata
 import warnings
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Literal
 from uuid import UUID, uuid4
 
 from PIL import Image
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased, joinedload, selectinload
 
 from mato_loop_backend.attachment_processing import (
     AttachmentProcessingError,
@@ -37,9 +40,16 @@ from mato_loop_backend.video_processing import (
     probe_media,
     video_container_candidate,
 )
-from mato_loop_backend.workspace import FileRevision, FileRoot, RootFileError, RootFileService
+from mato_loop_backend.workspace import (
+    FileRevision,
+    FileRoot,
+    RootFileError,
+    RootFileService,
+    WorkingFileRevision,
+)
 
 MAX_FILE_ATTACHMENT_BYTES = 64 * 1024 * 1024
+logger = logging.getLogger(__name__)
 ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES = 256 * 1024 * 1024
 MAX_IMAGE_ATTACHMENT_BYTES = MAX_FILE_ATTACHMENT_BYTES
 MAX_AUDIO_ATTACHMENT_BYTES = MAX_FILE_ATTACHMENT_BYTES
@@ -363,9 +373,85 @@ def classify_attachment(
 
 @dataclass(frozen=True)
 class _ManagedWrite:
-    source: FileRevision
-    companion: FileRevision | None
+    source: FileRevision | WorkingFileRevision
+    companion: FileRevision | WorkingFileRevision | None
     created_directories: tuple[str, ...]
+    source_created: bool
+
+
+def pending_attachments(message: Message) -> list[SimpleNamespace]:
+    if message.role != "tool":
+        return []
+    state = (message.provider_data or {}).get("_matoloop", {})
+    if state.get("fileOutputsPending") is not True or state.get("fileOutputsHidden"):
+        return []
+    result = []
+    for item in state.get("pendingAttachments", []):
+        if (
+            item.get("run_id") != state.get("runId")
+            or item.get("session_id") != str(message.session_id)
+            or item.get("message_id") != str(message.id)
+        ):
+            continue
+        values = dict(item)
+        for key in ("id", "message_id", "session_id", "file_root_id", "file_id", "run_id"):
+            values[key] = UUID(values[key])
+        result.append(SimpleNamespace(**values, message=message))
+    return result
+
+
+def model_attachments(message: Message, *, include_pending: bool = True) -> list:
+    if message.role == "tool" and (message.provider_data or {}).get("_matoloop", {}).get("fileOutputsHidden"):
+        return []
+    return [*message.attachments, *(pending_attachments(message) if include_pending else [])]
+
+
+def latest_image_references(messages: list[dict], *, run_id: UUID | None = None) -> list[dict]:
+    """Exclude superseded identities before budgeting; loading still verifies current hashes."""
+    latest = {}
+    superseded = set()
+    for message_index, message in enumerate(messages):
+        for attachment_index, item in enumerate(message.get("attachments") or []):
+            if not isinstance(item, dict) or item.get("kind") != "image":
+                continue
+            if (
+                run_id is not None
+                and item.get("file_revision") is None
+                and item.get("run_id") not in {None, str(run_id)}
+            ):
+                superseded.add((message_index, attachment_index))
+                continue
+            identity = tuple(item.get(key) for key in ("session_id", "file_root_id", "file_id"))
+            if not all(isinstance(value, str) and value for value in identity):
+                continue
+            source_order = item.get("source_order")
+            rank = (
+                source_order if type(source_order) is int else message_index,
+                message_index,
+                attachment_index,
+            )
+            previous = latest.get(identity)
+            if previous is None or rank > previous:
+                if previous is not None:
+                    superseded.add(previous[1:])
+                latest[identity] = rank
+            else:
+                superseded.add(rank[1:])
+    if not superseded:
+        return messages
+    return [
+        {
+            **message,
+            "attachments": [
+                item
+                for attachment_index, item in enumerate(message.get("attachments") or [])
+                if (message_index, attachment_index) not in superseded
+            ],
+        }
+        if "attachments" in message
+        else message
+        for message_index, message in enumerate(messages)
+    ]
 
 
 class AttachmentService:
@@ -374,6 +460,7 @@ class AttachmentService:
         session_storage: SessionStorage | Path | None = None,
         *,
         settings: InstanceLimits | None = None,
+        run_id: UUID | None = None,
     ) -> None:
         self.sessions = (
             SessionStorage(session_storage)
@@ -381,8 +468,9 @@ class AttachmentService:
             else session_storage or SessionStorage()
         )
         self.settings = settings
+        self.run_id = run_id
 
-    def _root_files(self, session_id: UUID, file_root_id: UUID) -> RootFileService:
+    def _root_files(self, session_id: UUID, file_root_id: UUID, *, run_id: UUID | None = None) -> RootFileService:
         project_id = None if file_root_id == session_id else file_root_id
         try:
             self.sessions.session_path(
@@ -392,6 +480,7 @@ class AttachmentService:
                 session_id,
                 project_id=project_id,
                 session_storage=self.sessions,
+                run_id=run_id,
                 session_quota_bytes=(
                     self.settings.session_quota_bytes if self.settings else None
                 ),
@@ -405,7 +494,7 @@ class AttachmentService:
     @staticmethod
     def _create_file(
         root_files: RootFileService, path: str, data: bytes
-    ) -> tuple[FileRevision, list[str]]:
+    ) -> tuple[FileRevision | WorkingFileRevision, list[str]]:
         parts = PurePosixPath(path).parts
         created_directories: list[str] = []
         for index in range(1, len(parts)):
@@ -435,17 +524,24 @@ class AttachmentService:
                 except RootFileError:
                     pass
             raise
-        return root_files.list_revisions(path)[0], created_directories
+        return root_files.working_revision(path), created_directories
 
     @staticmethod
     def _discard_write(root_files: RootFileService, written: _ManagedWrite) -> None:
-        revisions = [written.companion, written.source]
-        seen: set[tuple[UUID, int]] = set()
-        for revision in revisions:
-            if revision is None or (revision.file_id, revision.revision) in seen:
-                continue
-            seen.add((revision.file_id, revision.revision))
-            root_files.discard_output_revision(revision.file_id, revision.revision)
+        if root_files.run_id is not None:
+            # Remove new allocations, but retain existing run edits without deleting old history.
+            if written.companion is not None and written.companion.file_id != written.source.file_id:
+                root_files.delete_path(FileRoot.SESSION, written.companion.path, recursive=False)
+            if written.source_created:
+                root_files.delete_path(FileRoot.SESSION, written.source.path, recursive=False)
+        else:
+            revisions = [written.companion, written.source]
+            seen: set[tuple[UUID, int]] = set()
+            for revision in revisions:
+                if revision is None or (revision.file_id, revision.revision) in seen:
+                    continue
+                seen.add((revision.file_id, revision.revision))
+                root_files.discard_output_revision(revision.file_id, revision.revision)
         for directory in reversed(written.created_directories):
             try:
                 root_files.delete_path(FileRoot.SESSION, directory, recursive=False)
@@ -453,7 +549,7 @@ class AttachmentService:
                 pass
 
     @staticmethod
-    def _companion_metadata(root_id: UUID, revision: FileRevision) -> dict:
+    def _companion_metadata(root_id: UUID, revision: FileRevision | WorkingFileRevision) -> dict:
         return {
             "companionFileRootId": str(root_id),
             "companionFileId": str(revision.file_id),
@@ -463,10 +559,10 @@ class AttachmentService:
             "companionSha256": revision.sha256,
         }
 
-    async def create_image(self, db: AsyncSession, message: Message, data: bytes, mime_type: str, **kwargs) -> MessageAttachment:
+    async def create_image(self, db: AsyncSession, message: Message, data: bytes, mime_type: str, **kwargs) -> MessageAttachment | SimpleNamespace:
         return await self.create_attachment(db, message, data, mime_type, kind="image", **kwargs)
 
-    async def create_audio(self, db: AsyncSession, message: Message, data: bytes, mime_type: str, **kwargs) -> MessageAttachment:
+    async def create_audio(self, db: AsyncSession, message: Message, data: bytes, mime_type: str, **kwargs) -> MessageAttachment | SimpleNamespace:
         return await self.create_attachment(db, message, data, mime_type, kind="audio", **kwargs)
 
     async def create_reference(
@@ -476,13 +572,15 @@ class AttachmentService:
         *,
         file_root_id: UUID,
         file_id: UUID,
-        file_revision: int,
+        file_revision: int | None,
         file_path: str,
         filename: str,
         position: int,
         category: str,
         metadata: dict | None = None,
-    ) -> MessageAttachment:
+    ) -> MessageAttachment | SimpleNamespace:
+        if file_revision is None and self.run_id is None:
+            raise AttachmentError("attachment.notFound")
         locked_session = await db.scalar(
             select(ChatSession)
             .join(Message, Message.session_id == ChatSession.id)
@@ -495,18 +593,23 @@ class AttachmentService:
             message.session_id,
             project_id=locked_session.project_id,
             session_storage=self.sessions,
+            run_id=self.run_id,
         )
         if UUID(root_files.root_identity(FileRoot.SESSION)) != file_root_id:
             raise AttachmentError("attachment.notFound")
         try:
-            revision = await asyncio.to_thread(
+            revision = await asyncio.to_thread(root_files.working_revision, file_path) if file_revision is None else await asyncio.to_thread(
                 root_files.file_revision, file_id, file_revision
             )
+            if file_revision is None:
+                with root_files.open_working_file(file_id, expected_sha256=revision.sha256):
+                    pass
         except RootFileError as exc:
             raise AttachmentError("attachment.notFound") from exc
-        if revision.path != file_path:
+        if revision.path != file_path or revision.file_id != file_id:
             raise AttachmentError("attachment.notFound")
-        attachment = MessageAttachment(
+        values = dict(
+            id=uuid4(),
             message_id=message.id,
             position=position,
             kind="file",
@@ -522,7 +625,11 @@ class AttachmentService:
             file_path=file_path,
             filename=filename,
             metadata_json=_safe_metadata(metadata),
+            width=None, height=None, duration_ms=None,
         )
+        if self.run_id is not None:
+            return self._persist_pending(message, values)
+        attachment = MessageAttachment(**values)
         db.add(attachment)
         await db.flush()
         return attachment
@@ -543,7 +650,7 @@ class AttachmentService:
         processing_status: str | None = "ready",
         source_file_root_id: UUID | None = None,
         file_id: UUID | None = None,
-    ) -> MessageAttachment:
+    ) -> MessageAttachment | SimpleNamespace:
         if not data:
             raise AttachmentError("attachment.empty")
         max_bytes = (
@@ -641,6 +748,7 @@ class AttachmentService:
             project_id=locked_session.project_id,
             session_storage=self.sessions,
             session_quota_bytes=session_quota_bytes,
+            run_id=self.run_id,
         )
         try:
             used_bytes = await asyncio.to_thread(root_files.session_usage)
@@ -656,16 +764,19 @@ class AttachmentService:
                 )
             )
             position = int(maximum_position) + 1 if maximum_position is not None else 0
+            if self.run_id is not None:
+                position = max(position, max((item.position + 1 for item in pending_attachments(message)), default=0))
         if isinstance(position, bool) or position < 0:
             raise AttachmentError("attachment.invalidPosition")
 
         def write_managed() -> _ManagedWrite:
             root_id = UUID(root_files.root_identity(FileRoot.SESSION))
+            source_created = file_id is None or source_file_root_id != root_id
             created_directories: list[str] = []
-            source: FileRevision | None = None
-            companion: FileRevision | None = None
+            source: FileRevision | WorkingFileRevision | None = None
+            companion: FileRevision | WorkingFileRevision | None = None
             try:
-                if file_id is not None and source_file_root_id == root_id:
+                if not source_created:
                     source = root_files.append_output_revision(file_id, data)
                 else:
                     directory = _CATEGORY_DIRECTORIES[category]
@@ -705,12 +816,14 @@ class AttachmentService:
                             root_files, candidate, companion_data
                         )
                     created_directories.extend(directories)
-                return _ManagedWrite(source, companion, tuple(created_directories))
+                    if source.file_id != companion.file_id:
+                        root_files.register_derived_file(source.file_id, companion.file_id)
+                return _ManagedWrite(source, companion, tuple(created_directories), source_created)
             except BaseException:
                 if source is not None:
                     self._discard_write(
                         root_files,
-                        _ManagedWrite(source, companion, tuple(created_directories)),
+                        _ManagedWrite(source, companion, tuple(created_directories), source_created),
                     )
                 raise
 
@@ -719,7 +832,8 @@ class AttachmentService:
             written = await asyncio.shield(write_task)
         except asyncio.CancelledError:
             written = await write_task
-            await asyncio.to_thread(self._discard_write, root_files, written)
+            if root_files.run_id is None:
+                await asyncio.to_thread(self._discard_write, root_files, written)
             raise
         except RootFileError as exc:
             if exc.code == "file.sessionQuotaExceeded":
@@ -731,7 +845,7 @@ class AttachmentService:
             safe_metadata.update(
                 self._companion_metadata(root_id, written.companion)
             )
-        attachment = MessageAttachment(
+        values = dict(
             id=attachment_id,
             message_id=message.id,
             position=position,
@@ -752,6 +866,9 @@ class AttachmentService:
             duration_ms=duration_ms,
             metadata_json=safe_metadata,
         )
+        if self.run_id is not None:
+            return self._persist_pending(message, values)
+        attachment = MessageAttachment(**values)
         db.add(attachment)
         try:
             await db.flush()
@@ -760,7 +877,291 @@ class AttachmentService:
             raise
         return attachment
 
-    async def verified_path(self, attachment: MessageAttachment, session_id: UUID) -> Path:
+    def _persist_pending(self, message: Message, values: dict) -> SimpleNamespace:
+        values = {**values, "session_id": message.session_id, "run_id": self.run_id}
+        item = {
+            key: str(value) if isinstance(value, UUID) else value for key, value in values.items()
+        }
+        data = dict(message.provider_data or {})
+        state = dict(data.get("_matoloop", {}))
+        state.update(
+            runId=str(self.run_id),
+            fileOutputsPending=True,
+            pendingAttachments=[*state.get("pendingAttachments", []), item],
+        )
+        message.provider_data = {**data, "_matoloop": state}
+        return SimpleNamespace(**values, message=message)
+
+    async def resolve(
+        self, db: AsyncSession, session_id: UUID, attachment_id: UUID, *, kind: str
+    ) -> MessageAttachment | SimpleNamespace | None:
+        attachment = await db.scalar(
+            select(MessageAttachment)
+            .join(Message)
+            .options(joinedload(MessageAttachment.message))
+            .where(
+                Message.session_id == session_id,
+                MessageAttachment.id == attachment_id,
+                MessageAttachment.kind == kind,
+            )
+        )
+        if attachment is not None:
+            return attachment
+        return next(
+            (
+                item
+                for item in await self.pending_for_run(db, session_id)
+                if item.id == attachment_id and item.kind == kind
+            ),
+            None,
+        )
+
+    async def pending_for_run(self, db: AsyncSession, session_id: UUID) -> list[SimpleNamespace]:
+        if self.run_id is None:
+            return []
+        messages = (
+            await db.scalars(
+                select(Message).where(
+                    Message.session_id == session_id,
+                    Message.role == "tool",
+                    Message.provider_data["_matoloop"]["runId"].astext == str(self.run_id),
+                )
+            )
+        ).all()
+        return [
+            item
+            for message in messages
+            for item in pending_attachments(message)
+            if item.run_id == self.run_id and item.session_id == session_id
+        ]
+
+    def read_source(self, attachment, session_id: UUID, *, current_only: bool = False) -> bytes:
+        if not 0 <= attachment.size_bytes <= ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES:
+            raise AttachmentError("attachment.notFound")
+        run_id = getattr(attachment, "run_id", None)
+        if self.run_id is not None and run_id is not None and run_id != self.run_id:
+            raise AttachmentError("attachment.notFound")
+        try:
+            if run_id is not None and attachment.file_revision is None:
+                if attachment.session_id != session_id:
+                    raise AttachmentError("attachment.notFound")
+                root_files = self._root_files(session_id, attachment.file_root_id, run_id=run_id)
+                with root_files.open_working_file(
+                    attachment.file_id, expected_sha256=attachment.sha256
+                ) as source:
+                    data = source.read(ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES + 1)
+            else:
+                path = self.revision_path(
+                    session_id,
+                    attachment.file_root_id,
+                    attachment.file_id,
+                    attachment.file_revision,
+                    expected_size=attachment.size_bytes,
+                    expected_sha256=attachment.sha256,
+                    current_only=current_only,
+                )
+                with path.open("rb") as source:
+                    data = source.read(ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES + 1)
+            if (
+                len(data) != attachment.size_bytes
+                or hashlib.sha256(data).hexdigest() != attachment.sha256
+            ):
+                raise AttachmentError("attachment.notFound")
+            return data
+        except (RootFileError, OSError, ValueError, TypeError) as exc:
+            raise AttachmentError("attachment.notFound") from exc
+
+    async def backfill_derived_files(self, db: AsyncSession) -> int:
+        """Register verified legacy provenance without changing attachment rows or file contents."""
+        # Shared legacy companions must not be assigned to whichever owner is scanned first.
+        other = aliased(MessageAttachment)
+        shared = (
+            select(other.id)
+            .where(
+                other.file_root_id == MessageAttachment.file_root_id,
+                other.file_id != MessageAttachment.file_id,
+                func.lower(other.metadata_json["companionFileRootId"].astext)
+                == cast(MessageAttachment.file_root_id, String),
+                func.lower(other.metadata_json["companionFileId"].astext)
+                == func.lower(MessageAttachment.metadata_json["companionFileId"].astext),
+            )
+            .exists()
+        )
+        rows = await db.stream(
+            select(MessageAttachment, Message.session_id, shared)
+            .join(Message, Message.id == MessageAttachment.message_id)
+            .where(MessageAttachment.metadata_json["companionFileId"].astext.is_not(None))
+            .execution_options(yield_per=100)
+        )
+
+        def register(attachment: MessageAttachment, session_id: UUID) -> bool:
+            metadata = attachment.metadata_json or {}
+            companion_id = UUID(metadata["companionFileId"])
+            if companion_id == attachment.file_id:
+                return False
+            self.read_source(attachment, session_id)
+            if self._verified_companion_bytes(attachment, session_id) is None:
+                return False
+            files = self._root_files(session_id, attachment.file_root_id)
+            files.register_derived_file(
+                attachment.file_id,
+                companion_id,
+                source_revision=attachment.file_revision,
+                derived_revision=metadata["companionFileRevision"],
+            )
+            return True
+
+        verified = 0
+        try:
+            async for attachment, session_id, is_shared in rows:
+                try:
+                    if is_shared:
+                        raise AttachmentError("file.changed")
+                    verified += await asyncio.to_thread(register, attachment, session_id)
+                except (AttachmentError, RootFileError, SessionStorageError) as exc:
+                    logger.warning("Attachment provenance backfill skipped (%s)", exc.code)
+                except (KeyError, TypeError, ValueError, AttributeError):
+                    logger.warning("Attachment provenance backfill skipped (attachment.notFound)")
+                except OSError:
+                    logger.warning(
+                        "Attachment provenance backfill skipped (attachment.storageInvalid)"
+                    )
+        finally:
+            await rows.close()
+        return verified
+
+    async def finalize_run(self, db: AsyncSession, session: ChatSession, run_id: UUID) -> None:
+        root_files = RootFileService(
+            session.id, project_id=session.project_id, session_storage=self.sessions,
+            session_quota_bytes=self.settings.session_quota_bytes if self.settings else None,
+        )
+        revisions = {
+            item.file_id: item for item in await asyncio.to_thread(root_files.finalize_run, run_id)
+        }
+        messages = list(
+            (
+                await db.scalars(
+                    select(Message)
+                    .options(selectinload(Message.attachments))
+                    .where(
+                        Message.session_id == session.id,
+                        Message.role == "tool",
+                        Message.provider_data["_matoloop"]["runId"].astext == str(run_id),
+                    )
+                    .order_by(Message.created_at, Message.id)
+                )
+            ).all()
+        )
+        seen_files, seen_actions = set(), set()
+        for message in reversed(messages):
+            data = dict(message.provider_data or {})
+            state = dict(data.get("_matoloop", {}))
+            if state.get("fileOutputsPending") is not True:
+                seen_files.update(item.file_id for item in message.attachments)
+                seen_actions.update(
+                    (
+                        action.get("root"),
+                        action.get("rootIdentity"),
+                        action.get("executionAgentId"),
+                        action.get("currentDirectory"),
+                        action.get("path"),
+                    )
+                    for action in state.get("fileActions", [])
+                )
+                continue
+            outputs = []
+            for item in reversed(state.get("pendingAttachments", [])):
+                if (
+                    item.get("run_id") != str(run_id)
+                    or item.get("session_id") != str(session.id)
+                    or item.get("message_id") != str(message.id)
+                    or item.get("file_root_id") != root_files.root_identity(FileRoot.SESSION)
+                ):
+                    continue
+                file_id = UUID(item["file_id"])
+                if file_id in seen_files:
+                    continue
+                revision = revisions.get(file_id)
+                if revision is None:
+                    if item["file_revision"] is None:
+                        continue
+                    try:
+                        revision = root_files.file_revision(file_id, item["file_revision"])
+                    except RootFileError:
+                        continue
+                if revision.revision is None or revision.file_id != file_id or revision.size_bytes <= 0:
+                    continue
+                values = {
+                    key: value for key, value in item.items() if key not in {"session_id", "run_id"}
+                }
+                for key in ("id", "message_id", "file_root_id", "file_id"):
+                    values[key] = UUID(values[key])
+                values.update(
+                    file_revision=revision.revision,
+                    file_path=revision.path,
+                    size_bytes=revision.size_bytes,
+                    sha256=revision.sha256,
+                )
+                metadata = dict(values.get("metadata_json") or {})
+                if revision.sha256 != item["sha256"]:
+                    # Bytes changed after the attachment was described; do not publish stale media metadata.
+                    values.update(
+                        kind="file",
+                        mime_type="application/octet-stream",
+                        width=None,
+                        height=None,
+                        duration_ms=None,
+                    )
+                    metadata = {}
+                if metadata.get("companionFileRevision") is None and metadata.get(
+                    "companionFileId"
+                ):
+                    companion = revisions.get(UUID(metadata["companionFileId"]))
+                    if companion is not None:
+                        metadata.update(
+                            self._companion_metadata(UUID(item["file_root_id"]), companion)
+                        )
+                values["metadata_json"] = metadata
+                db.add(MessageAttachment(**values))
+                outputs.append(item)
+                seen_files.add(file_id)
+            actions = []
+            for action in reversed(state.get("fileActions", [])):
+                key = (
+                    action.get("root"),
+                    action.get("rootIdentity"),
+                    action.get("executionAgentId"),
+                    action.get("currentDirectory"),
+                    action.get("path"),
+                )
+                if key not in seen_actions:
+                    if action.get("root") == "session":
+                        if action.get("rootIdentity") != root_files.root_identity(FileRoot.SESSION):
+                            continue
+                        try:
+                            current = next(
+                                (item for item in revisions.values() if item.path == action["path"]),
+                                None,
+                            ) or root_files.working_revision(action["path"])
+                        except RootFileError:
+                            continue
+                        if current.revision is None or current.file_id in seen_files:
+                            continue
+                        seen_files.add(current.file_id)
+                        action = {**action, "sizeBytes": current.size_bytes}
+                    actions.append(action)
+                    seen_actions.add(key)
+            state["fileActions"] = list(reversed(actions))
+            state.pop("pendingAttachments", None)
+            state["fileOutputsPending"] = False
+            if not outputs and not actions:
+                state["fileOutputsHidden"] = True
+            message.provider_data = {**data, "_matoloop": state}
+        await db.flush()
+
+    async def verified_path(
+        self, attachment: MessageAttachment, session_id: UUID, *, current_only: bool = False
+    ) -> Path:
         path = self.revision_path(
             session_id,
             attachment.file_root_id,
@@ -768,6 +1169,7 @@ class AttachmentService:
             attachment.file_revision,
             expected_size=attachment.size_bytes,
             expected_sha256=attachment.sha256,
+            current_only=current_only,
         )
 
         def verify() -> bool:
@@ -799,10 +1201,15 @@ class AttachmentService:
         expected_path: str | None = None,
         expected_size: int | None = None,
         expected_sha256: str | None = None,
+        current_only: bool = False,
     ) -> Path:
         try:
             root_files = self._root_files(session_id, file_root_id)
             revision = root_files.file_revision(file_id, file_revision)
+            if current_only:
+                current = root_files.working_revision(revision.path)
+                if current.file_id != file_id or current.sha256 != revision.sha256:
+                    raise AttachmentError("attachment.notFound")
             if (
                 expected_path is not None
                 and revision.path != expected_path
@@ -816,18 +1223,16 @@ class AttachmentService:
         except (RootFileError, TypeError, ValueError) as exc:
             raise AttachmentError("attachment.notFound") from exc
 
-    async def read_audio(self, attachment: MessageAttachment, session_id: UUID) -> bytes:
+    async def read_audio(
+        self, attachment: MessageAttachment, session_id: UUID, *, current_only: bool = False
+    ) -> bytes:
         if (
             attachment.kind != "audio"
             or attachment.processing_status != "ready"
             or attachment.size_bytes > ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES
         ):
             raise AttachmentError("attachment.notFound")
-        path = await self.verified_path(attachment, session_id)
-        try:
-            data = await asyncio.to_thread(path.read_bytes)
-        except OSError as exc:
-            raise AttachmentError("attachment.notFound") from exc
+        data = await asyncio.to_thread(self.read_source, attachment, session_id, current_only=current_only)
         try:
             processed = await asyncio.to_thread(
                 process_attachment,
@@ -849,16 +1254,17 @@ class AttachmentService:
             raise AttachmentError("attachment.notFound")
         return processed.derived_files.get("audio.wav", data)
 
-    async def read_image(self, attachment: MessageAttachment, session_id: UUID) -> bytes:
+    async def read_image(
+        self, attachment: MessageAttachment, session_id: UUID, *, current_only: bool = False
+    ) -> bytes:
         if (
             attachment.kind != "image"
             or attachment.processing_status != "ready"
             or attachment.size_bytes > ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES
         ):
             raise AttachmentError("attachment.notFound")
-        path = await self.verified_path(attachment, session_id)
         try:
-            data = await asyncio.to_thread(path.read_bytes)
+            data = await asyncio.to_thread(self.read_source, attachment, session_id, current_only=current_only)
             validated = validate_image(
                 data,
                 attachment.mime_type,
@@ -877,6 +1283,8 @@ class AttachmentService:
         self,
         attachment: MessageAttachment,
         session_id: UUID,
+        *,
+        current_only: bool = False,
     ) -> bytes | None:
         metadata = attachment.metadata_json or {}
         values = {
@@ -892,9 +1300,10 @@ class AttachmentService:
         if (
             not isinstance(values["root"], str)
             or not isinstance(values["file"], str)
-            or not isinstance(values["revision"], int)
-            or isinstance(values["revision"], bool)
-            or values["revision"] < 1
+            or not (
+                values["revision"] is None and getattr(attachment, "run_id", None) is not None
+                or type(values["revision"]) is int and values["revision"] >= 1
+            )
             or not isinstance(values["path"], str)
             or not isinstance(values["size"], int)
             or isinstance(values["size"], bool)
@@ -907,48 +1316,31 @@ class AttachmentService:
             file_id = UUID(values["file"])
             if root_id != attachment.file_root_id:
                 raise AttachmentError("attachment.notFound")
-            path = self.revision_path(
+            return self.read_source(
+                SimpleNamespace(
+                    session_id=session_id,
+                    run_id=getattr(attachment, "run_id", None),
+                    file_root_id=root_id,
+                    file_id=file_id,
+                    file_revision=values["revision"],
+                    size_bytes=values["size"],
+                    sha256=values["sha256"],
+                ),
                 session_id,
-                root_id,
-                file_id,
-                values["revision"],
-                expected_size=values["size"],
-                expected_sha256=values["sha256"],
+                current_only=current_only,
             )
-            data = path.read_bytes()
         except (OSError, TypeError, ValueError) as exc:
             raise AttachmentError("attachment.notFound") from exc
-        if len(data) != values["size"] or hashlib.sha256(data).hexdigest() != values["sha256"]:
-            raise AttachmentError("attachment.notFound")
-        return data
 
     def read_derived_text(
-        self, attachment: MessageAttachment, session_id: UUID
+        self, attachment: MessageAttachment, session_id: UUID, *, current_only: bool = False
     ) -> str:
         if attachment.kind not in {"text", "document"} or attachment.processing_status != "ready":
             raise AttachmentError("attachment.notFound")
-        try:
-            source_path = self.revision_path(
-                session_id,
-                attachment.file_root_id,
-                attachment.file_id,
-                attachment.file_revision,
-                expected_size=attachment.size_bytes,
-                expected_sha256=attachment.sha256,
-            )
-            digest = hashlib.sha256()
-            size = 0
-            with source_path.open("rb") as source:
-                while chunk := source.read(1024 * 1024):
-                    size += len(chunk)
-                    if size > attachment.size_bytes:
-                        raise AttachmentError("attachment.notFound")
-                    digest.update(chunk)
-        except OSError as exc:
-            raise AttachmentError("attachment.notFound") from exc
-        if size != attachment.size_bytes or digest.hexdigest() != attachment.sha256:
-            raise AttachmentError("attachment.notFound")
-        data = self._verified_companion_bytes(attachment, session_id)
+        self.read_source(attachment, session_id, current_only=current_only)
+        data = self._verified_companion_bytes(
+            attachment, session_id, current_only=current_only
+        )
         if data is None:
             raise AttachmentError("attachment.notFound")
         try:
@@ -957,6 +1349,8 @@ class AttachmentService:
             raise AttachmentError("attachment.notFound") from exc
 
     async def discard(self, attachment: MessageAttachment, session_id: UUID) -> None:
+        if getattr(attachment, "run_id", None) is not None:
+            return
         root_files = self._root_files(session_id, attachment.file_root_id)
         metadata = attachment.metadata_json or {}
         companion_id = metadata.get("companionFileId")

@@ -663,7 +663,7 @@ async def test_complete_materializes_valid_image_without_leaking_storage_key(
     assert revision.path not in repr(request.media)
 
 
-async def test_projection_materializes_exact_revision_backed_image(
+async def test_projection_rejects_stale_image_without_substituting_current_bytes(
     monkeypatch, tmp_path: Path
 ) -> None:
     session_id = uuid4()
@@ -696,10 +696,8 @@ async def test_projection_materializes_exact_revision_backed_image(
         target_trust_level=TrustLevel.PUBLIC,
     )
 
-    projected_data = base64.b64decode(media[0].data_url.split(",", 1)[1])
-    assert media[0].status == "ready"
-    assert projected_data == data
-    assert projected_data != newer_data
+    assert media[0].status == "unavailable"
+    assert media[0].data_url is None
 
 
 async def test_complete_uses_unavailable_marker_for_missing_attachment_file(

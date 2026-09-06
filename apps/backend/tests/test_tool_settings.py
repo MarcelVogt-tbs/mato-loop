@@ -139,8 +139,11 @@ def test_root_specific_read_and_transfer_availability(
 
 
 @pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
-@pytest.mark.parametrize("capability", ["session.files.read", "session.files.write"])
-def test_session_file_defaults_and_saved_policies(
+@pytest.mark.parametrize(
+    "capability",
+    ["session.files.read", "session.files.write", "network.fetch", "network.search"],
+)
+def test_auto_defaults_and_saved_policies(
     trust: TrustLevel, capability: str
 ) -> None:
     settings = ToolSettings().select_trust(trust)
@@ -461,15 +464,21 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "analyzeVideo": {"policy": "ask", "timeoutSeconds": 1800},
         "updateAgentIdentity": {"policy": "ask"},
     }
+    auto_capabilities = {
+        "session.files.read",
+        "session.files.write",
+        "network.fetch",
+        "network.search",
+    }
     assert {
         capability
         for capability, policy in result["policies"].items()
         if policy == "auto"
-    } == {"session.files.read", "session.files.write"}
+    } == auto_capabilities
     assert all(
         policy == "ask"
         for capability, policy in result["policies"].items()
-        if capability not in {"session.files.read", "session.files.write"}
+        if capability not in auto_capabilities
     )
     assert "network.fetch" in result["policies"]
     assert "session.tool_result.read" in result["policies"]

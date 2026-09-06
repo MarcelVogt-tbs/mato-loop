@@ -492,6 +492,7 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
     scalars = MagicMock()
     scalars.all.return_value = list(reversed(attachments))
     tool_context.db.scalars.return_value = scalars
+    tool_context.db.scalar.side_effect = attachments
     read_image = AsyncMock(side_effect=[b"first", b"second"])
     monkeypatch.setattr(AttachmentService, "read_image", read_image)
     edit = AsyncMock(
@@ -512,6 +513,7 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
         (b"first", "image/png"),
         (b"second", "image/png"),
     )
+    assert all(call.kwargs == {"current_only": True} for call in read_image.await_args_list)
     request = tool_context.ask_handler.await_args.args[0]
     scope = json.loads(request.resource_scope)
     assert request.capability == "media.edit.image"
@@ -569,6 +571,7 @@ async def test_edit_image_sends_authorized_private_sources_to_public_target(
     scalars = MagicMock()
     scalars.all.return_value = [attachment]
     tool_context.db.scalars.return_value = scalars
+    tool_context.db.scalar.return_value = attachment
     monkeypatch.setattr(AttachmentService, "read_image", AsyncMock(return_value=b"private"))
     edit = AsyncMock(
         return_value=MediaResult(
@@ -689,6 +692,7 @@ async def test_transcription_cannot_load_attachment_from_other_session(
     )
     tool_context = context(tmp_path, call)
     tool_context.db.scalar.return_value = None
+    tool_context.db.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
     mock_settings_load(
         monkeypatch, settings, media_settings(ModelCapability.AUDIO_TRANSCRIPTION)
     )

@@ -381,6 +381,61 @@ describe('chat message queue', () => {
     ])
   })
 
+  it.each(['run.completed', 'run.failed', 'run.cancelled', 'reconnect', 'navigation', 'session-switch'])(
+    'opens only canonical final outputs after %s, never at tool completion', async (terminal) => {
+      const chat = useChatStore()
+      const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+      const runId = '550e8400-e29b-41d4-a716-446655440001'
+      activeSession(chat, sessionId)
+      api.get.mockResolvedValue({ data: [] })
+      vi.spyOn(chat, 'refreshSessions').mockResolvedValue()
+      const controlCenter = useControlCenterStore()
+      const open = vi.spyOn(controlCenter, 'openFile').mockResolvedValue('file-tab')
+      const final = {
+        id: sessionId, activeRun: null,
+        messages: [
+          { id: 'old', role: 'tool', runId: 'other-run', attachments: [] },
+          { id: 'hidden', role: 'tool', runId, attachments: [], fileActions: [] },
+          { id: 'final', role: 'tool', runId, attachments: [{
+            id: 'output', kind: 'file', filename: 'final.stl', mimeType: 'model/stl',
+            fileRootId: sessionId, fileId: '550e8400-e29b-41d4-a716-446655440002',
+            fileRevision: 3, filePath: 'final.stl', sizeBytes: 10
+          }] }
+        ]
+      }
+      const attachment = final.messages[2].attachments[0]
+      final.messages[0].attachments = [{ ...attachment, filePath: 'previous-run.stl' }]
+      final.messages.push({
+        id: 'second', role: 'tool', runId,
+        attachments: [attachment, { ...attachment, filePath: 'second.stl' }]
+      })
+      let resolveFinal
+      const refresh = vi.spyOn(chat, 'refreshSession').mockResolvedValue({ ...final, messages: [] })
+      chat.watchRun(sessionId, runId)
+      const source = chat.eventSource
+      source.listeners.get('tool.completed')({ data: JSON.stringify({ tool: 'render_openscad', toolCallId: 'tool-1' }) })
+      await Promise.resolve()
+      expect(open).not.toHaveBeenCalled()
+      refresh.mockImplementation(() => new Promise((resolve) => { resolveFinal = resolve }))
+      if (terminal === 'reconnect') {
+        api.get.mockResolvedValue({ data: { status: 'cancelled' } })
+        await source.onerror()
+      } else source.listeners.get(terminal.startsWith('run.') ? terminal : 'run.completed')()
+      expect(open).not.toHaveBeenCalled()
+      if (terminal === 'navigation') useWorkspaceStore().viewVersion += 1
+      if (terminal === 'session-switch') activeSession(chat, 'another-session')
+      resolveFinal(final)
+      if (['navigation', 'session-switch'].includes(terminal)) {
+        for (let tick = 0; tick < 5; tick++) await Promise.resolve()
+        expect(open).not.toHaveBeenCalled()
+        return
+      }
+      await vi.waitFor(() => expect(open).toHaveBeenCalledTimes(2))
+      expect(open).toHaveBeenCalledWith(expect.objectContaining({ path: 'final.stl', readOnly: false }))
+      expect(open.mock.calls.map(([target]) => target.path)).toEqual(['final.stl', 'second.stl'])
+    }
+  )
+
   it('keeps and pauses a message when sending fails', async () => {
     const chat = useChatStore()
     activeSession(chat)

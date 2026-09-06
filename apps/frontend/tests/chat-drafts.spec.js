@@ -1585,7 +1585,7 @@ describe('chat drafts', () => {
     expect(refresh).toHaveBeenCalledTimes(2)
   })
 
-  it('opens an ordinary file action only while the file view stays unchanged', async () => {
+  it('opens a final file action only while the file view stays unchanged', async () => {
     global.EventSource = EventSourceMock
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
     const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
@@ -1599,7 +1599,7 @@ describe('chat drafts', () => {
         id: sessionId,
         messages: [
           { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { root: 'files', path: 'result.md', content: 'Fertig' } }] },
-          { role: 'tool', toolCallId: 'call-1', fileActions: [action] }
+          { role: 'tool', runId: 'run-1', toolCallId: 'call-1', fileActions: [action] }
         ]
       }
     })
@@ -1618,6 +1618,8 @@ describe('chat drafts', () => {
     source.emit('run.phase', { phase: 'processing_tool', tool: 'write_file', toolCallId: 'call-1' })
     source.emit('tool.completed', { tool: 'write_file', toolCallId: 'call-1', metadata: {} })
 
+    expect(open).not.toHaveBeenCalled()
+    source.emit('run.completed', {})
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith({
       scope: 'session',
       path: 'result.md',
@@ -1632,6 +1634,7 @@ describe('chat drafts', () => {
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
     const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
     const attachment = {
+      kind: 'file',
       filename: 'generated.bin',
       sizeBytes: 12,
       fileRootId: rootIdentity,
@@ -1645,7 +1648,7 @@ describe('chat drafts', () => {
         projectId: rootIdentity,
         messages: [
           { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'generate_file', arguments: {} }] },
-          { role: 'tool', toolCallId: 'call-1', attachments: [attachment] }
+          { role: 'tool', runId: 'run-1', toolCallId: 'call-1', attachments: [attachment] }
         ]
       }
     })
@@ -1664,6 +1667,8 @@ describe('chat drafts', () => {
     source.emit('run.phase', { phase: 'processing_tool', tool: 'generate_file', toolCallId: 'call-1' })
     source.emit('tool.completed', { tool: 'generate_file', toolCallId: 'call-1', metadata: {} })
 
+    expect(open).not.toHaveBeenCalled()
+    source.emit('run.completed', {})
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith({
       scope: 'session',
       path: 'generated/generated.bin',
@@ -1683,8 +1688,10 @@ describe('chat drafts', () => {
         projectId: rootIdentity,
         messages: [{
           role: 'tool',
+          runId: 'run-1',
           toolCallId: 'call-1',
           attachments: [{
+            kind: 'file',
             filename: 'generated.bin',
             sizeBytes: 12,
             fileRootId: rootIdentity,
@@ -1711,9 +1718,9 @@ describe('chat drafts', () => {
 
     source.emit('run.phase', { phase: 'processing_tool', tool: 'generate_file', toolCallId: 'call-1' })
     source.emit('tool.completed', { tool: 'generate_file', toolCallId: 'call-1', metadata: {} })
+    source.emit('run.completed', {})
 
-    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith(`/sessions/${sessionId}`, expect.any(Object)))
-    expect(open).toHaveBeenCalledWith(expect.objectContaining({ path: 'generated.bin' }))
+    await vi.waitFor(() => expect(open).toHaveBeenCalledWith(expect.objectContaining({ path: 'generated.bin' })))
     expect(workspace.editorDraft).toBe('lokal')
   })
 
@@ -1727,8 +1734,10 @@ describe('chat drafts', () => {
         projectId: rootIdentity,
         messages: [{
           role: 'tool',
+          runId: 'run-1',
           toolCallId: 'call-1',
           attachments: [{
+            kind: 'file',
             filename: 'generated.bin',
             sizeBytes: 13,
             fileRootId: rootIdentity,
@@ -1756,6 +1765,7 @@ describe('chat drafts', () => {
     source.emit('run.phase', { phase: 'processing_tool', tool: 'generate_file', toolCallId: 'call-1' })
     source.emit('tool.completed', { tool: 'generate_file', toolCallId: 'call-1', metadata: {} })
 
+    source.emit('run.completed', {})
     await vi.waitFor(() => expect(workspace.fileChangeVersions['generated.bin']).toBe(1))
     expect(workspace.editorDraft).toBeNull()
     expect(open).not.toHaveBeenCalled()
@@ -1810,8 +1820,8 @@ describe('chat drafts', () => {
       }
     })
 
-    await vi.waitFor(() => expect(open).toHaveBeenCalledWith(expect.objectContaining({ path: 'result.md' })))
-    expect(sessionRefreshCalls).toBe(2)
+    await vi.waitFor(() => expect(sessionRefreshCalls).toBe(2))
+    expect(open).not.toHaveBeenCalled()
     expect(sessionRequests()[1][1].signal.aborted).toBe(false)
   })
 
@@ -1864,7 +1874,7 @@ describe('chat drafts', () => {
       downloadUrl: `/api/workspace/files/download?path=result.md&scope=session&session_id=${sessionId}&root_identity=${rootIdentity}`
     }
     api.get.mockResolvedValue({
-      data: { id: sessionId, messages: [{ role: 'tool', toolCallId: 'call-1', fileActions: [action] }] }
+      data: { id: sessionId, messages: [{ role: 'tool', runId: 'run-1', toolCallId: 'call-1', fileActions: [action] }] }
     })
     const workspace = useWorkspaceStore()
     workspace.sessionId = sessionId
@@ -1881,6 +1891,7 @@ describe('chat drafts', () => {
     source.emit('run.phase', { phase: 'processing_tool', tool: 'edit_file', toolCallId: 'call-1' })
     source.emit('tool.completed', { tool: 'edit_file', toolCallId: 'call-1', metadata: {} })
 
+    source.emit('run.completed', {})
     await vi.waitFor(() => expect(workspace.editorExternalChange).toBe(true))
     expect(workspace.editorDraft).toBe('lokal')
     expect(workspace.editorDirty).toBe(true)

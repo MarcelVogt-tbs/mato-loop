@@ -6,6 +6,7 @@ import logging
 import math
 from collections.abc import Awaitable, Callable
 from io import BytesIO
+from types import SimpleNamespace
 from typing import Any, Literal
 from uuid import UUID
 
@@ -18,6 +19,7 @@ from mato_loop_backend.attachments import (
     AttachmentError,
     AttachmentService,
     ValidatedImage,
+    latest_image_references,
     validate_image,
 )
 from mato_loop_backend.privacy import (
@@ -179,16 +181,16 @@ def normalize_provider_image(data: bytes, validated: ValidatedImage) -> tuple[by
 
 def _read_image_data_url(attachment: dict[str, Any]) -> str:
     session_id = UUID(attachment["session_id"])
-    path = AttachmentService().revision_path(
-        session_id,
-        UUID(attachment["file_root_id"]),
-        UUID(attachment["file_id"]),
-        attachment["file_revision"],
-        expected_size=attachment["size_bytes"],
-        expected_sha256=attachment["sha256"],
+    source = SimpleNamespace(
+        **{
+            **attachment,
+            "session_id": session_id,
+            "file_root_id": UUID(attachment["file_root_id"]),
+            "file_id": UUID(attachment["file_id"]),
+            "run_id": UUID(attachment["run_id"]) if attachment.get("run_id") else None,
+        }
     )
-    with path.open("rb") as file:
-        data = file.read(MAX_IMAGE_ATTACHMENT_BYTES + 1)
+    data = AttachmentService().read_source(source, session_id, current_only=True)
     if len(data) > MAX_IMAGE_ATTACHMENT_BYTES or len(data) != attachment["size_bytes"]:
         raise AttachmentError("attachment.invalidImage")
     validated = validate_image(data, attachment["mime_type"])
@@ -217,7 +219,7 @@ async def _provider_projection(
         return projected_messages, []
 
     selected = select_provider_images(
-        messages,
+        latest_image_references(messages),
         target_trust_level=target_trust_level.value,
         required_image_ids=required_image_ids,
     )
@@ -229,6 +231,7 @@ async def _provider_projection(
         )
         for item in selected
     ]
+
     async def materialize(position: int, attachment: dict[str, Any]) -> None:
         mime_type = attachment.get("mime_type")
         size_bytes = attachment.get("size_bytes")
@@ -240,9 +243,14 @@ async def _provider_projection(
         valid_source = (
             isinstance(file_root_id, str)
             and isinstance(file_id, str)
-            and isinstance(file_revision, int)
-            and not isinstance(file_revision, bool)
-            and file_revision > 0
+            and (
+                (
+                    isinstance(file_revision, int)
+                    and not isinstance(file_revision, bool)
+                    and file_revision > 0
+                )
+                or (file_revision is None and isinstance(attachment.get("run_id"), str))
+            )
         )
         if (
             mime_type not in _IMAGE_MIME_TYPES
