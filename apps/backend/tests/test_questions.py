@@ -1,8 +1,10 @@
 import asyncio
+import json
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import runtime as runtime_module
@@ -14,7 +16,12 @@ from mato_loop_backend.agent.question_decisions import (
     reject_question as reject_question_decision,
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.agent.tools import QuestionArguments, validate_question_answers
+from mato_loop_backend.agent.tools import (
+    QuestionArguments,
+    ToolContext,
+    tool_registry,
+    validate_question_answers,
+)
 from mato_loop_backend.api.routes.questions import (
     QuestionAnswerRequest,
     answer_question,
@@ -23,6 +30,7 @@ from mato_loop_backend.api.routes.questions import (
 from mato_loop_backend.events import run_events
 from mato_loop_backend.models import AgentRun, ChatSession, QuestionRequest, UserAccount
 from mato_loop_backend.providers.base import ToolCall
+from mato_loop_backend.settings import ToolSettings
 
 
 def _arguments() -> QuestionArguments:
@@ -98,6 +106,64 @@ def test_question_schema_explains_answer_mode_discriminators() -> None:
         "free_text: text; single_choice: exactly one option; multiple_choice: one or more options."
     )
     assert properties["options"]["description"] == "Empty for free_text; 2-12 items for choices."
+    assert properties["placeholder"]["description"] == (
+        "free_text only. Omit or use null for choices, even with allow_custom=true."
+    )
+
+
+@pytest.mark.parametrize("question_type", ["single_choice", "multiple_choice"])
+@pytest.mark.parametrize("allow_custom", [False, True])
+async def test_question_placeholder_error_identifies_field_and_allows_repair(
+    question_type, allow_custom
+) -> None:
+    payload = _arguments().model_dump(mode="json")
+    payload["questions"][2]["placeholder"] = "Additional notes"
+    question = payload["questions"][1]
+    question.update(
+        type=question_type, allow_custom=allow_custom, placeholder="Additional topics"
+    )
+    call = ToolCall("question-1", "question", payload)
+    context = Mock(spec=ToolContext, tool_settings=ToolSettings(), ask_user=AsyncMock())
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.is_error
+    assert json.loads(result.content) == {
+        "error": {
+            "code": "question.placeholderNotAllowed",
+            "message": (
+                "placeholder is only allowed for free_text. For choice questions, "
+                "omit placeholder or set it to null, including when allow_custom is true."
+            ),
+            "field": "questions[1].placeholder",
+        }
+    }
+    context.ask_user.assert_not_awaited()
+
+    question["placeholder"] = None
+    arguments = QuestionArguments.model_validate(payload)
+    assert arguments.questions[1].placeholder is None
+    assert arguments.questions[2].placeholder == "Additional notes"
+    del question["placeholder"]
+    assert QuestionArguments.model_validate(payload) == arguments
+    context.ask_user.return_value = {"format": ["Kurz"], "topics": ["API"], "note": []}
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    context.ask_user.assert_awaited_once_with(arguments)
+
+
+def test_question_placeholder_error_preserves_nested_location() -> None:
+    payload = _arguments().model_dump(mode="json")
+    payload["questions"][1]["placeholder"] = "Additional topics"
+
+    with pytest.raises(ValidationError) as raised:
+        QuestionArguments.model_validate(payload)
+
+    error = raised.value.errors(include_url=False, include_input=False, include_context=False)[0]
+    assert error["type"] == "question_placeholder_not_allowed"
+    assert error["loc"] == ("questions", 1)
 
 
 async def test_agent_question_push_is_sent_after_commit(monkeypatch) -> None:

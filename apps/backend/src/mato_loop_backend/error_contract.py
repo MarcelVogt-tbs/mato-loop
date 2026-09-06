@@ -281,6 +281,10 @@ _MESSAGES = {
     "question.answerTooLarge": "The submitted answer is too large.",
     "question.exclusiveCallRequired": "The question tool must be called without other tools in the same response.",
     "question.invalidAnswer": "The submitted answer does not match the question.",
+    "question.placeholderNotAllowed": (
+        "placeholder is only allowed for free_text. For choice questions, "
+        "omit placeholder or set it to null, including when allow_custom is true."
+    ),
     "question.rejected": "The user dismissed the question without answering.",
     "session.modelToolsUnavailable": "The selected model does not support the required tools.",
     "session.modelUnavailable": "The selected model is unavailable.",

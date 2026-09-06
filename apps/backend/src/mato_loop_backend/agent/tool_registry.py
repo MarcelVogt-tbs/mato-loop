@@ -1037,10 +1037,17 @@ class ToolRegistry:
         try:
             arguments = definition.validate_arguments(raw_arguments)
         except ValidationError as exc:
+            errors = exc.errors(include_url=False, include_input=False, include_context=False)
+            for error in errors:
+                if error["type"] == "question_placeholder_not_allowed":
+                    return ToolResult.error(
+                        "question.placeholderNotAllowed",
+                        field=f"questions[{error['loc'][1]}].placeholder",
+                    )
             field_name = next(
                 (
                     str(part)
-                    for error in exc.errors(include_url=False)
+                    for error in errors
                     for part in reversed(error.get("loc") or ())
                     if isinstance(part, str)
                 ),

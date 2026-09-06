@@ -143,6 +143,13 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'question.answerTooLarge' } })).toBe(
       'Die Antworten überschreiten das zulässige Größenlimit.'
     )
+    expect(apiErrorMessage({ error: {
+      code: 'question.placeholderNotAllowed',
+      message: 'private validation detail',
+      field: 'questions[2].placeholder'
+    } })).toBe(
+      'Platzhalter sind nur bei Freitextfragen erlaubt. Bei Auswahlfragen muss das Modell den Platzhalter weglassen oder auf null setzen, auch wenn eigene Antworten erlaubt sind.'
+    )
     expect(apiErrorMessage({ error: { code: 'attachment.invalidDocument' } })).toBe(
       'Das Dokument ist beschädigt, geschützt oder überschreitet die Verarbeitungsgrenzen.'
     )

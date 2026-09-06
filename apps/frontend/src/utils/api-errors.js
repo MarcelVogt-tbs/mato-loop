@@ -398,6 +398,7 @@ const messages = {
   'question.exclusiveCallRequired': () => 'Die Rückfrage muss ohne weitere Tool-Aufrufe gestellt werden.',
   'question.invalidAnswer': () => 'Die Antwort passt nicht zu den vorgegebenen Auswahlmöglichkeiten.',
   'question.notFound': () => 'Die Rückfrage wurde nicht gefunden.',
+  'question.placeholderNotAllowed': () => 'Platzhalter sind nur bei Freitextfragen erlaubt. Bei Auswahlfragen muss das Modell den Platzhalter weglassen oder auf null setzen, auch wenn eigene Antworten erlaubt sind.',
   'question.rejected': () => 'Die Rückfrage wurde ohne Antwort geschlossen.',
   'question.runInactive': () => 'Der zugehörige Agent-Run ist nicht mehr aktiv.',
   'privacy.pseudonymizationFailed': () => 'Die lokale Pseudonymisierung ist fehlgeschlagen.',

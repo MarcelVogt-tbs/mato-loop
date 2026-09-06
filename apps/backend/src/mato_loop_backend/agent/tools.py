@@ -4522,10 +4522,9 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "question",
-            "Ask 1-5 questions. Copy every requested type exactly: free_text for text, "
-            "single_choice for exactly one option, multiple_choice for one or more. Examples are not "
-            "options. allow_custom replaces Other; default_answers are fallbacks. Never use for "
-            "commands, output, or permissions; call alone.",
+            "Ask 1-5 questions; call alone. Copy every requested type exactly. Examples are not "
+            "options. allow_custom replaces Other; default_answers are fallbacks. "
+            "Never use for commands, output, or permissions.",
             QuestionArguments,
             _question,
             group="agent",

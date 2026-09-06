@@ -12,6 +12,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic_core import PydanticCustomError
 
 from mato_loop_backend.automations import next_run_at
 from mato_loop_backend.models import MemoryCategory
@@ -81,7 +82,13 @@ class QuestionItem(QuestionBase):
         default=True,
         description="Allow one custom text answer; do not add an Other option.",
     )
-    placeholder: str | None = Field(default=None, max_length=200)
+    placeholder: str | None = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "free_text only. Omit or use null for choices, even with allow_custom=true."
+        ),
+    )
 
     @model_validator(mode="after")
     def shape_matches_type(self) -> QuestionItem:
@@ -93,7 +100,10 @@ class QuestionItem(QuestionBase):
         if len(self.options) < 2:
             raise ValueError("choice question requires at least two options")
         if self.placeholder is not None:
-            raise ValueError("choice question must not have a placeholder")
+            raise PydanticCustomError(
+                "question_placeholder_not_allowed",
+                "choice question must not have a placeholder",
+            )
         labels = [option.label for option in self.options]
         if len(labels) != len(set(labels)):
             raise ValueError("option labels must be unique")
