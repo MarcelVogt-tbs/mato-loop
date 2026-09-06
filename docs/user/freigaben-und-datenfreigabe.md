@@ -10,11 +10,7 @@ Wenn eine Aktion nicht automatisch erlaubt ist, pausiert der Agent und zeigt ein
 - zu speichernden Memory-Inhalt
 - technische Details
 
-Alle normalen offenen Freigabeanfragen finden Sie außerdem im globalen Bereich **Freigaben** des Control Centers. Bestätigungsvorschläge im verbundenen Terminal werden ausschließlich dort entschieden.
-Die globale Liste zeigt die Ursprungssession und erlaubt dieselben Entscheidungen wie die
-Karte im Chat. Sie bündelt auch offene Agent-Rückfragen, die zur Beantwortung ihre Session
-öffnen, sowie bereits erteilte Session-Freigaben der aktuell gewählten Session. Das Badge am
-Control Center und am Benutzermenü zeigt nur offene Aktionen an.
+The global **Benachrichtigungen** view in the Control Center places normal pending approvals and agent questions at the top under **Aktion erforderlich**, with informational notices below under **Hinweise**. It shows the source session and lets you decide approvals and answer questions directly, without opening their chat. Contextual controls remain available in chat. Marking notices read individually or in bulk does not resolve pending approvals or questions. The center badge counts pending approvals, questions, and unread notices. Connected-terminal confirmation proposals are decided only in the terminal.
 
 ## Entscheidungen
 
@@ -24,9 +20,7 @@ Control Center und am Benutzermenü zeigt nur offene Aktionen an.
 | Einmal erlauben | Gilt nur für diese konkrete Aktion und ist die sichere Vorauswahl |
 | Passende Aktionen in dieser Session nicht mehr nachfragen | Der Haken ändert den Hauptbutton zu **Für Session erlauben** und erstellt eine widerrufbare Freigabe für den angezeigten Ressourcenumfang |
 
-Dauerhaft für eine Session erteilte Grants können Sie im globalen Bereich **Freigaben**
-einzeln oder gemeinsam widerrufen, für die aktuelle Session außerdem unter **Dateien**. Sie
-sind keine offenen Freigabeanfragen und erhöhen daher nicht das Badge für offene Aktionen.
+Granted permissions for the current session can be viewed and revoked individually or together under **Session > Session-Freigaben** in the Control Center, not in the global notification center. They are not pending requests and do not increase its badge count.
 
 Der Haken ist bei jeder neuen Anfrage ausgeschaltet und wird nicht im Browser gespeichert. Manche sensible oder nicht sicher eingrenzbare Aktionen bieten bewusst keine Session-Freigabe an.
 

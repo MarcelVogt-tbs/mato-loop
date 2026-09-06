@@ -606,7 +606,7 @@ const showFloatingControls = computed(() => (
 const attentionCount = computed(() => (
   approvals.pending.length + questions.pending.length + (terminal.pendingProposal ? 1 : 0)
 ))
-const notificationBadgeCount = computed(() => attentionCount.value || notifications.unreadCount)
+const notificationBadgeCount = computed(() => attentionCount.value + notifications.unreadCount)
 const notificationBadgeLabel = computed(() => notificationBadgeCount.value > 99
   ? '99+'
   : String(notificationBadgeCount.value || ''))

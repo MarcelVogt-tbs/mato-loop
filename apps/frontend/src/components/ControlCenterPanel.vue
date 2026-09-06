@@ -1,18 +1,18 @@
 <template>
   <section id="control-center-panel" class="control-center column full-height no-wrap" aria-label="Control Center">
-    <div class="control-center__tabs row items-center no-wrap q-pl-sm">
+    <div class="control-center__tabs row items-center no-wrap q-px-sm q-py-xs">
       <q-tabs
         :model-value="activeFlexibleTabId"
-        class="col"
+        class="control-center__tab-strip col"
+        content-class="control-center__tab-scroll"
         dense
         no-caps
         inline-label
         align="left"
         :breakpoint="0"
         indicator-color="transparent"
-        mobile-arrows
-        outside-arrows
         @update:model-value="activate"
+        @keydown.capture="navigateTabs"
       >
         <div
           v-for="tab in flexibleTabs"
@@ -88,11 +88,41 @@
       </q-tabs>
 
       <q-btn
+        v-if="$q.screen.gt.sm && flexibleTabs.length"
+        flat
+        round
+        size="16px"
+        class="control-center__tab-menu"
+        icon="more_vert"
+        aria-label="Geöffnete Tabs anzeigen"
+      >
+        <q-tooltip>Geöffnete Tabs</q-tooltip>
+        <q-menu anchor="bottom right" self="top right" class="app-action-menu">
+          <q-list padding>
+            <q-item
+              v-for="tab in flexibleTabs"
+              :key="tab.tabId"
+              clickable
+              v-ripple
+              v-close-popup
+              :active="activeFlexibleTabId === tab.tabId"
+              :disable="controlCenter.saving || !controlCenter.ready"
+              @click="activate(tab.tabId)"
+            >
+              <q-item-section avatar><q-icon :name="content(tab.appId).icon" /></q-item-section>
+              <q-item-section>{{ tabLabel(tab) }}</q-item-section>
+              <q-item-section v-if="activeFlexibleTabId === tab.tabId" side><q-icon name="check" color="primary" /></q-item-section>
+            </q-item>
+          </q-list>
+        </q-menu>
+      </q-btn>
+
+      <q-btn
         id="control-center-session-button"
         flat
         round
-        dense
-        class="col-auto"
+        size="16px"
+        class="q-ml-xs"
         icon="tune"
         :color="!controlCenter.activeGlobalSectionId && controlCenter.activeAppId === 'session' ? 'primary' : undefined"
         :loading="!controlCenter.ready && controlCenter.requestedAppId === 'session'"
@@ -107,12 +137,12 @@
         :key="item.id"
         flat
         round
-        dense
-        class="col-auto"
+        size="16px"
+        class="q-ml-xs"
         :icon="item.icon"
         :color="controlCenter.activeGlobalSectionId === item.id ? 'primary' : undefined"
         :loading="!controlCenter.ready && controlCenter.requestedAppId === item.id"
-        :aria-label="`${item.label} öffnen`"
+        :aria-label="`${item.label} öffnen, ${approvals.pending.length + questions.pending.length} offene Aufgaben, ${notifications.unreadCount} ungelesene Hinweise`"
         @click="openContent(item.id)"
       >
         <q-badge
@@ -130,7 +160,8 @@
         flat
         round
         dense
-        class="col-auto"
+        size="20px"
+        class="q-ml-sm app-surface-tonal"
         icon="close"
         aria-label="Control Center schließen"
         @click="closePanel"
@@ -151,12 +182,14 @@
       <component
         :is="content(controlCenter.activeTab.appId).component"
         v-if="controlCenter.activeTab?.kind === 'app' && ['files', 'computer-files'].includes(controlCenter.activeTab.appId)"
+        v-show="!controlCenter.activeGlobalSectionId"
         :key="controlCenter.activeTab.appId"
         class="fit"
       />
       <component
         :is="content(controlCenter.activeTab.appId).component"
         v-if="controlCenter.activeTab?.kind === 'file'"
+        v-show="!controlCenter.activeGlobalSectionId"
         :key="`${controlCenter.activeTab.tabId}:${controlCenter.activeTab.fileTarget.path}`"
         :tab="controlCenter.activeTab"
         class="fit"
@@ -203,7 +236,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { Notify } from 'quasar'
 import { useApprovalStore } from 'stores/approvals'
 import { useControlCenterStore } from 'stores/control-center'
@@ -251,6 +284,12 @@ const activeFlexibleTabId = computed(() => (
     ? null
     : controlCenter.activeAppId
 ))
+watch(activeFlexibleTabId, async (tabId) => {
+  if (!tabId) return
+  await nextTick()
+  document.getElementById(`control-center-tab-${tabId}`)?.parentElement
+    ?.querySelector('.control-center__tab-close')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+})
 const activeFooter = computed(() => (
   controlCenter.activeGlobalSectionId
     ? content(controlCenter.activeGlobalSectionId)?.footerComponent
@@ -288,10 +327,23 @@ function tabAriaLabel(tab) {
 }
 
 function badge(appId) {
-  const count = appId === 'approvals'
-    ? approvals.pending.length + questions.pending.length
-    : appId === 'notifications' ? notifications.unreadCount : 0
+  const count = appId === 'notifications'
+    ? approvals.pending.length + questions.pending.length + notifications.unreadCount
+    : 0
   return count > 99 ? '99+' : count || null
+}
+
+function navigateTabs(event) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)
+    || !event.target.matches('.control-center__tab')) return
+  // Tab shells contain separate close buttons, so QTabs cannot traverse them itself.
+  const tabs = [...event.currentTarget.querySelectorAll('.control-center__tab:not([aria-disabled="true"])')]
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+    : tabs.indexOf(event.target) + (event.key === 'ArrowLeft' ? -1 : 1)
+  event.preventDefault()
+  event.stopPropagation()
+  tabs[index]?.focus({ preventScroll: true })
+  tabs[index]?.parentElement.scrollIntoView({ block: 'nearest', inline: 'nearest' })
 }
 
 async function closePanel() {

@@ -5,7 +5,7 @@
         <div class="row items-start no-wrap q-gutter-sm q-mb-md">
           <div class="col">
             <h2 id="notification-app-title" class="text-subtitle1 text-weight-bold q-my-none">Benachrichtigungen</h2>
-            <div class="text-caption app-muted">Dauerhafte Hinweise zu Automationsläufen</div>
+            <div class="text-caption app-muted">Offene Entscheidungen, Rückfragen und dauerhafte Hinweise</div>
           </div>
           <q-btn
             flat
@@ -25,12 +25,58 @@
             dense
             icon="refresh"
             aria-label="Benachrichtigungen aktualisieren"
-            :loading="notifications.loading"
+            :loading="loading"
             @click="refresh"
           >
             <q-tooltip>Benachrichtigungen aktualisieren</q-tooltip>
           </q-btn>
         </div>
+        <section aria-labelledby="notification-actions-title" class="q-mb-lg">
+          <div class="row items-center q-gutter-sm q-mb-md">
+            <h3 id="notification-actions-title" class="text-subtitle1 text-weight-bold q-my-none">Aktion erforderlich</h3>
+            <q-badge v-if="attentionCount" rounded color="warning" text-color="dark" :label="attentionCount" />
+          </div>
+          <q-banner v-if="approvals.loadFailed || questions.loadFailed" rounded class="bg-negative text-white q-mb-md">
+            Freigaben oder Rückfragen konnten nicht vollständig geladen werden.
+            <template #action><q-btn flat no-caps color="white" label="Erneut laden" @click="refresh" /></template>
+          </q-banner>
+          <div v-if="questions.loading && !questions.loaded" class="q-mb-md">
+            <q-skeleton type="text" width="45%" /><q-skeleton type="text" width="80%" />
+          </div>
+          <section v-if="questions.pending.length" aria-labelledby="notification-questions-title" class="q-mb-lg">
+            <h4 id="notification-questions-title" class="text-subtitle2 text-weight-bold q-mt-none q-mb-sm">Rückfragen</h4>
+            <div v-for="question in questions.pending" :key="question.id" class="q-mb-md">
+              <div class="row items-center q-gutter-sm q-mb-sm">
+                <q-btn v-if="question.sessionId" flat dense no-caps color="primary" :label="sessionTitle(question.sessionId)" :to="{ name: 'chat', query: { session: question.sessionId } }" />
+                <span class="app-muted text-caption">{{ formatRelativeDateTime(question.createdAt, timestampNow) }}</span>
+              </div>
+              <QuestionDock :request="question" :show-stop="false" class="full-width" />
+            </div>
+          </section>
+          <section aria-labelledby="notification-decisions-title">
+            <h4 id="notification-decisions-title" class="text-subtitle2 text-weight-bold q-mt-none q-mb-sm">Offene Entscheidungen</h4>
+            <q-select v-model="selectedType" class="q-mb-md" outlined dense emit-value map-options label="Typ" :options="typeOptions" />
+            <template v-if="approvals.loading && !approvals.loaded">
+              <q-card v-for="index in 2" :key="index" flat class="app-surface q-mb-md">
+                <q-card-section class="row items-center no-wrap q-gutter-md"><q-skeleton type="QAvatar" /><div class="col"><q-skeleton type="text" width="35%" /><q-skeleton type="text" width="75%" /></div></q-card-section>
+              </q-card>
+            </template>
+            <div v-else-if="approvals.loaded && !filteredApprovals.length && !approvals.loadFailed" class="text-body2 app-muted">
+              {{ selectedType === 'all' ? 'Keine offenen Freigaben' : 'Keine offenen Freigaben dieses Typs' }}
+            </div>
+            <article v-for="approval in filteredApprovals" :key="approval.id" class="q-mb-md">
+              <div class="row items-center q-gutter-sm q-mb-sm">
+                <q-icon :name="approval.sessionId ? 'forum' : 'auto_awesome'" color="primary" />
+                <q-btn v-if="approval.sessionId" flat dense no-caps color="primary" :label="approval.sourceSession?.title || 'Session öffnen'" :to="{ name: 'chat', query: { session: approval.sessionId } }" />
+                <span v-else class="text-weight-medium">Dreaming im Hintergrund</span>
+                <span class="app-muted text-caption">{{ formatRelativeDateTime(approval.createdAt, timestampNow) }}</span>
+              </div>
+              <ApprovalCard :approval="approval" :show-draft-action="false" />
+            </article>
+          </section>
+        </section>
+        <q-separator class="q-mb-lg" />
+        <h3 id="notification-info-title" class="text-subtitle1 text-weight-bold q-mt-none q-mb-md">Hinweise</h3>
         <q-item class="app-surface-tonal rounded-borders q-mb-md">
           <q-item-section avatar><q-icon name="notifications_active" color="primary" /></q-item-section>
           <q-item-section>
@@ -101,14 +147,33 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { isNavigationFailure, NavigationFailureType, useRouter } from 'vue-router'
+import ApprovalCard from 'components/ApprovalCard.vue'
+import QuestionDock from 'components/QuestionDock.vue'
+import { useApprovalStore } from 'stores/approvals'
+import { useChatStore } from 'stores/chat'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
+import { useQuestionStore } from 'stores/questions'
 import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'
 import { notificationTargetRoute } from 'src/utils/notification-target'
 
 defineOptions({ name: 'NotificationCenterApp' })
 
 const router = useRouter()
+const approvals = useApprovalStore()
+const chat = useChatStore()
 const notifications = useInAppNotificationStore()
+const questions = useQuestionStore()
+const selectedType = ref('all')
+const typeOptions = [
+  { label: 'Alle Typen', value: 'all' },
+  { label: 'Agent-Aktionen', value: 'agent_action' },
+  { label: 'Memory-Änderungen', value: 'memory_change' }
+]
+const attentionCount = computed(() => approvals.pending.length + questions.pending.length)
+const loading = computed(() => approvals.loading || questions.loading || notifications.loading)
+const filteredApprovals = computed(() => selectedType.value === 'all'
+  ? approvals.pending
+  : approvals.pending.filter((item) => (item.requestType || 'agent_action') === selectedType.value))
 const timestampNow = ref(new Date())
 const pushToggleDisabled = computed(() => (
   !notifications.pushSupported
@@ -131,6 +196,10 @@ const pushStatus = computed(() => {
 })
 let timestampTimer = null
 
+function sessionTitle(sessionId) {
+  return chat.cachedSessions.find((session) => session.id === sessionId)?.title || 'Agent-Auftrag'
+}
+
 async function setPushEnabled(enabled) {
   try {
     if (enabled) await notifications.enablePush()
@@ -142,11 +211,7 @@ async function setPushEnabled(enabled) {
 
 async function refresh() {
   timestampNow.value = new Date()
-  try {
-    await notifications.fetchLatest()
-  } catch {
-    // The central API interceptor displays the error; the retry action remains available.
-  }
+  await Promise.allSettled([approvals.fetchPending(), questions.fetchPending(), notifications.fetchLatest()])
 }
 
 async function openNotification(notification) {
@@ -185,3 +250,10 @@ onMounted(() => {
 })
 onBeforeUnmount(() => window.clearInterval(timestampTimer))
 </script>
+
+<style scoped>
+.notification-center-app :deep(.question-dock),
+.notification-center-app :deep(.question-dock__body) {
+  max-height: none;
+}
+</style>
