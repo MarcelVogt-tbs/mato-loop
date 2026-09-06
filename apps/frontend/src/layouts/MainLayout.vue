@@ -122,7 +122,11 @@
                   v-model="expandedProjects[project.id]"
                   hide-expand-icon
                   class="project-list-item rounded-borders q-my-xs"
+                  :class="{ 'app-surface-tonal': sessionDropTarget === project.id }"
                   header-class="project-list-item__header"
+                  @dragover="dragSessionOver($event, project.id)"
+                  @dragleave="leaveSessionDropTarget"
+                  @drop="dropSession($event, project.id)"
                   @show="loadProjectSessions(project.id)"
                 >
                   <template #header>
@@ -186,6 +190,8 @@
                     @open="openSession"
                     @rename="openRenameDialog"
                     @move="openMoveDialog"
+                    @drag-start="startSessionDrag"
+                    @drag-end="endSessionDrag"
                     @delete="removeSession"
                     @toggle-pin="toggleSessionPinned"
                     @load-more="loadMoreSessions(project.id)"
@@ -199,7 +205,14 @@
               </q-list>
             </section>
 
-            <section class="q-mt-md" aria-labelledby="sessions-heading">
+            <section
+              class="q-mt-md"
+              :class="{ 'app-surface-tonal': sessionDropTarget === null }"
+              aria-labelledby="sessions-heading"
+              @dragover="dragSessionOver($event, null)"
+              @dragleave="leaveSessionDropTarget"
+              @drop="dropSession($event, null)"
+            >
               <q-item
                 dense
                 tag="div"
@@ -250,6 +263,8 @@
                 @open="openSession"
                 @rename="openRenameDialog"
                 @move="openMoveDialog"
+                @drag-start="startSessionDrag"
+                @drag-end="endSessionDrag"
                 @delete="removeSession"
                 @toggle-pin="toggleSessionPinned"
                 @load-more="loadMoreSessions(null)"
@@ -626,6 +641,8 @@ const moveSessionId = ref(null)
 const moveSourceProjectId = ref(null)
 const moveProjectId = ref(null)
 const movingSession = ref(false)
+const draggedSession = ref(null)
+const sessionDropTarget = ref(undefined)
 let sessionActivityTimer = null
 let sessionActivityRefreshPending = false
 const visualViewportHeight = ref(null)
@@ -833,10 +850,49 @@ async function deleteProject(project) {
   }
 }
 
-function openMoveDialog(session) {
+function startSessionDrag(event, session) {
+  if (movingSession.value || moveDialogOpen.value || !event.dataTransfer) {
+    event.preventDefault()
+    return
+  }
+  draggedSession.value = session
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('application/x-matoloop-session', session.id)
+}
+
+function endSessionDrag() {
+  draggedSession.value = null
+  sessionDropTarget.value = undefined
+}
+
+function canDropSession(projectId) {
+  return draggedSession.value && !movingSession.value && !moveDialogOpen.value
+    && (draggedSession.value.projectId || null) !== projectId
+}
+
+function dragSessionOver(event, projectId) {
+  if (!canDropSession(projectId)) return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+  sessionDropTarget.value = projectId
+}
+
+function leaveSessionDropTarget(event) {
+  if (!event.currentTarget.contains(event.relatedTarget)) sessionDropTarget.value = undefined
+}
+
+function dropSession(event, projectId) {
+  if (canDropSession(projectId)) {
+    event.preventDefault()
+    openMoveDialog(draggedSession.value, projectId)
+  }
+  endSessionDrag()
+}
+
+function openMoveDialog(session, projectId = session.projectId || null) {
   moveSessionId.value = session.id
   moveSourceProjectId.value = session.projectId || null
-  moveProjectId.value = moveSourceProjectId.value
+  moveProjectId.value = projectId
   moveDialogOpen.value = true
 }
 

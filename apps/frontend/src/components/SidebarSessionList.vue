@@ -42,7 +42,12 @@
           :active-class="$q.dark.isActive ? 'bg-grey-9 text-white' : 'bg-grey-3 text-dark'"
           @click="emit('open', session)"
         >
-          <q-item-section class="session-list-item__content">
+          <q-item-section
+            class="session-list-item__content"
+            draggable="true"
+            @dragstart="emit('drag-start', $event, session)"
+            @dragend="emit('drag-end')"
+          >
             <q-item-label
               lines="1"
               class="session-list-item__title text-body2"
@@ -192,6 +197,8 @@ const emit = defineEmits([
   'open',
   'rename',
   'move',
+  'drag-start',
+  'drag-end',
   'delete',
   'toggle-pin',
   'load-more',
