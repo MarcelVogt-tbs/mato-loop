@@ -1055,7 +1055,12 @@ class PermissionPolicy:
             )
             if confidential:
                 return PermissionDecision.ASK
-            if policy == ToolExecutionPolicy.AUTO and inside_workspace and scope["analysisComplete"]:
+            # Incomplete inspection uses shell.write; its policy also covers that uncertainty.
+            if (
+                policy == ToolExecutionPolicy.AUTO
+                and inside_workspace
+                and (scope["analysisComplete"] or scope["classification"] == "write")
+            ):
                 return PermissionDecision.ALLOW
             grants = list(
                 (

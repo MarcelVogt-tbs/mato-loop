@@ -224,13 +224,16 @@ def plan_agent_profile() -> AgentProfile:
 def build_agent_profile() -> AgentProfile:
     policies = {
         "filesystem.read": ToolExecutionPolicy.AUTO,
+        "filesystem.write": ToolExecutionPolicy.AUTO,
+        "filesystem.delete": ToolExecutionPolicy.AUTO,
         "shell.read": ToolExecutionPolicy.AUTO,
+        "shell.write": ToolExecutionPolicy.AUTO,
     }
     return AgentProfile(
         id=BUILD_AGENT_PROFILE_ID,
         name=BUILTIN_AGENT_PROFILE_NAMES[BUILD_AGENT_PROFILE_ID],
         description=(
-            "Setzt Aufgaben um und prüft Ergebnisse. Liest im Arbeitsverzeichnis automatisch, "
+            "Liest, ändert und löscht im Arbeitsverzeichnis automatisch und führt Shell-Befehle aus, "
             "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
         ),
         instructions=(

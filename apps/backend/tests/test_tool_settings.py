@@ -284,7 +284,7 @@ def test_only_coding_profiles_default_to_automatic_public_computer_reads(trust) 
 
 
 @pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
-def test_build_profile_inherits_write_approval(trust: TrustLevel) -> None:
+def test_build_profile_defaults_to_auto_writes_and_preserves_overrides(trust: TrustLevel) -> None:
     profile = build_agent_profile()
     settings = ToolSettings().select_trust(trust)
     settings._agent_permissions = (
@@ -296,8 +296,11 @@ def test_build_profile_inherits_write_approval(trust: TrustLevel) -> None:
     for capability in ("filesystem.write", "filesystem.delete", "shell.write"):
         assert (
             resolve_tool_execution_policy(settings, capability).policy
-            == ToolExecutionPolicy.ASK
+            == ToolExecutionPolicy.AUTO
         )
+        for policy in (ToolExecutionPolicy.ASK, ToolExecutionPolicy.DISABLED):
+            settings._agent_permissions.policies[capability] = policy
+            assert resolve_tool_execution_policy(settings, capability).policy == policy
     assert (
         resolve_tool_execution_policy(
             settings,

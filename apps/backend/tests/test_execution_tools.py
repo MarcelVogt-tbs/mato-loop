@@ -398,7 +398,9 @@ async def test_execution_error_params_are_validated_before_tool_serialization(tm
     assert "params" not in descriptor
 
 
-def _shell_permission(client, classification="write", prefixes=None, directory=None, paths=None):
+def _shell_permission(
+    client, classification="write", prefixes=None, directory=None, paths=None, analysis_complete=True
+):
     return PermissionRequest(
         capability=f"shell.{classification}",
         resource_type="shell_command",
@@ -408,7 +410,7 @@ def _shell_permission(client, classification="write", prefixes=None, directory=N
             classification,
             prefixes or [],
             paths or [],
-            True,
+            analysis_complete,
         ),
         action_kind="shell_run",
         risk_level="high",
@@ -523,6 +525,66 @@ async def test_coding_profile_auto_reads_keep_path_boundaries(
     assert await PermissionPolicy.evaluate(
         context.db, context.session, request, context.root_files, policy,
         agent_profile_id=profile.id, trust_level=TrustLevel.PUBLIC,
+    ) == expected
+
+
+@pytest.mark.parametrize("profile_factory", [plan_agent_profile, build_agent_profile, None])
+@pytest.mark.parametrize("trust", [TrustLevel.PUBLIC, TrustLevel.PRIVATE])
+@pytest.mark.parametrize(
+    ("analysis_complete", "path", "agent_overrides", "expected"),
+    [
+        (True, "/workspace/harness-eval-astra/app/frontend", {}, PermissionDecision.ALLOW),
+        (False, "/workspace/harness-eval-astra/app/frontend", {}, PermissionDecision.ALLOW),
+        (False, None, {}, PermissionDecision.ALLOW),
+        (False, "/etc/hosts", {}, PermissionDecision.ASK),
+        (False, "/workspace/harness-eval-astra/app/.env", {}, PermissionDecision.ASK),
+        (False, None, {"external_shell_enabled": False}, PermissionDecision.DENY),
+        (False, None, {"home_shell_enabled": False}, PermissionDecision.DENY),
+        (False, None, {"external_filesystem_policy": "deny"}, PermissionDecision.DENY),
+        (False, None, {"home_filesystem_policy": "deny"}, PermissionDecision.DENY),
+    ],
+)
+async def test_shell_write_policy_covers_incomplete_analysis(
+    tmp_path, profile_factory, trust, analysis_complete, path, agent_overrides, expected
+) -> None:
+    client = FakeExecutionClient(
+        {}, {"shell.inspect", "shell.run"}, current_directory="/workspace/harness-eval-astra/app"
+    )
+    call = ToolCall("shell", "shell_run", {
+        "command": 'for f in frontend/package.json frontend/vite.config.js; do cat "$f"; done'
+    })
+    context = _context(tmp_path, call, client)
+    agent = ExecutionAgent(
+        id=client.agent_id, user_id=context.session.user_id, home_directory="/workspace",
+        home_filesystem_policy="auto", external_filesystem_policy="ask",
+        home_shell_enabled=True, external_shell_enabled=True,
+    )
+    for key, value in agent_overrides.items():
+        setattr(agent, key, value)
+    context.db.scalar.return_value = agent
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[]))
+    settings = ToolSettings().select_trust(trust)
+    if profile_factory:
+        profile = profile_factory()
+        settings._agent_permissions = (
+            profile.public_permissions if trust == TrustLevel.PUBLIC else profile.private_permissions
+        )
+    request = _shell_permission(
+        client, prefixes=[["find"], ["find"], ["printf"], ["cat"]],
+        paths=[path] if path else [], analysis_complete=analysis_complete,
+    )
+    policy = _tool_policy(settings, IntegrationSettings(), request)
+    if profile_factory == plan_agent_profile:
+        assert policy == ToolExecutionPolicy.DISABLED
+        expected = PermissionDecision.DENY
+    elif profile_factory is None:
+        assert policy == ToolExecutionPolicy.ASK
+        if expected == PermissionDecision.ALLOW:
+            expected = PermissionDecision.ASK
+    else:
+        assert policy == ToolExecutionPolicy.AUTO
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session, request, context.root_files, policy,
     ) == expected
 
 

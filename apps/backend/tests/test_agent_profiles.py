@@ -69,7 +69,10 @@ def test_builtin_agent_profile_defaults() -> None:
     assert build.private_permissions == build.public_permissions
     assert build.private_permissions.policies == {
         "filesystem.read": ToolExecutionPolicy.AUTO,
+        "filesystem.write": ToolExecutionPolicy.AUTO,
+        "filesystem.delete": ToolExecutionPolicy.AUTO,
         "shell.read": ToolExecutionPolicy.AUTO,
+        "shell.write": ToolExecutionPolicy.AUTO,
     }
     assert not plan.private_permissions.integration_policies
     assert not build.private_permissions.integration_policies
