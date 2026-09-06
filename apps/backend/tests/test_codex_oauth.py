@@ -78,21 +78,18 @@ async def test_codex_model_discovery_filters_and_normalizes_models(monkeypatch) 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.url.path == "/backend-api/codex/models"
-        assert (
-            request.url.params["client_version"]
-            == codex_oauth.CODEX_COMPATIBILITY_VERSION
-        )
+        assert request.url.params["client_version"] == "0.153.4"
         assert request.headers["Authorization"] == "Bearer access"
         assert request.headers["ChatGPT-Account-ID"] == "account"
         assert request.headers["originator"] == "mato-loop"
-        assert request.headers["version"] == codex_oauth.CODEX_COMPATIBILITY_VERSION
+        assert request.headers["version"] == "0.153.4"
         return httpx.Response(
             200,
             json={
                 "models": [
                     {
-                        "slug": "gpt-test",
-                        "display_name": "GPT Test",
+                        "slug": "gpt-6-astra",
+                        "display_name": "GPT-6-Astra",
                         "visibility": "list",
                         "context_window": 272000,
                         "supports_parallel_tool_calls": True,
@@ -101,6 +98,8 @@ async def test_codex_model_discovery_filters_and_normalizes_models(monkeypatch) 
                         "supported_reasoning_levels": [
                             {"effort": "low", "description": "Fast"},
                             {"effort": "medium", "description": "Balanced"},
+                            {"effort": "high", "description": "Deep"},
+                            {"effort": "xhigh", "description": "Extra deep"},
                             {"effort": "max", "description": "Maximum"},
                             {"effort": "ultra", "description": "Delegation"},
                             {"effort": "future", "description": "Unknown"},
@@ -119,16 +118,16 @@ async def test_codex_model_discovery_filters_and_normalizes_models(monkeypatch) 
     )
 
     assert [model.id for model in models] == [
-        "openai-codex/gpt-test",
+        "openai-codex/gpt-6-astra",
         "openai-codex/gpt-image-2",
     ]
     assert models[0].metadata == {
-        "name": "GPT Test",
+        "name": "GPT-6-Astra",
         "max_model_len": 272000,
         "supports_parallel_tool_calls": True,
         "supports_image_input": True,
         "default_reasoning_effort": "medium",
-        "reasoning_efforts": ["low", "medium", "max", "ultra"],
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
     }
     assert models[1].capabilities == {"image_generation", "image_editing"}
     assert models[1].metadata == {
