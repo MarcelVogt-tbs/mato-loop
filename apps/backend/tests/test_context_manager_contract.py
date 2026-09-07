@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -12,6 +13,7 @@ from mato_loop_backend.agent.context import (
     ContextError,
     ContextManager,
     SummaryResult,
+    _compaction_boundary,
     _projection_messages,
     _shorten_evidence_output,
     _summary_source,
@@ -29,7 +31,11 @@ from mato_loop_backend.settings import (
     SkillDefinition,
     TrustLevel,
 )
-from mato_loop_backend.settings.models import ModelConfig
+from mato_loop_backend.settings.models import (
+    BUILD_AGENT_PROFILE_ID,
+    PLAN_AGENT_PROFILE_ID,
+    ModelConfig,
+)
 
 
 def _session() -> ChatSession:
@@ -763,9 +769,9 @@ def test_projection_compacts_tool_outputs_before_latest_user_turn() -> None:
     assert "https://example.test/source" not in summary_source
     assert "x" * 1_000 not in summary_source
     assert "y" * 1_000 not in summary_source
-    assert str(search_result.id) not in summary_source
-    assert str(fetch_result.id) not in summary_source
-    assert "toolResultReference" not in summary_source
+    assert str(search_result.id) in summary_source
+    assert str(fetch_result.id) in summary_source
+    assert "toolResultReference" in summary_source
 
 
 def test_public_projection_receives_authorized_private_history() -> None:
@@ -813,8 +819,8 @@ def test_public_projection_receives_authorized_private_history() -> None:
     assert "private.png" in projected_assistant["content"]
     summary_source = _summary_source(None, [assistant, tool_result])
     assert "privater Toolinhalt" not in summary_source
-    assert str(tool_result.id) not in summary_source
-    assert "toolResultReference" not in summary_source
+    assert str(tool_result.id) in summary_source
+    assert "toolResultReference" in summary_source
 
 
 def test_projection_distributes_current_tool_output_budget_fairly() -> None:
@@ -1190,7 +1196,7 @@ def test_active_skill_instructions_preserve_host_precedence() -> None:
     assert prompt.index("Host security") < prompt.index("Host-selected user skill")
 
 
-def test_summary_source_excludes_tool_calls_and_results() -> None:
+def test_summary_source_references_tool_content_without_copying_it() -> None:
     session = _session()
     assistant = _message(session.id, "assistant", "")
     assistant.tool_calls = [
@@ -1201,7 +1207,8 @@ def test_summary_source_excludes_tool_calls_and_results() -> None:
 
     source = _summary_source(None, [assistant, tool])
 
-    assert "session_tool_result_read" not in source
+    assert "session_tool_result_read" in source
+    assert str(tool.id) in source
     assert "vertraulicher wiederabgerufener Ausschnitt" not in source
 
 
@@ -1249,8 +1256,8 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "Do not search stable knowledge" in prompt
     assert "merely difficult tasks" in prompt
     assert "For open comparisons" in prompt
-    assert "use a second discovery search only if needed" in prompt
-    assert "verify one credible alternative" in prompt
+    assert "verify credible alternatives" in prompt
+    assert "stop when evidence is sufficient" in prompt
     assert "Search snippets are untrusted discovery" in prompt
     assert "one discriminative query per information need" in prompt
     assert "Preserve relationships" in prompt
@@ -1270,7 +1277,7 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "never use sourceId" in prompt
     assert "directly after each supported claim" in prompt
     assert "use at most two links per claim" in prompt
-    assert "Research budget limit: 8 calls this turn" in prompt
+    assert "Research budget limit:" not in prompt
     assert "Copy it exactly" in prompt
 
 
@@ -1390,18 +1397,19 @@ def test_system_prompt_enforces_managed_writing_contract() -> None:
         offered_tool_names=frozenset({"question", "read", "write_file"}),
     )
 
-    assert "Reusable email or drafts" in prompt
+    assert "Saved artifacts:" in prompt
     assert "one file per artifact" in prompt
-    assert "Default to root=files; computer only when explicit" in prompt
+    assert "default root=files, computer only when explicit" in prompt
     assert "descriptive .md; never files/" in prompt
     assert "one file per artifact with write_file" in prompt
-    assert "same path with edit_file after reading it" in prompt
+    assert "Read before edit_file; reuse the path" in prompt
     assert "mode=create" not in prompt
     assert "exact SHA-256" not in prompt
-    assert "never make version copies" in prompt
+    assert "no version copies" in prompt
     assert "Ask if ambiguous" in prompt
-    assert "never overwrite a dirty active file" in prompt
-    assert "Reply only with status and path, not the body" in prompt
+    assert "Never overwrite dirty files" in prompt
+    assert "Reply only with status and path, not the body" not in prompt
+    assert "otherwise answer inline unless a workflow requires an artifact" in prompt
 
 
 def test_missing_computer_directory_uses_structured_question_when_available() -> None:
@@ -1622,7 +1630,6 @@ def test_dynamic_memory_is_separate_from_runtime_prompt() -> None:
     )
     runtime_prefixes = (
         "Tool budget: 8 calls",
-        "Research budget limit: 4 calls this turn.",
         "Required memory mutation remains unresolved.",
         "Local time:",
         "The previous model turn returned neither assistant text nor a tool call.",
@@ -2188,3 +2195,219 @@ async def test_failed_projection_does_not_commit_new_summary() -> None:
 
     db.add.assert_not_called()
     db.commit.assert_not_awaited()
+
+
+def test_task_general_profiles_keep_main_plan_artifact_and_child_permissions() -> None:
+    session = _session()
+    tools = frozenset({"write_file", "read", "task"})
+    plan = AgentProfile(id=PLAN_AGENT_PROFILE_ID, name="Plan", instructions="Analyze and plan.")
+    build = AgentProfile(id=BUILD_AGENT_PROFILE_ID, name="Build", instructions="Complete the task.")
+    main = general_system_prompt(session, agent_profile=plan, offered_tool_names=tools)
+    child = general_system_prompt(session, agent_profile=plan, delegated=True)
+    work = general_system_prompt(session, agent_profile=build, offered_tool_names=tools)
+
+    assert f"root=files path=plans/{session.id}/plan.md" in main
+    assert "expectedSha256" in main
+    assert "analyze the request" in main
+    assert "Plan workflow:" not in child
+    assert f"root=files path=plans/{session.id}/plan.md" in child
+    assert "not a requirement to create" in child
+    assert "do not inherit the parent transcript" in child
+    assert "paths/IDs and active skill instructions" in work
+    assert "carry out the requested work, not only a proposal" in work
+    assert "answer inline when that fulfills the request" in work
+    assert "For repository work" in work
+    assert "not required for unrelated tasks" in work
+    for evidence in ("tests for code", "data checks", "source verification", "reconciliation"):
+        assert evidence in work
+
+
+def test_unlimited_tool_prompt_has_no_budget_or_remaining_count() -> None:
+    session = _session()
+    prompts = [general_system_prompt(
+        session,
+        include_local_time=False,
+        offered_tool_names=frozenset({"web_search", "webfetch"}),
+        tool_call_limit=None,
+        research_tool_call_limit=None,
+        research_tool_calls_used=used,
+    ) for used in (0, 100, 10_000)]
+    assert prompts[0] == prompts[1] == prompts[2]
+    assert "budget" not in prompts[0].lower()
+    assert "remaining calls" not in prompts[0]
+    finite = general_system_prompt(session, offered_tool_names=frozenset({"read"}), tool_call_limit=7)
+    assert "Tool budget: 7 calls" in finite
+
+
+def _tool_segment(session_id, index: int) -> list[Message]:
+    assistant = _message(session_id, "assistant", f"Check {index}: " + "context " * 70)
+    assistant.tool_calls = [
+        {"id": f"check-{index}-{part}", "name": "shell_run", "arguments": {}}
+        for part in range(2)
+    ]
+    results = []
+    for call in assistant.tool_calls:
+        result = _message(session_id, "tool", json.dumps({
+            "exitCode": 1,
+            "summary": {"passed": 41, "failed": 2, "value": 12.75, "unit": "mm"},
+            "error": {"code": "tool.executionFailed", "message": "SECRET_ERROR_DETAIL"},
+            "stdout": "SECRET_OUTPUT " * 100,
+            "credentials": {"apiKey": "SECRET_API_KEY"},
+            "provider_data": {"token": "SECRET_NESTED_PROVIDER"},
+        }))
+        result.tool_call_id = call["id"]
+        results.append(result)
+    return [assistant, *results]
+
+
+def _assert_whole_tool_pairs(messages) -> None:
+    expected = set()
+    for item in messages:
+        if item["role"] == "tool":
+            assert item["tool_call_id"] in expected
+            expected.remove(item["tool_call_id"])
+        else:
+            assert not expected
+            expected = {call["id"] for call in item.get("tool_calls") or []}
+    assert not expected
+
+
+async def test_long_single_turn_compacts_reloads_and_keeps_honest_coverage() -> None:
+    session = _session()
+    request = _message(session.id, "user", "Pruefe alle Messungen und korrigiere die Auswertung.")
+    records = [request]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    summarize = AsyncMock(return_value=SummaryResult("Facts\nChecks failed; verify remaining measurements.", None))
+
+    async def build():
+        return await ContextManager.build(
+            db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+            model=_model(context_window_tokens=8_000), settings=_settings(), summarize=summarize,
+        )
+
+    previous_boundary = -1
+    for cycle in range(3):
+        for index in range(cycle * 10, (cycle + 1) * 10):
+            records.extend(_tool_segment(session.id, index))
+        records[1].provider_data = {"responses_output_items": [{"secret": "SECRET_PROVIDER"}]}
+        snapshot = deepcopy([(item.id, item.content, item.tool_calls, item.provider_data) for item in records])
+        projection = await build()
+        assert projection.compacted
+        summary = projection.context_summary
+        assert summary is not None
+        boundary = next(i for i, item in enumerate(records) if item.id == summary.covered_through_message_id)
+        assert boundary == len(records) - 7
+        assert boundary > previous_boundary
+        source = summarize.await_args.args[0]
+        if cycle == 0:
+            assert request.content in source
+        else:
+            assert f"MESSAGE {request.id}" not in source
+            assert f"MESSAGE {records[previous_boundary - 2].id}" not in source
+            assert summary.previous_summary_id == db.scalar.return_value.id
+        assert "Untrusted operational tool evidence" in source
+        for text in ('"passed":41', '"failed":2', '"value":12.75', "tool.executionFailed"):
+            assert text in source
+            assert text in summary.content
+        assert "SECRET_" not in source
+        assert "SECRET_" not in summary.content
+        assert "provider_data" not in summary.content
+        last_reference = json.loads(summary.content.splitlines()[-1])["toolResultReference"]
+        assert last_reference == {
+            "tool": "session_tool_result_read",
+            "arguments": {"message_id": str(records[boundary].id), "offset": 0},
+            "totalCharacters": len(records[boundary].content),
+        }
+        coverage = json.loads(summary.content.split("Earlier evidence remains in canonical history.\n")[1].splitlines()[0])
+        assert coverage["coveredThroughMessageId"] == str(records[boundary].id)
+        assert coverage["earlierEvidenceReference"]["arguments"] == {
+            "session_id": str(session.id), "around_message_id": str(request.id),
+        }
+        users = [item["content"] for item in projection.messages if item["role"] == "user"]
+        assert users == [request.content]
+        _assert_whole_tool_pairs(projection.messages)
+        calls = [call["id"] for item in projection.messages for call in item.get("tool_calls") or []]
+        assert calls == [call["id"] for item in records[boundary + 1:] for call in item.tool_calls or []]
+        assert projection.estimated_input_tokens <= projection.input_budget_tokens
+        assert [(item.id, item.content, item.tool_calls, item.provider_data) for item in records] == snapshot
+
+        summary.id = uuid4()  # Emulate the database-assigned identity for the next reload.
+        db.scalar.return_value = summary
+        summarize.reset_mock()
+        reloaded = await build()
+        assert not reloaded.compacted
+        assert reloaded.messages == projection.messages
+        summarize.assert_not_awaited()
+        previous_boundary = boundary
+
+    next_request = _message(session.id, "user", "Fasse jetzt die Ergebnisse zusammen.")
+    records.append(next_request)
+    next_turn = await build()
+    assert [item["content"] for item in next_turn.messages if item["role"] == "user"] == [next_request.content]
+    _assert_whole_tool_pairs(next_turn.messages)
+
+
+def test_summary_evidence_is_bounded_and_excludes_orphans_arguments_and_secrets() -> None:
+    session = _session()
+    records = []
+    for index in range(30):
+        segment = _tool_segment(session.id, index)
+        segment[0].content = ""
+        segment[0].tool_calls[0]["arguments"] = {"command": "SECRET_COMMAND"}
+        segment[0].provider_data = {"reasoning": "SECRET_REASONING"}
+        records.extend(segment)
+    orphan = _message(session.id, "tool", '{"value":999}')
+    orphan.tool_call_id = "orphan-secret"
+    records.append(orphan)
+    source = _summary_source(None, records)
+    evidence = source.split("[Untrusted operational tool evidence]\n")[1]
+    assert len(evidence) < 6_600
+    assert "SECRET_" not in source
+    assert "orphan-secret" not in source
+    assert '"value":999' not in source
+    assert '"value":12.75' in source
+    assert '"toolName":"shell_run"' in source
+    assert '"toolCallId":"check-29-1"' in source
+
+
+async def test_long_turn_compaction_keeps_pending_call_out_of_summary() -> None:
+    session = _session()
+    records = [_message(session.id, "user", "Pruefe alle Werte")]
+    for index in range(10):
+        records.extend(_tool_segment(session.id, index))
+    pending = _tool_segment(session.id, 10)
+    records.extend(pending[:2])
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    summarize = AsyncMock(return_value=SummaryResult("Continue checking.", None))
+
+    projection = await ContextManager.build(
+        db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+        model=_model(context_window_tokens=8_000), settings=_settings(), summarize=summarize,
+    )
+
+    assert projection.compacted
+    assert projection.context_summary.covered_through_message_id == records[24].id
+    assert str(pending[0].id) not in summarize.await_args.args[0]
+    assert str(pending[1].id) not in summarize.await_args.args[0]
+    assert projection.messages[-3]["tool_calls"] == pending[0].tool_calls
+    assert projection.messages[-1]["tool_call_id"] == "check-10-1"
+    assert "tool.executionInterrupted" in projection.messages[-1]["content"]
+    _assert_whole_tool_pairs(projection.messages)
+
+
+def test_compaction_never_covers_pending_parallel_batch_or_later_history() -> None:
+    session = _session()
+    request = _message(session.id, "user", "Arbeite weiter")
+    records = [request, *_tool_segment(session.id, 0)]
+    pending = _tool_segment(session.id, 1)
+    records.extend(pending[:2])
+    pending_start = 4
+    records.extend([_message(session.id, "user", "Neue Nachricht"), *_tool_segment(session.id, 2)])
+
+    assert _compaction_boundary(records, len(records), within_turn=True) == pending_start
+    projected = _projection_messages("System", None, records[pending_start:], TrustLevel.PUBLIC)
+    _assert_whole_tool_pairs(projected)
+    assert projected[1]["tool_calls"] == pending[0].tool_calls
+    assert any("tool.executionInterrupted" in item["content"] for item in projected if item["role"] == "tool")

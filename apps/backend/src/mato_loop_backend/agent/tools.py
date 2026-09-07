@@ -240,7 +240,6 @@ from mato_loop_backend.settings import (
     load_agent_profile,
     load_agent_profile_tools,
     load_effective_agent_identity,
-    load_effective_integrations,
     load_effective_tools,
 )
 from mato_loop_backend.skills import (
@@ -262,7 +261,25 @@ ALL_TOOL_EXECUTION_POLICIES = tuple(ToolExecutionPolicy)
 
 
 async def _allow(context: ToolContext, request: PermissionRequest) -> bool:
-    return await context.ask(request) == PermissionDecision.ALLOW
+    if request.policy_integration_id is not None:
+        return await context.ask(request) == PermissionDecision.ALLOW
+    options = getattr(context, "bound_options", {})
+    integration_ids = set(options.get("integration_ids", ()))
+    if options.get("integration_id") is not None:
+        integration_ids.add(options["integration_id"])
+
+    async def selected() -> bool:
+        if not integration_ids:
+            return True
+        current = await context.current_integrations()
+        return integration_ids <= {str(item.id) for item in current.instances if item.enabled}
+
+    # Integration handlers can request additional approvals, such as Git directory access.
+    return (
+        await selected()
+        and await context.ask(request) == PermissionDecision.ALLOW
+        and await selected()
+    )
 
 
 async def _profile_tool_settings(context: ToolContext) -> ToolSettings:
@@ -280,7 +297,9 @@ async def _profile_tool_settings(context: ToolContext) -> ToolSettings:
             context.db, context.session.user_id, trust_level
         )
         settings._agent_profile_unavailable = True
-    return settings
+    from mato_loop_backend.agent.subagents import apply_delegation_ceiling
+
+    return apply_delegation_ceiling(settings, context.tool_settings._delegation_ceiling)
 
 
 def _execution_path(context: ToolContext, path: str) -> str:
@@ -471,6 +490,7 @@ async def _project_read_files(
             ChatSession.user_id == context.session.user_id,
             ChatSession.project_id == context.session.project_id,
             ChatSession.session_type == "chat",
+            or_(ChatSession.parent_session_id.is_(None), ChatSession.parent_session_id == context.session.id),
         )
     )
     if target is None:
@@ -1455,7 +1475,7 @@ async def _run_process(
         terminal_arguments = {
             key: value
             for key, value in arguments.items()
-            if key in {"command", "expectedInspectionRevision"}
+            if key in {"command", "timeoutSeconds", "expectedInspectionRevision"}
         }
         result = await terminal_coordinator.run(
             user_id=context.session.user_id,
@@ -1477,7 +1497,7 @@ async def _run_process(
             on_event=publish,
         )
     assert isinstance(result, ProcessResult)
-    return ToolResult.json(
+    tool_result = ToolResult.json(
         {
             **result.model_dump(by_alias=True),
             "requestedArguments": requested_arguments,
@@ -1489,6 +1509,12 @@ async def _run_process(
             },
         }
     )
+    if result.timed_out or result.exit_code != 0:
+        tool_result.is_error = True
+        tool_result.metadata["errorCode"] = (
+            "process.timedOut" if result.timed_out else "process.commandFailed"
+        )
+    return tool_result
 
 
 async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> ToolResult:
@@ -1501,7 +1527,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         agent_id=client.agent_id,
         current_directory=client.current_directory,
     )
-    requested = {"command": arguments.command}
+    requested = arguments.model_dump(exclude_none=True)
     executed = requested
     if mode == "confirm":
         decision = await terminal_coordinator.propose(
@@ -1521,7 +1547,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
                 context.user_denied = True
                 return ToolResult.error("permission.userDenied")
             return ToolResult.error("terminal.disconnected")
-        executed = {"command": decision.command_line}
+        executed = {**requested, "command": decision.command_line}
     inspection = await client.request(
         "shell.inspect",
         {"command": executed["command"], "currentDirectory": client.current_directory},
@@ -1535,9 +1561,12 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
             and all(command.prefix is not None for command in inspection.commands)
             else []
         )
-        analysis_incomplete = (
-            inspection.classification == "write" and not inspection.analysis_complete
-        )
+        metadata_kinds = {"toolchain_metadata", "discard"}
+        metadata_paths = frozenset(
+            target.path for target in inspection.targets if target.kind in metadata_kinds
+        ) - {
+            target.path for target in inspection.targets if target.kind not in metadata_kinds
+        }
         permission = PermissionRequest(
             capability=f"shell.{inspection.classification}",
             resource_type="shell_command",
@@ -1552,24 +1581,20 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
             action_kind="shell_run",
             risk_level="low" if inspection.classification == "read" else "high",
             title=(
-                "Lesenden Shell-Befehl ausführen?"
+                "Shell-Befehl ohne erkannte Schreibaktion ausführen?"
                 if inspection.classification == "read"
-                else (
-                    "Nicht vollständig geprüften Shell-Befehl ausführen?"
-                    if analysis_incomplete
-                    else "Schreibenden Shell-Befehl ausführen?"
-                )
+                else "Als schreibend eingestuften Shell-Befehl ausführen?"
             ),
             summary=(
-                "Der Befehl wurde als rein lesend klassifiziert."
+                "Es wurden keine bekannten Schreibaktionen erkannt. Der Befehl kann dennoch Nebenwirkungen haben."
                 if inspection.classification == "read"
-                else (
-                    "Der Befehl konnte nicht vollständig geprüft werden und wird vorsichtshalber wie ein schreibender Befehl behandelt."
-                    if analysis_incomplete
-                    else "Der Befehl kann Dateien verändern, Programme starten und Netzwerkdienste verwenden."
-                )
+                else "Der Befehl wurde als schreibend eingestuft und kann Dateien verändern, Programme starten und Netzwerkdienste verwenden."
+            ) + (
+                " Die Analyse ist unvollständig; nicht alle Befehle und Pfade konnten geprüft werden."
+                if not inspection.analysis_complete else ""
             ),
             resource_display=client.current_directory,
+            shell_metadata_paths=metadata_paths,
             approval_details={
                 "shellClassification": inspection.classification,
                 "shellAnalysisComplete": inspection.analysis_complete,
@@ -1601,6 +1626,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         {
             "command": executed["command"],
             "currentDirectory": client.current_directory,
+            "timeoutSeconds": arguments.timeout,
             "expectedInspectionRevision": inspection.inspection_revision,
         },
         requested_arguments=requested,
@@ -1610,6 +1636,8 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
 
 
 async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> ToolResult:
+    from mato_loop_backend.integrations.registry import agent_profile_search_available
+
     def binding_matches(
         primary_provider: str,
         fallback_provider: str | None,
@@ -1624,10 +1652,10 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
             == context.bound_options.get("fallback_provider_revision")
         )
 
-    current_integrations = await load_effective_integrations(
-        context.db, context.session.user_id
-    )
+    current_integrations = await context.current_integrations()
     current_tools = await _profile_tool_settings(context)
+    if not agent_profile_search_available(current_integrations, current_tools):
+        return ToolResult.error("tool.unavailable")
     primary_provider, fallback_provider = effective_search_providers(
         current_tools, current_integrations
     )
@@ -1635,10 +1663,10 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
         return ToolResult.error("tool.unavailable")
     if not await _allow(context, web_search_permission()):
         return ToolResult.error("permission.denied")
-    current_integrations = await load_effective_integrations(
-        context.db, context.session.user_id
-    )
+    current_integrations = await context.current_integrations()
     current_tools = await _profile_tool_settings(context)
+    if not agent_profile_search_available(current_integrations, current_tools):
+        return ToolResult.error("tool.unavailable")
     primary_provider, fallback_provider = effective_search_providers(
         current_tools, current_integrations
     )
@@ -1965,7 +1993,29 @@ def resolve_tool_execution_policy(
         include_scoped=include_scoped,
     )
     if profile_policy != resolution.policy:
-        return ToolPolicyResolution(profile_policy, "agent_profile", "configured")
+        resolution = ToolPolicyResolution(profile_policy, "agent_profile", "configured")
+    if (snapshot := settings._delegation_ceiling) is not None:
+        from mato_loop_backend.agent.subagents import ceiling_settings
+
+        defaults = (
+            snapshot["integrationDefaults"].get(str(integration_id), {})
+            if integration_id is not None else snapshot["actionDefaults"]
+        )
+        ceiling = (
+            resolve_tool_execution_policy(
+                ceiling_settings(snapshot, settings.trust_level),
+                capability,
+                ToolExecutionPolicy(defaults[capability]),
+                integration_id=integration_id,
+                resource_key=resource_key,
+                hard_unavailable_capabilities=hard_unavailable_capabilities,
+                include_scoped=include_scoped,
+            ).policy
+            if capability in defaults else ToolExecutionPolicy.DISABLED
+        )
+        policies = (ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, ToolExecutionPolicy.DISABLED)
+        if policies.index(ceiling) > policies.index(resolution.policy):
+            return ToolPolicyResolution(ceiling, "delegation", "ceiling")
     return resolution
 
 
@@ -3112,6 +3162,11 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
                 ChatSession.session_type == "chat",
                 ChatSession.id == context.session.id,
             ),
+            or_(
+                ChatSession.parent_session_id.is_(None),
+                ChatSession.parent_session_id == context.session.id,
+                ChatSession.id == context.session.id,
+            ),
         )
     )
     if target is None:
@@ -3279,6 +3334,7 @@ async def _session_browse(
                 ChatSession.user_id == context.session.user_id,
                 ChatSession.id != context.session.id,
                 ChatSession.session_type == "chat",
+                or_(ChatSession.parent_session_id.is_(None), ChatSession.parent_session_id == context.session.id),
             )
             .order_by(messages.c.created_at.desc(), ChatSession.id.desc())
             .limit(arguments.limit)
@@ -3333,6 +3389,7 @@ async def _session_search(
                 ChatSession.user_id == context.session.user_id,
                 ChatSession.id != context.session.id,
                 ChatSession.session_type == "chat",
+                or_(ChatSession.parent_session_id.is_(None), ChatSession.parent_session_id == context.session.id),
                 or_(*match_conditions),
             )
             .order_by(
@@ -4140,19 +4197,27 @@ async def _question(arguments: QuestionArguments, context: ToolContext) -> ToolR
 async def _task(arguments: TaskArguments, context: ToolContext) -> ToolResult:
     if context.task_handler is None:
         return ToolResult.error("tool.unavailable")
-    return await context.task_handler(arguments.prompt)
+    return await context.task_handler(arguments)
 
 
 async def _coding_project(context: ToolContext) -> Project | None:
     if context.session.project_id is None:
         return None
-    return await context.db.scalar(
+    project = await context.db.scalar(
         select(Project).where(
             Project.id == context.session.project_id,
             Project.user_id == context.session.user_id,
             Project.coding_integration_id.is_not(None),
-        )
+        ).execution_options(populate_existing=True)
     )
+    integrations = await context.current_integrations()
+    if project is None or not any(
+        item.id == project.coding_integration_id and item.enabled
+        and item.integration_type == "coding" and item.adapter_type == "opencode"
+        for item in integrations.instances
+    ):
+        return None
+    return project
 
 
 async def _authorize_coding(
@@ -4164,7 +4229,10 @@ async def _authorize_coding(
     *,
     risk_level: str = "medium",
 ) -> bool:
-    return await _allow(
+    integration_id = project.coding_integration_id
+    if await _coding_project(context) is None:
+        return False
+    allowed = await _allow(
         context,
         PermissionRequest(
             capability=capability,
@@ -4177,6 +4245,10 @@ async def _authorize_coding(
             resource_display=project.name,
         ),
     )
+    if not allowed:
+        return False
+    current = await _coding_project(context)
+    return current is not None and current.coding_integration_id == integration_id
 
 
 def _coding_error(exc: ProjectCodingError) -> ToolResult:
@@ -4407,9 +4479,9 @@ _USER_PROFILE_UPDATE = ToolAction(
     ToolExecutionPolicy.ASK,
     mutates=True,
 )
-_SHELL_READ = ToolAction("shell.read", "Lesende Shell-Befehle", ToolExecutionPolicy.AUTO)
+_SHELL_READ = ToolAction("shell.read", "Shell ohne erkannte Schreibaktionen", ToolExecutionPolicy.AUTO)
 _SHELL_WRITE = ToolAction(
-    "shell.write", "Schreibende Shell-Befehle", ToolExecutionPolicy.ASK, mutates=True
+    "shell.write", "Als schreibend eingestufte Shell", ToolExecutionPolicy.ASK, mutates=True
 )
 _SYSTEM_INFO = ToolAction(
     "system.info", "Systeminformationen", ToolExecutionPolicy.AUTO
@@ -4494,12 +4566,12 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "task",
-            "Delegate bounded read-only codebase exploration and return its findings.",
+            "Join parallel self-contained tasks; avoid write conflicts; 8/run; no recursion.",
             TaskArguments,
             _task,
             group="agent",
-            label="Codebasis erkunden",
-            icon="travel_explore",
+            label="Aufgaben delegieren",
+            icon="account_tree",
         ),
         ToolDefinition(
             "read",
@@ -5061,8 +5133,13 @@ tool_registry = ToolRegistry(
         ToolDefinition(
             "shell_run",
             "Run one command directly with the host-configured shell in the current directory. "
-            "The host inspects the command and its file targets before authorization. This is not an "
-            "operating-system sandbox; shell cd applies only to this call.",
+            "The host inspects the command and its file targets before authorization. "
+            "Read classification means no known write action was detected, not absence of side effects. "
+            "Analysis completeness is separate from classification. This is not an "
+            "operating-system sandbox; shell cd applies only to this call. "
+            "Optional timeout is in seconds (0 < timeout <= 3600); null uses the agent default, "
+            "subject to its local maximum. Nonzero exits and timeouts are errors with bounded "
+            "output retained; interpret the exit code and output for the command's meaning.",
             ShellRunArguments,
             _shell_run,
             tool_type="computer",

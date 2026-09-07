@@ -18,7 +18,7 @@ TOOL_ACTIVITY_LABELS = {
     "grep": "Dateiinhalte durchsuchen",
     "list_directory": "Ordner auflisten",
     "read_file": "Datei lesen",
-    "task": "Codebasis erkunden",
+    "task": "Aufgaben delegieren",
     "provide_file": "Datei bereitstellen",
     "write_file": "Datei schreiben",
     "edit_file": "Datei bearbeiten",

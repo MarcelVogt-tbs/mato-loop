@@ -21,6 +21,7 @@ from mato_loop_backend.models import (
     PermissionGrant,
     UserAccount,
 )
+from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
 from mato_loop_backend.settings import InstanceLimits, SettingsStore
 from mato_loop_backend.workspace import (
     FileRoot,
@@ -143,11 +144,10 @@ async def _file_context(
     session = None
     if session_id is not None:
         if for_update:
-            candidate = await db.scalar(
-                select(ChatSession)
-                .where(ChatSession.id == session_id, ChatSession.user_id == user.id)
-                .with_for_update()
-            )
+            try:
+                candidate = await get_owned_session(db, session_id, user.id, for_update=True)
+            except SessionServiceError as exc:
+                raise ApiError(exc.status_code, exc.code) from exc
         else:
             candidate = await db.get(ChatSession, session_id)
         if candidate is None or candidate.user_id != user.id:

@@ -469,6 +469,10 @@ async def test_coding_analyze_tool_uses_bound_project_and_permission(monkeypatch
         db=db,
         session=SimpleNamespace(id=uuid4(), user_id=user_id, project_id=project.id),
         ask=ask,
+        current_integrations=AsyncMock(return_value=SimpleNamespace(instances=[
+            SimpleNamespace(id=project.coding_integration_id, enabled=True,
+                            integration_type="coding", adapter_type="opencode")
+        ])),
     )
     monkeypatch.setattr(tools_module, "load_agent_profile", AsyncMock(return_value=object()))
     monkeypatch.setattr(

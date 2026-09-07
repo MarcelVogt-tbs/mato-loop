@@ -18,7 +18,7 @@ from mato_loop_backend.memory.embeddings import (
     EmbeddingError,
     embedding_client,
 )
-from mato_loop_backend.models import MemoryEmbeddingStatus, Message, MessageSearchChunk
+from mato_loop_backend.models import ChatSession, MemoryEmbeddingStatus, Message, MessageSearchChunk
 
 logger = logging.getLogger(__name__)
 TARGET_CHUNK_CHARACTERS = 1_200
@@ -72,6 +72,7 @@ def chunk_message_content(content: str) -> list[str]:
 
 def _eligible_filters() -> list[object]:
     return [
+        Message.chat_session.has(ChatSession.parent_session_id.is_(None)),
         Message.role.in_(("user", "assistant")),
         Message.generation_status == "completed",
         Message.error_code.is_(None),
@@ -107,6 +108,10 @@ class EpisodeIndexService:
             )
         )
         if not _eligible(message):
+            return 0
+        if await db.scalar(
+            select(ChatSession.parent_session_id).where(ChatSession.id == message.session_id)
+        ) is not None:
             return 0
         chunks = chunk_message_content(message.content)
         db.add_all(

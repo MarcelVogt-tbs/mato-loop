@@ -1,10 +1,12 @@
 import hashlib
 import json
+from dataclasses import replace
 from io import BytesIO
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from mato_loop_backend.agent.permissions import (
     PermissionDecision,
@@ -15,6 +17,8 @@ from mato_loop_backend.agent.permissions import (
     shell_prefix_allowed,
 )
 from mato_loop_backend.agent.runtime import _tool_policy
+from mato_loop_backend.agent.subagents import permission_snapshot
+from mato_loop_backend.agent.tool_arguments import ShellRunArguments
 from mato_loop_backend.agent.tool_registry import ToolContext
 from mato_loop_backend.agent.tools import (
     _execution_path,
@@ -98,8 +102,16 @@ def _tools(operations):
 def test_shell_tool_cannot_select_execution_targets() -> None:
     tools = _tools({"shell.run"})
     shell = next(item for item in tools.schemas() if item["name"] == "shell_run")
-    assert set(shell["parameters"]["properties"]) == {"command"}
+    assert set(shell["parameters"]["properties"]) == {"command", "timeout"}
+    assert ShellRunArguments(command="pwd").timeout is None
     assert all(item["name"] != "process_exec" for item in tools.schemas())
+    assert {
+        action.capability: (action.label, action.default_policy)
+        for action in tool_registry._operation_definitions["shell_run"].actions
+    } == {
+        "shell.read": ("Shell ohne erkannte Schreibaktionen", ToolExecutionPolicy.AUTO),
+        "shell.write": ("Als schreibend eingestufte Shell", ToolExecutionPolicy.ASK),
+    }
 
 
 async def test_execution_client_forwards_exact_arguments_without_context(monkeypatch) -> None:
@@ -530,6 +542,7 @@ async def test_coding_profile_auto_reads_keep_path_boundaries(
 
 @pytest.mark.parametrize("profile_factory", [plan_agent_profile, build_agent_profile, None])
 @pytest.mark.parametrize("trust", [TrustLevel.PUBLIC, TrustLevel.PRIVATE])
+@pytest.mark.parametrize("classification", ["read", "write"])
 @pytest.mark.parametrize(
     ("analysis_complete", "path", "agent_overrides", "expected"),
     [
@@ -544,8 +557,8 @@ async def test_coding_profile_auto_reads_keep_path_boundaries(
         (False, None, {"home_filesystem_policy": "deny"}, PermissionDecision.DENY),
     ],
 )
-async def test_shell_write_policy_covers_incomplete_analysis(
-    tmp_path, profile_factory, trust, analysis_complete, path, agent_overrides, expected
+async def test_shell_policy_covers_incomplete_analysis(
+    tmp_path, profile_factory, trust, classification, analysis_complete, path, agent_overrides, expected
 ) -> None:
     client = FakeExecutionClient(
         {}, {"shell.inspect", "shell.run"}, current_directory="/workspace/harness-eval-astra/app"
@@ -570,14 +583,17 @@ async def test_shell_write_policy_covers_incomplete_analysis(
             profile.public_permissions if trust == TrustLevel.PUBLIC else profile.private_permissions
         )
     request = _shell_permission(
-        client, prefixes=[["find"], ["find"], ["printf"], ["cat"]],
+        client, classification=classification, prefixes=[["find"], ["find"], ["printf"], ["cat"]],
         paths=[path] if path else [], analysis_complete=analysis_complete,
     )
-    policy = _tool_policy(settings, IntegrationSettings(), request)
-    if profile_factory == plan_agent_profile:
+    policy = _tool_policy(
+        settings, IntegrationSettings(), request,
+        snapshot=permission_snapshot(settings, {"shell_run"}),
+    )
+    if profile_factory == plan_agent_profile and classification == "write":
         assert policy == ToolExecutionPolicy.DISABLED
         expected = PermissionDecision.DENY
-    elif profile_factory is None:
+    elif profile_factory is None and (classification == "write" or trust == TrustLevel.PUBLIC):
         assert policy == ToolExecutionPolicy.ASK
         if expected == PermissionDecision.ALLOW:
             expected = PermissionDecision.ASK
@@ -632,15 +648,19 @@ async def test_shell_dispatches_with_inspection_classification(tmp_path) -> None
     }
 
 
-async def test_shell_labels_incomplete_inspection_as_unverified(tmp_path) -> None:
+@pytest.mark.parametrize("classification", ["read", "write"])
+@pytest.mark.parametrize("analysis_complete", [False, True])
+async def test_shell_copy_separates_classification_and_completeness(
+    tmp_path, classification, analysis_complete,
+) -> None:
     call = ToolCall("shell", "shell_run", {"command": "unknown-command --inspect"})
     client = FakeExecutionClient(
         {
             "shell.inspect": ShellInspectResult(
                 targets=[],
-                analysis_complete=False,
-                classification="write",
-                read_only=False,
+                analysis_complete=analysis_complete,
+                classification=classification,
+                read_only=classification == "read",
                 commands=[],
                 inspection_revision="b" * 64,
             ),
@@ -662,24 +682,34 @@ async def test_shell_labels_incomplete_inspection_as_unverified(tmp_path) -> Non
 
     assert not result.is_error
     request = context.ask_handler.await_args.args[0]
-    assert request.capability == "shell.write"
-    assert request.risk_level == "high"
-    assert request.title == "Nicht vollständig geprüften Shell-Befehl ausführen?"
+    assert request.capability == f"shell.{classification}"
+    assert request.risk_level == ("low" if classification == "read" else "high")
+    assert request.title == (
+        "Shell-Befehl ohne erkannte Schreibaktion ausführen?"
+        if classification == "read"
+        else "Als schreibend eingestuften Shell-Befehl ausführen?"
+    )
     assert request.summary == (
-        "Der Befehl konnte nicht vollständig geprüft werden und wird vorsichtshalber "
-        "wie ein schreibender Befehl behandelt."
+        "Es wurden keine bekannten Schreibaktionen erkannt. Der Befehl kann dennoch Nebenwirkungen haben."
+        if classification == "read"
+        else "Der Befehl wurde als schreibend eingestuft und kann Dateien verändern, Programme starten und Netzwerkdienste verwenden."
+    ) + (
+        " Die Analyse ist unvollständig; nicht alle Befehle und Pfade konnten geprüft werden."
+        if not analysis_complete else ""
     )
     assert request.approval_details == {
-        "shellClassification": "write",
-        "shellAnalysisComplete": False,
+        "shellClassification": classification,
+        "shellAnalysisComplete": analysis_complete,
         "shellPrefixes": [],
     }
 
 
+@pytest.mark.parametrize("timeout", [None, 0.5, 3600])
 async def test_terminal_confirm_reinspects_edited_shell_and_reports_execution(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, timeout
 ) -> None:
-    call = ToolCall("shell", "shell_run", {"command": "cat README.md"})
+    requested = {"command": "cat README.md", **({"timeout": timeout} if timeout else {})}
+    call = ToolCall("shell", "shell_run", requested)
 
     def inspection(arguments):
         edited = arguments["command"] == "cat pyproject.toml"
@@ -722,10 +752,12 @@ async def test_terminal_confirm_reinspects_edited_shell_and_reports_execution(
     assert [request[1]["command"] for request in client.requests] == ["cat pyproject.toml"]
     assert run.await_args.kwargs["arguments"] == {
         "command": "cat pyproject.toml",
+        "timeoutSeconds": timeout,
         "expectedInspectionRevision": "b" * 64,
     }
-    assert payload["requestedArguments"] == {"command": "cat README.md"}
-    assert payload["executedArguments"] == {"command": "cat pyproject.toml"}
+    assert propose.await_args.kwargs["requested_arguments"] == requested
+    assert payload["requestedArguments"] == requested
+    assert payload["executedArguments"] == {**requested, "command": "cat pyproject.toml"}
     assert payload["userEdited"] is True
 
     context.user_denied = False
@@ -738,3 +770,368 @@ async def test_terminal_confirm_reinspects_edited_shell_and_reports_execution(
     denied = await _tools(client.operations).execute(call, context)
     assert json.loads(denied.content)["error"]["code"] == "permission.userDenied"
     assert context.user_denied is True
+
+
+@pytest.mark.parametrize("timeout", [0, -1, 3600.1, float("inf"), float("nan"), True, "60"])
+def test_shell_timeout_rejects_invalid_values(timeout) -> None:
+    with pytest.raises(ValidationError):
+        ShellRunArguments(command="pwd", timeout=timeout)
+
+
+@pytest.mark.parametrize("terminal_mode", [None, "auto"])
+@pytest.mark.parametrize("timeout", [None, 0.25, 3600])
+@pytest.mark.parametrize(
+    ("exit_code", "timed_out", "error_code"),
+    [(0, False, None), (7, False, "process.commandFailed"), (-15, True, "process.timedOut"),
+     (0, True, "process.timedOut")],
+)
+async def test_shell_timeout_and_process_evidence(
+    tmp_path, monkeypatch, terminal_mode, timeout, exit_code, timed_out, error_code,
+) -> None:
+    call = ToolCall("shell", "shell_run", {"command": "printf evidence", "timeout": timeout})
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run", "terminal.run"})
+    process = ProcessResult(
+        exit_code=exit_code, timed_out=timed_out, duration_ms=123, stdout_bytes=8,
+        stderr_bytes=10, stdout_truncated=True, stderr_truncated=False,
+    )
+    inspection = ShellInspectResult(
+        targets=[], analysis_complete=True, classification="read", read_only=True,
+        commands=[{"tokens": ["printf", "evidence"], "prefix": ["printf"], "classification": "read"}],
+        inspection_revision="a" * 64,
+    )
+
+    async def execute(*_args, **kwargs):
+        await kwargs["on_event"](Mock(event="stdout", data="evidence"))
+        await kwargs["on_event"](Mock(event="stderr", data="diagnostic"))
+        return process
+
+    async def request(operation, arguments, _model, **kwargs):
+        if operation == "shell.inspect":
+            assert arguments == {"command": "printf evidence", "currentDirectory": client.current_directory}
+            return inspection
+        assert arguments["timeoutSeconds"] == timeout
+        assert arguments["expectedInspectionRevision"] == "a" * 64
+        assert kwargs["timeout"] == 3610
+        return await execute(**kwargs)
+
+    client.request = AsyncMock(side_effect=request)
+    run = AsyncMock(side_effect=execute)
+    monkeypatch.setattr(terminal_coordinator, "mode_for", lambda **_kwargs: terminal_mode)
+    monkeypatch.setattr(terminal_coordinator, "run", run)
+    context = _context(tmp_path, call, client)
+    result = await _tools(client.operations).execute(call, context)
+    payload = json.loads(result.content)
+
+    assert result.is_error == (error_code is not None)
+    assert result.metadata.get("errorCode") == error_code
+    assert payload["exitCode"] == exit_code
+    assert payload["timedOut"] == timed_out
+    assert payload["durationMs"] == 123
+    assert payload["stdoutBytes"] == 8
+    assert payload["stderrBytes"] == 10
+    assert payload["output"] == {"stdout": "evidence", "stderr": "diagnostic", "truncated": True}
+    assert context.ask_handler.await_count == 1
+    if terminal_mode:
+        assert run.await_args.kwargs["arguments"] == {
+            "command": "printf evidence", "timeoutSeconds": timeout,
+            "expectedInspectionRevision": "a" * 64,
+        }
+        assert client.request.await_count == 1
+    else:
+        run.assert_not_awaited()
+
+
+@pytest.mark.parametrize("deny", [False, True])
+async def test_shell_timeout_does_not_bypass_permission_or_inspection_revision(tmp_path, deny) -> None:
+    call = ToolCall("shell", "shell_run", {"command": "cat README.md", "timeout": 3600})
+
+    def changed(arguments):
+        assert arguments["expectedInspectionRevision"] == "a" * 64
+        assert arguments["timeoutSeconds"] == 3600
+        raise ExecutionClientError("process.inspectionChanged")
+
+    client = FakeExecutionClient(
+        {
+            "shell.inspect": ShellInspectResult(
+                targets=[], analysis_complete=True, classification="read", read_only=True,
+                commands=[{"tokens": ["cat", "README.md"], "prefix": ["cat"], "classification": "read"}],
+                inspection_revision="a" * 64,
+            ),
+            "shell.run": changed,
+        },
+        {"shell.inspect", "shell.run"},
+    )
+    context = _context(
+        tmp_path, call, client, decision=PermissionDecision.DENY if deny else PermissionDecision.ALLOW,
+    )
+    result = await _tools(client.operations).execute(call, context)
+    assert result.is_error
+    assert result.metadata["errorCode"] == ("permission.denied" if deny else "process.inspectionChanged")
+    assert len(client.requests) == (1 if deny else 2)
+    assert context.ask_handler.await_count == 1
+
+
+@pytest.mark.parametrize("profile_factory", [plan_agent_profile, build_agent_profile, None])
+@pytest.mark.parametrize("trust", [TrustLevel.PUBLIC, TrustLevel.PRIVATE])
+@pytest.mark.parametrize("classification", ["read", "write"])
+@pytest.mark.parametrize("analysis_complete", [False, True])
+async def test_shell_metadata_only_paths_preserve_profile_and_trust_policies(
+    tmp_path, profile_factory, trust, classification, analysis_complete,
+) -> None:
+    command = "command -v python3; ls /usr/bin /usr/local/bin 2>/dev/null"
+    if classification == "write":
+        command += "; touch result.txt"
+    call = ToolCall("shell", "shell_run", {"command": command})
+    targets = [
+        {"path": "/usr/bin", "kind": "toolchain_metadata"},
+        {"path": "/usr/local/bin", "kind": "toolchain_metadata"},
+        {"path": "/usr/bin/python3", "kind": "toolchain_metadata"},
+        {"path": "/dev/null", "kind": "discard"},
+        {"path": "/home/user/project/result.txt", "kind": "path"},
+    ]
+    inspection = ShellInspectResult.model_validate({
+        "targets": targets, "analysisComplete": analysis_complete,
+        "classification": classification, "readOnly": classification == "read",
+        "commands": [
+            {"tokens": ["command", "-v", "python3"], "prefix": ["command"], "classification": "read"},
+            {"tokens": ["ls", "/usr/bin", "/usr/local/bin"], "prefix": ["ls"], "classification": "read"},
+            *([{"tokens": ["touch", "result.txt"], "prefix": ["touch"], "classification": "write"}]
+              if classification == "write" else []),
+        ],
+        "inspectionRevision": "a" * 64,
+    })
+    client = FakeExecutionClient({
+        "shell.inspect": inspection,
+        "shell.run": ProcessResult(
+            exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0, stderr_bytes=0,
+            stdout_truncated=False, stderr_truncated=False,
+        ),
+    }, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, call, client)
+    context.db.scalar.return_value = ExecutionAgent(
+        id=client.agent_id, user_id=context.session.user_id, home_directory="/home/user",
+        home_filesystem_policy="auto", external_filesystem_policy="ask",
+        home_shell_enabled=True, external_shell_enabled=True,
+    )
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[]))
+    settings = ToolSettings().select_trust(trust)
+    profile = profile_factory() if profile_factory else None
+    if profile:
+        settings._agent_permissions = (
+            profile.public_permissions if trust == TrustLevel.PUBLIC else profile.private_permissions
+        )
+    expected_policy = (
+        ToolExecutionPolicy.DISABLED
+        if profile_factory == plan_agent_profile and classification == "write"
+        else ToolExecutionPolicy.ASK
+        if profile is None and (classification == "write" or trust == TrustLevel.PUBLIC)
+        else ToolExecutionPolicy.AUTO
+    )
+
+    async def authorize(request):
+        policy = _tool_policy(
+            settings, IntegrationSettings(), request,
+            snapshot=permission_snapshot(settings, {"shell_run"}),
+        )
+        assert policy == expected_policy
+        return await PermissionPolicy.evaluate(
+            context.db, context.session, request, context.root_files, policy,
+            agent_profile_id=profile.id if profile else None, trust_level=trust,
+        )
+
+    context.ask_handler = AsyncMock(side_effect=authorize)
+    result = await _tools(client.operations).execute(call, context)
+    assert result.is_error == (expected_policy != ToolExecutionPolicy.AUTO)
+    request = context.ask_handler.await_args.args[0]
+    assert request.shell_metadata_paths == frozenset(target["path"] for target in targets[:-1])
+    assert json.loads(request.resource_scope) == {
+        "agentId": str(client.agent_id), "currentDirectory": client.current_directory,
+        "classification": classification, "analysisComplete": analysis_complete,
+        "prefixes": [unit.prefix for unit in inspection.commands],
+        "paths": [target["path"] for target in targets],
+    }
+    assert set(request.approval_details) == {
+        "shellClassification", "shellAnalysisComplete", "shellPrefixes",
+    }
+    assert [operation for operation, _ in client.requests] == (
+        ["shell.inspect", "shell.run"] if not result.is_error else ["shell.inspect"]
+    )
+    if not result.is_error:
+        assert client.requests[-1][1]["expectedInspectionRevision"] == "a" * 64
+
+
+@pytest.mark.parametrize("classification", ["read", "write"])
+@pytest.mark.parametrize("kind", ["path", "input", "output", "executable", "script", "source", "directory"])
+@pytest.mark.parametrize("conflicting_path", ["/usr/bin/python3", "/dev/null"])
+async def test_shell_ordinary_target_wins_over_metadata_for_the_same_path(
+    tmp_path, classification, kind, conflicting_path,
+) -> None:
+    call = ToolCall("shell", "shell_run", {"command": "command -v python3; cat /usr/bin/python3"})
+    client = FakeExecutionClient({
+        "shell.inspect": ShellInspectResult(
+            targets=[
+                {"path": "/usr/bin/python3", "kind": "toolchain_metadata"},
+                {"path": "/dev/null", "kind": "discard"},
+                {"path": conflicting_path, "kind": kind},
+            ],
+            analysis_complete=False, classification=classification, read_only=classification == "read",
+            commands=[], inspection_revision="a" * 64,
+        ),
+    }, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, call, client, decision=PermissionDecision.ASK)
+    result = await _tools(client.operations).execute(call, context)
+    request = context.ask_handler.await_args.args[0]
+    assert result.is_error
+    assert request.shell_metadata_paths == frozenset({"/usr/bin/python3", "/dev/null"}) - {conflicting_path}
+    assert json.loads(request.resource_scope)["paths"] == [
+        "/usr/bin/python3", "/dev/null", conflicting_path,
+    ]
+    context.db.scalar.return_value = ExecutionAgent(
+        id=client.agent_id, user_id=context.session.user_id, home_directory="/home/user",
+        home_filesystem_policy="auto", external_filesystem_policy="ask",
+        home_shell_enabled=True, external_shell_enabled=True,
+    )
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[]))
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session, request, context.root_files, ToolExecutionPolicy.AUTO,
+    ) == PermissionDecision.ASK
+
+
+@pytest.mark.parametrize("classification", ["read", "write"])
+@pytest.mark.parametrize("analysis_complete", [False, True])
+@pytest.mark.parametrize(("path", "overrides", "expected"), [
+    ("/usr/bin", {}, PermissionDecision.ALLOW),
+    ("/dev/null", {}, PermissionDecision.ALLOW),
+    ("/usr/bin", {"external_shell_enabled": False}, PermissionDecision.DENY),
+    ("/dev/null", {"external_shell_enabled": False}, PermissionDecision.DENY),
+    ("/usr/bin", {"external_filesystem_policy": "deny"}, PermissionDecision.DENY),
+    ("/dev/null", {"external_filesystem_policy": "deny"}, PermissionDecision.DENY),
+    ("/usr/bin", {"home_shell_enabled": False}, PermissionDecision.DENY),
+    ("/usr/bin", {"home_filesystem_policy": "deny"}, PermissionDecision.DENY),
+    ("/usr/bin/.env", {}, PermissionDecision.ASK),
+    ("/usr/bin", {"unavailable": True}, PermissionDecision.DENY),
+])
+async def test_shell_metadata_paths_do_not_bypass_hard_checks(
+    tmp_path, classification, analysis_complete, path, overrides, expected,
+) -> None:
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, ToolCall("shell", "shell_run", {}), client)
+    agent = ExecutionAgent(
+        id=client.agent_id, user_id=context.session.user_id, home_directory="/home/user",
+        home_filesystem_policy="auto", external_filesystem_policy="ask",
+        home_shell_enabled=True, external_shell_enabled=True,
+    )
+    for key, value in overrides.items():
+        if key != "unavailable":
+            setattr(agent, key, value)
+    context.db.scalar.return_value = None if overrides.get("unavailable") else agent
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[]))
+    request = replace(
+        _shell_permission(client, classification=classification, paths=[path], analysis_complete=analysis_complete),
+        shell_metadata_paths=frozenset({path}),
+    )
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session, request, context.root_files, ToolExecutionPolicy.AUTO,
+    ) == expected
+    statement = context.db.scalar.await_args.args[0]
+    assert statement.get_execution_options()["populate_existing"] is True
+    assert "revoked_at IS NULL" in str(statement)
+    assert context.session.user_id in statement.compile().params.values()
+    assert client.agent_id in statement.compile().params.values()
+
+
+async def test_shell_metadata_must_be_current_typed_scope_subset(tmp_path) -> None:
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, ToolCall("shell", "shell_run", {}), client)
+    context.db.scalar.return_value = ExecutionAgent(
+        id=client.agent_id, user_id=context.session.user_id, home_directory="/home/user",
+        home_filesystem_policy="auto", external_filesystem_policy="ask",
+        home_shell_enabled=True, external_shell_enabled=True,
+    )
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[]))
+    request = _shell_permission(client, classification="read", paths=["/etc/hosts"])
+    assert request.shell_metadata_paths == frozenset()
+    for details in ({"shell_metadata_paths": ["/etc/hosts"]}, {"shellMetadataPaths": ["/etc/hosts"]}):
+        assert await PermissionPolicy.evaluate(
+            context.db, context.session, replace(request, approval_details=details),
+            context.root_files, ToolExecutionPolicy.AUTO,
+        ) == PermissionDecision.ASK
+        with pytest.raises(ValidationError):
+            ShellRunArguments(command="cat /etc/hosts", **details)
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session,
+        replace(request, shell_metadata_paths=frozenset({"/usr/bin"})),
+        context.root_files, ToolExecutionPolicy.AUTO,
+    ) == PermissionDecision.DENY
+    # Typed filesystem reads never use the shell-only exemption.
+    direct_read = execution_directory_permission(client.agent_id, "/usr/bin", capability="filesystem.read")
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session,
+        replace(direct_read, shell_metadata_paths=frozenset({"/usr/bin"})),
+        context.root_files, ToolExecutionPolicy.AUTO,
+    ) == PermissionDecision.ASK
+
+
+async def test_shell_reinspection_keeps_existing_grants_class_bound(tmp_path) -> None:
+    call = ToolCall("shell", "shell_run", {"command": "command -v python3"})
+    inspection = ShellInspectResult(
+        targets=[{"path": "/usr/bin/python3", "kind": "toolchain_metadata"}],
+        analysis_complete=False, classification="read", read_only=True,
+        commands=[{"tokens": ["command", "-v", "python3"], "prefix": ["command"], "classification": "read"}],
+        inspection_revision="a" * 64,
+    )
+    client = FakeExecutionClient({"shell.inspect": inspection}, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, call, client)
+    context.db.scalar.return_value = ExecutionAgent(
+        id=client.agent_id, user_id=context.session.user_id, home_directory="/home/user",
+        home_filesystem_policy="auto", external_filesystem_policy="ask",
+        home_shell_enabled=True, external_shell_enabled=True,
+    )
+    grants = []
+    context.db.scalars.return_value = Mock(all=Mock(side_effect=lambda: grants))
+
+    async def authorize(request):
+        return await PermissionPolicy.evaluate(
+            context.db, context.session, request, context.root_files, ToolExecutionPolicy.ASK,
+        )
+
+    context.ask_handler = AsyncMock(side_effect=authorize)
+    assert (await _tools(client.operations).execute(call, context)).is_error
+    pending = context.ask_handler.await_args.args[0]
+    grants.append(PermissionGrant(
+        session_id=context.session.id, capability=pending.capability,
+        resource_type=pending.resource_type, resource_scope=pending.resource_scope,
+    ))
+    client.responses["shell.inspect"] = ShellInspectResult.model_validate({
+        **inspection.model_dump(), "classification": "write", "read_only": False,
+        "inspection_revision": "b" * 64,
+    })
+    assert (await _tools(client.operations).execute(call, context)).is_error
+    reinspected = context.ask_handler.await_args.args[0]
+    assert reinspected.capability == "shell.write"
+    assert not PermissionPolicy.grant_matches(grants[0], reinspected, context.root_files)
+    assert [operation for operation, _ in client.requests] == ["shell.inspect", "shell.inspect"]
+    assert await authorize(pending) == PermissionDecision.ALLOW
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session, pending, context.root_files, ToolExecutionPolicy.DISABLED,
+    ) == PermissionDecision.DENY
+
+
+async def test_terminal_shell_failure_never_falls_back_to_shell_transport(tmp_path, monkeypatch) -> None:
+    call = ToolCall("shell", "shell_run", {"command": "pwd"})
+    client = FakeExecutionClient({
+        "shell.inspect": ShellInspectResult(
+            targets=[], analysis_complete=False, classification="read", read_only=True,
+            commands=[], inspection_revision="a" * 64,
+        ),
+    }, {"shell.inspect", "shell.run", "terminal.run"})
+    context = _context(tmp_path, call, client)
+    monkeypatch.setattr(terminal_coordinator, "mode_for", lambda **_kwargs: "auto")
+    run = AsyncMock(side_effect=ExecutionClientError("process.inspectionChanged"))
+    monkeypatch.setattr(terminal_coordinator, "run", run)
+    result = await _tools(client.operations).execute(call, context)
+    assert result.is_error
+    assert result.metadata["errorCode"] == "process.inspectionChanged"
+    assert [operation for operation, _ in client.requests] == ["shell.inspect"]
+    run.assert_awaited_once()
+    assert run.await_args.kwargs["arguments"]["expectedInspectionRevision"] == "a" * 64

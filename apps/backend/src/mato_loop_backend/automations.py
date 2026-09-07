@@ -168,15 +168,12 @@ class AutomationService:
     async def normal_session(
         db: AsyncSession, session_id: UUID, user_id: UUID, *, field: str
     ) -> ChatSession:
-        session = await db.scalar(
-            select(ChatSession)
-            .where(
-                ChatSession.id == session_id,
-                ChatSession.user_id == user_id,
-                ChatSession.session_type == "chat",
-            )
-            .with_for_update()
-        )
+        from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
+
+        try:
+            session = await get_owned_session(db, session_id, user_id, for_update=True)
+        except SessionServiceError as exc:
+            raise AutomationError(exc.code, field=field) from exc
         if session is None:
             raise AutomationError("automation.sessionNotFound", field=field)
         return session
@@ -557,6 +554,7 @@ class AutomationService:
         expected_revision: int,
     ) -> None:
         automation = await AutomationService.owned(db, automation_id, user_id)
+        execution_session_id = automation.execution_session_id
         if automation.revision != expected_revision:
             raise AutomationError(
                 "automation.changed", params={"currentRevision": automation.revision}
@@ -575,9 +573,11 @@ class AutomationService:
         )
         await db.rollback()
         from mato_loop_backend.agent.runtime import AgentRuntime
+        from mato_loop_backend.sessions.cleanup import deleting_child_sessions
 
         for agent_run_id in agent_run_ids:
             await AgentRuntime.cancel_and_wait(agent_run_id)
+        await AgentRuntime.cancel_descendants(execution_session_id)
 
         automation = await AutomationService.owned(
             db, automation_id, user_id, for_update=True
@@ -621,17 +621,18 @@ class AutomationService:
             logger.exception("Automation session storage could not be moved to trash")
             raise AutomationError("session.storageUnavailable") from exc
         try:
-            await db.delete(automation)
-            await db.flush()
-            if execution_session is not None:
-                await db.delete(execution_session)
-            await db.commit()
+            async with deleting_child_sessions(db, execution_session_id):
+                await db.delete(automation)
+                await db.flush()
+                if execution_session is not None:
+                    await db.delete(execution_session)
+                await db.commit()
         except BaseException:
             await db.rollback()
             if trashed is not None:
                 await asyncio.to_thread(
                     storage.restore_session,
-                    automation.execution_session_id,
+                    execution_session_id,
                     trashed,
                 )
             raise
@@ -964,6 +965,7 @@ class AutomationService:
                 .where(
                     ChatSession.id == output_session_id,
                     ChatSession.session_type == "chat",
+                    ChatSession.parent_session_id.is_(None),
                 )
                 .with_for_update()
             )

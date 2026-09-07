@@ -124,6 +124,17 @@ def _raise_api_error(exc: session_service.SessionServiceError) -> None:
     ) from exc
 
 
+async def _mutable_session(
+    db: AsyncSession, session_id: UUID, user_id: UUID, *, for_update: bool = False
+) -> ChatSession | None:
+    try:
+        return await session_service.get_owned_session(
+            db, session_id, user_id, for_update=for_update
+        )
+    except session_service.SessionServiceError as exc:
+        _raise_api_error(exc)
+
+
 class ControlCenterFileTarget(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -805,6 +816,47 @@ async def get_session_messages(
     }
 
 
+@router.get("/{session_id}/children")
+async def get_session_children(
+    session_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[dict[str, Any]]:
+    if await _owned_session(db, session_id, user.id) is None:
+        raise ApiError(404, "session.notFound")
+    latest_run_id = (
+        select(AgentRun.id)
+        .where(AgentRun.session_id == ChatSession.id, AgentRun.parent_run_id.is_(None))
+        .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
+        .limit(1)
+        .correlate(ChatSession)
+        .scalar_subquery()
+    )
+    rows = (
+        await db.execute(
+            select(ChatSession, AgentRun)
+            .outerjoin(AgentRun, AgentRun.id == latest_run_id)
+            .where(
+                ChatSession.parent_session_id == session_id,
+                ChatSession.user_id == user.id,
+            )
+            .order_by(ChatSession.created_at, ChatSession.spawn_index, ChatSession.id)
+        )
+    ).all()
+    return [
+        {
+            "id": str(child.id),
+            "title": child.title,
+            "parentSessionId": str(child.parent_session_id),
+            "spawnedByRunId": str(child.spawned_by_run_id),
+            "spawnedByToolCallId": child.spawned_by_tool_call_id,
+            "spawnIndex": child.spawn_index,
+            "run": run_payload(run) if run is not None else None,
+        }
+        for child, run in rows
+    ]
+
+
 @router.get("/{session_id}/messages/{message_id}")
 async def get_session_message(
     session_id: UUID,
@@ -831,7 +883,7 @@ async def mark_session_read(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, bool]:
-    item = await _owned_session(db, session_id, user.id, for_update=True)
+    item = await _mutable_session(db, session_id, user.id, for_update=True)
     if item is None:
         raise ApiError(404, "session.notFound")
     read_at = await db.scalar(
@@ -869,7 +921,7 @@ async def update_session(
             user,
             db,
             storage_factory=SessionStorage,
-            owned_session_query=_owned_session,
+            owned_session_query=_mutable_session,
             session_serializer=_session_payload,
         )
     except session_service.SessionServiceError as exc:
@@ -887,7 +939,7 @@ async def session_delete_impact(
             session_id,
             user.id,
             db,
-            owned_session_query=_owned_session,
+            owned_session_query=_mutable_session,
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)
@@ -915,7 +967,7 @@ async def delete_session(
             automation_mode=automation_mode,
             automation_impact=automation_impact,
             storage_factory=SessionStorage,
-            owned_session_query=_owned_session,
+            owned_session_query=_mutable_session,
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)
@@ -928,7 +980,7 @@ async def undo_user_message(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, Any]:
-    if await _owned_session(db, session_id, user.id) is None:
+    if await _mutable_session(db, session_id, user.id) is None:
         raise ApiError(404, "session.notFound")
     try:
         result = await ChatHistoryService.undo_user_message(
@@ -955,7 +1007,7 @@ async def retry_failed_message(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, Any]:
-    if await _owned_session(db, session_id, user.id) is None:
+    if await _mutable_session(db, session_id, user.id) is None:
         raise ApiError(404, "session.notFound")
     try:
         result = await ChatHistoryService.retry_failed_message(
@@ -1050,7 +1102,7 @@ async def _send_message(
             user,
             db,
             attachments=attachments,
-            owned_session_query=_owned_session,
+            owned_session_query=_mutable_session,
             duplicate_submission=_duplicate_submission_response,
             message_serializer=message_payload,
         )
@@ -1078,6 +1130,8 @@ async def send_message_with_attachments(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, Any]:
+    if await _mutable_session(db, session_id, user.id) is None:
+        raise ApiError(404, "session.notFound")
     request = _multipart_payload(payload, SendMessageRequest)
     assert isinstance(request, SendMessageRequest)
     duplicate = await _duplicate_submission_response(
@@ -1125,7 +1179,7 @@ async def cancel_run(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
-    if await _owned_session(db, session_id, user.id) is None:
+    if await _mutable_session(db, session_id, user.id) is None:
         raise ApiError(404, "session.runNotFound")
     run = await db.get(AgentRun, run_id)
     if run is None or run.session_id != session_id or run.parent_run_id is not None:

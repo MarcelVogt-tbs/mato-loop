@@ -149,6 +149,9 @@ async def test_native_coding_replays_revision_errors_checks_and_diff(tmp_path, m
             elif step in {2, 5, 6}:
                 assert previous["exitCode"] == (1 if step == 2 else 0)
                 assert previous["timedOut"] is False
+                assert messages[-1].provider_data["_matoloop"].get("errorCode") == (
+                    "process.commandFailed" if step == 2 else None
+                )
             elif step == 3:
                 assert previous["error"]["code"] == "file.changed"
             elif step == 4:

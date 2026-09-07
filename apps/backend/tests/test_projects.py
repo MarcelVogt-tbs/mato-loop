@@ -50,6 +50,12 @@ def _rows(*items):
     return result
 
 
+@pytest.fixture(autouse=True)
+def no_descendants(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "cancel_descendants", AsyncMock())
+    monkeypatch.setattr("mato_loop_backend.api.routes.projects.descendant_sessions", AsyncMock(return_value=[]))
+
+
 def test_project_model_enforces_owner_binding_and_chat_sessions() -> None:
     project_unique = next(
         constraint
@@ -242,10 +248,10 @@ async def test_delete_project_with_sessions_trashes_tree_and_database_rows(
         automation_impact=project_delete_impact_token([session.id], []),
     )
 
-    assert [call.args[0] for call in db.delete.await_args_list] == [session, project]
+    assert [call.args[0] for call in db.delete.await_args_list] == [project]
     db.commit.assert_awaited_once()
     assert not shared_file.exists()
-    db.execute.assert_not_awaited()
+    assert "DELETE FROM chat_sessions" in str(db.execute.await_args.args[0])
     assert list(storage.trash_dir.iterdir()) == []
     locked_automation_query = db.scalars.await_args_list[4].args[0]
     assert locked_automation_query.get_execution_options()["populate_existing"] is True
@@ -474,7 +480,7 @@ async def test_delete_project_restores_storage_when_commit_fails(
             ),
         )
 
-    db.rollback.assert_awaited_once()
+    assert db.rollback.await_count == 2
     assert shared_file.read_text(encoding="utf-8") == "shared"
     assert execution_file.read_text(encoding="utf-8") == "history"
     assert list(storage.trash_dir.iterdir()) == []

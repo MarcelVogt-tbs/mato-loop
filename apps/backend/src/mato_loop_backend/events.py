@@ -12,6 +12,15 @@ class RunEventBroker:
         self._subscribers: dict[UUID, set[asyncio.Queue[dict[str, Any]]]] = defaultdict(set)
         self._history: dict[UUID, list[dict[str, Any]]] = defaultdict(list)
         self._cleanup_tasks: set[asyncio.Task[None]] = set()
+        self._subagents: dict[UUID, tuple[UUID, dict[str, Any]]] = {}
+
+    def register_subagent(
+        self, run_id: UUID, parent_run_id: UUID, summary: dict[str, Any]
+    ) -> None:
+        self._subagents[run_id] = (parent_run_id, dict(summary))
+
+    def unregister_subagent(self, run_id: UUID) -> None:
+        self._subagents.pop(run_id, None)
 
     async def publish(self, run_id: UUID, event: dict[str, Any]) -> None:
         if event.get("type") in {"reasoning.updated", "context.summary.updated"}:
@@ -30,6 +39,33 @@ class RunEventBroker:
             task = asyncio.create_task(self._cleanup(run_id))
             self._cleanup_tasks.add(task)
             task.add_done_callback(self._cleanup_tasks.discard)
+
+        parent = self._subagents.get(run_id)
+        if parent is not None:
+            parent_run_id, summary = parent
+            event_type = event.get("type", "")
+            request_event = event_type.startswith(("approval.", "question."))
+            if request_event:
+                provenance = {
+                    "subagentSessionId": summary["sessionId"],
+                    "subagentTitle": summary["title"],
+                }
+                forwarded = {**event, **provenance}
+                for key in ("approval", "question"):
+                    if isinstance(event.get(key), dict):
+                        forwarded[key] = {
+                            **event[key],
+                            "payload": {**(event[key].get("payload") or {}), **provenance},
+                        }
+                await self.publish(parent_run_id, forwarded)
+            if request_event or event_type in {
+                "run.started", "run.timing", "run.completed", "run.failed", "run.cancelled",
+            }:
+                # This is an invalidation hint; clients reload the durable child status.
+                await self.publish(parent_run_id, {
+                    "type": "subagent.updated", "sessionId": summary["sessionId"],
+                    "runId": str(run_id), "toolCallId": summary["toolCallId"],
+                })
 
     async def _cleanup(self, run_id: UUID) -> None:
         await asyncio.sleep(60)

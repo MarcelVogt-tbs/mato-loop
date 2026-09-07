@@ -63,6 +63,8 @@ class PermissionRequest:
         "allow_session",
         "deny",
     )
+    # Derived from the current shell inspection, never from approval payloads or grants.
+    shell_metadata_paths: frozenset[str] = frozenset()
 
     @property
     def grant_capabilities(self) -> tuple[str, ...]:
@@ -862,7 +864,16 @@ class PermissionPolicy:
         *,
         agent_profile_id: UUID | None = None,
         trust_level: TrustLevel | None = None,
+        permission_session_id: UUID | None = None,
     ) -> PermissionDecision:
+        grant_session_id = permission_session_id or chat_session.id
+        if grant_session_id != chat_session.id:
+            if chat_session.parent_session_id != grant_session_id:
+                return PermissionDecision.DENY
+            parent = await db.get(ChatSession, grant_session_id, populate_existing=True)
+            if parent is None or parent.user_id != chat_session.user_id:
+                return PermissionDecision.DENY
+
         def grant_binding_conditions() -> tuple[Any, ...]:
             if trust_level is None:
                 return ()
@@ -907,12 +918,19 @@ class PermissionPolicy:
                     if target_id == chat_session.id
                     else await db.get(ChatSession, target_id)
                 )
+                if target is None or target.user_id != chat_session.user_id or (
+                    target is not chat_session
+                    and target.parent_session_id is not None
+                    and target.parent_session_id != chat_session.id
+                ):
+                    return PermissionDecision.DENY
                 if target is chat_session or (
-                    chat_session.project_id is not None
-                    and target is not None
-                    and target.user_id == chat_session.user_id
-                    and target.project_id == chat_session.project_id
-                    and target.session_type == "chat"
+                    target.parent_session_id == chat_session.id
+                    or (
+                        chat_session.project_id is not None
+                        and target.project_id == chat_session.project_id
+                        and target.session_type == "chat"
+                    )
                 ):
                     if policy == ToolExecutionPolicy.DISABLED:
                         return PermissionDecision.DENY
@@ -951,6 +969,7 @@ class PermissionPolicy:
                 or target.user_id != chat_session.user_id
                 or target.project_id != project_id
                 or target.session_type != "chat"
+                or (target.parent_session_id is not None and target.parent_session_id != chat_session.id)
             ):
                 return PermissionDecision.DENY
             if policy == ToolExecutionPolicy.DISABLED:
@@ -1001,7 +1020,7 @@ class PermissionPolicy:
                 (
                     await db.scalars(
                         select(PermissionGrant).where(
-                            PermissionGrant.session_id == chat_session.id,
+                            PermissionGrant.session_id == grant_session_id,
                             PermissionGrant.capability == request.capability,
                             PermissionGrant.resource_type == request.resource_type,
                             *grant_binding_conditions(),
@@ -1017,7 +1036,11 @@ class PermissionPolicy:
 
         if request.resource_type == "shell_command":
             scope = _shell_command_scope(request.resource_scope)
-            if scope is None or request.capability != f"shell.{scope['classification']}":
+            if (
+                scope is None
+                or request.capability != f"shell.{scope['classification']}"
+                or not request.shell_metadata_paths.issubset(scope["paths"])
+            ):
                 return PermissionDecision.DENY
             agent = await db.scalar(
                 select(ExecutionAgent)
@@ -1049,24 +1072,24 @@ class PermissionPolicy:
                 return PermissionDecision.DENY
             workspace = PurePosixPath(scope["currentDirectory"])
             target_paths = [PurePosixPath(path) for path in paths]
-            inside_workspace = all(_path_is_within(path, workspace) for path in target_paths)
+            # Verified metadata-only targets still participate in every hard path check.
+            inside_workspace = all(
+                _path_is_within(path, workspace)
+                for path in target_paths
+                if str(path) not in request.shell_metadata_paths
+            )
             confidential = any(
                 confidential_execution_path(str(path)) for path in target_paths
             )
             if confidential:
                 return PermissionDecision.ASK
-            # Incomplete inspection uses shell.write; its policy also covers that uncertainty.
-            if (
-                policy == ToolExecutionPolicy.AUTO
-                and inside_workspace
-                and (scope["analysisComplete"] or scope["classification"] == "write")
-            ):
+            if policy == ToolExecutionPolicy.AUTO and inside_workspace:
                 return PermissionDecision.ALLOW
             grants = list(
                 (
                     await db.scalars(
                         select(PermissionGrant).where(
-                            PermissionGrant.session_id == chat_session.id,
+                            PermissionGrant.session_id == grant_session_id,
                             PermissionGrant.capability == request.capability,
                             PermissionGrant.resource_type == request.resource_type,
                             *grant_binding_conditions(),
@@ -1129,7 +1152,7 @@ class PermissionPolicy:
             (
                 await db.scalars(
                     select(PermissionGrant).where(
-                        PermissionGrant.session_id == chat_session.id,
+                        PermissionGrant.session_id == grant_session_id,
                         PermissionGrant.capability.in_(request.grant_capabilities),
                         PermissionGrant.resource_type == request.resource_type,
                         *grant_binding_conditions(),

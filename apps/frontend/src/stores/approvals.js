@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { errorDescriptor } from 'src/utils/api-errors'
+import { validRelativePath } from 'src/utils/attachments'
 
 const TERMINAL_DECISION_ERRORS = new Set([
   'approval.policyChanged',
@@ -28,10 +29,23 @@ export const useApprovalStore = defineStore('approvals', {
     pendingCount: (state) => state.pending.length,
     grantsForSession: (state) => (sessionId) => state.grants.filter((item) => item.sessionId === sessionId),
     forSession: (state) => (sessionId) => state.pending.filter((item) => (
-      item.sessionId === sessionId && item.requestType !== 'memory_change'
+      item.sessionId === sessionId && (item.requestType !== 'memory_change' || item.payload?.subagentSessionId)
     ))
   },
   actions: {
+    async previewSkillDraft(approval) {
+      const sessionId = approval?.payload?.subagentSessionId
+      const draft = approval?.details?.draftFile
+      if (!sessionId || !['build_skill', 'edit_skill'].includes(approval?.actionKind)
+        || draft?.root !== 'session' || !validRelativePath(draft.path)) return null
+      // An omitted root is resolved by the backend from the child, not the active parent.
+      return (await api.get('/workspace/files/preview', {
+        params: {
+          scope: 'session', session_id: sessionId, path: draft.path,
+          ...(draft.rootIdentity ? { root_identity: draft.rootIdentity } : {})
+        }
+      })).data
+    },
     async fetchPending(config = {}) {
       const revision = ++this.revision
       this.loading = true

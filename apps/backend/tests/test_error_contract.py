@@ -63,6 +63,14 @@ def test_changed_file_error_has_controlled_fallback() -> None:
     assert describe_error("file.changed").message == "The file changed since it was opened."
 
 
+def test_execution_and_output_limits_have_controlled_fallbacks() -> None:
+    assert describe_error("process.commandFailed").message == "The command exited with a nonzero status."
+    assert describe_error("agent.outputLimitReached").message == "The model response was interrupted at its output limit."
+    assert describe_error("process.invalidSyntax").message == "The shell command has invalid syntax."
+    assert describe_error("process.inspectionLimitExceeded").message == "The shell command exceeds the inspection limits."
+    assert describe_error("process.unsupportedTargetQuoting").message == "The shell path target uses unsupported quoting. Use a literal path with ordinary quotes."
+
+
 def test_incomplete_patch_error_requires_rereading_even_the_failed_operation() -> None:
     assert describe_error("file.patchIncomplete").message == (
         "The patch did not complete. Files may have changed, including in the "

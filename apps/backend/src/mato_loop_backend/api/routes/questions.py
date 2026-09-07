@@ -18,7 +18,7 @@ from mato_loop_backend.agent.question_decisions import (
 from mato_loop_backend.agent.runtime import question_payload
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.models import ChatSession, QuestionRequest, UserAccount
+from mato_loop_backend.models import AgentRun, ChatSession, QuestionRequest, UserAccount
 from mato_loop_backend.security import require_user
 
 router = APIRouter(prefix="/questions", dependencies=[Depends(require_user)])
@@ -49,7 +49,29 @@ async def pending_questions(
             )
         ).all()
     )
-    return [question_payload(item) for item in items]
+    if not items:
+        return []
+    children = (await db.execute(
+        select(AgentRun.id, ChatSession.id, ChatSession.title, ChatSession.parent_session_id)
+        .join(ChatSession, ChatSession.id == AgentRun.session_id)
+        .where(
+            AgentRun.id.in_([item.run_id for item in items]),
+            ChatSession.user_id == user.id,
+            ChatSession.parent_session_id.is_not(None),
+        )
+    )).all()
+    origins = {
+        run_id: (parent_id, {"subagentSessionId": str(session_id), "subagentTitle": title})
+        for run_id, session_id, title, parent_id in children
+    }
+    result = []
+    for item in items:
+        payload = question_payload(item)
+        origin = origins.get(item.run_id)
+        if origin is not None and origin[0] == item.session_id:
+            payload["payload"] = origin[1]
+        result.append(payload)
+    return result
 
 
 @router.post("/{question_id}/answers")

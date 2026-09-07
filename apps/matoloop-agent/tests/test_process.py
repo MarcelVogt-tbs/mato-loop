@@ -1,12 +1,20 @@
 import asyncio
 import os
+import stat
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from matoloop_agent.config import AgentConfig
 from matoloop_agent.filesystem import AgentError, Filesystem
-from matoloop_agent.process import ProcessRunner
+from matoloop_agent.process import EXECUTION_PATH, ProcessRunner
+
+SCREENSHOT_COMMAND = (
+    "python3 --version; uv --version; node --version; npm --version; "
+    "which python3.13 2>/dev/null; ls /usr/bin/python* 2>/dev/null"
+)
 
 
 def configuration(home: Path) -> AgentConfig:
@@ -112,11 +120,11 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             (root / "link").symlink_to(target)
             config = configuration(root)
             runner = ProcessRunner(config, Filesystem(config))
-            symlink = runner.inspect_shell("cat link", os.fspath(root))
-            self.assertFalse(symlink["readOnly"])
-            self.assertEqual(symlink["targets"], [])
+            with self.assertRaises(AgentError) as raised:
+                runner.inspect_shell("cat link", os.fspath(root))
+            self.assertEqual(raised.exception.code, "path.unsupportedType")
             dynamic = runner.inspect_shell("echo $HOME", os.fspath(root))
-            self.assertTrue(dynamic["analysisComplete"])
+            self.assertFalse(dynamic["analysisComplete"])
             self.assertEqual(dynamic["classification"], "read")
             self.assertEqual(dynamic["commands"][0]["tokens"], ["echo", "$HOME"])
             read_only = runner.inspect_shell("cat target", os.fspath(root))
@@ -388,9 +396,9 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(raised.exception.code, "process.inspectionChanged")
             compose.unlink()
             compose.symlink_to(root / "missing.yaml")
-            rejected = runner.inspect_shell(command, str(root))
-            self.assertFalse(rejected["analysisComplete"])
-            self.assertFalse(rejected["readOnly"])
+            with self.assertRaises(AgentError) as raised:
+                runner.inspect_shell(command, str(root))
+            self.assertEqual(raised.exception.code, "path.unsupportedType")
 
     def test_docker_operations_and_option_aware_prefixes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -506,14 +514,14 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             ):
                 with self.subTest(command=command):
                     inspected = runner.inspect_shell(command, str(root))
-                    self.assertEqual(inspected["classification"], "write")
+                    self.assertEqual(inspected["classification"], "read")
                     self.assertNotIn("prefix", inspected["commands"][0])
 
             for group in ("compose", "container", "image", "network", "volume", "system"):
                 command = f"docker {group} future-operation"
                 with self.subTest(command=command):
                     inspected = runner.inspect_shell(command, str(root))
-                    self.assertEqual(inspected["classification"], "write")
+                    self.assertEqual(inspected["classification"], "read")
                     self.assertEqual(
                         inspected["commands"][0]["prefix"], ["docker", group, "future-operation"]
                     )
@@ -557,9 +565,612 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(nested["classification"], "write")
             self.assertEqual(len(nested["commands"]), 2)
 
-            rejected = runner.inspect_shell("cat 'unterminated", os.fspath(root))
-            self.assertEqual(rejected["classification"], "write")
-            self.assertEqual(rejected["commands"], [])
+            with self.assertRaises(AgentError) as raised:
+                runner.inspect_shell("cat 'unterminated", os.fspath(root))
+            self.assertEqual(raised.exception.code, "process.invalidSyntax")
+
+
+class ShellInspectionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        for directory in (
+            "workspace",
+            "outside",
+            "confidential",
+            "dev",
+            *[p[1:] for p in EXECUTION_PATH.split(":") if p not in {"/bin", "/sbin"}],
+        ):
+            (self.root / directory).mkdir(parents=True, exist_ok=True)
+        (self.root / "bin").symlink_to("usr/bin")
+        (self.root / "sbin").symlink_to("usr/sbin")
+        for name in ("ls", "python3.13"):
+            (self.root / "usr/bin" / name).write_text("installed fixture")
+            (self.root / "usr/bin" / name).chmod(0o755)
+        (self.root / "usr/bin/python3").symlink_to("python3.13")
+        (self.root / "outside/file").write_text("external")
+        (self.root / "confidential/file").write_text("private")
+        os.mknod(self.root / "dev/null", stat.S_IFCHR | 0o666, os.makedev(1, 3))
+        config = configuration(self.root)
+        self.filesystem = Filesystem(config)
+        self.runner = ProcessRunner(config, self.filesystem)
+
+        @contextmanager
+        def fixture_root():
+            fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                yield fd
+            finally:
+                os.close(fd)
+
+        self.enterContext(patch.object(self.filesystem, "_root_fd", fixture_root))
+        self.which = self.enterContext(
+            patch("matoloop_agent.process.shutil.which", return_value="/usr/bin/ls")
+        )
+        self.spawn = self.enterContext(
+            patch(
+                "asyncio.create_subprocess_exec",
+                side_effect=AssertionError("Inspection must not execute"),
+            )
+        )
+
+    def inspect(self, command: str) -> dict:
+        result = self.runner.inspect_shell(command, "/workspace")
+        self.spawn.assert_not_called()
+        return result
+
+    def test_exact_screenshot_inspection_has_only_fingerprinted_special_targets(self) -> None:
+        result = self.inspect(SCREENSHOT_COMMAND)
+        self.assertTrue(result["analysisComplete"])
+        self.assertEqual(result["classification"], "read")
+        self.assertEqual(len(result["commands"]), 6)
+        self.assertEqual(
+            {(t["path"], t["kind"]) for t in result["targets"]},
+            {
+                ("/dev/null", "discard"),
+                ("/usr/bin", "toolchain_metadata"),
+                ("/usr/bin/ls", "toolchain_metadata"),
+                ("/usr/bin/python3", "toolchain_metadata"),
+                ("/usr/bin/python3.13", "toolchain_metadata"),
+            },
+        )
+        for target in result["targets"]:
+            self.assertTrue(
+                {"device", "rdev", "inode", "mode", "size", "modifiedNs", "changedNs"}
+                <= target.keys()
+            )
+        self.assertEqual(result["targets"][0]["rdev"], os.makedev(1, 3))
+        self.assertEqual(
+            self.inspect(SCREENSHOT_COMMAND)["inspectionRevision"], result["inspectionRevision"]
+        )
+        (self.root / "usr/bin/python3.13").write_text("changed installed fixture")
+        self.assertNotEqual(
+            self.inspect(SCREENSHOT_COMMAND)["inspectionRevision"], result["inspectionRevision"]
+        )
+        self.which.assert_called_with("ls", path=EXECUTION_PATH)
+
+    def test_metadata_literals_globs_no_matches_aliases_and_normal_access(self) -> None:
+        for operand in (
+            "/usr/bin",
+            "/usr/bin/python3.13",
+            "/usr/bin/python*",
+            "/usr/bin/python?.13",
+            "/usr/bin/python[0-9].13",
+            "/bin/python*",
+            "/usr/bin/no-match*",
+        ):
+            with self.subTest(operand=operand):
+                result = self.inspect(f"ls {operand}")
+                self.assertTrue(result["analysisComplete"])
+                self.assertTrue(result["readOnly"])
+                self.assertTrue(all(t["kind"] == "toolchain_metadata" for t in result["targets"]))
+                self.assertIn("/usr/bin", [t["path"] for t in result["targets"]])
+        result = self.inspect("ls /bin/python*")
+        self.assertIn("/bin", [t["path"] for t in result["targets"]])
+        self.assertIn("/bin/python3", [t["path"] for t in result["targets"]])
+        result = self.inspect("ls /usr/bin/missing")
+        self.assertFalse(result["analysisComplete"])
+        self.assertIn("/usr/bin/missing", [t["path"] for t in result["targets"]])
+        result = self.inspect(
+            "ls /usr/bin/python*; cat /usr/bin/python3.13; cat /dev/null; pwd >/dev/null"
+        )
+        self.assertTrue(result["readOnly"])
+        kinds = {(t["path"], t["kind"]) for t in result["targets"]}
+        self.assertTrue(
+            {
+                ("/usr/bin/python3.13", "path"),
+                ("/usr/bin/python3.13", "toolchain_metadata"),
+                ("/dev/null", "path"),
+                ("/dev/null", "discard"),
+            }
+            <= kinds
+        )
+
+    def test_metadata_does_not_apply_to_shell_changes_wrappers_or_quoted_globs(self) -> None:
+        for command in (
+            "PATH=/outside ls /usr/bin/python*",
+            "PATH=/outside; ls /usr/bin/python*",
+            "ls() { pwd; }; ls /usr/bin/python*",
+            "env ls /usr/bin/python*",
+            "command ls /usr/bin/python*",
+            "./ls /usr/bin/python*",
+            "echo $(pwd); ls /usr/bin/python*",
+            "ls /usr/bin/$(pwd)*",
+            "ls '/usr/bin/python*'",
+            'ls "/usr/bin/python*"',
+            r"ls /usr/bin/python\*",
+            "ls /usr/bin/python'*'",
+            "ls /usr/bin/python* '/usr/bin/python*'",
+            "ls /usr/bin/python* /usr/bin/python'*'",
+            "ls /usr/bin/..",
+            "read PATH; ls /usr/bin/python*",
+            "trap 'ls() { pwd; }' EXIT; ls /usr/bin/python*",
+            "ls /usr/bin/python[[:digit:]]*",
+            "ls /usr/bin/python[^x]*",
+            "find /usr/bin -name 'python*'",
+            *[
+                f"ls {flag} /usr/bin/python*"
+                for flag in ("-L", "-H", "-R", "-lL", "--dereference", "--recursive", "--unknown")
+            ],
+        ):
+            with self.subTest(command=command):
+                result = self.inspect(command)
+                self.assertTrue(result["readOnly"])
+                self.assertFalse(any(t["kind"] == "toolchain_metadata" for t in result["targets"]))
+        for installed in (None, "/usr/local/bin/ls", "/outside/wrapper"):
+            with self.subTest(installed=installed):
+                self.which.return_value = installed
+                result = self.inspect("ls /usr/bin/python*")
+                self.assertFalse(result["analysisComplete"])
+                self.assertTrue(all(t["kind"] != "toolchain_metadata" for t in result["targets"]))
+
+    def test_discard_is_only_verified_static_output_and_other_writes_stay_sticky(self) -> None:
+        for command in (
+            ">/dev/null",
+            "pwd 2>/dev/null",
+            "pwd >> /dev/null",
+            "pwd >'/dev/null'",
+            "pwd &>/dev/null",
+        ):
+            with self.subTest(command=command):
+                result = self.inspect(command)
+                self.assertTrue(result["readOnly"])
+                self.assertTrue(result["analysisComplete"])
+                self.assertEqual([t["kind"] for t in result["targets"]], ["discard"])
+        for command in (
+            "> output",
+            "touch --version; pwd >/dev/null",
+            "rm --help; " + SCREENSHOT_COMMAND,
+            "ls /usr/bin/python* >/workspace/output",
+            "pwd >$OUTPUT",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.inspect(command)["classification"], "write")
+        result = self.inspect("pwd </dev/null")
+        self.assertEqual([t["kind"] for t in result["targets"]], ["input"])
+        result = self.inspect("pwd <>/dev/null")
+        self.assertEqual(result["classification"], "write")
+        self.assertEqual([t["kind"] for t in result["targets"]], ["output"])
+        null = self.root / "dev/null"
+        null.unlink()
+        for kind in ("file", "link", "wrong-device", "missing"):
+            with self.subTest(kind=kind):
+                if kind == "file":
+                    null.write_text("not a device")
+                elif kind == "link":
+                    null.symlink_to("../outside/file")
+                elif kind == "wrong-device":
+                    os.mknod(null, stat.S_IFCHR | 0o666, os.makedev(1, 5))
+                with self.assertRaises(AgentError):
+                    self.inspect("pwd >/dev/null")
+                if kind != "missing":
+                    null.unlink()
+
+    def test_unresolved_analysis_continues_and_hard_violations_are_not_missing(self) -> None:
+        command = "cat missing /outside/file /confidential/file; unknown; touch ./new"
+        result = self.inspect(command)
+        self.assertFalse(result["analysisComplete"])
+        self.assertEqual(result["classification"], "write")
+        self.assertTrue(
+            {"/workspace/missing", "/outside/file", "/confidential/file", "/workspace/new"}
+            <= {t["path"] for t in result["targets"]}
+        )
+        self.assertTrue(all("prefix" in unit for unit in result["commands"]))
+        result = self.inspect(
+            "cat $MISSING /outside/file; cat /confidential/file; echo $(touch ./new)"
+        )
+        self.assertFalse(result["analysisComplete"])
+        self.assertEqual(result["classification"], "write")
+        self.assertTrue(all("prefix" not in unit for unit in result["commands"]))
+        self.assertTrue(
+            {"/outside/file", "/confidential/file", "/workspace/new"}
+            <= {t["path"] for t in result["targets"]}
+        )
+        (self.root / "workspace/link").symlink_to("../outside/file")
+        for command in (
+            "cat missing link",
+            "cat $MISSING link",
+            "echo " + "x" * 1025 + "; cat link",
+        ):
+            with self.subTest(command=command), self.assertRaises(AgentError) as raised:
+                self.inspect(command)
+            self.assertEqual(raised.exception.code, "path.unsupportedType")
+
+    def test_incomplete_extraction_is_read_unless_a_bounded_known_write_is_seen(self) -> None:
+        for command in (
+            "echo " + "x" * 1025,
+            "echo " + "x " * 256,
+            "; ".join(["pwd"] * 65),
+            "$COMMAND",
+            "cat missing",
+            "git remote future-operation",
+            "git stash future-operation",
+            "docker compose future-operation",
+        ):
+            with self.subTest(command=command):
+                result = self.inspect(command)
+                self.assertTrue(result["readOnly"])
+                self.assertLessEqual(len(result["commands"]), 64)
+                if not result["analysisComplete"] and command != "cat missing":
+                    self.assertTrue(all("prefix" not in unit for unit in result["commands"]))
+        for command in (
+            "echo " + "x" * 1025 + "; touch file",
+            "touch " + "x" * 1025,
+            "echo $(rm file)",
+            ">file",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.inspect(command)["classification"], "write")
+
+    def test_metadata_no_follow_and_enumeration_bound(self) -> None:
+        with patch("matoloop_agent.filesystem.os.scandir", wraps=os.scandir) as scanned:
+            with patch("matoloop_agent.filesystem.os.stat", wraps=os.stat) as inspected:
+                self.inspect("ls /usr/bin/python*")
+        self.assertTrue(all(isinstance(call.args[0], int) for call in scanned.call_args_list))
+        self.assertTrue(
+            all(
+                call.kwargs.get("follow_symlinks") is False and "dir_fd" in call.kwargs
+                for call in inspected.call_args_list
+            )
+        )
+        link = self.root / "usr/bin/python3"
+        link.unlink()
+        link.symlink_to("/outside", target_is_directory=True)
+        with self.assertRaises(AgentError):
+            self.inspect("ls /usr/bin/python*")
+        link.unlink()
+        link.symlink_to("/confidential/file")
+        result = self.inspect("ls /usr/bin/python*")
+        self.assertIn("/confidential/file", [t["path"] for t in result["targets"]])
+        (self.root / "bin").unlink()
+        (self.root / "bin").symlink_to("outside")
+        with self.assertRaises(AgentError):
+            self.inspect("ls /bin/python*")
+        self.filesystem.max_entries = 1
+        with self.assertRaises(AgentError) as raised:
+            self.inspect("ls /usr/bin/no-match*")
+        self.assertEqual(raised.exception.code, "process.inspectionLimitExceeded")
+
+    def test_serialization_limits_do_not_hide_late_writers_or_paths(self) -> None:
+        (self.root / "workspace/link").symlink_to("../outside/file")
+        for command in (
+            "pwd; " * 64 + "cat ./link",
+            "cat " + "missing " * 256 + "./link",
+            "cat --" + "x" * 1025 + " ./link",
+            "cat $'can\\'t' ./link",
+        ):
+            with self.subTest(command=command), self.assertRaises(AgentError) as raised:
+                self.inspect(command)
+            self.assertEqual(raised.exception.code, "path.unsupportedType")
+        for command in (
+            "pwd; " * 64 + "rm ./victim",
+            "find . " + "-print " * 256 + "-delete",
+            "docker image save " + "--quiet " * 256 + "--output ./archive",
+            "rm $'can\\'t'",
+        ):
+            with self.subTest(command=command):
+                result = self.inspect(command)
+                self.assertEqual(result["classification"], "write")
+                self.assertFalse(result["analysisComplete"])
+                self.assertLessEqual(len(result["commands"]), 64)
+                self.assertTrue(all("prefix" not in unit for unit in result["commands"]))
+                self.assertTrue(all(len(unit["tokens"]) <= 256 for unit in result["commands"]))
+        result = self.inspect("pwd; " * 64 + "cat /outside/file /confidential/file")
+        self.assertTrue(
+            {"/outside/file", "/confidential/file"} <= {t["path"] for t in result["targets"]}
+        )
+        result = self.inspect("cat " + "missing " * 256 + "/outside/file /confidential/file")
+        self.assertTrue(
+            {"/outside/file", "/confidential/file"} <= {t["path"] for t in result["targets"]}
+        )
+        self.assertEqual(result["commands"], [])
+        for command in ("cat " + " ".join(f"file{i}" for i in range(257)), " " * (256 * 1024 + 1)):
+            with self.subTest(command=command), self.assertRaises(AgentError) as raised:
+                self.inspect(command)
+            self.assertEqual(raised.exception.code, "process.inspectionLimitExceeded")
+
+    def test_dot_globs_retain_ordinary_parent_scopes(self) -> None:
+        (self.root / "usr/bin/.env").write_text("private")
+        for pattern in (".*", ".?", ".*?", "..*"):
+            with self.subTest(pattern=pattern):
+                result = self.inspect(f"ls /usr/bin/{pattern}")
+                self.assertTrue(result["readOnly"])
+                self.assertFalse(result["analysisComplete"])
+                self.assertIn(
+                    ("/usr", "directory"), {(t["path"], t["kind"]) for t in result["targets"]}
+                )
+                self.assertFalse(any(t["kind"] == "toolchain_metadata" for t in result["targets"]))
+
+    def test_large_listings_use_fingerprints_without_losing_hidden_scopes(self) -> None:
+        directory = self.root / "usr/bin"
+        for index in range(300):
+            (directory / f"tool{index}").write_text("tool")
+            (directory / f"other{index}").write_text("other tool")
+        result = self.inspect("ls -l /usr/bin")
+        self.assertTrue(result["analysisComplete"])
+        self.assertTrue(all(t["kind"] == "toolchain_metadata" for t in result["targets"]))
+        self.assertLessEqual(len(result["targets"]), 2)
+        self.assertTrue(any("listingFingerprint" in t for t in result["targets"]))
+        (directory / "tool299").write_text("changed attributes")
+        self.assertNotEqual(
+            result["inspectionRevision"], self.inspect("ls -l /usr/bin")["inspectionRevision"]
+        )
+        result = self.inspect("ls /usr/bin/tool*")
+        self.assertTrue(result["readOnly"])
+        self.assertLessEqual(len(result["targets"]), 256)
+        self.assertIn(
+            ("/usr/bin", "directory"), {(t["path"], t["kind"]) for t in result["targets"]}
+        )
+        (directory / ".env").write_text("private")
+        result = self.inspect("ls -la /usr/bin")
+        self.assertIn(
+            ("/usr/bin/.env", "path"), {(t["path"], t["kind"]) for t in result["targets"]}
+        )
+        self.assertLessEqual(len(result["targets"]), 256)
+        result = self.inspect("ls /usr/bin/.env*")
+        self.assertIn(
+            ("/usr/bin/.env", "path"), {(t["path"], t["kind"]) for t in result["targets"]}
+        )
+        command = "ls /usr/bin/tool*; ls /usr/bin/other*"
+        before = self.inspect(command)["inspectionRevision"]
+        (directory / "other299").write_text("new attributes")
+        self.assertNotEqual(before, self.inspect(command)["inspectionRevision"])
+        result = self.inspect(
+            "cat " + " ".join(f"file{i}" for i in range(250)) + "; ls /usr/bin/tool*"
+        )
+        self.assertLessEqual(len(result["targets"]), 256)
+        self.assertIn(
+            ("/usr/bin", "directory"), {(t["path"], t["kind"]) for t in result["targets"]}
+        )
+        for index in range(256):
+            (directory / f".hidden{index}").write_text("hidden")
+        with self.assertRaises(AgentError) as raised:
+            self.inspect("ls -a /usr/bin")
+        self.assertEqual(raised.exception.code, "process.inspectionLimitExceeded")
+
+    def test_docker_archive_outputs_and_established_mutators(self) -> None:
+        for operation in ("save", "export", "image save", "container export"):
+            self.assertTrue(self.inspect(f"docker {operation} item")["readOnly"])
+            for output in (
+                "-o ./archive",
+                "-o./archive",
+                "--output ./archive",
+                "--output=./archive",
+            ):
+                with self.subTest(operation=operation, output=output):
+                    result = self.inspect(f"docker --context local {operation} item {output}")
+                    self.assertEqual(result["classification"], "write")
+        for operation in (
+            "cp",
+            "create",
+            "import",
+            "load",
+            "pause",
+            "rename",
+            "unpause",
+            "update",
+            "compose scale",
+            "container update",
+            "image load",
+        ):
+            with self.subTest(operation=operation):
+                self.assertEqual(
+                    self.inspect(f"docker {operation} item")["classification"], "write"
+                )
+        for operation in ("future", "image future", "container future"):
+            self.assertTrue(self.inspect(f"docker {operation} --output archive")["readOnly"])
+
+    def test_read_write_redirect_normalization_preserves_original_syntax_and_data(self) -> None:
+        for command in (
+            "<>file",
+            "3<>file",
+            "cat <>file",
+            "cat 3<>file",
+            "cat <>one 4<>two",
+            "cat <>/dev/null",
+            "cat 3<>/dev/null",
+        ):
+            with self.subTest(command=command):
+                result = self.inspect(command)
+                self.assertTrue(result["analysisComplete"])
+                self.assertEqual(result["classification"], "write")
+                self.assertTrue(all(t["kind"] == "output" for t in result["targets"]))
+                argv, _ = self.runner.execution_argv(
+                    current_directory="/workspace",
+                    command=command,
+                    expected_inspection_revision=result["inspectionRevision"],
+                )
+                self.assertEqual(argv, [str(self.runner.shell), "-c", command])
+        for command in ("printf '%s' '<>file'", "cat <<EOF\n<>file\nEOF\n"):
+            with self.subTest(command=command):
+                self.assertTrue(self.inspect(command)["readOnly"])
+        command = "cat <<EOF\n<>literal\nEOF\ncat <>file"
+        result = self.inspect(command)
+        self.assertEqual(result["classification"], "write")
+        self.assertEqual([t["path"] for t in result["targets"]], ["/workspace/file"])
+        for command in ("cat < >file", "cat <>", "cat <>file; echo '"):
+            with self.subTest(command=command), self.assertRaises(AgentError) as raised:
+                self.inspect(command)
+            self.assertEqual(raised.exception.code, "process.invalidSyntax")
+
+    def test_external_toolchain_link_destinations_are_ordinary_targets(self) -> None:
+        vendor = self.root / "opt/vendor"
+        vendor.mkdir(parents=True)
+        (vendor / "tool").write_text("installed vendor tool")
+        (self.root / "usr/local/bin/tool").symlink_to("/opt/vendor/tool")
+        result = self.inspect("ls /usr/local/bin/tool*")
+        self.assertIn(
+            ("/opt/vendor/tool", "path"), {(t["path"], t["kind"]) for t in result["targets"]}
+        )
+        self.assertTrue(
+            all(
+                t["path"] in EXECUTION_PATH.split(":")
+                or str(Path(t["path"]).parent) in EXECUTION_PATH.split(":")
+                for t in result["targets"]
+                if t["kind"] == "toolchain_metadata"
+            )
+        )
+        (vendor / "tool").unlink()
+        (vendor / "tool").mkdir()
+        with self.assertRaises(AgentError):
+            self.inspect("ls /usr/local/bin/tool*")
+
+    def test_ansi_c_path_quoting_never_produces_a_fabricated_target(self) -> None:
+        (self.root / "outside/link").symlink_to("file")
+        with self.assertRaises(AgentError) as raised:
+            self.inspect("printf >$'/outside/file' /outside/link")
+        self.assertEqual(raised.exception.code, "path.unsupportedType")
+        for shell in ("bash", "dash"):
+            self.runner.shell = Path("/usr/bin") / shell
+            for word in (
+                "$'/outside/link'",
+                "$'/outside/file'",
+                "$'/dev/null'",
+                "$'/outside/'link",
+                "./$'link'",
+                r"$'\057outside\057link'",
+                r"$'/outside/\x6cink'",
+                r"$'/outside/file\0ignored'",
+                r"$'/outside/\u006cink'",
+                "$'/outside/\u00e4'",
+            ):
+                for operator in (">", ">>", "1<>", "<"):
+                    with self.subTest(shell=shell, word=word, operator=operator):
+                        with self.assertRaises(AgentError) as raised:
+                            self.inspect(f"printf x {operator}{word}")
+                        self.assertEqual(raised.exception.code, "process.unsupportedTargetQuoting")
+                        self.assertEqual(
+                            str(raised.exception), "Shell path target uses unsupported quoting"
+                        )
+            with self.assertRaises(AgentError) as raised:
+                self.inspect("cat $'/outside/file'")
+            self.assertEqual(raised.exception.code, "process.unsupportedTargetQuoting")
+            result = self.inspect("printf '%s' $'ordinary data'; cat /outside/file")
+            self.assertFalse(result["analysisComplete"])
+            self.assertEqual([t["path"] for t in result["targets"]], ["/outside/file"])
+            self.assertTrue(all("prefix" not in unit for unit in result["commands"]))
+
+        literal = self.root / "workspace/$'/outside/file'"
+        literal.parent.mkdir(parents=True)
+        literal.write_text("literal dollar and quote characters")
+        result = self.inspect("printf x > \"$'/outside/file'\"")
+        self.assertTrue(result["analysisComplete"])
+        self.assertEqual([t["path"] for t in result["targets"]], ["/workspace/$'/outside/file'"])
+
+    def test_first_redirect_destination_and_trailing_argv_are_inspected(self) -> None:
+        (self.root / "workspace/input").write_text("input")
+        (self.root / "workspace/link").symlink_to("../outside/file")
+        for command in (
+            "printf 1<>./link x",
+            "printf >./link x",
+            "cat <input ./link",
+            "cat <./link /outside/file",
+            "cat <<EOF ./link\nnot an argument\nEOF\n",
+        ):
+            with self.subTest(command=command), self.assertRaises(AgentError) as raised:
+                self.inspect(command)
+            self.assertEqual(raised.exception.code, "path.unsupportedType")
+
+        for command, tokens, targets in (
+            (
+                "cat <input /outside/file",
+                ["cat", "/outside/file"],
+                {("/workspace/input", "input"), ("/outside/file", "path")},
+            ),
+            (
+                "cat <input /outside/file >out /confidential/file",
+                ["cat", "/outside/file", "/confidential/file"],
+                {
+                    ("/workspace/input", "input"),
+                    ("/workspace/out", "output"),
+                    ("/outside/file", "path"),
+                    ("/confidential/file", "path"),
+                },
+            ),
+            (
+                "printf >out x /outside/file",
+                ["printf", "x", "/outside/file"],
+                {("/workspace/out", "output"), ("/outside/file", "path")},
+            ),
+            (
+                "cat >&2 /outside/file",
+                ["cat", "/outside/file"],
+                {("/outside/file", "path")},
+            ),
+            (
+                "cat <<'EOF' /outside/file\n/ignored/body\nEOF\n",
+                ["cat", "/outside/file"],
+                {("/outside/file", "path")},
+            ),
+        ):
+            with self.subTest(command=command):
+                result = self.inspect(command)
+                self.assertTrue(result["analysisComplete"])
+                self.assertEqual(result["commands"][0]["tokens"], tokens)
+                self.assertEqual({(t["path"], t["kind"]) for t in result["targets"]}, targets)
+
+        result = self.inspect("docker >out image save -o ./archive")
+        self.assertEqual(
+            result["commands"][0]["tokens"], ["docker", "image", "save", "-o", "./archive"]
+        )
+        self.assertEqual(result["commands"][0]["prefix"], ["docker", "image", "save"])
+        self.assertEqual(result["classification"], "write")
+
+    def test_redirect_arguments_preserve_nested_command_and_data_ownership(self) -> None:
+        (self.root / "workspace/input").write_text("input")
+        result = self.inspect('echo "$(cat <input /outside/file)" >out last')
+        self.assertFalse(result["analysisComplete"])
+        self.assertEqual(
+            [unit["tokens"] for unit in result["commands"]],
+            [
+                ["echo", "$(cat <input /outside/file)", "last"],
+                ["cat", "/outside/file"],
+            ],
+        )
+        self.assertEqual(
+            {(t["path"], t["kind"]) for t in result["targets"]},
+            {
+                ("/workspace/input", "input"),
+                ("/workspace/out", "output"),
+                ("/outside/file", "path"),
+            },
+        )
+        result = self.inspect("{ cat input; } >out")
+        self.assertEqual(result["commands"][0]["tokens"], ["cat", "input"])
+        result = self.inspect('printf >/dev/null "%s" "$(pwd)"')
+        self.assertTrue(result["readOnly"])
+        self.assertEqual([t["kind"] for t in result["targets"]], ["discard"])
+        result = self.inspect("ls >/dev/null /usr/bin/python*")
+        self.assertTrue(result["readOnly"])
+        self.assertTrue(result["analysisComplete"])
+        self.assertEqual(result["commands"][0]["tokens"], ["ls", "/usr/bin/python*"])
+        self.assertTrue(
+            all(t["kind"] in {"discard", "toolchain_metadata"} for t in result["targets"])
+        )
+        result = self.inspect("printf >$(printf '%s' $'name') /outside/file")
+        self.assertFalse(result["analysisComplete"])
+        self.assertEqual([t["path"] for t in result["targets"]], ["/outside/file"])
 
 
 if __name__ == "__main__":

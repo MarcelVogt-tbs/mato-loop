@@ -71,6 +71,7 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.settings.models import ModelAvailability, ModelCapability
 from mato_loop_backend.workspace import RootFileError, RootFileService
 
+from .cleanup import descendant_sessions
 from .serialization import rebind_session_file_metadata
 
 logger = logging.getLogger(__name__)
@@ -331,6 +332,19 @@ async def owned_session(
     return await db.scalar(statement.with_for_update())
 
 
+async def get_owned_session(
+    db: AsyncSession,
+    session_id: UUID,
+    user_id: UUID,
+    *,
+    for_update: bool = False,
+) -> ChatSession | None:
+    item = await owned_session(db, session_id, user_id, for_update=for_update)
+    if item is not None and item.parent_session_id is not None:
+        raise SessionServiceError(403, "session.readOnly")
+    return item
+
+
 def has_unread_messages(
     item: ChatSession, last_assistant_message_at: datetime | None
 ) -> bool:
@@ -365,7 +379,7 @@ async def session_detail_payload(
         .limit(1)
     )
     retry_message_id = None
-    if active_run is None and messages:
+    if item.parent_session_id is None and active_run is None and messages:
         retry_source = await ChatHistoryService.retry_source(
             db,
             session_id=item.id,
@@ -552,9 +566,9 @@ async def duplicate_submission_response(
     )
     if run is None:
         return None
+    item = await get_owned_session(db, run.session_id, user_id)
     if requested_session_id is not None and run.session_id != requested_session_id:
         raise SessionServiceError(409, "http.conflict")
-    item = await db.get(ChatSession, run.session_id)
     message = await db.scalar(
         select(Message)
         .where(
@@ -681,7 +695,11 @@ async def list_sessions(
             activity_at.label("activity_at"),
         )
         .outerjoin(latest_messages, latest_messages.c.session_id == ChatSession.id)
-        .where(ChatSession.user_id == user_id, ChatSession.session_type == "chat")
+        .where(
+            ChatSession.user_id == user_id,
+            ChatSession.session_type == "chat",
+            ChatSession.parent_session_id.is_(None),
+        )
     )
     if project_id is not None:
         statement = statement.where(ChatSession.project_id == project_id)
@@ -1321,6 +1339,8 @@ async def delete_session(
     )
     if item is None:
         raise SessionServiceError(404, "session.notFound")
+    if item.parent_session_id is not None:
+        raise SessionServiceError(403, "session.readOnly")
     linked_automations = list(
         (
             await db.scalars(
@@ -1380,10 +1400,17 @@ async def delete_session(
             )
         ).all()
     )
-    if automation_agent_run_ids or active_runs:
+    active_run_ids = [*automation_agent_run_ids, *(run.id for run in active_runs)]
+    descendant_roots = [session_id]
+    if automation_mode == "deleteAutomations":
+        descendant_roots.extend(automation.execution_session_id for automation in linked_automations)
+    if active_run_ids:
         await db.rollback()
-        for run_id in [*automation_agent_run_ids, *(run.id for run in active_runs)]:
+        for run_id in active_run_ids:
             await AgentRuntime.cancel_and_wait(run_id)
+    await db.rollback()
+    for root_id in descendant_roots:
+        await AgentRuntime.cancel_descendants(root_id)
     linked_automations = list(
         (
             await db.scalars(
@@ -1483,6 +1510,16 @@ async def delete_session(
         (session_id, item.project_id),
         *((execution_session.id, None) for execution_session in execution_sessions),
     ]
+    storage_sessions.extend(
+        await descendant_sessions(db, [storage_id for storage_id, _ in storage_sessions])
+    )
+    if (await db.scalars(
+        select(AgentRun.id).where(
+            AgentRun.session_id.in_([storage_id for storage_id, _ in storage_sessions]),
+            AgentRun.status.in_(ACTIVE_RUN_STATUSES),
+        ).limit(1)
+    )).all():
+        raise SessionServiceError(409, "session.runAlreadyActive")
     trashed_trees = []
     try:
         for storage_session_id, project_id in storage_sessions:

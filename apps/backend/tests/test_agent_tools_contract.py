@@ -121,22 +121,28 @@ async def test_sqlalchemy_tool_errors_reach_runtime_rollback() -> None:
 
 
 async def test_task_tool_has_bounded_prompt_and_delegates(tmp_path) -> None:
-    with pytest.raises(ValidationError):
-        TaskArguments(prompt="   ")
-    with pytest.raises(ValidationError):
-        TaskArguments(prompt="x" * 8_001)
+    for tasks in ([], [{"description": "Inspect", "prompt": "x"}] * 5,
+                  [{"description": "Inspect", "prompt": " "}],
+                  [{"description": " ", "prompt": "Inspect"}],
+                  [{"description": "Inspect", "prompt": "x" * 8_001}],
+                  [{"description": "Inspect", "prompt": "x", "type": "explore"}]):
+        with pytest.raises(ValidationError):
+            TaskArguments(tasks=tasks)
 
-    call = ToolCall("task-1", "task", {"prompt": " Inspect auth "})
+    call = ToolCall("task-1", "task", {"tasks": [{"description": "Translate", "prompt": " Translate this text "}]})
     context = _context(tmp_path, call)
     context.task_handler = AsyncMock(return_value=ToolResult("findings", {}))
 
     result = await tool_registry.execute(call, context)
 
     assert result.content == "findings"
-    context.task_handler.assert_awaited_once_with("Inspect auth")
+    context.task_handler.assert_awaited_once_with(TaskArguments(tasks=[
+        {"description": "Translate", "prompt": "Translate this text"}
+    ]))
     schema = next(item for item in tool_registry.schemas(IntegrationSettings()) if item["name"] == "task")
-    assert set(schema["parameters"]["properties"]) == {"prompt"}
-    assert schema["parameters"]["properties"]["prompt"]["maxLength"] == 8_000
+    assert set(schema["parameters"]["properties"]) == {"tasks"}
+    assert schema["parameters"]["properties"]["tasks"]["maxItems"] == 4
+    assert schema["parameters"]["$defs"]["DelegatedTask"]["properties"]["prompt"]["maxLength"] == 8_000
 
 
 async def test_bound_tool_defaults_fill_only_fully_omitted_arguments(tmp_path) -> None:
@@ -633,7 +639,9 @@ async def test_shared_tool_binds_two_instances_and_targets_selected_resource(
     second = _shared_integration("Second")
     settings = IntegrationSettings(instances=[first, second])
     effective = ToolRegistry([]).effective(settings)
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(
+        side_effect=lambda _db, model, **_kwargs: settings if model is IntegrationSettings else model()
+    ))
     call = ToolCall(
         id="shared",
         name="tasks_read",
@@ -774,7 +782,9 @@ async def test_aggregate_shared_tool_binds_all_current_instances(
     first = _shared_integration("First")
     second = _shared_integration("Second")
     settings = IntegrationSettings(instances=[first, second])
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(
+        side_effect=lambda _db, model, **_kwargs: settings if model is IntegrationSettings else model()
+    ))
     effective = ToolRegistry([]).effective(settings)
     call = ToolCall(id="aggregate", name="tasks_list_accounts", arguments={})
     context = _context(tmp_path, call)
@@ -795,7 +805,9 @@ async def test_private_integration_tool_uses_only_operation_authorization(
     _shared_adapter(monkeypatch, handler, releases_private_data=True)
     integration = _shared_integration("Private")
     settings = IntegrationSettings(instances=[integration])
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(
+        side_effect=lambda _db, model, **_kwargs: settings if model is IntegrationSettings else model()
+    ))
     effective = ToolRegistry([]).effective(settings)
     call = ToolCall(
         id="private",
@@ -2455,8 +2467,11 @@ async def test_session_tools_require_permission_before_reading_session_data(
     context.db.scalar.assert_not_awaited()
 
 
-@pytest.mark.parametrize("target_id", [None, uuid4()])
+@pytest.mark.parametrize("target_id", [None, uuid4(), "child"])
 async def test_session_read_uses_current_or_explicit_target_session(tmp_path, target_id) -> None:
+    child = target_id == "child"
+    if child:
+        target_id = uuid4()
     arguments = {} if target_id is None else {"session_id": str(target_id)}
     call = ToolCall(id="read", name="session_read", arguments=arguments)
     context = _context(tmp_path, call)
@@ -2468,6 +2483,7 @@ async def test_session_read_uses_current_or_explicit_target_session(tmp_path, ta
         memory_mode="disabled",
         web_search_policy="available",
         private_integration_data_used=True,
+        parent_session_id=context.session.id if child else None,
     )
     messages = Mock()
     messages.all.return_value = []
@@ -2485,6 +2501,9 @@ async def test_session_read_uses_current_or_explicit_target_session(tmp_path, ta
     assert request.resource_scope == str(expected_id)
     context.db.scalar.assert_awaited_once()
     context.db.scalars.assert_awaited_once()
+    statement = context.db.scalar.await_args.args[0]
+    assert "chat_sessions.parent_session_id IS NULL" in str(statement)
+    assert context.session.id in statement.compile().params.values()
 
 
 @pytest.mark.parametrize(
@@ -4162,6 +4181,63 @@ async def test_fetch_transcript_requests_approval_when_policy_becomes_ask(
 
     assert result.is_error is False
     context.ask_handler.assert_awaited_once()
+
+
+@pytest.mark.parametrize("tool_name,capability", [
+    ("webfetch", "network.fetch"),
+    ("update_user_profile", "settings.user_profile.update"),
+    ("load_skill", "skills.load"),
+])
+@pytest.mark.parametrize("ceiling_policy", [ToolExecutionPolicy.ASK, ToolExecutionPolicy.DISABLED])
+async def test_effective_dispatch_preserves_ceiling_across_live_settings_reload(
+    tmp_path, monkeypatch, tool_name, capability, ceiling_policy,
+):
+    from mato_loop_backend.agent.subagents import permission_snapshot
+
+    skill = SkillDefinition(name="Review", description="Review", instructions="Review the text.")
+    arguments = {
+        "webfetch": {"url": "https://example.test"},
+        "update_user_profile": {"preferred_name": "Changed"},
+        "load_skill": {"skill_id": str(skill.id)},
+    }[tool_name]
+    call = ToolCall("child-call", tool_name, arguments)
+    context = _context(tmp_path, call, decision=PermissionDecision.DENY)
+    context.session.parent_session_id = uuid4()
+    context.skill_state.catalog[skill.id] = skill
+    before = ToolSettings(private_permissions={"policies": {capability: ceiling_policy}})
+    snapshot = permission_snapshot(before, {tool_name})
+    live = ToolSettings(private_permissions={"policies": {capability: "auto"}})
+    context.db.scalar.return_value.data = live.model_dump(mode="json")
+    context.tool_settings = live.model_copy(deep=True)
+    context.tool_settings._delegation_ceiling = snapshot
+    network_reads = []
+
+    async def fetch(url, **kwargs):
+        await kwargs["authorize_url"](url)
+        network_reads.append(url)
+        return WebFetchResult(final_url=url, content_type="text/plain", content="Fetched",
+                              status_code=200, output_format="text")
+
+    monkeypatch.setattr(tools_module, "fetch_web", fetch)
+    # Use a previously offered live toolset; dispatch must still retain the child's ceiling.
+    effective = tool_registry.effective(IntegrationSettings(), webfetch_enabled=True, tool_settings=live)
+    assert tool_name in effective.tools
+    result = await effective.execute(call, context)
+    assert result.is_error
+    assert result.metadata["errorCode"] == (
+        "permission.denied" if ceiling_policy == ToolExecutionPolicy.ASK else "tool.unavailable"
+    )
+    assert context.tool_settings._delegation_ceiling == snapshot
+    assert network_reads == [] and context.skill_state.active is None
+    if ceiling_policy == ToolExecutionPolicy.ASK:
+        context.ask_handler.assert_awaited_once()
+        assert context.ask_handler.await_args.args[0].capability == capability
+    else:
+        context.ask_handler.assert_not_awaited()
+        assert tool_name not in tool_registry.effective(
+            IntegrationSettings(), webfetch_enabled=True, tool_settings=context.tool_settings
+        ).tools
+    assert "delegation" not in str(context.tool_settings.model_dump(mode="json"))
 
 
 async def test_webfetch_denial_stops_before_the_fetch_continues(tmp_path, monkeypatch) -> None:

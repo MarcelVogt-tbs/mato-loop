@@ -11,6 +11,22 @@ AGENT_ID = "2ea504cc-e3c6-4e0d-aa05-080328100fe8"
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_shell_and_terminal_timeouts_are_optional_and_bounded(self) -> None:
+        for operation in ("shell.run", "terminal.run"):
+            values = {"command": "pwd", "currentDirectory": "/workspace"}
+            if operation == "terminal.run":
+                values.update(terminalId=AGENT_ID, rows=24, columns=80)
+            request = Request(type="request", id=REQUEST_ID, operation=operation, arguments=values)
+            self.assertIsNone(validate_arguments(request).timeout_seconds)
+            for timeout in (None, 0.01, 3600):
+                request.arguments["timeoutSeconds"] = timeout
+                self.assertEqual(validate_arguments(request).timeout_seconds, timeout)
+            for timeout in (0, -1, 3600.1, float("inf"), float("nan"), True, "60"):
+                request.arguments["timeoutSeconds"] = timeout
+                with self.subTest(operation=operation, timeout=timeout):
+                    with self.assertRaises(ValidationError):
+                        validate_arguments(request)
+
     def test_protocol_version_one_and_hello_shape_are_strict(self) -> None:
         hello = Hello(
             agentId=AGENT_ID,

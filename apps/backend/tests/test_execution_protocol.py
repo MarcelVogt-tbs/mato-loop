@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from mato_loop_backend.execution.client import (
     ExecutionClient,
     ExecutionClientError,
+    ShellInspectResult,
     TerminalOpenResult,
     TerminalReadResult,
     WorkspaceWriteResult,
@@ -351,3 +352,120 @@ async def test_execution_client_maps_model_edit_errors(monkeypatch, code) -> Non
     with pytest.raises(ExecutionClientError) as exc_info:
         await client.request("filesystem.edit", {}, WorkspaceWriteResult)
     assert exc_info.value.code == code
+
+
+@pytest.mark.parametrize("directory", [
+    "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin",
+])
+@pytest.mark.parametrize("suffix", ["", "/python3"])
+def test_shell_inspection_accepts_only_fixed_toolchain_metadata_locations(directory, suffix) -> None:
+    result = ShellInspectResult.model_validate({
+        "targets": [
+            {"path": directory + suffix, "kind": "toolchain_metadata"},
+            {"path": "/dev/null", "kind": "discard"},
+        ],
+        "analysisComplete": False,
+        "classification": "read",
+        "readOnly": True,
+        "commands": [],
+        "inspectionRevision": "a" * 64,
+    })
+    assert result.classification == "read"
+    assert result.analysis_complete is False
+    assert [target.path for target in result.targets] == [directory + suffix, "/dev/null"]
+
+
+@pytest.mark.parametrize("kind", [
+    "directory", "input", "output", "executable", "source", "script", "path",
+])
+def test_shell_inspection_preserves_legacy_target_kinds_and_incomplete_writes(kind) -> None:
+    result = ShellInspectResult.model_validate({
+        "targets": [{"path": "/outside/target", "kind": kind}],
+        "analysisComplete": False,
+        "classification": "write",
+        "commands": [],
+        "inspectionRevision": "a" * 64,
+    })
+    assert result.targets[0].kind == kind
+    assert result.classification == "write"
+    assert result.read_only is False
+
+
+@pytest.mark.parametrize("target", [
+    {"path": "/tmp/null", "kind": "discard"},
+    {"path": "/dev/null/child", "kind": "discard"},
+    {"path": "/usr/bin/python3/data", "kind": "toolchain_metadata"},
+    {"path": "/usr/local/bin/python3/data", "kind": "toolchain_metadata"},
+    {"path": "/usr/bin-extra/python3", "kind": "toolchain_metadata"},
+    {"path": "/usr/local", "kind": "toolchain_metadata"},
+    {"path": "/opt/bin", "kind": "toolchain_metadata"},
+    {"path": "/usr/bin/../etc", "kind": "toolchain_metadata"},
+    {"path": "/usr/bin//python3", "kind": "toolchain_metadata"},
+    {"path": "/usr/bin/python3", "kind": "future_metadata"},
+])
+async def test_shell_client_rejects_invalid_special_targets(monkeypatch, target) -> None:
+    client = ExecutionClient(uuid4(), frozenset({"shell.inspect"}))
+
+    async def request(*_args, **_kwargs):
+        return ResponseMessage.model_validate({
+            "type": "response", "id": uuid4(), "ok": True,
+            "result": {
+                "targets": [target], "analysisComplete": False,
+                "classification": "read", "readOnly": True, "commands": [],
+                "inspectionRevision": "a" * 64,
+            },
+        })
+
+    monkeypatch.setattr(
+        "mato_loop_backend.execution.client.execution_agent_connections.request", request,
+    )
+    with pytest.raises(ExecutionClientError) as error:
+        await client.request("shell.inspect", {}, ShellInspectResult)
+    assert error.value.code == "executionAgent.protocolError"
+
+
+@pytest.mark.parametrize("overrides", [
+    {"readOnly": False},
+    {"classification": "write"},
+    {"commands": [{"tokens": ["touch", "file"], "classification": "write"}]},
+])
+def test_shell_inspection_rejects_inconsistent_classification(overrides) -> None:
+    payload = {
+        "targets": [], "analysisComplete": False, "classification": "read",
+        "readOnly": True, "commands": [], "inspectionRevision": "a" * 64,
+    }
+    with pytest.raises(ValidationError):
+        ShellInspectResult.model_validate({**payload, **overrides})
+    payload.pop("readOnly")
+    with pytest.raises(ValidationError):
+        ShellInspectResult.model_validate(payload)
+
+
+def test_shell_inspection_accepts_redirect_only_writes() -> None:
+    result = ShellInspectResult.model_validate({
+        "targets": [{"path": "/work/output", "kind": "output"}],
+        "analysisComplete": True, "classification": "write", "commands": [],
+        "inspectionRevision": "a" * 64,
+    })
+    assert result.read_only is False
+
+
+@pytest.mark.parametrize("operation", ["shell.inspect", "shell.run", "terminal.run"])
+async def test_shell_client_maps_invalid_syntax_without_retry(monkeypatch, operation) -> None:
+    client = ExecutionClient(uuid4(), frozenset({operation}))
+    calls = []
+
+    async def request(*args, **_kwargs):
+        calls.append(args)
+        return ResponseMessage.model_validate({
+            "type": "response", "id": uuid4(), "ok": False,
+            "error": {"code": "process.invalidSyntax"},
+        })
+
+    monkeypatch.setattr(
+        "mato_loop_backend.execution.client.execution_agent_connections.request", request,
+    )
+    with pytest.raises(ExecutionClientError) as error:
+        await client.request(operation, {}, ShellInspectResult)
+    assert error.value.code == "process.invalidSyntax"
+    assert len(calls) == 1

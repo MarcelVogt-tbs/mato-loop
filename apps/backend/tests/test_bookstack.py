@@ -1,3 +1,4 @@
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -7,9 +8,11 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-import mato_loop_backend.integrations.bookstack as bookstack_module
-import mato_loop_backend.integrations.webfetch as webfetch_module
 from mato_loop_backend.agent.permissions import PermissionDecision
+from mato_loop_backend.agent.tool_registry import ToolContext
+from mato_loop_backend.agent.tools import tool_registry
+from mato_loop_backend.integrations import bookstack as bookstack_module
+from mato_loop_backend.integrations import webfetch as webfetch_module
 from mato_loop_backend.integrations.bookstack import (
     BOOKSTACK_ADAPTER,
     KnowledgeBookArguments,
@@ -65,12 +68,19 @@ from mato_loop_backend.integrations.registry import (
     integration_adapter,
 )
 from mato_loop_backend.integrations.webfetch import DownloadedFile, WebFetchError
+from mato_loop_backend.models import ChatSession
+from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
+    AgentProfile,
     AgentProfilePermissions,
+    AgentProfilesSettings,
     IntegrationInstance,
     IntegrationSettings,
+    SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
+    TrustLevel,
+    load_agent_profile_tools,
 )
 from mato_loop_backend.workspace import RootFileError
 
@@ -91,6 +101,26 @@ def _revision(instance: IntegrationInstance) -> str:
         separators=(",", ":"),
         sort_keys=True,
     )
+
+
+def test_delegation_keeps_removed_resource_limits_visible_to_aggregate_filters():
+    from mato_loop_backend.agent.subagents import apply_delegation_ceiling, permission_snapshot
+    from mato_loop_backend.agent.tools import resolve_tool_execution_policy
+
+    instance = _base()
+    before = ToolSettings(private_permissions={"resource_policies": {str(instance.id): {
+        "book:1": {"knowledge.read": "disabled"},
+        "book:2": {"knowledge.read": "auto"},
+    }}})
+    snapshot = permission_snapshot(before, {"knowledge_list_books"}, IntegrationSettings(instances=[instance]))
+    live = ToolSettings(private_permissions={"policies": {"knowledge.read": "ask"}})
+    context = _context(instance, _revision(instance))
+    context.tool_settings = apply_delegation_ceiling(live, snapshot)
+    assert bookstack_module._disabled_book_keys(context, instance) == {"book:1"}
+    assert resolve_tool_execution_policy(
+        live, "knowledge.read", ToolExecutionPolicy.AUTO,
+        integration_id=instance.id, resource_key="book:2",
+    ).policy == ToolExecutionPolicy.ASK
 
 
 def _context(instance: IntegrationInstance, revision: str) -> SimpleNamespace:
@@ -894,6 +924,7 @@ def _attachment(**overrides) -> BookStackAttachment:
 
 def _download_context(instance: IntegrationInstance, revision: str) -> SimpleNamespace:
     context = _context(instance, revision)
+    context.current_integrations = AsyncMock(return_value=context.integration_settings)
     context.session = SimpleNamespace(user_id=uuid4())
     context.tool_settings = ToolSettings()
     context.ask = AsyncMock(return_value=PermissionDecision.ALLOW)
@@ -1261,6 +1292,101 @@ def _blocked_context(instance, revision, *, book_key: str = "book:9"):
         }
     )
     return context
+
+
+@pytest.mark.parametrize("tool_name", ["knowledge_search", "knowledge_list_books"])
+@pytest.mark.parametrize("permission_source", ["tools", "profile"])
+@pytest.mark.parametrize("delegated", [False, True])
+async def test_aggregate_books_recheck_resource_policies_after_pending_approval(
+    monkeypatch, tool_name, permission_source, delegated,
+) -> None:
+    from mato_loop_backend.agent.subagents import apply_delegation_ceiling, permission_snapshot
+
+    instance = _base()
+    integrations = IntegrationSettings(instances=[instance])
+    profile = AgentProfile(name="Reader", instructions="Read selected books.")
+    tools = ToolSettings(private_permissions={"policies": {"knowledge.read": "ask"}})
+    permissions = profile.private_permissions if permission_source == "profile" else tools.private_permissions
+    permissions.resource_policies = {
+        str(instance.id): {"book:8": {"knowledge.read": ToolExecutionPolicy.DISABLED}}
+    }
+
+    async def load(_db, model, **_kwargs):
+        if model is IntegrationSettings:
+            return integrations.model_copy(deep=True)
+        if model is ToolSettings:
+            return tools.model_copy(deep=True)
+        if model is AgentProfilesSettings:
+            return AgentProfilesSettings(profiles=[profile.model_copy(deep=True)])
+        return model()
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=None))
+    db = AsyncMock()
+    session = ChatSession(id=uuid4(), user_id=uuid4(), agent_profile_id=profile.id)
+    current_tools, _profile = await load_agent_profile_tools(db, session.user_id, profile.id, TrustLevel.PRIVATE)
+    ceiling = permission_snapshot(current_tools, {tool_name}, integrations) if delegated else None
+    apply_delegation_ceiling(current_tools, ceiling)
+    call = ToolCall(id="books", name=tool_name, arguments={
+        "integration_id": str(instance.id),
+        **({"queries": ["books"]} if tool_name == "knowledge_search" else {}),
+    })
+    waiting, release = asyncio.Event(), asyncio.Event()
+
+    async def approve(request):
+        assert request.capability == "knowledge.read"
+        waiting.set()
+        await release.wait()
+        return PermissionDecision.ALLOW
+
+    context = ToolContext(db=db, session=session, run_id=uuid4(), tool_call=call,
+                          root_files=None, integration_settings=integrations,
+                          tool_settings=current_tools, model_trust_level=TrustLevel.PRIVATE,
+                          ask_handler=approve)
+    client = AsyncMock()
+    books = [(7, "Visible"), (8, "Ceiling"), (9, "Revoked secret")]
+    client.search.return_value = tuple(
+        BookStackSearchResult(type="page", id=book_id, name=name, book_id=book_id,
+                              chapter_id=None, preview=f"{name} preview")
+        for book_id, name in books
+    )
+    client.list_books.return_value = (tuple(
+        BookStackBook(id=book_id, name=name, slug=f"book-{book_id}", description=f"{name} preview")
+        for book_id, name in books
+    ), False)
+    client.list_shelves.return_value = ((), False)
+
+    @asynccontextmanager
+    async def selected_client(_integration_id, _context):
+        yield client, _revision(instance)
+
+    monkeypatch.setattr(bookstack_module, "_selected_client", selected_client)
+    effective = tool_registry.effective(integrations, tool_settings=current_tools)
+    async with asyncio.timeout(5):
+        pending = asyncio.create_task(effective.execute(call, context))
+        try:
+            await waiting.wait()
+            client.search.assert_not_awaited()
+            client.list_books.assert_not_awaited()
+            permissions.resource_policies = {
+                str(instance.id): {"book:9": {"knowledge.read": ToolExecutionPolicy.DISABLED}}
+            }
+        finally:
+            release.set()
+        result = await pending
+
+    assert not result.is_error
+    items = json.loads(result.content)["results" if tool_name == "knowledge_search" else "books"]
+    assert [item["name"] for item in items] == (["Visible"] if delegated else ["Visible", "Ceiling"])
+    assert "Revoked secret" not in result.content
+    assert "book:9" not in result.content
+    revoked_token = bookstack_module._page_token(
+        _page(id=9, book_id=9, name="Revoked secret", slug="", updated_at=None),
+        instance.id, _revision(instance), "book:9",
+    )
+    assert revoked_token not in result.content
+    assert context.tool_settings is not current_tools
+    assert context.tool_settings._delegation_ceiling == ceiling
 
 
 async def test_search_hides_results_from_books_with_disabled_read_policy(

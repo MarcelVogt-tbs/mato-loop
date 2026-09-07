@@ -23,7 +23,7 @@ except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts
 
 from .config import AgentConfig
 from .filesystem import AgentError
-from .process import ProcessRunner
+from .process import EXECUTION_PATH, ProcessRunner
 
 PTY_AVAILABLE = (
     os.name == "posix"
@@ -59,7 +59,6 @@ class TerminalManager:
         self.home = os.fspath(config.home_directory)
         self.shell = process.shell
         self.process = process
-        self.default_timeout = config.default_timeout_seconds
         self.max_output = config.max_output_bytes
         self._terminals: dict[str, _Terminal] = {}
         self._runs: dict[str, _Terminal] = {}
@@ -76,7 +75,7 @@ class TerminalManager:
             "TERM": os.environ.get("TERM", "xterm-256color"),
             "COLORTERM": os.environ.get("COLORTERM", "truecolor"),
             "LANG": os.environ.get("LANG", "C.UTF-8"),
-            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PATH": EXECUTION_PATH,
             "USER": username,
             "LOGNAME": username,
         }
@@ -94,20 +93,23 @@ class TerminalManager:
             raise AgentError("operation.unsupported", "POSIX terminal support is unavailable")
         _cwd, cwd_fd = self.process._cwd(current_directory)
         try:
+            self.process.validate_executable(argv[0])
             pid, master_fd = pty.fork()
+            if pid == 0:  # pragma: no branch - child replaces itself
+                try:
+                    os.fchdir(cwd_fd)
+                    os.close(cwd_fd)
+                    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+                    os.closerange(3, os.sysconf("SC_OPEN_MAX"))
+                    os.execve(argv[0], argv, environment)
+                except BaseException:
+                    os._exit(127)
         except OSError as exc:
-            os.close(cwd_fd)
             raise AgentError(
                 "process.startFailed", "Terminal process could not be started"
             ) from exc
-        if pid == 0:  # pragma: no branch - child replaces itself
-            try:
-                os.fchdir(cwd_fd)
-                signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-                os.execve(argv[0], argv, environment)
-            except BaseException:
-                os._exit(127)
-        os.close(cwd_fd)
+        finally:
+            os.close(cwd_fd)
         try:
             flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
             fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
@@ -211,8 +213,9 @@ class TerminalManager:
                 await asyncio.wait_for(asyncio.shield(entry.wait_task), 2)
             except TimeoutError:
                 pass
-        if entry.wait_task is not None and not entry.wait_task.done():
-            self._signal(entry.pid, signal.SIGKILL)
+        # The leader may exit on SIGTERM while descendants ignore it.
+        self._signal(entry.pid, signal.SIGKILL)
+        if entry.wait_task is not None:
             await entry.wait_task
         if close_fd:
             entry.eof = True
@@ -352,6 +355,7 @@ class TerminalManager:
         expected_inspection_revision: str | None,
         stream: StreamCallback,
     ) -> dict:
+        timeout = self.process.execution_timeout(timeout)
         if terminal_id in self._runs or terminal_id in self._terminals:
             raise AgentError("terminal.exists", "Terminal identifier is already in use")
         if len(self._terminals) + len(self._runs) >= MAX_TERMINALS:
@@ -410,10 +414,10 @@ class TerminalManager:
 
         timed_out = False
         try:
-            async with asyncio.timeout(timeout or self.default_timeout):
+            async with asyncio.timeout(timeout):
                 await drain()
                 if entry.wait_task is not None:
-                    await entry.wait_task
+                    await asyncio.shield(entry.wait_task)
             await finish_decoder()
         except TimeoutError:
             timed_out = True

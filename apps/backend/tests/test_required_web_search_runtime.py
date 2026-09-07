@@ -88,10 +88,7 @@ async def _runtime_setup(
     monkeypatch,
     results: list[ProviderResult],
     *,
-    max_steps: int = 10,
-    max_tool_calls: int = 20,
-    max_research_tool_calls: int = 8,
-    max_model_requests: int = 10,
+    max_tool_calls: int | None = 25,
     search_policy: WebSearchPolicy = WebSearchPolicy.REQUIRED,
     active_supports_image_input: bool = False,
     vision_fallback: bool = False,
@@ -144,12 +141,7 @@ async def _runtime_setup(
         vision_model_id=vision_model.id if vision_model is not None else None,
         skill_creation_model_id=builder_model.id if builder_model is not None else None,
     )
-    runtime_settings = AgentRuntimeSettings(
-        max_steps=max_steps,
-        max_model_requests=max_model_requests,
-        max_tool_calls=max_tool_calls,
-        max_research_tool_calls=max_research_tool_calls,
-    )
+    runtime_settings = AgentRuntimeSettings()
     session = ChatSession(
         id=uuid4(),
         user_id=uuid4(),
@@ -171,8 +163,10 @@ async def _runtime_setup(
         session_id=session.id,
         role="user",
         content=user_content,
+        provider_data={"_matoloop": {"maxToolCallsByRun": {str(run.id): max_tool_calls}}},
         trust_level=user_trust_level.value if user_trust_level is not None else None,
     )
+    run.input_message_id = user.id
     records = [user]
     if user_image:
         user.attachments = [
@@ -332,6 +326,45 @@ async def test_session_reasoning_effort_reaches_primary_model_request(monkeypatc
     await AgentRuntime._execute_loop(db, run)
 
     assert requests[0]["reasoning_effort"] == "low"
+
+
+async def test_child_reuses_context_and_generic_tools_without_main_workflows(monkeypatch):
+    from mato_loop_backend.agent.subagents import permission_snapshot
+    from mato_loop_backend.settings.models import plan_agent_profile
+
+    db, run, requests, projections, _events = await _runtime_setup(
+        monkeypatch, [ProviderResult(content="Translated text", finish_reason="stop")],
+        search_policy=WebSearchPolicy.REQUIRED, reasoning_effort="high",
+    )
+    session = db.get.return_value
+    session.parent_session_id = uuid4()
+    session.memory_mode = "full"
+    run.trust_level = "public"
+    run.input_message_id = uuid4()
+    profile = plan_agent_profile()
+    run.agent_profile_id = session.agent_profile_id = profile.id
+    settings = ToolSettings()
+    settings._agent_permissions = profile.public_permissions
+    message = Message(id=run.input_message_id, session_id=session.id, role="user", content="Translate text",
+                      provider_data={"_matoloop": {"delegationCeiling": permission_snapshot(
+                          settings, {"task", "question", "read", "web_search", "write_file", "memory_retrieve"}
+                      )}})
+    db.get.side_effect = lambda model, _key, **kw: message if model is Message else session
+    monkeypatch.setattr(runtime_module, "load_agent_profile", AsyncMock(return_value=profile))
+    monkeypatch.setattr(runtime_module, "load_agent_profile_tools", AsyncMock(return_value=(settings, profile)))
+    monkeypatch.setattr(runtime_module.SessionStorage, "provision", lambda *_args: None)
+    monkeypatch.setattr(runtime_module.memory_policy, "effective_memory", lambda *_args: runtime_module.memory_policy.EffectiveMemory(True, True, True))
+    retrieve = AsyncMock(side_effect=AssertionError("Children must not retrieve automatic memory"))
+    monkeypatch.setattr(runtime_module.MemoryService, "pinned_context", retrieve)
+    await AgentRuntime._execute_loop(db, run)
+    tools = {tool["name"] for tool in requests[0]["tools"]}
+    assert tools == {"question", "read", "web_search", "write_file"}
+    assert requests[0]["reasoning_effort"] == "high"
+    assert "delegated task" in projections[0]["system_prompt"]
+    assert "Plan workflow:" not in projections[0]["system_prompt"]
+    assert "Build workflow:" not in projections[0]["system_prompt"]
+    assert "delegationCeiling" not in str(requests[0]["messages"])
+    retrieve.assert_not_awaited()
 
 
 async def test_runtime_replays_exact_tool_calls_without_persisting_them(monkeypatch) -> None:
@@ -583,7 +616,6 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
             ProviderResult(content="Visuell verglichen.", finish_reason="stop"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
-        max_steps=2,
         active_supports_image_input=True,
         integration_settings=IntegrationSettings(instances=[integration]),
         execution_agent_id=agent_id,
@@ -762,7 +794,6 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
         monkeypatch,
         results,
         search_policy=WebSearchPolicy.AVAILABLE,
-        max_steps=3,
         vision_fallback=vision_fallback,
         integration_settings=IntegrationSettings(instances=[integration]),
         execution_agent_id=agent_id,
@@ -891,7 +922,6 @@ async def test_private_openscad_source_uses_public_active_vision_model(monkeypat
             ),
             ProviderResult(content="Fertig.", finish_reason="stop"),
         ],
-        max_steps=2,
         search_policy=WebSearchPolicy.AVAILABLE,
         active_supports_image_input=True,
         vision_fallback=True,
@@ -946,8 +976,6 @@ async def test_failed_active_openscad_verifier_does_not_fallback_and_counts_budg
     db, run, requests, _projections, events = await _runtime_setup(
         monkeypatch,
         [],
-        max_steps=2,
-        max_model_requests=3,
         search_policy=WebSearchPolicy.AVAILABLE,
         active_supports_image_input=True,
         vision_fallback=True,
@@ -1063,7 +1091,6 @@ async def test_each_successful_openscad_preview_runs_a_verifier(monkeypatch) -> 
             ProviderResult(content="Second inspection"),
             ProviderResult(content="Fertig.", finish_reason="stop"),
         ],
-        max_steps=3,
         search_policy=WebSearchPolicy.AVAILABLE,
         vision_fallback=True,
         integration_settings=IntegrationSettings(instances=[integration]),
@@ -1163,7 +1190,6 @@ async def test_openscad_stl_and_failed_preview_do_not_run_verifier(monkeypatch) 
             ),
             ProviderResult(content="Fertig.", finish_reason="stop"),
         ],
-        max_steps=2,
         search_policy=WebSearchPolicy.AVAILABLE,
         vision_fallback=True,
         integration_settings=IntegrationSettings(instances=[integration]),
@@ -1668,7 +1694,7 @@ async def test_skill_builder_uses_only_one_structured_repair_across_fallback(
             ProviderResult(content="invalid"),
             ProviderResult(content="still invalid"),
             ProviderResult(content="fallback invalid"),
-            ProviderResult(content="Unbestätigte Antwort", finish_reason="stop"),
+            ProviderResult(content="Der Skill konnte nicht erstellt werden.", finish_reason="stop"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
         skill_creation_model=True,
@@ -1685,10 +1711,10 @@ async def test_skill_builder_uses_only_one_structured_repair_across_fallback(
         AsyncMock(return_value={"skillModelFallback": ["Sessionmodell verwenden"]}),
     )
 
-    with pytest.raises(AgentRunError) as exc_info:
-        await AgentRuntime._execute_loop(db, run)
+    await AgentRuntime._execute_loop(db, run)
 
-    assert exc_info.value.code == "skill.creationModelFailed"
+    assert json.loads(_tool_messages(db)[0].content)["error"]["code"] == "skill.creationModelFailed"
+    assert _assistant_messages(db)[-1].content == "Der Skill konnte nicht erstellt werden."
     assert [request["model"].model_id for request in requests] == [
         "local-model",
         "skill-builder",
@@ -1702,11 +1728,10 @@ async def test_skill_builder_uses_only_one_structured_repair_across_fallback(
     ]
 
 
-async def test_failed_skill_builder_request_consumes_model_budget(monkeypatch) -> None:
+async def test_failed_skill_builder_requests_are_locally_bounded_and_counted(monkeypatch) -> None:
     db, run, requests, _projections, _events = await _runtime_setup(
         monkeypatch,
         [],
-        max_model_requests=2,
         search_policy=WebSearchPolicy.AVAILABLE,
         skill_creation_model=True,
     )
@@ -1725,6 +1750,8 @@ async def test_failed_skill_builder_request_consumes_model_budget(monkeypatch) -
         requests.append(kwargs)
         if len(requests) == 1:
             return main_result
+        if len(requests) == 4:
+            return ProviderResult(content="Der Skill konnte nicht erstellt werden.")
         raise RuntimeError("builder unavailable")
 
     original_execute = ToolRegistry._execute_definition
@@ -1739,11 +1766,11 @@ async def test_failed_skill_builder_request_consumes_model_budget(monkeypatch) -
     )
     monkeypatch.setattr(AgentRuntime, "_request_question", question)
 
-    with pytest.raises(AgentRunError) as exc_info:
-        await AgentRuntime._execute_loop(db, run)
+    await AgentRuntime._execute_loop(db, run)
 
-    assert exc_info.value.code == "agent.modelRequestLimitReached"
-    assert len(requests) == 2
+    assert len(requests) == 4
+    assert json.loads(_tool_messages(db)[0].content)["error"]["code"] == "skill.creationModelFailed"
+    assert _assistant_messages(db)[-1].provider_data["_matoloop"]["performance"]["modelRequest"] == 4
     question.assert_awaited_once()
 
 
@@ -1794,6 +1821,7 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
     assert tool_message.provider_data == {
         "_matoloop": {
             "runId": str(run.id),
+            "toolName": "write_file",
             "fileOutputsPending": True,
             "fileActions": [
                 {
@@ -2018,14 +2046,13 @@ async def test_empty_response_after_search_is_repaired(monkeypatch) -> None:
     assert any(event.get("delta") == answer for event in events)
 
 
-async def test_empty_response_repair_can_cross_the_step_limit(monkeypatch) -> None:
+async def test_empty_response_repair_is_locally_bounded(monkeypatch) -> None:
     db, run, requests, _projections, _events = await _runtime_setup(
         monkeypatch,
         [
             ProviderResult(content="", finish_reason="stop"),
             ProviderResult(content="Reparierte Antwort", finish_reason="stop"),
         ],
-        max_steps=1,
         search_policy=WebSearchPolicy.AVAILABLE,
     )
 
@@ -2178,7 +2205,7 @@ async def test_required_search_retries_hidden_after_tool_failure(monkeypatch) ->
     )
 
 
-async def test_failed_mutation_blocks_an_unconfirmed_final_response(monkeypatch) -> None:
+async def test_failed_mutation_allows_an_honest_negative_final_response(monkeypatch) -> None:
     db, run, _requests, _projections, events = await _runtime_setup(
         monkeypatch,
         [
@@ -2196,20 +2223,17 @@ async def test_failed_mutation_blocks_an_unconfirmed_final_response(monkeypatch)
                 ],
                 finish_reason="tool_calls",
             ),
-            ProviderResult(content="Die Datei wurde erfolgreich erstellt.", finish_reason="stop"),
+            ProviderResult(content="Die Datei konnte nicht erstellt werden.", finish_reason="stop"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
         tool_result=ToolResult.error("tool.invalidArguments", field="path"),
     )
 
-    with pytest.raises(AgentRunError) as exc_info:
-        await AgentRuntime._execute_loop(db, run)
+    await AgentRuntime._execute_loop(db, run)
 
-    assert exc_info.value.code == "tool.invalidArguments"
-    assert "Die Datei wurde erfolgreich erstellt." not in {
-        message.content for message in _assistant_messages(db)
-    }
-    assert all(event["type"] != "message.delta" for event in events)
+    assert _tool_messages(db)[0].provider_data["_matoloop"]["errorCode"] == "tool.invalidArguments"
+    assert _assistant_messages(db)[-1].content == "Die Datei konnte nicht erstellt werden."
+    assert [event.get("delta") for event in events].count("Die Datei konnte nicht erstellt werden.") == 1
 
 
 async def test_user_denial_skips_the_remaining_tool_batch(monkeypatch) -> None:
@@ -2474,11 +2498,13 @@ async def test_directory_change_allows_retrying_a_failed_workspace_call(monkeypa
         execution_agent_id=uuid4(),
         execution_operations=("filesystem.resolve",),
     )
-    tool_registry._execute_definition.side_effect = [
-        ToolResult.error("file.notFound"),
-        ToolResult.json({"currentDirectory": "/workspace/drastic-backup"}),
-        ToolResult("README", {}),
-    ]
+    async def execute(call, _context, _tool):
+        if call.name == "change_directory":
+            run.current_directory_snapshot = "/workspace/drastic-backup"
+            return ToolResult.json({"currentDirectory": run.current_directory_snapshot})
+        return ToolResult("README", {}) if run.current_directory_snapshot else ToolResult.error("file.notFound")
+
+    tool_registry._execute_definition.side_effect = execute
 
     await AgentRuntime._execute_loop(db, run)
 
@@ -2488,7 +2514,7 @@ async def test_directory_change_allows_retrying_a_failed_workspace_call(monkeypa
     assert _assistant_messages(db)[-1].content == "Repository gelesen."
 
 
-async def test_available_uses_the_shared_research_budget(monkeypatch) -> None:
+async def test_research_uses_only_the_shared_tool_budget(monkeypatch) -> None:
     db, run, requests, projections, _ = await _runtime_setup(
         monkeypatch,
         [
@@ -2502,25 +2528,22 @@ async def test_available_uses_the_shared_research_budget(monkeypatch) -> None:
             ),
             ProviderResult(content="Budgetierte Antwort", finish_reason="stop"),
         ],
-        max_research_tool_calls=1,
+        max_tool_calls=25,
         search_policy=WebSearchPolicy.AVAILABLE,
     )
 
     await AgentRuntime._execute_loop(db, run)
 
-    assert tool_registry._execute_definition.await_count == 1
-    assert {"web_search", "webfetch", "fetch_transcript"} <= {
-        tool["name"] for tool in requests[1]["tools"]
-    }
+    assert tool_registry._execute_definition.await_count == 2
     assert requests[0]["tools"] == requests[1]["tools"] == requests[2]["tools"]
-    assert projections[0]["system_prompt"] == projections[1]["system_prompt"]
-    assert projections[1]["system_prompt"] == projections[2]["system_prompt"]
+    assert "Research budget limit" not in projections[1]["system_prompt"]
     tool_messages = [
         call.args[0]
         for call in db.add.call_args_list
         if isinstance(call.args[0], Message) and call.args[0].role == "tool"
     ]
-    assert any("agent.researchBudgetReached" in message.content for message in tool_messages)
+    assert len(tool_messages) == 2
+    assert all("errorCode" not in message.provider_data["_matoloop"] for message in tool_messages)
 
 
 async def test_repeated_successful_research_call_does_not_hit_the_network(monkeypatch) -> None:
@@ -2553,7 +2576,7 @@ async def test_repeated_successful_research_call_does_not_hit_the_network(monkey
     assert requests[0]["tools"] == requests[1]["tools"] == requests[2]["tools"]
     assert projections[0]["system_prompt"] == projections[1]["system_prompt"]
     assert projections[1]["system_prompt"] == projections[2]["system_prompt"]
-    assert "Research budget limit: 8 calls this turn" in projections[2]["system_prompt"]
+    assert "Research budget limit" not in projections[2]["system_prompt"]
 
 
 async def test_tool_call_limit_applies_after_required_gate(monkeypatch) -> None:
@@ -2598,7 +2621,6 @@ async def test_exact_tool_call_limit_allows_tool_free_final_response(monkeypatch
             ),
             ProviderResult(content=answer, finish_reason="stop"),
         ],
-        max_steps=1,
         max_tool_calls=1,
         search_policy=WebSearchPolicy.AVAILABLE,
     )
@@ -2626,18 +2648,20 @@ async def test_oversized_tool_batch_executes_nothing(monkeypatch) -> None:
                     _search_call("search-2", "Zweite Frage"),
                 ],
                 finish_reason="tool_calls",
-            )
+            ),
+            ProviderResult(content="Das Budget reicht nicht fuer diesen Auftrag.", finish_reason="stop"),
         ],
         max_tool_calls=1,
         search_policy=WebSearchPolicy.AVAILABLE,
     )
 
-    with pytest.raises(AgentRunError) as exc_info:
-        await AgentRuntime._execute_loop(db, run)
+    await AgentRuntime._execute_loop(db, run)
 
-    assert exc_info.value.code == "agent.toolCallLimitReached"
-    assert len(requests) == 1
-    assert not _assistant_messages(db)
+    assert len(requests) == 2
+    assert requests[-1]["tools"] == [] and requests[-1]["tool_choice"] == "none"
+    assert len(_tool_messages(db)) == 2
+    assert all(json.loads(message.content)["error"]["code"] == "agent.toolCallLimitReached" for message in _tool_messages(db))
+    assert _assistant_messages(db)[-1].provider_data["_matoloop"]["completionCause"] == "agent.toolCallLimitReached"
     tool_registry._execute_definition.assert_not_awaited()
 
 

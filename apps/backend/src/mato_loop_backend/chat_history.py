@@ -16,6 +16,7 @@ from mato_loop_backend.models import (
     Message,
 )
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
+from mato_loop_backend.sessions.cleanup import deleting_child_sessions
 
 logger = logging.getLogger(__name__)
 _ACTIVE_RUN_STATUSES = ("queued", "running", "waiting_approval", "waiting_input")
@@ -56,6 +57,8 @@ class ChatHistoryService:
         session = await db.scalar(statement)
         if session is None:
             raise ChatHistoryError("session.notFound", 404)
+        if session.parent_session_id is not None:
+            raise ChatHistoryError("session.readOnly", 403)
         return session
 
     @staticmethod
@@ -124,6 +127,7 @@ class ChatHistoryService:
                 continue
 
             await db.rollback()
+            await AgentRuntime.cancel_descendants(session_id)
             session = await cls._owned_session(db, session_id, user_id)
             if await cls._active_run(db, session_id) is None:
                 return session
@@ -244,15 +248,26 @@ class ChatHistoryService:
 
         target_index = messages.index(target)
         content = target.content
-        if target_index == 0:
-            await cls._delete_session(db, session)
-            return UndoUserMessageResult(content, True)
-
-        await cls._delete_message_suffix(
-            db, messages, target_index, include_boundary=True
+        run_ids = None if target_index == 0 else list(
+            (await db.scalars(
+                select(AgentRun.id).where(
+                    AgentRun.session_id == session_id,
+                    AgentRun.input_message_id.in_([message.id for message in messages[target_index:]]),
+                )
+            )).all()
         )
-        await cls._commit(db)
-        return UndoUserMessageResult(content, False)
+        try:
+            async with deleting_child_sessions(db, session_id, spawned_by_run_ids=run_ids):
+                if target_index == 0:
+                    await cls._delete_session(db, session)
+                else:
+                    await cls._delete_message_suffix(
+                        db, messages, target_index, include_boundary=True
+                    )
+                    await cls._commit(db)
+        except (OSError, SessionStorageError) as exc:
+            raise ChatHistoryError("session.storageUnavailable", 500) from exc
+        return UndoUserMessageResult(content, target_index == 0)
 
     @classmethod
     async def retry_failed_message(
@@ -263,6 +278,11 @@ class ChatHistoryService:
         user_id: UUID,
         message_id: UUID,
     ) -> RetryFailedMessageResult:
+        await cls._owned_session(db, session_id, user_id, for_update=False)
+        if await cls._active_run(db, session_id) is not None:
+            raise ChatHistoryError("session.runAlreadyActive", 409)
+        await db.rollback()
+        await AgentRuntime.cancel_descendants(session_id)
         session = await cls._owned_session(db, session_id, user_id)
         if await cls._active_run(db, session_id) is not None:
             raise ChatHistoryError("session.runAlreadyActive", 409)
@@ -277,11 +297,16 @@ class ChatHistoryService:
             raise ChatHistoryError("session.retryUnavailable", 409)
         failed_run, user_index = source
 
-        await cls._delete_message_suffix(
-            db, messages, user_index, include_boundary=False
-        )
         try:
-            run = await AgentRuntime.retry(db, session, failed_run)
+            async with deleting_child_sessions(
+                db, session_id, spawned_by_run_ids=[failed_run.id]
+            ):
+                await cls._delete_message_suffix(
+                    db, messages, user_index, include_boundary=False
+                )
+                run = await AgentRuntime.retry(db, session, failed_run)
+        except (OSError, SessionStorageError) as exc:
+            raise ChatHistoryError("session.storageUnavailable", 500) from exc
         except BaseException:
             await db.rollback()
             raise

@@ -76,6 +76,7 @@ export function buildChatTranscript(
   approvals = [],
   {
     running = false,
+    runId = null,
     toolExecutionActive = running,
     activeToolCallId = null,
     processOutputs = {},
@@ -94,10 +95,10 @@ export function buildChatTranscript(
   const approvalsByToolCall = new Map()
   for (const approval of approvals) {
     const toolCallId = approval.details?.toolCallId
-    if (toolCallId) approvalsByToolCall.set(toolCallId, approval)
+    if (toolCallId) approvalsByToolCall.set(`${approval.runId || ''}:${toolCallId}`, approval)
   }
 
-  const questionsByToolCall = new Map(questions.map((question) => [question.toolCallId, question]))
+  const questionsByToolCall = new Map(questions.map((question) => [`${question.runId || ''}:${question.toolCallId}`, question]))
 
   let lastUserIndex = -1
   messages.forEach((message, index) => {
@@ -116,9 +117,11 @@ export function buildChatTranscript(
       _sourceIndex: index,
       toolCalls: (message.toolCalls || []).map((tool, toolIndex) => {
         const currentRound = running && index > lastUserIndex
-        const approval = currentRound ? approvalsByToolCall.get(tool.id) || null : null
-        const question = currentRound ? questionsByToolCall.get(tool.id) || null : null
         const result = results.get(tool.id)?.shift() || null
+        const toolRunId = message.runId || result?.runId || (currentRound ? runId : null)
+        const requestKey = `${toolRunId || ''}:${tool.id}`
+        const approval = currentRound ? approvalsByToolCall.get(requestKey) || null : null
+        const question = currentRound ? questionsByToolCall.get(requestKey) || null : null
         if (approval) matchedApprovalIds.add(approval.id)
         if (question) matchedQuestionIds.add(question.id)
         const active = currentRound && toolExecutionActive && !result && !approval && !question && (activeToolCallId
@@ -129,6 +132,7 @@ export function buildChatTranscript(
         return {
           key: `${message.id || index}:${tool.id || toolIndex}:${toolIndex}`,
           tool,
+          ...(toolRunId ? { runId: toolRunId } : {}),
           result,
           approval,
           question,

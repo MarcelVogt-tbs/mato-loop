@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +37,10 @@ from mato_loop_backend.settings import (
     load_effective_tools,
     resolve_agent_persona,
 )
+from mato_loop_backend.settings.models import (
+    ProfileToolCallLimit,
+    validate_integration_availability,
+)
 
 router = APIRouter(prefix="/agent-profiles", dependencies=[Depends(require_user)])
 SettingsApiScope = Literal["instance", "personal"]
@@ -57,6 +61,13 @@ class AgentProfileRequest(BaseModel):
     description: str = Field(default="", max_length=500)
     persona_id: UUID | None = None
     instructions: str = Field(min_length=1, max_length=16_000)
+    max_tool_calls: ProfileToolCallLimit = 25
+    integrations_enabled_by_default: StrictBool = True
+    integration_availability: dict[str, StrictBool] = Field(default_factory=dict)
+
+    _validate_availability = field_validator("integration_availability")(
+        validate_integration_availability
+    )
     private_permissions: AgentProfilePermissions = Field(
         default_factory=AgentProfilePermissions
     )
@@ -153,9 +164,7 @@ async def _response(
     ]
     public_tools = tools.model_copy(deep=True).select_trust(TrustLevel.PUBLIC)
     private_tools = tools.model_copy(deep=True).select_trust(TrustLevel.PRIVATE)
-    all_groups = tool_registry.catalog(public_tools, integrations)
     groups = tool_registry.catalog(public_tools, IntegrationSettings())
-    policy_integration_ids = set(_catalog_integration_policies(all_groups))
     return {
         "defaultAgentProfileId": str(DEFAULT_AGENT_PROFILE_ID),
         "personalAgentsEnabled": effective.personal_agents_enabled,
@@ -167,7 +176,11 @@ async def _response(
                 "id": str(instance.id),
                 "name": instance.name,
                 "integrationType": instance.integration_type,
+                "adapterType": instance.adapter_type,
                 "enabled": instance.enabled,
+                "available": instance.enabled and integrations.availability_for(
+                    instance.adapter_type
+                ).value != "disabled",
                 "scope": "personal" if instance.owner_id == user.id else "instance",
                 "supportsPolicies": bool(
                     tool_registry.integration_resource_actions(instance)
@@ -181,7 +194,6 @@ async def _response(
                 ),
             }
             for instance in integrations.instances
-            if str(instance.id) in policy_integration_ids
         ],
         "personas": [
             {
@@ -349,6 +361,12 @@ async def _profile_from_request(
     allowed = _catalog_policies(tool_registry.catalog(tools, IntegrationSettings()))
     integration_allowed = _catalog_integration_policies(groups)
     integration_ids = {str(item.id) for item in integrations.instances}
+    for integration_id, enabled in payload.integration_availability.items():
+        if integration_id not in integration_ids and (
+            existing is None
+            or existing.integration_availability.get(integration_id) is not enabled
+        ):
+            raise ApiError(422, "validation.invalidChoice", field="integrationAvailability")
     _validate_permissions(
         payload.private_permissions,
         allowed,
@@ -367,6 +385,14 @@ async def _profile_from_request(
     )
     values = payload.model_dump()
     values["persona_id"] = persona_id
+    for field in (
+        "max_tool_calls", "integrations_enabled_by_default", "integration_availability"
+    ):
+        if field not in payload.model_fields_set:
+            if existing is not None:
+                values[field] = getattr(existing, field)
+            else:
+                values.pop(field)
     return AgentProfile(id=profile_id or uuid4(), **values)
 
 

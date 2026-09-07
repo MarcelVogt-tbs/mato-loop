@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, ClassVar, Self
+from typing import Annotated, Any, ClassVar, Self
 from unicodedata import category as unicode_category
 from uuid import UUID, uuid4
 
@@ -12,6 +12,7 @@ from pydantic import (
     ConfigDict,
     Field,
     PrivateAttr,
+    StrictBool,
     computed_field,
     field_validator,
     model_validator,
@@ -108,6 +109,14 @@ BUILTIN_AGENT_PROFILE_NAMES = {
 }
 BUILTIN_AGENT_PROFILE_IDS = frozenset(BUILTIN_AGENT_PROFILE_NAMES)
 
+ProfileToolCallLimit = Annotated[int, Field(strict=True, gt=0)] | None
+
+
+def validate_integration_availability(value: dict[str, bool]) -> dict[str, bool]:
+    if any(str(UUID(key)) != key for key in value):
+        raise ValueError("integration availability keys must be canonical UUIDs")
+    return value
+
 
 class PersonaProfile(BaseModel):
     model_config = ConfigDict(
@@ -164,6 +173,9 @@ class AgentProfile(BaseModel):
     description: str = Field(default="", max_length=500)
     persona_id: UUID | None = None
     instructions: str = Field(min_length=1, max_length=16_000)
+    max_tool_calls: ProfileToolCallLimit = 25
+    integrations_enabled_by_default: StrictBool = True
+    integration_availability: dict[str, StrictBool] = Field(default_factory=dict)
     private_permissions: AgentProfilePermissions = Field(
         default_factory=AgentProfilePermissions
     )
@@ -171,6 +183,27 @@ class AgentProfile(BaseModel):
         default_factory=AgentProfilePermissions
     )
     owner_id: UUID | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def profile_defaults(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        values = dict(value)
+        coding = str(values.get("id")) in {
+            str(PLAN_AGENT_PROFILE_ID), str(BUILD_AGENT_PROFILE_ID)
+        }
+        for snake, camel, default in (
+            ("max_tool_calls", "maxToolCalls", None if coding else 25),
+            ("integrations_enabled_by_default", "integrationsEnabledByDefault", not coding),
+        ):
+            if snake not in values and camel not in values:
+                values[snake] = default
+        return values
+
+    _validate_availability = field_validator("integration_availability")(
+        validate_integration_availability
+    )
 
     @field_validator("name", "description", "instructions", mode="before")
     @classmethod
@@ -661,6 +694,8 @@ class DefaultTaskListSettings(BaseModel):
 
 
 class ToolSettingsBase(SettingsDocument):
+    _agent_profile: AgentProfile | None = PrivateAttr(default=None)
+    _delegation_ceiling: dict[str, Any] | None = PrivateAttr(default=None)
     _agent_permissions: AgentProfilePermissions | None = PrivateAttr(default=None)
     _agent_profile_unavailable: bool = PrivateAttr(default=False)
     _trust_level: TrustLevel = PrivateAttr(default=TrustLevel.PRIVATE)
@@ -907,6 +942,7 @@ class IntegrationSettingsBase(SettingsDocument):
 
 class IntegrationSettings(IntegrationSettingsBase):
     settings_key = "integrations"
+    _agent_profile_excluded_ids: frozenset[str] = PrivateAttr(default=frozenset())
 
     adapter_availability: dict[str, IntegrationAdapterAvailability] = Field(
         default_factory=dict
@@ -967,10 +1003,6 @@ class UserIntegrationSettings(IntegrationSettingsBase):
 class AgentRuntimeSettings(SettingsDocument):
     settings_key = "agent-runtime"
 
-    max_steps: int = Field(default=20, ge=1, le=100)
-    max_model_requests: int = Field(default=30, ge=1, le=200)
-    max_tool_calls: int = Field(default=50, ge=1, le=100)
-    max_research_tool_calls: int = Field(default=8, ge=1, le=100)
     request_timeout_seconds: int = Field(default=300, ge=10, le=3600)
     compaction_trigger_ratio: float = Field(default=0.8, ge=0.5, le=0.95)
     compaction_target_ratio: float = Field(default=0.6, ge=0.1, le=0.9)

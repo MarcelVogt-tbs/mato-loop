@@ -70,6 +70,7 @@ class AgentConfig(BaseModel):
     default_timeout_seconds: float = Field(
         default=60.0, alias="defaultTimeoutSeconds", gt=0, le=3600
     )
+    max_timeout_seconds: float = Field(default=3600.0, alias="maxTimeoutSeconds", gt=0, le=3600)
     _data_directory: Path = PrivateAttr(default_factory=Path.cwd)
 
     @property

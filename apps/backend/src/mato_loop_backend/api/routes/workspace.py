@@ -1199,6 +1199,7 @@ async def render_openscad_file(
         current_directory=current_directory,
         root_identity=root_identity,
         execution_agent_id=execution_agent_id,
+        for_update=session_id is not None,
     )
     if payload.expected_revision is not None:
         try:
@@ -1495,7 +1496,7 @@ async def _copy_or_move_entry(
         db,
         current_directory=current_directory,
         execution_agent_id=execution_agent_id,
-        for_update=session_id is not None,
+        for_update=move and session_id is not None,
     )
     destination_session_id = (
         payload.destination_session_id

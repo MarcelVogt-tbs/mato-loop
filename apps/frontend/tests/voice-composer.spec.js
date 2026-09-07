@@ -21,6 +21,7 @@ vi.mock('components/ControlCenterPanel.vue', () => ({ default: { render: () => n
 vi.mock('components/MessageContent.vue', () => ({ default: { render: () => null } }))
 vi.mock('components/MessageAttachments.vue', () => ({ default: { render: () => null } }))
 vi.mock('components/QuestionDock.vue', () => ({ default: { render: () => null } }))
+vi.mock('components/SubagentInspector.vue', () => ({ default: { render: () => null } }))
 
 import ChatComposer from '../src/components/ChatComposer.vue'
 import ChatPage from '../src/pages/ChatPage.vue'
@@ -97,6 +98,7 @@ beforeEach(async () => {
   app.component('QScrollArea', { methods: { getScrollTarget() { return null } }, render() { return h('div', this.$slots.default?.()) } })
   app.component('QVirtualScroll', { render: () => null })
   app.component('QSkeleton', { render: () => null })
+  app.component('QDialog', { render: () => null })
   app.mount(root)
 })
 
@@ -110,6 +112,51 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it('never renders a composer while a direct child session URL redirects to its parent inspector', async () => {
+    chat.outboxLoaded = true
+    let releaseChild
+    let releaseRedirect
+    const stopGuard = router.beforeEach((to) => to.query.subagent === 'session-1'
+      ? new Promise((resolve) => { releaseRedirect = resolve }) : true)
+    mocks.api.get.mockImplementation(async (url) => ({ data: url === '/sessions/session-1'
+      ? await new Promise((resolve) => { releaseChild = resolve })
+      : url === '/sessions/parent' ? { id: 'parent', messages: [] }
+        : url.endsWith('/children') ? [] : {} }))
+    showPage.value = true
+    await vi.waitFor(() => expect(releaseChild).toBeTypeOf('function'))
+    expect(root.querySelector('.chat-composer')).toBeNull()
+    releaseChild({ id: 'session-1', readOnly: true, parentSessionId: 'parent', messages: [] })
+    await vi.waitFor(() => expect(releaseRedirect).toBeTypeOf('function'))
+    expect(chat.current).toBeNull()
+    expect(root.querySelector('.chat-composer')).toBeNull()
+    releaseRedirect(true)
+    await vi.waitFor(() => expect(router.currentRoute.value.query).toEqual({ session: 'parent', subagent: 'session-1' }))
+    await vi.waitFor(() => expect(chat.current?.id).toBe('parent'))
+    expect(mocks.api.post.mock.calls.some(([url]) => url.startsWith('/sessions/session-1'))).toBe(false)
+    stopGuard()
+  })
+
+  it('keeps the mounted parent composer, draft and session when only the subagent URL changes', async () => {
+    chat.outboxLoaded = true
+    mocks.api.get.mockImplementation(async (url) => ({ data: url === '/sessions/session-1'
+      ? { id: 'session-1', messages: [] }
+      : url.endsWith('/children') ? [] : {} }))
+    showPage.value = true
+    await vi.waitFor(() => expect(mocks.api.get.mock.calls.some(([url]) => url === '/sessions/session-1')).toBe(true))
+    await vi.waitFor(() => expect(chat.current?.id).toBe('session-1'))
+    await nextTick()
+    const parent = chat.current
+    chat.setDraft('Unveränderter Elternentwurf')
+    mocks.api.get.mockClear()
+    mocks.recorder.cancelRecording.mockClear()
+    await router.push('/?session=session-1&subagent=child')
+    await router.push('/?session=session-1')
+    expect(chat.current).toBe(parent)
+    expect(chat.activeDraft).toBe('Unveränderter Elternentwurf')
+    expect(mocks.api.get.mock.calls.some(([url]) => url === '/sessions/session-1')).toBe(false)
+    expect(mocks.recorder.cancelRecording).not.toHaveBeenCalled()
+  })
+
   it.each(['model', 'disabled', 'loading', 'failed'])('records with unavailable transcription: %s', async (reason) => {
     const settings = useToolSettingsStore()
     if (reason === 'model') useProviderStore().audioTranscriptionModelId = null

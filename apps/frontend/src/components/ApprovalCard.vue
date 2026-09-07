@@ -1,5 +1,6 @@
 <template>
   <q-card flat class="approval-card app-surface">
+    <SubagentRequestLink :request="approval" />
     <q-card-section class="row items-start no-wrap q-gutter-md">
       <q-avatar :color="riskColor" text-color="white" :icon="actionIcon" />
       <div class="col">
@@ -88,6 +89,10 @@
               text-color="white"
               :label="shellClassification.label"
             />
+            <q-chip v-if="shellClassification.incomplete" dense square outline label="Analyse unvollständig" />
+            <div class="text-caption app-muted q-mt-xs">
+              Die Einstufung ist keine Garantie für rein lesendes Verhalten.
+            </div>
             <div v-if="shellPrefixes.length" class="q-mt-sm">
               <div class="text-caption app-muted">Session-Präfixe</div>
               <code v-for="prefix in shellPrefixes" :key="prefix" class="q-mr-sm">{{ prefix }}</code>
@@ -105,8 +110,8 @@
             outline
             no-caps
             color="primary"
-            icon="edit_document"
-            label="Entwurf öffnen und bearbeiten"
+            :icon="childSkillDraft ? 'visibility' : 'edit_document'"
+            :label="childSkillDraft ? 'Entwurf ansehen' : 'Entwurf öffnen und bearbeiten'"
             class="q-mt-md"
             @click="emit('open-approval-draft', approval)"
           />
@@ -217,6 +222,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import ToolPresentation from 'components/ToolPresentation.vue'
+import SubagentRequestLink from 'components/SubagentRequestLink.vue'
 import {
   approvalResource,
   memoryApprovalDisplay,
@@ -302,8 +308,9 @@ const skillPreview = computed(() => skillDraftApproval.value
 const draftFile = computed(() => skillDraftApproval.value
   ? props.approval.details?.draftFile
   : null)
+const childSkillDraft = computed(() => skillDraftApproval.value && Boolean(props.approval.payload?.subagentSessionId))
 const matchingDraftDirty = computed(() => Boolean(
-  draftFile.value
+  !childSkillDraft.value && draftFile.value
   && workspace.editorDirty
   && workspace.sessionId === props.approval.sessionId
   && workspace.scope === 'session'
@@ -311,7 +318,9 @@ const matchingDraftDirty = computed(() => Boolean(
   && workspace.viewedEntry?.path === draftFile.value.path
 ))
 const draftRevision = computed(() => draftFile.value
-  ? workspace.filePreviews[draftFile.value.path]?.revision ?? draftFile.value.initialRevision
+  ? childSkillDraft.value
+    ? draftFile.value.initialRevision
+    : workspace.filePreviews[draftFile.value.path]?.revision ?? draftFile.value.initialRevision
   : undefined)
 const technicalDetails = computed(() => {
   if (approvalTool.value.name === 'memory_write') {

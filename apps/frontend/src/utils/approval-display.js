@@ -164,12 +164,10 @@ export function approvalResource(approval, sessions = []) {
 export function shellClassificationDisplay(approval) {
   const classification = approval?.payload?.shellClassification
   if (!['read', 'write'].includes(classification)) return null
-  if (classification === 'read') return { color: 'primary', label: 'Lesender Befehl' }
   return {
-    color: 'warning',
-    label: approval.payload.shellAnalysisComplete === false
-      ? 'Nicht vollständig analysiert'
-      : 'Schreibender Befehl'
+    color: classification === 'read' ? 'primary' : 'warning',
+    label: classification === 'read' ? 'Keine Schreibaktion erkannt' : 'Als schreibend eingestuft',
+    incomplete: approval.payload.shellAnalysisComplete === false
   }
 }
 
@@ -209,7 +207,9 @@ export function permissionGrantDisplay(grant, sessions = []) {
         .map((prefix) => prefix.join(' '))
       : []
     return {
-      label: grant.capability === 'shell.read' ? 'Lesende Shell-Befehle' : 'Schreibende Shell-Befehle',
+      label: grant.capability === 'shell.read'
+        ? 'Shell-Befehle ohne erkannte Schreibaktionen'
+        : 'Als schreibend eingestufte Shell-Befehle',
       value: [resource.value, ...prefixes].join(' · '),
       icon: 'terminal'
     }

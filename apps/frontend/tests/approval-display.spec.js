@@ -113,29 +113,51 @@ describe('approval display', () => {
     }
   })
 
-  it('shows shell grant classification and token prefixes', () => {
+  it.each([
+    ['shell.read', 'Shell-Befehle ohne erkannte Schreibaktionen'],
+    ['shell.write', 'Als schreibend eingestufte Shell-Befehle']
+  ])('shows %s grant classification and token prefixes', (capability, label) => {
     expect(permissionGrantDisplay({
-      capability: 'shell.write',
+      capability,
       resourceType: 'shell_command',
       resourceDisplay: '/home/user/project',
       shellPrefixes: [['git', 'status'], ['cat']]
     })).toEqual({
-      label: 'Schreibende Shell-Befehle',
+      label,
       value: '/home/user/project · git status · cat',
       icon: 'terminal'
     })
   })
 
-  it('distinguishes incomplete shell analysis from an analyzed write', () => {
-    expect(shellClassificationDisplay({
-      payload: { shellClassification: 'write', shellAnalysisComplete: false }
-    })).toEqual({ color: 'warning', label: 'Nicht vollständig analysiert' })
-    expect(shellClassificationDisplay({
-      payload: { shellClassification: 'write', shellAnalysisComplete: true }
-    })).toEqual({ color: 'warning', label: 'Schreibender Befehl' })
-    expect(shellClassificationDisplay({
-      payload: { shellClassification: 'read', shellAnalysisComplete: true }
-    })).toEqual({ color: 'primary', label: 'Lesender Befehl' })
+  it.each([
+    ['read', 'primary', 'Keine Schreibaktion erkannt'],
+    ['write', 'warning', 'Als schreibend eingestuft']
+  ])('keeps %s classification independent of analysis completeness', (classification, color, label) => {
+    for (const complete of [true, false, undefined, null]) {
+      const approval = Object.freeze({
+        title: 'Gespeicherter historischer Titel',
+        riskLevel: classification === 'read' ? 'low' : 'high',
+        payload: Object.freeze({
+          shellClassification: classification,
+          ...(complete === undefined ? {} : { shellAnalysisComplete: complete })
+        })
+      })
+      expect(shellClassificationDisplay(approval)).toEqual({
+        color, label, incomplete: complete === false
+      })
+    }
+  })
+
+  it('does not infer shell classification for legacy, unknown or non-shell payloads', () => {
+    for (const approval of [
+      undefined,
+      {},
+      { capability: 'shell.read', payload: { shellAnalysisComplete: false } },
+      { payload: { shellClassification: 'unknown', shellAnalysisComplete: false } },
+      { capability: 'filesystem.write' }
+    ]) {
+      expect(shellClassificationDisplay(approval)).toBeNull()
+    }
   })
 
   it('shows cleaned URL approvals and readable session grants', () => {

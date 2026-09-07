@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent import runtime as runtime_module
 from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionPolicy,
@@ -21,6 +22,7 @@ from mato_loop_backend.agent.permissions import (
     session_browse_permission,
     session_permission,
     session_search_permission,
+    shell_command_scope,
     skill_edit_permission,
     skill_load_permission,
     skill_write_permission,
@@ -28,13 +30,20 @@ from mato_loop_backend.agent.permissions import (
     webfetch_permission,
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.subagents import permission_snapshot
 from mato_loop_backend.agent.tools import (
     ToolAction,
     resolve_tool_execution_policy,
     tool_registry,
 )
 from mato_loop_backend.integrations import canonicalize_url
-from mato_loop_backend.models import AgentRun, ChatSession, ExecutionAgent, PermissionGrant
+from mato_loop_backend.models import (
+    AgentRun,
+    ChatSession,
+    ExecutionAgent,
+    Message,
+    PermissionGrant,
+)
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
@@ -46,6 +55,7 @@ from mato_loop_backend.settings import (
     ToolSettings,
     TrustLevel,
 )
+from mato_loop_backend.settings.models import AgentProfilePermissions
 from mato_loop_backend.workspace import RootFileService
 
 
@@ -64,6 +74,7 @@ def _db_with_grants(*grants: PermissionGrant) -> AsyncMock:
     result.all.return_value = list(grants)
     db = AsyncMock(spec=AsyncSession)
     db.scalars.return_value = result
+    db.get.return_value = _session()
     return db
 
 
@@ -925,6 +936,113 @@ async def test_current_session_read_honors_automatic_policy(tmp_path) -> None:
 
     assert decision == PermissionDecision.ALLOW
     db.scalars.assert_not_awaited()
+
+
+@pytest.mark.parametrize("kind", ["url", "root", "execution", "shell"])
+async def test_child_uses_parent_grants_and_revocation_stops_execution(tmp_path, kind):
+    parent = _session(user_id=uuid4())
+    child = _session(user_id=parent.user_id, parent_session_id=parent.id, current_directory="/work")
+    roots = _root_files(tmp_path, child)
+    agent = ExecutionAgent(id=uuid4(), user_id=parent.user_id, home_directory="/home",
+                           home_filesystem_policy="ask", external_filesystem_policy="ask",
+                           home_shell_enabled=True, external_shell_enabled=True)
+    request = {
+        "url": webfetch_permission("https://example.org"),
+        "root": _path_request(roots, "note.txt"),
+        "execution": execution_directory_permission(agent.id, "/work", capability="filesystem.read"),
+        "shell": PermissionRequest(capability="shell.read", resource_type="shell_command",
+            resource_scope=shell_command_scope(agent.id, "/work", "read", [["pwd"]], [], True),
+            action_kind="shell", risk_level="low", title="Read", summary="Read"),
+    }[kind]
+    grant = PermissionGrant(session_id=parent.id, capability=request.capability,
+                            resource_type=request.resource_type, resource_scope=request.resource_scope)
+    db = _db_with_grants(grant)
+    db.get.return_value = parent
+    db.scalar.return_value = agent
+    assert await PermissionPolicy.evaluate(
+        db, child, request, roots, ToolExecutionPolicy.ASK, permission_session_id=parent.id
+    ) == PermissionDecision.ALLOW
+    assert parent.id in db.scalars.await_args.args[0].compile().params.values()
+    db.scalars.return_value.all.return_value = []
+    assert await PermissionPolicy.evaluate(
+        db, child, request, roots, ToolExecutionPolicy.ASK, permission_session_id=parent.id
+    ) == PermissionDecision.ASK
+    if kind == "root":
+        assert await PermissionPolicy.evaluate(
+            db, child, request, _root_files(tmp_path, parent), ToolExecutionPolicy.AUTO,
+            permission_session_id=parent.id,
+        ) == PermissionDecision.DENY
+
+
+@pytest.mark.parametrize("invalid", ["unrelated", "owner", "missing"])
+async def test_child_cannot_choose_another_permission_namespace(tmp_path, invalid):
+    parent = _session(user_id=uuid4())
+    child = _session(user_id=parent.user_id, parent_session_id=parent.id)
+    if invalid == "unrelated":
+        child.parent_session_id = uuid4()
+    elif invalid == "owner":
+        parent.user_id = uuid4()
+    db = _db_with_grants()
+    db.get.return_value = None if invalid == "missing" else parent
+    assert await PermissionPolicy.evaluate(
+        db, child, webfetch_permission("https://example.org"), _root_files(tmp_path, child),
+        ToolExecutionPolicy.AUTO, permission_session_id=parent.id,
+    ) == PermissionDecision.DENY
+    db.scalars.assert_not_awaited()
+
+
+async def test_parent_can_read_only_its_own_child_sessions(tmp_path):
+    parent = _session(user_id=uuid4())
+    child = _session(user_id=parent.user_id, parent_session_id=parent.id)
+    db = _db_with_grants()
+    db.get.return_value = child
+    roots = _root_files(tmp_path, parent)
+    assert await PermissionPolicy.evaluate(db, parent, session_permission(child.id), roots, ToolExecutionPolicy.AUTO) == PermissionDecision.ALLOW
+    assert await PermissionPolicy.evaluate(db, parent, session_permission(child.id), roots, ToolExecutionPolicy.DISABLED) == PermissionDecision.DENY
+    child.parent_session_id = uuid4()
+    assert await PermissionPolicy.evaluate(db, parent, session_permission(child.id), roots, ToolExecutionPolicy.AUTO) == PermissionDecision.DENY
+    child.parent_session_id = parent.id
+    child.user_id = uuid4()
+    assert await PermissionPolicy.evaluate(db, parent, session_permission(child.id), roots, ToolExecutionPolicy.AUTO) == PermissionDecision.DENY
+
+
+@pytest.mark.parametrize("layer", ["default", "global", "integration", "resource", "profile"])
+async def test_child_integration_ceiling_cannot_widen_ask_to_auto(tmp_path, monkeypatch, layer):
+    integration = IntegrationInstance(name="Calendar", integration_type="calendar", adapter_type="caldav",
+                                      config={"base_url": "https://example.org", "username": "private-user"},
+                                      credential_id=uuid4())
+    integrations = IntegrationSettings(instances=[integration])
+    settings = ToolSettings().select_trust(TrustLevel.PUBLIC)
+    capability = "calendar.read"
+    if layer == "global":
+        settings.permissions.policies[capability] = ToolExecutionPolicy.ASK
+    elif layer == "integration":
+        settings.permissions.integration_policies[str(integration.id)] = {capability: ToolExecutionPolicy.ASK}
+    elif layer == "resource":
+        settings.permissions.resource_policies[str(integration.id)] = {"calendar:test": {capability: ToolExecutionPolicy.ASK}}
+    elif layer == "profile":
+        settings._agent_permissions = AgentProfilePermissions(integration_policies={str(integration.id): {capability: "ask"}})
+    actions = Mock(return_value=(ToolAction(capability, "Read", ToolExecutionPolicy.ASK if layer == "default" else ToolExecutionPolicy.AUTO),))
+    monkeypatch.setattr(tool_registry, "integration_resource_actions", actions)
+    snapshot = permission_snapshot(settings, {"calendar_query_events"}, integrations)
+    assert "private-user" not in str(snapshot) and str(integration.credential_id) not in str(snapshot)
+    parent = _session(user_id=uuid4())
+    child = _session(user_id=parent.user_id, parent_session_id=parent.id)
+    run = AgentRun(id=uuid4(), session_id=child.id, input_message_id=uuid4(), trust_level="public")
+    message = Message(id=run.input_message_id, provider_data={"_matoloop": {"delegationCeiling": snapshot}})
+    db = _db_with_grants()
+    db.get.side_effect = lambda model, key, **kw: message if model is Message else parent
+    actions.return_value = (ToolAction(capability, "Read", ToolExecutionPolicy.AUTO),)
+    monkeypatch.setattr(runtime_module, "load_agent_profile_tools", AsyncMock(return_value=(ToolSettings().select_trust(TrustLevel.PUBLIC), None)))
+    monkeypatch.setattr(runtime_module, "load_effective_integrations", AsyncMock(return_value=integrations))
+    approve = AsyncMock(return_value="deny")
+    monkeypatch.setattr(AgentRuntime, "_request_approval", approve)
+    request = PermissionRequest(capability=capability, resource_type="network_service", resource_scope="calendar:test",
+                                action_kind="read", risk_level="low", title="Read", summary="Read",
+                                policy_integration_id=integration.id, policy_resource_key="calendar:test")
+    decision = await AgentRuntime._authorize(db, run, child, ToolCall("read", "calendar_query_events", {}), request, _root_files(tmp_path, child))
+    assert decision == PermissionDecision.USER_DENIED
+    approve.assert_awaited_once()
 
 
 async def test_other_session_read_requires_approval_without_matching_grant(tmp_path) -> None:

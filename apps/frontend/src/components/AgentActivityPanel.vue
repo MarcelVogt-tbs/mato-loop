@@ -135,6 +135,8 @@
     </div>
     </q-expansion-item>
 
+    <SubagentRows :children="subagents" />
+
     <ApprovalCard
       v-for="item in approvalItems"
       :key="`approval-${item.approval.id}`"
@@ -160,6 +162,7 @@
             <q-icon name="draft" color="primary" size="24px" />
             <span class="col ellipsis text-weight-medium">{{ action.filename }}</span>
             <q-btn
+              v-if="!readOnly"
               flat
               round
               dense
@@ -192,6 +195,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AgentActivityEntry from 'components/AgentActivityEntry.vue'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
+import SubagentRows from 'components/SubagentRows.vue'
 import {
   deduplicateFileOutputAttachments,
   toolOutputAttachments,
@@ -221,6 +225,8 @@ const props = defineProps({
   contextSummary: { type: Object, default: null },
   warnings: { type: Array, default: () => [] },
   processOutputs: { type: Object, default: () => ({}) },
+  subagents: { type: Array, default: () => [] },
+  readOnly: Boolean,
   running: Boolean
 })
 const emit = defineEmits(['open-file', 'open-approval-draft', 'resize-start', 'resized'])
@@ -272,7 +278,7 @@ const toolUsage = computed(() => toolUsageSummary(items.value).map((tool) => ({
   ...tool,
   active: tool.active || tool.name === activeToolName.value
 })))
-const approvalItems = computed(() => items.value.filter((item) => item.approval))
+const approvalItems = computed(() => props.readOnly ? [] : items.value.filter((item) => item.approval))
 const errorItems = computed(() => states.value.filter(({ status }) => (
   ['failed', 'denied'].includes(status.name)
 )))

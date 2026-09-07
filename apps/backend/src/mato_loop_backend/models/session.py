@@ -78,6 +78,23 @@ class ChatSession(Base):
             ["projects.id", "projects.user_id"],
             name="fk_chat_sessions_project_owner",
         ),
+        UniqueConstraint("id", "user_id"),
+        ForeignKeyConstraint(
+            ["parent_session_id", "user_id"],
+            ["chat_sessions.id", "chat_sessions.user_id"],
+            name="fk_chat_sessions_parent_owner",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "(parent_session_id IS NULL AND spawned_by_run_id IS NULL "
+            "AND spawned_by_tool_call_id IS NULL AND spawn_index IS NULL) OR "
+            "(parent_session_id IS NOT NULL AND spawned_by_run_id IS NOT NULL "
+            "AND spawned_by_tool_call_id IS NOT NULL AND spawn_index IS NOT NULL)",
+            name="spawn_shape_valid",
+        ),
+        CheckConstraint("parent_session_id IS NULL OR parent_session_id <> id", name="parent_not_self"),
+        CheckConstraint("spawn_index IS NULL OR spawn_index >= 0", name="spawn_index_nonnegative"),
+        UniqueConstraint("spawned_by_run_id", "spawned_by_tool_call_id", "spawn_index"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -85,6 +102,12 @@ class ChatSession(Base):
         ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True
     )
     project_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
+    parent_session_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
+    spawned_by_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE", use_alter=True), nullable=True
+    )
+    spawned_by_tool_call_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    spawn_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     title: Mapped[str] = mapped_column(String(240), nullable=False, default="Neue Session")
     session_type: Mapped[str] = mapped_column(
         String(20), nullable=False, default="chat", server_default=text("'chat'")

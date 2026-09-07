@@ -20,7 +20,7 @@ from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionRequest,
 )
-from mato_loop_backend.agent.tool_arguments import QuestionArguments
+from mato_loop_backend.agent.tool_arguments import QuestionArguments, TaskArguments
 from mato_loop_backend.agent.tool_contracts import ToolAction
 from mato_loop_backend.agent.video_analysis import (
     ResolvedVideoModel,
@@ -37,6 +37,7 @@ from mato_loop_backend.integrations import (
 )
 from mato_loop_backend.integrations.contracts import IntegrationResource, ToolContribution
 from mato_loop_backend.integrations.registry import (
+    agent_profile_search_available,
     effective_integration_contributions,
     installed_integration_tools,
     integration_adapter,
@@ -53,10 +54,12 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
+    load_agent_profile,
     load_agent_profile_tools,
     load_effective_ai,
     load_effective_integrations,
 )
+from mato_loop_backend.settings.effective import filter_agent_profile_integrations
 from mato_loop_backend.skills import RunSkillState, SkillDraft
 from mato_loop_backend.video_processing import VideoAnalysisMode
 from mato_loop_backend.workspace import RootFileError, RootFileService
@@ -75,7 +78,7 @@ VideoAnalysisHandler = Callable[
     Awaitable[dict[str, Any]],
 ]
 VideoAnalysisTargetResolver = Callable[[int], ResolvedVideoModel | None]
-TaskHandler = Callable[[str], Awaitable["ToolResult"]]
+TaskHandler = Callable[[TaskArguments], Awaitable["ToolResult"]]
 PolicyResolver = Callable[..., ToolExecutionPolicy]
 CapabilityResolver = Callable[..., set[str]]
 
@@ -201,6 +204,25 @@ class ToolContext:
     execution_client: ExecutionClient | None = None
     session_read_cursors: dict[UUID, UUID | None] = field(default_factory=dict)
     task_handler: TaskHandler | None = None
+
+    async def current_integrations(self) -> IntegrationSettings:
+        from mato_loop_backend.agent.subagents import integration_ceiling_ids
+
+        settings = await load_effective_integrations(self.db, self.session.user_id)
+        profile = self.tool_settings._agent_profile
+        profile_id = self.agent_profile_id or self.session.agent_profile_id
+        if profile_id is not None:
+            try:
+                profile = await load_agent_profile(self.db, self.session.user_id, profile_id)
+            except AgentProfileUnavailable:
+                return filter_agent_profile_integrations(settings, None, allowed_ids=())
+        return filter_agent_profile_integrations(
+            settings, profile,
+            allowed_ids=(
+                () if self.tool_settings._agent_profile_unavailable
+                else integration_ceiling_ids(self.tool_settings._delegation_ceiling)
+            ),
+        )
 
     async def ask(self, request: PermissionRequest) -> PermissionDecision:
         if self.user_denied:
@@ -707,7 +729,24 @@ class ToolRegistry:
         tool_capabilities: set[str] | frozenset[str] = frozenset(),
         tool_settings: ToolSettings | None = None,
         execution_operations: set[str] | frozenset[str] = frozenset(),
+        coding_integration_id: UUID | None = None,
     ) -> EffectiveToolSet:
+        from mato_loop_backend.agent.subagents import integration_ceiling_ids
+
+        integration_settings = filter_agent_profile_integrations(
+            integration_settings,
+            tool_settings._agent_profile if tool_settings is not None else None,
+            allowed_ids=(
+                () if tool_settings._agent_profile_unavailable
+                else integration_ceiling_ids(tool_settings._delegation_ceiling)
+            ) if tool_settings is not None else None,
+        )
+        coding_instances = [
+            item for item in integration_settings.instances
+            if item.enabled and item.adapter_type == "opencode"
+            and item.integration_type == "coding"
+            and (coding_integration_id is None or item.id == coding_integration_id)
+        ]
         definitions, sources, prompt_fragments = self._combined_definitions(
             integration_settings
         )
@@ -728,6 +767,11 @@ class ToolRegistry:
                 execution_operations=execution_operations,
             )
             and (tool_settings is None or self._actions_enabled(item, tool_settings))
+            and (item.required_capability != "project.coding" or bool(coding_instances))
+            and (
+                item.name != "web_search" or tool_settings is None
+                or agent_profile_search_available(integration_settings, tool_settings)
+            )
         }
         search_providers = (
             effective_search_providers(tool_settings, integration_settings)
@@ -925,9 +969,7 @@ class ToolRegistry:
         async def integration_is_current(selected_id: str | None) -> bool:
             if selected_id is None:
                 return True
-            current_integrations = await load_effective_integrations(
-                context.db, context.session.user_id
-            )
+            current_integrations = await context.current_integrations()
             current_instance = next(
                 (
                     instance
@@ -960,9 +1002,7 @@ class ToolRegistry:
         async def resolve_resource(
             selected_id: str, resource_key: str
         ) -> IntegrationResource | None:
-            current_integrations = await load_effective_integrations(
-                context.db, context.session.user_id
-            )
+            current_integrations = await context.current_integrations()
             instance = next(
                 (
                     item
@@ -1010,7 +1050,7 @@ class ToolRegistry:
                 return ToolResult.error("tool.unavailable")
         elif definition.required_capability is not None:
             try:
-                context.tool_settings, _profile = await load_agent_profile_tools(
+                current_settings, _profile = await load_agent_profile_tools(
                     context.db,
                     context.session.user_id,
                     context.agent_profile_id or context.session.agent_profile_id,
@@ -1018,6 +1058,11 @@ class ToolRegistry:
                 )
             except AgentProfileUnavailable:
                 return ToolResult.error("tool.unavailable")
+            from mato_loop_backend.agent.subagents import apply_delegation_ceiling
+
+            context.tool_settings = apply_delegation_ceiling(
+                current_settings, context.tool_settings._delegation_ceiling
+            )
             ai_settings = await load_effective_ai(context.db, context.session.user_id)
             if self._capability_resolver is None:
                 raise RuntimeError("tool registry capability resolver is not configured")
@@ -1155,6 +1200,20 @@ class ToolRegistry:
                     ):
                         return ToolResult.error("tool.unavailable")
                     context.bound_resource = resource
+            if tool.source_type == "integration":
+                from mato_loop_backend.agent.tools import _profile_tool_settings
+
+                # Aggregate handlers filter resource data using these policies after approval.
+                context.tool_settings = await _profile_tool_settings(context)
+                context.integration_settings = await context.current_integrations()
+                bound_ids = set(aggregate_integration_ids)
+                if selected_integration_id is not None:
+                    bound_ids.add(selected_integration_id)
+                context.integration_settings = filter_agent_profile_integrations(
+                    context.integration_settings, None, allowed_ids=bound_ids
+                )
+                if bound_ids != {str(item.id) for item in context.integration_settings.instances}:
+                    return ToolResult.error("tool.unavailable")
             result = await definition.handler(arguments, context)
             if definition.releases_private_data and not result.is_error:
                 result.metadata["privateIntegrationData"] = True

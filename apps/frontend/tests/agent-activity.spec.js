@@ -10,6 +10,12 @@ import {
 } from '../src/utils/agent-activity'
 
 describe('agent activity', () => {
+  it('shows a persisted tool-limit handoff without treating it as a verified success', () => {
+    const [entry] = runWarningEntries(['agent.toolCallLimitReached'], 'limited')
+    expect(entry.type).toBe('warning')
+    expect(entry.presentation.title).toBe('Tool-Limit erreicht')
+    expect(entry.presentation.summary).toContain('offene Aufgaben')
+  })
   it('uses safe German labels for runtime phases', () => {
     expect(agentActivityLabel({ phase: 'preparing_context' }))
       .toBe('Verarbeite Anfrage')

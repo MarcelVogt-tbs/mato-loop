@@ -19,6 +19,7 @@ from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.memory.service import MemoryService
 from mato_loop_backend.models import ApprovalRequest, ChatSession, PermissionGrant, UserAccount
 from mato_loop_backend.security import require_user
+from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
 
 router = APIRouter(prefix="/approvals", dependencies=[Depends(require_user)])
 
@@ -202,7 +203,7 @@ async def all_permissions(
                 ApprovalRequest,
                 ApprovalRequest.id == PermissionGrant.source_approval_id,
             )
-            .where(ChatSession.user_id == user.id)
+            .where(ChatSession.user_id == user.id, ChatSession.parent_session_id.is_(None))
             .order_by(PermissionGrant.created_at)
         )
     ).all()
@@ -224,7 +225,10 @@ async def revoke_permissions(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> None:
-    session = await db.get(ChatSession, session_id)
+    try:
+        session = await get_owned_session(db, session_id, user.id)
+    except SessionServiceError as exc:
+        raise ApiError(exc.status_code, exc.code) from exc
     if session is None or session.user_id != user.id:
         raise ApiError(404, "approval.notFound")
     await db.execute(
@@ -242,7 +246,10 @@ async def revoke_permission(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> None:
-    session = await db.get(ChatSession, session_id)
+    try:
+        session = await get_owned_session(db, session_id, user.id)
+    except SessionServiceError as exc:
+        raise ApiError(exc.status_code, exc.code) from exc
     if session is None or session.user_id != user.id:
         raise ApiError(404, "approval.notFound")
     grant = await db.get(PermissionGrant, grant_id)

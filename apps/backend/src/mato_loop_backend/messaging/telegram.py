@@ -642,6 +642,7 @@ async def _command(
                     .where(
                         ChatSession.user_id == endpoint.user_id,
                         ChatSession.session_type == "chat",
+                        ChatSession.parent_session_id.is_(None),
                     )
                     .order_by(activity.c.created_at.desc(), ChatSession.id.desc())
                     .limit(SESSION_LIST_LIMIT)
@@ -664,6 +665,7 @@ async def _command(
                         select(ChatSession).where(
                             ChatSession.user_id == endpoint.user_id,
                             ChatSession.session_type == "chat",
+                            ChatSession.parent_session_id.is_(None),
                             cast(ChatSession.id, type_=String).startswith(short_id),
                         )
                     )
@@ -685,8 +687,10 @@ async def _command(
     elif command == "/stop":
         run_id = (
             await db.scalar(
-                select(AgentRun.id).where(
+                select(AgentRun.id).join(ChatSession, ChatSession.id == AgentRun.session_id).where(
                     AgentRun.session_id == endpoint.current_session_id,
+                    ChatSession.user_id == endpoint.user_id,
+                    ChatSession.parent_session_id.is_(None),
                     AgentRun.parent_run_id.is_(None),
                     AgentRun.status.in_(("queued", "running", "waiting_approval", "waiting_input")),
                 )
@@ -1364,7 +1368,14 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
             content = text.strip()
             if len(content) > MESSAGE_CONTENT_MAX_LENGTH:
                 raise TelegramServiceError("validation.tooLong")
-            session = await db.get(ChatSession, endpoint.current_session_id) if endpoint.current_session_id else None
+            from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
+
+            try:
+                session = await get_owned_session(
+                    db, endpoint.current_session_id, endpoint.user_id
+                ) if endpoint.current_session_id else None
+            except SessionServiceError as exc:
+                raise TelegramServiceError(exc.code) from exc
             if session is None or session.user_id != endpoint.user_id or session.session_type != "chat":
                 run = await _new_session(db, endpoint, content, attachments, inbox.id)
             else:

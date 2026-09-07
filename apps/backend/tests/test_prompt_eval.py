@@ -328,7 +328,13 @@ def test_agent_web_routing_cases_offer_real_production_schemas() -> None:
         by_name = {tool["name"]: tool for tool in tools}
 
         assert set(by_name) == {"web_search", "webfetch", "shell_run"}
-        assert set(by_name["shell_run"]["parameters"]["properties"]) == {"command"}
+        properties = by_name["shell_run"]["parameters"]["properties"]
+        assert set(properties) == {"command", "timeout"}
+        assert properties["timeout"]["default"] is None
+        assert properties["timeout"]["anyOf"] == [
+            {"exclusiveMinimum": 0, "maximum": 3600, "type": "number"},
+            {"type": "null"},
+        ]
         assert by_name["shell_run"]["parameters"]["required"] == ["command"]
         assert by_name["shell_run"]["parameters"]["additionalProperties"] is False
 

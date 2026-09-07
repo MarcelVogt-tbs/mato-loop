@@ -1,14 +1,17 @@
 import asyncio
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import runtime as runtime_module
+from mato_loop_backend.agent import subagents
 from mato_loop_backend.agent.context import _model_tool_calls
+from mato_loop_backend.agent.permissions import PermissionDecision, PermissionRequest
 from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
 from mato_loop_backend.agent.runtime import (
     RUN_PHASES,
@@ -20,9 +23,17 @@ from mato_loop_backend.agent.runtime import (
     _safe_provider_data,
     _safe_tool_arguments,
 )
+from mato_loop_backend.agent.tool_arguments import QuestionArguments, TaskArguments
 from mato_loop_backend.attachments import AttachmentInput
 from mato_loop_backend.events import RunEventBroker, run_events
-from mato_loop_backend.models import AgentRun, ChatSession, Message, TitleGenerationStatus
+from mato_loop_backend.models import (
+    AgentRun,
+    ApprovalRequest,
+    ChatSession,
+    Message,
+    QuestionRequest,
+    TitleGenerationStatus,
+)
 from mato_loop_backend.providers.base import (
     ProviderError,
     ProviderResult,
@@ -35,10 +46,11 @@ from mato_loop_backend.settings import (
     AiSettings,
     IntegrationSettings,
     SettingsStore,
+    ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
 )
-from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+from mato_loop_backend.settings.models import BUILD_AGENT_PROFILE_ID, LlmProviderConfig, ModelConfig
 from mato_loop_backend.workspace import RootFileService
 
 
@@ -171,143 +183,443 @@ async def test_plan_directory_accepts_first_canonical_write(tmp_path) -> None:
     assert root_files.read_bytes("session", path, limit=100) == b"# Plan"
 
 
-async def test_explore_child_persists_isolated_read_only_transcript(monkeypatch) -> None:
-    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
-    model = ModelConfig(provider_id=provider.id, model_id="model")
-    profile_id = uuid4()
-    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
+@pytest.fixture
+def delegated_runtime(monkeypatch):
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Main", reasoning_effort="high",
+                          agent_profile_id=BUILD_AGENT_PROFILE_ID, web_search_policy="required")
+    user = Message(id=uuid4(), session_id=session.id, role="user", content="Work",
+                   provider_data={"_matoloop": {"activeFile": {"dirty": True, "path": "/work/code.py"}}})
     parent = AgentRun(
-        id=uuid4(),
-        session_id=session.id,
-        status="running",
-        model_config_id=model.id,
-        model_name="Model",
-        agent_profile_id=profile_id,
-        trust_level="public",
-        execution_operations=[],
+        id=uuid4(), session_id=session.id, input_message_id=user.id, status="running",
+        model_config_id=uuid4(), model_name="Model", agent_profile_id=BUILD_AGENT_PROFILE_ID,
+        trust_level="public", pseudonymization_enabled=True, execution_agent_id=uuid4(),
+        execution_agent_revision=3, current_directory_snapshot="/work", execution_operations=["shell.run"],
     )
-    db = AsyncMock(spec=AsyncSession)
-    persisted = []
+    objects = {(type(item), item.id): item for item in (session, user, parent)}
+    databases = []
 
-    def add(item) -> None:
+    def add(item):
         if item.id is None:
             item.id = uuid4()
-        persisted.append(item)
+        item.created_at = datetime.now(UTC)
+        if isinstance(item, (ApprovalRequest, QuestionRequest)):
+            item.status = "pending"
+        objects[type(item), item.id] = item
 
-    db.add.side_effect = add
-    monkeypatch.setattr(
-        SettingsStore,
-        "load",
-        AsyncMock(return_value=AgentRuntimeSettings()),
+    def factory():
+        db = AsyncMock(spec=AsyncSession)
+        db.__aenter__.return_value = db
+        db.get.side_effect = lambda model, key, **kw: objects.get((model, key))
+        db.add.side_effect = add
+        db.add_all.side_effect = lambda items: [add(item) for item in items]
+        db.scalar.return_value = None
+        async def scalars(statement):
+            session_id = statement.compile().params["session_id_1"]
+            tools = [item for (model, _key), item in objects.items()
+                     if model is Message and item.session_id == session_id and item.role == "tool"
+                     and (item.provider_data or {}).get("_matoloop", {}).get("errorCode") not in {
+                         "agent.toolCallLimitReached", "agent.outputLimitReached", "agent.repeatedToolCall", "tool.skippedAfterUserDenial",
+                     }]
+            return Mock(all=lambda: list(reversed(tools))[:6])
+        db.scalars.side_effect = scalars
+        databases.append(db)
+        return db
+
+    db = factory()
+    db.scalar.return_value = 0
+    monkeypatch.setattr(subagents, "AsyncSessionFactory", factory)
+    monkeypatch.setattr(subagents, "load_agent_profile_tools", AsyncMock(return_value=(ToolSettings().select_trust(TrustLevel.PUBLIC), None)))
+    monkeypatch.setattr(subagents, "load_effective_integrations", AsyncMock(return_value=runtime_module.IntegrationSettings()))
+    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", factory)
+    monkeypatch.setattr(SessionStorage, "provision", Mock())
+    monkeypatch.setattr(run_events, "register_subagent", Mock(), raising=False)
+    monkeypatch.setattr(run_events, "unregister_subagent", Mock(), raising=False)
+    monkeypatch.setattr(run_events, "publish", AsyncMock())
+    for name in ("_transcribe_voice_messages", "_finalize_run_files", "_persist_run_duration",
+                 "_deliver_run_push", "_terminalize_incomplete_tool_calls"):
+        monkeypatch.setattr(AgentRuntime, name, AsyncMock())
+
+    async def delegate(max_tool_calls=None, *, tool_settings=None, integration_settings=None, tool_names=None):
+        return await subagents.run_tasks(
+            AgentRuntime, db, parent, session,
+            TaskArguments(tasks=[{"description": f"Task {i}", "prompt": f"Translate text {i}"} for i in range(2)]),
+            tool_call_id="task-1", tool_settings=tool_settings or ToolSettings().select_trust(TrustLevel.PUBLIC),
+            tool_names=tool_names or {"task", "question", "write_file", "web_search"},
+            integration_settings=integration_settings,
+            max_tool_calls=max_tool_calls,
+        )
+
+    return session, parent, objects, databases, delegate
+
+
+@pytest.mark.parametrize("partial_failure", [False, True])
+async def test_delegated_children_parallel_normal_lifecycle(monkeypatch, delegated_runtime, partial_failure):
+    session, parent, objects, databases, delegate = delegated_runtime
+    barrier = asyncio.Barrier(2)
+    loop_databases = []
+
+    async def execute(db, run, _visible):
+        assert databases[0].commit.await_count == 1
+        assert databases[1].commit.await_count == 1
+        loop_databases.append(db)
+        await asyncio.wait_for(barrier.wait(), timeout=1)
+        child_session = objects[ChatSession, run.session_id]
+        if partial_failure and child_session.spawn_index == 1:
+            raise AgentRunError("agent.emptyResponse")
+        message = Message(id=uuid4(), session_id=run.session_id, role="assistant", content="x" * 12_001)
+        db.add(message)
+        run.result_message_id = message.id
+
+    monkeypatch.setattr(AgentRuntime, "_execute_loop", execute)
+    result = json.loads((await delegate()).content)["tasks"]
+    await asyncio.sleep(0)  # Let scheduled task-registry cleanup callbacks run.
+    assert result[0]["status"] == "completed"
+    assert result[0]["truncated"] is True and len(result[0]["result"]) == 12_000
+    assert result[1]["status"] == ("failed" if partial_failure else "completed")
+    assert result[1]["errorCode"] == ("agent.emptyResponse" if partial_failure else None)
+    assert len(loop_databases) == 2 and loop_databases[0] is not loop_databases[1]
+    assert parent.status == "running"
+    children = [obj for (model, key), obj in objects.items() if model is AgentRun and key != parent.id]
+    for child in children:
+        child_session = objects[ChatSession, child.session_id]
+        assert child_session.parent_session_id == session.id
+        assert child_session.spawned_by_run_id == parent.id
+        assert child_session.spawned_by_tool_call_id == "task-1"
+        assert child_session.memory_mode == "disabled" and child_session.web_search_policy == "available"
+        assert child_session.reasoning_effort == "high"
+        assert child.parent_run_id is None and child.session_id != parent.session_id
+        assert child.input_message_id is not None and child.result_message_id is not None
+        assert child.internal_transcript is None and child.internal_result is None
+        for name in ("model_config_id", "model_name", "trust_level", "pseudonymization_enabled",
+                     "execution_agent_id", "execution_agent_revision", "current_directory_snapshot", "execution_operations"):
+            assert getattr(child, name) == getattr(parent, name)
+        metadata = objects[Message, child.input_message_id].provider_data["_matoloop"]
+        assert metadata["activeFile"]["dirty"] is True
+        assert metadata["maxToolCallsByRun"] == {str(child.id): None}
+        assert metadata["delegationCeiling"]["integrationIds"] == []
+        assert metadata["delegationCeiling"]["toolNames"] == ["question", "web_search", "write_file"]
+        assert child.id not in AgentRuntime._tasks
+
+
+async def test_delegation_intersects_live_spawn_scope_and_both_permission_ceilings(monkeypatch, delegated_runtime):
+    from mato_loop_backend.agent.tools import resolve_tool_execution_policy
+    from mato_loop_backend.settings import (
+        IntegrationInstance,
+        IntegrationSettings,
+        ToolExecutionPolicy,
     )
-    requests = []
+    from mato_loop_backend.settings.effective import filter_agent_profile_integrations
+    from mato_loop_backend.settings.models import AgentProfile
 
-    async def complete(_db, **kwargs):
-        requests.append(kwargs)
-        if len(requests) == 1:
-            return ProviderResult(
-                tool_calls=[
-                    ToolCall("glob-1", "glob", {"root": "files", "pattern": "**/*.py"})
-                ]
-            )
-        return ProviderResult(content="Found the runtime in `agent/runtime.py`.")
+    _session, _parent, objects, _databases, delegate = delegated_runtime
+    accounts = [IntegrationInstance(
+        name=name, integration_type="calendar", adapter_type="caldav",
+        config={"base_url": "https://example.org", "username": "user"}, credential_id=uuid4(),
+    ) for name in ("A", "B", "New")]
+    account_id = accounts[1].id
+    offered_integrations = IntegrationSettings(instances=accounts[:2])
+    live_integrations = IntegrationSettings(instances=accounts)
+    profile = AgentProfile(name="Build", instructions="Follow the task.", integrationsEnabledByDefault=True,
+                           integrationAvailability={str(accounts[0].id): False})
+    offered_tools = ToolSettings(public_permissions={
+        "policies": {"session.files.write": "ask", "network.fetch": "auto", "calendar.read": "auto"},
+        "resource_policies": {str(account_id): {"old": {"calendar.read": "ask"}}},
+    }).select_trust(TrustLevel.PUBLIC)
+    live_tools = ToolSettings(public_permissions={
+        "policies": {"session.files.write": "auto", "network.fetch": "ask", "calendar.read": "auto"},
+        "resource_policies": {str(account_id): {"spawn": {"calendar.read": "ask"}}},
+    }).select_trust(TrustLevel.PUBLIC)
+    live_tools.tool_availability["question"] = False
+    monkeypatch.setattr(subagents, "load_agent_profile_tools", AsyncMock(return_value=(live_tools, profile)))
+    monkeypatch.setattr(subagents, "load_effective_integrations", AsyncMock(return_value=live_integrations))
 
-    monkeypatch.setattr(runtime_module.ProviderService, "complete", complete)
-    execute = AsyncMock(return_value=runtime_module.ToolResult("agent/runtime.py", {}))
-    monkeypatch.setattr(runtime_module.tool_registry, "_execute_definition", execute)
+    async def execute(db, run, _visible):
+        # Reopening settings after persistence must not reopen the child snapshot.
+        profile.integration_availability[str(accounts[0].id)] = True
+        live_tools.tool_availability["question"] = True
+        metadata = objects[Message, run.input_message_id].provider_data["_matoloop"]
+        snapshot = metadata["delegationCeiling"]
+        assert snapshot["integrationIds"] == [str(account_id)]
+        assert "question" not in snapshot["toolNames"]
+        assert "task" not in snapshot["toolNames"]
+        scoped = filter_agent_profile_integrations(live_integrations, profile, allowed_ids=subagents.integration_ceiling_ids(snapshot))
+        assert [item.id for item in scoped.instances] == [account_id]
+        reopened = ToolSettings(public_permissions={"policies": {
+            "session.files.write": "auto", "network.fetch": "auto", "calendar.read": "auto",
+        }}).select_trust(TrustLevel.PUBLIC)
+        bounded = subagents.apply_delegation_ceiling(reopened, snapshot)
+        for capability in ("session.files.write", "network.fetch"):
+            assert resolve_tool_execution_policy(bounded, capability).policy == ToolExecutionPolicy.ASK
+        for resource in ("old", "spawn"):
+            request = PermissionRequest(capability="calendar.read", resource_type="network_service", resource_scope=resource,
+                                        action_kind="read", risk_level="low", title="Read", summary="Read",
+                                        policy_integration_id=account_id, policy_resource_key=resource)
+            assert runtime_module._tool_policy(subagents.ceiling_settings(snapshot, TrustLevel.PUBLIC), scoped, request, snapshot=snapshot) == ToolExecutionPolicy.ASK
+            assert resolve_tool_execution_policy(bounded, "calendar.read", integration_id=account_id, resource_key=resource).policy == ToolExecutionPolicy.ASK
+        assert resolve_tool_execution_policy(bounded, "calendar.read", integration_id=account_id, resource_key="other").policy == ToolExecutionPolicy.AUTO
+        message = Message(id=uuid4(), session_id=run.session_id, role="assistant", content="Scoped result")
+        db.add(message)
+        run.result_message_id = message.id
 
-    result = await AgentRuntime._run_explore_child(
-        db,
-        parent,
-        session,
-        "Find the runtime",
-        model=model,
-        provider=provider,
-        tool_settings=ToolSettings(),
-        integration_settings=IntegrationSettings(),
-        root_files=RootFileService(session.id),
-        profile_instructions="Be concise.",
-    )
-
-    child = persisted[0]
-    assert result.content == "Found the runtime in `agent/runtime.py`."
-    assert child.parent_run_id == parent.id
-    assert child.session_id == parent.session_id
-    assert child.agent_profile_id == profile_id
-    assert child.input_message_id is None and child.result_message_id is None
-    assert child.status == "completed"
-    assert child.internal_result == result.content
-    assert [tool["name"] for tool in requests[0]["tools"]] == ["read", "glob", "grep"]
-    assert [item["role"] for item in child.internal_transcript] == [
-        "system",
-        "user",
-        "assistant",
-        "tool",
-        "assistant",
-    ]
-    assert execute.await_args.args[0].name == "glob"
-    assert execute.await_args.args[1].task_handler is None
+    monkeypatch.setattr(AgentRuntime, "_execute_loop", execute)
+    result = await delegate(tool_settings=offered_tools, integration_settings=offered_integrations,
+                            tool_names={"task", "question", "write_file", "webfetch", "calendar_query_events"})
+    assert all(task["status"] == "completed" for task in json.loads(result.content)["tasks"])
+    subagents.load_agent_profile_tools.assert_awaited_once()
+    subagents.load_effective_integrations.assert_awaited_once()
 
 
-async def test_explore_child_is_cancelled_with_parent_task(monkeypatch) -> None:
-    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
-    model = ModelConfig(provider_id=provider.id, model_id="model")
-    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
-    parent = AgentRun(
-        id=uuid4(),
-        session_id=session.id,
-        status="running",
-        model_config_id=model.id,
-        trust_level="public",
-        execution_operations=[],
-    )
-    db = AsyncMock(spec=AsyncSession)
-    child = None
+@pytest.mark.parametrize("limited", [False, True])
+async def test_child_failed_or_limited_handoff_keeps_bounded_tool_references(monkeypatch, delegated_runtime, limited):
+    _session, _parent, objects, _databases, delegate = delegated_runtime
 
-    def add(item) -> None:
-        nonlocal child
-        if item.id is None:
-            item.id = uuid4()
-        child = item
+    async def execute(db, run, _visible):
+        for index in range(7):
+            db.add(Message(
+                id=uuid4(), session_id=run.session_id, role="tool", tool_call_id=f"write-{index}",
+                content=f"result-{index}:" + "x" * 1_500,
+                provider_data={"_matoloop": {"runId": str(run.id), "toolName": "write_file", "fileActions": [{"operation": "write", "root": "session", "path": f"{index}.txt"}]}},
+            ))
+        db.add(Message(id=uuid4(), session_id=run.session_id, role="tool", content="Rejected batch.",
+                       provider_data={"_matoloop": {"errorCode": "agent.outputLimitReached"}}))
+        if not limited:
+            raise AgentRunError("agent.outputLimitReached")
+        message = Message(id=uuid4(), session_id=run.session_id, role="assistant", content="Teilweise erledigt.",
+                          provider_data={"_matoloop": {"completionCause": "agent.toolCallLimitReached"}})
+        db.add(message)
+        run.result_message_id = message.id
 
-    db.add.side_effect = add
-    db.get.side_effect = lambda *_args, **_kwargs: child
-    monkeypatch.setattr(
-        SettingsStore,
-        "load",
-        AsyncMock(return_value=AgentRuntimeSettings()),
-    )
+    monkeypatch.setattr(AgentRuntime, "_execute_loop", execute)
+    results = json.loads((await delegate(max_tool_calls=7)).content)["tasks"]
+    for result in results:
+        assert result["status"] == ("completed" if limited else "failed")
+        assert result["cause"]["code"] == ("agent.toolCallLimitReached" if limited else "agent.outputLimitReached")
+        evidence = result["lastToolResults"]
+        assert len(evidence) == 6
+        assert [item["toolCallId"] for item in evidence] == [f"write-{index}" for index in range(1, 7)]
+        assert all(len(item["result"]) == 1_200 and item["truncated"] for item in evidence)
+        assert evidence[-1]["fileActions"] == [{"operation": "write", "root": "files", "path": "6.txt"}]
+        assert all(str(objects[Message, UUID(item["messageId"])].session_id) == result["sessionId"] for item in evidence)
+
+
+@pytest.mark.parametrize("during_startup", [False, True])
+async def test_delegated_parent_cancellation_joins_children(monkeypatch, delegated_runtime, during_startup):
+    _session, parent, objects, databases, delegate = delegated_runtime
     entered = asyncio.Event()
+    release = asyncio.Event()
 
-    async def complete(_db, **_kwargs):
+    async def execute(_db, _run, _visible):
         entered.set()
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(runtime_module.ProviderService, "complete", complete)
-    task = asyncio.create_task(
-        AgentRuntime._run_explore_child(
-            db,
-            parent,
-            session,
-            "Inspect",
-            model=model,
-            provider=provider,
-            tool_settings=ToolSettings(),
-            integration_settings=IntegrationSettings(),
-            root_files=RootFileService(session.id),
-            profile_instructions="",
-        )
-    )
+    if during_startup:
+        factory = subagents.AsyncSessionFactory
+
+        def delayed_factory():
+            db = factory()
+            if len(databases) == 2:
+                async def commit():
+                    entered.set()
+                    await release.wait()
+                db.commit.side_effect = commit
+            return db
+
+        monkeypatch.setattr(subagents, "AsyncSessionFactory", delayed_factory)
+    monkeypatch.setattr(AgentRuntime, "_execute_loop", execute)
+    task = asyncio.create_task(delegate())
     await asyncio.wait_for(entered.wait(), timeout=1)
     task.cancel()
-
+    release.set()
     with pytest.raises(asyncio.CancelledError):
-        await task
-    assert child is not None
-    assert child.status == "cancelled"
-    assert child.parent_run_id == parent.id
-    assert child.internal_result is not None
-    assert child.id not in AgentRuntime._tasks
+        await asyncio.wait_for(task, timeout=1)
+    children = [obj for (model, key), obj in objects.items() if model is AgentRun and key != parent.id]
+    assert len(children) == 2
+    assert all(child.status == "cancelled" and child.id not in AgentRuntime._tasks for child in children)
+    assert parent.status == "running"
+
+
+async def test_delegation_limit_and_recursion_are_host_enforced(delegated_runtime):
+    session, _parent, _objects, databases, delegate = delegated_runtime
+    databases[0].scalar.return_value = 7
+    result = await delegate()
+    assert result.is_error
+    assert len(databases) == 1
+    session.parent_session_id = uuid4()
+    assert (await delegate()).is_error
+    assert len(databases) == 1
+
+
+@pytest.mark.parametrize("shutdown", [False, True])
+async def test_cancel_before_scheduled_run_starts_persists_terminal_state(monkeypatch, delegated_runtime, shutdown):
+    _session, parent, _objects, _databases, _delegate = delegated_runtime
+    parent.status = "queued"
+    execute = AsyncMock(side_effect=AssertionError("Cancelled work must never execute"))
+    monkeypatch.setattr(AgentRuntime, "_execute_loop", execute)
+    task = AgentRuntime._schedule_run(parent)
+    if shutdown:
+        await AgentRuntime.shutdown()
+        assert parent.status == "failed" and parent.error == "agent.backendRestarted"
+    else:
+        assert AgentRuntime.cancel(parent.id)
+        assert task.cancelling() == 0
+        await asyncio.gather(task, return_exceptions=True)
+        assert parent.status == "cancelled"
+    assert parent.result_message_id is not None
+    execute.assert_not_awaited()
+
+
+async def test_cancel_descendants_uses_recursive_sessions_and_never_replays_orphans(monkeypatch):
+    root_id = uuid4()
+    runs = [AgentRun(id=uuid4(), session_id=uuid4(), status="queued", trust_level="public") for _ in range(2)]
+    read_db, write_db = AsyncMock(spec=AsyncSession), AsyncMock(spec=AsyncSession)
+    for db in (read_db, write_db):
+        db.__aenter__.return_value = db
+    read_db.execute.return_value = Mock(all=lambda: [(run.session_id, None) for run in runs])
+    read_db.scalars.return_value = Mock(all=lambda: [run.id for run in runs])
+    write_db.get.side_effect = lambda _model, key: next(run for run in runs if run.id == key)
+    write_db.add.side_effect = lambda message: setattr(message, "id", uuid4())
+    factory = Mock(side_effect=[read_db, write_db])
+    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", factory)
+
+    async def cancel(_run_id):
+        read_db.__aexit__.assert_awaited_once()
+        return False
+
+    monkeypatch.setattr(AgentRuntime, "cancel_and_wait", AsyncMock(side_effect=cancel))
+    schedule = Mock(side_effect=AssertionError("Orphans must not be replayed"))
+    monkeypatch.setattr(AgentRuntime, "_schedule_run", schedule)
+    for name in ("_terminalize_incomplete_tool_calls", "_finalize_run_files", "_persist_run_duration"):
+        monkeypatch.setattr(AgentRuntime, name, AsyncMock())
+    monkeypatch.setattr(run_events, "publish", AsyncMock())
+    await AgentRuntime.cancel_descendants(root_id)
+    assert "WITH RECURSIVE" in str(read_db.execute.await_args.args[0])
+    assert "agent_runs.parent_run_id IS NULL" in str(read_db.scalars.await_args.args[0])
+    assert all(run.status == "cancelled" and run.result_message_id is not None for run in runs)
+    assert AgentRuntime.cancel_and_wait.await_count == 2
+    schedule.assert_not_called()
+
+
+async def test_child_cancellation_joins_provisioning_thread_before_storage_cleanup(tmp_path, monkeypatch):
+    child = ChatSession(id=uuid4(), user_id=uuid4(), parent_session_id=uuid4())
+    run = AgentRun(id=uuid4(), session_id=child.id, input_message_id=uuid4())
+    message = Message(id=run.input_message_id, provider_data={"_matoloop": {"delegationCeiling": {}}})
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = lambda model, _key: child if model is ChatSession else message
+    storage = SessionStorage(tmp_path / "sessions")
+    provision = storage.provision
+    started, cleaned = asyncio.Event(), asyncio.Event()
+    release, finished = threading.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def blocked_provision(*args):
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(timeout=5), "Test did not release provisioning"
+        provision(*args)
+        finished.set()
+
+    monkeypatch.setattr(storage, "provision", blocked_provision)
+    monkeypatch.setattr(runtime_module, "SessionStorage", lambda: storage)
+
+    async def child_and_cleanup():
+        try:
+            await AgentRuntime._execute_loop(db, run)
+        finally:
+            assert finished.is_set(), "Cleanup raced the still-running provisioning thread"
+            storage.remove_session(child.id)
+            cleaned.set()
+
+    task = asyncio.create_task(child_and_cleanup())
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        task.cancel()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert not task.done() and not cleaned.is_set()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+        assert finished.is_set() and cleaned.is_set()
+        assert not storage.session_path(child.id).exists()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        assert await asyncio.to_thread(finished.wait, 2)
+
+
+@pytest.mark.parametrize("kind", ["approval", "question"])
+async def test_delegated_waits_keep_parent_active_and_expire_on_cancel(monkeypatch, delegated_runtime, kind):
+    session, parent, objects, _databases, delegate = delegated_runtime
+    entered = asyncio.Event()
+    created = []
+
+    async def publish(_run_id, event):
+        if event["type"] == f"{kind}.created":
+            created.append(event[kind])
+            if len(created) == 2:
+                entered.set()
+
+    async def execute(db, run, _visible):
+        child = objects[ChatSession, run.session_id]
+        call = ToolCall("call", kind, {})
+        if kind == "approval":
+            await AgentRuntime._request_approval(db, run, child, call, PermissionRequest(
+                capability="network.fetch", resource_type="url", resource_scope="https://example.org",
+                action_kind="fetch", risk_level="low", title="Read", summary="Read",
+            ))
+        else:
+            await AgentRuntime._request_question(db, run, child, call, QuestionArguments(questions=[{
+                "id": "detail", "type": "free_text", "header": "Detail", "question": "Which detail?",
+            }]))
+
+    monkeypatch.setattr(runtime_module.WebPushService, "deliver_after_commit", AsyncMock())
+    monkeypatch.setattr(run_events, "publish", publish)
+    monkeypatch.setattr(AgentRuntime, "_execute_loop", execute)
+    task = asyncio.create_task(delegate())
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    assert parent.status == "running"
+    for event in created:
+        assert event["sessionId"] == str(session.id)
+        assert event["runId"] != str(parent.id)
+        assert event["payload"]["subagentTitle"].startswith("Task ")
+        assert event["payload"]["subagentSessionId"] != str(session.id)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
+    request_type = ApprovalRequest if kind == "approval" else QuestionRequest
+    requests = [obj for (model, _key), obj in objects.items() if model is request_type]
+    assert len(requests) == 2 and all(request.status == "expired" for request in requests)
+    assert parent.status == "running"
+
+
+async def test_child_authorization_uses_main_grants_child_roots_and_snapshot(monkeypatch):
+    parent = ChatSession(id=uuid4(), user_id=uuid4())
+    child = ChatSession(id=uuid4(), user_id=parent.user_id, parent_session_id=parent.id,
+                        agent_profile_id=BUILD_AGENT_PROFILE_ID)
+    run = AgentRun(id=uuid4(), session_id=child.id, input_message_id=uuid4(), trust_level="public")
+    settings = ToolSettings(public_permissions={"policies": {"network.fetch": "ask"}}).select_trust(TrustLevel.PUBLIC)
+    message = Message(id=run.input_message_id, provider_data={"_matoloop": {
+        "delegationCeiling": subagents.permission_snapshot(settings, {"webfetch"})
+    }})
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = lambda model, key: parent if model is ChatSession else message
+    monkeypatch.setattr(runtime_module, "load_agent_profile_tools", AsyncMock(return_value=(ToolSettings(), None)))
+    monkeypatch.setattr(runtime_module, "load_effective_integrations", AsyncMock(return_value=IntegrationSettings()))
+    evaluate = AsyncMock(side_effect=[PermissionDecision.ASK, PermissionDecision.ALLOW])
+    monkeypatch.setattr(runtime_module.PermissionPolicy, "evaluate", evaluate)
+    approve = AsyncMock(return_value="allow_once")
+    monkeypatch.setattr(AgentRuntime, "_request_approval", approve)
+    request = PermissionRequest(capability="network.fetch", resource_type="url", resource_scope="https://example.org",
+                                action_kind="fetch", risk_level="low", title="Read", summary="Read")
+    roots = RootFileService(child.id)
+    call = ToolCall("fetch-1", "webfetch", {"url": "https://example.org"})
+    decision = await AgentRuntime._authorize(db, run, child, call, request, roots)
+    assert decision == PermissionDecision.ALLOW
+    for evaluated in evaluate.await_args_list:
+        assert evaluated.args[1] is child and evaluated.args[3] is roots
+        assert evaluated.args[4] == ToolExecutionPolicy.ASK
+        assert evaluated.kwargs["permission_session_id"] == parent.id
+    assert approve.await_args.args[1] is run
+    assert (await AgentRuntime._authorize(db, run, child, ToolCall("task", "task", {}), request, roots)) == PermissionDecision.DENY
 
 
 @pytest.mark.parametrize(
@@ -317,13 +629,19 @@ async def test_explore_child_is_cancelled_with_parent_task(monkeypatch) -> None:
         (TrustLevel.PRIVATE, None, TrustLevel.PRIVATE, False),
     ],
 )
+@pytest.mark.parametrize("tool_limit", [25, None])
 async def test_start_persists_effective_run_policy_snapshot(
     monkeypatch,
     provider_trust: TrustLevel,
     model_trust: TrustLevel | None,
     expected_trust: TrustLevel,
     expected_pseudonymization: bool,
+    tool_limit: int | None,
 ) -> None:
+    from mato_loop_backend.settings.models import AgentProfile
+
+    profile = AgentProfile(name="Custom", instructions="Follow the task.", maxToolCalls=tool_limit)
+    monkeypatch.setattr(runtime_module, "load_agent_profile", AsyncMock(return_value=profile))
     provider = LlmProviderConfig(
         name="Provider",
         adapter_type="openai-compatible",
@@ -352,6 +670,7 @@ async def test_start_persists_effective_run_policy_snapshot(
         user_id=uuid4(),
         title="Test",
         model_config_id=model.id,
+        agent_profile_id=profile.id,
     )
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [session, None, True, True]
@@ -360,6 +679,7 @@ async def test_start_persists_effective_run_policy_snapshot(
     run = await AgentRuntime.start(db, session, "Nachricht", run_id=requested_run_id)
 
     message, persisted_run = db.add_all.call_args.args[0]
+    assert message.provider_data["_matoloop"]["maxToolCallsByRun"] == {str(run.id): tool_limit}
     assert message.trust_level == expected_trust.value
     assert persisted_run is run
     assert run.id == requested_run_id

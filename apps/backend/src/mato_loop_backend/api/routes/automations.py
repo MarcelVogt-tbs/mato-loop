@@ -118,6 +118,7 @@ class AutomationRunRequest(BaseModel):
 
 def _raise(exc: AutomationError) -> None:
     statuses = {
+        "session.readOnly": 403,
         "session.storageUnavailable": 500,
         "automation.notFound": 404,
         "automation.runNotFound": 404,

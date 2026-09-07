@@ -13,6 +13,10 @@ const LABELS = {
 }
 
 const WARNING_PRESENTATIONS = {
+  'agent.toolCallLimitReached': {
+    title: 'Tool-Limit erreicht',
+    summary: 'Der Lauf wurde ohne weitere Tool-Aufrufe abgeschlossen. Im Abschlussbericht stehen erledigte und offene Aufgaben.'
+  },
   'privacy.placeholderRestorationIncomplete': {
     title: 'Geschützter Wert nicht verfügbar',
     summary: 'Ein Datenschutz-Platzhalter konnte nicht wiederhergestellt werden.'
@@ -59,6 +63,7 @@ export function agentActivityDisplayKey(activity) {
 export function agentRunPresentation({
   running = false,
   stopping = false,
+  runId = null,
   activity = null,
   streamReasoning = null,
   streamContent = '',
@@ -72,10 +77,11 @@ export function agentRunPresentation({
   const currentToolItems = toolItems.filter((item) => item.current)
   const activeTool = toolItems.find((item) => item.active)
     || currentToolItems.find((item) => item.tool?.id === activity?.toolCallId)
-  const approval = toolItems.find((item) => item.approval)?.approval
-    || transcript?.unmatchedApprovals?.[0]
-  const question = toolItems.find((item) => item.question)?.question
-    || transcript?.unmatchedQuestions?.[0]
+  const belongsToRun = (request) => request && (!runId || request.runId === runId)
+  const approval = toolItems.find((item) => belongsToRun(item.approval))?.approval
+    || transcript?.unmatchedApprovals?.find(belongsToRun)
+  const question = toolItems.find((item) => belongsToRun(item.question))?.question
+    || transcript?.unmatchedQuestions?.find(belongsToRun)
   if (
     !stopping
     && !approval

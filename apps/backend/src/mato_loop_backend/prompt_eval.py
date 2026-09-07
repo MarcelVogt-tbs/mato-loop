@@ -842,7 +842,7 @@ CASES = (
         expected_arguments={"root": "computer", "path": "README.md"},
     ),
     PromptCase(
-        id="codebase_investigation_uses_explore_task",
+        id="codebase_investigation_uses_delegated_task",
         kind="general",
         user=(
             "Untersuche die Codebasis: Wo werden Agent-Runs persistiert und welche Stellen prüfen "
@@ -851,7 +851,7 @@ CASES = (
         tools=("task", "read", "glob", "grep"),
         working_directory="/data/home/project",
         expected_tool="task",
-        argument_contains={"prompt": ("Agent", "Berechtigungen")},
+        argument_contains={"tasks": ("description", "prompt", "Agent", "Berechtigungen")},
     ),
     PromptCase(
         id="email_revision_replaces_same_path_with_exact_sha256",
@@ -1690,7 +1690,7 @@ CASES = (
         kind="general",
         user=(
             "Schreibe eine freundliche E-Mail an Frau Sommer und frage nach einem Termin "
-            "in der nächsten Woche."
+            "in der nächsten Woche. Speichere sie als Markdown-Datei in der Session."
         ),
         tools=("question", "write_file"),
         expected_tool="write_file",
@@ -1701,7 +1701,7 @@ CASES = (
         forbidden_tools=("question",),
     ),
     PromptCase(
-        id="generic_application_sample_creates_draft",
+        id="generic_application_sample_stays_in_chat",
         kind="general",
         user="Bewerbung erstmal muster",
         history=(
@@ -1712,7 +1712,8 @@ CASES = (
             },
         ),
         tools=("write_file",),
-        expected_tool="write_file",
+        expected_no_tools=True,
+        forbidden_tools=("write_file",),
     ),
     PromptCase(
         id="application_explanation_stays_in_chat",
@@ -4060,9 +4061,9 @@ _SEMANTIC_CONTRACTS = (
     ContractCoverage("file.grep", "file", ("grep_uses_session_root_path_and_include",)),
     ContractCoverage("file.read", "file", ("workspace_read_uses_exact_root",)),
     ContractCoverage(
-        "agent.explore_task",
+        "agent.delegated_task",
         "tools",
-        ("codebase_investigation_uses_explore_task",),
+        ("codebase_investigation_uses_delegated_task",),
     ),
     ContractCoverage("file.provide", "file", ("provide_file_creates_download",)),
     ContractCoverage(
@@ -4073,7 +4074,7 @@ _SEMANTIC_CONTRACTS = (
             "initial_email_creates_one_session_markdown_file",
             "email_revision_replaces_same_path_with_exact_sha256",
             "successful_tool_result_allows_confirmation",
-            "generic_application_sample_creates_draft",
+            "generic_application_sample_stays_in_chat",
             "application_explanation_stays_in_chat",
         ),
     ),

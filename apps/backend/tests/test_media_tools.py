@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.media_prompt_profiles import (
@@ -186,6 +187,30 @@ async def test_disabled_media_tool_is_rejected_before_provider(
                 "message": "The tool is unavailable.",
         }
     }
+    generate.assert_not_awaited()
+
+
+@pytest.mark.parametrize("policy", [ToolExecutionPolicy.ASK, ToolExecutionPolicy.DISABLED])
+async def test_media_dispatch_retains_private_spawn_ceiling_after_capability_reload(tmp_path, monkeypatch, policy):
+    from mato_loop_backend.agent.subagents import permission_snapshot
+
+    call = ToolCall("image", "generate_image", {"prompt": "Test"})
+    tool_context = context(tmp_path, call, decision=PermissionDecision.DENY)
+    tool_context.model_trust_level = TrustLevel.PRIVATE
+    before = ToolSettings(generate_image={"policy": policy}).select_trust(TrustLevel.PRIVATE)
+    snapshot = permission_snapshot(before, {"generate_image"})
+    live = ToolSettings(generate_image={"policy": "auto"})
+    tool_context.tool_settings = live.model_copy(deep=True)
+    tool_context.tool_settings._delegation_ceiling = snapshot
+    mock_settings_load(monkeypatch, live, media_settings(ModelCapability.IMAGE_GENERATION))
+    generate = AsyncMock(side_effect=AssertionError("Unapproved media must not be generated"))
+    monkeypatch.setattr(MediaService, "generate_image", generate)
+    effective = tool_registry.effective(IntegrationSettings(), tool_settings=live, tool_capabilities={"media.generate.image"})
+    result = await effective.execute(call, tool_context)
+    assert result.metadata["errorCode"] == ("permission.denied" if policy == ToolExecutionPolicy.ASK else "tool.unavailable")
+    assert tool_context.tool_settings._delegation_ceiling == snapshot
+    if policy == ToolExecutionPolicy.ASK:
+        tool_context.ask_handler.assert_awaited_once()
     generate.assert_not_awaited()
 
 

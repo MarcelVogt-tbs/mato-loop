@@ -3,6 +3,7 @@ import { apiErrorMessage, errorDescriptor } from 'src/utils/api-errors'
 import { cleanUrlForDisplay } from 'src/utils/webfetch'
 
 const TOOL_DISPLAY = {
+  task: { label: 'Subagenten beauftragen', icon: 'account_tree' },
   question: { label: 'Rückfrage stellen', icon: 'help_outline' },
   read: { label: 'Datei lesen', icon: 'description' },
   glob: { label: 'Dateien suchen', icon: 'folder_open' },

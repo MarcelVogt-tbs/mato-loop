@@ -6,6 +6,7 @@ import { useApprovalStore } from 'src/stores/approvals'
 import { controlCenterRequestState, useControlCenterStore } from 'src/stores/control-center'
 import { useInstanceLimitsStore } from 'src/stores/instance-limits'
 import { useQuestionStore } from 'src/stores/questions'
+import { useSubagentStore } from 'src/stores/subagents'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import {
   attachmentKind,
@@ -1079,6 +1080,7 @@ export const useChatStore = defineStore('chat', {
       try {
         const session = (await api.get(`/sessions/${id}`, { signal: controller.signal })).data
         if (this.selectedSessionId !== id || this.sessionLoadVersion !== loadVersion) return
+        if (session.readOnly && session.parentSessionId) return session
         controlCenter.syncSession(session)
         this.applySessionResult(session)
         void this.markSessionRead(session).catch(() => {})
@@ -2149,6 +2151,7 @@ export const useChatStore = defineStore('chat', {
       this.streamModelName = run.modelName || this.streamModelName
       source.onopen = () => {
         if (this.eventSource !== source) return
+        if (useSubagentStore().parentId === sessionId) void useSubagentStore().loadChildren()
         this.reconnectAttempts = 0
         if (this.activity.phase === 'reconnecting') {
           const connectedPhase = run.status === 'waiting_approval' || run.status === 'waiting_input'
@@ -2197,6 +2200,10 @@ export const useChatStore = defineStore('chat', {
       source.addEventListener('agent.identity.updated', (event) => {
         if (this.eventSource !== source) return
         useAgentIdentityStore().assignIdentity(JSON.parse(event.data).identity)
+      })
+      source.addEventListener('subagent.updated', () => {
+        if (this.eventSource !== source || useSubagentStore().parentId !== sessionId) return
+        void useSubagentStore().loadChildren()
       })
       source.addEventListener('message.delta', (event) => {
         if (this.eventSource !== source) return
@@ -2380,6 +2387,10 @@ export const useChatStore = defineStore('chat', {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
         const approval = payload.approval
+        if (approval.payload?.subagentSessionId) {
+          useApprovalStore().add(approval)
+          return
+        }
         this.setActivity('waiting_approval', {
           tool: approval.details?.tool,
           toolCallId: approval.details?.toolCallId,
@@ -2388,8 +2399,12 @@ export const useChatStore = defineStore('chat', {
         this.setSessionRunStatus(sessionId, 'waiting_approval')
         useApprovalStore().add(approval)
       })
-      source.addEventListener('approval.resolved', () => {
+      source.addEventListener('approval.resolved', (event) => {
         if (this.eventSource !== source) return
+        if (JSON.parse(event.data).subagentSessionId) {
+          void useApprovalStore().fetchPending().catch(() => {})
+          return
+        }
         this.setActivity('processing_tool', {
           tool: this.activity.tool,
           toolCallId: this.activity.toolCallId
@@ -2397,8 +2412,12 @@ export const useChatStore = defineStore('chat', {
         this.setSessionRunStatus(sessionId, 'running')
         useApprovalStore().fetchPending()
       })
-      source.addEventListener('approval.expired', () => {
+      source.addEventListener('approval.expired', (event) => {
         if (this.eventSource !== source) return
+        if (JSON.parse(event.data).subagentSessionId) {
+          void useApprovalStore().fetchPending().catch(() => {})
+          return
+        }
         this.setActivity('processing_tool', {
           tool: this.activity.tool,
           toolCallId: this.activity.toolCallId
@@ -2410,6 +2429,10 @@ export const useChatStore = defineStore('chat', {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
         const question = payload.question
+        if (question.payload?.subagentSessionId) {
+          useQuestionStore().add(question)
+          return
+        }
         this.setActivity('waiting_input', {
           tool: 'question',
           toolCallId: question.toolCallId,
@@ -2419,8 +2442,12 @@ export const useChatStore = defineStore('chat', {
         useQuestionStore().add(question)
       })
       for (const name of ['question.answered', 'question.rejected', 'question.expired']) {
-        source.addEventListener(name, () => {
+        source.addEventListener(name, (event) => {
           if (this.eventSource !== source) return
+          if (JSON.parse(event.data).subagentSessionId) {
+            void useQuestionStore().fetchPending().catch(() => {})
+            return
+          }
           this.setActivity('processing_tool', { tool: 'question', toolCallId: this.activity.toolCallId })
           this.setSessionRunStatus(sessionId, 'running')
           void useQuestionStore().fetchPending().catch(() => {})
@@ -2450,6 +2477,7 @@ export const useChatStore = defineStore('chat', {
         this.streamModelName = null
         this.clearActivity()
         this.setSessionRunStatus(sessionId, null)
+        if (useSubagentStore().parentId === sessionId) void useSubagentStore().loadChildren()
         if (!this.historyActionPending) {
           void this.refreshSession(sessionId)
             .then(openFinalOutputs)
@@ -2487,6 +2515,9 @@ export const useChatStore = defineStore('chat', {
         this.running = !this.cancelRequested
         if (!this.cancelRequested) this.setActivity('reconnecting')
         this.reconnectAttempts += 1
+        if (useSubagentStore().parentId === sessionId) void useSubagentStore().loadChildren()
+        void useApprovalStore().fetchPending().catch(() => {})
+        void useQuestionStore().fetchPending().catch(() => {})
 
         const stopDisconnectedRun = (terminal = false) => {
           if (this.runId !== runId) return

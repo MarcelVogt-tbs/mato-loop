@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import AgentRuntime
@@ -28,6 +28,7 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
+from mato_loop_backend.sessions.cleanup import descendant_sessions
 
 router = APIRouter(prefix="/projects", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
@@ -115,6 +116,7 @@ async def _session_count(db: AsyncSession, project: Project) -> int:
         select(func.count(ChatSession.id)).where(
             ChatSession.project_id == project.id,
             ChatSession.user_id == project.user_id,
+            ChatSession.parent_session_id.is_(None),
         )
     )
     return count or 0
@@ -124,6 +126,7 @@ def _project_session_ids(project_id: UUID, user_id: UUID):
     return select(ChatSession.id).where(
         ChatSession.project_id == project_id,
         ChatSession.user_id == user_id,
+        ChatSession.parent_session_id.is_(None),
     )
 
 
@@ -185,7 +188,8 @@ async def list_projects(
             .outerjoin(
                 ChatSession,
                 (ChatSession.project_id == Project.id)
-                & (ChatSession.user_id == Project.user_id),
+                & (ChatSession.user_id == Project.user_id)
+                & ChatSession.parent_session_id.is_(None),
             )
             .where(Project.user_id == user.id)
             .group_by(Project.id)
@@ -334,9 +338,15 @@ async def delete_project(
             raise ApiError(409, "session.runAlreadyActive")
 
     automation_ids = [item.id for item in linked_automations]
+    cancellation_roots = [*session_ids]
+    if automation_mode == "deleteAutomations":
+        cancellation_roots.extend(item.execution_session_id for item in linked_automations)
     if run_ids := await active_run_ids(session_ids, automation_ids):
         await db.rollback()
         await cancel_runs(run_ids)
+    await db.rollback()
+    for session_id in cancellation_roots:
+        await AgentRuntime.cancel_descendants(session_id)
 
     for attempt in range(2):
         project = await _owned_project(db, project_db_id, owner_id, for_update=True)
@@ -355,14 +365,20 @@ async def delete_project(
         linked_automations = await _linked_automations(
             db, project_db_id, owner_id, for_update=True
         )
-        session_ids = [item.id for item in sessions]
+        session_ids = [item.id for item in sessions if item.parent_session_id is None]
         if automation_impact != project_delete_impact_token(
             session_ids, linked_automations
         ):
             raise ApiError(409, "session.automationImpactChanged")
         _validate_automation_policy(linked_automations, automation_mode)
         automation_ids = [item.id for item in linked_automations]
-        late_run_ids = await active_run_ids(session_ids, automation_ids)
+        deletion_roots = [item.id for item in sessions]
+        if automation_mode == "deleteAutomations":
+            deletion_roots.extend(item.execution_session_id for item in linked_automations)
+        descendants = await descendant_sessions(db, deletion_roots)
+        late_run_ids = await active_run_ids(
+            [*deletion_roots, *(child_id for child_id, _ in descendants)], automation_ids
+        )
         coding_execution_id = await db.scalar(
             select(ProjectPlanExecution.id)
             .where(
@@ -397,30 +413,34 @@ async def delete_project(
                 )
             ).all()
         )
-    execution_storage_ids = [item.id for item in execution_sessions]
+    extra_storage = dict(
+        [(item.id, item.project_id) for item in execution_sessions]
+        + [(child_id, child_project) for child_id, child_project in descendants
+           if child_project != project_db_id]
+    )
 
     storage = SessionStorage()
     project_trashed: Path | None = None
-    execution_trashed: list[tuple[UUID, Path | None]] = []
+    execution_trashed: list[tuple[UUID, UUID | None, Path | None]] = []
 
     async def trash_storage() -> None:
         nonlocal project_trashed
         project_trashed = await asyncio.to_thread(
             storage.trash_project, project_db_id
         )
-        for execution_session_id in execution_storage_ids:
+        for execution_session_id, storage_project_id in extra_storage.items():
             trashed = await asyncio.to_thread(
-                storage.trash_session, execution_session_id, None
+                storage.trash_session, execution_session_id, storage_project_id
             )
-            execution_trashed.append((execution_session_id, trashed))
+            execution_trashed.append((execution_session_id, storage_project_id, trashed))
 
     async def restore_storage() -> None:
-        for execution_session_id, trashed in reversed(execution_trashed):
+        for execution_session_id, storage_project_id, trashed in reversed(execution_trashed):
             if trashed is None:
                 continue
             try:
                 await asyncio.to_thread(
-                    storage.restore_session, execution_session_id, trashed, None
+                    storage.restore_session, execution_session_id, trashed, storage_project_id
                 )
             except Exception:
                 logger.exception("Automation session storage could not be restored")
@@ -439,7 +459,7 @@ async def delete_project(
             await db.rollback()
 
     async def purge_storage() -> None:
-        for _execution_session_id, trashed in execution_trashed:
+        for _execution_session_id, _storage_project_id, trashed in execution_trashed:
             try:
                 await asyncio.to_thread(storage.purge_trashed, trashed)
             except Exception:
@@ -477,10 +497,12 @@ async def delete_project(
             for automation in linked_automations:
                 await db.delete(automation)
             await db.flush()
-            for execution_session in execution_sessions:
-                await db.delete(execution_session)
-        for session in sessions:
-            await db.delete(session)
+        if deletion_roots:
+            await db.execute(
+                delete(ChatSession)
+                .where(ChatSession.id.in_(deletion_roots), ChatSession.user_id == owner_id)
+                .execution_options(synchronize_session=False)
+            )
         await db.flush()
         await db.delete(project)
         commit_task = asyncio.create_task(db.commit())

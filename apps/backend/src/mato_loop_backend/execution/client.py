@@ -5,10 +5,10 @@ import binascii
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any, BinaryIO, Literal
+from typing import Any, BinaryIO, Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from mato_loop_backend.execution.manager import (
     ExecutionAgentError,
@@ -190,9 +190,24 @@ class SystemInfoResult(ExecutionResult):
 
 class ShellTarget(ExecutionResult):
     path: str
-    kind: str
+    kind: Literal[
+        "directory", "input", "output", "executable", "source", "script", "path",
+        "toolchain_metadata", "discard",
+    ]
 
     _validate_path = field_validator("path")(_absolute_path)
+
+    @model_validator(mode="after")
+    def validate_special_target(self) -> Self:
+        if self.kind == "discard" and self.path != "/dev/null":
+            raise ValueError("invalid shell discard target")
+        if self.kind == "toolchain_metadata":
+            directories = {
+                "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin",
+            }
+            if self.path not in directories and str(PurePosixPath(self.path).parent) not in directories:
+                raise ValueError("invalid shell toolchain metadata target")
+        return self
 
 
 class ShellCommand(ExecutionResult):
@@ -221,13 +236,14 @@ class ShellInspectResult(ExecutionResult):
     commands: list[ShellCommand] = Field(max_length=64)
     inspection_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
 
-    @field_validator("read_only")
-    @classmethod
-    def validate_read_only(cls, value: bool, info) -> bool:
-        classification = info.data.get("classification")
-        if classification is not None and value != (classification == "read"):
+    @model_validator(mode="after")
+    def validate_classification(self) -> Self:
+        if self.read_only != (self.classification == "read") or (
+            self.classification == "read"
+            and any(command.classification == "write" for command in self.commands)
+        ):
             raise ValueError("inconsistent shell classification")
-        return value
+        return self
 
 
 class ExecutionClientError(Exception):
@@ -297,6 +313,9 @@ _REMOTE_ERROR_CODES = {
     "path.unsupportedType": "file.unsupportedType",
     "process.notAllowed": "process.notAllowed",
     "process.inspectionChanged": "process.inspectionChanged",
+    "process.invalidSyntax": "process.invalidSyntax",
+    "process.inspectionLimitExceeded": "process.inspectionLimitExceeded",
+    "process.unsupportedTargetQuoting": "process.unsupportedTargetQuoting",
     "process.outputTooLarge": "process.outputTooLarge",
     "process.startFailed": "process.startFailed",
     "process.timedOut": "process.timedOut",

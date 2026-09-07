@@ -64,7 +64,8 @@ class GlobalSearchService:
                 .outerjoin(
                     ChatSession,
                     (ChatSession.project_id == Project.id)
-                    & (ChatSession.user_id == Project.user_id),
+                    & (ChatSession.user_id == Project.user_id)
+                    & ChatSession.parent_session_id.is_(None),
                 )
                 .where(
                     Project.user_id == owner_id,
@@ -91,6 +92,7 @@ class GlobalSearchService:
                 .where(
                     ChatSession.user_id == owner_id,
                     ChatSession.session_type == "chat",
+                    ChatSession.parent_session_id.is_(None),
                     ChatSession.title.icontains(cleaned_query, autoescape=True),
                 )
                 .order_by(ChatSession.updated_at.desc(), ChatSession.id.desc())

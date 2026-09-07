@@ -11,6 +11,7 @@ _GENERIC_MESSAGE = "The action failed."
 _MESSAGES = {
     "agent.backendRestarted": "The agent run was interrupted by a backend restart.",
     "agent.emptyResponse": "The model returned no usable response.",
+    "agent.outputLimitReached": "The model response was interrupted at its output limit.",
     "agent.failed": "The agent run failed.",
     "agent.requiredWebSearchFailed": "The required web search failed.",
     "agent.requiredWebSearchMissing": "The model did not perform the required web search.",
@@ -25,6 +26,8 @@ _MESSAGES = {
         "Change the arguments or use another approach."
     ),
     "agent.toolCallLimitReached": "The agent reached the maximum number of tool calls.",
+    "agent.subagentLimitReached": "The run reached the maximum number of subagents.",
+    "session.readOnly": "Subagent sessions are read-only. Use the main session to continue.",
     "agentProfile.notFound": "The agent profile was not found.",
     "agentProfile.duplicate": "An agent profile with this name already exists.",
     "agentProfile.defaultProtected": "Built-in agent profiles cannot be renamed or deleted.",
@@ -241,6 +244,10 @@ _MESSAGES = {
     "process.outputTooLarge": "The process produced too much output.",
     "process.startFailed": "The process could not be started.",
     "process.timedOut": "The process exceeded its time limit.",
+    "process.commandFailed": "The command exited with a nonzero status.",
+    "process.invalidSyntax": "The shell command has invalid syntax.",
+    "process.inspectionLimitExceeded": "The shell command exceeds the inspection limits.",
+    "process.unsupportedTargetQuoting": "The shell path target uses unsupported quoting. Use a literal path with ordinary quotes.",
     "process.unavailable": "Process execution is unavailable.",
     "terminal.agentMismatch": "The terminal and chat session use different MatoLoop Agents.",
     "terminal.alreadyAttached": "This terminal is already attached to another chat session.",

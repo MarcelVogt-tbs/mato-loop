@@ -25,15 +25,20 @@ class ToolArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class TaskArguments(ToolArguments):
+class DelegatedTask(ToolArguments):
+    description: str = Field(min_length=1, max_length=240)
     prompt: str = Field(min_length=1, max_length=8_000)
 
-    @field_validator("prompt")
+    @field_validator("description", "prompt")
     @classmethod
     def prompt_must_not_be_blank(cls, value: str) -> str:
         if not (cleaned := value.strip()):
             raise ValueError("prompt must not be blank")
         return cleaned
+
+
+class TaskArguments(ToolArguments):
+    tasks: list[DelegatedTask] = Field(min_length=1, max_length=4)
 
 
 class QuestionOption(ToolArguments):
@@ -269,6 +274,10 @@ class MovePathArguments(CopyPathArguments):
 
 class ShellRunArguments(ToolArguments):
     command: str = Field(min_length=1, max_length=256 * 1024)
+    timeout: float | None = Field(
+        default=None, strict=True, gt=0, le=3600,
+        description="Time limit in seconds. Null uses the agent default; the local agent maximum applies.",
+    )
 
 
 class SystemInfoArguments(ToolArguments):

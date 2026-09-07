@@ -30,7 +30,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.workspace import RootFileError, RootFileService
 
 LAST_MESSAGE_AT_UNSET = object()
-_PUBLIC_WARNING_CODES = {"privacy.placeholderRestorationIncomplete"}
+_PUBLIC_WARNING_CODES = {"privacy.placeholderRestorationIncomplete", "agent.toolCallLimitReached"}
 
 
 class _StoredFileAction(BaseModel):
@@ -318,6 +318,11 @@ def session_payload(
     file_views = control_center.get("file_views")
     payload = {
         "id": str(item.id),
+        "parentSessionId": str(item.parent_session_id) if item.parent_session_id else None,
+        "spawnedByRunId": str(item.spawned_by_run_id) if item.spawned_by_run_id else None,
+        "spawnedByToolCallId": item.spawned_by_tool_call_id,
+        "spawnIndex": item.spawn_index,
+        "readOnly": item.parent_session_id is not None,
         "projectId": str(item.project_id) if item.project_id else None,
         "title": item.title,
         "titleGenerationStatus": item.title_generation_status,

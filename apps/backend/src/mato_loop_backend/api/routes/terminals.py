@@ -30,7 +30,8 @@ from mato_loop_backend.execution.terminals import (
     BrowserTerminalConnection,
     terminal_coordinator,
 )
-from mato_loop_backend.models import ChatSession, ExecutionAgent, LoginSession, UserAccount
+from mato_loop_backend.models import ExecutionAgent, LoginSession, UserAccount
+from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
 
 router = APIRouter(prefix="/terminals")
 _TERMINAL_OPERATIONS = frozenset(
@@ -232,7 +233,7 @@ async def _handle_browser(connection: BrowserTerminalConnection) -> None:
                     )
             elif isinstance(message, _AttachMessage):
                 async with AsyncSessionFactory() as db:
-                    session = await db.get(ChatSession, message.session_id)
+                    session = await get_owned_session(db, message.session_id, connection.user_id)
                     if session is None or session.user_id != connection.user_id:
                         raise ValueError("session.notFound")
                     if session.preferred_execution_agent_id != connection.agent_id:
@@ -256,6 +257,8 @@ async def _handle_browser(connection: BrowserTerminalConnection) -> None:
                 return
         except ValidationError:
             await connection.error("terminal.messageInvalid")
+        except SessionServiceError as exc:
+            await connection.error(exc.code)
         except ValueError as exc:
             code = str(exc)
             await connection.error(code if code.startswith("terminal.") or code == "session.notFound" else "terminal.messageInvalid")

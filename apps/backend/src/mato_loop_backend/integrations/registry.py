@@ -22,6 +22,7 @@ from mato_loop_backend.settings.models import (
     IntegrationAdapterAvailability,
     IntegrationInstance,
     IntegrationSettings,
+    ToolSettings,
 )
 
 
@@ -31,6 +32,14 @@ class SearxngConfig(BaseModel):
 
 def search_provider_key(instance: IntegrationInstance) -> str:
     return f"{instance.adapter_type}:{instance.id}"
+
+
+def agent_profile_search_available(
+    settings: IntegrationSettings, tools: ToolSettings
+) -> bool:
+    """Do not replace a profile-excluded primary search provider with no-key search."""
+    primary = tools.web_search.primary_provider
+    return primary.split(":", 1)[-1] not in settings._agent_profile_excluded_ids
 
 
 def _searxng_contributions(instance: IntegrationInstance) -> IntegrationContributions:

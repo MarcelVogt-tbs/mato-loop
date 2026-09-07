@@ -52,6 +52,9 @@ describe('agent profiles store', () => {
       description: 'Prüft Quellen',
       personaId: 'persona-1',
       instructions: 'Arbeite sorgfältig.',
+      maxToolCalls: null,
+      integrationsEnabledByDefault: false,
+      integrationAvailability: { 'integration-1': false, 'integration-2': true },
       publicPermissions: { policies: { 'network.search': 'auto' } },
       privatePermissions: { policies: { 'network.search': 'ask' } }
     }
@@ -66,6 +69,11 @@ describe('agent profiles store', () => {
 
     await store.createAgent(payload)
     await store.updateAgent('global-1', { ...payload, name: 'Analyse' })
+    expect(store.byId('global-1')).toMatchObject({
+      maxToolCalls: null,
+      integrationsEnabledByDefault: false,
+      integrationAvailability: payload.integrationAvailability
+    })
     await store.deleteAgent('global-1')
 
     expect(api.post).toHaveBeenCalledWith('/agent-profiles', payload, { params: { scope: 'instance' } })

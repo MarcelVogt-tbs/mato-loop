@@ -100,6 +100,7 @@ def _candidate_filters(
     filters = [
         ChatSession.user_id == owner_id,
         ChatSession.session_type == "chat",
+        ChatSession.parent_session_id.is_(None),
         *_eligible_filters(),
     ]
     if current_session_id is not None:
@@ -192,6 +193,7 @@ class EpisodeRetrievalService:
                     ChatSession.id != current_session_id,
                     ChatSession.project_id == project_id,
                     ChatSession.session_type == "chat",
+                    ChatSession.parent_session_id.is_(None),
                     ChatSession.memory_mode == "full",
                 )
                 .order_by(
@@ -242,6 +244,7 @@ class EpisodeRetrievalService:
             ChatSession.user_id == owner_id,
             ChatSession.id != current_session_id,
             ChatSession.session_type == "chat",
+            ChatSession.parent_session_id.is_(None),
             *_eligible_filters(),
         ]
         if full_sessions_only:

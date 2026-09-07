@@ -1,3 +1,4 @@
+from collections.abc import Collection
 from uuid import UUID
 
 from sqlalchemy import select
@@ -228,6 +229,33 @@ async def load_effective_integrations(
     return instance
 
 
+def filter_agent_profile_integrations(
+    settings: IntegrationSettings,
+    profile: AgentProfile | None,
+    *,
+    allowed_ids: Collection[UUID | str] | None = None,
+) -> IntegrationSettings:
+    """Filter a runtime copy without changing integration enablement or policies."""
+    effective = settings.model_copy(deep=True)
+    ceiling = {str(value) for value in allowed_ids} if allowed_ids is not None else None
+    effective.instances = [
+        item for item in effective.instances
+        if (ceiling is None or str(item.id) in ceiling)
+        and (
+            profile is None
+            or profile.integration_availability.get(
+                str(item.id), profile.integrations_enabled_by_default
+            )
+        )
+    ]
+    selected_ids = {item.id for item in effective.instances}
+    effective._agent_profile_excluded_ids |= frozenset(
+        str(item.id) for item in settings.instances
+        if item.id not in selected_ids
+    )
+    return effective
+
+
 def _merge_permissions(
     baseline: AgentProfilePermissions,
     override: AgentProfilePermissions,
@@ -357,6 +385,7 @@ async def load_agent_profile_tools(
     if profile_id is None:
         return tools, None
     profile = await load_agent_profile(db, user_id, profile_id)
+    tools._agent_profile = profile
     tools._agent_permissions = (
         profile.private_permissions
         if trust_level == TrustLevel.PRIVATE

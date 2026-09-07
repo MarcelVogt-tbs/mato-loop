@@ -304,7 +304,7 @@ async def _runtime_setup(
     ai_settings = AiSettings(
         providers=[provider], models=[model], default_model_id=model.id
     )
-    runtime_settings = AgentRuntimeSettings(max_steps=10, max_model_requests=10)
+    runtime_settings = AgentRuntimeSettings()
     session = ChatSession(
         id=records[-1].session_id,
         user_id=uuid4(),

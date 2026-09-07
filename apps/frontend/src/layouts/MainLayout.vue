@@ -1223,7 +1223,12 @@ watch(
   { immediate: true }
 )
 
-onBeforeRouteUpdate(confirmDiscardedEdit)
+onBeforeRouteUpdate((to, from) => {
+  if (to.name === 'chat' && from.name === 'chat'
+    && to.query.session === from.query.session
+    && to.query.subagent !== from.query.subagent) return true
+  return confirmDiscardedEdit()
+})
 onBeforeRouteLeave(confirmDiscardedEdit)
 
 onMounted(async () => {

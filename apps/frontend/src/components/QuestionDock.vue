@@ -1,5 +1,6 @@
 <template>
   <q-card flat class="question-dock app-surface" @keydown="handleKeydown">
+    <SubagentRequestLink :request="request" />
     <q-card-section class="question-dock__header row items-center no-wrap">
       <div class="row items-center no-wrap q-gutter-sm">
         <q-icon name="help_outline" color="primary" size="20px" />
@@ -190,6 +191,7 @@
 <script setup>
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useQuestionStore } from 'stores/questions'
+import SubagentRequestLink from 'components/SubagentRequestLink.vue'
 
 defineOptions({ name: 'QuestionDock' })
 

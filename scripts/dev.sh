@@ -60,7 +60,9 @@ check_matoloop_agent() {
 }
 
 test_backend() {
-    run_backend "uv sync --frozen && uv run pytest"
+    local args=""
+    if (( $# )); then printf -v args ' %q' "$@"; fi
+    run_backend "uv sync --frozen && uv run pytest$args"
 }
 
 test_frontend() {
@@ -93,7 +95,7 @@ run_target() {
         check:frontend) check_frontend ;;
         check:matoloop-agent) check_matoloop_agent ;;
         test:all) test_backend; test_frontend; test_matoloop_agent ;;
-        test:backend) test_backend ;;
+        test:backend) test_backend "${@:3}" ;;
         test:frontend) test_frontend ;;
         test:matoloop-agent) test_matoloop_agent ;;
         test:rag) test_rag ;;
@@ -160,7 +162,7 @@ case "${1:-}" in
         esac
         ;;
     check) run_target check "${2:-all}" ;;
-    test) run_target test "${2:-all}" ;;
+    test) run_target test "${2:-all}" "${@:3}" ;;
     eval-prompts) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.prompt_eval "$@" ;;
     eval-session-cache) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.session_cache_eval "$@" ;;
     help|-h|--help|'') usage ;;

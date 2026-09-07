@@ -186,27 +186,34 @@
                     <template #avatar><q-icon name="rule" color="primary" /></template>
                     Ein Präfix pro Zeile. Es wird tokenbasiert geprüft und gilt nur für die jeweilige
                     Klassifikation. Alle Teilbefehle müssen erlaubt sein.
+                    Die Einstufung ist keine Garantie für rein lesendes Verhalten.
                   </q-banner>
-                  <q-input
-                    v-model="shellPrefixText.read"
-                    outlined
-                    type="textarea"
-                    autogrow
-                    label="Erlaubte Präfixe für lesende Befehle"
-                    hint="Beispiel: cat"
-                    :rules="[shellPrefixRule]"
-                    lazy-rules
-                  />
-                  <q-input
-                    v-model="shellPrefixText.write"
-                    outlined
-                    type="textarea"
-                    autogrow
-                    label="Erlaubte Präfixe für schreibende Befehle"
-                    hint="Beispiel: git status"
-                    :rules="[shellPrefixRule]"
-                    lazy-rules
-                  />
+                  <div>
+                    <label for="shell-read-prefixes" class="text-caption">Präfixe für Befehle ohne erkannte Schreibaktionen</label>
+                    <q-input
+                      v-model="shellPrefixText.read"
+                      for="shell-read-prefixes"
+                      outlined
+                      type="textarea"
+                      autogrow
+                      hint="Beispiel: cat"
+                      :rules="[shellPrefixRule]"
+                      lazy-rules
+                    />
+                  </div>
+                  <div>
+                    <label for="shell-write-prefixes" class="text-caption">Präfixe für als schreibend eingestufte Befehle</label>
+                    <q-input
+                      v-model="shellPrefixText.write"
+                      for="shell-write-prefixes"
+                      outlined
+                      type="textarea"
+                      autogrow
+                      hint="Beispiel: git status"
+                      :rules="[shellPrefixRule]"
+                      lazy-rules
+                    />
+                  </div>
                 </div>
 
                 <div v-else-if="mediaToolsByName[tool.name]" class="tool-settings-detail q-gutter-md">

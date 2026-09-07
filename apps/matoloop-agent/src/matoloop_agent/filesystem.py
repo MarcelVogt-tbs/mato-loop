@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import fnmatch
 import hashlib
 import json
 import os
@@ -172,32 +173,154 @@ class Filesystem:
         candidate = posixpath.normpath(
             path if path.startswith("/") else f"{current_directory}/{path}"
         )
-        parts = _parts(candidate)
-        if not parts:
-            with self._root_fd() as root_fd:
-                metadata = os.fstat(root_fd)
-            return self._target(candidate, metadata, "directory")
-        parent_path = _path(parts[:-1])
-        self.resolve_directory(parent_path)
-        name = parts[-1]
-        if name in {"", ".", ".."}:
-            raise AgentError("path.invalid", "Invalid path target")
+        _parts(candidate)
         metadata = None
         with self._root_fd() as root_fd:
-            parent_fd = self._open_dir(root_fd, parts[:-1])
+            # Validate traversed components before lexical normalization can erase a link/..
+            absolute = path if path.startswith("/") else f"{current_directory}/{path}"
+            if "\\" in absolute or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in absolute):
+                raise AgentError("path.invalid", "Invalid path target")
+            name = absolute.rsplit("/", 1)[-1] or "."
+            try:
+                parent_fd = self._open_dir(
+                    root_fd, tuple(part for part in absolute.split("/")[1:-1] if part)
+                )
+            except AgentError as exc:
+                if not isinstance(exc.__cause__, FileNotFoundError):
+                    raise
+                if must_exist:
+                    raise AgentError("path.notFound", "Path target is unavailable") from exc
+                return {"path": candidate}
             try:
                 metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
                 if stat.S_ISLNK(metadata.st_mode):
-                    raise OSError
+                    raise AgentError("path.unsupportedType", "Shell path target is a symbolic link")
             except FileNotFoundError as exc:
                 if must_exist:
                     raise AgentError("path.notFound", "Path target is unavailable") from exc
                 metadata = None
             except OSError as exc:
-                raise AgentError("path.notFound", "Path target is unavailable") from exc
+                raise AgentError("path.unavailable", "Path target is unavailable") from exc
             finally:
                 os.close(parent_fd)
         return self._target(candidate, metadata) if metadata is not None else {"path": candidate}
+
+    def inspect_toolchain_directory(
+        self,
+        directory: str,
+        pattern: str | None,
+        *,
+        include_hidden: bool = False,
+        max_targets: int = 256,
+    ) -> list[dict]:
+        """Inspect one literal toolchain directory, never recursively or through directory links."""
+        targets = []
+        listing = []
+        requested = directory
+        with self._root_fd() as root_fd:
+            # The standard usr-merge aliases are the only directory-link exception.
+            if directory in {"/bin", "/sbin"}:
+                try:
+                    metadata = os.stat(directory[1:], dir_fd=root_fd, follow_symlinks=False)
+                    destination = (
+                        os.readlink(directory[1:], dir_fd=root_fd)
+                        if stat.S_ISLNK(metadata.st_mode)
+                        else None
+                    )
+                except OSError as exc:
+                    raise AgentError(
+                        "path.unavailable", "Toolchain directory is unavailable"
+                    ) from exc
+                if stat.S_ISLNK(metadata.st_mode):
+                    if destination not in {"usr" + directory, "/usr" + directory}:
+                        raise AgentError(
+                            "path.unsupportedType", "Toolchain directory link is invalid"
+                        )
+                    targets.append(self._target(directory, metadata))
+                    directory = "/usr" + directory
+            directory_fd = self._open_dir(root_fd, _parts(directory))
+            try:
+                directory_target = self._target(directory, os.fstat(directory_fd))
+                targets.append(directory_target)
+                with os.scandir(directory_fd) as entries:
+                    for index, entry in enumerate(entries):
+                        if index >= self.max_entries:
+                            raise AgentError(
+                                "process.inspectionLimitExceeded",
+                                "Shell inspection exceeds its limits",
+                            )
+                        if pattern is None and entry.name.startswith(".") and not include_hidden:
+                            continue
+                        if pattern is not None and (
+                            (entry.name.startswith(".") and not pattern.startswith("."))
+                            or not fnmatch.fnmatchcase(entry.name, pattern)
+                        ):
+                            continue
+                        metadata = os.stat(entry.name, dir_fd=directory_fd, follow_symlinks=False)
+                        entry_path = f"{directory}/{entry.name}"
+                        _parts(entry_path)
+                        entry_target = self._target(entry_path, metadata)
+                        if entry.name.startswith("."):
+                            entry_target["kind"] = "path"
+                        listing.append(entry_target)
+                        if pattern is not None:
+                            # Default ls can traverse a command-line directory symlink. Prove
+                            # one-hop file links only; chained links keep the normal hard denial.
+                            mode = metadata.st_mode
+                            if stat.S_ISLNK(mode):
+                                link = os.readlink(entry.name, dir_fd=directory_fd)
+                                target = self.resolve_path_target(link, directory, must_exist=True)
+                                if posixpath.dirname(
+                                    target["path"]
+                                ) != directory or posixpath.basename(target["path"]).startswith(
+                                    "."
+                                ):
+                                    target["kind"] = "path"
+                                listing.append(target)
+                                mode = target["mode"]
+                            if not stat.S_ISREG(mode):
+                                raise AgentError(
+                                    "path.unsupportedType",
+                                    "Toolchain operand is not a regular file",
+                                )
+            except OSError as exc:
+                raise AgentError("path.unavailable", "Toolchain metadata is unavailable") from exc
+            finally:
+                os.close(directory_fd)
+        if (
+            pattern is not None
+            and not any(c in pattern for c in "*?[")
+            and not any(t["path"] == f"{directory}/{pattern}" for t in listing)
+        ):
+            missing = {"path": f"{directory}/{pattern}"}
+            if pattern.startswith("."):
+                missing["kind"] = "path"
+            listing.append(missing)
+        if requested != directory:
+            listing.extend(
+                {**target, "path": requested + target["path"][len(directory) :]}
+                for target in listing[:]
+                if target["path"].startswith(directory + "/")
+            )
+        listing.sort(key=lambda target: (target["path"], target.get("kind", "")))
+        directory_target["listingFingerprint"] = hashlib.sha256(
+            json.dumps(listing, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if pattern is None or len(targets) + len(listing) > max_targets:
+            if pattern is not None:
+                for target in targets:
+                    target["kind"] = "directory"
+            # Preserve visible hidden names and external link destinations for policy checks.
+            listing = [target for target in listing if target.get("kind") == "path"]
+        targets.extend(listing)
+        targets = list(
+            {(target["path"], target.get("kind", "")): target for target in targets}.values()
+        )
+        if len(targets) > max_targets:
+            raise AgentError(
+                "process.inspectionLimitExceeded", "Shell inspection exceeds its limits"
+            )
+        return sorted(targets, key=lambda target: target["path"])
 
     @staticmethod
     def _target(
@@ -207,6 +330,7 @@ class Filesystem:
             "path": path,
             "targetKind": kind or ("directory" if stat.S_ISDIR(metadata.st_mode) else "file"),
             "device": metadata.st_dev,
+            "rdev": metadata.st_rdev,
             "inode": metadata.st_ino,
             "mode": metadata.st_mode,
             "size": metadata.st_size,

@@ -83,6 +83,19 @@ describe('inline approvals', () => {
     })
   })
 
+  it('does not preview an invalid child draft path or a non-session root', async () => {
+    const approvals = useApprovalStore()
+    for (const draftFile of [
+      { root: 'session', path: '../parent.json' },
+      { root: 'workspace', path: 'draft.json' }
+    ]) {
+      expect(await approvals.previewSkillDraft({
+        actionKind: 'build_skill', payload: { subagentSessionId: 'child' }, details: { draftFile }
+      })).toBeNull()
+    }
+    expect(api.get).not.toHaveBeenCalled()
+  })
+
   it('keeps an approval visible when the decision fails', async () => {
     api.post.mockRejectedValue(new Error('request failed'))
     const approvals = useApprovalStore()

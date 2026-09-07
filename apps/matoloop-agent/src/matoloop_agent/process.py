@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import hashlib
 import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import stat
 import time
@@ -21,6 +23,7 @@ from .filesystem import AgentError, Filesystem, _parts
 StreamCallback = Callable[[str, str], Awaitable[None]]
 
 _BASH_LANGUAGE = Language(tree_sitter_bash.language())
+EXECUTION_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 _ALWAYS_WRITES = {
     "chgrp",
     "chmod",
@@ -54,15 +57,21 @@ _WRITE_SUBCOMMANDS = {
         "commit",
         "compose",
         "container",
+        "cp",
+        "create",
         "exec",
         "image",
+        "import",
         "kill",
+        "load",
         "login",
         "logout",
         "network",
+        "pause",
         "pull",
         "push",
         "restart",
+        "rename",
         "rm",
         "rmi",
         "run",
@@ -70,6 +79,8 @@ _WRITE_SUBCOMMANDS = {
         "stop",
         "system",
         "tag",
+        "unpause",
+        "update",
         "volume",
     },
     "git": {
@@ -149,6 +160,50 @@ _DOCKER_READ_SUBCOMMANDS = {
     "network": {"inspect", "ls"},
     "volume": {"inspect", "ls"},
     "system": {"df", "events", "info"},
+}
+_DOCKER_WRITE_SUBCOMMANDS = {
+    "compose": {
+        "build",
+        "cp",
+        "create",
+        "down",
+        "exec",
+        "kill",
+        "pause",
+        "pull",
+        "push",
+        "restart",
+        "rm",
+        "run",
+        "scale",
+        "start",
+        "stop",
+        "unpause",
+        "up",
+        "watch",
+    },
+    "container": {
+        "attach",
+        "commit",
+        "cp",
+        "create",
+        "exec",
+        "kill",
+        "pause",
+        "prune",
+        "rename",
+        "restart",
+        "rm",
+        "run",
+        "start",
+        "stop",
+        "unpause",
+        "update",
+    },
+    "image": {"build", "import", "load", "prune", "pull", "push", "rm", "tag"},
+    "network": {"connect", "create", "disconnect", "prune", "rm"},
+    "volume": {"create", "prune", "rm", "update"},
+    "system": {"prune"},
 }
 _FIND_WRITE_ACTIONS = {
     "-delete",
@@ -335,13 +390,18 @@ def _definitely_writes(tokens: list[str]) -> bool:
     if executable == "docker":
         command = _docker_command(arguments)
         if command is None:
-            return True
+            return False
         semantic, remaining = command
         if len(semantic) == 1:
             return False
         group = semantic[1]
+        if semantic[1:] in (["save"], ["export"], ["image", "save"], ["container", "export"]) and (
+            _option_present(remaining, {"--output", "-o"})
+            or _short_option_present(remaining, {"-o"})
+        ):
+            return True
         if group in _DOCKER_READ_SUBCOMMANDS:
-            if semantic[2] not in _DOCKER_READ_SUBCOMMANDS[group]:
+            if semantic[2] in _DOCKER_WRITE_SUBCOMMANDS[group]:
                 return True
             return (
                 group == "compose"
@@ -423,10 +483,33 @@ def _definitely_writes(tokens: list[str]) -> bool:
                 return len(values) > 1
             if subcommand == "remote":
                 nested = _subcommand(arguments[arguments.index(subcommand) + 1 :], set())
-                return nested not in {None, "get-url", "show"}
+                return nested in {
+                    "add",
+                    "prune",
+                    "remove",
+                    "rename",
+                    "rm",
+                    "set-branches",
+                    "set-head",
+                    "set-url",
+                    "update",
+                }
             if subcommand == "stash":
                 nested = _subcommand(arguments[arguments.index(subcommand) + 1 :], set())
-                return nested not in {"list", "show"}
+                return nested in {
+                    None,
+                    "apply",
+                    "branch",
+                    "clear",
+                    "create",
+                    "drop",
+                    "pop",
+                    "push",
+                    "save",
+                    "store",
+                    "export",
+                    "import",
+                }
             if subcommand == "worktree":
                 nested = _subcommand(arguments[arguments.index(subcommand) + 1 :], set())
                 return nested in {"add", "lock", "move", "prune", "remove", "repair", "unlock"}
@@ -534,13 +617,65 @@ def _node_text(source: bytes, node: Node) -> str:
     return source[node.start_byte : node.end_byte].decode("utf-8")
 
 
-def _command_tokens(source: bytes, node: Node) -> list[str] | None:
-    parts = []
-    for index, child in enumerate(node.children):
-        if node.field_name_for_child(index) in {"name", "argument"}:
-            parts.append(_node_text(source, child))
+def _parse_shell(command: str) -> Node:
+    if len(command) > 256 * 1024:
+        raise AgentError("process.inspectionLimitExceeded", "Shell inspection exceeds its limits")
+    source = command.encode("utf-8")
+    parser = Parser(_BASH_LANGUAGE)
+    root = parser.parse(source).root_node
+    if root.has_error:
+        normalized = bytearray(source)
+        redirect_starts = {node.start_byte for node in _nodes(root, "file_redirect")}
+        # The grammar misses POSIX <>. Change only its proven redirect operator,
+        # preserving byte offsets so inspection and execution still use the original text.
+        for error in _nodes(root, "ERROR"):
+            start, end = error.start_byte, error.end_byte
+            if (
+                source[start:end] == b"<"
+                and source[start : end + 1] == b"<>"
+                and (
+                    end in redirect_starts
+                    or (
+                        error.parent.type == "file_redirect"
+                        and any(
+                            child.type == ">" and child.start_byte == end
+                            for child in error.parent.children
+                        )
+                    )
+                )
+            ):
+                normalized[start] = ord(">")
+            elif (
+                source[start:end] == b">"
+                and source[start - 1 : end] == b"<>"
+                and error.parent.type == "file_redirect"
+                and any(
+                    child.type == "<" and child.end_byte == start for child in error.parent.children
+                )
+            ):
+                normalized[start - 1] = ord(">")
+        if normalized != source:
+            root = parser.parse(bytes(normalized)).root_node
+        if root.has_error:
+            raise AgentError("process.invalidSyntax", "Shell command has invalid syntax")
+    return root
+
+
+def _has_ansi_quoting(word: Node) -> bool:
+    # Quote fragments belong to this word; substitutions have their own command owners.
+    return word.type == "ansi_c_string" or (
+        word.type in {"command_name", "concatenation", "string"}
+        and any(_has_ansi_quoting(child) for child in word.named_children)
+    )
+
+
+def _command_tokens(source: bytes, words: list[Node]) -> list[str] | None:
+    if any(_has_ansi_quoting(word) for word in words):
+        return None
     try:
-        tokens = shlex.split(" ".join(parts), comments=False, posix=True)
+        tokens = shlex.split(
+            " ".join(_node_text(source, word) for word in words), comments=False, posix=True
+        )
     except ValueError:
         return None
     return tokens or None
@@ -596,6 +731,7 @@ class ProcessRunner:
         except AgentError as exc:
             raise ValueError("configured executable is unavailable") from exc
         self.default_timeout = config.default_timeout_seconds
+        self.max_timeout = config.max_timeout_seconds
         self.max_output = config.max_output_bytes
         self.filesystem = filesystem
 
@@ -622,123 +758,356 @@ class ProcessRunner:
                 raise
 
     def inspect_shell(self, command: str, current_directory: str) -> dict:
-        def result(
-            *,
-            targets: list[dict] | None = None,
-            commands: list[dict] | None = None,
-            analysis_complete: bool = False,
-        ) -> dict:
-            command_units = commands or []
-            classification = (
-                "read"
-                if analysis_complete
-                and all(unit["classification"] == "read" for unit in command_units)
-                else "write"
-            )
+        current = self.filesystem.resolve_directory(current_directory)["path"]
+        targets: list[dict] = []
+        commands: list[dict] = []
+        analysis_complete = True
+        extraction_complete = True
+        redirect_writes = False
+        command_writes = False
+        unsupported_target_quoting = False
+
+        def result() -> dict:
+            if unsupported_target_quoting:
+                raise AgentError(
+                    "process.unsupportedTargetQuoting", "Shell path target uses unsupported quoting"
+                )
+            if not extraction_complete:
+                for unit in commands:
+                    unit.pop("prefix", None)
+            writes = redirect_writes or command_writes
             result = {
-                "targets": targets or [],
-                "analysisComplete": analysis_complete,
-                "readOnly": classification == "read",
-                "classification": classification,
-                "commands": command_units,
+                "targets": targets,
+                "analysisComplete": analysis_complete and extraction_complete,
+                "readOnly": not writes,
+                "classification": "write" if writes else "read",
+                "commands": commands,
             }
-            result["inspectionRevision"] = self._inspection_revision(result)
+            result["inspectionRevision"] = self._inspection_revision(
+                {"command": command, "currentDirectory": current, **result}
+            )
             return result
 
-        current = self.filesystem.resolve_directory(current_directory)["path"]
+        root = _parse_shell(command)
         if not command.strip():
+            analysis_complete = False
             return result()
         source = command.encode("utf-8")
-        tree = Parser(_BASH_LANGUAGE).parse(source)
-        if tree.root_node.has_error:
-            return result()
 
-        targets: list[dict] = []
-        seen_targets: set[tuple[str, str]] = set()
+        seen_targets: dict[tuple[str, str], dict] = {}
 
-        def add(path: str, kind: str, *, must_exist: bool) -> bool:
-            try:
-                target = self.filesystem.resolve_path_target(path, current, must_exist=must_exist)
-            except AgentError:
-                return False
-            target["kind"] = "directory" if target.pop("targetKind", None) == "directory" else kind
+        def retain(target: dict, kind: str) -> None:
+            target_kind = target.pop("targetKind", None)
+            target["kind"] = (
+                "directory"
+                if target_kind == "directory" and kind not in {"toolchain_metadata", "discard"}
+                else kind
+            )
             key = (target["path"], target["kind"])
             if key in seen_targets:
-                return True
-            seen_targets.add(key)
+                if "listingFingerprint" in target:
+                    previous = seen_targets[key]
+                    previous["listingFingerprint"] = hashlib.sha256(
+                        (
+                            previous.get("listingFingerprint", "") + target["listingFingerprint"]
+                        ).encode()
+                    ).hexdigest()
+                return
+            if len(targets) >= 256:
+                raise AgentError(
+                    "process.inspectionLimitExceeded", "Shell inspection exceeds its limits"
+                )
+            seen_targets[key] = target
             targets.append(target)
-            return True
 
-        command_nodes = _nodes(tree.root_node, "command")
+        def add(path: str, kind: str, *, must_exist: bool, literal: bool = True) -> None:
+            nonlocal analysis_complete
+            if not literal and any(c in path for c in "$`*?[]{}~"):
+                analysis_complete = False
+                # Keep the literal parent visible when expansion is unresolved.
+                path = path.rpartition("/")[0]
+                if not path or any(c in path for c in "$`*?[]{}~"):
+                    return
+                kind, must_exist = "path", True
+            # Missing literals still carry their absolute path for policy checks. Hard
+            # no-follow/access errors must not be mistaken for incomplete analysis.
+            target = self.filesystem.resolve_path_target(path, current, must_exist=False)
+            if must_exist and "mode" not in target:
+                analysis_complete = False
+            retain(target, kind)
+
+        command_nodes = _nodes(root, "command")
         if len(command_nodes) > 64:
-            return result()
-        commands: list[dict] = []
+            extraction_complete = False
+        units = []
+        dynamic_types = {
+            "expansion",
+            "simple_expansion",
+            "command_substitution",
+            "process_substitution",
+            "arithmetic_expansion",
+        }
         for node in command_nodes:
-            tokens = _command_tokens(source, node)
-            if tokens is None or len(tokens) > 256 or any(len(token) > 1_024 for token in tokens):
-                return result(targets=targets, commands=commands)
+            words = [
+                child
+                for index, child in enumerate(node.children)
+                if node.field_name_for_child(index) in {"name", "argument"}
+            ]
+            redirects = list(node.children_by_field_name("redirect"))
+            if (
+                node.parent.type == "redirected_statement"
+                and node.parent.child_by_field_name("body") == node
+            ):
+                redirects.extend(node.parent.children_by_field_name("redirect"))
+            for redirect in redirects:
+                # Repeated destinations after the first word are argv, not redirect targets.
+                if redirect.type == "file_redirect":
+                    words.extend(redirect.children_by_field_name("destination")[1:])
+                else:
+                    words.extend(redirect.children_by_field_name("argument"))
+            words.sort(key=lambda word: word.start_byte)
+            tokens = _command_tokens(source, words)
+            serializable = tokens is not None
+            if tokens is None:
+                extraction_complete = False
+                tokens = []
+                for word in words:
+                    if _has_ansi_quoting(word):
+                        tokens.append(_node_text(source, word))
+                        continue
+                    try:
+                        values = shlex.split(_node_text(source, word), comments=False, posix=True)
+                    except ValueError:
+                        values = []
+                    tokens.append(values[0] if len(values) == 1 else "$unresolved")
+            unit_writes = bool(tokens) and _definitely_writes(tokens)
+            command_writes |= unit_writes
+            if not tokens:
+                continue
+            if len(words) != len(tokens) or any(c in tokens[0] for c in "*?[]{}~"):
+                extraction_complete = False
             command_unit = {
                 "tokens": tokens,
-                "classification": "write" if _definitely_writes(tokens) else "read",
+                "classification": "write" if unit_writes else "read",
             }
-            prefix = _command_prefix(tokens)
-            if prefix is not None:
-                command_unit["prefix"] = prefix
-            commands.append(command_unit)
+            if (
+                not serializable
+                or len(commands) >= 64
+                or len(tokens) > 256
+                or any(
+                    not token
+                    or len(token) > 1_024
+                    or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in token)
+                    for token in tokens
+                )
+            ):
+                extraction_complete = False
+            else:
+                prefix = _command_prefix(tokens)
+                if prefix is not None and not any(
+                    any(c in token for c in "$`*?[]{}~") for token in prefix
+                ):
+                    command_unit["prefix"] = prefix
+                commands.append(command_unit)
+            units.append((command_unit, words))
 
-        for redirect in _nodes(tree.root_node, "file_redirect"):
+        if any(
+            _nodes(root, kind)
+            for kind in {"function_definition", "variable_assignment", *dynamic_types}
+        ):
+            extraction_complete = False
+
+        metadata_safe = extraction_complete and not any(
+            Path(unit["tokens"][0]).name
+            in {
+                ".",
+                "source",
+                "eval",
+                "exec",
+                "export",
+                "unset",
+                "alias",
+                "unalias",
+                "hash",
+                "enable",
+                "builtin",
+                "command",
+                "env",
+                "set",
+                "shopt",
+                "trap",
+                "read",
+                "getopts",
+                "declare",
+                "typeset",
+                "local",
+                "readonly",
+            }
+            for unit in commands
+        )
+
+        for redirect in _nodes(root, "file_redirect"):
             text = _node_text(source, redirect)
             match = _OUTPUT_REDIRECT.match(text)
             if match is None:
-                return result(targets=targets, commands=commands)
+                analysis_complete = False
+                continue
             operator = match.group(1)
+            destination_node = redirect.child_by_field_name("destination")
+            destination_text = (
+                _node_text(source, destination_node) if destination_node is not None else ""
+            )
+            ansi_quoted = destination_node is not None and _has_ansi_quoting(destination_node)
+            dynamic = destination_node is not None and any(
+                _nodes(destination_node, kind) for kind in dynamic_types
+            )
+            if ansi_quoted:
+                unsupported_target_quoting = True
             try:
-                destination_parts = shlex.split(text[match.end() :].strip(), posix=True)
+                destination_parts = [] if ansi_quoted else shlex.split(destination_text, posix=True)
             except ValueError:
-                return result(targets=targets, commands=commands)
+                analysis_complete = False
+                destination_parts = []
             destination = destination_parts[0] if len(destination_parts) == 1 else ""
-            descriptor_only = operator in {">&", "<&"} and destination.lstrip("&").isdigit()
+            descriptor_only = (
+                operator in {">&", "<&"} and re.fullmatch(r"\d+-?|-", destination) is not None
+            )
             writes = (
                 ">" in operator
                 and operator not in {">&"}
                 or (operator == ">&" and not descriptor_only)
             )
-            if not writes:
-                if (
-                    operator == "<"
-                    and destination
-                    and not add(destination, "input", must_exist=True)
-                ):
-                    return result(targets=targets, commands=commands)
+            static = (
+                destination and not dynamic and not any(c in destination_text for c in "*?[]{}~")
+            )
+            if writes and static and destination == "/dev/null" and operator != "<>":
+                target = self.filesystem.resolve_path_target(destination, current, must_exist=True)
+                if not stat.S_ISCHR(target["mode"]) or target["rdev"] != os.makedev(1, 3):
+                    raise AgentError(
+                        "path.unsupportedType", "Discard target is not the null device"
+                    )
+                retain(target, "discard")
                 continue
+            if not writes:
+                if operator in {"<", "<&"} and not descriptor_only:
+                    if static:
+                        add(destination, "input", must_exist=True)
+                    else:
+                        analysis_complete = False
+                continue
+            redirect_writes = True
             if commands:
                 commands[0]["classification"] = "write"
-            if (
-                destination
-                and not descriptor_only
-                and not add(destination, "output", must_exist=False)
-            ):
-                return result(targets=targets, commands=commands)
+            if static and not descriptor_only:
+                add(destination, "output", must_exist=False)
+            elif not descriptor_only:
+                analysis_complete = False
 
-        for command_unit in commands:
+        for command_unit, words in units:
             tokens = command_unit["tokens"]
-            if "/" in tokens[0] and not add(tokens[0], "executable", must_exist=True):
-                return result(targets=targets, commands=commands)
+            ansi_words = {_node_text(source, word) for word in words if _has_ansi_quoting(word)}
+            metadata_paths = set()
+            installed_ls = (
+                shutil.which(tokens[0], path=EXECUTION_PATH)
+                if tokens[0] in {"ls", "/usr/bin/ls", "/bin/ls"}
+                else None
+            )
+            literal_paths = {
+                token
+                for word, token in zip(words, tokens, strict=False)
+                if word.type in {"raw_string", "string"}
+                and not any(_nodes(word, kind) for kind in dynamic_types)
+            }
+            if (
+                metadata_safe
+                and tokens[0] in {"ls", "/usr/bin/ls", "/bin/ls"}
+                and installed_ls in {"/usr/bin/ls", "/bin/ls"}
+                and not any(
+                    _node_text(source, word) != token and any(c in token for c in "*?[]")
+                    for word, token in zip(words[1:], tokens[1:], strict=False)
+                )
+                and all(
+                    not token.startswith("-") or token == "--" or re.fullmatch(r"-[aAldh1]+", token)
+                    for token in tokens[1:]
+                )
+            ):
+                for word, path in zip(words[1:], tokens[1:], strict=False):
+                    raw = _node_text(source, word)
+                    if path.startswith("-") or any(c in raw for c in "$`{}~\\"):
+                        continue
+                    glob = any(c in path for c in "*?[]")
+                    if glob and (raw != path or any(s in path for s in ("[:", "[.", "[=", "[^"))):
+                        continue
+                    directory, _, basename = path.rpartition("/")
+                    if path in EXECUTION_PATH.split(":"):
+                        directory, basename = path, None
+                    if directory not in EXECUTION_PATH.split(":") or basename in {"", ".", ".."}:
+                        continue
+                    if (
+                        basename
+                        and basename.startswith(".")
+                        and any(fnmatch.fnmatchcase(dot, basename) for dot in (".", ".."))
+                    ):
+                        analysis_complete = False
+                        add(directory, "path", must_exist=True)
+                        if fnmatch.fnmatchcase("..", basename):
+                            add(directory + "/..", "path", must_exist=True)
+                        continue
+                    for target in self.filesystem.inspect_toolchain_directory(
+                        directory,
+                        basename,
+                        include_hidden=any(
+                            token.startswith("-")
+                            and not token.startswith("--")
+                            and any(c in token for c in "aA")
+                            for token in tokens[1:]
+                        ),
+                        max_targets=max(1, 256 - len(targets) - 3),
+                    ):
+                        if "mode" not in target:
+                            analysis_complete = False
+                        retain(target, target.pop("kind", "toolchain_metadata"))
+                    metadata_paths.add(path)
+                if metadata_paths:
+                    retain(
+                        self.filesystem.resolve_path_target(
+                            "/usr/bin/ls", current, must_exist=True
+                        ),
+                        "toolchain_metadata",
+                    )
+                    if installed_ls == "/bin/ls":
+                        for target in self.filesystem.inspect_toolchain_directory("/bin", "ls"):
+                            retain(target, target.pop("kind", "toolchain_metadata"))
+            if "/" in tokens[0] and not (
+                metadata_paths and tokens[0] in {"/usr/bin/ls", "/bin/ls"}
+            ):
+                if tokens[0] in ansi_words:
+                    unsupported_target_quoting = True
+                else:
+                    add(tokens[0], "executable", must_exist=True)
             for path, kind, must_exist in _path_operands(tokens):
-                if not add(path, kind, must_exist=must_exist):
-                    return result(targets=targets, commands=commands)
+                if path in metadata_paths:
+                    continue
+                if path in ansi_words:
+                    unsupported_target_quoting = True
+                    continue
+                add(path, kind, must_exist=must_exist, literal=path in literal_paths)
             for token in tokens[1:]:
+                if token in ansi_words:
+                    if "/" in token:
+                        unsupported_target_quoting = True
+                    continue
                 if (
-                    token.startswith("-")
+                    token in metadata_paths
+                    or token.startswith("-")
                     or "://" in token
-                    or any(character in token for character in "$`*?[]{}~")
+                    or (token in literal_paths and any(c in token for c in "$`*?[]{}~"))
                     or not token.startswith(("/", "./", "../"))
                 ):
                     continue
-                if not add(token, "path", must_exist=False):
-                    return result(targets=targets, commands=commands)
+                add(token, "path", must_exist=False, literal=token in literal_paths)
 
-        return result(targets=targets, commands=commands, analysis_complete=True)
+        return result()
 
     @staticmethod
     def _inspection_revision(result: dict) -> str:
@@ -750,9 +1119,7 @@ class ProcessRunner:
         if "/" in executable:
             candidates = [Path(current_directory) / executable]
         else:
-            candidates = [
-                Path(directory) / executable for directory in ("/usr/local/bin", "/usr/bin", "/bin")
-            ]
+            candidates = [Path(directory) / executable for directory in EXECUTION_PATH.split(":")]
         for candidate in candidates:
             try:
                 resolved = self._resolve_executable(candidate)
@@ -771,6 +1138,9 @@ class ProcessRunner:
         inspection = None
         if self.shell is None:
             raise AgentError("process.notAllowed", "Shell execution is disabled")
+        root = _parse_shell(command)
+        if _nodes(root, "ansi_c_string") and expected_inspection_revision is None:
+            self.inspect_shell(command, current_directory)
         if expected_inspection_revision is not None:
             inspection = self.inspect_shell(command, current_directory)
             actual_revision = inspection.get("inspectionRevision") or self._inspection_revision(
@@ -778,7 +1148,11 @@ class ProcessRunner:
             )
             if actual_revision != expected_inspection_revision:
                 raise AgentError("process.inspectionChanged", "Shell inspection changed")
-        if inspection is not None and inspection.get("readOnly") is True:
+        if (
+            inspection is not None
+            and inspection.get("readOnly") is True
+            and inspection.get("analysisComplete") is True
+        ):
             commands = inspection.get("commands", [])
             simple = not any(character in command for character in "();<>|&$`*?[]{}~\n\r")
             tokens = shlex.split(command, comments=True)
@@ -793,9 +1167,24 @@ class ProcessRunner:
     def execution_environment(home: str, inspection: dict | None) -> dict[str, str]:
         return {
             "HOME": home,
+            "PWD": home,
             "LANG": os.environ.get("LANG", "C.UTF-8"),
-            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PATH": EXECUTION_PATH,
         }
+
+    def execution_timeout(self, timeout: float | None) -> float:
+        if timeout is not None and (isinstance(timeout, bool) or not 0 < timeout <= 3600):
+            raise AgentError("request.invalid", "Process timeout is outside the allowed range")
+        return min(self.default_timeout if timeout is None else timeout, self.max_timeout)
+
+    def validate_executable(self, executable: str) -> None:
+        # Path-based exec preserves shebang $0; this check is not atomic with exec.
+        try:
+            metadata = self.filesystem.stat(executable)
+        except AgentError as exc:
+            raise AgentError("process.startFailed", "Executable is unavailable") from exc
+        if metadata["kind"] != "file":
+            raise AgentError("process.startFailed", "Executable is not a regular file")
 
     async def exec(
         self,
@@ -806,15 +1195,18 @@ class ProcessRunner:
         stream: StreamCallback,
         expected_inspection_revision: str | None = None,
     ) -> dict:
+        timeout = self.execution_timeout(timeout)
         argv, inspection = self.execution_argv(
             current_directory=current_directory,
             command=command,
             expected_inspection_revision=expected_inspection_revision,
         )
         cwd, cwd_fd = self._cwd(current_directory)
-        environment = self.execution_environment(cwd, inspection)
         started = time.monotonic()
         try:
+            # Procfs is only for descriptor-bound startup, never a logical HOME or PWD.
+            environment = self.execution_environment(current_directory, inspection)
+            self.validate_executable(argv[0])
             process = await asyncio.create_subprocess_exec(
                 *argv,
                 cwd=cwd,
@@ -826,9 +1218,9 @@ class ProcessRunner:
                 pass_fds=(cwd_fd,),
             )
         except OSError as exc:
-            os.close(cwd_fd)
             raise AgentError("process.startFailed", "Process could not be started") from exc
-        os.close(cwd_fd)
+        finally:
+            os.close(cwd_fd)
         sent = {"stdout": 0, "stderr": 0}
         truncated = {"stdout": False, "stderr": False}
         total_sent = 0
@@ -856,9 +1248,9 @@ class ProcessRunner:
         ]
         timed_out = False
         try:
-            async with asyncio.timeout(timeout or self.default_timeout):
+            async with asyncio.timeout(timeout):
                 await process.wait()
-                await asyncio.gather(*drain_tasks)
+                await asyncio.shield(asyncio.gather(*drain_tasks))
         except TimeoutError:
             timed_out = True
             await self._terminate(process)

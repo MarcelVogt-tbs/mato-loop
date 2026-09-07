@@ -1077,6 +1077,7 @@ class MemoryService:
             session is None
             or session.user_id != owner_id
             or session.session_type != "chat"
+            or session.parent_session_id is not None
             or dream_run is None
             or dream_run.session_id != session.id
         ):

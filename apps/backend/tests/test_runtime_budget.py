@@ -1,0 +1,237 @@
+from unittest.mock import AsyncMock, Mock
+from uuid import uuid4
+
+import pytest
+from test_required_web_search_runtime import (
+    _assistant_messages,
+    _runtime_setup,
+    _search_call,
+    _tool_messages,
+)
+
+import mato_loop_backend.agent.runtime as runtime_module
+from mato_loop_backend.agent.runtime import AgentRunError, AgentRuntime
+from mato_loop_backend.agent.subagents import integration_ceiling_ids, permission_snapshot
+from mato_loop_backend.agent.tools import ToolResult, tool_registry
+from mato_loop_backend.models import Message, WebSearchPolicy
+from mato_loop_backend.providers.base import ProviderResult, ToolCall
+from mato_loop_backend.sessions.serialization import message_payload
+from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings, ToolSettings
+from mato_loop_backend.settings.effective import filter_agent_profile_integrations
+from mato_loop_backend.settings.models import AgentProfile
+
+
+@pytest.mark.parametrize(("limit", "calls"), [(25, 25), (None, 61)])
+async def test_profile_budget_snapshot_and_unlimited_run(monkeypatch, limit, calls):
+    db, run, requests, projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(tool_calls=[_search_call(str(index), f"Question {index}")]) for index in range(calls)]
+        + [ProviderResult(content="Ergebnisse zusammengefasst.")],
+        max_tool_calls=limit,
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    profile = AgentProfile(name="Custom", instructions="Follow the task.", maxToolCalls=1)
+    monkeypatch.setattr(runtime_module, "load_agent_profile_tools", AsyncMock(return_value=(ToolSettings(), profile)))
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == calls + 1
+    assert tool_registry._execute_definition.await_count == calls
+    assert len(_tool_messages(db)) == calls
+    assert bool(requests[-1]["tools"]) is (limit is None)
+    assert requests[-1]["tool_choice"] == ("auto" if limit is None else "none")
+    performance = _assistant_messages(db)[-1].provider_data["_matoloop"]["performance"]
+    assert performance["toolCallsUsed"] == calls
+    assert performance["researchToolCallsUsed"] == calls
+    assert performance["modelRequest"] == calls + 1
+    assert performance["maxToolCalls"] == limit
+    if limit is None:
+        assert "Tool budget:" not in projections[-1]["system_prompt"]
+    else:
+        assert message_payload(_assistant_messages(db)[-1])["warnings"] == ["agent.toolCallLimitReached"]
+
+
+@pytest.mark.parametrize("reason", ["length", "max_tokens", "max_output_tokens", "MAX_TOKENS"])
+async def test_output_truncated_batch_has_no_effects_and_full_batch_can_be_repaired(monkeypatch, reason):
+    calls = [ToolCall(str(index), "write_file", {"root": "session", "path": f"{index}.txt", "content": "text"}) for index in range(2)]
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(tool_calls=calls, finish_reason=reason),
+         ProviderResult(tool_calls=[ToolCall(f"repair-{call.id}", call.name, call.arguments) for call in calls]),
+         ProviderResult(content="Beide Dateien erstellt.")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    async def execute(call, _context, _tool):
+        assert call.id.startswith("repair-")
+        assert len(_tool_messages(db)) >= 2
+        return ToolResult.json({"written": call.arguments["path"]})
+    tool_registry._execute_definition.side_effect = execute
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == 3
+    assert tool_registry._execute_definition.await_count == 2
+    tools = _tool_messages(db)
+    assert [message.tool_call_id for message in tools] == ["0", "1", "repair-0", "repair-1"]
+    assert all(message.provider_data["_matoloop"]["errorCode"] == "agent.outputLimitReached" for message in tools[:2])
+    assert all("complete batch" in message.content for message in tools[:2])
+    assert [item.args[0].arguments for item in tool_registry._execute_definition.await_args_list] == [call.arguments for call in calls]
+
+
+async def test_truncated_repairs_are_bounded_even_with_unlimited_budget(monkeypatch):
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(tool_calls=[_search_call(str(index), f"Question {index}")], finish_reason="length") for index in range(3)],
+        max_tool_calls=None,
+    )
+    with pytest.raises(AgentRunError, match="agent.outputLimitReached"):
+        await AgentRuntime._execute_loop(db, run)
+    assert len(requests) == len(_tool_messages(db)) == 3
+    tool_registry._execute_definition.assert_not_awaited()
+
+
+async def test_alternative_edit_patch_repair_retains_original_failure(monkeypatch):
+    edit = ToolCall("edit", "edit_file", {"root": "workspace", "path": "note.txt", "oldText": "old", "newText": "new"})
+    patch = ToolCall("patch", "apply_patch", {"patch": "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n*** End Patch"})
+    db, run, _requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(tool_calls=[edit]), ProviderResult(tool_calls=[patch]), ProviderResult(content="Die Datei wurde per Patch korrigiert.")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        execution_agent_id=uuid4(), execution_operations=("filesystem.patch",),
+    )
+    run.current_directory_snapshot = "/work"
+    tool_registry._execute_definition.side_effect = [ToolResult.error("file.notFound"), ToolResult.json({"written": "note.txt"})]
+    await AgentRuntime._execute_loop(db, run)
+    assert [call.args[0].name for call in tool_registry._execute_definition.await_args_list] == ["edit_file", "apply_patch"]
+    assert _tool_messages(db)[0].provider_data["_matoloop"]["errorCode"] == "file.notFound"
+    assert "per Patch" in _assistant_messages(db)[-1].content
+
+
+async def test_unrelated_success_does_not_reset_failed_call_protection(monkeypatch):
+    failed = ToolCall("failed", "write_file", {"root": "session", "path": "missing/note.txt", "content": "text"})
+    other = ToolCall("other", "read", {"root": "session", "path": "other.txt"})
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(tool_calls=[call]) for call in [failed, other, failed, other, failed]],
+        max_tool_calls=None, search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    tool_registry._execute_definition.side_effect = [ToolResult.error("file.notFound"), ToolResult("text", {}), ToolResult("text", {})]
+    with pytest.raises(AgentRunError, match="agent.repeatedToolCall"):
+        await AgentRuntime._execute_loop(db, run)
+    assert len(requests) == 5
+    assert tool_registry._execute_definition.await_count == 3
+    assert _tool_messages(db)[-1].provider_data["_matoloop"]["errorCode"] == "agent.repeatedToolCall"
+
+
+@pytest.mark.parametrize(("old_limit", "new_limit"), [(None, 25), (25, None)])
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_retry_snapshots_current_budget_without_overwriting_failed_run(monkeypatch, old_limit, new_limit, legacy):
+    count = 25 if new_limit is not None else 26
+    db, failed, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(tool_calls=[_search_call(str(index), f"Question {index}")]) for index in range(count)]
+        + [ProviderResult(content="Ergebnisse zusammengefasst.")],
+        max_tool_calls=old_limit, search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    session = db.get.return_value
+    message = (await AgentRuntime._records(db, session.id))[0]
+    if legacy:
+        message.provider_data = {"_matoloop": {"maxToolCalls": old_limit}}
+    failed.status = "failed"
+    failed.model_config_id = session.model_config_id
+    profile = AgentProfile(name="Custom", instructions="Follow the task.", maxToolCalls=new_limit)
+    failed.agent_profile_id = session.agent_profile_id = profile.id
+    monkeypatch.setattr(runtime_module, "load_agent_profile", AsyncMock(return_value=profile))
+    monkeypatch.setattr(runtime_module, "load_agent_profile_tools", AsyncMock(return_value=(ToolSettings(), profile)))
+    monkeypatch.setattr(AgentRuntime, "_schedule_run", Mock())
+    db.get.side_effect = lambda model, _key, **_kw: message if model is Message else session
+
+    run = await AgentRuntime.retry(db, session, failed)
+    assert message.provider_data["_matoloop"]["maxToolCallsByRun"] == {str(failed.id): old_limit, str(run.id): new_limit}
+    profile.max_tool_calls = old_limit
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == count + 1
+    assert tool_registry._execute_definition.await_count == count
+    assert bool(requests[-1]["tools"]) is (new_limit is None)
+    assert _assistant_messages(db)[-1].provider_data["_matoloop"]["performance"]["maxToolCalls"] == new_limit
+
+
+@pytest.mark.parametrize("repair_succeeds", [False, True])
+async def test_shell_retry_after_edit_keeps_failure_evidence(monkeypatch, repair_succeeds):
+    command = ToolCall("check", "shell_run", {"command": "pytest"})
+    edit = ToolCall("repair", "edit_file", {"root": "computer", "path": "test_app.py", "oldText": "old", "newText": "new"})
+    db, run, _requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(tool_calls=[command]), ProviderResult(tool_calls=[edit]), ProviderResult(tool_calls=[command]),
+         ProviderResult(content="Die Pruefung ist abgeschlossen.")],
+        search_policy=WebSearchPolicy.AVAILABLE, execution_agent_id=uuid4(), execution_operations=("shell.run",),
+    )
+    run.current_directory_snapshot = "/work"
+    failure = ToolResult.json({"exitCode": 1, "output": {"stdout": "FAILED test_app.py"}}, metadata={"errorCode": "process.commandFailed"})
+    tool_registry._execute_definition.side_effect = [failure, ToolResult.json({"written": "test_app.py"}) if repair_succeeds else ToolResult.error("file.changed"), ToolResult.json({"exitCode": 0})]
+    await AgentRuntime._execute_loop(db, run)
+    assert tool_registry._execute_definition.await_count == (3 if repair_succeeds else 2)
+    assert _tool_messages(db)[0].provider_data["_matoloop"]["errorCode"] == "process.commandFailed"
+    assert "FAILED test_app.py" in _tool_messages(db)[0].content
+    assert _tool_messages(db)[-1].provider_data["_matoloop"].get("errorCode") == (None if repair_succeeds else "agent.repeatedToolCall")
+
+
+@pytest.mark.parametrize("call", [ToolCall("read", "read", {"root": "computer", "path": "README.md"}), ToolCall("check", "shell_run", {"command": "pytest"})])
+async def test_cwd_changes_failed_call_preconditions(monkeypatch, call):
+    db, run, _requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(tool_calls=[call]), ProviderResult(tool_calls=[ToolCall("cd", "change_directory", {"path": "/other"})]), ProviderResult(tool_calls=[call]), ProviderResult(content="Geprueft.")],
+        search_policy=WebSearchPolicy.AVAILABLE, execution_agent_id=uuid4(), execution_operations=("shell.run", "filesystem.resolve"),
+    )
+    run.current_directory_snapshot = "/work"
+    async def execute(current, _context, _tool):
+        if current.name == "change_directory":
+            run.current_directory_snapshot = "/other"
+            return ToolResult.json({"currentDirectory": "/other"})
+        return ToolResult.error("file.notFound") if run.current_directory_snapshot == "/work" else ToolResult("OK", {})
+    tool_registry._execute_definition.side_effect = execute
+    await AgentRuntime._execute_loop(db, run)
+    assert tool_registry._execute_definition.await_count == 3
+    assert _tool_messages(db)[-1].content == "OK"
+
+
+def test_child_integration_snapshot_is_concrete_and_legacy_fails_closed():
+    first = IntegrationInstance(name="First", integration_type="search", adapter_type="searxng")
+    second = IntegrationInstance(name="Second", integration_type="search", adapter_type="searxng")
+    settings = IntegrationSettings(instances=[first, second])
+    profile = AgentProfile(name="Custom", instructions="Follow the task.", integrationsEnabledByDefault=False, integrationAvailability={str(first.id): True})
+    selected = filter_agent_profile_integrations(settings, profile)
+    snapshot = permission_snapshot(ToolSettings(), {"web_search"}, selected)
+    assert snapshot["integrationIds"] == [str(first.id)]
+    profile.integrations_enabled_by_default = True
+    live = IntegrationSettings(instances=[first, second, IntegrationInstance(id=uuid4(), name="New", integration_type="search", adapter_type="searxng")])
+    scoped = filter_agent_profile_integrations(live, profile, allowed_ids=integration_ceiling_ids(snapshot))
+    assert [item.id for item in scoped.instances] == [first.id]
+    del snapshot["integrationIds"]
+    assert integration_ceiling_ids(snapshot) == [str(first.id)]
+    assert integration_ceiling_ids({}) == []
+    assert integration_ceiling_ids({"integrationIds": None}) == []
+    assert integration_ceiling_ids(None) is None
+
+
+@pytest.mark.parametrize(("offered_allow", "spawn_allow"), [(False, True), (True, False), (True, True)])
+def test_delegation_intersects_shell_prefix_permissions(offered_allow, spawn_allow):
+    from mato_loop_backend.agent.permissions import PermissionRequest, shell_command_scope
+    from mato_loop_backend.agent.subagents import ceiling_settings
+    from mato_loop_backend.settings import ToolExecutionPolicy, TrustLevel
+
+    snapshots = [permission_snapshot(
+        ToolSettings(shell_prefixes={"read": [["pytest"]] if allowed else []}).select_trust(TrustLevel.PUBLIC),
+        {"shell_run"},
+    ) for allowed in (offered_allow, spawn_allow)]
+    snapshot = snapshots[1]
+    snapshot["offeredCeiling"] = snapshots[0]
+    request = PermissionRequest(
+        capability="shell.read", resource_type="shell_command",
+        resource_scope=shell_command_scope(uuid4(), "/work", "read", [["pytest"]], [], True),
+        action_kind="shell_run", risk_level="low", title="Run", summary="Run tests",
+    )
+    assert runtime_module._tool_policy(
+        ceiling_settings(snapshot, TrustLevel.PUBLIC), IntegrationSettings(), request, snapshot=snapshot,
+    ) == (ToolExecutionPolicy.AUTO if offered_allow and spawn_allow else ToolExecutionPolicy.ASK)

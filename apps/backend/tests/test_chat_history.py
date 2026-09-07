@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -7,6 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent.runtime import AgentRunError, AgentRuntime
 from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
 from mato_loop_backend.models import AgentRun, ChatSession, Message, UserAccount
+
+
+@pytest.fixture(autouse=True)
+def _no_live_descendant_tasks(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "cancel_descendants", AsyncMock(), raising=False)
 
 
 def _records(session_id):
@@ -24,6 +29,8 @@ async def test_undo_removes_user_message_suffix_and_returns_draft(monkeypatch) -
     messages = _records(session.id)
     db = AsyncMock(spec=AsyncSession)
     remove_suffix = AsyncMock()
+    db.scalars.return_value = MagicMock(all=lambda: [])
+    db.execute.return_value = MagicMock(all=lambda: [])
     commit = AsyncMock()
     monkeypatch.setattr(
         ChatHistoryService, "_lock_after_cancelling_active_run", AsyncMock(return_value=session)
@@ -81,6 +88,7 @@ async def test_undo_of_first_user_message_deletes_session(monkeypatch) -> None:
     session = ChatSession(id=uuid4(), user_id=user.id, title="Test")
     messages = _records(session.id)
     db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value = MagicMock(all=lambda: [])
     delete_session = AsyncMock()
     monkeypatch.setattr(
         ChatHistoryService, "_lock_after_cancelling_active_run", AsyncMock(return_value=session)
@@ -114,6 +122,7 @@ async def test_retry_keeps_user_message_and_restarts_original_failed_run(monkeyp
     replacement_run = AgentRun(id=uuid4(), session_id=session.id, status="queued")
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = failed_run
+    db.execute.return_value = MagicMock(all=lambda: [])
     remove_suffix = AsyncMock()
     retry = AsyncMock(return_value=replacement_run)
     monkeypatch.setattr(ChatHistoryService, "_owned_session", AsyncMock(return_value=session))
@@ -174,6 +183,9 @@ async def test_runtime_retry_reuses_failed_run_model(monkeypatch) -> None:
         pseudonymization_enabled=True,
     )
     db = AsyncMock(spec=AsyncSession)
+    message = Message(id=uuid4(), session_id=session.id, role="user", content="Retry")
+    failed_run.input_message_id = message.id
+    db.get.return_value = message
     monkeypatch.setattr(
         SettingsStore,
         "load",

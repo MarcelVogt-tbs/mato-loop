@@ -351,7 +351,7 @@ async def test_failed_project_move_restores_the_session_tree(monkeypatch) -> Non
     storage.stage_session_move.return_value = receipt
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
     monkeypatch.setattr(
-        sessions_route, "_owned_session", AsyncMock(return_value=session)
+        sessions_route, "_mutable_session", AsyncMock(return_value=session)
     )
 
     with pytest.raises(RuntimeError, match="commit failed"):
@@ -387,7 +387,7 @@ async def test_standalone_project_move_rebinds_managed_file_references(monkeypat
     receipt = storage.stage_session_move.return_value
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
     monkeypatch.setattr(
-        sessions_route, "_owned_session", AsyncMock(return_value=session)
+        sessions_route, "_mutable_session", AsyncMock(return_value=session)
     )
     monkeypatch.setattr(
         sessions_route.SettingsStore,
@@ -1711,6 +1711,8 @@ async def test_session_delete_trashes_commits_and_purges_tree(
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = session
     db.scalars.return_value = active_runs_result
+    db.execute.return_value = MagicMock(all=lambda: [])
+    monkeypatch.setattr(AgentRuntime, "cancel_descendants", AsyncMock(), raising=False)
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: sessions)
 
     await delete_session(session_id, user, db)
@@ -1738,6 +1740,8 @@ async def test_session_delete_restores_tree_when_database_commit_fails(
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = session
     db.scalars.return_value = active_runs_result
+    db.execute.return_value = MagicMock(all=lambda: [])
+    monkeypatch.setattr(AgentRuntime, "cancel_descendants", AsyncMock(), raising=False)
     db.commit.side_effect = RuntimeError("commit failed")
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: sessions)
 
@@ -1746,7 +1750,7 @@ async def test_session_delete_restores_tree_when_database_commit_fails(
 
     assert stored_file.read_text(encoding="utf-8") == "Inhalt"
     assert list(sessions.trash_dir.iterdir()) == []
-    db.rollback.assert_awaited_once()
+    assert db.rollback.await_count == 2
 
 
 async def test_attachment_download_rejects_incomplete_hierarchy() -> None:

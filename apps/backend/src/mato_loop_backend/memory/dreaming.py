@@ -980,6 +980,7 @@ class DreamingService:
             .where(
                 ChatSession.memory_mode == MemoryMode.FULL.value,
                 ChatSession.session_type == "chat",
+                ChatSession.parent_session_id.is_(None),
                 UserAccount.is_active.is_(True),
             )
         )
@@ -1155,6 +1156,7 @@ class DreamingService:
                         MemoryDreamRun.status == MemoryDreamStatus.BLOCKED.value,
                         ChatSession.memory_mode == MemoryMode.FULL.value,
                         ChatSession.session_type == "chat",
+                        ChatSession.parent_session_id.is_(None),
                         UserAccount.is_active.is_(True),
                     )
                 )
@@ -1278,7 +1280,7 @@ class DreamingService:
 
         if await DreamingService._cancel_if_inactive(db, run, session.user_id):
             return
-        if session.session_type != "chat":
+        if session.session_type != "chat" or session.parent_session_id is not None:
             run.status = MemoryDreamStatus.CANCELLED.value
             run.error = "memory.invalidSource"
             run.completed_at = datetime.now(UTC)
@@ -1568,7 +1570,7 @@ class DreamingService:
         if locked_session.memory_mode != MemoryMode.FULL.value:
             await DreamingService._block(db, run, "memory.sessionDisabled")
             return
-        if locked_session.session_type != "chat":
+        if locked_session.session_type != "chat" or locked_session.parent_session_id is not None:
             run.status = MemoryDreamStatus.CANCELLED.value
             run.error = "memory.invalidSource"
             run.completed_at = datetime.now(UTC)

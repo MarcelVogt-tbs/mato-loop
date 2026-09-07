@@ -31,6 +31,7 @@ from mato_loop_backend.project_coding import (
     ProjectCodingService,
 )
 from mato_loop_backend.security import require_user
+from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
 from mato_loop_backend.settings import load_effective_agent_identity
 
 router = APIRouter(prefix="/projects", dependencies=[Depends(require_user)])
@@ -724,6 +725,13 @@ async def create_plan(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> CodingPlanResponse:
+    if payload.originating_session_id is not None:
+        try:
+            session = await get_owned_session(db, payload.originating_session_id, user.id)
+        except SessionServiceError as exc:
+            raise ApiError(exc.status_code, exc.code) from exc
+        if session is None:
+            raise ApiError(404, "session.notFound")
     project = await _owned_project(db, project_id, user.id)
     item = await _call(
         ProjectCodingService.create_plan(

@@ -3,6 +3,30 @@ import { describe, expect, it } from 'vitest'
 import { apiErrorMessage, decodeBlobApiError, errorDescriptor } from '../src/utils/api-errors'
 
 describe('API error messages', () => {
+  it('uses controlled shell-inspection messages instead of parser details', () => {
+    expect(apiErrorMessage({ error: { code: 'process.invalidSyntax', message: 'private parser detail' } })).toBe(
+      'Der Shell-Befehl enthält einen Syntaxfehler. Korrigiere den Befehl vor einem erneuten Versuch.'
+    )
+    expect(apiErrorMessage({ error: { code: 'process.inspectionLimitExceeded', message: 'private path detail' } })).toBe(
+      'Der Shell-Befehl überschreitet die Analysegrenzen. Teile ihn in kleinere Befehle auf.'
+    )
+    expect(apiErrorMessage({ error: { code: 'process.unsupportedTargetQuoting', message: 'private path detail' } })).toBe(
+      'Der Shell-Zielpfad verwendet eine nicht unterstützte Maskierung. Verwende einen festen Pfad mit normalen Anführungszeichen.'
+    )
+  })
+  it('formats failed commands without exposing an external error message', () => {
+    expect(apiErrorMessage({ error: { code: 'process.commandFailed', message: 'private process detail' } })).toBe(
+      'Der Befehl wurde mit einem Fehler beendet. Prüfe die Ausgabe und den Exit-Code.'
+    )
+  })
+  it('translates subagent limits and read-only session errors', () => {
+    expect(apiErrorMessage({ error: { code: 'agent.subagentLimitReached' } })).toBe(
+      'Die maximale Anzahl an Subagents für diesen Lauf ist erreicht.'
+    )
+    expect(apiErrorMessage({ error: { code: 'session.readOnly' } })).toBe(
+      'Subagent-Sessions sind schreibgeschützt. Arbeite in der Hauptsession weiter.'
+    )
+  })
   it('warns that an incomplete patch may have mutated even its failed operation', () => {
     expect(apiErrorMessage({ error: {
       code: 'file.patchIncomplete',

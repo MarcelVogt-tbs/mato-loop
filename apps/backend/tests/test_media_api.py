@@ -129,6 +129,7 @@ async def test_session_multipart_routes_forward_attachments_without_text(monkeyp
     send = AsyncMock(return_value={"runId": str(uuid4()), "modelName": "Test"})
     monkeypatch.setattr(sessions_route, "_create_session", create)
     monkeypatch.setattr(sessions_route, "_send_message", send)
+    monkeypatch.setattr(sessions_route, "_mutable_session", AsyncMock(return_value=object()))
     monkeypatch.setattr(
         SettingsStore, "load", AsyncMock(return_value=InstanceLimits())
     )
@@ -330,6 +331,7 @@ async def test_session_multipart_retries_skip_attachment_classification(monkeypa
     load = AsyncMock()
     uploads = AsyncMock()
     monkeypatch.setattr(sessions_route, "_duplicate_submission_response", duplicate)
+    monkeypatch.setattr(sessions_route, "_mutable_session", AsyncMock(return_value=object()))
     monkeypatch.setattr(SettingsStore, "load", load)
     monkeypatch.setattr(sessions_route, "_attachment_uploads", uploads)
     payload = json.dumps({"content": "retry", "run_id": str(run_id)})
@@ -349,6 +351,7 @@ async def test_session_multipart_retries_skip_attachment_classification(monkeypa
 
 
 async def test_session_attachment_processing_limit_returns_413(monkeypatch) -> None:
+    monkeypatch.setattr(sessions_route, "_mutable_session", AsyncMock(return_value=object()))
     monkeypatch.setattr(
         SettingsStore, "load", AsyncMock(return_value=InstanceLimits())
     )

@@ -28,11 +28,10 @@ from mato_loop_backend.settings.models import (
 
 
 def test_missing_settings_fields_use_defaults() -> None:
-    settings = AgentRuntimeSettings.model_validate({"max_steps": 7})
+    removed = {"max_steps": 7, "max_model_requests": 30, "max_tool_calls": 50, "max_research_tool_calls": 8}
+    settings = AgentRuntimeSettings.model_validate(removed)
 
-    assert settings.max_steps == 7
-    assert settings.max_tool_calls == 50
-    assert settings.max_research_tool_calls == 8
+    assert not removed.keys() & settings.model_dump().keys()
     assert settings.request_timeout_seconds == 300
     assert settings.compaction_trigger_ratio == 0.8
     assert settings.compaction_target_ratio == 0.6

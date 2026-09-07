@@ -81,6 +81,61 @@ class FilesystemTests(unittest.TestCase):
         self.assertTrue(component_opens)
         self.assertTrue(all(call.args[1] & os.O_NOFOLLOW for call in component_opens))
 
+    def test_inspection_distinguishes_missing_paths_from_hard_errors(self) -> None:
+        for path in ("missing", "missing/child"):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    self.filesystem.resolve_path_target(path, str(self.root), must_exist=False),
+                    {"path": self.path(path)},
+                )
+                with self.assertRaises(AgentError) as raised:
+                    self.filesystem.resolve_path_target(path, str(self.root), must_exist=True)
+                self.assertEqual(raised.exception.code, "path.notFound")
+        (self.root / "real").mkdir()
+        (self.root / "real/file").write_text("safe")
+        (self.root / "link").symlink_to("real", target_is_directory=True)
+        for path in ("link", "link/file", "link/../real/file", "link/..", "real/file/child"):
+            with self.subTest(path=path), self.assertRaises(AgentError) as raised:
+                self.filesystem.resolve_path_target(path, str(self.root), must_exist=False)
+            self.assertNotEqual(raised.exception.code, "path.notFound")
+        with patch.object(
+            filesystem_module.os, "stat", side_effect=PermissionError("private detail")
+        ):
+            with self.assertRaises(AgentError) as raised:
+                self.filesystem.resolve_path_target("real/file", str(self.root), must_exist=False)
+        self.assertEqual(raised.exception.code, "path.unavailable")
+        self.assertNotIn("private detail", str(raised.exception))
+        for path in (".", "real/..", "real/"):
+            self.assertEqual(
+                self.filesystem.resolve_path_target(path, str(self.root), must_exist=True)[
+                    "targetKind"
+                ],
+                "directory",
+            )
+
+    def test_inspection_exceptions_do_not_change_direct_text_tool_semantics(self) -> None:
+        target = self.root / "target"
+        target.write_text("original\n")
+        link = self.root / "link"
+        link.symlink_to(target)
+        revision = hashlib.sha256(target.read_bytes()).hexdigest()
+        for path in (str(link), "/dev/null"):
+            operations = (
+                lambda path=path: self.filesystem.read(path, 1, 1, 100),
+                lambda path=path: self.filesystem.write(path, "changed", None),
+                lambda path=path: self.filesystem.edit(path, "original", "changed", False),
+                lambda path=path: self.filesystem.patch(
+                    f"*** Begin Patch\n*** Update File: {path}\n"
+                    "@@\n-original\n+changed\n*** End Patch\n",
+                    {path: revision},
+                ),
+            )
+            for operation in operations:
+                with self.subTest(path=path), self.assertRaises(AgentError):
+                    operation()
+        self.assertEqual(target.read_text(), "original\n")
+        self.assertTrue(link.is_symlink())
+
     def test_import_export_are_atomic_and_bounded(self) -> None:
         source = self.root / "download"
         source.write_bytes(b"binary\x00data")

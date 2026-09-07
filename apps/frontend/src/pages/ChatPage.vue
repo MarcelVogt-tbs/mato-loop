@@ -127,9 +127,10 @@
             >
               <AgentActivityPanel
                 v-if="message.workHistory && (
-                  !message.currentTurn || !chat.running || runPresentation.showActivity
+                  !message.currentTurn || !chat.running || runPresentation.showActivity || childrenByMessage.has(message.id)
                 )"
                 :history="message.workHistory"
+                :subagents="childrenByMessage.get(message.id) || []"
                 :activity="message.currentTurn ? chat.activity : null"
                 :presentation="message.currentTurn ? runPresentation : null"
                 :reasoning="message.currentTurn ? chat.streamReasoning : null"
@@ -250,6 +251,13 @@
             </div>
           </template>
           <template #after>
+            <q-banner v-if="subagents.childrenError" rounded class="app-surface-tonal q-mt-md" role="alert">
+              {{ apiErrorMessage(subagents.childrenError) }}
+              <template #action>
+                <q-btn flat no-caps color="primary" label="Subagenten laden" @click="subagents.loadChildren()" />
+              </template>
+            </q-banner>
+            <SubagentRows :children="unmatchedChildren" />
             <ApprovalCard
               v-for="approval in transcript.unmatchedApprovals"
               :key="approval.id"
@@ -274,7 +282,10 @@
       </q-card>
     </div>
 
-    <div v-else-if="!chat.loadError" class="chat-composer-region">
+    <div
+      v-else-if="!chat.loadError && !chat.current?.readOnly && (!routeSessionId || chat.current)"
+      class="chat-composer-region"
+    >
       <transition name="chat-scroll-jump">
         <div v-if="chat.current && !followingBottom" class="chat-scroll-to-bottom">
           <q-btn
@@ -309,10 +320,11 @@
         @undo="undoQueuedMessage"
       />
       <QuestionDock
-        v-if="activeQuestion && chat.running"
+        v-if="activeQuestion"
         :key="activeQuestion.id"
         :request="activeQuestion"
         :stopping="chat.stopping"
+        :show-stop="chat.running"
         @stop="chat.stop"
       />
       <ChatComposer
@@ -372,6 +384,38 @@
         </aside>
       </template>
     </q-splitter>
+    <SubagentInspector
+      v-if="routeSessionId && routeSubagentId"
+      :parent-id="routeSessionId"
+      :child-id="routeSubagentId"
+    />
+    <q-dialog
+      :model-value="Boolean(approvalDraftPreview)"
+      maximized
+      aria-labelledby="approval-draft-preview-title"
+      @update:model-value="approvalDraftPreview = null"
+    >
+      <q-card v-if="approvalDraftPreview" class="column no-wrap full-height">
+        <q-card-section class="row items-center no-wrap q-gutter-sm">
+          <div class="col overflow-hidden">
+            <h2 id="approval-draft-preview-title" class="text-subtitle1 text-weight-bold q-my-none ellipsis">{{ approvalDraftPreview.filename }}</h2>
+            <div class="text-caption app-muted">Skill-Entwurf des Subagenten · Nur Lesezugriff</div>
+          </div>
+          <q-btn flat round icon="close" aria-label="Entwurfsvorschau schließen" @click="approvalDraftPreview = null" />
+        </q-card-section>
+        <q-separator />
+        <q-scroll-area class="col">
+          <div v-if="approvalDraftPreview.loading" class="row justify-center q-pa-lg" role="status">
+            <q-spinner color="primary" size="32px" />
+            <span class="app-sr-only">Entwurf wird geladen</span>
+          </div>
+          <q-banner v-else-if="approvalDraftPreview.error" class="app-surface-tonal q-ma-md" role="alert">
+            {{ apiErrorMessage(approvalDraftPreview.error) }}
+          </q-banner>
+          <pre v-else class="file-viewer__text q-pa-md">{{ approvalDraftPreview.content }}</pre>
+        </q-scroll-area>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
@@ -388,6 +432,9 @@ import ControlCenterPanel from 'components/ControlCenterPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import QuestionDock from 'components/QuestionDock.vue'
+import SubagentInspector from 'components/SubagentInspector.vue'
+import SubagentRows from 'components/SubagentRows.vue'
+import { useSubagentStore } from 'stores/subagents'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useApprovalStore } from 'stores/approvals'
@@ -430,6 +477,7 @@ const router = useRouter()
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const chat = useChatStore()
+const subagents = useSubagentStore()
 const identity = useAgentIdentityStore()
 const agentProfiles = useAgentProfileStore()
 const approvals = useApprovalStore()
@@ -451,6 +499,7 @@ const trustedImageOriginsBySession = ref(new Map())
 const followingBottom = ref(true)
 const messageTimestampNow = ref(Date.now())
 const messageActionId = ref(null)
+const approvalDraftPreview = ref(null)
 const announcedRunStatus = ref('')
 const bottomThreshold = 64
 const liveWorkHistory = computed(() => ({
@@ -467,6 +516,9 @@ const userMessageLabel = (message) => (
 )
 const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
+))
+const routeSubagentId = computed(() => (
+  typeof route.query.subagent === 'string' ? route.query.subagent : null
 ))
 const routeProjectId = computed(() => (
   typeof route.query.project === 'string' ? route.query.project : null
@@ -499,6 +551,7 @@ const transcript = computed(() => buildChatTranscript(
   sessionApprovals.value,
   {
     running: chat.running,
+    runId: chat.runId || chat.current?.activeRun?.id,
     toolExecutionActive: chat.activity.phase === 'processing_tool',
     activeToolCallId: chat.activity.toolCallId,
     questions: sessionQuestions.value,
@@ -508,6 +561,20 @@ const transcript = computed(() => buildChatTranscript(
 const hasCurrentAssistantTurn = computed(() => (
   transcript.value.messages.some((message) => message.currentTurn)
 ))
+const childrenByMessage = computed(() => {
+  const result = new Map()
+  for (const message of transcript.value.messages) {
+    const children = subagents.children.filter((child) => (message.workHistory?.entries || []).some((entry) => (
+      entry.tool?.id === child.spawnedByToolCallId && entry.runId === child.spawnedByRunId
+    )))
+    if (children.length) result.set(message.id, children)
+  }
+  return result
+})
+const unmatchedChildren = computed(() => {
+  const matched = new Set([...childrenByMessage.value.values()].flat().map((child) => child.id))
+  return subagents.children.filter((child) => !matched.has(child.id))
+})
 const hasCurrentWorkHistory = computed(() => (
   transcript.value.messages.some((message) => message.currentTurn && message.workHistory)
 ))
@@ -529,6 +596,7 @@ const displayMessages = computed(() => {
   return withLiveTranscriptMessage(messages, liveMessage)
 })
 const runPresentation = computed(() => agentRunPresentation({
+  runId: chat.runId || chat.current?.activeRun?.id,
   running: chat.running,
   stopping: chat.stopping,
   activity: chat.activity,
@@ -580,6 +648,26 @@ async function openApprovalDraft(approval) {
   const draft = approval?.details?.draftFile
   const sessionId = approval?.sessionId
   if (!['build_skill', 'edit_skill'].includes(approval?.actionKind) || !draft || chat.current?.id !== sessionId) return
+  if (approval.payload?.subagentSessionId) {
+    approvalDraftPreview.value = { filename: draft.filename, loading: true, content: '', error: null }
+    const preview = approvalDraftPreview.value
+    try {
+      const data = await approvals.previewSkillDraft(approval)
+      if (approvalDraftPreview.value !== preview) return
+      if (data?.kind !== 'text' || typeof data.content !== 'string' || !draft.initialRevision) {
+        preview.error = { code: 'skill.draftInvalid' }
+      } else if (data.revision !== draft.initialRevision) {
+        preview.error = { code: 'file.changed' }
+      } else {
+        preview.content = data.content
+      }
+    } catch (error) {
+      if (approvalDraftPreview.value === preview) preview.error = error
+    } finally {
+      if (approvalDraftPreview.value === preview) preview.loading = false
+    }
+    return
+  }
   const tabId = await controlCenter.openFile({
     scope: 'session',
     path: draft.path,
@@ -707,7 +795,12 @@ async function loadRouteSession() {
   const sessionId = routeSessionId.value
   await composer.value?.prepareAudioNavigation?.()
   if (routeSessionId.value !== sessionId) return
-  await chat.loadSession(sessionId).catch(() => null)
+  const session = await chat.loadSession(sessionId).catch(() => null)
+  if (routeSessionId.value !== sessionId) return
+  if (session?.readOnly && session.parentSessionId) {
+    await router.replace({ name: 'chat', query: { session: session.parentSessionId, subagent: session.id } })
+    return
+  }
   if (chat.selectedSessionId !== sessionId || chat.loadError) return
   await reconcileRouteProject()
   const requestedApp = typeof route.query.controlCenter === 'string'
@@ -736,6 +829,7 @@ async function reconcileRouteProject() {
     query: {
       ...(chat.current.projectId ? { project: chat.current.projectId } : {}),
       session: chat.current.id,
+      ...(routeSubagentId.value ? { subagent: routeSubagentId.value } : {}),
       ...(typeof route.query.controlCenter === 'string'
         ? { controlCenter: route.query.controlCenter }
         : {}),
@@ -1114,7 +1208,11 @@ function chatPageStyle(offset, height) {
   }
 }
 
-watch(routeSessionId, () => void loadRouteSession(), { immediate: true })
+watch(routeSessionId, (id) => {
+  approvalDraftPreview.value = null
+  void subagents.loadChildren(id)
+  void loadRouteSession()
+}, { immediate: true })
 watch(routeProjectId, () => void reconcileRouteProject())
 watch(routeMessageId, () => void revealRouteMessage())
 watch(
@@ -1205,6 +1303,8 @@ onMounted(() => {
   executionAgents.startPolling()
 })
 onBeforeUnmount(() => {
+  approvalDraftPreview.value = null
+  void subagents.loadChildren(null)
   virtualScrollRefreshVersion += 1
   resizeObserver?.disconnect()
   scrollTarget?.removeEventListener('scroll', updateFollowState)

@@ -119,6 +119,33 @@
 
           <q-card flat class="app-surface q-mb-md">
             <q-card-section>
+              <div class="text-subtitle1 text-weight-bold">Tool-Aufrufe pro Lauf</div>
+              <q-toggle
+                :model-value="form.maxToolCalls === null"
+                label="Unbegrenzt"
+                @update:model-value="form.maxToolCalls = $event ? null : 25"
+              />
+              <q-input
+                v-if="form.maxToolCalls !== null"
+                v-model.number="form.maxToolCalls"
+                outlined
+                type="number"
+                min="1"
+                step="1"
+                label="Maximale Tool-Aufrufe"
+                :rules="[toolLimitRule]"
+                lazy-rules
+              />
+              <q-banner rounded class="app-surface-tonal q-mt-sm">
+                <template #avatar><q-icon name="warning_amber" color="warning" /></template>
+                Hohe oder unbegrenzte Limits können lange Läufe und hohe Modell- und Dienstkosten verursachen.
+                Ohne Limit gibt es keinen automatischen Stopp durch die Anzahl der Tool-Aufrufe.
+              </q-banner>
+            </q-card-section>
+          </q-card>
+
+          <q-card flat class="app-surface q-mb-md">
+            <q-card-section>
               <div class="text-subtitle1 text-weight-bold">Persona</div>
               <div class="text-caption app-muted">Wiederverwendbares Verhalten und Charakter dieses Agenten.</div>
             </q-card-section>
@@ -229,6 +256,20 @@
         </q-tab-panel>
 
         <q-tab-panel name="integrations" class="q-pa-none">
+          <q-card flat class="app-surface q-mb-md">
+            <q-card-section>
+              <q-toggle
+                v-model="form.integrationsEnabledByDefault"
+                label="Integrationen standardmäßig aktivieren"
+              />
+              <div class="text-body2 app-muted">
+                {{ form.integrationsEnabledByDefault
+                  ? 'Auch künftig konfigurierte Integrationen sind für dieses Profil verfügbar.'
+                  : 'Nur ausdrücklich aktivierte Integrationen sind für dieses Profil verfügbar.' }}
+                Einzelne Abweichungen bleiben beim Umschalten erhalten. Die Auswahl erteilt keine Berechtigungen.
+              </div>
+            </q-card-section>
+          </q-card>
           <q-card flat class="app-surface">
             <q-card-section>
               <div class="text-subtitle1 text-weight-bold">Integrationen und Ressourcen</div>
@@ -237,19 +278,36 @@
               </div>
             </q-card-section>
             <q-separator />
-            <q-banner v-if="!policyIntegrations.length && !agents.loading" class="app-surface-tonal q-ma-md">
+            <q-banner v-if="!agents.integrations.length && !agents.loading" class="app-surface-tonal q-ma-md">
               Es sind keine aktivierbaren Integrationen konfiguriert.
             </q-banner>
             <q-list separator>
               <q-expansion-item
-                v-for="integration in policyIntegrations"
+                v-for="integration in agents.integrations"
                 :key="integration.id"
                 group="agent-integrations"
                 :icon="integration.enabled ? 'extension' : 'extension_off'"
                 :label="integration.name"
-                :caption="integration.enabled ? 'Aktiv' : 'In den Integrationseinstellungen deaktiviert'"
+                :caption="integrationHint(integration)"
                 @show="loadIntegration(integration.id)"
               >
+                <q-card-section>
+                  <q-select
+                    :model-value="form.integrationAvailability[integration.id] ?? 'inherit'"
+                    outlined
+                    emit-value
+                    map-options
+                    :label="`Verfügbarkeit: ${integration.name}`"
+                    :options="integrationAvailabilityOptions"
+                    :hint="integrationHint(integration)"
+                    :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                    persistent-hint
+                    @update:model-value="setIntegrationAvailability(integration.id, $event)"
+                  />
+                  <div v-if="!integration.supportsPolicies" class="text-caption app-muted q-mt-sm">
+                    Diese Integration stellt Optionen oder Projektfunktionen bereit. Deren bestehende Tool-Rechte gelten weiterhin.
+                  </div>
+                </q-card-section>
                 <q-card-section v-if="agents.integrationMetadataFailed[integration.id]">
                   <q-banner rounded class="app-surface-tonal">
                     Die Aktionen oder Ressourcen dieser Integration konnten nicht geladen werden.
@@ -275,7 +333,7 @@
                             emit-value
                             map-options
                             :label="audience.label"
-                            :disable="!integration.enabled"
+                            :disable="!integrationAvailable(integration)"
                             :options="policyOptions(inheritedIntegrationPolicy(audience.value, integration.id, action))"
                             :hint="`Wirksam: ${policyLabel(effectiveIntegrationPolicy(audience.value, integration.id, action.capability))}`"
                             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
@@ -318,7 +376,7 @@
                               emit-value
                               map-options
                               :label="audience.label"
-                              :disable="!integration.enabled || resource.hardUnavailableCapabilities.includes(action.capability)"
+                              :disable="!integrationAvailable(integration) || resource.hardUnavailableCapabilities.includes(action.capability)"
                               :options="policyOptions(inheritedResourcePolicy(audience.value, integration.id, resource, action.capability))"
                               :hint="resourcePolicyHint(audience.value, integration.id, resource, action.capability)"
                               :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
@@ -389,6 +447,9 @@ const form = reactive({
   description: '',
   personaId: null,
   instructions: '',
+  maxToolCalls: 25,
+  integrationsEnabledByDefault: true,
+  integrationAvailability: {},
   publicPermissions: emptyPermissions(),
   privatePermissions: emptyPermissions()
 })
@@ -413,12 +474,18 @@ const isCreate = computed(() => route.name === 'settings-agent-create')
 const isProtected = computed(() => editingAgent.value?.protected === true)
 const blocked = computed(() => scope.value === 'personal' && !agents.personalAgentsEnabled)
 const dirty = computed(() => Boolean(savedPayload.value) && JSON.stringify(requestPayload()) !== savedPayload.value)
-const policyIntegrations = computed(() => agents.integrations.filter((item) => item.supportsPolicies))
+const integrationAvailabilityOptions = computed(() => [
+  { label: `Standard (${form.integrationsEnabledByDefault ? 'Aktiv' : 'Deaktiviert'})`, value: 'inherit' },
+  { label: 'Aktiv', value: true },
+  { label: 'Deaktiviert', value: false }
+])
 const baselineActions = computed(() => Object.fromEntries(audiences.map(({ value }) => [
   value,
   Object.fromEntries((agents.groupsByTrust[value] || []).flatMap((group) => (
     (group.tools || []).flatMap((tool) => (
-      (tool.actions || []).map((action) => [action.capability, action])
+      (tool.actions || []).map((action) => [action.capability, {
+        ...action, available: tool.available !== false && action.available !== false
+      }])
     ))
   )))
 ])))
@@ -443,6 +510,7 @@ const permissionGroups = computed(() => {
 })
 
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtfeld'
+const toolLimitRule = (value) => (Number.isSafeInteger(value) && value > 0) || 'Eine positive ganze Zahl eingeben.'
 const permissionField = (audience) => `${audience}Permissions`
 const permissions = (audience) => form[permissionField(audience)]
 const policyLabel = (policy) => policyLabels[policy] || policy
@@ -469,12 +537,32 @@ function audienceResource(audience, integrationId, resourceKey) {
   ))
 }
 
+function integrationAvailable(integration) {
+  return Boolean(integration?.enabled && integration.available !== false
+    && (form.integrationAvailability[integration.id] ?? form.integrationsEnabledByDefault))
+}
+
+function integrationHint(integration) {
+  if (!integration.enabled || integration.available === false) return 'Technisch nicht verfügbar; die Profilauswahl bleibt gespeichert.'
+  return integrationAvailable(integration)
+    ? 'Für dieses Profil verfügbar; Tool-Rechte gelten zusätzlich.'
+    : 'Für dieses Profil deaktiviert; gespeicherte Tool-Rechte bleiben erhalten.'
+}
+
+function setIntegrationAvailability(integrationId, value) {
+  if (value === 'inherit') delete form.integrationAvailability[integrationId]
+  else form.integrationAvailability[integrationId] = value
+}
+
 function requestPayload() {
   return {
     name: form.name.trim(),
     description: form.description.trim(),
     personaId: form.personaId,
     instructions: form.instructions.trim(),
+    maxToolCalls: form.maxToolCalls,
+    integrationsEnabledByDefault: form.integrationsEnabledByDefault,
+    integrationAvailability: clone(form.integrationAvailability),
     publicPermissions: clone(form.publicPermissions),
     privatePermissions: clone(form.privatePermissions)
   }
@@ -486,6 +574,9 @@ function assignForm(agent = null) {
     description: agent?.description || '',
     personaId: agent?.personaId || null,
     instructions: agent?.instructions || '',
+    maxToolCalls: agent?.maxToolCalls === null ? null : (agent?.maxToolCalls ?? 25),
+    integrationsEnabledByDefault: agent?.integrationsEnabledByDefault ?? true,
+    integrationAvailability: clone(agent?.integrationAvailability || {}),
     publicPermissions: clone(agent?.publicPermissions || emptyPermissions()),
     privatePermissions: clone(agent?.privatePermissions || emptyPermissions())
   })
@@ -509,12 +600,13 @@ function baselinePolicy(audience, capability) {
 }
 
 function effectiveGlobalPolicy(audience, capability) {
+  if (baselineActions.value[audience]?.[capability]?.available === false) return 'disabled'
   const configured = globalPolicy(audience, capability)
   return configured === 'inherit' ? baselinePolicy(audience, capability) : configured
 }
 
 function effectiveIntegrationPolicy(audience, integrationId, capability) {
-  if (!policyIntegrations.value.find((item) => item.id === integrationId)?.enabled) return 'disabled'
+  if (!integrationAvailable(agents.integrations.find((item) => item.id === integrationId))) return 'disabled'
   const action = audienceAction(audience, integrationId, capability)
   const configured = integrationPolicy(audience, integrationId, capability)
   if (configured !== 'inherit') return configured
@@ -574,7 +666,7 @@ function setResourcePolicy(audience, integrationId, resourceKey, capability, pol
 }
 
 function resourcePolicyHint(audience, integrationId, resource, capability) {
-  if (!policyIntegrations.value.find((item) => item.id === integrationId)?.enabled) return 'Wirksam: Deaktiviert'
+  if (!integrationAvailable(agents.integrations.find((item) => item.id === integrationId))) return 'Wirksam: Deaktiviert'
   if (resource.hardUnavailableCapabilities.includes(capability)) return 'Wirksam: Deaktiviert'
   const configured = resourcePolicy(audience, integrationId, resource.key, capability)
   const effective = configured === 'inherit'
@@ -590,6 +682,7 @@ function resourceActions(integrationId, resource) {
 }
 
 async function loadIntegration(integrationId, force = false) {
+  if (!agents.integrations.find((item) => item.id === integrationId)?.supportsPolicies) return
   if (!force && (metadata(integrationId) || agents.integrationMetadataLoading[integrationId])) return
   try {
     await agents.fetchIntegrationMetadata(integrationId)
@@ -627,11 +720,13 @@ async function load() {
 
 async function saveAgent() {
   if (agents.loading || loadFailed.value || !dirty.value) return
-  if (!form.name.trim() || !form.instructions.trim()) {
+  const invalidLimit = form.maxToolCalls !== null && toolLimitRule(form.maxToolCalls) !== true
+  if (!form.name.trim() || !form.instructions.trim() || invalidLimit) {
     section.value = 'profile'
     await nextTick()
   }
   if (!await formRef.value?.validate()) return
+  if (invalidLimit) return
   const creating = isCreate.value
   try {
     const saved = editingAgent.value

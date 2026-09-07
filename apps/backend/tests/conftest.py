@@ -7,6 +7,10 @@ from mato_loop_backend.settings import SettingsStore
 _load_optional = SettingsStore.load_optional
 
 
+def pytest_addoption(parser):
+    parser.addoption("--subagent-db", action="store_true", help="Run native session PostgreSQL integration tests")
+
+
 @pytest.fixture(autouse=True)
 def no_personal_settings_by_default(monkeypatch):
     async def load_optional(session, settings_type, **kwargs):
