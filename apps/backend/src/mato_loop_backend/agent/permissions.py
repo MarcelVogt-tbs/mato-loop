@@ -648,7 +648,10 @@ def user_profile_permission(
     return PermissionRequest(
         capability="settings.user_profile.update",
         resource_type="user_profile",
-        resource_scope=str(user_id),
+        resource_scope=json.dumps(
+            {"modelScope": model_scope, "userId": str(user_id)},
+            separators=(",", ":"), sort_keys=True,
+        ),
         action_kind="update_user_profile",
         risk_level="medium",
         title="Persönliches Profil ändern?",
@@ -656,8 +659,27 @@ def user_profile_permission(
             f"Der Agent möchte {fields} im persönlichen Profil für "
             f"{scopes[model_scope]} ändern."
         ),
-        resource_display="Eigenes persönliches Profil",
+        resource_display=f"Eigenes persönliches Profil ({scopes[model_scope]})",
     )
+
+
+def _user_profile_scope(resource_scope: str) -> tuple[UUID, str] | None:
+    try:
+        value = json.loads(resource_scope)
+        if not isinstance(value, dict) or set(value) != {"modelScope", "userId"}:
+            return None
+        if not isinstance(value["userId"], str) or value["modelScope"] not in (
+            "private_models", "public_models", "both_models"
+        ):
+            return None
+        user_id = UUID(value["userId"])
+        if str(user_id) != value["userId"] or json.dumps(
+            value, separators=(",", ":"), sort_keys=True
+        ) != resource_scope:
+            return None
+        return user_id, value["modelScope"]
+    except (TypeError, ValueError):
+        return None
 
 
 def skill_load_permission(user_id: UUID, skill_name: str) -> PermissionRequest:
@@ -884,6 +906,15 @@ class PermissionPolicy:
             )
             return (profile_condition, PermissionGrant.trust_level == trust_level.value)
 
+        if request.resource_type == "user_profile":
+            scope = _user_profile_scope(request.resource_scope)
+            if (
+                scope is None
+                or scope[0] != chat_session.user_id
+                or request.capability != "settings.user_profile.update"
+            ):
+                return PermissionDecision.DENY
+
         if request.resource_type in {"automation_collection", "automation"}:
             scope = (
                 _automation_collection_scope(request.resource_scope)
@@ -972,13 +1003,8 @@ class PermissionPolicy:
                 or (target.parent_session_id is not None and target.parent_session_id != chat_session.id)
             ):
                 return PermissionDecision.DENY
-            if policy == ToolExecutionPolicy.DISABLED:
-                return PermissionDecision.DENY
-            return (
-                PermissionDecision.ALLOW
-                if policy == ToolExecutionPolicy.AUTO
-                else PermissionDecision.ASK
-            )
+            if policy == ToolExecutionPolicy.AUTO:
+                return PermissionDecision.ALLOW
 
         if request.resource_type == "execution_directory":
             scope = _execution_directory_scope(request.resource_scope)
@@ -1140,7 +1166,9 @@ class PermissionPolicy:
             if policy in {None, ToolExecutionPolicy.AUTO}:
                 return PermissionDecision.ALLOW
 
-        elif request.capability.startswith(("filesystem.", "session.files.")):
+        elif request.resource_type != "project_session_path" and request.capability.startswith(
+            ("filesystem.", "session.files.")
+        ):
             return PermissionDecision.DENY
 
         if policy == ToolExecutionPolicy.DISABLED:
@@ -1219,7 +1247,15 @@ class PermissionPolicy:
             except ValueError:
                 return False
         if request.resource_type == "project_session_path":
-            return False
+            return (
+                _project_session_path_scope(request.resource_scope) is not None
+                and request.resource_scope == grant.resource_scope
+            )
+        if request.resource_type == "user_profile":
+            return (
+                _user_profile_scope(request.resource_scope) is not None
+                and request.resource_scope == grant.resource_scope
+            )
         if request.resource_type == "url":
             return request.resource_scope == grant.resource_scope
         if request.resource_type == "shell_command":

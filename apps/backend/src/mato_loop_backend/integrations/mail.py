@@ -554,9 +554,30 @@ def _permission(capability: str, operation: str, arguments: Any, context: Any):
     from mato_loop_backend.agent.permissions import integration_operation_permission
 
     instance, revision = _binding(context, arguments.integration_id)
-    digest = hashlib.sha256(
-        arguments.model_dump_json(exclude={"integration_id"}).encode()
-    ).hexdigest()[:24]
+    serialized = arguments.model_dump_json(exclude={"integration_id"})
+    if capability == "mail.read":
+        identity = arguments.model_dump(mode="json", exclude={"integration_id"})
+        for field in ("message_token", "attachment_token"):
+            if field not in identity:
+                continue
+            try:
+                locator, part = locator_from_token(
+                    identity[field],
+                    arguments.integration_id,
+                    revision,
+                    require_part=field == "attachment_token",
+                )
+            except ValueError:
+                raise MailError("integration.staleReference") from None
+            # Hash the stable locator, never the randomized ciphertext or plaintext scope.
+            identity[field] = {
+                "mailbox": locator.mailbox,
+                "uidvalidity": locator.uidvalidity,
+                "uid": locator.uid,
+                "part": part,
+            }
+            serialized = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(serialized.encode()).hexdigest()[:24]
     labels = {
         "mail.read": ("E-Mails lesen?", "Der Agent möchte E-Mail-Daten lesen."),
         "mail.drafts": (

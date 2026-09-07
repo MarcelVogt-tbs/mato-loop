@@ -724,6 +724,7 @@ async def test_shared_tool_rejects_action_irrelevant_to_selected_resource(
     integration = _shared_integration("First")
     settings = IntegrationSettings(instances=[integration])
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(tools_module, "_profile_tool_settings", AsyncMock(return_value=ToolSettings()))
     effective = ToolRegistry([]).effective(settings)
     call = ToolCall(
         id="irrelevant",
@@ -1524,6 +1525,29 @@ async def test_session_file_operations_only_ask_for_deletion(tmp_path, trust) ->
         ] * (2 if name in {"copy_path", "move_path"} else 1)
 
     assert context.root_files.read_file("session", "output/moved.txt").content == "1: after"
+
+
+@pytest.mark.parametrize("name", ["copy_path", "move_path"])
+@pytest.mark.parametrize("trust", list(TrustLevel))
+async def test_transfer_source_denial_skips_destination_approval(tmp_path, monkeypatch, name, trust):
+    call = ToolCall(name, name, {
+        "source_root": "files", "source_path": "source.txt",
+        "destination_root": "files", "destination_path": "destination.txt",
+    })
+    context = _context(tmp_path, call)
+    context.tool_settings = ToolSettings().select_trust(trust)
+    context.ask_handler = AsyncMock(return_value=PermissionDecision.DENY)
+    context.root_files.write_file("session", "source.txt", "unchanged")
+    dispatch = Mock(side_effect=AssertionError("Denied source must not be changed"))
+    monkeypatch.setattr(context.root_files, name, dispatch)
+    result = await tool_registry.effective(
+        context.integration_settings, tool_settings=context.tool_settings
+    ).execute(call, context)
+    assert result.is_error
+    assert json.loads(result.content)["error"]["code"] == "permission.denied"
+    context.ask_handler.assert_awaited_once()
+    dispatch.assert_not_called()
+    assert context.root_files.read_file("session", "source.txt").content == "1: unchanged"
 
 
 def test_global_policy_removes_tools_requiring_a_disabled_action() -> None:

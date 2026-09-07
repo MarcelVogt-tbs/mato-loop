@@ -214,7 +214,7 @@ async def add_directory_grant(
     agent_profile_id: UUID | None,
     trust_level: str | None,
 ) -> None:
-    if agent_id is None or path is None or policy != "ask" or trust_level is None:
+    if agent_id is None or path is None or policy not in {"auto", "ask"} or trust_level is None:
         return
     scope = execution_directory_scope(agent_id, path)
     existing = await db.scalar(

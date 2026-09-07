@@ -36,6 +36,7 @@ from mato_loop_backend.integrations import (
     effective_search_providers,
 )
 from mato_loop_backend.integrations.contracts import IntegrationResource, ToolContribution
+from mato_loop_backend.integrations.mail_client import MailError
 from mato_loop_backend.integrations.registry import (
     agent_profile_search_available,
     effective_integration_contributions,
@@ -1000,7 +1001,7 @@ class ToolRegistry:
             )
 
         async def resolve_resource(
-            selected_id: str, resource_key: str
+            selected_id: str, resource_key: str, capabilities: set[str]
         ) -> IntegrationResource | None:
             current_integrations = await context.current_integrations()
             instance = next(
@@ -1011,7 +1012,11 @@ class ToolRegistry:
                 ),
                 None,
             )
-            if instance is None:
+            if (
+                instance is None
+                or instance.owner_id not in (None, context.session.user_id)
+                or _model_revision(instance) != context.bound_options["binding_revision"]
+            ):
                 return None
             adapter = integration_adapter(
                 instance.integration_type, instance.adapter_type
@@ -1037,7 +1042,17 @@ class ToolRegistry:
                     exc_info=True,
                 )
                 return None
-            return next((item for item in resources if item.key == resource_key), None)
+            resource = next((item for item in resources if item.key == resource_key), None)
+            if (
+                resource is None
+                or (
+                    resource.applicable_capabilities is not None
+                    and not capabilities <= resource.applicable_capabilities
+                )
+                or capabilities & resource.hard_unavailable_capabilities
+            ):
+                return None
+            return resource
 
         if tool.source_id is not None and not await integration_is_current(tool.source_id):
             return ToolResult.error("tool.unavailable")
@@ -1173,6 +1188,45 @@ class ToolRegistry:
                     {request.capability for request in requests}
                 ):
                     return ToolResult.error("tool.unavailable")
+                if resource_key is not None:
+                    from mato_loop_backend.agent.tools import _profile_tool_settings
+
+                    context.tool_settings = await _profile_tool_settings(context)
+                    if (
+                        context.tool_settings._agent_profile_unavailable
+                        or not context.tool_settings.tool_availability.get(definition.name, True)
+                    ):
+                        return ToolResult.error("tool.unavailable")
+                    if self._policy_resolver is not None and any(
+                        self._policy_resolver(
+                            context.tool_settings,
+                            request.capability,
+                            next(
+                                action.default_policy for action in definition.actions
+                                if action.capability == request.capability
+                            ),
+                            integration_id=request.policy_integration_id,
+                            resource_key=request.policy_resource_key,
+                        ) == ToolExecutionPolicy.DISABLED
+                        for request in requests
+                    ):
+                        return ToolResult.error("permission.denied")
+                    # Discover host-only metadata, never resource content, before approval.
+                    resource = await resolve_resource(
+                        selected_integration_id, resource_key, declared
+                    )
+                    if resource is None:
+                        return ToolResult.error("tool.unavailable")
+                    requests = tuple(
+                        replace(
+                            request,
+                            policy_hard_unavailable_capabilities=(
+                                resource.hard_unavailable_capabilities
+                                if request.use_integration_policy else frozenset()
+                            ),
+                        )
+                        for request in requests
+                    )
                 for request in requests:
                     if not await self._allow(context, request):
                         return ToolResult.error("permission.denied")
@@ -1188,16 +1242,9 @@ class ToolRegistry:
                     return ToolResult.error("tool.unavailable")
                 if resource_key is not None:
                     resource = await resolve_resource(
-                        selected_integration_id, resource_key
+                        selected_integration_id, resource_key, declared
                     )
-                    if (
-                        resource is None
-                        or (
-                            resource.applicable_capabilities is not None
-                            and not declared <= resource.applicable_capabilities
-                        )
-                        or declared & resource.hard_unavailable_capabilities
-                    ):
+                    if resource is None:
                         return ToolResult.error("tool.unavailable")
                     context.bound_resource = resource
             if tool.source_type == "integration":
@@ -1221,6 +1268,7 @@ class ToolRegistry:
         except (
             AttachmentError,
             ExecutionClientError,
+            MailError,
             RootFileError,
             SearchIntegrationError,
             WebFetchError,

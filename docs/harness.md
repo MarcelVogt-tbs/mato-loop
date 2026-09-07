@@ -95,6 +95,8 @@ Configured integrations resolve through a static host catalog. An adapter can co
 
 A contributed tool with configurable actions must provide a host-side authorization factory. The registry validates every produced permission request against the actions declared by that tool before its handler runs. Integration settings cannot declare capabilities or authorization behavior.
 
+For a selected integration resource, the registry refreshes effective policy and technical availability before performing a host-only metadata preflight. Missing resources, inapplicable actions, and remote ACL denials stop the call before creating an approval. Discovery may use authenticated, read-only resource metadata requests, but does not fetch resource content or release discovered metadata to the model. Integration bindings and resource restrictions are checked again after authorization before content access or mutation.
+
 The effective tool set is bound for exactly one model request. Schema export, option validation, and subsequent execution use the same binding. Calls outside this set are rejected even when a global tool definition with that name exists. Before external effects, handlers reload revocable integration, tool, and capability configuration.
 
 Bindings retain their source integration ID and a canonical revision of that integration instance. Deletion, disabling, credential replacement, or configuration changes invalidate an already offered contributed tool. Host-selected provider options are bound to the same request; execution never silently switches a stale call to a different provider.
@@ -107,7 +109,7 @@ Every execution receives host context containing at least run ID, current sessio
 4. Return typed `allow_once`, `allow_session`, or `deny`.
 5. Only for `allow_session` and a live run, persist the grant in the approval transaction and then resume the waiter.
 
-Model arguments cannot bypass registry selection, `Context.ask`, capability boundaries, or resource matchers. The tool performs effects only after an allowing result.
+Model arguments cannot bypass registry selection, `Context.ask`, capability boundaries, or resource matchers. Tool content access and mutations occur only after an allowing result; the host-only resource metadata preflight above is part of authorization. Copy and move stop after a denied source permission without asking for a destination permission that cannot make the operation succeed.
 
 This permission sequence also governs commands shown in Control Center Terminal Auto mode. Terminal Confirm mode is a separate direct-user authorization path: the attached user may edit, execute, or deny the proposed call, no reusable grant is created, and ordinary directory and shell-policy matchers do not authorize that command. Session, run, owner, agent, current-directory, and shell-inspection bindings are still revalidated before execution.
 
@@ -119,12 +121,16 @@ A permission consists of a capability and typed resource matcher. Security decis
 
 - Path matchers contain explicit `session` or `workspace` root and compare relative paths component by component inside the host-bound root; string-prefix matching is forbidden.
 - Computer directory matchers use canonical `{agentId,path}` JSON and compare normalized absolute POSIX paths component by component. They bound model directory entry independently from file or process policy; string-prefix matching is forbidden.
+- Explicit authenticated computer/directory selection creates the same profile- and trust-bound directory grant for permitted `auto` and `ask` zones. The grant permits directory use within the selected subtree, not file or shell operations. Denied zones and missing bindings create no grant. Existing sessions can explicitly reselect their directory; grants are not backfilled on startup or recreated by normal runs after revocation.
 - Session matchers compare UUIDs and distinguish the current session from an explicitly named other session.
+- Project-session file grants match the exact canonical project ID, target session ID, and relative path. Repeated reads and pagination reuse them under `ask`; each evaluation rechecks current ownership, project membership, and target-session eligibility. They do not authorize another path or a subtree.
+- Personal-profile update grants bind the owner and resolved data audience (`private_models`, `public_models`, or `both_models`) in addition to the normal session, agent-profile, and executing-model trust binding. They cover profile updates for that audience, not only the fields displayed in the first request. Legacy owner-only UUID grants do not authorize a new audience-bound request.
 - Session-search matchers represent browse and search as one collection resource. A grant to read one session does not allow either discovery operation.
 - URL matchers use the SHA-256 hash of the complete canonical URL. Display metadata is persisted separately without query values.
 - Persisted matchers deserialize losslessly to the same typed matcher.
 - Approval display title, summary, and risk are metadata, not matching inputs.
 - Integration-operation matchers compare the exact integration UUID, canonical binding-revision hash, optional opaque resource key, and host-generated operation key. Remote labels and URLs are never matcher inputs.
+- Token-based Mail read keys hash the validated mailbox, UIDVALIDITY, UID, optional attachment part, and other read arguments together with the operation identity. Reissuing an encrypted token for the same message does not change its scope. Plaintext locators and ciphertext tokens are not stored in the matcher. Old ciphertext-based read grants may require one fresh approval; queries, other messages, attachments, bindings, and mutation decisions are not broadened.
 - Shell matchers use the host-generated `shell.read` or `shell.write` class and semantic token prefixes. Persistent allowlists are class-specific. Session grants compare token sequences and bind them to the same agent and absolute current directory. Disabled capabilities, hard shell-zone switches, and filesystem `deny` are evaluated before grants.
 - Terminal Confirm commands do not use a resource matcher or persistent grant. The user's terminal decision applies only to the bound pending call.
 - Image-edit matchers retain direct attachment provenance separately from a bounded host-controlled authorization lineage. Descendants inherit lineage roots; unrelated images, sessions, targets, and trust levels do not match.

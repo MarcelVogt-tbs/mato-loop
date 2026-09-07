@@ -27,6 +27,7 @@ from mato_loop_backend.agent.permissions import (
     skill_load_permission,
     skill_write_permission,
     transcript_permission,
+    user_profile_permission,
     webfetch_permission,
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
@@ -1091,6 +1092,121 @@ async def test_same_project_session_reads_honor_policy(tmp_path) -> None:
         path_request,
         root_files,
         ToolExecutionPolicy.DISABLED,
+    ) == PermissionDecision.DENY
+
+
+@pytest.mark.parametrize("trust", list(TrustLevel))
+async def test_project_file_grant_reuse_is_exact_and_rechecks_eligibility(tmp_path, trust):
+    session = _session(user_id=uuid4(), project_id=uuid4(), session_type="chat")
+    target = _session(user_id=session.user_id, project_id=session.project_id, session_type="chat")
+    request = project_session_path_permission(
+        project_id=session.project_id, session_id=target.id, relative_path="notes.txt",
+        action_kind="read", action_label="Datei lesen",
+    )
+    profile_id = uuid4()
+    grant = PermissionGrant(
+        session_id=session.id, capability=request.capability,
+        resource_type=request.resource_type, resource_scope=request.resource_scope,
+        agent_profile_id=profile_id, trust_level=trust.value,
+    )
+    roots = _root_files(tmp_path, session)
+    db = _db_with_grants(grant)
+    db.get.return_value = target
+    for _ in range(2):
+        assert await PermissionPolicy.evaluate(
+            db, session, request, roots, ToolExecutionPolicy.ASK,
+            agent_profile_id=profile_id, trust_level=trust,
+        ) == PermissionDecision.ALLOW
+    parameters = db.scalars.await_args.args[0].compile().params.values()
+    assert session.id in parameters and profile_id in parameters and trust.value in parameters
+
+    for changed in (
+        {"relative_path": "notes.txt/child"}, {"relative_path": "other.txt"},
+        {"project_id": uuid4()}, {"session_id": uuid4()},
+    ):
+        other = project_session_path_permission(**{
+            "project_id": session.project_id, "session_id": target.id,
+            "relative_path": "notes.txt", "action_kind": "read", "action_label": "Datei lesen",
+            **changed,
+        })
+        assert not PermissionPolicy.grant_matches(grant, other, roots)
+    assert await PermissionPolicy.evaluate(
+        db, session, request, roots, ToolExecutionPolicy.DISABLED
+    ) == PermissionDecision.DENY
+    for field, changed in (("user_id", uuid4()), ("project_id", uuid4()),
+                           ("parent_session_id", uuid4()), ("session_type", "automation")):
+        previous = getattr(target, field)
+        setattr(target, field, changed)
+        assert await PermissionPolicy.evaluate(
+            db, session, request, roots, ToolExecutionPolicy.ASK
+        ) == PermissionDecision.DENY
+        setattr(target, field, previous)
+    db.scalars.return_value.all.return_value = []
+    assert await PermissionPolicy.evaluate(
+        db, session, request, roots, ToolExecutionPolicy.ASK
+    ) == PermissionDecision.ASK
+
+
+@pytest.mark.parametrize("trust", list(TrustLevel))
+@pytest.mark.parametrize("audience", ["private_models", "public_models", "both_models"])
+async def test_profile_grants_bind_owner_and_data_audience(tmp_path, trust, audience):
+    session = _session(user_id=uuid4())
+    roots = _root_files(tmp_path, session)
+    request = user_profile_permission(
+        session.user_id, field_labels=["Name"], model_scope=audience
+    )
+    profile_id = uuid4()
+    grant = PermissionGrant(
+        session_id=session.id, capability=request.capability,
+        resource_type=request.resource_type, resource_scope=request.resource_scope,
+        agent_profile_id=profile_id, trust_level=trust.value,
+    )
+    db = _db_with_grants(grant)
+    same_audience = user_profile_permission(
+        session.user_id, field_labels=["Sprache"], model_scope=audience
+    )
+    assert await PermissionPolicy.evaluate(
+        db, session, same_audience, roots, ToolExecutionPolicy.ASK,
+        agent_profile_id=profile_id, trust_level=trust,
+    ) == PermissionDecision.ALLOW
+    parameters = db.scalars.await_args.args[0].compile().params.values()
+    assert session.id in parameters and profile_id in parameters and trust.value in parameters
+    for other_audience in {"private_models", "public_models", "both_models"} - {audience}:
+        other = user_profile_permission(
+            session.user_id, field_labels=["Name"], model_scope=other_audience
+        )
+        assert await PermissionPolicy.evaluate(
+            db, session, other, roots, ToolExecutionPolicy.ASK
+        ) == PermissionDecision.ASK
+    foreign = user_profile_permission(uuid4(), field_labels=["Name"], model_scope=audience)
+    assert await PermissionPolicy.evaluate(
+        db, session, foreign, roots, ToolExecutionPolicy.AUTO
+    ) == PermissionDecision.DENY
+    assert await PermissionPolicy.evaluate(
+        db, session, request, roots, ToolExecutionPolicy.DISABLED
+    ) == PermissionDecision.DENY
+    grant.resource_scope = str(session.user_id)
+    assert await PermissionPolicy.evaluate(
+        db, session, request, roots, ToolExecutionPolicy.ASK
+    ) == PermissionDecision.ASK
+    db.scalars.return_value.all.return_value = []
+    assert await PermissionPolicy.evaluate(
+        db, session, request, roots, ToolExecutionPolicy.ASK
+    ) == PermissionDecision.ASK
+
+
+@pytest.mark.parametrize("scope", [
+    "null", "[]", "{}", "not-json",
+    '{"modelScope":"both_models","userId":123}',
+    '{"modelScope":[],"userId":"00000000-0000-4000-8000-000000000001"}',
+    '{"modelScope":"current_model","userId":"00000000-0000-4000-8000-000000000001"}',
+])
+async def test_invalid_profile_scopes_are_denied(tmp_path, scope):
+    session = _session(user_id=uuid4())
+    request = user_profile_permission(session.user_id, field_labels=["Name"], model_scope="both_models")
+    assert await PermissionPolicy.evaluate(
+        _db_with_grants(), session, replace(request, resource_scope=scope),
+        _root_files(tmp_path, session), ToolExecutionPolicy.AUTO,
     ) == PermissionDecision.DENY
 
 

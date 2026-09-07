@@ -1272,9 +1272,7 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
         action_kind="copy_path",
         action_label="Ziel erstellen",
     )
-    source_allowed = await _allow(context, source_request)
-    destination_allowed = await _allow(context, destination_request)
-    if not source_allowed or not destination_allowed:
+    if not await _allow(context, source_request) or not await _allow(context, destination_request):
         return ToolResult.error("permission.denied")
     if arguments.source_root == arguments.destination_root == "workspace":
         destination = _execution_path(context, arguments.destination_path)
@@ -1394,9 +1392,7 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
         action_kind="move_path",
         action_label="Ziel erstellen",
     )
-    source_allowed = await _allow(context, source_request)
-    destination_allowed = await _allow(context, destination_request)
-    if not source_allowed or not destination_allowed:
+    if not await _allow(context, source_request) or not await _allow(context, destination_request):
         return ToolResult.error("permission.denied")
     if arguments.source_root == arguments.destination_root == "workspace":
         destination = _execution_path(context, arguments.destination_path)

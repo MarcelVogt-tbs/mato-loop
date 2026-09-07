@@ -1,11 +1,16 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.permissions import (
+    PermissionDecision,
+    PermissionPolicy,
+    execution_directory_permission,
+)
 from mato_loop_backend.agent.runtime import AgentRuntime, _effective_execution_operations
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.sessions import (
@@ -22,8 +27,9 @@ from mato_loop_backend.execution import (
 from mato_loop_backend.memory.episode_indexing import EpisodeIndexService
 from mato_loop_backend.models import AgentRun, ChatSession, ExecutionAgent, PermissionGrant
 from mato_loop_backend.sessions.service import add_directory_grant
-from mato_loop_backend.settings import AiSettings, SettingsStore
+from mato_loop_backend.settings import AiSettings, SettingsStore, ToolExecutionPolicy, TrustLevel
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+from mato_loop_backend.workspace import RootFileService
 
 
 def _agent(user_id=None, **values):
@@ -99,25 +105,45 @@ async def test_preferences_reject_denied_external_directory(monkeypatch) -> None
     assert error.value.code == "permission.denied"
 
 
-async def test_directory_grant_is_bound_to_profile_and_model_trust() -> None:
+@pytest.mark.parametrize("zone_policy", ["auto", "ask"])
+@pytest.mark.parametrize("trust", list(TrustLevel))
+async def test_directory_grant_is_bound_to_profile_and_model_trust(zone_policy, trust) -> None:
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = None
     profile_id = uuid4()
+    agent_id = uuid4()
 
     await add_directory_grant(
         db,
         uuid4(),
-        uuid4(),
+        agent_id,
         "/srv/project",
-        "ask",
+        zone_policy,
         profile_id,
-        "public",
+        trust.value,
     )
 
     grant = db.add.call_args.args[0]
     assert isinstance(grant, PermissionGrant)
     assert grant.agent_profile_id == profile_id
-    assert grant.trust_level == "public"
+    assert grant.trust_level == trust.value
+
+    session = ChatSession(id=grant.session_id, user_id=uuid4(), current_directory="/srv/project")
+    agent = _agent(session.user_id, external_filesystem_policy=zone_policy)
+    agent.id = agent_id
+    db.scalar.return_value = agent
+    db.scalars.return_value = Mock(all=Mock(return_value=[grant]))
+    request = execution_directory_permission(agent_id, "/srv/project/src")
+    roots = RootFileService(session.id)
+    assert await PermissionPolicy.evaluate(
+        db, session, request, roots, ToolExecutionPolicy.ASK,
+        agent_profile_id=profile_id, trust_level=trust,
+    ) == PermissionDecision.ALLOW
+    db.scalars.return_value.all.return_value = []
+    assert await PermissionPolicy.evaluate(
+        db, session, request, roots, ToolExecutionPolicy.ASK,
+        agent_profile_id=profile_id, trust_level=trust,
+    ) == PermissionDecision.ASK
 
     db.reset_mock()
     await add_directory_grant(
@@ -130,6 +156,14 @@ async def test_directory_grant_is_bound_to_profile_and_model_trust() -> None:
         None,
     )
     db.add.assert_not_called()
+
+
+@pytest.mark.parametrize("policy", [None, "deny"])
+async def test_directory_grant_is_not_created_for_unavailable_zone(policy):
+    db = AsyncMock(spec=AsyncSession)
+    await add_directory_grant(db, uuid4(), uuid4(), "/srv/project", policy, uuid4(), "public")
+    db.add.assert_not_called()
+    db.scalar.assert_not_awaited()
 
 
 def test_effective_operations_require_a_current_directory() -> None:

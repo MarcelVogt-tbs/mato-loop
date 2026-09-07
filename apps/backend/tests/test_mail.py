@@ -1,25 +1,35 @@
+import hashlib
+import json
+import traceback
 from contextlib import contextmanager
+from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.tools import ToolContext, ToolRegistry
 from mato_loop_backend.api.request_body_limit import _request_limit
 from mato_loop_backend.api.routes.integrations import (
     IntegrationAccessRequest,
     get_integration_access,
     update_integration_access,
 )
+from mato_loop_backend.error_contract import error_payload
+from mato_loop_backend.integrations import registry as integration_registry
 from mato_loop_backend.integrations.mail import (
     MAIL_ADAPTER,
     MAIL_CREDENTIAL_KIND,
     MailConfig,
     MailCreateDraftArguments,
+    MailIntegrationArguments,
+    MailSearchArguments,
     MailSendMessageArguments,
     MailTokenArguments,
+    _permission,
     binding_revision,
     locator_from_token,
     token_for,
@@ -32,6 +42,8 @@ from mato_loop_backend.integrations.mail_client import (
     parse_message,
 )
 from mato_loop_backend.integrations.service import MailIntegrationService
+from mato_loop_backend.models import ChatSession
+from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.security import CredentialCipher
 from mato_loop_backend.settings import (
     IntegrationInstance,
@@ -64,6 +76,216 @@ def _client() -> MailClient:
     return MailClient(
         **MailConfig.model_validate(_account().config).model_dump(), password="secret"
     )
+
+
+@pytest.fixture(autouse=True)
+def mail_cipher(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "mato_loop_backend.auth.credentials.get_runtime_config",
+        lambda: SimpleNamespace(secrets_dir=tmp_path),
+    )
+
+
+@pytest.fixture
+def mail_binding():
+    account = _account()
+    return account, SimpleNamespace(
+        bound_options={
+            "integration_id": str(account.id),
+            "binding_revision": binding_revision(account),
+        },
+        integration_settings=IntegrationSettings(instances=[account]),
+    )
+
+
+@pytest.mark.parametrize("part", [None, "2.1"])
+def test_mail_read_scopes_use_stable_private_locator_identity(mail_binding, part) -> None:
+    class AttachmentArguments(MailIntegrationArguments):
+        attachment_token: str
+        limit: int = 50
+
+    account, context = mail_binding
+    revision = binding_revision(account)
+    locator = MessageLocator("Confidential/Payroll", 172839, 987654)
+    field = "attachment_token" if part else "message_token"
+    model = AttachmentArguments if part else MailTokenArguments
+    operation = "mail_get_attachment" if part else "mail_get_message"
+
+    def permission(token, **changes):
+        arguments = model(integration_id=account.id, **{field: token}, **changes)
+        before = arguments.model_dump()
+        request = _permission("mail.read", operation, arguments, context)[0]
+        assert arguments.model_dump() == before
+        return request
+
+    first = token_for(account.id, revision, locator, part=part)
+    second = token_for(account.id, revision, locator, part=part)
+    assert first != second
+    request = permission(first)
+    assert request == permission(second)
+    assert request.available_decisions == ("allow_once", "allow_session", "deny")
+    assert request.use_integration_policy
+    assert request.policy_integration_id == account.id
+    scope = json.loads(request.resource_scope)
+    assert scope["integrationId"] == str(account.id)
+    assert scope["bindingRevision"] == hashlib.sha256(revision.encode()).hexdigest()
+    assert scope["operationKey"].startswith(f"{operation}:")
+    assert len(scope["operationKey"].split(":")[1]) == 24
+    for private in (locator.mailbox, str(locator.uidvalidity), str(locator.uid), first, second, revision):
+        assert private not in repr(request)
+    if part:
+        assert part not in repr(request)
+        assert permission(first, limit=10).resource_scope != request.resource_scope
+
+    variants = [
+        (MessageLocator("Confidential/Other", locator.uidvalidity, locator.uid), part),
+        (MessageLocator(locator.mailbox, locator.uidvalidity + 1, locator.uid), part),
+        (MessageLocator(locator.mailbox, locator.uidvalidity, locator.uid + 1), part),
+    ]
+    if part:
+        variants.append((locator, "2.2"))
+    scopes = {request.resource_scope}
+    for other_locator, other_part in variants:
+        token = token_for(account.id, revision, other_locator, part=other_part)
+        scopes.add(permission(token).resource_scope)
+    assert len(scopes) == len(variants) + 1
+    arguments = model(integration_id=account.id, **{field: first})
+    assert _permission("mail.read", "other_read", arguments, context)[0].resource_scope not in scopes
+
+
+@pytest.mark.parametrize("field", ["message_token", "attachment_token"])
+@pytest.mark.parametrize("invalid", ["malformed", "payload", "integration", "revision", "part"])
+def test_mail_read_rejects_invalid_tokens_before_permission_request(
+    mail_binding, monkeypatch, field, invalid
+) -> None:
+    class AttachmentArguments(MailIntegrationArguments):
+        attachment_token: str
+
+    account, context = mail_binding
+    revision = binding_revision(account)
+    locator = MessageLocator("Confidential/Payroll", 172839, 987654)
+    part = "2.1" if field == "attachment_token" else None
+    if invalid == "part":
+        part = None if part else "2.1"
+    token = token_for(
+        uuid4() if invalid == "integration" else account.id,
+        "old binding" if invalid == "revision" else revision,
+        locator,
+        part=part,
+    )
+    if invalid == "malformed":
+        token = "invalid ciphertext"
+    elif invalid == "payload":
+        payload = CredentialCipher().decrypt(token.encode("ascii"))
+        payload["uid"] = "sensitive invalid uid"
+        token = CredentialCipher().encrypt(payload).decode("ascii")
+    permission = Mock(side_effect=AssertionError("invalid tokens must not request approval"))
+    monkeypatch.setattr(
+        "mato_loop_backend.agent.permissions.integration_operation_permission", permission
+    )
+    model = AttachmentArguments if field == "attachment_token" else MailTokenArguments
+    arguments = model(integration_id=account.id, **{field: token})
+    with pytest.raises(MailError) as error:
+        _permission("mail.read", "mail_get_message", arguments, context)
+    assert error.value.code == "integration.staleReference"
+    permission.assert_not_called()
+    formatted = "".join(traceback.format_exception(error.value))
+    for private in (locator.mailbox, revision, token, "sensitive invalid uid"):
+        assert private not in formatted
+
+
+@pytest.mark.parametrize("invalid", ["malformed", "integration", "revision"])
+async def test_mail_registry_rejects_invalid_tokens_without_approval_or_execution(
+    mail_binding, monkeypatch, caplog, invalid
+) -> None:
+    account, binding = mail_binding
+    revision = binding_revision(account)
+    locator = MessageLocator("Confidential/Payroll", 172839, 987654)
+    token = token_for(
+        uuid4() if invalid == "integration" else account.id,
+        "old binding" if invalid == "revision" else revision,
+        locator,
+    )
+    if invalid == "malformed":
+        token = "invalid ciphertext"
+    handler = AsyncMock(side_effect=AssertionError("invalid tokens must not execute"))
+    contribution = next(
+        tool for tool in MAIL_ADAPTER.shared_tools if tool.name == "mail_get_message"
+    )
+    monkeypatch.setitem(
+        integration_registry._ADAPTERS,
+        ("mail", "imap_smtp"),
+        replace(MAIL_ADAPTER, shared_tools=(replace(contribution, handler=handler),)),
+    )
+    monkeypatch.setattr(
+        ToolContext, "current_integrations",
+        AsyncMock(return_value=binding.integration_settings),
+    )
+    call = ToolCall(
+        "mail-read", "mail_get_message",
+        {"integration_id": str(account.id), "message_token": token},
+    )
+    context = ToolContext(
+        db=AsyncMock(spec=AsyncSession),
+        run_id=uuid4(),
+        session=ChatSession(id=uuid4(), user_id=uuid4()),
+        tool_call=call,
+        root_files=Mock(),
+        integration_settings=binding.integration_settings,
+        ask_handler=AsyncMock(side_effect=AssertionError("invalid tokens must not ask")),
+    )
+    effective = ToolRegistry([]).effective(binding.integration_settings)
+
+    result = await effective.execute(call, context)
+
+    context.ask_handler.assert_not_called()
+    handler.assert_not_called()
+    assert result.is_error
+    assert result.metadata == {"errorCode": "integration.staleReference"}
+    assert json.loads(result.content) == error_payload("integration.staleReference")
+    assert not caplog.records
+    for private in (locator.mailbox, revision, token):
+        assert private not in repr(result)
+
+
+def test_mail_search_scopes_preserve_query_arguments(mail_binding) -> None:
+    account, context = mail_binding
+    arguments = MailSearchArguments(
+        integration_id=account.id, mailbox="Confidential/Payroll", query="salary", limit=50
+    )
+    scopes = set()
+    for changes in ({}, {"mailbox": "Other"}, {"query": "bonus"}, {"limit": 10}):
+        selected = arguments.model_copy(update=changes)
+        request = _permission("mail.read", "mail_search", selected, context)[0]
+        digest = hashlib.sha256(
+            selected.model_dump_json(exclude={"integration_id"}).encode()
+        ).hexdigest()[:24]
+        assert json.loads(request.resource_scope)["operationKey"] == f"mail_search:{digest}"
+        assert selected.mailbox not in repr(request)
+        assert selected.query not in repr(request)
+        scopes.add(request.resource_scope)
+    assert len(scopes) == 4
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["mail_update_draft", "mail_delete_draft", "mail_send_draft", "mail_delete_message"],
+)
+def test_mail_mutation_scopes_and_decisions_remain_unchanged(mail_binding, operation) -> None:
+    account, context = mail_binding
+    tool = next(tool for tool in MAIL_ADAPTER.shared_tools if tool.name == operation)
+    scopes = set()
+    for _ in range(2):
+        token = token_for(account.id, binding_revision(account), MessageLocator("INBOX", 17, 42))
+        arguments = tool.arguments_model(integration_id=account.id, message_token=token)
+        request = tool.authorization_factory(arguments, context)[0]
+        digest = hashlib.sha256(
+            arguments.model_dump_json(exclude={"integration_id"}).encode()
+        ).hexdigest()[:24]
+        assert json.loads(request.resource_scope)["operationKey"] == f"{operation}:{digest}"
+        assert request.available_decisions == ("allow_once", "deny")
+        scopes.add(request.resource_scope)
+    assert len(scopes) == 2
 
 
 def test_mail_config_and_adapter_allow_only_encrypted_transports_and_account_policies() -> None:
