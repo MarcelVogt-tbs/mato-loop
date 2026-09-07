@@ -14,7 +14,8 @@ export const controlCenterFixedAppIds = new Set(
 )
 
 export const controlCenterGlobalSectionManifest = Object.freeze([
-  { id: 'notifications', label: 'Benachrichtigungen', icon: 'notifications' }
+  { id: 'notifications', label: 'Benachrichtigungen', icon: 'notifications' },
+  { id: 'approvals', label: 'Freigaben', icon: 'pending_actions' }
 ])
 
 export const controlCenterIntegrationIds = new Set(controlCenterIntegrationManifest.map((item) => item.id))

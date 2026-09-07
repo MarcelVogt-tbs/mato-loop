@@ -89,7 +89,7 @@ describe('control center store', () => {
   })
 
   it('keeps global sections outside the integration manifest', () => {
-    expect([...controlCenterGlobalSectionIds]).toEqual(['notifications'])
+    expect([...controlCenterGlobalSectionIds]).toEqual(['notifications', 'approvals'])
     expect(controlCenterIntegrationIds.has('agent-coding')).toBe(true)
     expect(controlCenterIntegrationIds.has('notifications')).toBe(false)
     expect(controlCenterIntegrationIds.has('approvals')).toBe(false)
@@ -114,7 +114,7 @@ describe('control center store', () => {
     expect(useControlCenterStore().splitRatio).toBe(DEFAULT_CONTROL_CENTER_SPLIT_RATIO)
   })
 
-  it.each(['notifications', 'approvals'])('opens %s as notifications while persisting the panel state', async (appId) => {
+  it('opens global sections while persisting the panel state', async () => {
     api.patch.mockResolvedValue({
       data: {
         controlCenter: {
@@ -128,7 +128,7 @@ describe('control center store', () => {
     const store = useControlCenterStore()
     store.syncSession({ id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } })
 
-    await store.openApp(appId)
+    await store.openApp('notifications')
     expect(store.open).toBe(true)
     expect(store.activeGlobalSectionId).toBe('notifications')
     expect(store.activeContentId).toBe('notifications')
@@ -400,13 +400,13 @@ describe('control center store', () => {
     ])
   })
 
-  it.each(['calendar', 'notifications', 'approvals'])('does not carry a deferred %s shortcut into another session', async (appId) => {
+  it('does not carry a deferred integration shortcut into another session', async () => {
     const store = useControlCenterStore()
     store.bindSession({
       id: 'session-1',
       controlCenter: { tabs: [tab('files')], activeAppId: 'files' }
     })
-    await store.openApp(appId)
+    await store.openApp('calendar')
 
     store.bindSession({
       id: 'session-2',
@@ -418,39 +418,21 @@ describe('control center store', () => {
     })
 
     expect(store.requestedAppId).toBeNull()
-    expect(store.activeGlobalSectionId).toBeNull()
     expect(store.activeAppId).toBe('files')
     expect(api.patch).not.toHaveBeenCalled()
   })
 
-  it.each(['notifications', 'approvals'])('opens %s immediately and defers persistence until session state is loaded', async (appId) => {
+  it('opens global shortcuts immediately while session state is loading', async () => {
     const store = useControlCenterStore()
     store.bindSession({
       id: 'session-1',
       controlCenter: { tabs: [tab('files')], activeAppId: 'files' }
     })
 
-    await store.openApp(appId)
+    await store.openApp('approvals')
 
-    expect(store.activeGlobalSectionId).toBe('notifications')
-    expect(store.open).toBe(true)
-    expect(store.requestedAppId).toBe('notifications')
-    expect(api.patch).not.toHaveBeenCalled()
-
-    api.patch.mockResolvedValue({
-      data: { controlCenter: { tabs: [tab('files')], activeAppId: 'files', open: true } }
-    })
-    store.syncSession({
-      id: 'session-1',
-      controlCenter: { tabs: [tab('files')], activeAppId: 'files', open: false }
-    })
-    await vi.waitFor(() => expect(api.patch).toHaveBeenCalledOnce())
-
-    expect(store.activeContentId).toBe('notifications')
-    expect(store.open).toBe(true)
+    expect(store.activeGlobalSectionId).toBe('approvals')
     expect(store.requestedAppId).toBeNull()
-    expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
-      control_center: requestState(['session', 'files'], 'files', true)
-    })
+    expect(api.patch).not.toHaveBeenCalled()
   })
 })

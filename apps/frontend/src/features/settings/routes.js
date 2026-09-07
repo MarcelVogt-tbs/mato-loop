@@ -57,7 +57,7 @@ export const settingsRoutes = [
   {
     path: 'approvals',
     name: 'settings-approvals',
-    redirect: { name: 'chat', query: { controlCenter: 'notifications' } }
+    redirect: { name: 'chat', query: { controlCenter: 'approvals' } }
   },
   {
     path: 'execution-agents',

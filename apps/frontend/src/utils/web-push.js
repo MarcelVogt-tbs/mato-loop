@@ -17,7 +17,7 @@ export function pushTargetPath(target) {
   ) {
     return `/settings/automations/${encodeURIComponent(target.automationId)}?run=${encodeURIComponent(target.runId)}`
   }
-  if (target?.type === 'actions') return '/?controlCenter=notifications'
+  if (target?.type === 'actions') return '/?controlCenter=approvals'
   return '/'
 }
 

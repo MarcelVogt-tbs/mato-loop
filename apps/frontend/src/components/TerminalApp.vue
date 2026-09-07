@@ -29,7 +29,7 @@
         <template #avatar><q-icon name="pending_actions" /></template>
         Der Chat-Agent wartet auf eine Freigabe.
         <template #action>
-          <q-btn flat dense no-caps color="dark" label="Benachrichtigungen öffnen" @click="openNotifications" />
+          <q-btn flat dense no-caps color="dark" label="Freigaben öffnen" @click="openApprovals" />
         </template>
       </q-banner>
 
@@ -250,8 +250,8 @@ function reconnect() {
   terminal.connect({ sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId })
 }
 
-function openNotifications() {
-  void controlCenter.openApp('notifications').catch(() => {})
+function openApprovals() {
+  void controlCenter.openApp('approvals').catch(() => {})
 }
 
 watch(() => terminal.proposal, (proposal, previous) => {

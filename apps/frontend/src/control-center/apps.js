@@ -1,3 +1,4 @@
+import ApprovalCenterApp from 'components/ApprovalCenterApp.vue'
 import AgentCodingApp from 'components/AgentCodingApp.vue'
 import ComputerFileExplorerPanel from 'components/ComputerFileExplorerPanel.vue'
 import FileExplorerPanel from 'components/FileExplorerPanel.vue'
@@ -25,7 +26,8 @@ const components = {
   mail: MailApp,
   coding: CodingApp,
   terminal: TerminalApp,
-  notifications: NotificationCenterApp
+  notifications: NotificationCenterApp,
+  approvals: ApprovalCenterApp
 }
 
 const footerComponents = {

@@ -22,9 +22,7 @@ Persisted configuration and external responses must not provide handlers, arbitr
 
 An integration implementation may ship one Control Center view per integration type. Its inert ID, German label, Material icon, and Vue component are registered in the compiled frontend manifest. Multiple configured instances remain inside that one view. It uses normal typed MatoLoop APIs and stores; runtime settings require explicit authenticated backend contracts with the same ownership and effective-state rules as other settings.
 
-Control Center session metadata stores only bounded inert app and resource-tab IDs, their order, the active tab, panel visibility, separate managed and computer explorer positions, and validated file targets. It stores no editor content. The unified global **Benachrichtigungen** view is not session metadata. Persisted integration configuration and external responses cannot provide component paths, JavaScript, HTML, routes, form schemas, or remote bundles. Unknown IDs never cause code loading. Independently installed frontend plugins would require a separate signed and isolated plugin platform and are not part of the integration contract.
-
-**Benachrichtigungen** places pending approvals and questions above informational notices. Both can be answered centrally; marking notices read does not resolve them. Granted session permissions remain in the **Session** app, not in the global center.
+Control Center session metadata stores only bounded inert app and resource-tab IDs, their order, the active tab, panel visibility, separate managed and computer explorer positions, and validated file targets. It stores no editor content. Global Control Center sections such as notifications and approvals are not session metadata. Persisted integration configuration and external responses cannot provide component paths, JavaScript, HTML, routes, form schemas, or remote bundles. Unknown IDs never cause code loading. Independently installed frontend plugins would require a separate signed and isolated plugin platform and are not part of the integration contract.
 
 ## Execution Locations
 

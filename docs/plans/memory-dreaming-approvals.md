@@ -18,7 +18,7 @@ Status: implemented in August 2026. This file is retained as an implementation r
 - Approved updates, merges, and removals update the originating Dreaming run counters in the approval transaction.
 - Derived embeddings are refreshed only when canonical content changes.
 - Preferred name, form of address, primary residence, pronouns, and primary language live in the separate maintained user profile. Dreaming neither reads nor changes it.
-- The unified global **Benachrichtigungen** view shows pending memory updates, merges, and removals with their before and proposed states as actionable decisions above informational notices.
+- The global approvals page and notification center show memory updates, merges, and removals with their before and proposed states.
 
 ## Remaining Exclusions
 

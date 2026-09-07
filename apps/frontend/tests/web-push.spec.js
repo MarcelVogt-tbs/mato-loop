@@ -35,7 +35,7 @@ describe('web push contract', () => {
     expect(pushTargetPath({
       type: 'automationRun', automationId: AUTOMATION_ID, runId: RUN_ID
     })).toBe(`/settings/automations/${AUTOMATION_ID}?run=${RUN_ID}`)
-    expect(pushTargetPath({ type: 'actions' })).toBe('/?controlCenter=notifications')
+    expect(pushTargetPath({ type: 'actions' })).toBe('/?controlCenter=approvals')
   })
 
   it('shows a safe fallback for unknown versions and ignores arbitrary click destinations', () => {

@@ -56,28 +56,9 @@
   flex: 0 0 auto;
 }
 
-// Quasar 2.18 has no desktop no-arrows prop or public overflow state.
-// Keep these selectors scoped to this strip; QTabs still handles active-tab scrolling.
-.control-center__tab-strip > .q-tabs__arrow,
-.control-center__tab-menu {
-  display: none;
-}
-
-.control-center__tab-strip.q-tabs--scrollable ~ .control-center__tab-menu {
-  display: inline-flex;
-}
-
-.control-center__tab-scroll {
-  overflow-x: auto;
-}
-
-.control-center__tab-strip.q-tabs--scrollable .control-center__tab-scroll {
-  mask-image: linear-gradient(to right, transparent, #000 8px, #000 calc(100% - 8px), transparent);
-}
-
 .control-center__tab-shell {
   min-width: 0;
-  max-width: min(240px, 100%);
+  max-width: 240px;
   flex: 0 0 auto;
   border: 1px solid transparent;
   border-right-color: var(--app-surface-border);
@@ -155,7 +136,8 @@
 }
 
 .control-center__content,
-.notification-center-app {
+.notification-center-app,
+.approval-center-app {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
