@@ -7,11 +7,18 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import runtime as runtime_module
+from mato_loop_backend.agent.context import compaction_messages, estimate_tokens
 from mato_loop_backend.agent.runtime import AgentRuntime, _generated_session_title
-from mato_loop_backend.agent.title_generation import repair_title_output_budget, title_input
+from mato_loop_backend.agent.title_generation import (
+    initial_title_output_budget,
+    repair_title_output_budget,
+    title_input,
+)
 from mato_loop_backend.events import run_events
 from mato_loop_backend.models import ChatSession, Message, MessageAttachment, TitleGenerationStatus
+from mato_loop_backend.providers import service as service_module
 from mato_loop_backend.providers.base import ProviderResult, PublicReasoning
+from mato_loop_backend.providers.output_budget import allocate_output_tokens, guarded_input_tokens
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
@@ -52,10 +59,19 @@ class _SessionContext:
         return None
 
 
-async def test_compaction_uses_global_model_before_session_model(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("manual", "discovered", "expected"),
+    [(None, None, 512), (128, None, 128), (None, 64, 64), (128, 64, 64)],
+)
+async def test_compaction_uses_global_model_before_session_model(
+    monkeypatch, manual, discovered, expected,
+) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     active = ModelConfig(provider_id=provider.id, model_id="agent")
-    compaction = ModelConfig(provider_id=provider.id, model_id="compact")
+    compaction = ModelConfig(
+        provider_id=provider.id, model_id="compact",
+        max_output_tokens=manual, discovered_max_output_tokens=discovered,
+    )
     settings = AiSettings(
         providers=[provider],
         models=[active, compaction],
@@ -76,6 +92,69 @@ async def test_compaction_uses_global_model_before_session_model(monkeypatch) ->
     assert result.model_config_id == compaction.id
     assert complete.await_args.kwargs["model"] is compaction
     assert complete.await_args.kwargs["tools"] == []
+    assert complete.await_args.kwargs["max_output_tokens"] == expected
+    assert complete.await_args.kwargs["reserved_output_tokens"] == expected
+    assert complete.await_args.kwargs["estimated_input_tokens"] == estimate_tokens(
+        compaction_messages("USER: Test"), compaction.characters_per_token,
+    )
+
+
+async def test_compaction_fit_includes_system_message_and_envelope(monkeypatch) -> None:
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    source = "USER: Test"
+    output_tokens = 128
+    prompt_tokens = estimate_tokens(compaction_messages(source)[1]["content"], 4)
+    compaction = ModelConfig(
+        provider_id=provider.id, model_id="compact", max_output_tokens=None,
+        context_window_tokens=prompt_tokens + output_tokens, characters_per_token=4,
+    )
+    active = ModelConfig(provider_id=provider.id, model_id="agent", max_output_tokens=None)
+    complete = AsyncMock(return_value=ProviderResult(content=_VALID_SUMMARY))
+    monkeypatch.setattr(ProviderService, "complete", complete)
+
+    result = await AgentRuntime._summarize(
+        AsyncMock(spec=AsyncSession), source, output_tokens,
+        ai_settings=AiSettings(
+            providers=[provider], models=[active, compaction], compaction_model_id=compaction.id,
+        ),
+        active_model=active, runtime_settings=AgentRuntimeSettings(safety_reserve_tokens=0),
+    )
+
+    assert result.model_config_id == active.id
+    complete.assert_awaited_once()
+    assert complete.await_args.kwargs["model"] is active
+
+
+@pytest.mark.parametrize("headroom", [-1, 0])
+@pytest.mark.parametrize("output_tokens", [7, 512])
+async def test_compaction_candidate_fit_includes_shared_slack(monkeypatch, headroom, output_tokens):
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    source = "x" * 1000
+    raw_estimate = estimate_tokens(compaction_messages(source), 4)
+    compaction = ModelConfig(
+        provider_id=provider.id, model_id="compact", characters_per_token=4,
+        context_window_tokens=guarded_input_tokens(raw_estimate) + output_tokens + 4096 + headroom,
+    )
+    active = ModelConfig(provider_id=provider.id, model_id="agent")
+    complete = AsyncMock(return_value=ProviderResult(content=_VALID_SUMMARY))
+    monkeypatch.setattr(ProviderService, "complete", complete)
+    result = await AgentRuntime._summarize(
+        AsyncMock(spec=AsyncSession), source, output_tokens,
+        ai_settings=AiSettings(
+            providers=[provider], models=[active, compaction], compaction_model_id=compaction.id,
+        ),
+        active_model=active, runtime_settings=AgentRuntimeSettings(),
+    )
+    assert result.model_config_id == (compaction.id if headroom == 0 else active.id)
+    complete.assert_awaited_once()
+    request = complete.await_args.kwargs
+    assert request["estimated_input_tokens"] == raw_estimate
+    assert allocate_output_tokens(
+        request["model"], request["estimated_input_tokens"],
+        requested=request["max_output_tokens"],
+        reserved_output_tokens=request["reserved_output_tokens"],
+        safety_reserve_tokens=request["safety_reserve_tokens"],
+    ) == output_tokens
 
 
 async def test_compaction_falls_back_to_active_model_after_specialist_failure(
@@ -202,10 +281,16 @@ async def test_compaction_marks_host_fallback_after_empty_visible_output(
     assert "USER: Test" in result.content
 
 
-async def test_title_generation_falls_back_to_session_model(monkeypatch) -> None:
-    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+@pytest.mark.parametrize(("context_window", "safety"), [(131_072, 4_096), (4_096, 0)])
+async def test_title_generation_falls_back_to_session_model(monkeypatch, context_window, safety) -> None:
+    provider = LlmProviderConfig(
+        name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "http://local.test/v1"},
+    )
     agent = ModelConfig(provider_id=provider.id, model_id="agent")
-    session_model = ModelConfig(provider_id=provider.id, model_id="session")
+    session_model = ModelConfig(
+        provider_id=provider.id, model_id="session", context_window_tokens=context_window,
+    )
     settings = AiSettings(
         providers=[provider],
         models=[agent, session_model],
@@ -222,11 +307,13 @@ async def test_title_generation_falls_back_to_session_model(monkeypatch) -> None
     db.get.side_effect = [session, message]
 
     async def load(_db, settings_type):
-        return settings if settings_type is AiSettings else AgentRuntimeSettings()
+        return settings if settings_type is AiSettings else AgentRuntimeSettings(safety_reserve_tokens=safety)
 
     monkeypatch.setattr(SettingsStore, "load", load)
     monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
-    complete = AsyncMock(return_value=SimpleNamespace(content="Standardmodelle konfigurieren"))
+    transport = AsyncMock(return_value=ProviderResult(content="Standardmodelle konfigurieren"))
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+    complete = AsyncMock(wraps=ProviderService.complete)
     monkeypatch.setattr(ProviderService, "complete", complete)
     publish = AsyncMock()
     monkeypatch.setattr(run_events, "publish", publish)
@@ -242,6 +329,8 @@ async def test_title_generation_falls_back_to_session_model(monkeypatch) -> None
 
     assert complete.await_args.kwargs["model"].id == session_model.id
     assert complete.await_args.kwargs["max_output_tokens"] == 2_048
+    assert complete.await_args.kwargs["safety_reserve_tokens"] == safety
+    assert transport.await_args.kwargs["request"].max_output_tokens == 2_048
     statement = db.scalar.await_args.args[0]
     assert "chat_sessions.title" in str(statement)
     assert "Standardmodelle konfigurieren" in statement.compile().params.values()
@@ -350,11 +439,24 @@ def test_title_repair_budget_uses_provider_signals_and_model_limit() -> None:
     assert repair_title_output_budget(1_024, 16_384, reasoning_only) == 4_096
     assert repair_title_output_budget(1_024, 2_048, reasoning_only) == 2_048
     assert repair_title_output_budget(256, 300, ProviderResult()) == 300
+    assert initial_title_output_budget(None) == 2_048
+    assert initial_title_output_budget(64) == 64
+    assert repair_title_output_budget(2_048, None, reasoning_only) == 4_096
+    assert repair_title_output_budget(64, 64, reasoning_only) == 64
 
 
-async def test_title_generation_repairs_empty_visible_output(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("manual", "discovered", "expected"),
+    [(None, None, [2_048, 4_096]), (128, None, [128, 128]), (None, 64, [64, 64]), (128, 64, [64, 64])],
+)
+async def test_title_generation_repairs_empty_visible_output(
+    monkeypatch, manual, discovered, expected,
+) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
-    model = ModelConfig(provider_id=provider.id, model_id="title")
+    model = ModelConfig(
+        provider_id=provider.id, model_id="title",
+        max_output_tokens=manual, discovered_max_output_tokens=discovered,
+    )
     settings = AiSettings(
         providers=[provider], models=[model], title_generation_model_id=model.id
     )
@@ -369,7 +471,7 @@ async def test_title_generation_repairs_empty_visible_output(monkeypatch) -> Non
     db.scalar.return_value = session.id
 
     async def load(_db, settings_type):
-        return settings if settings_type is AiSettings else AgentRuntimeSettings()
+        return settings if settings_type is AiSettings else AgentRuntimeSettings(safety_reserve_tokens=128)
 
     complete = AsyncMock(
         side_effect=[
@@ -391,9 +493,10 @@ async def test_title_generation_repairs_empty_visible_output(monkeypatch) -> Non
     )
 
     assert complete.await_count == 2
+    assert [call.kwargs["safety_reserve_tokens"] for call in complete.await_args_list] == [128, 128]
     assert [
         call.kwargs["max_output_tokens"] for call in complete.await_args_list
-    ] == [2_048, 4_096]
+    ] == expected
     repair_prompt = complete.await_args.kwargs["messages"][0]["content"]
     assert "previous attempt" in repair_prompt
     assert "only the final title" in repair_prompt

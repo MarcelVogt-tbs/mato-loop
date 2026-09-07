@@ -182,7 +182,8 @@ def test_model_runtime_uses_defaults_and_legacy_config_values() -> None:
     )
 
     assert default_model.context_window_tokens == 128_000
-    assert default_model.max_output_tokens == 16_384
+    assert default_model.max_output_tokens is None
+    assert default_model.discovered_max_output_tokens is None
     assert default_model.characters_per_token == 4.0
     assert default_model.origin == "manual"
     assert default_model.availability == "available"
@@ -205,7 +206,7 @@ def test_discovered_context_window_can_drive_effective_runtime_limit() -> None:
     )
 
     assert model.context_window_tokens == 32_000
-    assert model.max_output_tokens == 8_000
+    assert model.max_output_tokens == 16_384
     assert model.context_window_source == "provider"
 
 
@@ -266,7 +267,7 @@ def test_model_input_modalities_are_canonical_with_legacy_image_compatibility() 
     assert canonical.supports_image_input is False
 
 
-def test_legacy_small_context_derives_a_safe_output_limit() -> None:
+def test_small_context_defaults_to_auto_output() -> None:
     model = ModelConfig.model_validate(
         {
             "provider_id": uuid4(),
@@ -276,7 +277,49 @@ def test_legacy_small_context_derives_a_safe_output_limit() -> None:
     )
 
     assert model.context_window_tokens == 8_192
-    assert model.max_output_tokens == 2_048
+    assert model.max_output_tokens is None
+
+
+@pytest.mark.parametrize("key", ["max_output_tokens", "maxOutputTokens"])
+def test_explicit_auto_output_overrides_legacy_config_without_mutating_it(key) -> None:
+    config = {"max_output_tokens": 512, "maxOutputTokens": 1_024, "temperature": 0.6}
+    model = ModelConfig.model_validate({
+        "provider_id": uuid4(), "model_id": "opaque", key: None, "config": config,
+    })
+    assert model.max_output_tokens is None
+    assert model.config == config
+    assert ModelConfig.model_validate(model.model_dump()).max_output_tokens is None
+
+
+@pytest.mark.parametrize("field", ["max_output_tokens", "discovered_max_output_tokens"])
+@pytest.mark.parametrize("value", [0, -1, True, False, 1.5, 2.0, "512", "", [], {}])
+def test_output_limits_require_strict_positive_integers_or_null(field, value) -> None:
+    with pytest.raises(ValidationError):
+        ModelConfig(provider_id=uuid4(), model_id="opaque", **{field: value})
+
+
+@pytest.mark.parametrize("context", [2, 4_096, 128_000])
+def test_manual_output_ceiling_is_independent_of_context(context) -> None:
+    model = ModelConfig(
+        provider_id=uuid4(), model_id="opaque", context_window_tokens=context,
+        max_output_tokens=2_000_000, discovered_max_output_tokens=8_192,
+    )
+    assert model.max_output_tokens == 2_000_000
+    assert model.discovered_max_output_tokens == 8_192
+
+
+@pytest.mark.parametrize("key", ["context_window_tokens", "contextWindowTokens"])
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("output", [None, 1])
+def test_model_context_requires_two_tokens_with_auto_or_minimum_cap(key, legacy, output) -> None:
+    values = {"provider_id": uuid4(), "model_id": "opaque", "max_output_tokens": output}
+    context = {key: 1}
+    with pytest.raises(ValidationError):
+        ModelConfig.model_validate({**values, **({"config": context} if legacy else context)})
+    context[key] = 2
+    model = ModelConfig.model_validate({**values, **({"config": context} if legacy else context)})
+    assert model.context_window_tokens == 2
+    assert model.max_output_tokens == output
 
 
 def test_compaction_target_must_be_below_trigger() -> None:
@@ -292,6 +335,20 @@ async def test_settings_can_be_loaded_with_row_lock() -> None:
 
     statement = db.scalar.await_args.args[0]
     assert "FOR UPDATE" in str(statement)
+
+
+async def test_loading_ai_settings_does_not_persist_output_defaults() -> None:
+    from types import SimpleNamespace
+
+    data = {"models": [{"provider_id": str(uuid4()), "model_id": "opaque"}]}
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = SimpleNamespace(data=data)
+    settings = await SettingsStore.load(db, AiSettings)
+    assert settings.models[0].max_output_tokens is None
+    assert "max_output_tokens" not in data["models"][0]
+    db.add.assert_not_called()
+    db.flush.assert_not_awaited()
+    db.commit.assert_not_awaited()
 
 
 async def test_user_settings_require_an_explicit_user_scope() -> None:

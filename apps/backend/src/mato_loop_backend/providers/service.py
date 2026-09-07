@@ -47,12 +47,22 @@ from mato_loop_backend.providers.base import (
 from mato_loop_backend.providers.codex_auth import codex_headers, refresh_codex_credential
 from mato_loop_backend.providers.openai_compatible import (
     DiscoveredModel,
+    _chat_body,
+    _responses_body,
     chat_completions,
     responses_api,
+)
+from mato_loop_backend.providers.output_budget import (
+    ESTIMATION_POLICY,
+    allocate_output_tokens,
+    estimate_request_input_tokens,
+    guarded_input_tokens,
+    output_token_limit,
 )
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings.models import (
+    AgentRuntimeSettings,
     LlmProviderConfig,
     ModelCapability,
     ModelConfig,
@@ -62,6 +72,7 @@ from mato_loop_backend.settings.models import (
     effective_model_pseudonymization,
     effective_model_trust,
 )
+from mato_loop_backend.settings.store import SettingsStore
 
 logger = logging.getLogger(__name__)
 
@@ -492,6 +503,9 @@ class ProviderService:
         on_retry: Callable[[int, int, int | None, str], Awaitable[None]] | None = None,
         timeout: float = 300,
         max_output_tokens: int | None = None,
+        estimated_input_tokens: int | None = None,
+        reserved_output_tokens: int | None = None,
+        safety_reserve_tokens: int | None = None,
         target_trust_level: TrustLevel | None = None,
         pseudonymization_enabled: bool | None = None,
         image_inputs: list[ProviderImageInput] | None = None,
@@ -500,6 +514,14 @@ class ProviderService:
         required_image_ids: tuple[str, ...] = (),
         reasoning_effort: ReasoningEffort | str | None = None,
     ) -> ProviderResult:
+        """Complete with an adaptive budget checked after all input transformations.
+
+        estimated_input_tokens is an optional raw projection estimate, without
+        proportional slack or fixed safety. Diagnostics are returned separately
+        from provider usage in provider_data["output_budget"].
+        An omitted safety reserve uses the stored global runtime setting; an
+        explicit value preserves the caller's snapshot without another lookup.
+        """
         if model.provider_id != provider.id:
             raise ProviderError(
                 "Model and provider do not belong together",
@@ -605,11 +627,6 @@ class ProviderService:
             supports_parallel_tool_calls=(
                 model.supports_tools and model.supports_parallel_tool_calls
             ),
-            max_output_tokens=(
-                None
-                if adapter.omit_generation_options
-                else min(max_output_tokens or model.max_output_tokens, model.max_output_tokens)
-            ),
             temperature=(
                 None
                 if adapter.omit_generation_options
@@ -638,6 +655,46 @@ class ProviderService:
             continuation_scope=continuation_scope,
             media=media,
         )
+        body = _responses_body(request) if api_type == "responses" else _chat_body(request)
+        final_input_tokens = estimate_request_input_tokens(body, model.characters_per_token)
+        if estimated_input_tokens is not None:
+            # Validate before max(), which could otherwise conceal invalid negative inputs.
+            guarded_input_tokens(estimated_input_tokens)
+        input_tokens = max(final_input_tokens, estimated_input_tokens or 0)
+        unknown_media = any(item.modality in {"audio", "video"} for item in media)
+        limit = output_token_limit(model, max_output_tokens)
+        reserve = (
+            min(2_048, limit) if limit is not None else 2_048
+        ) if reserved_output_tokens is None else reserved_output_tokens
+        if safety_reserve_tokens is None:
+            runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
+            safety_reserve_tokens = runtime_settings.safety_reserve_tokens
+        allocated = allocate_output_tokens(
+            model,
+            input_tokens,
+            requested=max_output_tokens,
+            reserved_output_tokens=reserve,
+            safety_reserve_tokens=safety_reserve_tokens,
+        )
+        request.max_output_tokens = None if adapter.omit_generation_options else allocated
+        output_budget = {
+            "estimatedInputTokens": input_tokens,
+            "finalEstimatedInputTokens": final_input_tokens,
+            "guardedInputTokens": guarded_input_tokens(input_tokens),
+            "reservedOutputTokens": reserve,
+            "allocatedOutputTokens": allocated,
+            "transmittedMaxOutputTokens": request.max_output_tokens,
+            "safetyReserveTokens": safety_reserve_tokens,
+            "manualLimit": model.max_output_tokens,
+            "providerLimit": model.discovered_max_output_tokens,
+            "helperLimit": max_output_tokens,
+            "mode": (
+                "helper" if max_output_tokens is not None
+                else "manual" if model.max_output_tokens is not None else "auto"
+            ),
+            "estimationPolicy": ESTIMATION_POLICY,
+            "mediaInputTokensUnknown": unknown_media,
+        }
         stream_started = False
         warning_pending = False
         warning_emitted = False
@@ -702,6 +759,7 @@ class ProviderService:
         reasoning_callback = tracked_reasoning if on_reasoning else None
 
         async def finalize(result: ProviderResult) -> ProviderResult:
+            result.provider_data["output_budget"] = output_budget
             try:
                 if delta_restorer is not None and on_delta is not None:
                     if remaining := delta_restorer.flush():

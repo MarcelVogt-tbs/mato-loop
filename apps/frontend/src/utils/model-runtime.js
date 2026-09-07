@@ -35,7 +35,8 @@ export const DEFAULT_MODEL_RUNTIME = Object.freeze({
   discoveredContextWindowTokens: null,
   useDiscoveredContextWindow: false,
   contextWindowSource: 'override',
-  maxOutputTokens: 16384,
+  maxOutputTokens: null,
+  discoveredMaxOutputTokens: null,
   charactersPerToken: 4,
   supportsTools: true,
   supportsParallelToolCalls: true,
@@ -50,6 +51,7 @@ export const DEFAULT_MODEL_RUNTIME = Object.freeze({
 
 function modelValue(model, camelKey, snakeKey) {
   if (model?.[camelKey] !== undefined) return model[camelKey]
+  if (model?.[snakeKey] !== undefined) return model[snakeKey]
   if (model?.config?.[camelKey] !== undefined) return model.config[camelKey]
   if (model?.config?.[snakeKey] !== undefined) return model.config[snakeKey]
   return DEFAULT_MODEL_RUNTIME[camelKey]
@@ -87,6 +89,7 @@ export function modelRuntimeForm(model) {
     ),
     contextWindowSource: modelValue(model, 'contextWindowSource', 'context_window_source'),
     maxOutputTokens: modelValue(model, 'maxOutputTokens', 'max_output_tokens'),
+    discoveredMaxOutputTokens: model?.discoveredMaxOutputTokens ?? model?.discovered_max_output_tokens ?? null,
     charactersPerToken: modelValue(model, 'charactersPerToken', 'characters_per_token'),
     supportsTools: modelValue(model, 'supportsTools', 'supports_tools'),
     supportsParallelToolCalls: modelValue(model, 'supportsParallelToolCalls', 'supports_parallel_tool_calls'),
@@ -111,7 +114,7 @@ export function modelRuntimePayload(form) {
       : supportsImageInput ? ['text', 'image'] : ['text'],
     context_window_tokens: Number(form.contextWindowTokens),
     use_discovered_context_window: Boolean(form.useDiscoveredContextWindow),
-    max_output_tokens: Number(form.maxOutputTokens),
+    max_output_tokens: form.maxOutputTokens == null ? null : Number(form.maxOutputTokens),
     characters_per_token: Number(form.charactersPerToken),
     supports_tools: Boolean(form.supportsTools),
     supports_parallel_tool_calls: Boolean(form.supportsTools && form.supportsParallelToolCalls),

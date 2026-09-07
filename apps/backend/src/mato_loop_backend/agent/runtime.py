@@ -171,6 +171,7 @@ from mato_loop_backend.providers.base import (
     select_provider_images,
 )
 from mato_loop_backend.providers.media import MediaService, available_media_capabilities
+from mato_loop_backend.providers.output_budget import output_token_limit, raw_input_budget
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
@@ -2388,6 +2389,9 @@ class AgentRuntime:
                 model=model,
                 messages=projection.messages,
                 tools=schemas,
+                estimated_input_tokens=projection.estimated_input_tokens,
+                reserved_output_tokens=projection.reserved_output_tokens,
+                safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
                 tool_choice=(
                     "none" if tool_budget_exhausted else
                     "required"
@@ -2530,6 +2534,9 @@ class AgentRuntime:
             if tool_budget_exhausted:
                 message_warnings.append("agent.toolCallLimitReached")
             provider_data = _safe_provider_data(result.provider_data, normalized_calls)
+            output_budget = provider_data.pop("output_budget", {})
+            if not isinstance(output_budget, dict):
+                output_budget = {}
             if hide_tool_round:
                 provider_data = _hidden_tool_round_provider_data(provider_data)
             if result.usage:
@@ -2556,6 +2563,18 @@ class AgentRuntime:
                     "toolSchemaTokens": tool_schema_tokens,
                     "estimatedInputTokens": projection.estimated_input_tokens,
                     "inputBudgetTokens": projection.input_budget_tokens,
+                    "reservedOutputTokens": projection.reserved_output_tokens,
+                    "safetyReserveTokens": runtime_settings.safety_reserve_tokens,
+                    **{
+                        key: output_budget[key]
+                        for key in (
+                            "estimatedInputTokens", "finalEstimatedInputTokens", "guardedInputTokens",
+                            "reservedOutputTokens", "allocatedOutputTokens", "transmittedMaxOutputTokens",
+                            "safetyReserveTokens", "manualLimit", "providerLimit", "helperLimit",
+                            "mode", "estimationPolicy", "mediaInputTokensUnknown",
+                        )
+                        if key in output_budget
+                    },
                     "contextPreparationMs": max(
                         0, round((provider_started_at - context_started_at) * 1_000)
                     ),
@@ -2903,6 +2922,7 @@ class AgentRuntime:
                                         tool_choice="required",
                                         timeout=active_runtime_settings.request_timeout_seconds,
                                         max_output_tokens=SKILL_CREATION_OUTPUT_TOKENS,
+                                        safety_reserve_tokens=active_runtime_settings.safety_reserve_tokens,
                                         target_trust_level=effective_model_trust(
                                             target_provider, target_model
                                         ),
@@ -3129,6 +3149,7 @@ class AgentRuntime:
                             tool_choice="none",
                             timeout=active_runtime_settings.request_timeout_seconds,
                             max_output_tokens=max_output_tokens,
+                            safety_reserve_tokens=active_runtime_settings.safety_reserve_tokens,
                             target_trust_level=active_vision_trust,
                             image_inputs=[
                                 ProviderImageInput(
@@ -3239,6 +3260,7 @@ class AgentRuntime:
                         active_frame_candidates=frame_video_candidates,
                         active_transcription_available=transcription_available,
                         active_tool_settings: ToolSettings = tool_settings,
+                        active_runtime_settings: AgentRuntimeSettings = runtime_settings,
                         active_model: ModelConfig = model,
                     ) -> dict[str, Any]:
                         nonlocal model_requests
@@ -3316,6 +3338,7 @@ class AgentRuntime:
                                 tools=[],
                                 tool_choice="none",
                                 timeout=active_tool_settings.analyze_video.timeout_seconds,
+                                safety_reserve_tokens=active_runtime_settings.safety_reserve_tokens,
                                 target_trust_level=effective_model_trust(
                                     selected_native.provider, selected_native.model
                                 ),
@@ -4271,7 +4294,6 @@ class AgentRuntime:
         unique_candidates = list({item.id: item for item in candidates}.values())
         attempts = 0
         messages = compaction_messages(source)
-        prompt = messages[1]["content"]
         for candidate in unique_candidates:
             if attempts >= runtime_settings.max_compaction_requests:
                 break
@@ -4279,16 +4301,18 @@ class AgentRuntime:
             if candidate_provider is None:
                 continue
             attempts += 1
-            effective_output_tokens = min(candidate.max_output_tokens, output_tokens)
-            available_input_tokens = (
+            effective_output_tokens = output_token_limit(candidate, output_tokens)
+            assert effective_output_tokens is not None
+            available_input_tokens = raw_input_budget(max(
+                0,
                 candidate.context_window_tokens
                 - effective_output_tokens
-                - runtime_settings.safety_reserve_tokens
-            )
+                - runtime_settings.safety_reserve_tokens,
+            ))
             if available_input_tokens <= 0:
                 continue
-            input_chars = int(available_input_tokens * candidate.characters_per_token)
-            if len(prompt) > input_chars:
+            estimated_input_tokens = estimate_tokens(messages, candidate.characters_per_token)
+            if estimated_input_tokens > available_input_tokens:
                 continue
             streamed_parts: list[str] = []
 
@@ -4316,6 +4340,9 @@ class AgentRuntime:
                     tools=[],
                     timeout=runtime_settings.request_timeout_seconds,
                     max_output_tokens=effective_output_tokens,
+                    estimated_input_tokens=estimated_input_tokens,
+                    reserved_output_tokens=effective_output_tokens,
+                    safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
                     on_delta=on_delta,
                     on_retry=on_retry,
                     reasoning_effort=(
@@ -4509,7 +4536,8 @@ class AgentRuntime:
                             )
                         )
                 title = None
-                output_budget = initial_title_output_budget(model.max_output_tokens)
+                model_limit = output_token_limit(model)
+                output_budget = initial_title_output_budget(model_limit)
                 for attempt in range(2):
                     await AgentRuntime._ensure_user_active(db, chat_session.user_id)
                     result = await ProviderService.complete(
@@ -4520,6 +4548,7 @@ class AgentRuntime:
                         tools=[],
                         timeout=runtime_settings.request_timeout_seconds,
                         max_output_tokens=output_budget,
+                        safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
                         image_inputs=image_inputs,
                     )
                     title = _generated_session_title(result.content)
@@ -4537,7 +4566,7 @@ class AgentRuntime:
                         output_budget,
                     )
                     output_budget = repair_title_output_budget(
-                        output_budget, model.max_output_tokens, result
+                        output_budget, model_limit, result
                     )
                     messages[0]["content"] += (
                         " The previous attempt contained no visible title. Return only the final "

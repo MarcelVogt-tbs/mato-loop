@@ -38,6 +38,7 @@ from mato_loop_backend.api.routes.providers import (
 )
 from mato_loop_backend.providers.openai_compatible import DiscoveredModel
 from mato_loop_backend.providers.service import ProviderService
+from mato_loop_backend.providers.settings_service import ProviderSettingsService
 from mato_loop_backend.settings import (
     AiSettings,
     SettingsStore,
@@ -52,6 +53,7 @@ from mato_loop_backend.settings.models import (
     ModelConfig,
     ModelInputModality,
     ModelOrigin,
+    ReasoningEffort,
 )
 
 
@@ -258,7 +260,8 @@ async def test_sync_adds_updates_and_marks_discovered_models_missing(monkeypatch
     assert added.context_window_tokens == 8_192
     assert added.discovered_context_window_tokens == 8_192
     assert added.use_discovered_context_window is True
-    assert added.max_output_tokens == 2_048
+    assert added.max_output_tokens is None
+    assert added.discovered_max_output_tokens is None
     assert settings.default_model_id is None
     assert provider.models_last_synced_at is not None
     assert result["models"][-1]["modelId"] == "opaque/vendor:model@1"
@@ -404,7 +407,8 @@ async def test_lemonade_sync_updates_capabilities_without_replacing_context_over
     }
 
 
-async def test_sync_updates_models_following_provider_context(monkeypatch) -> None:
+@pytest.mark.parametrize("context", [8_000, 32_000, 128_000])
+async def test_sync_updates_models_following_provider_context(monkeypatch, context) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(
         provider_id=provider.id,
@@ -424,7 +428,7 @@ async def test_sync_updates_models_following_provider_context(monkeypatch) -> No
             return_value=[
                 DiscoveredModel(
                     id="auto-context",
-                    context_length=32_000,
+                    context_length=context,
                     max_context_window=128_000,
                 )
             ]
@@ -433,9 +437,9 @@ async def test_sync_updates_models_following_provider_context(monkeypatch) -> No
 
     result = await sync_provider_models(provider.id, _db())
 
-    assert model.context_window_tokens == 32_000
-    assert model.discovered_context_window_tokens == 32_000
-    assert model.max_output_tokens == 8_000
+    assert model.context_window_tokens == context
+    assert model.discovered_context_window_tokens == context
+    assert model.max_output_tokens == 16_000
     assert result["models"][0]["contextWindowSource"] == "provider"
 
 
@@ -879,6 +883,7 @@ async def test_model_specific_test_uses_selected_model(monkeypatch) -> None:
 
     assert await run_model_test(second.id, db) == {"status": "ok"}
     assert complete.await_args.kwargs["model"] is second
+    assert complete.await_args.kwargs["max_output_tokens"] == 1_024
 
 
 async def test_model_specific_test_rejects_non_chat_model(monkeypatch) -> None:
@@ -1146,3 +1151,210 @@ def test_default_models_request_enables_title_vision_fallback_by_default() -> No
     )
 
     assert request.title_vision_fallback_enabled is True
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, 2.0, "512"])
+def test_model_request_rejects_invalid_output_limits(value) -> None:
+    with pytest.raises(ValidationError):
+        ModelRequest(modelId="opaque", maxOutputTokens=value)
+
+
+@pytest.mark.parametrize("key", ["context_window_tokens", "contextWindowTokens"])
+@pytest.mark.parametrize("output", [None, 1])
+def test_model_request_requires_two_context_tokens_with_auto_or_minimum_cap(key, output) -> None:
+    with pytest.raises(ValidationError):
+        ModelRequest(modelId="opaque", maxOutputTokens=output, **{key: 1})
+    request = ModelRequest(modelId="opaque", maxOutputTokens=output, **{key: 2})
+    assert request.context_window_tokens == 2
+    assert request.max_output_tokens == output
+
+
+@pytest.mark.parametrize("field", ["discoveredMaxOutputTokens", "discovered_max_output_tokens"])
+def test_discovered_output_limit_is_read_only(field) -> None:
+    with pytest.raises(ValidationError):
+        ModelRequest(modelId="opaque", **{field: 512})
+
+
+async def test_model_output_update_preserves_omitted_fields_and_explicit_auto(monkeypatch) -> None:
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    settings = AiSettings(providers=[provider])
+    _mock_settings(monkeypatch, settings)
+    db = _db()
+    result = await create_manual_model(provider.id, ModelRequest(modelId="opaque"), db)
+    assert result["models"][0]["maxOutputTokens"] is None
+    assert result["models"][0]["discoveredMaxOutputTokens"] is None
+    model = settings.models[0]
+    model.max_output_tokens = 64_000
+    model.discovered_max_output_tokens = 8_192
+    model.reasoning_effort = ReasoningEffort.HIGH
+    model.reasoning_summary = True
+    model.config = {"maxOutputTokens": 512, "temperature": 0.7, "unknown": {"x": [1]}}
+    before = model.model_dump()
+    for context in (4_096, 128_000):
+        result = await update_model(
+            model.id, ModelRequest(modelId="opaque", contextWindowTokens=context), db,
+        )
+        assert settings.models[0].model_dump() == {**before, "context_window_tokens": context}
+        assert result["models"][0]["maxOutputTokens"] == 64_000
+        assert result["models"][0]["discoveredMaxOutputTokens"] == 8_192
+    result = await update_model(model.id, ModelRequest(modelId="opaque", maxOutputTokens=None), db)
+    assert result["models"][0]["maxOutputTokens"] is None
+    assert settings.models[0].config == before["config"]
+    assert ModelConfig.model_validate(settings.models[0].model_dump()).max_output_tokens is None
+
+
+@pytest.mark.parametrize("cap", [None, 32_768, 0, -1, True, 2.0, "32768"])
+async def test_discovery_trusts_only_documented_output_cap_metadata(monkeypatch, cap) -> None:
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    settings = AiSettings(providers=[provider])
+    _mock_settings(monkeypatch, settings)
+    discovered = DiscoveredModel(
+        id="opaque", context_length=128_000, max_tokens=512, max_output_tokens=1_024,
+        default_parameters={"max_tokens": 256},
+        top_provider={"max_completion_tokens": cap, "unknown": "not exposed"},
+    )
+    monkeypatch.setattr(ProviderService, "discover_models", AsyncMock(return_value=[discovered]))
+    result = await sync_provider_models(provider.id, _db())
+    expected = cap if type(cap) is int and cap > 0 else None
+    assert result["models"][0]["maxOutputTokens"] is None
+    assert result["models"][0]["discoveredMaxOutputTokens"] == expected
+    assert discovered.metadata.get("top_provider") == (
+        {"max_completion_tokens": expected} if expected else None
+    )
+    settings.models[0].max_output_tokens = 100_000
+    monkeypatch.setattr(ProviderService, "discover_models", AsyncMock(return_value=[DiscoveredModel(id="opaque")]))
+    result = await sync_provider_models(provider.id, _db())
+    assert result["models"][0]["discoveredMaxOutputTokens"] is None
+    assert result["models"][0]["maxOutputTokens"] == 100_000
+
+
+@pytest.mark.parametrize("manual_cap", [None, 64_000])
+async def test_sync_refreshes_manual_model_output_metadata_without_overwriting_settings(
+    monkeypatch, manual_cap,
+) -> None:
+    provider = LlmProviderConfig(name="OpenRouter", adapter_type="openai-compatible")
+    model = ModelConfig(
+        provider_id=provider.id, model_id="exact/id", name="Manual", enabled=False,
+        context_window_tokens=8_192, max_output_tokens=manual_cap,
+        reasoning_effort=ReasoningEffort.HIGH,
+        config={"temperature": 0.7, "unknown": [1, None]},
+    )
+    settings = AiSettings(providers=[provider], models=[model])
+    _mock_settings(monkeypatch, settings)
+    before = model.model_dump()
+    for cap in (32_768, None):
+        discovered = DiscoveredModel(
+            id=model.model_id, name="Discovered", context_length=128_000,
+            capabilities={ModelCapability.IMAGE_GENERATION},
+            capabilities_authoritative=True, supports_tools=False,
+            **({"top_provider": {"max_completion_tokens": cap}} if cap else {}),
+        )
+        monkeypatch.setattr(ProviderService, "discover_models", AsyncMock(return_value=[discovered]))
+        result = await sync_provider_models(provider.id, _db())
+        assert model.model_dump() == {**before, "discovered_max_output_tokens": cap}
+        assert result["models"][0]["discoveredMaxOutputTokens"] == cap
+        assert result["models"][0]["maxOutputTokens"] == manual_cap
+
+
+async def test_model_rename_clears_only_discovered_output_cap(monkeypatch) -> None:
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(
+        provider_id=provider.id, model_id="A", discovered_max_output_tokens=512,
+        max_output_tokens=64_000, context_window_tokens=8_192,
+        config={"temperature": 0.7}, reasoning_effort=ReasoningEffort.HIGH,
+    )
+    settings = AiSettings(providers=[provider], models=[model])
+    _mock_settings(monkeypatch, settings)
+    before = model.model_dump()
+    await update_model(model.id, ModelRequest(modelId="B"), _db())
+    assert settings.models[0].model_dump() == {
+        **before, "model_id": "B", "discovered_max_output_tokens": None,
+    }
+
+
+@pytest.mark.parametrize("origin", list(ModelOrigin))
+@pytest.mark.parametrize("switch", [False, True])
+async def test_model_provider_binding_changes_clear_only_discovered_cap(monkeypatch, origin, switch) -> None:
+    providers = [LlmProviderConfig(name=name, adapter_type="openai-compatible") for name in ("A", "B")]
+    model = ModelConfig(
+        provider_id=providers[0].id, model_id="same-id", origin=origin,
+        discovered_max_output_tokens=512, max_output_tokens=64_000,
+        context_window_tokens=8_192, config={"temperature": 0.7},
+    )
+    settings = AiSettings(providers=providers, models=[model])
+    _mock_settings(monkeypatch, settings)
+    before = model.model_dump()
+    target = providers[int(switch)].id
+    await ProviderSettingsService.update_model(
+        _db(), settings, None, model.id,
+        {"model_id": model.model_id, "provider_id": str(target)}, None,
+    )
+    assert settings.models[0].model_dump() == {
+        **before, "provider_id": target,
+        "discovered_max_output_tokens": None if switch else 512,
+    }
+
+
+@pytest.mark.parametrize("origin", list(ModelOrigin))
+@pytest.mark.parametrize("change", ["endpoint", "api_type", "api_key", "remove_api_key", "none"])
+async def test_provider_identity_updates_invalidate_caps_in_both_origins(monkeypatch, origin, change) -> None:
+    provider = LlmProviderConfig(
+        name="Local", adapter_type="openai-compatible", credential_id=uuid4(),
+        config={"base_url": "https://provider.test/v1", "api_type": "chat_completions"},
+    )
+    other = LlmProviderConfig(name="Other", adapter_type="openai-compatible")
+    model = ModelConfig(
+        provider_id=provider.id, model_id="not-listed", origin=origin,
+        discovered_max_output_tokens=512, max_output_tokens=64_000,
+        context_window_tokens=8_192, config={"temperature": 0.7},
+    )
+    untouched = ModelConfig(provider_id=other.id, model_id=model.model_id, discovered_max_output_tokens=256)
+    settings = AiSettings(providers=[provider, other], models=[model, untouched])
+    _mock_settings(monkeypatch, settings)
+    monkeypatch.setattr(provider_routes, "load_credential", AsyncMock(return_value=None))
+    monkeypatch.setattr(provider_routes, "store_credential", AsyncMock(return_value=SimpleNamespace(id=uuid4())))
+    monkeypatch.setattr(provider_routes, "delete_credential", AsyncMock(return_value=True))
+    before = model.model_dump()
+    await update_openai_provider(provider.id, OpenAIProviderRequest(
+        name="Renamed",
+        base_url="https://other.test/v1" if change == "endpoint" else provider.config["base_url"],
+        api_type="responses" if change == "api_type" else "chat_completions",
+        api_key="test-key" if change == "api_key" else None,
+        remove_api_key=change == "remove_api_key",
+    ), _db())
+    assert model.model_dump() == {
+        **before, "discovered_max_output_tokens": 512 if change == "none" else None,
+        "availability": ModelAvailability.MISSING
+        if origin == ModelOrigin.DISCOVERED and change != "none" else before["availability"],
+    }
+    assert untouched.discovered_max_output_tokens == 256
+    monkeypatch.setattr(ProviderService, "discover_models", AsyncMock(return_value=[]))
+    await sync_provider_models(provider.id, _db())
+    assert model.discovered_max_output_tokens is None
+    assert model.enabled is True
+    assert model.availability == (ModelAvailability.MISSING if origin == ModelOrigin.DISCOVERED else ModelAvailability.AVAILABLE)
+    assert model.max_output_tokens == 64_000
+    assert untouched.discovered_max_output_tokens == 256
+
+
+@pytest.mark.parametrize("change", ["account", "credential", "none"])
+async def test_codex_identity_change_clears_caps_but_token_rotation_preserves_them(monkeypatch, change) -> None:
+    credential = SimpleNamespace(id=uuid4(), metadata_json={"accountId": "old"})
+    provider = LlmProviderConfig(name="Codex", adapter_type="openai-codex", credential_id=credential.id)
+    model = ModelConfig(provider_id=provider.id, model_id="opaque", discovered_max_output_tokens=512)
+    settings = AiSettings(providers=[provider], models=[model])
+    _mock_settings(monkeypatch, settings)
+    db = _db()
+    db.scalar.return_value = credential
+    before = model.model_dump()
+    await ProviderSettingsService.connect_codex(
+        db, {"account_id": "new" if change == "account" else "old"}, None,
+        load_settings=AsyncMock(return_value=(settings, None)),
+        store_credential=AsyncMock(return_value=SimpleNamespace(id=uuid4()) if change == "credential" else credential),
+    )
+    assert model.model_dump() == {**before, "discovered_max_output_tokens": 512 if change == "none" else None}
+    model.discovered_max_output_tokens = 512
+    await ProviderSettingsService.disconnect_codex(
+        db, settings, None, [SimpleNamespace(id=provider.credential_id)],
+    )
+    assert model.model_dump() == {**before, "discovered_max_output_tokens": None}

@@ -71,6 +71,14 @@ def test_execution_and_output_limits_have_controlled_fallbacks() -> None:
     assert describe_error("process.unsupportedTargetQuoting").message == "The shell path target uses unsupported quoting. Use a literal path with ordinary quotes."
 
 
+def test_provider_context_capacity_error_preserves_controlled_code() -> None:
+    from mato_loop_backend.providers.base import ProviderError
+
+    error = ProviderError("private request detail", code="agent.contextWindowExceeded")
+    assert error.public_code == "agent.contextWindowExceeded"
+    assert describe_error(error.public_code).message == "The request does not fit in the model's context window."
+
+
 def test_incomplete_patch_error_requires_rereading_even_the_failed_operation() -> None:
     assert describe_error("file.patchIncomplete").message == (
         "The patch did not complete. Files may have changed, including in the "

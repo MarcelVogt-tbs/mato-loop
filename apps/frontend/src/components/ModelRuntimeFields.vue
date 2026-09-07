@@ -18,7 +18,7 @@
           :hint="contextWindowHint"
           :disable="form.useDiscoveredContextWindow && form.discoveredContextWindowTokens != null"
           lazy-rules
-          :rules="[positiveIntegerRule, contextRule]"
+          :rules="[positiveIntegerRule, value => Number(value) >= 2 || 'Das Kontextfenster muss mindestens 2 Tokens umfassen.']"
         />
         <q-btn
           v-if="form.discoveredContextWindowTokens != null"
@@ -29,18 +29,36 @@
           @click="toggleProviderContextWindow"
         />
       </div>
-      <q-input
-        v-model.number="form.maxOutputTokens"
-        outlined
-        hide-bottom-space
-        type="number"
-        min="1"
-        step="1"
-        label="Maximale Ausgabe (Tokens)"
-        hint="Muss kleiner als das Kontextfenster sein."
-        lazy-rules
-        :rules="[positiveIntegerRule, outputRule]"
-      />
+      <div>
+        <q-toggle
+          :model-value="form.maxOutputTokens == null"
+          color="primary"
+          label="Ausgabelimit: Auto"
+          @update:model-value="form.maxOutputTokens = $event ? null : (form.discoveredMaxOutputTokens ?? form.contextWindowTokens)"
+        />
+        <div v-if="generationOptionsOmitted" class="text-caption app-muted q-mb-sm">
+          Bei ChatGPT Codex wird kein Ausgabelimit übertragen. Die Einstellung beeinflusst nur die interne Kontextplanung; die Ausgabe begrenzt der Provider.
+        </div>
+        <div v-else class="text-caption app-muted q-mb-sm">
+          Auto passt das Ausgabebudget an den freien Kontext an. Ein manuelles Limit ist eine zusätzliche Obergrenze, keine reservierte Ausgabelänge.
+        </div>
+        <q-input
+          v-if="form.maxOutputTokens != null"
+          v-model.number="form.maxOutputTokens"
+          outlined
+          hide-bottom-space
+          type="number"
+          min="1"
+          step="1"
+          label="Manuelles Ausgabelimit (Tokens)"
+          :hint="generationOptionsOmitted
+            ? 'Darf größer als das Kontextfenster sein; dient nur der internen Kontextplanung.'
+            : 'Darf größer als das Kontextfenster sein; das Budget wird pro Anfrage begrenzt.'"
+          lazy-rules
+          :rules="[positiveIntegerRule]"
+        />
+        <div v-if="!generationOptionsOmitted" class="text-caption app-muted q-mt-sm">{{ outputLimitHint }}</div>
+      </div>
       <q-input
         v-model.number="form.charactersPerToken"
         outlined
@@ -163,6 +181,7 @@ const inputModalityOptions = [
   { label: 'Video', value: 'video' }
 ]
 const props = defineProps({
+  generationOptionsOmitted: { type: Boolean, default: false },
   reasoningSummaryAvailable: Boolean,
   reasoningSummaryForced: Boolean,
   providerTrustLevel: { type: String, default: 'public' },
@@ -183,6 +202,9 @@ const contextWindowHint = computed(() => {
   }
   return `Manueller Override; Providerwert: ${form.value.discoveredContextWindowTokens.toLocaleString('de-DE')} Tokens.`
 })
+const outputLimitHint = computed(() => form.value.discoveredMaxOutputTokens == null
+  ? 'Provider-Ausgabelimit unbekannt. Der Provider kann die Ausgabe zusätzlich begrenzen.'
+  : `Gemeldetes Provider-Ausgabelimit: ${form.value.discoveredMaxOutputTokens.toLocaleString('de-DE')} Tokens.`)
 
 function positiveIntegerRule(value) {
   return Number.isInteger(Number(value)) && Number(value) > 0 || 'Bitte gib eine positive ganze Zahl ein.'
@@ -192,14 +214,6 @@ function positiveNumberRule(value) {
   return Number.isFinite(Number(value)) && Number(value) > 0 || 'Bitte gib eine positive Zahl ein.'
 }
 
-function contextRule(value) {
-  return Number(value) > Number(form.value.maxOutputTokens) || 'Das Kontextfenster muss größer als die maximale Ausgabe sein.'
-}
-
-function outputRule(value) {
-  return Number(value) < Number(form.value.contextWindowTokens) || 'Die maximale Ausgabe muss kleiner als das Kontextfenster sein.'
-}
-
 function toggleProviderContextWindow() {
   if (form.value.useDiscoveredContextWindow) {
     form.value.useDiscoveredContextWindow = false
@@ -207,8 +221,5 @@ function toggleProviderContextWindow() {
   }
   form.value.useDiscoveredContextWindow = true
   form.value.contextWindowTokens = form.value.discoveredContextWindowTokens
-  if (Number(form.value.maxOutputTokens) >= Number(form.value.contextWindowTokens)) {
-    form.value.maxOutputTokens = Math.max(1, Math.floor(form.value.contextWindowTokens / 4))
-  }
 }
 </script>

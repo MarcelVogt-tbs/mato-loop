@@ -47,6 +47,7 @@ describe('model runtime configuration', () => {
       useDiscoveredContextWindow: false,
       contextWindowSource: 'override',
       maxOutputTokens: 8000,
+      discoveredMaxOutputTokens: 32768,
       charactersPerToken: 3.5,
       supportsTools: false,
       supportsParallelToolCalls: false,
@@ -65,6 +66,7 @@ describe('model runtime configuration', () => {
       useDiscoveredContextWindow: false,
       contextWindowSource: 'override',
       maxOutputTokens: 8000,
+      discoveredMaxOutputTokens: 32768,
       charactersPerToken: 3.5,
       supportsTools: false,
       supportsParallelToolCalls: false,
@@ -112,6 +114,31 @@ describe('model runtime configuration', () => {
       reasoning_summary: false,
       reasoning_effort: 'high'
     })
+  })
+
+  it('roundtrips Auto and preserves explicit null over legacy aliases', () => {
+    for (const field of ['maxOutputTokens', 'max_output_tokens']) {
+      const form = modelRuntimeForm({
+        [field]: null,
+        config: { maxOutputTokens: 512, max_output_tokens: 1024 },
+        discoveredMaxOutputTokens: 32768
+      })
+      expect(form.maxOutputTokens).toBeNull()
+      const payload = modelRuntimePayload(form)
+      expect(payload.max_output_tokens).toBeNull()
+      expect(payload).not.toHaveProperty('discovered_max_output_tokens')
+      expect(payload).not.toHaveProperty('discoveredMaxOutputTokens')
+    }
+    expect(modelRuntimePayload(modelRuntimeForm()).max_output_tokens).toBeNull()
+    expect(modelRuntimeForm({ config: { max_output_tokens: 512 } }).maxOutputTokens).toBe(512)
+  })
+
+  it('does not clip manual ceilings to context or provider limits', () => {
+    const form = modelRuntimeForm({ maxOutputTokens: 64000, discoveredMaxOutputTokens: 8192 })
+    for (const context of [4096, 128000]) {
+      form.contextWindowTokens = context
+      expect(modelRuntimePayload(form).max_output_tokens).toBe(64000)
+    }
   })
 
   it('preserves inherited model policy values', () => {

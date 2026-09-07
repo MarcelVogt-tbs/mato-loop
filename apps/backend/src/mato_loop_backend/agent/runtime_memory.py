@@ -10,6 +10,7 @@ from mato_loop_backend.memory.episode_retrieval import (
 )
 from mato_loop_backend.memory.service import memory_reference_timestamps
 from mato_loop_backend.models import MemoryRecord, Message
+from mato_loop_backend.providers.output_budget import generation_reserve, raw_input_budget
 from mato_loop_backend.settings import AgentRuntimeSettings, MemorySettings
 from mato_loop_backend.settings.models import ModelConfig
 
@@ -202,12 +203,12 @@ def _automatic_context_character_budget(
     runtime_settings: AgentRuntimeSettings,
     memory_settings: MemorySettings,
 ) -> int:
-    input_budget = max(
+    input_budget = raw_input_budget(max(
         0,
         model.context_window_tokens
-        - model.max_output_tokens
+        - generation_reserve(model)
         - runtime_settings.safety_reserve_tokens,
-    )
+    ))
     token_budget = min(
         memory_settings.automatic_context_max_tokens,
         int(input_budget * AUTOMATIC_CONTEXT_BUDGET_RATIO),

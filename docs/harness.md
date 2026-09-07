@@ -203,17 +203,45 @@ Compaction triggers from estimated input budget, not message count, and can adva
 
 ## Model Context Settings
 
-Every model configuration has explicit context-window and maximum-output limits as positive token counts with safe defaults. Model and provider arguments cannot increase these host limits.
+`contextWindowTokens` is the configured context capacity, with a configuration minimum of two tokens; this does not guarantee enough room for a runtime request. `maxOutputTokens: null` selects Auto, the default for new manual and discovered models. A strict positive integer selects a manual output ceiling, not a fixed output reservation. The stored ceiling is neither clamped to a quarter of the context window nor rewritten when the context window changes. Effective allocation may be lower without changing the saved value.
 
-For one model request:
+`discoveredMaxOutputTokens` is a read-only nullable provider ceiling. Only the documented OpenRouter `top_provider.max_completion_tokens` field currently supplies an authoritative value; absent, invalid, or ambiguous metadata leaves it unknown (`null`). Generation defaults, model names, and context capacity are not evidence of an output ceiling. Synchronization refreshes this field for matching manually entered models as well as discovered models, including clearing it when the returned metadata no longer supplies a valid cap. Manual output settings and existing context-window source selection remain independent.
+
+For an ordinary agent request, let `C` be context capacity, `S` the fixed safety reserve (4,096 tokens by default), `M` an optional manual ceiling, and `H` an optional known provider ceiling. Omit absent limits from each minimum:
 
 ```text
-input_budget = context_window_tokens - max_output_tokens - safety_reserve_tokens
+R = min(2048, M, H)
+capacity = max(0, C - S - R)
+input_budget = raw_input_budget(capacity) = capacity * 10 // 11
+trigger_budget = min(input_budget,
+    raw_input_budget(max(0, floor(C * compaction_trigger_ratio) - S - R)))
 ```
 
-System instructions, tool schemas, memories, summaries, and history all count against `input_budget`. Before provider access, the request builder estimates usage, keeps output reserve free, and compacts or shortens only the transient projection. If minimum context still does not fit, the run ends with a stable context error instead of sending an oversized request.
+`R` reserves a useful generation turn; it is not the output ceiling. System instructions, tool schemas, memories, summaries, history, and projected image estimates count against this raw input budget. ContextManager uses the same inverse-margin calculation for its compaction trigger and transient tool-output budget. Automatic memory snippets use at most 10% of the raw input budget under their separate configured cap. The inverse factor is `10 / 11`, not a subtraction of 10% from capacity: it leaves room for a later 10% increase of the raw estimate. Projection estimates include neither that increase nor the fixed safety reserve.
 
-Provider metadata can supply useful defaults, but explicit validated model settings are authoritative. Changes apply to new model requests and never rewrite old runs or canonical history.
+After media projection, pseudonymization, tool-schema conversion, and provider serialization, ProviderService estimates the final input and allocates output:
+
+```text
+I = max(raw_projection_estimate, raw_final_serialized_estimate)
+guardedI = ceil(I * 1.1) = (I * 11 + 9) // 10
+output = min(C - S - guardedI, M, H, Q)
+```
+
+An absent projection estimate contributes zero. `Q` is an optional explicit per-request helper ceiling, not another persisted model setting. The proportional margin is applied exactly once, after taking the maximum of the two raw estimates. The fixed `S` is also subtracted once. The default service-level generation reserve is `min(2048, M, H, Q)`; the normal agent passes its projection's `R`, and a helper may explicitly reserve its full bounded output. An allocation that is nonpositive or smaller than the required reserve fails with `agent.contextWindowExceeded` before transport. ContextManager reports `agent.contextWindowTooSmall` when no raw input budget exists, or `agent.contextWindowExceeded` when required context still cannot fit after compaction and shortening. Final transformations can make an otherwise valid projection fail this last check; ProviderService does not recursively invoke compaction.
+
+Input estimation uses serialized input framing, instructions, messages, tools, and continuation with the model's characters-per-token ratio. It excludes generation options and transport metadata and does not count binary/base64 payloads as text. Each image adds a 2,048-token input estimate; audio, video, and opaque encrypted continuation each add an 8,192-token heuristic reserve. These are not tokenizer measurements or upper-bound guarantees. Long media, large inputs, unknown server templates, or different tokenization can still require a lower manual output ceiling or produce a provider context error. There is no hidden 2,048-token output cap for requests containing media.
+
+Helpers keep their own small explicit ceilings rather than taking all Auto headroom. Titles start at 2,048 tokens and allow one repair up to 4,096, subject to manual and known provider ceilings. Compaction requests have a bounded summary target of 256 to 2,048 tokens, capped by the helper model's limits, reserve that effective output in full, and preflight their input with `raw_input_budget`. Other explicit helper caps remain in force. The `/models/{model_id}/test` connection test supplies an explicit 1,024-token helper ceiling, subject to the transport behavior described below.
+
+Adaptive allocation is provider-neutral and has no Qwen-specific branch. All existing reasoning defaults, effort selection, supported disable rules, summary visibility, and continuation rules remain unchanged for every model. Auto output does not introduce automatic thinking selection or enable reasoning.
+
+ProviderService returns host diagnostics in `provider_data["output_budget"]`, separately from actual provider usage. Normal assistant persistence carries these into `_matoloop.performance`: raw and final input estimates, guarded input, safety and output reserves, manual/provider/helper limits, mode, estimation policy, and computed versus transmitted output. `allocatedOutputTokens` is the effective computed allowance; `transmittedMaxOutputTokens` is the actual request option. Compatible Chat Completions sends `max_tokens`, and compatible Responses sends `max_output_tokens`. Codex omits generation options, so its transmitted value is `None` (`null` in JSON) even though a host allowance is computed. Diagnostics must not imply that Codex received or enforces that allowance. No transport's estimate is a guarantee of actual token use.
+
+### One-Time Auto Migration
+
+Data-only Alembic revision `49e718887770` switches every existing model in all instance- and user-scoped `ai` settings documents to Auto, including models with explicitly chosen manual output limits. It handles top-level and legacy nested output fields without a relational schema change. Applying this migration deliberately destroys the old output ceilings: no backup is kept. Downgrade removes output settings, including manual ceilings entered after the upgrade, so older code uses compatibility defaults; it does not restore historical limits. New manual ceilings entered after upgrade remain in force during normal use and synchronization.
+
+The migration preserves context settings, user-selected reasoning, temperature, and all other configuration. It does not rewrite old runs or canonical history. This contract describes implementation and upgrade behavior, not a unit-test or live-provider validation result; validation reports are maintained separately.
 
 ## Acceptance Tests
 

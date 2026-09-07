@@ -164,9 +164,9 @@ class ModelRuntimeRequest(ApiRequest):
     capabilities: set[ModelCapability] = Field(
         default_factory=lambda: {ModelCapability.CHAT}
     )
-    context_window_tokens: int = Field(default=128_000, ge=1, le=10_000_000)
+    context_window_tokens: int = Field(default=128_000, ge=2, le=10_000_000)
     use_discovered_context_window: bool = False
-    max_output_tokens: int = Field(default=16_384, ge=1, le=1_000_000)
+    max_output_tokens: int | None = Field(default=None, strict=True, gt=0)
     characters_per_token: float = Field(default=4.0, gt=0, le=100)
     supports_tools: bool = True
     supports_parallel_tool_calls: bool = True
@@ -207,8 +207,6 @@ class ModelRuntimeRequest(ApiRequest):
 
     @model_validator(mode="after")
     def validate_limits(self) -> Self:
-        if self.max_output_tokens >= self.context_window_tokens:
-            raise ValueError("max_output_tokens must be less than context_window_tokens")
         if not self.supports_tools:
             self.supports_parallel_tool_calls = False
         self.supports_image_input = (
@@ -454,6 +452,7 @@ def _settings_payload(
                 "useDiscoveredContextWindow": model.use_discovered_context_window,
                 "contextWindowSource": model.context_window_source,
                 "maxOutputTokens": model.max_output_tokens,
+                "discoveredMaxOutputTokens": model.discovered_max_output_tokens,
                 "charactersPerToken": model.characters_per_token,
                 "supportsTools": model.supports_tools,
                 "supportsParallelToolCalls": model.supports_parallel_tool_calls,
@@ -896,6 +895,7 @@ async def test_model(
             model=model,
             messages=[{"role": "user", "content": "Reply with OK only."}],
             tools=[],
+            max_output_tokens=1_024,
         )
     except ProviderError as exc:
         logger.warning("Model connection test failed: %s", exc.public_code)

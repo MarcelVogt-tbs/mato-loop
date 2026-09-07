@@ -46,6 +46,13 @@ class DiscoveredModel(BaseModel):
     default_reasoning_effort: ReasoningEffort | None = None
     reasoning_efforts: list[ReasoningEffort] | None = None
 
+    @property
+    def discovered_max_output_tokens(self) -> int | None:
+        # OpenRouter /models documents this as an output cap, not a generation default.
+        top_provider = (self.__pydantic_extra__ or {}).get("top_provider")
+        value = top_provider.get("max_completion_tokens") if isinstance(top_provider, dict) else None
+        return value if type(value) is int and value > 0 else None
+
     @model_validator(mode="after")
     def derive_legacy_image_capability(self) -> DiscoveredModel:
         if self.input_modalities is not None:
@@ -104,6 +111,10 @@ class DiscoveredModel(BaseModel):
                 for key, value in list(image_defaults.items())[:32]
                 if isinstance(key, str)
                 and isinstance(value, (str, int, float, bool, type(None)))
+            }
+        if self.discovered_max_output_tokens is not None:
+            metadata["top_provider"] = {
+                "max_completion_tokens": self.discovered_max_output_tokens
             }
         return metadata
 

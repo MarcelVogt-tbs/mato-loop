@@ -55,7 +55,12 @@ from mato_loop_backend.settings import (
     ToolSettings,
     UserProfileSettings,
 )
-from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig, TrustLevel
+from mato_loop_backend.settings.models import (
+    LlmProviderConfig,
+    ModelConfig,
+    ModelInputModality,
+    TrustLevel,
+)
 from mato_loop_backend.video_processing import MediaInfo, VideoFrame
 from mato_loop_backend.workspace import RootFileService
 
@@ -107,6 +112,7 @@ async def _runtime_setup(
     user_trust_level: TrustLevel | None = None,
     reasoning_effort: str | None = None,
     model_id: str = "local-model",
+    safety_reserve_tokens: int = 4_096,
 ):
     provider = LlmProviderConfig(
         name="Local",
@@ -141,7 +147,7 @@ async def _runtime_setup(
         vision_model_id=vision_model.id if vision_model is not None else None,
         skill_creation_model_id=builder_model.id if builder_model is not None else None,
     )
-    runtime_settings = AgentRuntimeSettings()
+    runtime_settings = AgentRuntimeSettings(safety_reserve_tokens=safety_reserve_tokens)
     session = ChatSession(
         id=uuid4(),
         user_id=uuid4(),
@@ -622,6 +628,7 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
         execution_operations=("integration.openscad.render", "cache.export"),
         user_image=True,
         downloaded_image=True,
+        safety_reserve_tokens=128,
     )
     generated_id = uuid4()
 
@@ -674,6 +681,7 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
     assert verifier["tools"] == []
     assert verifier["tool_choice"] == "none"
     assert verifier["max_output_tokens"] == 512
+    assert verifier["safety_reserve_tokens"] == 128
     assert [image.data for image in verifier["image_inputs"]] == [
         b"png",
         b"reference-0.png",
@@ -1503,6 +1511,7 @@ async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
         search_policy=WebSearchPolicy.AVAILABLE,
         skills=skills,
         skill_creation_model=True,
+        safety_reserve_tokens=128,
     )
 
     async def execute(call, context, bound_tool):
@@ -1534,6 +1543,7 @@ async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
 
     await AgentRuntime._execute_loop(db, run)
 
+    assert all(request["safety_reserve_tokens"] == 128 for request in requests)
     assert [request["model"].model_id for request in requests] == [
         "local-model",
         "skill-builder",
@@ -2765,6 +2775,39 @@ async def test_private_pdf_pages_use_public_active_vision_model(monkeypatch) -> 
     assert requests[1]["image_inputs"][0].trust_level == TrustLevel.PRIVATE.value
 
 
+async def test_native_video_uses_loaded_runtime_safety(monkeypatch) -> None:
+    monkeypatch.setattr(
+        video_analysis, "probe_video",
+        lambda _data: MediaInfo("mp4", "video/mp4", 8_000, 640, 360, 0, None),
+    )
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(tool_calls=[ToolCall(
+                id="video", name="analyze_video",
+                arguments={"root": "session", "path": "video.mp4"},
+            )]),
+            ProviderResult(content="Video description"),
+            ProviderResult(content="Analysis complete"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE, safety_reserve_tokens=128,
+    )
+    ai = await SettingsStore.load(db, AiSettings)
+    ai.models[0].input_modalities = [ModelInputModality.TEXT, ModelInputModality.VIDEO]
+
+    async def execute(_call, context, _tool):
+        return ToolResult.json(await context.video_analysis_handler(
+            b"video", TrustLevel.PUBLIC, None, "overview", None,
+        ))
+
+    tool_registry._execute_definition.side_effect = execute
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == 3
+    assert requests[1]["media_inputs"][0].modality == "video"
+    assert requests[1]["safety_reserve_tokens"] == 128
+
+
 async def test_video_frames_are_analyzed_in_provider_sized_batches(monkeypatch) -> None:
     frames = [VideoFrame(index * 1_000, f"frame-{index}".encode()) for index in range(8)]
     monkeypatch.setattr(
@@ -2794,6 +2837,7 @@ async def test_video_frames_are_analyzed_in_provider_sized_batches(monkeypatch) 
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
         active_supports_image_input=True,
+        safety_reserve_tokens=128,
     )
 
     async def execute(_call, context, _tool):
@@ -2823,6 +2867,7 @@ async def test_video_frames_are_analyzed_in_provider_sized_batches(monkeypatch) 
         for request in image_requests
     )
     assert all(request["max_output_tokens"] == 1_024 for request in image_requests)
+    assert all(request["safety_reserve_tokens"] == 128 for request in image_requests)
     assert all(
         "at most 300 words" in request["messages"][0]["content"]
         for request in image_requests

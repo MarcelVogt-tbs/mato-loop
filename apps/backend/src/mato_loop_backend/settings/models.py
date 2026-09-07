@@ -424,7 +424,7 @@ class ModelConfig(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     context_window_tokens: int = Field(
         default=128_000,
-        ge=1,
+        ge=2,
         le=10_000_000,
         validation_alias=AliasChoices("context_window_tokens", "contextWindowTokens"),
     )
@@ -442,11 +442,19 @@ class ModelConfig(BaseModel):
             "use_discovered_context_window", "useDiscoveredContextWindow"
         ),
     )
-    max_output_tokens: int = Field(
-        default=16_384,
-        ge=1,
-        le=1_000_000,
+    max_output_tokens: int | None = Field(
+        default=None,
+        strict=True,
+        gt=0,
         validation_alias=AliasChoices("max_output_tokens", "maxOutputTokens"),
+    )
+    discovered_max_output_tokens: int | None = Field(
+        default=None,
+        strict=True,
+        gt=0,
+        validation_alias=AliasChoices(
+            "discovered_max_output_tokens", "discoveredMaxOutputTokens"
+        ),
     )
     characters_per_token: float = Field(
         default=4.0,
@@ -505,11 +513,6 @@ class ModelConfig(BaseModel):
             )
         values.pop("supports_image_input", None)
         values.pop("supportsImageInput", None)
-        context_window = values.get("context_window_tokens", values.get("contextWindowTokens"))
-        has_output_limit = "max_output_tokens" in values or "maxOutputTokens" in values
-        if context_window is not None and not has_output_limit:
-            if isinstance(context_window, int) and not isinstance(context_window, bool) and context_window > 1:
-                values["max_output_tokens"] = min(16_384, max(1, context_window // 4))
         return values
 
     @model_validator(mode="after")
@@ -519,13 +522,6 @@ class ModelConfig(BaseModel):
             and self.discovered_context_window_tokens is not None
         ):
             self.context_window_tokens = self.discovered_context_window_tokens
-            self.max_output_tokens = min(
-                self.max_output_tokens,
-                max(1, self.context_window_tokens // 4),
-                self.context_window_tokens - 1,
-            )
-        if self.max_output_tokens >= self.context_window_tokens:
-            raise ValueError("max_output_tokens must be less than context_window_tokens")
         if not self.supports_tools:
             self.supports_parallel_tool_calls = False
         return self

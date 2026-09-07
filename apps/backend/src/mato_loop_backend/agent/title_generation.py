@@ -68,16 +68,22 @@ def title_input(content: str, attachments: list[tuple[str, str | None]]) -> str:
     return (result.rstrip() + suffix)[:TITLE_INPUT_MAX_CHARACTERS].rstrip()
 
 
-def initial_title_output_budget(model_limit: int) -> int:
-    return min(model_limit, TITLE_INITIAL_OUTPUT_TOKENS)
+def initial_title_output_budget(model_limit: int | None) -> int:
+    return (
+        min(model_limit, TITLE_INITIAL_OUTPUT_TOKENS)
+        if model_limit is not None else TITLE_INITIAL_OUTPUT_TOKENS
+    )
 
 
 def repair_title_output_budget(
     current_budget: int,
-    model_limit: int,
+    model_limit: int | None,
     result: ProviderResult,
 ) -> int:
-    hard_limit = min(model_limit, TITLE_MAX_OUTPUT_TOKENS)
+    hard_limit = (
+        min(model_limit, TITLE_MAX_OUTPUT_TOKENS)
+        if model_limit is not None else TITLE_MAX_OUTPUT_TOKENS
+    )
     observed_tokens = max(
         result.usage.get("output_tokens", 0),
         result.usage.get("reasoning_tokens", 0),

@@ -46,9 +46,11 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.providers.base import ProviderError, ProviderResult, ToolCall
+from mato_loop_backend.providers.output_budget import output_token_limit, raw_input_budget
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
+    AgentRuntimeSettings,
     AiSettings,
     MemorySettings,
     ReasoningEffort,
@@ -359,12 +361,14 @@ def _record_candidates_tool(max_candidates: int = 100) -> dict[str, Any]:
 
 
 def _source_character_limit(
-    model: ModelConfig, output_tokens: int = DREAMING_EXTRACTION_OUTPUT_TOKENS
+    model: ModelConfig, output_tokens: int = DREAMING_EXTRACTION_OUTPUT_TOKENS,
+    *, safety_reserve_tokens: int,
 ) -> int:
-    available_input_tokens = max(
-        1,
-        model.context_window_tokens - min(output_tokens, model.max_output_tokens) - 4_096,
-    )
+    effective_output_tokens = output_token_limit(model, output_tokens)
+    assert effective_output_tokens is not None
+    available_input_tokens = raw_input_budget(max(
+        0, model.context_window_tokens - effective_output_tokens - safety_reserve_tokens,
+    ))
     return max(0, int(available_input_tokens * model.characters_per_token) - 16_000)
 
 
@@ -384,8 +388,10 @@ def _serialize_messages(messages: list[Message]) -> str:
     )
 
 
-def _fit_message_batch(messages: list[Message], model: ModelConfig) -> list[Message]:
-    limit = _source_character_limit(model)
+def _fit_message_batch(
+    messages: list[Message], model: ModelConfig, *, safety_reserve_tokens: int,
+) -> list[Message]:
+    limit = _source_character_limit(model, safety_reserve_tokens=safety_reserve_tokens)
     last_complete_index = -1
     for index, message in enumerate(messages):
         if len(_serialize_messages(messages[: index + 1])) > limit:
@@ -501,6 +507,7 @@ async def _extract_candidates(
     max_candidates: int,
     evidence_ids: set[UUID],
     user_evidence_ids: set[UUID],
+    safety_reserve_tokens: int,
     active_check: Callable[[], Awaitable[None]] | None = None,
 ) -> DreamCandidates:
     messages: list[dict[str, Any]] = [
@@ -525,7 +532,8 @@ async def _extract_candidates(
             messages=messages,
             tools=[_record_candidates_tool(max_candidates)],
             tool_choice="required",
-            max_output_tokens=DREAMING_EXTRACTION_OUTPUT_TOKENS,
+            max_output_tokens=output_token_limit(model, DREAMING_EXTRACTION_OUTPUT_TOKENS),
+            safety_reserve_tokens=safety_reserve_tokens,
             reasoning_effort=_dreaming_reasoning_effort(model),
         )
         calls = _normalized_calls(result)
@@ -728,6 +736,7 @@ async def _reconcile_candidates(
     candidate_count: int,
     candidate_local_ids: list[set[UUID]],
     candidate_remove: list[bool],
+    safety_reserve_tokens: int,
     active_check: Callable[[], Awaitable[None]] | None = None,
 ) -> DreamReconciliation:
     messages: list[dict[str, Any]] = [
@@ -744,7 +753,8 @@ async def _reconcile_candidates(
             messages=messages,
             tools=[_reconciliation_tool(candidate_count)],
             tool_choice="required",
-            max_output_tokens=DREAMING_RECONCILIATION_OUTPUT_TOKENS,
+            max_output_tokens=output_token_limit(model, DREAMING_RECONCILIATION_OUTPUT_TOKENS),
+            safety_reserve_tokens=safety_reserve_tokens,
             reasoning_effort=_dreaming_reasoning_effort(model),
         )
         calls = _normalized_calls(result)
@@ -822,10 +832,14 @@ def _reconciliation_batches(
     entries: list[tuple[int, DreamCandidate, list[MemoryRecord]]],
     model: ModelConfig,
     user_evidence: dict[UUID, str] | None = None,
+    *, safety_reserve_tokens: int,
 ) -> list[list[tuple[int, DreamCandidate, list[MemoryRecord]]]]:
     limit = min(
         80_000,
-        _source_character_limit(model, DREAMING_RECONCILIATION_OUTPUT_TOKENS),
+        _source_character_limit(
+            model, DREAMING_RECONCILIATION_OUTPUT_TOKENS,
+            safety_reserve_tokens=safety_reserve_tokens,
+        ),
     )
     batches: list[list[tuple[int, DreamCandidate, list[MemoryRecord]]]] = []
     current: list[tuple[int, DreamCandidate, list[MemoryRecord]]] = []
@@ -1055,7 +1069,10 @@ class DreamingService:
             )
             while messages and messages[-1].role != "assistant":
                 messages.pop()
-            messages = _fit_message_batch(messages, model)
+            runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
+            messages = _fit_message_batch(
+                messages, model, safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
+            )
             if not messages:
                 continue
             latest_at = messages[-1].created_at
@@ -1371,7 +1388,10 @@ class DreamingService:
         evidence_ids = {item.id for item in messages}
         user_evidence_ids = {item.id for item in messages if item.role == "user"}
         source = _serialize_messages(messages)
-        if len(source) > _source_character_limit(model):
+        runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
+        if len(source) > _source_character_limit(
+            model, safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
+        ):
             raise DreamingContractError("memory.dreamingOutputInvalid")
         instructions = memory.dreaming_instructions.strip()
         system_prompt = DREAMING_SYSTEM_PROMPT
@@ -1393,6 +1413,7 @@ class DreamingService:
             max_candidates=memory.dreaming_max_candidates,
             evidence_ids=evidence_ids,
             user_evidence_ids=user_evidence_ids,
+            safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
             active_check=ensure_active,
         )
         if await DreamingService._cancel_if_inactive(db, run, session.user_id):
@@ -1526,7 +1547,10 @@ class DreamingService:
         user_evidence = {
             item.id: item.content for item in messages if item.role == "user"
         }
-        for batch in _reconciliation_batches(entries, model, user_evidence):
+        for batch in _reconciliation_batches(
+            entries, model, user_evidence,
+            safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
+        ):
             if await DreamingService._cancel_if_inactive(db, run, session.user_id):
                 return
             batch_entries = [(candidate, matches) for _index, candidate, matches in batch]
@@ -1538,6 +1562,7 @@ class DreamingService:
                 candidate_count=len(batch),
                 candidate_local_ids=[{item.id for item in matches} for _candidate, matches in batch_entries],
                 candidate_remove=[candidate.remove for candidate, _matches in batch_entries],
+                safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
                 active_check=ensure_active,
             )
             if await DreamingService._cancel_if_inactive(db, run, session.user_id):

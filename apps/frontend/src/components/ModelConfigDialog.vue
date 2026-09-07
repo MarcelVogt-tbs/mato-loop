@@ -66,6 +66,7 @@
             <ModelRuntimeFields
               v-if="supportsChat"
               :model-value="form"
+              :generation-options-omitted="provider?.adapterType === 'openai-codex'"
               :reasoning-summary-available="reasoningSummaryAvailable"
               :reasoning-summary-forced="provider?.adapterType === 'openai-codex'"
               :provider-trust-level="provider?.trustLevel"

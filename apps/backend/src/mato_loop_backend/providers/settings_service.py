@@ -194,11 +194,6 @@ def _apply_discovered_context_window(value: ModelConfig, discovered: int | None)
     if not value.use_discovered_context_window or discovered is None:
         return
     value.context_window_tokens = discovered
-    value.max_output_tokens = min(
-        value.max_output_tokens,
-        max(1, discovered // 4),
-        discovered - 1,
-    )
 
 
 async def _clear_sessions(
@@ -304,11 +299,10 @@ class ProviderSettingsService:
         ):
             provider_config.models_last_synced_at = None
             for item in settings.models:
-                if (
-                    item.provider_id == provider_config.id
-                    and item.origin == ModelOrigin.DISCOVERED
-                ):
-                    item.availability = ModelAvailability.MISSING
+                if item.provider_id == provider_config.id:
+                    item.discovered_max_output_tokens = None
+                    if item.origin == ModelOrigin.DISCOVERED:
+                        item.availability = ModelAvailability.MISSING
             clear_invalid_defaults(settings)
         await cls.save(db, settings, owner_id)
         return provider_config
@@ -444,13 +438,16 @@ class ProviderSettingsService:
         }
         for external_id, discovered_model in discovered_by_id.items():
             value = existing_by_id.get(external_id)
+            if value is not None:
+                value.discovered_max_output_tokens = (
+                    discovered_model.discovered_max_output_tokens
+                )
             if value is None:
                 name = discovered_model.metadata.get("name")
                 discovered_context = _discovered_context_window(
                     discovered_model.metadata
                 )
                 context_window = discovered_context or 128_000
-                max_output = min(16_384, max(1, context_window // 4))
                 supports_tools = discovered_model.metadata.get("supports_tools")
                 supports_parallel = discovered_model.metadata.get(
                     "supports_parallel_tool_calls"
@@ -474,7 +471,9 @@ class ProviderSettingsService:
                         context_window_tokens=context_window,
                         discovered_context_window_tokens=discovered_context,
                         use_discovered_context_window=True,
-                        max_output_tokens=max_output,
+                        discovered_max_output_tokens=(
+                            discovered_model.discovered_max_output_tokens
+                        ),
                         supports_parallel_tool_calls=(
                             supports_parallel
                             if isinstance(supports_parallel, bool)
@@ -540,10 +539,11 @@ class ProviderSettingsService:
         for value in settings.models:
             if (
                 value.provider_id == provider_config.id
-                and value.origin == ModelOrigin.DISCOVERED
                 and value.model_id not in discovered_by_id
             ):
-                value.availability = ModelAvailability.MISSING
+                value.discovered_max_output_tokens = None
+                if value.origin == ModelOrigin.DISCOVERED:
+                    value.availability = ModelAvailability.MISSING
         provider_config.models_last_synced_at = synced_at
         clear_invalid_defaults(settings)
 
@@ -590,12 +590,6 @@ class ProviderSettingsService:
             raise ProviderSettingsError(
                 "provider.discoveredModelIdImmutable", field="modelId"
             )
-        _ensure_unique_model_id(
-            settings,
-            provider_id=current.provider_id,
-            model_id=values["model_id"],
-            exclude_id=current.id,
-        )
         candidate = current.model_dump()
         candidate.update(values)
         if enabled is not None:
@@ -606,6 +600,15 @@ class ProviderSettingsService:
             validated = ModelConfig.model_validate(candidate)
         except ValidationError as exc:
             raise ProviderSettingsError("provider.configurationInvalid") from exc
+        provider(settings, validated.provider_id)
+        _ensure_unique_model_id(
+            settings,
+            provider_id=validated.provider_id,
+            model_id=validated.model_id,
+            exclude_id=current.id,
+        )
+        if (validated.provider_id, validated.model_id) != (current.provider_id, current.model_id):
+            validated.discovered_max_output_tokens = None
         settings.models[settings.models.index(current)] = validated
         clear_invalid_defaults(settings)
         await cls.save(db, settings, owner_id)
@@ -782,6 +785,7 @@ class ProviderSettingsService:
         existing = await db.scalar(
             scoped_credentials(owner_id).where(Credential.kind == "codex-oauth")
         )
+        previous_account = str(existing.metadata_json.get("accountId") or "") if existing else ""
         credential = await store_credential(
             db,
             owner_id=owner_id,
@@ -808,6 +812,10 @@ class ProviderSettingsService:
             )
             value.owner_id = owner_id
             settings.providers.append(value)
+        if value.credential_id != credential.id or previous_account != str(token.get("account_id") or ""):
+            for item in settings.models:
+                if item.provider_id == value.id:
+                    item.discovered_max_output_tokens = None
         value.credential_id = credential.id
         await cls.save(db, settings, owner_id)
         await db.commit()
@@ -825,6 +833,9 @@ class ProviderSettingsService:
         for value in settings.providers:
             if value.credential_id in credential_ids:
                 value.credential_id = None
+                for item in settings.models:
+                    if item.provider_id == value.id:
+                        item.discovered_max_output_tokens = None
         clear_invalid_defaults(settings)
         for credential in credentials:
             await db.delete(credential)

@@ -24,6 +24,7 @@ from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.memory.service import memory_visible_to
 from mato_loop_backend.models import ChatSession, ContextSummary, Message
 from mato_loop_backend.providers.base import select_provider_images
+from mato_loop_backend.providers.output_budget import generation_reserve, raw_input_budget
 from mato_loop_backend.settings.models import (
     BUILD_AGENT_PROFILE_ID,
     PLAN_AGENT_PROFILE_ID,
@@ -104,6 +105,7 @@ class ContextProjection:
     input_budget_tokens: int
     compacted: bool = False
     context_summary: ContextSummary | None = None
+    reserved_output_tokens: int = 2_048
 
 
 SummaryCallback = Callable[[str, int], Awaitable[SummaryResult]]
@@ -1905,13 +1907,24 @@ class ContextManager:
         attachment_service: AttachmentService | None = None,
     ) -> ContextProjection:
         records = [item for item in records if item.error_code is None]
-        input_budget = (
+        reserved_output_tokens = generation_reserve(model)
+        input_budget = raw_input_budget(max(
+            0,
             model.context_window_tokens
-            - model.max_output_tokens
-            - settings.safety_reserve_tokens
-        )
+            - reserved_output_tokens
+            - settings.safety_reserve_tokens,
+        ))
         if input_budget <= 0:
             raise ContextError("agent.contextWindowTooSmall")
+        trigger_tokens = min(
+            input_budget,
+            raw_input_budget(max(
+                0,
+                int(model.context_window_tokens * settings.compaction_trigger_ratio)
+                - reserved_output_tokens
+                - settings.safety_reserve_tokens,
+            )),
+        )
         latest = await db.scalar(
             select(ContextSummary)
             .where(ContextSummary.session_id == chat_session.id)
@@ -1970,15 +1983,12 @@ class ContextManager:
             return messages, total
 
         messages, estimated = await project(latest, active_records)
-        trigger_tokens = min(
-            input_budget,
-            max(1, int(model.context_window_tokens * settings.compaction_trigger_ratio))
-            - model.max_output_tokens
-            - settings.safety_reserve_tokens,
-        )
         if estimated <= max(1, trigger_tokens):
             _strip_projection_metadata(messages)
-            return ContextProjection(messages, estimated, input_budget)
+            return ContextProjection(
+                messages, estimated, input_budget,
+                reserved_output_tokens=reserved_output_tokens,
+            )
 
         current_tool_indices = _current_tool_output_indices(messages)
         current_tool_tokens = sum(
@@ -2107,4 +2117,5 @@ class ContextManager:
             input_budget,
             compacted=compacted,
             context_summary=pending_summary,
+            reserved_output_tokens=reserved_output_tokens,
         )

@@ -12,6 +12,7 @@ from mato_loop_backend.agent.runtime import (
     AgentRuntime,
 )
 from mato_loop_backend.agent.runtime_memory import (
+    _automatic_context_character_budget,
     _automatic_context_suppressed,
     _bounded_automatic_payload,
     _bounded_memory_overview,
@@ -46,6 +47,7 @@ from mato_loop_backend.models import (
     Project,
 )
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
+from mato_loop_backend.providers.output_budget import raw_input_budget
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
@@ -61,6 +63,30 @@ from mato_loop_backend.settings import (
     UserProfileSettings,
 )
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+
+
+@pytest.mark.parametrize(
+    ("manual", "discovered", "reserve"),
+    [(None, None, 2_048), (8_000, None, 2_048), (128, None, 128), (None, 64, 64)],
+)
+def test_automatic_memory_uses_projection_generation_reserve(manual, discovered, reserve):
+    model = ModelConfig(
+        provider_id=uuid4(), model_id="model", context_window_tokens=10_000,
+        max_output_tokens=manual, discovered_max_output_tokens=discovered, characters_per_token=4,
+    )
+    assert _automatic_context_character_budget(
+        model, AgentRuntimeSettings(safety_reserve_tokens=512),
+        MemorySettings(automatic_context_max_tokens=2_000),
+    ) == int(raw_input_budget(10_000 - reserve - 512) * 0.1) * 4
+
+
+def test_automatic_memory_raw_capacity_keeps_configured_limit_and_handles_no_room():
+    model = ModelConfig(provider_id=uuid4(), model_id="model", characters_per_token=4)
+    runtime = AgentRuntimeSettings()
+    memory = MemorySettings(automatic_context_max_tokens=128)
+    assert _automatic_context_character_budget(model, runtime, memory) == 512
+    model.context_window_tokens = 4096
+    assert _automatic_context_character_budget(model, runtime, memory) == 0
 
 
 def test_short_follow_up_builds_one_contextual_retrieval_query() -> None:

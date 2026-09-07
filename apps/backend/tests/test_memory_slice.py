@@ -71,9 +71,11 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.providers import ToolCall
 from mato_loop_backend.providers.base import ProviderError, ProviderResult
+from mato_loop_backend.providers.output_budget import allocate_output_tokens, raw_input_budget
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
+    AgentRuntimeSettings,
     AiSettings,
     IntegrationSettings,
     MemorySettings,
@@ -1168,6 +1170,36 @@ async def test_dreaming_queue_queries_exclude_automation_sessions() -> None:
     assert "chat_sessions.session_type" in requeue_sql
 
 
+@pytest.mark.parametrize("safety", [0, 4_096])
+async def test_dreaming_queue_fits_sources_using_loaded_runtime_safety(monkeypatch, safety):
+    session = ChatSession(id=uuid4(), user_id=uuid4(), memory_mode="full", session_type="chat")
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="model", context_window_tokens=13_000)
+    ai = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
+    messages = [
+        Message(id=uuid4(), role="user", content="x" * 10_000, created_at=datetime.now(UTC)),
+        Message(id=uuid4(), role="assistant", content="Answer", created_at=datetime.now(UTC)),
+    ]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = Mock(all=Mock(return_value=[session]))
+    db.scalar.side_effect = [None, None, MemoryDreamState(session_id=session.id), None]
+    monkeypatch.setattr(DreamingService, "_next_messages", AsyncMock(return_value=messages))
+    load = AsyncMock(side_effect=lambda _db, kind, **_kwargs: {
+        AiSettings: ai,
+        MemorySettings: MemorySettings(),
+        AgentRuntimeSettings: AgentRuntimeSettings(safety_reserve_tokens=safety),
+    }[kind])
+    monkeypatch.setattr(SettingsStore, "load", load)
+
+    runs = await DreamingService.enqueue(db, trigger=MemoryDreamTrigger.MANUAL)
+
+    assert len(runs) == (1 if safety == 0 else 0)
+    assert any(call.args[1] is AgentRuntimeSettings for call in load.await_args_list)
+    if runs:
+        assert runs[0].source_to_message_id == messages[-1].id
+        assert runs[0].source_message_count == 2
+
+
 async def test_stale_automation_dreaming_run_is_cancelled_before_model_work(
     monkeypatch,
 ) -> None:
@@ -1436,12 +1468,21 @@ def test_dreaming_tool_schemas_are_inline_for_local_models() -> None:
     assert decisions["items"]["additionalProperties"] is False
 
 
-async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("manual", "discovered", "expected"),
+    [(None, None, 4_096), (128, None, 128), (None, 64, 64), (128, 64, 64)],
+)
+async def test_dreaming_repairs_invalid_candidate_tool_arguments(
+    monkeypatch, manual, discovered, expected,
+) -> None:
     evidence_id = uuid4()
     provider = LlmProviderConfig(
         name="Lokal", adapter_type="openai-compatible", trust_level="private"
     )
-    model = ModelConfig(provider_id=provider.id, model_id="model")
+    model = ModelConfig(
+        provider_id=provider.id, model_id="model",
+        max_output_tokens=manual, discovered_max_output_tokens=discovered,
+    )
     complete = AsyncMock(
         side_effect=[
             ProviderResult(
@@ -1486,6 +1527,7 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) ->
         provider=provider,
         model=model,
         system_prompt=DREAMING_SYSTEM_PROMPT,
+        safety_reserve_tokens=128,
         source=f"MESSAGE {evidence_id} [USER]\nmeine Frau und unser Kind",
         max_candidates=10,
         evidence_ids={evidence_id},
@@ -1494,6 +1536,8 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(monkeypatch) ->
 
     assert output.candidates[0].content == "Der Nutzer ist verheiratet und hat ein Kind."
     assert complete.await_count == 2
+    assert [call.kwargs["max_output_tokens"] for call in complete.await_args_list] == [expected] * 2
+    assert [call.kwargs["safety_reserve_tokens"] for call in complete.await_args_list] == [128] * 2
     retry_messages = complete.await_args_list[1].kwargs["messages"]
     assert retry_messages[-1]["role"] == "tool"
     assert "memory, category, evidence, and remove" in retry_messages[-1]["content"]
@@ -1518,6 +1562,7 @@ async def test_dreaming_stops_before_a_repair_when_user_becomes_inactive(
             provider=provider,
             model=model,
             system_prompt=DREAMING_SYSTEM_PROMPT,
+            safety_reserve_tokens=128,
             source=f"MESSAGE {evidence_id} [USER]\nTest",
             max_candidates=10,
             evidence_ids={evidence_id},
@@ -1581,6 +1626,7 @@ async def test_dreaming_repairs_assistant_only_evidence(monkeypatch) -> None:
         provider=provider,
         model=model,
         system_prompt=DREAMING_SYSTEM_PROMPT,
+        safety_reserve_tokens=128,
         source=(
             f"MESSAGE {user_id} [USER]\nBitte antworte kurz.\n\n"
             f"MESSAGE {assistant_id} [ASSISTANT]\nVerstanden."
@@ -1647,6 +1693,7 @@ async def test_dreaming_removal_requires_only_direct_user_evidence(monkeypatch) 
         provider=provider,
         model=model,
         system_prompt=DREAMING_SYSTEM_PROMPT,
+        safety_reserve_tokens=128,
         source=(
             f"MESSAGE {user_id} [USER]\nVergiss, dass ich in Berlin lebe.\n\n"
             f"MESSAGE {assistant_id} [ASSISTANT]\nVerstanden."
@@ -1719,6 +1766,7 @@ async def test_dreaming_extraction_uses_source_only_and_merges_candidate_calls(
         provider=provider,
         model=model,
         system_prompt=DREAMING_SYSTEM_PROMPT,
+        safety_reserve_tokens=128,
         source=(
             f"MESSAGE {first_evidence_id} [USER]\nMeine Familie ist wichtig.\n\n"
             f"MESSAGE {second_evidence_id} [ASSISTANT]\nVerstanden."
@@ -1742,12 +1790,21 @@ async def test_dreaming_extraction_uses_source_only_and_merges_candidate_calls(
     ]
 
 
-async def test_dreaming_reconciliation_repairs_invalid_output(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("manual", "discovered", "expected"),
+    [(None, None, 4_096), (128, None, 128), (None, 64, 64), (128, 64, 64)],
+)
+async def test_dreaming_reconciliation_repairs_invalid_output(
+    monkeypatch, manual, discovered, expected,
+) -> None:
     memory_id = uuid4()
     provider = LlmProviderConfig(
         name="Lokal", adapter_type="openai-compatible", trust_level="private"
     )
-    model = ModelConfig(provider_id=provider.id, model_id="model")
+    model = ModelConfig(
+        provider_id=provider.id, model_id="model",
+        max_output_tokens=manual, discovered_max_output_tokens=discovered,
+    )
     complete = AsyncMock(
         side_effect=[
             ProviderResult(
@@ -1790,10 +1847,13 @@ async def test_dreaming_reconciliation_repairs_invalid_output(monkeypatch) -> No
         candidate_count=1,
         candidate_local_ids=[{memory_id}],
         candidate_remove=[False],
+        safety_reserve_tokens=128,
     )
 
     assert result.decisions[0].action == "unchanged"
     assert complete.await_count == 2
+    assert [call.kwargs["max_output_tokens"] for call in complete.await_args_list] == [expected] * 2
+    assert [call.kwargs["safety_reserve_tokens"] for call in complete.await_args_list] == [128] * 2
     assert complete.await_args_list[0].kwargs["messages"][0]["content"] == (
         RECONCILIATION_SYSTEM_PROMPT
     )
@@ -1857,6 +1917,7 @@ async def test_dreaming_removal_reconciliation_allows_only_exact_remove(
         candidate_count=1,
         candidate_local_ids=[{memory_id}],
         candidate_remove=[True],
+        safety_reserve_tokens=128,
     )
 
     assert result.decisions[0].action == "remove"
@@ -1916,6 +1977,7 @@ async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> N
         candidate_count=2,
         candidate_local_ids=[{memory_id}, set()],
         candidate_remove=[False, False],
+        safety_reserve_tokens=128,
     )
 
     assert [decision.candidate_index for decision in result.decisions] == [0, 1]
@@ -2019,11 +2081,36 @@ def test_dreaming_reconciliation_requires_complete_safe_updates() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("manual", "discovered", "expected"),
+    [(None, None, 4_096), (8_192, None, 4_096), (128, None, 128), (None, 64, 64)],
+)
+@pytest.mark.parametrize("safety", [0, 128, 4_096, 8_192])
+def test_dreaming_source_budget_uses_request_caps(manual, discovered, expected, safety):
+    model = ModelConfig(
+        provider_id=uuid4(), model_id="model", context_window_tokens=32_768,
+        max_output_tokens=manual, discovered_max_output_tokens=discovered, characters_per_token=4,
+    )
+    raw_capacity = raw_input_budget(32_768 - expected - safety)
+    limit = _source_character_limit(model, safety_reserve_tokens=safety)
+    assert limit == raw_capacity * 4 - 16_000
+    assert allocate_output_tokens(
+        model, (limit + 16_000) // 4,
+        requested=expected, reserved_output_tokens=expected, safety_reserve_tokens=safety,
+    ) == expected
+    model.context_window_tokens = 4_096
+    assert _source_character_limit(model, safety_reserve_tokens=safety) == 0
+    assert _fit_message_batch([
+        Message(id=uuid4(), role="user", content="Question"),
+        Message(id=uuid4(), role="assistant", content="Answer"),
+    ], model, safety_reserve_tokens=safety) == []
+
+
 def test_dreaming_fit_keeps_only_complete_serialized_turns() -> None:
     model = ModelConfig(
         provider_id=uuid4(),
         model_id="small",
-        context_window_tokens=12_300,
+        context_window_tokens=13_000,
         max_output_tokens=8_192,
         characters_per_token=4.0,
     )
@@ -2035,7 +2122,7 @@ def test_dreaming_fit_keeps_only_complete_serialized_turns() -> None:
         id=uuid4(), role="user", content="x" * 2_000, created_at=datetime.now(UTC)
     )
 
-    fitted = _fit_message_batch([first, second, omitted], model)
+    fitted = _fit_message_batch([first, second, omitted], model, safety_reserve_tokens=4_096)
 
     assert fitted == [first, second]
     assert omitted.id not in {item.id for item in fitted}
@@ -2075,6 +2162,7 @@ def test_reconciliation_batches_never_slice_candidate_content() -> None:
         [(index, candidate, []) for index, candidate in enumerate(first)],
         model,
         evidence,
+        safety_reserve_tokens=4_096,
     )
 
     assert [entry[1].content for batch in batches for entry in batch] == [
@@ -2083,7 +2171,7 @@ def test_reconciliation_batches_never_slice_candidate_content() -> None:
     ]
     assert all(
         len(_reconciliation_source([(entry[1], entry[2]) for entry in batch], evidence))
-        <= _source_character_limit(model, DREAMING_RECONCILIATION_OUTPUT_TOKENS)
+        <= _source_character_limit(model, DREAMING_RECONCILIATION_OUTPUT_TOKENS, safety_reserve_tokens=4_096)
         for batch in batches
     )
     assert "x" * 1_000 not in _reconciliation_source(
@@ -2232,6 +2320,8 @@ async def test_host_matching_routes_profile_and_remove_candidates(
             if kind is MemorySettings
             else UserProfileSettings()
             if kind is UserProfileSettings
+            else AgentRuntimeSettings(safety_reserve_tokens=128)
+            if kind is AgentRuntimeSettings
             else ai
         )
     )
@@ -2324,6 +2414,7 @@ async def test_host_matching_routes_profile_and_remove_candidates(
     await DreamingService._process(db, run.id)
 
     complete.assert_awaited_once()
+    assert complete.await_args.kwargs["safety_reserve_tokens"] == 128
     assert reconciliation_candidates.await_args.kwargs["owner_id"] == user_id
     blocked = not latest_enabled or latest_mode != "full"
     if blocked:
@@ -2430,6 +2521,8 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
             if kind is MemorySettings
             else UserProfileSettings()
             if kind is UserProfileSettings
+            else AgentRuntimeSettings(safety_reserve_tokens=128)
+            if kind is AgentRuntimeSettings
             else ai
         )
     )

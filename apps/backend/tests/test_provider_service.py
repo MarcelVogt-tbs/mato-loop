@@ -18,7 +18,9 @@ from mato_loop_backend.providers import service as service_module
 from mato_loop_backend.providers.base import (
     ProviderError,
     ProviderImageInput,
+    ProviderMedia,
     ProviderMediaInput,
+    ProviderRequest,
     ProviderResult,
     PublicReasoning,
     ToolCall,
@@ -27,6 +29,14 @@ from mato_loop_backend.providers.openai_compatible import (
     _chat_body,
     _responses_body,
     discover_models,
+)
+from mato_loop_backend.providers.output_budget import (
+    allocate_output_tokens,
+    estimate_request_input_tokens,
+    generation_reserve,
+    guarded_input_tokens,
+    output_token_limit,
+    raw_input_budget,
 )
 from mato_loop_backend.providers.service import ProviderService, _with_retries
 from mato_loop_backend.session_storage import SessionStorage
@@ -180,7 +190,7 @@ async def test_complete_relaxes_only_llamacpp_repetition_limits(
     transport = AsyncMock(return_value=ProviderResult(content="OK"))
     monkeypatch.setattr(service_module, "chat_completions", transport)
 
-    await ProviderService.complete(
+    result = await ProviderService.complete(
         AsyncMock(spec=AsyncSession),
         provider=provider,
         model=model,
@@ -198,6 +208,9 @@ async def test_complete_relaxes_only_llamacpp_repetition_limits(
     assert tools[0]["parameters"]["maxItems"] == 50
     assert tools[0]["parameters"]["$defs"]["Item"]["maxLength"] == 2_000
     assert request.include_usage is include_usage
+    assert result.provider_data["output_budget"]["finalEstimatedInputTokens"] == (
+        estimate_request_input_tokens(_chat_body(request), model.characters_per_token)
+    )
 
 
 async def test_complete_validates_and_transports_direct_audio_and_video(monkeypatch) -> None:
@@ -389,7 +402,7 @@ async def test_public_complete_pseudonymizes_and_restores_request_scope(
     }
     assert result.reasoning is not None
     assert result.reasoning.text == "Gedanke zu anna@example.com"
-    assert result.provider_data == {}
+    assert set(result.provider_data) == {"output_budget"}
 
 
 async def test_public_complete_rejects_unknown_pseudonym_marker(monkeypatch) -> None:
@@ -535,6 +548,9 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(mon
     assert result.content == "OK"
     assert request.model == "gpt-5.6-sol"
     assert request.max_output_tokens is None
+    budget = result.provider_data["output_budget"]
+    assert budget["allocatedOutputTokens"] == 1_024
+    assert budget["transmittedMaxOutputTokens"] is None
     assert request.temperature is None
     assert request.tools == [{"name": "read_file", "parameters": {}}]
     assert request.supports_parallel_tool_calls is True
@@ -1653,3 +1669,356 @@ async def test_complete_rejects_unknown_adapter_before_transport(monkeypatch) ->
 
     assert exc_info.value.public_code == "provider.configurationInvalid"
     transport.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("manual", "provider_cap", "helper", "expected"),
+    [(None, None, None, None), (80_000, None, None, 80_000),
+     (80_000, 40_000, None, 40_000), (None, 40_000, 7, 7),
+     (2, 40_000, 7, 2), (None, None, 1, 1)],
+)
+def test_output_budget_uses_only_present_caps(manual, provider_cap, helper, expected):
+    model = ModelConfig(
+        provider_id=uuid4(), model_id="arbitrary",
+        max_output_tokens=manual, discovered_max_output_tokens=provider_cap,
+    )
+    assert output_token_limit(model, helper) == expected
+    assert generation_reserve(model) == min(2048, manual or 2048, provider_cap or 2048)
+    assert allocate_output_tokens(model, 1000, requested=helper) == min(
+        128_000 - 4096 - 1100, expected or 128_000
+    )
+    assert model.max_output_tokens == manual
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "100"])
+@pytest.mark.parametrize("source", ["max_output_tokens", "discovered_max_output_tokens", "requested"])
+def test_output_budget_rejects_invalid_caps(value, source):
+    model = ModelConfig(provider_id=uuid4(), model_id="arbitrary")
+    requested = None
+    if source == "requested":
+        requested = value
+    else:
+        model = model.model_copy(update={source: value})
+    with pytest.raises(ProviderError) as exc_info:
+        output_token_limit(model, requested)
+    assert exc_info.value.public_code == "provider.configurationInvalid"
+
+
+def test_output_budget_reserve_and_nonpositive_boundaries():
+    model = ModelConfig(provider_id=uuid4(), model_id="arbitrary", context_window_tokens=8192)
+    assert guarded_input_tokens(1) == 2
+    assert allocate_output_tokens(model, 0, reserved_output_tokens=4096) == 4096
+    for kwargs in (
+        {"estimated_input_tokens": 1, "reserved_output_tokens": 4096},
+        {"estimated_input_tokens": 4000},
+        {"estimated_input_tokens": 0, "requested": 1, "reserved_output_tokens": 2},
+    ):
+        with pytest.raises(ProviderError) as exc_info:
+            allocate_output_tokens(model, **kwargs)
+        assert exc_info.value.code == "agent.contextWindowExceeded"
+    assert allocate_output_tokens(model, 3722, requested=1) == 1
+
+
+def test_raw_input_budget_is_exact_inverse_of_guarded_input():
+    for capacity in (*range(1000), 59_392, 10_000_000):
+        raw = raw_input_budget(capacity)
+        assert guarded_input_tokens(raw) <= capacity
+        assert guarded_input_tokens(raw + 1) > capacity
+    assert raw_input_budget(59_392) == 53_992
+    for invalid in (-1, True, 1.5, "100"):
+        with pytest.raises(ProviderError) as exc_info:
+            raw_input_budget(invalid)
+        assert exc_info.value.public_code == "provider.configurationInvalid"
+
+
+@pytest.mark.parametrize("api_type", ["chat_completions", "responses"])
+async def test_output_budget_serialized_cap_is_adaptive_and_name_invariant(monkeypatch, api_type):
+    provider = LlmProviderConfig(
+        name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "https://local.test/v1", "api_type": api_type},
+    )
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [], "status": "completed", "output": []})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "mato_loop_backend.providers.openai_compatible.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    budgets = []
+    for name, content, projection in (
+        ("arbitrary", "Test", None), ("Qwen/Qwen3.8-27B", "Test", None),
+        ("gpt-5.6", "Test", None), ("arbitrary", "x" * 40_000, None),
+        ("arbitrary", "Test", 20_000),
+    ):
+        model = ModelConfig(provider_id=provider.id, model_id=name, supports_streaming=False)
+        result = await ProviderService.complete(
+            AsyncMock(spec=AsyncSession), provider=provider, model=model,
+            messages=[{"role": "system", "content": "Instructions"},
+                      {"role": "user", "content": content}],
+            tools=[{"name": "read", "parameters": {"type": "object"}}],
+            estimated_input_tokens=projection,
+        )
+        budget = result.provider_data["output_budget"]
+        budgets.append(budget)
+        field = "max_tokens" if api_type == "chat_completions" else "max_output_tokens"
+        assert bodies[-1][field] == budget["allocatedOutputTokens"]
+        assert budget["transmittedMaxOutputTokens"] == bodies[-1][field]
+        assert budget["allocatedOutputTokens"] == (
+            model.context_window_tokens - 4096 - budget["guardedInputTokens"]
+        )
+        assert budget["finalEstimatedInputTokens"] == estimate_request_input_tokens(bodies[-1])
+    assert budgets[0] == budgets[1] == budgets[2]
+    assert budgets[0]["allocatedOutputTokens"] > 16_384
+    assert budgets[3]["allocatedOutputTokens"] < budgets[0]["allocatedOutputTokens"]
+    assert budgets[4]["guardedInputTokens"] == 22_000
+
+
+@pytest.mark.parametrize("api_type", ["chat_completions", "responses"])
+@pytest.mark.parametrize(
+    ("manual", "provider_cap", "helper", "expected"),
+    [(80_000, None, None, 80_000), (80_000, 40_000, None, 40_000),
+     (None, 40_000, 7, 7), (3, 40_000, 7, 3)],
+)
+async def test_output_budget_transports_minimum_cap(
+    monkeypatch, api_type, manual, provider_cap, helper, expected,
+):
+    provider = LlmProviderConfig(
+        name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "https://local.test/v1", "api_type": api_type},
+    )
+    model = ModelConfig(
+        provider_id=provider.id, model_id="arbitrary", max_output_tokens=manual,
+        discovered_max_output_tokens=provider_cap,
+    )
+    transport = AsyncMock(return_value=ProviderResult())
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+    monkeypatch.setattr(service_module, "responses_api", transport)
+    result = await ProviderService.complete(
+        AsyncMock(spec=AsyncSession), provider=provider, model=model,
+        messages=[{"role": "user", "content": "Test"}], tools=[], max_output_tokens=helper,
+    )
+    request = transport.await_args.kwargs["request"]
+    body = _responses_body(request) if api_type == "responses" else _chat_body(request)
+    field = "max_output_tokens" if api_type == "responses" else "max_tokens"
+    budget = result.provider_data["output_budget"]
+    assert body[field] == budget["allocatedOutputTokens"] == expected
+    assert budget["manualLimit"] == model.max_output_tokens == manual
+    assert budget["providerLimit"] == provider_cap
+    assert budget["helperLimit"] == helper
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"estimated_input_tokens": -1}, {"estimated_input_tokens": True},
+     {"estimated_input_tokens": 1.5}, {"safety_reserve_tokens": -1},
+     {"reserved_output_tokens": -1}, {"reserved_output_tokens": True},
+     {"max_output_tokens": 0}, {"max_output_tokens": False}],
+)
+async def test_output_budget_invalid_request_counts_fail_before_transport(monkeypatch, kwargs):
+    provider = LlmProviderConfig(
+        name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "https://local.test/v1"},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="arbitrary")
+    transport = AsyncMock()
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+    with pytest.raises(ProviderError) as exc_info:
+        await ProviderService.complete(
+            AsyncMock(spec=AsyncSession), provider=provider, model=model,
+            messages=[{"role": "user", "content": "Test"}], tools=[], **kwargs,
+        )
+    assert exc_info.value.public_code == "provider.configurationInvalid"
+    transport.assert_not_awaited()
+
+
+@pytest.mark.parametrize("api_type", ["chat_completions", "responses"])
+async def test_output_budget_rechecks_pseudonym_expansion_and_required_reserve(monkeypatch, api_type):
+    provider = LlmProviderConfig(
+        name="Public", adapter_type="openai-compatible",
+        config={"base_url": "https://public.test/v1", "api_type": api_type},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="arbitrary", context_window_tokens=8192)
+
+    class ExpandingPseudonymizer:
+        def protect_messages(self, messages):
+            return [{"role": "system", "content": "privacy " * 100},
+                    {"role": "user", "content": "placeholder " * 400}]
+
+        def restore_text(self, text, **kwargs):
+            return text
+
+    monkeypatch.setattr(service_module, "RequestPseudonymizer", ExpandingPseudonymizer)
+    transport = AsyncMock(return_value=ProviderResult())
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+    monkeypatch.setattr(service_module, "responses_api", transport)
+    kwargs = dict(
+        provider=provider, model=model, messages=[{"role": "user", "content": "a"}],
+        tools=[], estimated_input_tokens=1,
+    )
+    result = await ProviderService.complete(AsyncMock(spec=AsyncSession), **kwargs)
+    budget = result.provider_data["output_budget"]
+    assert budget["estimatedInputTokens"] > 1000
+    assert budget["allocatedOutputTokens"] < 3000
+    transport.reset_mock()
+    with pytest.raises(ProviderError) as exc_info:
+        await ProviderService.complete(
+            AsyncMock(spec=AsyncSession), **kwargs, reserved_output_tokens=3000,
+        )
+    assert exc_info.value.code == "agent.contextWindowExceeded"
+    transport.assert_not_awaited()
+    with pytest.raises(ProviderError):
+        await ProviderService.complete(
+            AsyncMock(spec=AsyncSession), **{**kwargs, "model": model.model_copy(
+                update={"context_window_tokens": 4096}
+            )},
+        )
+    transport.assert_not_awaited()
+
+
+@pytest.mark.parametrize("serializer", [_chat_body, _responses_body])
+def test_output_budget_estimates_framing_tools_and_replayed_continuation(serializer):
+    request = ProviderRequest(model="ignored", messages=[{"role": "user", "content": "a"}])
+    initial = estimate_request_input_tokens(serializer(request))
+    request.max_output_tokens = 99_999
+    request.temperature = 0.9
+    request.model = "much-longer-model-name" * 100
+    assert estimate_request_input_tokens(serializer(request)) == initial
+    request.messages.insert(0, {"role": "system", "content": "instructions" * 100})
+    request.tools = [{"name": "tool", "description": "description" * 100, "parameters": {}}]
+    with_tools = estimate_request_input_tokens(serializer(request))
+    assert with_tools > initial + 500
+    request.continuation_scope = {"providerId": "same"}
+    request.messages.append({
+        "role": "assistant", "content": "",
+        "provider_data": {
+            "continuation_scope": request.continuation_scope,
+            "chat_reasoning_details": [{"type": "reasoning.text", "text": "reason" * 1000}],
+            "responses_output_items": [{"role": "assistant", "content": [
+                {"type": "output_text", "text": "reason" * 1000}
+            ]}],
+        },
+    })
+    assert estimate_request_input_tokens(serializer(request)) > with_tools + 1000
+
+
+@pytest.mark.parametrize("serializer", [_chat_body, _responses_body])
+def test_output_budget_image_and_opaque_payloads_are_not_text(serializer):
+    request = ProviderRequest(model="vision", messages=[{"role": "user", "content": "a"}])
+    initial = estimate_request_input_tokens(serializer(request))
+    request.media = [ProviderMedia(0, "image/png", data_url="data:image/png;base64,a", status="ready")]
+    small = estimate_request_input_tokens(serializer(request))
+    request.media[0].data_url += "a" * 1_000_000
+    assert estimate_request_input_tokens(serializer(request)) == small
+    assert initial + 2048 < small < initial + 2200
+    request.messages.append({
+        "role": "assistant", "content": "", "provider_data": {
+            "continuation_scope": {"providerId": "same"},
+            "reasoning_encrypted_content": "a" * 1_000_000,
+            "chat_reasoning_details": [{"type": "reasoning.encrypted", "data": "a" * 1_000_000}],
+        },
+    })
+    request.continuation_scope = {"providerId": "same"}
+    assert small + 8192 < estimate_request_input_tokens(serializer(request)) < small + 8400
+
+
+@pytest.mark.parametrize("modality", ["audio", "video"])
+@pytest.mark.parametrize("helper", [None, 7, 16_384])
+@pytest.mark.parametrize("manual", [None, 8_192])
+async def test_output_budget_large_native_media_has_only_explicit_caps(
+    monkeypatch, modality, helper, manual,
+):
+    provider = LlmProviderConfig(
+        name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "https://local.test/v1"},
+    )
+    model = ModelConfig(
+        provider_id=provider.id, model_id="media", input_modalities={"text", modality},
+        max_output_tokens=manual,
+    )
+    transport = AsyncMock(return_value=ProviderResult())
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+    result = await ProviderService.complete(
+        AsyncMock(spec=AsyncSession), provider=provider, model=model,
+        messages=[{"role": "user", "content": "Inspect"}], tools=[], max_output_tokens=helper,
+        media_inputs=[ProviderMediaInput(
+            0, b"a" * (17 * 1024 * 1024),
+            "audio/wav" if modality == "audio" else "video/mp4", "private", modality,
+        )],
+    )
+    budget = result.provider_data["output_budget"]
+    assert 8192 < budget["estimatedInputTokens"] < 8400
+    assert budget["mediaInputTokensUnknown"] is True
+    capacity = model.context_window_tokens - 4096 - budget["guardedInputTokens"]
+    assert budget["allocatedOutputTokens"] == min(
+        value for value in (capacity, manual, helper) if value is not None
+    )
+    assert budget["helperLimit"] == helper
+    if helper is None:
+        assert budget["allocatedOutputTokens"] > 2048
+        assert budget["mode"] == ("auto" if manual is None else "manual")
+    assert transport.await_args.kwargs["request"].max_output_tokens == budget["allocatedOutputTokens"]
+
+
+@pytest.mark.parametrize("api_type", ["chat_completions", "responses"])
+@pytest.mark.parametrize(("manual", "helper"), [(None, 128), (128, None)])
+async def test_complete_loads_configured_safety_for_small_context_helpers(
+    monkeypatch, api_type, manual, helper,
+):
+    provider = LlmProviderConfig(
+        name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "https://local.test/v1", "api_type": api_type},
+    )
+    model = ModelConfig(
+        provider_id=provider.id, model_id="small", context_window_tokens=512,
+        max_output_tokens=manual,
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = SimpleNamespace(data={"safety_reserve_tokens": 0})
+    transport = AsyncMock(return_value=ProviderResult(content="Short title"))
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+    monkeypatch.setattr(service_module, "responses_api", transport)
+    kwargs = dict(
+        provider=provider, model=model, messages=[{"role": "user", "content": "Name this chat"}],
+        tools=[], max_output_tokens=helper,
+    )
+    result = await ProviderService.complete(db, **kwargs)
+    db.scalar.assert_awaited_once()
+    statement = db.scalar.await_args.args[0]
+    assert "agent-runtime" in statement.compile().params.values()
+    assert "settings.user_id IS NULL" in str(statement)
+    assert result.provider_data["output_budget"]["safetyReserveTokens"] == 0
+    assert transport.await_args.kwargs["request"].max_output_tokens == 128
+
+    db.scalar.return_value = SimpleNamespace(data={"safety_reserve_tokens": 512})
+    transport.reset_mock()
+    with pytest.raises(ProviderError) as exc_info:
+        await ProviderService.complete(db, **kwargs)
+    assert exc_info.value.code == "agent.contextWindowExceeded"
+    assert db.scalar.await_count == 2
+    transport.assert_not_awaited()
+
+
+@pytest.mark.parametrize("safety", [0, 4096])
+async def test_complete_explicit_safety_snapshot_skips_settings_lookup(monkeypatch, safety):
+    provider = LlmProviderConfig(
+        name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "https://local.test/v1"},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="model")
+    load = AsyncMock(side_effect=AssertionError("Explicit safety must not load settings"))
+    monkeypatch.setattr(service_module.SettingsStore, "load", load)
+    monkeypatch.setattr(service_module, "chat_completions", AsyncMock(return_value=ProviderResult()))
+    result = await ProviderService.complete(
+        AsyncMock(spec=AsyncSession), provider=provider, model=model,
+        messages=[{"role": "user", "content": "Test"}], tools=[], safety_reserve_tokens=safety,
+    )
+    load.assert_not_awaited()
+    budget = result.provider_data["output_budget"]
+    assert budget["safetyReserveTokens"] == safety
+    assert budget["allocatedOutputTokens"] == (
+        model.context_window_tokens - safety - budget["guardedInputTokens"]
+    )

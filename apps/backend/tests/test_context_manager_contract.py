@@ -14,6 +14,7 @@ from mato_loop_backend.agent.context import (
     ContextManager,
     SummaryResult,
     _compaction_boundary,
+    _message_text_tokens,
     _projection_messages,
     _shorten_evidence_output,
     _summary_source,
@@ -23,6 +24,11 @@ from mato_loop_backend.agent.context import (
     message_dict,
 )
 from mato_loop_backend.models import ChatSession, ContextSummary, Message, MessageAttachment
+from mato_loop_backend.providers.output_budget import (
+    allocate_output_tokens,
+    generation_reserve,
+    raw_input_budget,
+)
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AgentProfile,
@@ -1697,7 +1703,7 @@ def test_required_web_search_prompt_preserves_memory_context_contract() -> None:
 def _model(
     *,
     context_window_tokens: int,
-    max_output_tokens: int = 100,
+    max_output_tokens: int | None = 100,
     supports_image_input: bool = False,
 ) -> ModelConfig:
     return ModelConfig(
@@ -1765,9 +1771,110 @@ async def test_current_tool_output_budget_scales_with_model_context() -> None:
     large_content = json.loads(large.messages[-1]["content"])["content"]
 
     assert len(large_content) > len(small_content)
-    assert small.estimated_input_tokens <= int(1_500 * 0.8) - 100
-    assert large.estimated_input_tokens <= int(5_000 * 0.8) - 100
+    assert small.estimated_input_tokens <= raw_input_budget(int(1_500 * 0.8) - 100)
+    assert large.estimated_input_tokens <= raw_input_budget(int(5_000 * 0.8) - 100)
     assert len(json.loads(tool_result.content)["content"]) == 6_008
+
+
+@pytest.mark.parametrize(
+    ("manual", "discovered", "reserve"),
+    [(None, None, 2_048), (16_384, None, 2_048), (128, None, 128), (None, 64, 64), (128, 64, 64)],
+)
+async def test_context_uses_minimum_generation_reserve(manual, discovered, reserve) -> None:
+    session = _session()
+    model = _model(context_window_tokens=32_768, max_output_tokens=manual)
+    model.discovered_max_output_tokens = discovered
+    records = [
+        _message(session.id, "user", "x" * 11_000),
+        _message(session.id, "assistant", "Earlier answer"),
+        _message(session.id, "user", "Continue checking"),
+        *_tool_segment(session.id, 0),
+        *_tool_segment(session.id, 1),
+    ]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    summarize = AsyncMock()
+
+    projection = await ContextManager.build(
+        db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+        model=model, settings=_settings(safety_reserve_tokens=512), summarize=summarize,
+    )
+
+    assert projection.reserved_output_tokens == reserve
+    assert projection.input_budget_tokens == raw_input_budget(32_768 - reserve - 512)
+    assert not projection.compacted
+    summarize.assert_not_awaited()
+    assert [item["content"] for item in projection.messages if item["role"] == "user"] == [
+        records[0].content, records[2].content,
+    ]
+    _assert_whole_tool_pairs(projection.messages)
+    db.add.assert_not_called()
+
+
+@pytest.mark.parametrize("manual", [None, 7])
+async def test_context_raw_budget_boundary_fits_provider_allocation(manual):
+    session = _session()
+    current = _message(session.id, "user", "")
+    model = _model(context_window_tokens=65_536, max_output_tokens=manual)
+    settings = _settings(safety_reserve_tokens=4096)
+    reserve = generation_reserve(model)
+    capacity = raw_input_budget(model.context_window_tokens - 4096 - reserve)
+    framing = _message_text_tokens(
+        _projection_messages("System", None, [current], TrustLevel.PUBLIC), 1,
+    )
+    current.content = "x" * (capacity - framing)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    summarize = AsyncMock()
+    kwargs = dict(
+        chat_session=session, records=[current], system_prompt="System", tool_schemas=[],
+        model=model, settings=settings, summarize=summarize,
+    )
+    projection = await ContextManager.build(db, **kwargs)
+    assert projection.estimated_input_tokens == projection.input_budget_tokens == capacity
+    assert projection.estimated_input_tokens == _message_text_tokens(projection.messages, 1)
+    assert allocate_output_tokens(
+        model, projection.estimated_input_tokens,
+        reserved_output_tokens=projection.reserved_output_tokens,
+    ) == reserve
+    summarize.assert_not_awaited()
+    current.content += "x"
+    with pytest.raises(ContextError) as exc_info:
+        await ContextManager.build(db, **kwargs)
+    assert exc_info.value.code == "agent.contextWindowExceeded"
+
+
+@pytest.mark.parametrize(("summary_size", "compacted"), [(38_000, False), (42_000, True)])
+async def test_auto_context_trigger_applies_slack_once_without_recompacting_fitting_history(
+    summary_size, compacted,
+):
+    session = _session()
+    covered = _message(session.id, "assistant", "Already summarized")
+    current = _message(session.id, "user", "x" * 2_000)
+    summary = ContextSummary(
+        id=uuid4(), session_id=session.id, covered_through_message_id=covered.id,
+        content="x" * summary_size, estimated_tokens=summary_size, is_fallback=False,
+    )
+    model = _model(context_window_tokens=65_536, max_output_tokens=None)
+    settings = _settings(safety_reserve_tokens=4096)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = summary
+    summarize = AsyncMock(return_value=SummaryResult("Retained facts", None))
+    kwargs = dict(
+        chat_session=session, records=[covered, current], system_prompt="System", tool_schemas=[],
+        model=model, settings=settings, summarize=summarize,
+    )
+    projection = await ContextManager.build(db, **kwargs)
+    assert projection.compacted is compacted
+    if compacted:
+        db.scalar.return_value = projection.context_summary
+    else:
+        assert projection.estimated_input_tokens > 40_000
+    assert allocate_output_tokens(model, projection.estimated_input_tokens) >= 2048
+    reloaded = await ContextManager.build(db, **kwargs)
+    assert not reloaded.compacted
+    assert reloaded.estimated_input_tokens == projection.estimated_input_tokens
+    assert summarize.await_count == int(compacted)
 
 
 async def test_large_current_tool_output_does_not_compact_older_history() -> None:
@@ -1809,7 +1916,7 @@ async def test_large_current_tool_output_does_not_compact_older_history() -> Non
 
     summarize.assert_not_awaited()
     assert projection.compacted is False
-    assert projection.estimated_input_tokens <= 3_900
+    assert projection.estimated_input_tokens <= raw_input_budget(3_900)
 
 
 async def test_existing_summary_boundary_excludes_covered_history() -> None:
@@ -2047,6 +2154,7 @@ async def test_compaction_preserves_history_and_records_stable_summary_boundary(
 
     assert projection.compacted is True
     assert [message.id for message in records] == original_ids
+    assert projection.reserved_output_tokens == 100
     assert [message.content for message in records] == original_contents
     summary = db.add.call_args.args[0]
     assert isinstance(summary, ContextSummary)

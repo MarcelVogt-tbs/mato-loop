@@ -11,6 +11,7 @@ _GENERIC_MESSAGE = "The action failed."
 _MESSAGES = {
     "agent.backendRestarted": "The agent run was interrupted by a backend restart.",
     "agent.emptyResponse": "The model returned no usable response.",
+    "agent.contextWindowExceeded": "The request does not fit in the model's context window.",
     "agent.outputLimitReached": "The model response was interrupted at its output limit.",
     "agent.failed": "The agent run failed.",
     "agent.requiredWebSearchFailed": "The required web search failed.",
@@ -402,6 +403,7 @@ _NAMESPACE_MESSAGES = {
 }
 
 _PROVIDER_CODES = {
+    "agent.contextWindowExceeded",
     "provider.authenticationFailed",
     "provider.configurationInvalid",
     "provider.discoveryFailed",

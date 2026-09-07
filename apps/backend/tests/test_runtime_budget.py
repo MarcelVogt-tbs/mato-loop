@@ -21,6 +21,40 @@ from mato_loop_backend.settings.effective import filter_agent_profile_integratio
 from mato_loop_backend.settings.models import AgentProfile
 
 
+@pytest.mark.parametrize("transmitted", [30_000, None])
+async def test_runtime_passes_projection_reserve_and_records_provider_allocation(monkeypatch, transmitted):
+    output_budget = {
+        "estimatedInputTokens": 150,
+        "finalEstimatedInputTokens": 150,
+        "guardedInputTokens": 165,
+        "reservedOutputTokens": 2_048,
+        "allocatedOutputTokens": 30_000,
+        "transmittedMaxOutputTokens": transmitted,
+        "safetyReserveTokens": 4_096,
+        "manualLimit": None,
+        "providerLimit": 32_768,
+        "helperLimit": None,
+        "mode": "auto",
+        "estimationPolicy": "serialized-characters-media-reserves-v1",
+        "mediaInputTokensUnknown": False,
+    }
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content="Antwort", provider_data={"output_budget": output_budget})],
+        max_tool_calls=7, search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    await AgentRuntime._execute_loop(db, run)
+
+    assert requests[0]["estimated_input_tokens"] == 100
+    assert requests[0]["reserved_output_tokens"] == 2_048
+    assert requests[0]["safety_reserve_tokens"] == 4_096
+    assert "max_output_tokens" not in requests[0]
+    performance = _assistant_messages(db)[0].provider_data["_matoloop"]["performance"]
+    assert {key: performance[key] for key in output_budget} == output_budget
+    assert performance["inputBudgetTokens"] == 1_000
+    assert performance["maxToolCalls"] == 7
+
+
 @pytest.mark.parametrize(("limit", "calls"), [(25, 25), (None, 61)])
 async def test_profile_budget_snapshot_and_unlimited_run(monkeypatch, limit, calls):
     db, run, requests, projections, _events = await _runtime_setup(
