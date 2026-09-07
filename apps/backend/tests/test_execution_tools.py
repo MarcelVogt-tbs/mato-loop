@@ -604,8 +604,33 @@ async def test_shell_policy_covers_incomplete_analysis(
     ) == expected
 
 
-async def test_shell_dispatches_with_inspection_classification(tmp_path) -> None:
-    call = ToolCall("shell", "shell_run", {"command": "cat README.md"})
+@pytest.mark.parametrize(("command", "commands", "prefixes"), [
+    (
+        "cat README.md",
+        [{"tokens": ["cat", "README.md"], "prefix": ["cat"], "classification": "read"}],
+        [["cat"]],
+    ),
+    (
+        "docker exec app cat /etc/hosts",
+        [{"tokens": ["docker", "exec", "app", "cat", "/etc/hosts"],
+          "prefix": None, "classification": "read"}],
+        [],
+    ),
+    (
+        "curl https://example.com; docker exec app cat /etc/hosts; cat README.md",
+        [
+            {"tokens": ["curl", "https://example.com"], "prefix": ["curl"], "classification": "read"},
+            {"tokens": ["docker", "exec", "app", "cat", "/etc/hosts"],
+             "prefix": None, "classification": "read"},
+            {"tokens": ["cat", "README.md"], "prefix": ["cat"], "classification": "read"},
+        ],
+        [],
+    ),
+])
+async def test_shell_dispatches_with_inspection_classification(
+    tmp_path, command, commands, prefixes,
+) -> None:
+    call = ToolCall("shell", "shell_run", {"command": command})
     client = FakeExecutionClient(
         {
             "shell.inspect": ShellInspectResult(
@@ -613,9 +638,7 @@ async def test_shell_dispatches_with_inspection_classification(tmp_path) -> None
                 analysis_complete=True,
                 classification="read",
                 read_only=True,
-                commands=[
-                    {"tokens": ["cat", "README.md"], "prefix": ["cat"], "classification": "read"}
-                ],
+                commands=commands,
                 inspection_revision="a" * 64,
             ),
             "shell.run": ProcessResult(
@@ -639,13 +662,33 @@ async def test_shell_dispatches_with_inspection_classification(tmp_path) -> None
         "shell.inspect",
         "shell.run",
     ]
+    assert client.requests[-1][1] == {
+        "command": command,
+        "currentDirectory": client.current_directory,
+        "timeoutSeconds": None,
+        "expectedInspectionRevision": "a" * 64,
+    }
     request = context.ask_handler.await_args.args[0]
     assert request.capability == "shell.read"
     assert request.approval_details == {
         "shellClassification": "read",
         "shellAnalysisComplete": True,
-        "shellPrefixes": [["cat"]],
+        "shellPrefixes": prefixes,
     }
+    assert json.loads(request.resource_scope)["prefixes"] == prefixes
+    assert request.available_decisions == (
+        ("allow_once", "allow_session", "deny") if prefixes else ("allow_once", "deny")
+    )
+    allowed = [["docker"], ["curl"], ["cat"]]
+    assert shell_prefix_allowed(ToolSettings(shell_prefixes={"read": allowed}), request) == bool(prefixes)
+    granted = _shell_permission(client, classification="read", prefixes=allowed)
+    grant = PermissionGrant(
+        session_id=context.session.id,
+        capability=granted.capability,
+        resource_type=granted.resource_type,
+        resource_scope=granted.resource_scope,
+    )
+    assert PermissionPolicy.grant_matches(grant, request, context.root_files) == bool(prefixes)
 
 
 @pytest.mark.parametrize("classification", ["read", "write"])

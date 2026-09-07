@@ -1,5 +1,6 @@
 import asyncio
 import os
+import shlex
 import stat
 import tempfile
 import unittest
@@ -312,6 +313,11 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                 "npm test",
                 "python -c pass",
                 "curl https://example.invalid",
+                "curl -sXGET https://example.invalid",
+                "curl -su user:o https://example.invalid",
+                "curl -A sXPOST https://example.invalid",
+                "curl -A '-sXPOST' https://example.invalid",
+                "curl --user-agent '-sooutput' https://example.invalid",
                 "find . -maxdepth invalid",
                 "find . -name *.py",
                 "printf target & pwd",
@@ -335,6 +341,10 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                 "git config user.name Test",
                 "git stash",
                 "curl -XPOST https://example.invalid",
+                "curl -sXPOST https://example.invalid",
+                "curl -sooutput.txt https://example.invalid",
+                "curl -X GET -X POST https://example.invalid",
+                "curl --request=GET --request=POST https://example.invalid",
                 "curl -ooutput.txt https://example.invalid",
             ):
                 with self.subTest(command=command):
@@ -400,6 +410,172 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                 runner.inspect_shell(command, str(root))
             self.assertEqual(raised.exception.code, "path.unsupportedType")
 
+    def test_docker_exec_classifies_inner_commands_without_host_path_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = configuration(root)
+            runner = ProcessRunner(config, Filesystem(config))
+            for wrapper in (
+                "docker --context local exec",
+                "docker container exec",
+                "docker compose --project-name test exec",
+            ):
+                for payload, classification in (
+                    ("lemonade config", "read"),
+                    ("cat /container-only/file", "read"),
+                    ("/container-only/bin/tool --inspect", "read"),
+                    ("curl -fsS --max-time 15 http://example.invalid/health", "read"),
+                    ("echo 'rm /tmp/file; echo x > /tmp/file'", "read"),
+                    ("sh -c 'docker exec \"{server,rm}\" echo ok'", "read"),
+                    ("curl --user-agent '-sXPOST' http://example.invalid", "read"),
+                    ("sh -c 'cat /container-only/file | head -8'", "read"),
+                    ('bash -lc \'printf "%s" "$(pwd)"\'', "read"),
+                    ("sh -c 'echo ok >&2'", "read"),
+                    ("sh -c 'cat < /container-only/file'", "read"),
+                    ("docker exec nested lemonade config", "read"),
+                    ("rm /container-only/file", "write"),
+                    ("curl -XPOST http://example.invalid", "write"),
+                    ("curl -sXPOST http://example.invalid", "write"),
+                    ("curl -so/tmp/output http://example.invalid", "write"),
+                    ("curl -X GET -X POST http://example.invalid", "write"),
+                    ("curl -o /container-only/file http://example.invalid", "write"),
+                    ("sh -c 'echo x > /tmp/file'", "write"),
+                    ("sh -c 'echo x > /dev/null'", "write"),
+                    ("sh -c 'cat <> /tmp/file'", "write"),
+                    ("sh -c 'cat >&output'", "write"),
+                    ("sh -c 'echo $(touch /tmp/file)'", "write"),
+                    ("sh -c 'git < /tmp/input commit'", "write"),
+                    ("sh -c 'exec rm /tmp/file'", "write"),
+                    ("sh -c '. /container-only/script.sh'", "write"),
+                    ("sh -c 'docker exec $(printf server) rm /tmp/file'", "write"),
+                    ("bash -c 'docker exec {server,rm} /tmp/file'", "write"),
+                    ("sh -c 'r\\\nm /tmp/file'", "write"),
+                    ("sh -c 'git com\\\nmit -m test'", "write"),
+                    (r"""sh -c 'sh -c "echo $(printf %s \;touch\ /tmp/file)"' """, "write"),
+                    ("sh -c 'sh -c \"rm /tmp/file\"'", "write"),
+                    ("sh -c '$COMMAND'", "write"),
+                    ("sh -c 'if'", "write"),
+                    ("sh /container-only/script.sh", "write"),
+                    ("env FLAG=value rm /tmp/file", "write"),
+                    ("docker exec nested rm /tmp/file", "write"),
+                ):
+                    command = f"{wrapper} -itu root -w /container-only server {payload}"
+                    with self.subTest(command=command):
+                        inspected = runner.inspect_shell(command, str(root))
+                        self.assertEqual(inspected["classification"], classification)
+                        self.assertEqual(inspected["readOnly"], classification == "read")
+                        self.assertFalse(inspected["analysisComplete"])
+                        self.assertEqual(inspected["targets"], [])
+                        self.assertFalse(any("prefix" in unit for unit in inspected["commands"]))
+
+            command = (
+                "curl -fsS --max-time 15 http://192.168.1.32:13305/api/v1/health; "
+                "curl -fsS --max-time 15 http://192.168.1.32:13305/api/v1/models; "
+                "docker exec lemonade-server lemonade config; "
+                "ps -eo pid,rss,args --sort=-rss | head -8"
+            )
+            inspected = runner.inspect_shell(command, str(root))
+            self.assertEqual(inspected["classification"], "read")
+            self.assertEqual(len(inspected["commands"]), 5)
+            self.assertNotIn("prefix", inspected["commands"][2])
+            argv, _ = runner.execution_argv(
+                current_directory=str(root),
+                command=command,
+                expected_inspection_revision=inspected["inspectionRevision"],
+            )
+            self.assertEqual(argv[-2:], ["-c", command])
+            with self.assertRaises(AgentError) as raised:
+                runner.execution_argv(
+                    current_directory=str(root),
+                    command=command.replace("config", "status"),
+                    expected_inspection_revision=inspected["inspectionRevision"],
+                )
+            self.assertEqual(raised.exception.code, "process.inspectionChanged")
+
+            for options in ("--", "-e FLAG=1 --user=root --workdir=/app", "--interactive=false"):
+                self.assertEqual(
+                    runner.inspect_shell(
+                        f"docker exec {options} server lemonade config", str(root)
+                    )["classification"],
+                    "read",
+                )
+            for suffix in (
+                "",
+                "server",
+                "--user",
+                "--future server cat",
+                "--privileged server cat",
+                "server $COMMAND",
+                'server sh -c "$COMMAND"',
+                "server sh -c $'rm /tmp/f'",
+                "{server,rm} /tmp/file",
+                "ser\\\nver rm /tmp/file",
+            ):
+                with self.subTest(suffix=suffix):
+                    self.assertEqual(
+                        runner.inspect_shell(f"docker exec {suffix}", str(root))["classification"],
+                        "write",
+                    )
+            nested = ["echo", "ok"]
+            for _ in range(10):
+                nested = ["sh", "-c", shlex.join(nested)]
+            for payload in (shlex.join(nested), "docker exec nested " * 10 + "echo ok"):
+                self.assertEqual(
+                    runner.inspect_shell("docker exec server " + payload, str(root))[
+                        "classification"
+                    ],
+                    "write",
+                )
+
+    def test_docker_exec_preserves_outer_files_and_redirects(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = configuration(root)
+            runner = ProcessRunner(config, Filesystem(config))
+            env_file = root / "container.env"
+            env_file.write_text("FLAG=1\n")
+            compose_file = root / "compose.yaml"
+            compose_file.write_text("services: {}\n")
+            for option in (f"--env-file {env_file}", f"--env-file={env_file}"):
+                inspected = runner.inspect_shell(
+                    f"docker exec {option} server cat /container-only/file", str(root)
+                )
+                self.assertEqual(inspected["classification"], "read")
+                self.assertEqual(
+                    [target["path"] for target in inspected["targets"]], [str(env_file)]
+                )
+            inspected = runner.inspect_shell(
+                "docker compose -f ./compose.yaml exec -T --index=1 "
+                "server cat /container-only/file",
+                str(root),
+            )
+            self.assertEqual(inspected["classification"], "read")
+            self.assertEqual(
+                [target["path"] for target in inspected["targets"]], [str(compose_file)]
+            )
+            for suffix, classification in (("> output", "write"), ("< container.env", "read")):
+                inspected = runner.inspect_shell(
+                    f"docker exec server cat /container-only/file {suffix}", str(root)
+                )
+                self.assertEqual(inspected["classification"], classification)
+                self.assertEqual(len(inspected["targets"]), 1)
+                self.assertEqual(inspected["targets"][0]["path"], str(root / suffix[2:]))
+            inspected = runner.inspect_shell("docker exec server echo $(touch output)", str(root))
+            self.assertEqual(inspected["classification"], "write")
+            link = root / "link"
+            link.symlink_to(env_file)
+            self.assertEqual(
+                runner.inspect_shell(f"docker exec server cat {link}", str(root))["targets"], []
+            )
+            for command in (
+                f"docker exec --env-file {link} server cat /container-only/file",
+                f"docker exec server cat /container-only/file > {link}",
+                f"docker exec server cat $(cat {link})",
+            ):
+                with self.subTest(command=command), self.assertRaises(AgentError) as raised:
+                    runner.inspect_shell(command, str(root))
+                self.assertEqual(raised.exception.code, "path.unsupportedType")
+
     def test_docker_operations_and_option_aware_prefixes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -450,15 +626,17 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                             with self.subTest(command=command):
                                 inspected = runner.inspect_shell(command, str(root))
                                 classification = "read" if operation in reads.split() else "write"
-                                self.assertTrue(inspected["analysisComplete"])
+                                self.assertEqual(inspected["analysisComplete"], operation != "exec")
                                 self.assertEqual(inspected["classification"], classification)
                                 self.assertEqual(inspected["readOnly"], classification == "read")
                                 self.assertEqual(
                                     inspected["commands"][0]["classification"], classification
                                 )
                                 self.assertEqual(
-                                    inspected["commands"][0]["prefix"],
-                                    ["docker", *([group] if group else []), operation],
+                                    inspected["commands"][0].get("prefix"),
+                                    None
+                                    if operation == "exec"
+                                    else ["docker", *([group] if group else []), operation],
                                 )
 
             for command, classification, prefix in (

@@ -205,6 +205,11 @@ _DOCKER_WRITE_SUBCOMMANDS = {
     "volume": {"create", "prune", "rm", "update"},
     "system": {"prune"},
 }
+_DOCKER_EXEC_COMMANDS = (
+    ["docker", "exec"],
+    ["docker", "container", "exec"],
+    ["docker", "compose", "exec"],
+)
 _FIND_WRITE_ACTIONS = {
     "-delete",
     "-exec",
@@ -257,6 +262,13 @@ _OPTIONS_WITH_VALUES = {
 }
 _OUTPUT_REDIRECT = re.compile(r"^\s*(?:\d+)?\s*(&>>|&>|>>|>\||<>|>&|>|<<-?|<<<|<&|<)")
 _INTERPRETERS = {"bash", "dash", "node", "perl", "python", "python3", "ruby", "sh"}
+_DYNAMIC_SHELL_NODES = {
+    "expansion",
+    "simple_expansion",
+    "command_substitution",
+    "process_substitution",
+    "arithmetic_expansion",
+}
 _PREFIX_ARITY = {
     ("aws",): 3,
     ("az",): 3,
@@ -382,7 +394,103 @@ def _docker_command(arguments: list[str]) -> tuple[list[str], list[str]] | None:
     return (semantic, arguments) if len(semantic) == 1 else None
 
 
-def _definitely_writes(tokens: list[str]) -> bool:
+def _docker_exec_payload(
+    arguments: list[str], *, compose: bool
+) -> tuple[list[str], list[str]] | None:
+    value_options = {"--env", "-e", "--user", "-u", "--workdir", "-w"}
+    value_options |= {"--index"} if compose else {"--env-file", "--detach-keys"}
+    flags = {"--detach", "-d", "--interactive", "-i", "--tty", "-t"}
+    if compose:
+        flags |= {"--no-TTY", "-T"}
+    host_files = []
+    while arguments:
+        argument = arguments[0]
+        if argument == "--":
+            arguments = arguments[1:]
+            break
+        if not argument.startswith("-"):
+            break
+        while len(argument) > 2 and argument[:2] in flags and argument[2] not in "=-":
+            argument = "-" + argument[2:]
+        option, separator, value = argument.partition("=")
+        if option in value_options:
+            if not separator:
+                if len(arguments) < 2:
+                    return None
+                value = arguments[1]
+                arguments = arguments[1:]
+            if option == "--env-file":
+                host_files.append(value)
+        elif option in flags and (not separator or value in {"true", "false"}):
+            pass
+        elif any(
+            argument.startswith(option) and argument != option for option in ("-e", "-u", "-w")
+        ):
+            pass
+        else:
+            # Unknown option arity and privileged execution retain the write classification.
+            return None
+        arguments = arguments[1:]
+    if len(arguments) < 2 or not arguments[0] or not arguments[1] or arguments[1].startswith("-"):
+        return None
+    return arguments[1:], host_files
+
+
+def _container_command_writes(tokens: list[str], depth: int) -> bool:
+    # ponytail: bound wrapper nesting; unfamiliar shell forms keep the former write class.
+    if depth > 8 or not tokens or any(c in tokens[0] for c in "$`*?[]{}~"):
+        return True
+    executable = Path(tokens[0]).name
+    if executable not in {"sh", "bash", "dash"}:
+        if tokens[0] == "." or executable in {"env", "sudo", "eval", "exec", "command", "source"}:
+            return True
+        return _definitely_writes(tokens, depth=depth)
+    if len(tokens) < 3 or not re.fullmatch(r"-[elux]*c[elux]*", tokens[1]) or "\\\n" in tokens[2]:
+        return True
+    source = tokens[2].encode("utf-8")
+    try:
+        root = _parse_shell(tokens[2])
+    except AgentError as exc:
+        if exc.code != "process.invalidSyntax":
+            raise
+        return True
+    if any(
+        _nodes(root, kind)
+        for kind in {"expansion", "simple_expansion", "variable_assignment", "ansi_c_string"}
+    ):
+        return True
+    for redirect in _nodes(root, "file_redirect"):
+        match = _OUTPUT_REDIRECT.match(_node_text(source, redirect))
+        if match is None:
+            return True
+        operator = match.group(1)
+        if ">" in operator:
+            destination = redirect.child_by_field_name("destination")
+            if (
+                operator != ">&"
+                or destination is None
+                or not re.fullmatch(r"\d+-?|-", _node_text(source, destination))
+            ):
+                # Container /dev/null cannot use the host's verified discard exemption.
+                return True
+    commands = _nodes(root, "command")
+    if len(commands) > 64:
+        return True
+    for command in commands:
+        words = _command_words(command)
+        inner = _command_tokens(source, words)
+        if inner is None or len(inner) != len(words):
+            return True
+        if Path(inner[0]).name in {"docker", "sh", "bash", "dash"} and _unresolved_wrapper_words(
+            source, words
+        ):
+            return True
+        if _container_command_writes(inner, depth + 1):
+            return True
+    return False
+
+
+def _definitely_writes(tokens: list[str], *, depth: int = 0) -> bool:
     executable = Path(tokens[0]).name
     arguments = tokens[1:]
     if executable in _ALWAYS_WRITES:
@@ -394,6 +502,9 @@ def _definitely_writes(tokens: list[str]) -> bool:
         semantic, remaining = command
         if len(semantic) == 1:
             return False
+        if semantic in _DOCKER_EXEC_COMMANDS:
+            payload = _docker_exec_payload(remaining, compose=semantic[1] == "compose")
+            return payload is None or _container_command_writes(payload[0], depth + 1)
         group = semantic[1]
         if semantic[1:] in (["save"], ["export"], ["image", "save"], ["container", "export"]) and (
             _option_present(remaining, {"--output", "-o"})
@@ -514,17 +625,60 @@ def _definitely_writes(tokens: list[str]) -> bool:
                 nested = _subcommand(arguments[arguments.index(subcommand) + 1 :], set())
                 return nested in {"add", "lock", "move", "prune", "remove", "repair", "unlock"}
     if executable == "curl":
-        if _option_present(arguments, _CURL_WRITE_OPTIONS) or _short_option_present(
-            arguments, {"-F", "-O", "-T", "-d", "-o"}
-        ):
-            return True
+        value_options = {
+            "--url",
+            "--user-agent",
+            "--header",
+            "--user",
+            "--proxy-user",
+            "--proxy",
+            "--max-time",
+            "--connect-timeout",
+            "--retry",
+            "--range",
+            "--referer",
+            "--cookie",
+            "--cacert",
+            "--cert",
+            "--key",
+            "--interface",
+            "--resolve",
+            "--connect-to",
+            "--config",
+            "--write-out",
+            "--request",
+        }
+        skip_next = False
         for index, argument in enumerate(arguments):
-            if argument in {"-X", "--request"} and index + 1 < len(arguments):
-                return arguments[index + 1].upper() in _MUTATING_HTTP_METHODS
-            if argument.startswith("-X") and argument != "-X":
-                return argument[2:].upper() in _MUTATING_HTTP_METHODS
-            if argument.startswith("--request="):
-                return argument.partition("=")[2].upper() in _MUTATING_HTTP_METHODS
+            if skip_next:
+                skip_next = False
+                continue
+            if argument == "--":
+                break
+            option, separator, value = argument.partition("=")
+            following = arguments[index + 1] if index + 1 < len(arguments) else ""
+            if option in _CURL_WRITE_OPTIONS:
+                return True
+            if option in value_options:
+                skip_next = not separator
+                if (
+                    option == "--request"
+                    and (value if separator else following).upper() in _MUTATING_HTTP_METHODS
+                ):
+                    return True
+            elif argument.startswith("-") and not argument.startswith("--"):
+                for offset, option in enumerate(argument[1:], start=1):
+                    if option in "FOTdo":
+                        return True
+                    if option in "AbcCDeEHKmPQrtUuwxXyYz":
+                        skip_next = offset == len(argument) - 1
+                        value = argument[offset + 1 :] or following
+                        if option == "X" and value.upper() in _MUTATING_HTTP_METHODS:
+                            return True
+                        break
+                    # Only peel known switches; other options may consume the remaining text.
+                    if option not in "#012346aBfgGiIjJklLMnNpRqsSvVZ":
+                        break
     if executable == "dd" and any(argument.startswith("of=") for argument in arguments):
         return True
     if executable == "find" and any(argument in _FIND_WRITE_ACTIONS for argument in arguments):
@@ -681,6 +835,43 @@ def _command_tokens(source: bytes, words: list[Node]) -> list[str] | None:
     return tokens or None
 
 
+def _command_words(node: Node) -> list[Node]:
+    words = [
+        child
+        for index, child in enumerate(node.children)
+        if node.field_name_for_child(index) in {"name", "argument"}
+    ]
+    redirects = list(node.children_by_field_name("redirect"))
+    if (
+        node.parent.type == "redirected_statement"
+        and node.parent.child_by_field_name("body") == node
+    ):
+        redirects.extend(node.parent.children_by_field_name("redirect"))
+    for redirect in redirects:
+        # Repeated destinations after the first word are argv, not redirect targets.
+        if redirect.type == "file_redirect":
+            words.extend(redirect.children_by_field_name("destination")[1:])
+        else:
+            words.extend(redirect.children_by_field_name("argument"))
+    return sorted(words, key=lambda word: word.start_byte)
+
+
+def _unresolved_wrapper_words(source: bytes, words: list[Node]) -> bool:
+    if any(
+        _nodes(word, kind) for word in words for kind in _DYNAMIC_SHELL_NODES | {"ansi_c_string"}
+    ) or (words and b"\\\n" in source[words[0].start_byte : words[-1].end_byte]):
+        return True
+    stack = list(words)
+    while stack:
+        word = stack.pop()
+        if word.type in {"raw_string", "string"}:
+            continue
+        if not word.children and any(c in _node_text(source, word) for c in "*?[]{}~"):
+            return True
+        stack.extend(word.children)
+    return False
+
+
 def _command_prefix(tokens: list[str]) -> list[str] | None:
     if "/" in tokens[0]:
         return None
@@ -688,6 +879,8 @@ def _command_prefix(tokens: list[str]) -> list[str] | None:
     arguments = tokens[1:]
     if executable == "docker":
         command = _docker_command(arguments)
+        if command is not None and command[0] in _DOCKER_EXEC_COMMANDS:
+            return None
         return command[0] if command is not None and len(command[0]) > 1 else None
     if executable in {"eval", "exec"} or (
         (executable in _INTERPRETERS or executable.startswith("python"))
@@ -840,32 +1033,9 @@ class ProcessRunner:
         if len(command_nodes) > 64:
             extraction_complete = False
         units = []
-        dynamic_types = {
-            "expansion",
-            "simple_expansion",
-            "command_substitution",
-            "process_substitution",
-            "arithmetic_expansion",
-        }
+        dynamic_types = _DYNAMIC_SHELL_NODES
         for node in command_nodes:
-            words = [
-                child
-                for index, child in enumerate(node.children)
-                if node.field_name_for_child(index) in {"name", "argument"}
-            ]
-            redirects = list(node.children_by_field_name("redirect"))
-            if (
-                node.parent.type == "redirected_statement"
-                and node.parent.child_by_field_name("body") == node
-            ):
-                redirects.extend(node.parent.children_by_field_name("redirect"))
-            for redirect in redirects:
-                # Repeated destinations after the first word are argv, not redirect targets.
-                if redirect.type == "file_redirect":
-                    words.extend(redirect.children_by_field_name("destination")[1:])
-                else:
-                    words.extend(redirect.children_by_field_name("argument"))
-            words.sort(key=lambda word: word.start_byte)
+            words = _command_words(node)
             tokens = _command_tokens(source, words)
             serializable = tokens is not None
             if tokens is None:
@@ -881,6 +1051,19 @@ class ProcessRunner:
                         values = []
                     tokens.append(values[0] if len(values) == 1 else "$unresolved")
             unit_writes = bool(tokens) and _definitely_writes(tokens)
+            docker = (
+                _docker_command(tokens[1:]) if tokens and Path(tokens[0]).name == "docker" else None
+            )
+            if (
+                docker is not None
+                and docker[0] in _DOCKER_EXEC_COMMANDS
+                and (
+                    not serializable
+                    or len(tokens) != len(words)
+                    or _unresolved_wrapper_words(source, words)
+                )
+            ):
+                unit_writes = True
             command_writes |= unit_writes
             if not tokens:
                 continue
@@ -1006,6 +1189,16 @@ class ProcessRunner:
         for command_unit, words in units:
             tokens = command_unit["tokens"]
             ansi_words = {_node_text(source, word) for word in words if _has_ansi_quoting(word)}
+            docker = _docker_command(tokens[1:]) if Path(tokens[0]).name == "docker" else None
+            if docker is not None and docker[0] in _DOCKER_EXEC_COMMANDS:
+                # Container paths cannot be verified against the agent host filesystem.
+                analysis_complete = False
+                semantic, remaining = docker
+                payload = _docker_exec_payload(remaining, compose=semantic[1] == "compose")
+                if payload is not None:
+                    for path in payload[1]:
+                        add(path, "input", must_exist=True)
+                    tokens = tokens[: len(tokens) - len(remaining)]
             metadata_paths = set()
             installed_ls = (
                 shutil.which(tokens[0], path=EXECUTION_PATH)
