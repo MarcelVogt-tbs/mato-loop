@@ -49,7 +49,7 @@ describe('MatoLoop frontend scaffold', () => {
       settingsLabel: 'Kanäle', settingsIcon: 'forum'
     })
     expect(settingsRoutes.find((route) => route.name === 'settings-approvals')?.redirect).toEqual({
-      name: 'chat', query: { controlCenter: 'approvals' }
+      name: 'chat', query: { controlCenter: 'notifications' }
     })
     expect(settingsRoutes.find((route) => route.name === 'settings-personalization')?.meta).toEqual({
       settingsLabel: 'Personalisierung', settingsIcon: 'manage_accounts'

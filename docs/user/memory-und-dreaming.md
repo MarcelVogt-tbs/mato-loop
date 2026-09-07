@@ -68,7 +68,7 @@ Für das Ändern und Entfernen stehen jeweils diese Richtlinien zur Verfügung:
 
 Der Standard ist **Automatisch** für Änderungen und **Nachfragen** für Entfernungen. Eine Zusammenführung benötigt beide Rechte: Ist eine Richtlinie deaktiviert, wird sie übersprungen. Steht mindestens eine auf Nachfragen, entsteht eine Freigabe. Nur zweimal Automatisch führt sofort zusammen.
 
-Offene Dreaming-Entscheidungen finden Sie unter **Control Center > Freigaben**. Diese Memory-Freigaben bleiben auch nach einem Backend-Neustart offen. Beim Genehmigen prüft MatoLoop die betroffenen Erinnerungen, Belege und Richtlinien erneut. Wurde eine Erinnerung inzwischen geändert, läuft die Freigabe ab, ohne einen Teil der vorgeschlagenen Änderung anzuwenden. Zusammenführungen bewahren Belege, private Einstufung und vorhandene Markierungen gemeinsam in einer Transaktion.
+Pending Dreaming decisions can be answered under **Control Center > Benachrichtigungen > Aktion erforderlich**, above informational notices. Diese Memory-Freigaben bleiben auch nach einem Backend-Neustart offen. Beim Genehmigen prüft MatoLoop die betroffenen Erinnerungen, Belege und Richtlinien erneut. Wurde eine Erinnerung inzwischen geändert, läuft die Freigabe ab, ohne einen Teil der vorgeschlagenen Änderung anzuwenden. Zusammenführungen bewahren Belege, private Einstufung und vorhandene Markierungen gemeinsam in einer Transaktion.
 
 Dreaming kann manuell für alle oder für eine einzelne Session gestartet werden. Die Oberfläche zeigt Laufstatus und die Anzahl neu angelegter, aktualisierter und entfernter Erinnerungen. Später genehmigte Änderungen werden dem ursprünglichen Lauf zugerechnet.
 

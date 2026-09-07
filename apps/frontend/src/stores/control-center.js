@@ -372,8 +372,14 @@ export const useControlCenterStore = defineStore('control-center', {
       }
     },
     async openApp(appId) {
+      if (appId === 'approvals') appId = 'notifications'
       if (controlCenterGlobalSectionIds.has(appId)) {
         this.activeGlobalSectionId = appId
+        if (!this.ready) {
+          this.open = true
+          this.requestedAppId = appId
+          return null
+        }
         this.requestedAppId = null
         return this.setOpen(true)
       }

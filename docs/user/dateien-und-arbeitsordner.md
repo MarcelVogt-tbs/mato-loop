@@ -35,7 +35,8 @@ In der App **Dateien** können Sie:
 - Ordner anlegen
 - Dateien und Ordner umbenennen oder löschen
 - Dateiversionen anzeigen, herunterladen oder wiederherstellen
-- Session-Freigaben anzeigen und widerrufen
+
+View and revoke granted session permissions under **Session > Session-Freigaben** in the Control Center, not in the file app or the global notification center.
 
 Nachrichten verweisen bei Uploads und dauerhaften Binärausgaben auf die exakte Dateiversion. Normales Bearbeiten, Umbenennen und Verschieben erhalten diese Verweise. Löschen entfernt Datei und vollständigen Versionsverlauf; die Nachricht zeigt die Datei danach als nicht mehr verfügbar. Reine Text-, JSON-, Status- und Fehlerergebnisse bleiben Teil der Nachricht.
 
