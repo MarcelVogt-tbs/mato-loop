@@ -834,12 +834,44 @@ async def test_runtime_finalizer_uses_session_and_preserves_conflicts(monkeypatc
     db.scalar.return_value = None
     finalize = AsyncMock()
     monkeypatch.setattr(AttachmentService, "finalize_run", finalize)
-    await AgentRuntime._finalize_run_files(db, run)
+    assert await AgentRuntime._finalize_run_files(db, run) is True
     finalize.assert_awaited_once_with(db, session, run.id)
     finalize.side_effect = RootFileError("file.changed", "File changed during publication")
     with pytest.raises(RootFileError):
         await AgentRuntime._finalize_run_files(db, run)
-    await AgentRuntime._finalize_run_files(db, run, tolerate_conflict=True)
+    assert await AgentRuntime._finalize_run_files(db, run, tolerate_conflict=True) is False
+    db.begin_nested.assert_called_once_with()
+    assert db.begin_nested.return_value.__aexit__.await_args.args[0] is RootFileError
+
+
+async def test_recovery_retries_failed_active_run_file_finalization(monkeypatch):
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
+    run = AgentRun(id=uuid4(), session_id=session.id, status="running")
+    db = AsyncMock(spec=AsyncSession)
+
+    async def scalars(statement):
+        entity = statement.column_descriptions[0]["entity"]
+        values = {
+            AgentRun: [run] if run.status == "running" else [],
+            ChatSession: [session],
+            Message: [],
+        }
+        return Mock(all=Mock(return_value=values[entity]))
+
+    db.scalars.side_effect = scalars
+    db.get.side_effect = lambda entity, _id: session if entity is ChatSession else run
+    files = Mock(pending_run_ids=Mock(return_value=(run.id,)))
+    finalize = AsyncMock(return_value=False)
+    monkeypatch.setattr(runtime_module, "RootFileService", lambda *_args, **_kwargs: files)
+    monkeypatch.setattr(AgentRuntime, "_finalize_run_files", finalize)
+    monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
+    monkeypatch.setattr(AgentRuntime, "_persist_error_message", AsyncMock())
+    monkeypatch.setattr(AgentRuntime, "_persist_run_duration", AsyncMock())
+
+    await AgentRuntime.recover(db)
+    assert finalize.await_count == 2
+    await AgentRuntime.recover(db)
+    assert finalize.await_count == 3
 
 
 @pytest.mark.parametrize("later_finalized", [False, True])
@@ -988,7 +1020,8 @@ async def test_pending_audio_and_image_tools_use_owned_live_sources(tmp_path, mo
     result = await tools_module._edit_image(
         SimpleNamespace(attachment_ids=[image.id], prompt="Make it blue"), context
     )
-    assert result.attachments[0].file_id == image.file_id
+    assert result.attachments[0].file_root_id is None
+    assert result.attachments[0].file_id is None
     assert edit.await_args.kwargs["images"] == ((png("red"), "image/png"),)
     db.add.assert_not_called()
 

@@ -30,4 +30,6 @@ If an attachment limit prevents adding a recording, it remains available for ano
 
 ## Mediengenerierung
 
-Je nach Provider, Modellfähigkeiten und Tool-Richtlinien kann der Agent Bilder, Sprache oder Audio erzeugen und Bilder bearbeiten. Dauerhafte erzeugte oder bearbeitete Bilder, QR-Codes, Sprach- und Audioausgaben, abgerufene Bilder, gerenderte PDF-Seiten sowie OpenSCAD-Exporte werden als verwaltete Dateien mit gespeicherten Vollversionen abgelegt. Die jeweilige Nachricht verweist auf genau diese Version. Normales Bearbeiten, Verschieben und Löschen durch den Agenten erhält diesen Verweis, soweit die Aktion eine verwaltete Datei betrifft; das manuelle Löschen oder Wiederherstellen im Versionsverlauf kann ihn dagegen unbrauchbar machen.
+Je nach Provider, Modellfähigkeiten und Tool-Richtlinien kann der Agent Bilder, Sprache oder Audio erzeugen und Bilder bearbeiten. Dauerhafte erzeugte oder bearbeitete Bilder, QR-Codes, Sprach- und Audioausgaben, abgerufene Bilder, gerenderte PDF-Seiten sowie OpenSCAD-Exporte werden als verwaltete Dateien mit gespeicherten Vollversionen abgelegt. Die jeweilige Nachricht verweist auf genau diese Version. Normales Bearbeiten, Verschieben und das Aktivieren einer anderen Version erhalten diesen Verweis; das Löschen der vollständigen verwalteten Datei macht ihn unbrauchbar.
+
+Die Bearbeitung eines einzelnen, bereits erzeugten Bildes ergänzt dessen Versionsverlauf. Ein hochgeladenes oder heruntergeladenes Original sowie mehrere gemeinsam bearbeitete Quellen bleiben unverändert; das Ergebnis wird als neue Datei gespeichert.

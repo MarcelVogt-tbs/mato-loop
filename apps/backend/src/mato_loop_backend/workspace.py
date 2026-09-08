@@ -87,11 +87,10 @@ class WorkingFileRevision:
 
 
 @dataclass(frozen=True, slots=True)
-class RevisionMutationResult:
-    deleted: bool
+class RevisionActivationResult:
     file_id: UUID
-    current_revision: int | None
-    sha256: str | None
+    current_revision: int
+    sha256: str
 
 
 class RootFileError(ValueError):
@@ -1427,6 +1426,16 @@ class RootFileService:
                     )
                     and [item["revision"] for item in items]
                     == sorted({item["revision"] for item in items})
+                    and all(
+                        "previousRevision" not in item
+                        or type(item["previousRevision"]) is int
+                        and item["previousRevision"] != item["revision"]
+                        and any(
+                            candidate["revision"] == item["previousRevision"]
+                            for candidate in items
+                        )
+                        for item in items
+                    )
                     and (current is None and not items or type(current) is int and any(item["revision"] == current for item in items))
                     and (
                         "maxRevision" not in index
@@ -1716,7 +1725,10 @@ class RootFileService:
             if data == current and index["currentRevision"] is not None:
                 return self.working_revision(path)
             revision = index["maxRevision"] + 1
-            item = self._revision_item(revision, data)
+            item = {
+                **self._revision_item(revision, data),
+                "previousRevision": index["currentRevision"],
+            }
             revision_target = directory / str(revision)
             temporary = target.parent / f".{target.name}.{uuid4().hex}.tmp"
             index_temporary = directory / f".index.{uuid4().hex}.tmp"
@@ -1780,8 +1792,9 @@ class RootFileService:
             if len(revisions) == 1:
                 self.delete_path(FileRoot.SESSION, index["path"], recursive=False)
                 return
-            self.restore_revision(
-                index["path"], revisions[-2]["revision"],
+            self._discard_latest_revision(
+                index["path"],
+                revisions[-1].get("previousRevision", revisions[-2]["revision"]),
                 expected_file_id=file_id, expected_current_revision=revision,
             )
 
@@ -1811,7 +1824,7 @@ class RootFileService:
             raise RootFileError("file.changed", "File changed since it was read")
         return current
 
-    def restore_revision(
+    def activate_revision(
         self,
         relative_path: str,
         revision: int,
@@ -1819,7 +1832,7 @@ class RootFileService:
         expected_file_id: UUID,
         expected_current_revision: int,
         expected_current_sha256: str | None = None,
-    ) -> RevisionMutationResult:
+    ) -> RevisionActivationResult:
         if isinstance(revision, bool) or revision < 1:
             raise RootFileError("file.revisionNotFound", "Revision not found")
         path = self.normalize_relative_path(relative_path)
@@ -1849,13 +1862,79 @@ class RootFileService:
             if hashlib.sha256(selected_data).hexdigest() != selected["sha256"]:
                 raise RootFileError("file.revisionInvalid", "Invalid revision history")
             if revision == index["currentRevision"]:
-                return RevisionMutationResult(False, file_id, revision, selected["sha256"])
+                return RevisionActivationResult(file_id, revision, selected["sha256"])
 
-            later = [
-                item for item in index["revisions"] if item["revision"] > revision
-            ]
+            old_index = self._read_private_file(directory / "index.json")
+            updated = self._index_bytes({**index, "currentRevision": revision})
+            temporary = target.parent / f".{target.name}.{uuid4().hex}.tmp"
+            index_temporary = directory / f".index.{uuid4().hex}.tmp"
+            index_replaced = False
+            target_replaced = False
+            try:
+                self._write_private_file(temporary, selected_data)
+                self._write_private_file(index_temporary, updated)
+                self._assert_session_quota(
+                    0, replaced_bytes=len(current_data) + len(old_index)
+                )
+                os.replace(index_temporary, directory / "index.json")
+                index_replaced = True
+                os.replace(temporary, target)
+                target_replaced = True
+                self._fsync_directory(target.parent)
+                self._fsync_directory(directory)
+            except BaseException:
+                if target_replaced:
+                    self._replace_private_file(target, current_data)
+                if index_replaced:
+                    self._replace_private_file(directory / "index.json", old_index)
+                self._fsync_directory(target.parent)
+                self._fsync_directory(directory)
+                temporary.unlink(missing_ok=True)
+                index_temporary.unlink(missing_ok=True)
+                raise
+            return RevisionActivationResult(file_id, revision, selected["sha256"])
+
+    def _discard_latest_revision(
+        self,
+        relative_path: str,
+        revision: int,
+        *,
+        expected_file_id: UUID,
+        expected_current_revision: int,
+        expected_current_sha256: str | None = None,
+    ) -> None:
+        if isinstance(revision, bool) or revision < 1:
+            raise RootFileError("file.revisionNotFound", "Revision not found")
+        path = self.normalize_relative_path(relative_path)
+        self._assert_mutable(FileRoot.SESSION, self._parts(path))
+        with self._session_operation_lock(FileRoot.SESSION):
+            self._assert_available(path, allow_own=False)
+            history = self._history_for_path(path)
+            if history is None:
+                raise RootFileError("file.changed", "File changed since it was read")
+            directory, index = history
+            target = self._ensure_no_symlinks(self._files_path(), self._parts(path))
+            current_data = self._read_private_file(target)
+            discarded = self._assert_revision_preconditions(
+                index,
+                current_data,
+                expected_file_id,
+                expected_current_revision,
+                expected_current_sha256,
+            )
+            selected = next(
+                (item for item in index["revisions"] if item["revision"] == revision), None
+            )
+            if selected is None:
+                raise RootFileError("file.revisionNotFound", "Revision not found")
+            selected_data = self._read_private_file(directory / str(revision))
+            if hashlib.sha256(selected_data).hexdigest() != selected["sha256"]:
+                raise RootFileError("file.revisionInvalid", "Invalid revision history")
+            if revision == index["currentRevision"]:
+                return
+
             revisions_root = self._revisions_path()
-            trash = revisions_root / f".restore-{uuid4().hex}"
+            trash = revisions_root / f".discard-{uuid4().hex}"
             staged_revisions = trash / "revisions"
             staged_derivatives = trash / "derived"
             staged_revisions.mkdir(mode=0o700, parents=True)
@@ -1878,7 +1957,7 @@ class RootFileService:
                             "revisions": [
                                 item
                                 for item in index["revisions"]
-                                if item["revision"] <= revision
+                                if item["revision"] != discarded["revision"]
                             ],
                         }
                     ),
@@ -1886,7 +1965,7 @@ class RootFileService:
                 derivatives = directory / "derived"
                 if derivatives.exists() or derivatives.is_symlink():
                     self._ensure_directory(derivatives)
-                for item in later:
+                for item in (discarded,):
                     source = directory / str(item["revision"])
                     metadata = self._metadata(source)
                     if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
@@ -1932,8 +2011,7 @@ class RootFileService:
                 self._fsync_directory(revisions_root)
                 shutil.rmtree(disposable)
             except OSError:
-                logger.warning("Restored file; revision trash cleanup deferred", exc_info=True)
-            return RevisionMutationResult(False, file_id, revision, selected["sha256"])
+                logger.warning("Discarded output revision; trash cleanup deferred", exc_info=True)
 
     def replace_text_file(
         self,

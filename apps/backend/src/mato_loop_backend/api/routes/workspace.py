@@ -168,7 +168,7 @@ class UpdateFileRequest(BaseModel):
     expected_revision: str = Field(strict=True, pattern=r"^[0-9a-f]{64}$")
 
 
-class RevisionMutationRequest(BaseModel):
+class RevisionActivationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     path: str = Field(strict=True, min_length=1, max_length=1_200)
@@ -184,13 +184,12 @@ class RevisionMutationRequest(BaseModel):
     )
 
 
-class RevisionMutationResponse(BaseModel):
+class RevisionActivationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    file_deleted: bool = Field(alias="fileDeleted")
     file_id: UUID = Field(alias="fileId")
-    current_revision: int | None = Field(alias="currentRevision")
-    current_sha256: str | None = Field(alias="currentSha256")
+    current_revision: int = Field(alias="currentRevision")
+    current_sha256: str = Field(alias="currentSha256")
 
 
 class WorkspaceUsageResponse(BaseModel):
@@ -970,23 +969,28 @@ async def download_file_revision(
 
 
 @router.post(
-    "/files/revisions/{revision}/restore", response_model=RevisionMutationResponse
+    "/files/revisions/{revision}/activate", response_model=RevisionActivationResponse
 )
-async def restore_file_revision(
+async def activate_file_revision(
     revision: int,
-    payload: RevisionMutationRequest,
+    payload: RevisionActivationRequest,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
     session_id: UUID,
     root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
-) -> RevisionMutationResponse:
+) -> RevisionActivationResponse:
+    context = await _file_context(
+        FileScope.SESSION, session_id, user, db, for_update=True, root_identity=root_identity
+    )
+    await _clear_file_grants(db, user, context, (payload.path,))
+    await db.commit()
     context = await _file_context(
         FileScope.SESSION, session_id, user, db, for_update=True, root_identity=root_identity
     )
     assert context.root_files is not None
     try:
         result = await asyncio.to_thread(
-            context.root_files.restore_revision,
+            context.root_files.activate_revision,
             payload.path,
             revision,
             expected_file_id=payload.file_id,
@@ -995,10 +999,7 @@ async def restore_file_revision(
         )
     except RootFileError as exc:
         raise _context_error(exc) from exc
-    await _clear_file_grants(db, user, context, (payload.path,))
-    await db.commit()
-    return RevisionMutationResponse(
-        fileDeleted=result.deleted,
+    return RevisionActivationResponse(
         fileId=result.file_id,
         currentRevision=result.current_revision,
         currentSha256=result.sha256,

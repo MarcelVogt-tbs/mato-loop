@@ -2698,6 +2698,13 @@ async def _edit_image(
     result.metadata["authorizationSourceAttachmentIds"] = [
         str(attachment_id) for attachment_id in authorization_source_ids
     ]
+    identity_source = (
+        ordered[0]
+        if len(ordered) == 1
+        and ordered[0].category == "generated"
+        and ordered[0].purpose == "artifact"
+        else None
+    )
     return ToolResult(
         "Image edited.",
         {},
@@ -2708,8 +2715,8 @@ async def _edit_image(
                 result.filename,
                 kind="image",
                 metadata=result.metadata,
-                file_root_id=ordered[0].file_root_id,
-                file_id=ordered[0].file_id,
+                file_root_id=identity_source.file_root_id if identity_source else None,
+                file_id=identity_source.file_id if identity_source else None,
             ),
         ),
         trust_level=result.trust_level,

@@ -54,7 +54,7 @@ Bis zu vier Dateien können im Browser gemeinsam ausgewählt und nacheinander ho
 
 Die Vorschaugrößen für unterstützte Bilder sowie geeignete UTF-8-Text- und Markdown-Dateien werden global festgelegt; das Textlimit gilt auch für den integrierten Editor. Sichere SVG-Vorschauen bleiben unabhängig davon auf 5 MiB begrenzt. Andere Formate stehen zum Download bereit. Eine neue Datei beginnt mit einer vollständigen Version. Normales Ersetzen hängt nach Prüfung des erwarteten SHA-256-Werts eine Vollversion an; Umbenennen und Verschieben behalten Identität und Verlauf.
 
-Das Löschen einer Datei entfernt ihren gesamten Versionsverlauf. Beim Wiederherstellen wird die gewählte ältere Version zur aktuellen Version; alle späteren Versionen werden entfernt, ohne eine neue Version anzulegen. Dadurch können exakte Verweise auf entfernte spätere Versionen unbrauchbar werden.
+Das Löschen einer Datei entfernt ihren gesamten Versionsverlauf. Beim Aktivieren wird die gewählte ältere Version zur aktuellen Version; alle gespeicherten Versionen bleiben erhalten.
 
 Beim Senden einer Nachricht übermittelt MatoLoop für die aktuell geöffnete Datei nur Wurzel, Wurzelidentität, Pfad, SHA-256 und den Status ungespeicherter Änderungen. Dateiinhalte werden dadurch nicht automatisch an den Agenten gesendet.
 
@@ -63,4 +63,4 @@ Markdown kann als Quelltext oder visuell bearbeitet werden. In der schreibgesch�
 Gespeicherte Markdown-Dateien können über **Als PDF speichern** in einer hellen Druckansicht geöffnet werden. Nach dem Rendern von Formeln und Mermaid-Diagrammen erscheint der Druckdialog des Browsers; dort kann das Dokument als PDF gespeichert werden. Ungespeicherte Änderungen werden nicht exportiert.
 
 !!! warning "Löschen"
-    Das Löschen eines Ordners wirkt rekursiv. Das Löschen einer Datei entfernt ihren vollständigen Versionsverlauf; Wiederherstellen entfernt alle späteren Versionen. Prüfen Sie Pfad und Version vor der Bestätigung.
+    Das Löschen eines Ordners wirkt rekursiv. Das Löschen einer Datei entfernt ihren vollständigen Versionsverlauf. Prüfen Sie den Pfad vor der Bestätigung.

@@ -146,7 +146,7 @@ async def test_child_http_mutations_block_real_storage_and_grants(tree, client):
         ("PATCH", "/api/workspace/entries" + query, {"path": "note.txt", "name": "renamed.txt"}),
         ("DELETE", "/api/workspace/entries" + query + "&path=note.txt", None),
         ("POST", "/api/workspace/files/openscad/render" + query, {"path": "note.scad"}),
-        ("POST", "/api/workspace/files/revisions/1/restore" + query, {"path": "note.txt", "fileId": str(uuid4()), "expectedCurrentRevision": 1}),
+        ("POST", "/api/workspace/files/revisions/1/activate" + query, {"path": "note.txt", "fileId": str(uuid4()), "expectedCurrentRevision": 1}),
         ("POST", "/api/workspace/entries/move" + query, {"path": "note.txt", "destination": "moved.txt", "destination_scope": "session"}),
         ("POST", "/api/workspace/entries/copy" + query, {"path": "note.txt", "destination": "copy.txt", "destination_scope": "session"}),
         ("POST", f"/api/sessions/{child_id}/messages", {"content": "manual"}),

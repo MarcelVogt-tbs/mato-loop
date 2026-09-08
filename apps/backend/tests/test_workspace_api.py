@@ -247,7 +247,7 @@ async def test_session_preview_edit_and_image_validation(tmp_path: Path, monkeyp
     assert (root / "files" / "readme.md").read_text(encoding="utf-8") == "updated"
 
 
-async def test_revision_api_restores_and_rejects_stale_confirmation(
+async def test_revision_api_activates_without_deleting_and_rejects_stale_confirmation(
     tmp_path: Path, monkeypatch
 ) -> None:
     context, root = _session_context(tmp_path)
@@ -286,12 +286,23 @@ async def test_revision_api_restores_and_rejects_stale_confirmation(
     assert [item["revision"] for item in listed["items"]] == [3, 2, 1]
     assert preview["content"] == "one"
     current = listed["items"][0]
-    payload = workspace_route.RevisionMutationRequest(
+    payload = workspace_route.RevisionActivationRequest(
         path="notes.txt",
         fileId=listed["fileId"],
         expectedCurrentRevision=current["revision"],
     )
-    restored = await workspace_route.restore_file_revision(
+    activate = MagicMock(wraps=service.activate_revision)
+    monkeypatch.setattr(service, "activate_revision", activate)
+    db.commit.side_effect = RuntimeError("commit failed")
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await workspace_route.activate_file_revision(
+            1, payload, user, db, service.session_id
+        )
+    assert activate.call_count == 0
+    assert (root / "files" / "notes.txt").read_text(encoding="utf-8") == "three"
+    db.commit.side_effect = None
+
+    activated = await workspace_route.activate_file_revision(
         1,
         payload,
         user,
@@ -299,25 +310,24 @@ async def test_revision_api_restores_and_rejects_stale_confirmation(
         service.session_id,
     )
 
-    assert restored.file_deleted is False
-    assert restored.current_revision == 1
-    assert restored.current_sha256 == hashlib.sha256(b"one").hexdigest()
+    assert activated.current_revision == 1
+    assert activated.current_sha256 == hashlib.sha256(b"one").hexdigest()
     assert (root / "files" / "notes.txt").read_text(encoding="utf-8") == "one"
-    assert [item.revision for item in service.list_revisions("notes.txt")] == [1]
+    assert [item.revision for item in service.list_revisions("notes.txt")] == [3, 2, 1]
 
     with pytest.raises(ApiError) as stale:
-        await workspace_route.restore_file_revision(
+        await workspace_route.activate_file_revision(
             1, payload, user, db, service.session_id
         )
     assert stale.value.code == "file.changed"
-    assert clear_grants.await_count == 1
-    assert db.commit.await_count == 1
+    assert clear_grants.await_count == 3
+    assert db.commit.await_count == 3
 
     service.write_file(
         FileRoot.SESSION, "notes.txt", "four", mode="replace",
         expected_sha256=hashlib.sha256(b"one").hexdigest(),
     )
-    assert [item.revision for item in service.list_revisions("notes.txt")] == [4, 1]
+    assert [item.revision for item in service.list_revisions("notes.txt")] == [4, 3, 2, 1]
 
 
 @pytest.mark.parametrize("filename,kind", [

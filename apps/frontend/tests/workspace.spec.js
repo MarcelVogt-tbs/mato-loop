@@ -884,7 +884,7 @@ describe('workspace store', () => {
     expect(workspace.activeFileSnapshot(null)).toBeNull()
   })
 
-  it('uses the revision endpoints and reloads canonical state after restore', async () => {
+  it('activates a revision and preserves historical tabs', async () => {
     const workspace = useWorkspaceStore()
     workspace.sessionId = 'session-a'
     workspace.scope = 'session'
@@ -897,7 +897,7 @@ describe('workspace store', () => {
           ? { kind: 'markdown', content: 'neu', revision: 'b'.repeat(64) }
           : { fileId: 'file-1', items: [{ revision: 2, current: true, sha256: 'b'.repeat(64) }] }
     }))
-    api.post.mockResolvedValue({ data: { restored: true } })
+    api.post.mockResolvedValue({ data: { currentRevision: 1 } })
     const controlCenter = useControlCenterStore()
     controlCenter.tabs = [1, 2, 3].map((revision) => ({
       tabId: `history-${revision}`, kind: 'file',
@@ -908,13 +908,13 @@ describe('workspace store', () => {
 
     await workspace.loadRevisions('notes.md')
     await workspace.revisionPreview('notes.md', 1)
-    await workspace.restoreRevision('notes.md', 1)
+    await workspace.activateRevision('notes.md', 1)
 
     const params = { path: 'notes.md', session_id: 'session-a', scope: 'session', root_identity: 'project-root' }
     expect(api.get).toHaveBeenCalledWith('/workspace/files/revisions/1/preview', {
       params
     })
-    expect(api.post).toHaveBeenCalledWith('/workspace/files/revisions/1/restore', {
+    expect(api.post).toHaveBeenCalledWith('/workspace/files/revisions/1/activate', {
       path: 'notes.md',
       file_id: 'file-1',
       expected_current_revision: 2,
@@ -924,8 +924,8 @@ describe('workspace store', () => {
     })
     expect(workspace.fileRevisions['notes.md'].items[0].revision).toBe(2)
     expect(workspace.filePreviews['notes.md'].revision).toBe('b'.repeat(64))
-    expect(close.mock.calls).toEqual([['history-2'], ['history-3']])
-    expect(workspace.fileTabStates['history-3']).toBeUndefined()
+    expect(close).not.toHaveBeenCalled()
+    expect(workspace.fileTabStates['history-3']).toEqual({ editorDirty: false })
   })
 
   it('creates an empty UTF-8 file and opens the returned entry for editing', async () => {

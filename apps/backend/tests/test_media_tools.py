@@ -505,6 +505,9 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
             mime_type="image/png",
             size_bytes=5,
             sha256="0" * 64,
+            file_root_id=uuid4(),
+            file_id=uuid4(),
+            file_revision=1,
             file_path=f"attachments/{attachment_id}/image.png",
             metadata_json=(
                 {"authorizationSourceAttachmentIds": [str(original_attachment_id)]}
@@ -549,10 +552,20 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
     assert result.attachments[0].metadata["authorizationSourceAttachmentIds"] == sorted(
         [str(original_attachment_id), str(attachment_ids[1])]
     )
+    assert result.attachments[0].file_root_id is None
+    assert result.attachments[0].file_id is None
 
 
+@pytest.mark.parametrize(
+    ("category", "purpose", "reuses_identity"),
+    [
+        ("generated", "artifact", True),
+        ("user_upload", "attachment", False),
+        ("downloaded", "artifact", False),
+    ],
+)
 async def test_edit_image_sends_authorized_private_sources_to_public_target(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, category, purpose, reuses_identity
 ) -> None:
     attachment_id = uuid4()
     call = ToolCall(
@@ -580,17 +593,22 @@ async def test_edit_image_sends_authorized_private_sources_to_public_target(
         content="Privat",
         trust_level="private",
     )
+    file_root_id, file_id = uuid4(), uuid4()
     attachment = MessageAttachment(
         id=attachment_id,
         message_id=message.id,
         message=message,
         position=0,
         kind="image",
-        category="user_upload",
+        category=category,
+        purpose=purpose,
         processing_status="ready",
         mime_type="image/png",
         size_bytes=5,
         sha256="0" * 64,
+        file_root_id=file_root_id,
+        file_id=file_id,
+        file_revision=1,
         file_path=f"attachments/{attachment_id}/image.png",
     )
     scalars = MagicMock()
@@ -612,6 +630,8 @@ async def test_edit_image_sends_authorized_private_sources_to_public_target(
 
     assert result.is_error is False
     assert edit.await_args.kwargs["images"] == ((b"private", "image/png"),)
+    assert result.attachments[0].file_root_id == (file_root_id if reuses_identity else None)
+    assert result.attachments[0].file_id == (file_id if reuses_identity else None)
     tool_context.ask_handler.assert_not_awaited()
 
 

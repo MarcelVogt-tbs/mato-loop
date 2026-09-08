@@ -251,13 +251,13 @@
                 <div class="row items-center no-wrap q-gutter-xs">
                   <q-chip v-if="isCurrentRevision(revision)" dense color="primary" text-color="white">Aktuell</q-chip>
                   <q-btn
-                    v-if="!isCurrentRevision(revision) && canRestoreRevision"
+                    v-if="!isCurrentRevision(revision) && canActivateRevision"
                     flat round dense icon="restore" color="primary"
-                    :loading="restoringRevisionId === revisionId(revision)"
+                    :loading="activatingRevisionId === revisionId(revision)"
                     :disable="Boolean(revisionActionPending)"
-                    :aria-label="`Version ${revisionLabel(revision)} wiederherstellen`"
-                    @click.stop="restoreRevision(revision)"
-                  ><q-tooltip>Wiederherstellen</q-tooltip></q-btn>
+                    :aria-label="`Version ${revisionLabel(revision)} aktivieren`"
+                    @click.stop="activateRevision(revision)"
+                  ><q-tooltip>Aktivieren</q-tooltip></q-btn>
                 </div>
               </q-item-section>
             </q-item>
@@ -315,7 +315,7 @@ const openScadError = ref(null)
 const openScadUrl = ref('')
 const revisionsOpen = ref(false)
 const revisionsLoading = ref(false)
-const restoringRevisionId = ref(null)
+const activatingRevisionId = ref(null)
 let renderController
 let renderVersion = 0
 let exportController
@@ -341,7 +341,7 @@ const editable = computed(() => (
   && ['text', 'markdown', 'openscad'].includes(preview.value.kind)
   && workspace.operationAvailable('filesystem.write')
 ))
-const canRestoreRevision = computed(() => Boolean(
+const canActivateRevision = computed(() => Boolean(
   props.entry?.path
   && workspace.scope === 'session'
   && !workspace.toolContext
@@ -391,7 +391,7 @@ const currentRevisionId = computed(() => (
   ?? revisionState.value.currentRevision
   ?? preview.value.revision
 ))
-const revisionActionPending = computed(() => restoringRevisionId.value)
+const revisionActionPending = computed(() => activatingRevisionId.value)
 const unavailableMessage = computed(() => ({
   invalidImage: 'Die Bilddatei ist beschädigt oder ungültig.',
   unsafeSvg: 'Die SVG-Datei enthält aktive oder externe Inhalte und kann nicht sicher angezeigt werden.',
@@ -500,16 +500,16 @@ async function previewRevision(revision) {
   if (tabId) revisionsOpen.value = false
 }
 
-async function restoreRevision(revision) {
+async function activateRevision(revision) {
   const id = revisionId(revision)
   const path = props.entry?.path
   const contextVersion = workspace.contextVersion
   const viewVersion = workspace.viewVersion
   const expectedState = revisionState.value
   const accepted = await confirm(
-    `Soll Version ${revisionLabel(revision)} wiederhergestellt werden? Alle späteren Versionen werden dauerhaft gelöscht. Verknüpfte Dateien in älteren Nachrichten sind danach möglicherweise nicht mehr verfügbar.`,
-    'Version wiederherstellen?',
-    { okLabel: 'Wiederherstellen', okColor: 'warning' }
+    `Soll Version ${revisionLabel(revision)} aktiviert werden? Die Datei wird auf diesen Stand gesetzt. Alle Versionen bleiben erhalten.`,
+    'Version aktivieren?',
+    { okLabel: 'Aktivieren', okColor: 'primary' }
   )
   if (
     !accepted
@@ -517,13 +517,13 @@ async function restoreRevision(revision) {
     || workspace.contextVersion !== contextVersion
     || workspace.viewVersion !== viewVersion
   ) return
-  restoringRevisionId.value = id
+  activatingRevisionId.value = id
   try {
-    const result = await workspace.restoreRevision(path, id, expectedState)
+    const result = await workspace.activateRevision(path, id, expectedState)
     if (!result) return
-    $q.notify({ type: 'positive', message: 'Version wiederhergestellt.' })
+    $q.notify({ type: 'positive', message: 'Version aktiviert.' })
   } finally {
-    restoringRevisionId.value = null
+    activatingRevisionId.value = null
   }
 }
 

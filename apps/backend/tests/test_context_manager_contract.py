@@ -1609,7 +1609,8 @@ def test_system_prompt_describes_managed_file_roots() -> None:
     assert "'.' is root" in prompt
     assert "Path has no root name, files/ prefix, or absolute form" in prompt
     assert "exact unused destination" in prompt
-    assert "root=files is managed and revisioned" in prompt
+    assert "root=files is managed" in prompt
+    assert "revisioned" not in prompt
     assert "No computer directory selected. Use root=files." in prompt
     assert "paths and reads are not downloads" in prompt
     assert "provide_file is only for another file" in prompt

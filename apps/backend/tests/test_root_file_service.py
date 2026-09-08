@@ -187,7 +187,7 @@ def test_file_deletion_removes_complete_history(tmp_path: Path) -> None:
     assert not (root / "revisions" / str(file_id)).exists()
 
 
-def test_restore_truncates_later_revisions_and_derivatives_without_reusing_numbers(
+def test_activate_revision_preserves_history_derivatives_and_high_water_mark(
     tmp_path: Path,
 ) -> None:
     service, root = make_service(tmp_path)
@@ -206,28 +206,69 @@ def test_restore_truncates_later_revisions_and_derivatives_without_reusing_numbe
     del index["maxRevision"]  # Old indexes infer their high-water mark.
     (history / "index.json").write_text(json.dumps(index), encoding="utf-8")
 
-    restored = service.restore_revision(
+    activated = service.activate_revision(
         "notes.txt", 1, **revision_preconditions(service, "notes.txt")
     )
 
-    assert restored.current_revision == 1
-    assert restored.sha256 == hashlib.sha256(b"one").hexdigest()
-    assert [item.revision for item in service.list_revisions("notes.txt")] == [1]
+    assert activated.current_revision == 1
+    assert activated.sha256 == hashlib.sha256(b"one").hexdigest()
+    assert [item.revision for item in service.list_revisions("notes.txt")] == [3, 2, 1]
     assert (root / "files" / "notes.txt").read_text(encoding="utf-8") == "one"
-    assert not (history / "2").exists()
-    assert not (history / "3").exists()
-    assert not (history / "derived" / "2").exists()
-    assert not (history / "derived" / "3").exists()
-    with pytest.raises(RootFileError):
-        service.open_revision_by_id(file_id, 3)
+    assert (history / "2").exists()
+    assert (history / "3").exists()
+    assert (history / "derived" / "2").exists()
+    assert (history / "derived" / "3").exists()
     assert json.loads((history / "index.json").read_text(encoding="utf-8"))[
         "maxRevision"
     ] == 3
 
-    service.replace_text_file(
-        FileRoot.SESSION, "notes.txt", "four", hashlib.sha256(b"one").hexdigest()
+    service.activate_revision(
+        "notes.txt", 3, **revision_preconditions(service, "notes.txt")
     )
-    assert [item.revision for item in service.list_revisions("notes.txt")] == [4, 1]
+    assert (root / "files" / "notes.txt").read_text(encoding="utf-8") == "three"
+
+    service.replace_text_file(
+        FileRoot.SESSION, "notes.txt", "four", hashlib.sha256(b"three").hexdigest()
+    )
+    assert [item.revision for item in service.list_revisions("notes.txt")] == [4, 3, 2, 1]
+
+
+def test_discard_output_revision_restores_the_previously_active_revision(
+    tmp_path: Path,
+) -> None:
+    service, _root = make_service(tmp_path)
+    service.write_file(FileRoot.SESSION, "notes.txt", "one")
+    service.upsert_text_file(FileRoot.SESSION, "notes.txt", "two")
+    service.upsert_text_file(FileRoot.SESSION, "notes.txt", "three")
+    service.activate_revision(
+        "notes.txt", 1, **revision_preconditions(service, "notes.txt")
+    )
+
+    revision = service.append_output_revision(
+        service.working_revision("notes.txt").file_id, b"temporary"
+    )
+    service.discard_output_revision(revision.file_id, revision.revision)
+
+    assert service.read_bytes(FileRoot.SESSION, "notes.txt", limit=100) == b"one"
+    assert [
+        (item.revision, item.current) for item in service.list_revisions("notes.txt")
+    ] == [(3, False), (2, False), (1, True)]
+
+
+def test_revision_history_rejects_invalid_previous_revision(tmp_path: Path) -> None:
+    service, root = make_service(tmp_path)
+    service.write_file(FileRoot.SESSION, "notes.txt", "one")
+    revision = service.append_output_revision(
+        service.working_revision("notes.txt").file_id, b"temporary"
+    )
+    index_path = root / "revisions" / str(revision.file_id) / "index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    index["revisions"][-1]["previousRevision"] = revision.revision
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+
+    with pytest.raises(RootFileError) as invalid:
+        service.list_revisions("notes.txt")
+    assert invalid.value.code == "file.revisionInvalid"
 
 
 def test_project_sessions_share_files_and_revision_identity(tmp_path: Path) -> None:
@@ -461,7 +502,7 @@ def test_busy_file_and_subtree_reject_competing_mutations(tmp_path: Path, other_
         lambda: other.append_output_revision(preconditions["expected_file_id"], b"outside"),
         lambda: other.rename_path(FileRoot.SESSION, "dir", "moved"),
         lambda: other.delete_path(FileRoot.SESSION, "dir", recursive=True),
-        lambda: other.restore_revision("dir/file.txt", 1, **preconditions),
+        lambda: other.activate_revision("dir/file.txt", 1, **preconditions),
         lambda: other.copy_path(FileRoot.SESSION, "source.txt", FileRoot.SESSION, "dir/file.txt"),
         lambda: other.move_path(FileRoot.SESSION, "source.txt", FileRoot.SESSION, "dir"),
     ):
@@ -558,11 +599,11 @@ def test_first_run_edit_preserves_unindexed_baseline_and_reserves_quota(tmp_path
         assert handle.read() == b"original" * 1000
     working.upsert_text_file(FileRoot.SESSION, "manual.txt", "final")
     assert public.finalize_run(working.run_id)[0].revision == 2
-    public.restore_revision("manual.txt", 1, **revision_preconditions(public, "manual.txt"))
+    public.activate_revision("manual.txt", 1, **revision_preconditions(public, "manual.txt"))
     assert target.read_bytes() == b"original" * 1000
 
 
-def test_noop_run_receipt_survives_later_runs_and_is_pruned_with_its_revision(tmp_path: Path) -> None:
+def test_noop_run_receipt_survives_later_runs_and_revision_activation(tmp_path: Path) -> None:
     public, root = make_service(tmp_path)
     public.write_file(FileRoot.SESSION, "color.txt", "red")
     first, second = run_service(public, uuid4()), run_service(public, uuid4())
@@ -577,11 +618,14 @@ def test_noop_run_receipt_survives_later_runs_and_is_pruned_with_its_revision(tm
     assert retried[0].sha256 == original.sha256
     history = root / "revisions" / str(original.file_id)
     assert {path.name for path in history.iterdir()} == {"index.json", "1", "2"}
-    public.restore_revision("color.txt", 1, **revision_preconditions(public, "color.txt"))
+    public.activate_revision("color.txt", 1, **revision_preconditions(public, "color.txt"))
     assert restarted.finalize_run(first.run_id) == (original,)
-    assert restarted.finalize_run(second.run_id) == ()
+    assert restarted.finalize_run(second.run_id)[0].revision == 2
     receipts = json.loads((history / "index.json").read_bytes())["runReceipts"]
-    assert receipts == {f"{public.session_id}/{first.run_id}": 1}
+    assert receipts == {
+        f"{public.session_id}/{first.run_id}": 1,
+        f"{public.session_id}/{second.run_id}": 2,
+    }
     public.delete_path(FileRoot.SESSION, "color.txt", recursive=False)
     assert restarted.finalize_run(first.run_id) == ()
     assert not history.exists()
@@ -738,7 +782,7 @@ def test_run_rename_move_and_directory_copy_keep_one_content_revision(tmp_path: 
 
 
 @pytest.mark.parametrize("selected", [1, 2])
-def test_restore_waits_for_finalization_including_own_run(tmp_path: Path, selected: int) -> None:
+def test_activation_waits_for_finalization_including_own_run(tmp_path: Path, selected: int) -> None:
     published, _root = make_service(tmp_path)
     published.write_file(FileRoot.SESSION, "file.txt", "one")
     published.upsert_text_file(FileRoot.SESSION, "file.txt", "two")
@@ -747,13 +791,13 @@ def test_restore_waits_for_finalization_including_own_run(tmp_path: Path, select
     draft = first.working_revision("file.txt")
     for service in (published, first):
         with pytest.raises(RootFileError) as busy:
-            service.restore_revision("file.txt", selected, **revision_preconditions(published, "file.txt"))
+            service.activate_revision("file.txt", selected, **revision_preconditions(published, "file.txt"))
         assert busy.value.code == "file.changed"
     with first.open_working_file(draft.file_id) as handle:
         assert handle.read() == b"first"
     published.finalize_run(first.run_id)
-    published.restore_revision("file.txt", selected, **revision_preconditions(published, "file.txt"))
-    assert published.finalize_run(first.run_id) == ()
+    published.activate_revision("file.txt", selected, **revision_preconditions(published, "file.txt"))
+    assert published.finalize_run(first.run_id)[0].revision == 3
     assert published.read_bytes(FileRoot.SESSION, "file.txt", limit=100) == (b"one" if selected == 1 else b"two")
 
 
@@ -870,7 +914,7 @@ def test_ownership_is_single_parent_acyclic_and_identity_based(tmp_path: Path) -
 
 
 @pytest.mark.parametrize("discard", [False, True])
-def test_source_restore_preserves_companion_files_and_histories(tmp_path: Path, discard: bool) -> None:
+def test_source_activation_and_discard_preserve_companion_files(tmp_path: Path, discard: bool) -> None:
     service, root = make_service(tmp_path)
     service.write_file(FileRoot.SESSION, "report.pdf", "source one")
     service.write_file(FileRoot.SESSION, "report.md", "child one")
@@ -889,9 +933,9 @@ def test_source_restore_preserves_companion_files_and_histories(tmp_path: Path, 
     if discard:
         service.discard_output_revision(source, 2)
     else:
-        service.restore_revision("report.pdf", 1, **revision_preconditions(service, "report.pdf"))
+        service.activate_revision("report.pdf", 1, **revision_preconditions(service, "report.pdf"))
     assert service.read_bytes(FileRoot.SESSION, "report.pdf", limit=100) == b"source one"
-    assert [item.revision for item in service.list_revisions("report.pdf")] == [1]
+    assert [item.revision for item in service.list_revisions("report.pdf")] == ([1] if discard else [2, 1])
     assert service.read_bytes(FileRoot.SESSION, "report.md", limit=100) == b"child two"
     assert [item.revision for item in service.list_revisions("report.md")] == [2, 1]
     assert (root / "revisions" / str(child) / "2").read_bytes() == b"child two"
@@ -908,7 +952,7 @@ def test_source_restore_preserves_companion_files_and_histories(tmp_path: Path, 
 
 @pytest.mark.parametrize("discard", [False, True])
 @pytest.mark.parametrize("failure", ["write", "index", "target", "fsync_file", "fsync_history", "fsync_staged"])
-def test_restore_io_failure_keeps_file_history_caches_and_companions(
+def test_activation_and_discard_io_failure_keep_file_history_caches_and_companions(
     tmp_path: Path, monkeypatch, failure: str, discard: bool,
 ) -> None:
     service, root = make_service(tmp_path)
@@ -942,7 +986,10 @@ def test_restore_io_failure_keeps_file_history_caches_and_companions(
         selected = (
             failure == "fsync_file" and path == root / "files"
             or failure == "fsync_history" and path == root / "revisions" / str(source)
-            or failure == "fsync_staged" and path.name == "derived" and path.parent.name.startswith(".restore-")
+            or failure == "fsync_staged" and (
+                path.name == "derived" and path.parent.name.startswith(".discard-")
+                if discard else path == root / "revisions" / str(source)
+            )
         )
         if selected and not failed:
             failed = True
@@ -956,13 +1003,13 @@ def test_restore_io_failure_keeps_file_history_caches_and_companions(
         if discard:
             service.discard_output_revision(source, 2)
         else:
-            service.restore_revision("source", 1, **revision_preconditions(service, "source"))
+            service.activate_revision("source", 1, **revision_preconditions(service, "source"))
     assert failed
     assert {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()} == before
     assert service.working_revision("source").revision == 2
 
 
-def test_restore_preserves_unmapped_child_edits_and_shared_derivations(tmp_path: Path) -> None:
+def test_activation_preserves_unmapped_child_edits_and_shared_derivations(tmp_path: Path) -> None:
     service, _root = make_service(tmp_path)
     service.write_file(FileRoot.SESSION, "source", "one")
     service.write_file(FileRoot.SESSION, "child", "one")
@@ -975,13 +1022,13 @@ def test_restore_preserves_unmapped_child_edits_and_shared_derivations(tmp_path:
     service.register_derived_file(source, child)
     service.register_derived_file(source, shared)
     service.upsert_text_file(FileRoot.SESSION, "child", "independent edit")
-    service.restore_revision("source", 1, **revision_preconditions(service, "source"))
+    service.activate_revision("source", 1, **revision_preconditions(service, "source"))
     assert [item.revision for item in service.list_revisions("child")] == [3, 2, 1]
     assert service.read_bytes(FileRoot.SESSION, "child", limit=100) == b"independent edit"
     assert service.read_bytes(FileRoot.SESSION, "shared", limit=100) == b"same"
 
 
-def test_restore_does_not_interfere_with_companion_run(tmp_path: Path) -> None:
+def test_activation_does_not_interfere_with_companion_run(tmp_path: Path) -> None:
     service, _root = make_service(tmp_path)
     service.write_file(FileRoot.SESSION, "source", "one")
     service.upsert_text_file(FileRoot.SESSION, "source", "two")
@@ -990,14 +1037,14 @@ def test_restore_does_not_interfere_with_companion_run(tmp_path: Path) -> None:
     working = run_service(service, uuid4())
     working.upsert_text_file(FileRoot.SESSION, "child", "work in progress")
 
-    service.restore_revision("source", 1, **revision_preconditions(service, "source"))
+    service.activate_revision("source", 1, **revision_preconditions(service, "source"))
 
     assert service.read_bytes(FileRoot.SESSION, "child", limit=100) == b"work in progress"
     assert service.pending_run_ids() == (working.run_id,)
     assert service.finalize_run(working.run_id)[0].revision == 2
 
 
-def test_restore_cleanup_failure_is_success_and_retried(tmp_path: Path, monkeypatch, caplog) -> None:
+def test_discard_cleanup_failure_is_success_and_retried(tmp_path: Path, monkeypatch, caplog) -> None:
     service, root = make_service(tmp_path)
     service.write_file(FileRoot.SESSION, "source", "one")
     service.upsert_text_file(FileRoot.SESSION, "source", "two")
@@ -1009,19 +1056,18 @@ def test_restore_cleanup_failure_is_success_and_retried(tmp_path: Path, monkeypa
         return original(path, *args, **kwargs)
 
     monkeypatch.setattr(shutil, "rmtree", fail_cleanup)
-    result = service.restore_revision("source", 1, **revision_preconditions(service, "source"))
+    service.discard_output_revision(service.working_revision("source").file_id, 2)
 
-    assert result.current_revision == 1
     assert (root / "files" / "source").read_bytes() == b"one"
     assert [item.revision for item in service.list_revisions("source")] == [1]
     assert list((root / "revisions").glob(".delete-owned-*"))
-    assert "revision trash cleanup deferred" in caplog.text
+    assert "output revision; trash cleanup deferred" in caplog.text
     monkeypatch.setattr(shutil, "rmtree", original)
     service.list_revisions("source")
     assert not list((root / "revisions").glob(".delete-owned-*"))
 
 
-def test_failed_restore_rollback_keeps_recovery_bytes(tmp_path: Path, monkeypatch) -> None:
+def test_failed_discard_rollback_keeps_recovery_bytes(tmp_path: Path, monkeypatch) -> None:
     service, root = make_service(tmp_path)
     service.write_file(FileRoot.SESSION, "source", "one")
     service.upsert_text_file(FileRoot.SESSION, "source", "two")
@@ -1041,10 +1087,10 @@ def test_failed_restore_rollback_keeps_recovery_bytes(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr(os, "replace", fail_replace)
     with pytest.raises(OSError, match="rollback failure"):
-        service.restore_revision("source", 1, **revision_preconditions(service, "source"))
+        service.discard_output_revision(service.working_revision("source").file_id, 2)
 
     service.session_usage()
-    trash = next((root / "revisions").glob(".restore-*"))
+    trash = next((root / "revisions").glob(".discard-*"))
     assert (trash / "revisions" / "2").read_bytes() == b"two"
     assert (root / "files" / "source").read_bytes() == b"two"
     assert not list((root / "revisions").glob(".delete-owned-*"))
@@ -1063,7 +1109,7 @@ def test_run_derivation_bindings_resolve_after_restart_and_finalization(tmp_path
     published.finalize_run(working.run_id)
     restarted = RootFileService(published.session_id, session_storage=published.session_storage)
     links = restarted._derived_links()
-    restarted.restore_revision("source", 1, **revision_preconditions(restarted, "source"))
+    restarted.activate_revision("source", 1, **revision_preconditions(restarted, "source"))
     assert restarted.read_bytes(FileRoot.SESSION, "child", limit=100) == b"two"
     assert restarted._derived_links() == links
 
@@ -1107,7 +1153,7 @@ def test_companion_deletion_rejects_symlinked_parent_without_touching_outside(tm
 
 
 @pytest.mark.parametrize("own_cache", [False, True])
-def test_restore_does_not_follow_derivative_directory_symlink(tmp_path: Path, own_cache: bool) -> None:
+def test_activation_does_not_follow_derivative_directory_symlink(tmp_path: Path, own_cache: bool) -> None:
     service, root = make_service(tmp_path)
     service.write_file(FileRoot.SESSION, "source", "one")
     service.write_file(FileRoot.SESSION, "child", "one")
@@ -1120,13 +1166,7 @@ def test_restore_does_not_follow_derivative_directory_symlink(tmp_path: Path, ow
     (outside / "2").mkdir(parents=True)
     (outside / "2" / "keep").write_bytes(b"safe")
     (root / "revisions" / str(source if own_cache else child) / "derived").symlink_to(outside, target_is_directory=True)
-    if own_cache:
-        with pytest.raises(RootFileError) as symlink:
-            service.restore_revision("source", 1, **revision_preconditions(service, "source"))
-        assert symlink.value.code == "file.symlinkForbidden"
-        assert service.working_revision("source").revision == 2
-    else:
-        service.restore_revision("source", 1, **revision_preconditions(service, "source"))
-        assert service.working_revision("source").revision == 1
+    service.activate_revision("source", 1, **revision_preconditions(service, "source"))
+    assert service.working_revision("source").revision == 1
     assert (outside / "2" / "keep").read_bytes() == b"safe"
     assert service.working_revision("child").revision == 2

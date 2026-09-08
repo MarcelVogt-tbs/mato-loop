@@ -709,7 +709,7 @@ def general_system_prompt(
     if file_tools_available:
         parts.append(
             "explicit root plus relative POSIX path; '.' is root. Path has no root name, files/ prefix, "
-            "or absolute form. root=files is managed and revisioned; root=computer is its selected directory. "
+            "or absolute form. root=files is managed; root=computer is its selected directory. "
             "Copy and move need an exact unused destination."
         )
     if "write_file" in offered_tool_names:

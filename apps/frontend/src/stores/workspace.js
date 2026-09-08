@@ -768,13 +768,13 @@ export const useWorkspaceStore = defineStore('workspace', {
       const params = new URLSearchParams(this.readRequestParams({ path, ...(fileId ? { file_id: fileId } : {}) }))
       return `/api/workspace/files/revisions/${revision}/${action}?${params}`
     },
-    async restoreRevision(path, revision, state = this.fileRevisions[path] || {}) {
+    async activateRevision(path, revision, state = this.fileRevisions[path] || {}) {
       requireWritableContext(this)
       const storageSessionId = this.managedStorageSessionId()
       const contextVersion = this.contextVersion
       const viewVersion = this.viewVersion
       const sessionId = this.sessionId
-      const { data } = await api.post(`/workspace/files/revisions/${revision}/restore`, {
+      const { data } = await api.post(`/workspace/files/revisions/${revision}/activate`, {
         path,
         file_id: state.fileId,
         expected_current_revision: state.items?.find((item) => item.current)?.revision,
@@ -787,17 +787,6 @@ export const useWorkspaceStore = defineStore('workspace', {
         || viewVersion !== this.viewVersion
         || sessionId !== this.sessionId
       ) return null
-      const controlCenter = useControlCenterStore()
-      const removedTabs = controlCenter.fileTabs.filter((tab) => (
-        tab.fileTarget.scope === 'session'
-        && tab.fileTarget.rootIdentity === this.rootIdentity
-        && tab.fileTarget.fileId === state.fileId
-        && tab.fileTarget.revision > revision
-      ))
-      for (const tab of removedTabs) {
-        await controlCenter.closeFile(tab.tabId)
-        this.discardFileTab(tab.tabId)
-      }
       await Promise.allSettled([
         this.preview(path),
         this.loadRevisions(path),

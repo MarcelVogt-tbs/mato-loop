@@ -4187,19 +4187,24 @@ class AgentRuntime:
     @classmethod
     async def _finalize_run_files(
         cls, db: AsyncSession, run: AgentRun, *, tolerate_conflict: bool = False
-    ) -> None:
+    ) -> bool:
         session = await db.get(ChatSession, run.session_id)
         if session is None:
-            return
-        try:
+            return True
+        if not tolerate_conflict:
             limits = await SettingsStore.load(db, InstanceLimits)
             await AttachmentService(settings=limits).finalize_run(db, session, run.id)
+            return True
+        try:
+            async with db.begin_nested():
+                limits = await SettingsStore.load(db, InstanceLimits)
+                await AttachmentService(settings=limits).finalize_run(db, session, run.id)
         except (AttachmentError, RootFileError, SessionStorageError, OSError):
-            if not tolerate_conflict:
-                raise
             logger.exception(
                 "Run %s file finalization failed; attachment publication remains pending", run.id
             )
+            return False
+        return True
 
     @classmethod
     async def recover(cls, db: AsyncSession) -> int:
@@ -4217,8 +4222,10 @@ class AgentRuntime:
             ).all()
         )
         error = describe_error("agent.backendRestarted")
+        finalized = set()
         for run in runs:
-            await cls._finalize_run_files(db, run, tolerate_conflict=True)
+            if await cls._finalize_run_files(db, run, tolerate_conflict=True):
+                finalized.add(run.id)
             duration_complete = run.status != "running"
             if run.parent_run_id is not None:
                 run.active_started_at = None
@@ -4236,7 +4243,6 @@ class AgentRuntime:
             if duration_complete:
                 await cls._persist_run_duration(db, run)
         sessions = (await db.scalars(select(ChatSession))).all()
-        recovered = {run.id for run in runs}
         for session in sessions:
             files = RootFileService(session.id, project_id=session.project_id)
             try:
@@ -4260,7 +4266,7 @@ class AgentRuntime:
                 if state.get("pendingAttachments") or state.get("fileActions"):
                     pending_ids.add(UUID(state["runId"]))
             for run_id in pending_ids:
-                if run_id in recovered:
+                if run_id in finalized:
                     continue
                 run = await db.get(AgentRun, run_id)
                 if run is not None and run.session_id == session.id:
