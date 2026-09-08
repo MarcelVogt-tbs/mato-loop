@@ -52,9 +52,7 @@ class AgentConfig(BaseModel):
     home_directory: Path = Field(alias="homeDirectory")
     allow_insecure: bool = Field(default=False, alias="allowInsecure")
     shell_executable: Path | None = Field(default=None, alias="shellExecutable")
-    git_executable: Path | None = Field(default=None, alias="gitExecutable")
     openscad_executable: Path | None = Field(default=None, alias="openscadExecutable")
-    allow_network: bool = Field(default=True, alias="allowNetwork")
     max_message_bytes: int = Field(
         default=1024 * 1024, alias="maxMessageBytes", ge=1024, le=1024 * 1024
     )
@@ -91,7 +89,7 @@ class AgentConfig(BaseModel):
             raise ValueError("homeDirectory must be an accessible directory")
         return canonical
 
-    @field_validator("shell_executable", "git_executable", "openscad_executable")
+    @field_validator("shell_executable", "openscad_executable")
     @classmethod
     def absolute_optional_executable(cls, value: Path | None) -> Path | None:
         if value is not None and not value.is_absolute():

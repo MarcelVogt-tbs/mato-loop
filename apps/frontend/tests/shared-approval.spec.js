@@ -29,7 +29,7 @@ it.each(['read', 'write'])('displays the exact read-only shared review and actua
     title: 'Befehl ausführen?', summary: 'Befehl prüfen', riskLevel: classification === 'read' ? 'low' : 'high',
     capability: `shell.${classification}`, resourceType: 'shell_command', resourceDisplay: sharedDraft.currentDirectory,
     availableDecisions: ['allow_once', 'allow_session', 'deny'],
-    payload: { sharedDraft, shellClassification: classification, shellAnalysisComplete: true, shellPrefixes: [['git', 'status']] },
+    payload: { sharedDraft, shellClassification: classification, shellAnalysisComplete: true, shellPrefixes: [['ls', '-l']] },
     details: { tool: 'shell_run', arguments: { command: 'unreviewed original' } }
   }
   approvals.add(approval)
@@ -44,7 +44,7 @@ it.each(['read', 'write'])('displays the exact read-only shared review and actua
   expect(root.querySelector('textarea, [contenteditable="true"]')).toBeNull()
   expect(root.textContent).toContain(classification === 'read' ? 'Keine Schreibaktion erkannt' : 'Als schreibend eingestuft')
   expect(root.textContent).not.toContain('Analyse unvollständig')
-  expect(root.textContent).toContain('git status')
+  expect(root.textContent).toContain('ls -l')
   const changed = { ...approval, payload: { ...approval.payload, sharedDraft: {
     ...sharedDraft, command: 'printf edited', currentDirectory: '/new/terminal/cwd', inspectionRevision: 'inspection-new'
   } } }

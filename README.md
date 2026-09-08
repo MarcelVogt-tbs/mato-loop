@@ -113,9 +113,11 @@ docker compose pull
 docker compose up -d
 ```
 
-The `matoloop-agent` service has exactly two runtime mounts: `MATOLOOP_AGENT_DATA:/data` for `/data/config.json`, credentials, transfers, Git state, and cache data, and `MATOLOOP_AGENT_HOME:/workspace` for the configured home directory. The production template sets these to `/opt/matoloop-agent/data` and `/opt/matoloop-agent/home`. The backend does not access, migrate, or delete the host home directory. The Docker container currently runs as root, so MatoLoop policies are not an operating-system sandbox: mounted scope and host policy determine what it can access.
+The `matoloop-agent` service has exactly two runtime mounts: `MATOLOOP_AGENT_DATA:/data` for `/data/config.json`, credentials, transfers, and cache data, and `MATOLOOP_AGENT_HOME:/workspace` for the configured home directory. The production template sets these to `/opt/matoloop-agent/data` and `/opt/matoloop-agent/home`. The backend does not access, migrate, or delete the host home directory. The Docker container currently runs as root, so MatoLoop policies are not an operating-system sandbox: mounted scope and host policy determine what it can access.
 
 When upgrading from the former standalone MatoLoop Agent, move or copy its credential and durable state into the new `MATOLOOP_AGENT_DATA` directory before starting `matoloop-agent`. Pair the agent again if that state is not retained. Old environment-variable aliases are unsupported.
+
+Existing installations must complete the [removed Git integration cleanup](docs/user/betrieb-und-datensicherung.md#removed-git-integration) before restarting the upgraded MatoLoop Agent.
 
 The production template stores backend and PostgreSQL data below `/opt/mato-loop` and MatoLoop Agent data below `/opt/matoloop-agent`. It publishes port `10020` on `0.0.0.0`; restrict access with the host firewall and configure TLS through a suitable reverse proxy. Before production use, verify secure cookies, credentials, backups, and restoration for the target environment.
 
@@ -153,6 +155,8 @@ Webfetch follows redirects only after renewed authorization and resolution and p
 New sessions start without a working directory. Their first persisted message creates only owner-bound internal session storage under `/data/sessions`; this is not a workspace. Standalone session storage under `/data/sessions/<session-id>` contains `files/`, `revisions/`, and private `attachments/`. Project sessions share `/data/projects/<project-id>/files` and `/data/projects/<project-id>/revisions`, while `/data/projects/<project-id>/sessions/<session-id>/attachments` remains private to one session. Attachment derivatives stay below their source attachment. Durable byte-valued backend tool outputs become revisioned managed files with exact message references; text, JSON, status, and error results remain relational message content. There are no separate generated, downloaded, or derived trees, and the backend has no `/data/home` workspace.
 
 A workspace is an ordinary normalized absolute POSIX path on the selected owner-bound MatoLoop Agent. The required `homeDirectory` is its initial directory suggestion; agents advertise no roots, root IDs, or root revisions. A session stores only its selected agent and current absolute directory. Without both, computer file, process, shell, and local integration operations are unavailable, while chat, backend tools, and persisted session files continue to work.
+
+Git operations use shell commands on the selected, connected MatoLoop Agent with Git installed, under the existing shell permissions. There is no dedicated Git integration or backend clone path.
 
 Authenticated Control Center file requests are owner-bound and may directly access any path available to the selected MatoLoop Agent's operating-system user. This intentionally bypasses model tool policies and approvals; it does not bypass operating-system permissions or the agent's descriptor-based no-follow checks.
 

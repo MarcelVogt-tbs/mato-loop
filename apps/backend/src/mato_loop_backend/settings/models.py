@@ -233,9 +233,6 @@ def plan_agent_profile() -> AgentProfile:
         "session.files.write": ToolExecutionPolicy.AUTO,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.DISABLED,
-        "git.stage": ToolExecutionPolicy.DISABLED,
-        "git.clone": ToolExecutionPolicy.DISABLED,
-        "git.commit": ToolExecutionPolicy.DISABLED,
     }
     return AgentProfile(
         id=PLAN_AGENT_PROFILE_ID,
@@ -952,7 +949,7 @@ class IntegrationSettings(IntegrationSettingsBase):
         data = dict(value)
         availability = dict(data.get("adapter_availability", {}))
         backend_adapters = {"searxng", "caldav", "bookstack", "mealie", "imap_smtp"}
-        agent_adapters = {"git", "openscad"}
+        agent_adapters = {"openscad"}
         legacy_adapters = backend_adapters | agent_adapters
         if (
             "personal_integrations_enabled" in data

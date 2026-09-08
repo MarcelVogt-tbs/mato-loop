@@ -54,10 +54,12 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(AgentConfig.load(path).home_directory, base)
 
-            for removed in ("name", "roots", "dataDir"):
+            for removed in ("name", "roots", "dataDir", "gitExecutable", "allowNetwork"):
                 path.write_text(json.dumps({"homeDirectory": os.fspath(base), removed: "old"}))
-                with self.subTest(removed=removed), self.assertRaises(ValidationError):
-                    AgentConfig.load(path)
+                with self.subTest(removed=removed):
+                    with self.assertRaises(ValidationError) as rejected:
+                        AgentConfig.load(path)
+                    self.assertEqual(rejected.exception.errors()[0]["type"], "extra_forbidden")
 
     async def test_hello_uses_protocol_one_public_agent_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

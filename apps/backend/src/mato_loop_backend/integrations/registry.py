@@ -13,7 +13,6 @@ from mato_loop_backend.integrations.contracts import (
     ToolContribution,
     ToolOptionContribution,
 )
-from mato_loop_backend.integrations.git import GIT_ADAPTER
 from mato_loop_backend.integrations.mail import MAIL_ADAPTER
 from mato_loop_backend.integrations.mealie import MEALIE_ADAPTER
 from mato_loop_backend.integrations.opencode import OPENCODE_ADAPTER
@@ -67,7 +66,6 @@ _ADAPTERS = {
     ("mail", "imap_smtp"): MAIL_ADAPTER,
     ("knowledge", "bookstack"): BOOKSTACK_ADAPTER,
     ("recipes", "mealie"): MEALIE_ADAPTER,
-    ("git", "git"): GIT_ADAPTER,
     ("openscad", "openscad"): OPENSCAD_ADAPTER,
     ("coding", "opencode"): OPENCODE_ADAPTER,
 }

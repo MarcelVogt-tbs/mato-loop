@@ -71,12 +71,6 @@ const TOOL_DISPLAY = {
   'process.exec': { label: 'Prozess ausführen', icon: 'terminal' },
   shell_run: { label: 'Shell-Befehl ausführen', icon: 'terminal' },
   'shell.run': { label: 'Shell-Befehl ausführen', icon: 'terminal' },
-  git_clone: { label: 'Git-Repository klonen', icon: 'account_tree' },
-  git_status: { label: 'Git-Status anzeigen', icon: 'fact_check' },
-  git_diff: { label: 'Git-Änderungen anzeigen', icon: 'difference' },
-  git_log: { label: 'Git-Verlauf anzeigen', icon: 'history' },
-  git_add: { label: 'Git-Änderungen vormerken', icon: 'add_task' },
-  git_commit: { label: 'Git-Commit erstellen', icon: 'commit' },
   list_automations: { label: 'Automationen anzeigen', icon: 'view_list' },
   get_automation: { label: 'Automation anzeigen', icon: 'schedule' },
   create_automation: { label: 'Automation erstellen', icon: 'add_task' },
@@ -254,21 +248,6 @@ export function toolPresentation(tool, displayItems = []) {
     return { summary: toolSummary(tool), items: profileDisplayItems(tool) }
   }
 
-  if (tool?.name === 'git_clone') {
-    const source = tool.arguments?.source || tool.arguments?.repository_url || tool.arguments?.url
-    const isUrl = /^https?:\/\//i.test(source)
-    return {
-      summary: toolSummary(tool),
-      items: typeof source === 'string' && source
-        ? [{
-            label: isUrl ? 'Repository-URL' : 'Repository-Quelle',
-            value: isUrl ? cleanUrlForDisplay(source) : source,
-            format: 'code'
-          }]
-        : []
-    }
-  }
-
   const command = shellCommand(tool)
   if (command) {
     return {
@@ -353,30 +332,6 @@ export function toolSummary(tool) {
     return argumentsValue.completed ? 'Als erledigt markieren' : 'Als offen markieren'
   }
   if (tool?.name === 'tasks_delete') return 'Aufgabe löschen'
-  if (tool?.name === 'git_clone') {
-    const url = argumentsValue.source || argumentsValue.repository_url || argumentsValue.url
-    const destination = argumentsValue.destination || argumentsValue.target_path || argumentsValue.path
-    return truncate([url ? cleanUrlForDisplay(url) : '', destination].filter(Boolean).join(' -> '))
-  }
-  if (tool?.name === 'git_add' && Array.isArray(argumentsValue.paths)) {
-    return truncate(argumentsValue.paths.join(', '))
-  }
-  if (['git_diff', 'git_log'].includes(tool?.name) && Array.isArray(argumentsValue.paths)) {
-    const paths = truncate(argumentsValue.paths.join(', '))
-    if (paths) return tool.name === 'git_diff' && argumentsValue.staged ? `Vorgemerkt: ${paths}` : paths
-    if (tool.name === 'git_diff' && argumentsValue.staged) return 'Vorgemerkte Änderungen'
-    if (tool.name === 'git_log' && Number.isInteger(argumentsValue.limit)) {
-      return `Letzte ${argumentsValue.limit} Commits`
-    }
-  }
-  if (tool?.name === 'git_commit' && typeof argumentsValue.message === 'string') {
-    return truncate(argumentsValue.message)
-  }
-  if (['git_status', 'git_diff', 'git_log'].includes(tool?.name)) {
-    return truncate(
-      argumentsValue.repository_path || argumentsValue.repositoryPath || argumentsValue.path || ''
-    )
-  }
   if (tool?.name === 'generate_qr_code') return 'QR-Code'
   if (tool?.name === 'read_qr_code' && typeof argumentsValue.attachment_id === 'string') {
     return `Bildanhang ${truncate(argumentsValue.attachment_id, 36)}`

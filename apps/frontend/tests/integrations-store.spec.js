@@ -85,21 +85,6 @@ const recipesResponse = {
   ]
 }
 
-const gitResponse = {
-  configured: true,
-  instances: [
-    {
-      id: 'git-id',
-      name: 'Projekte',
-      integrationType: 'git',
-      providerType: 'git',
-      executionAgentId: 'agent-1',
-      allowNetwork: false,
-      enabled: true
-    }
-  ]
-}
-
 const openScadResponse = {
   configured: true,
   instances: [{
@@ -137,8 +122,8 @@ const catalogResponse = {
       availability: 'instance_only'
     },
     {
-      integrationType: 'git',
-      adapterType: 'git',
+      integrationType: 'openscad',
+      adapterType: 'openscad',
       executionLocation: 'agent',
       availability: 'disabled'
     }
@@ -163,7 +148,7 @@ describe('integration store', () => {
     expect(store.catalogLoadFailed).toBe(false)
     expect(store.adapterAvailable('searxng', 'instance')).toBe(true)
     expect(store.adapterAvailable('searxng', 'personal')).toBe(false)
-    expect(store.adapterAvailable('git', 'instance')).toBe(false)
+    expect(store.adapterAvailable('openscad', 'instance')).toBe(false)
   })
 
   it('updates one catalog adapter from the server response', async () => {
@@ -172,12 +157,12 @@ describe('integration store', () => {
     const store = useIntegrationStore()
     store.catalog = [...catalogResponse.adapters]
 
-    await store.setAdapterAvailability('git', 'full')
+    await store.setAdapterAvailability('openscad', 'full')
 
-    expect(api.put).toHaveBeenCalledWith('/integrations/catalog/git', { availability: 'full' })
+    expect(api.put).toHaveBeenCalledWith('/integrations/catalog/openscad', { availability: 'full' })
     expect(store.catalog[1]).toEqual(updated)
-    expect(store.adapterAvailable('git', 'personal')).toBe(true)
-    expect(store.adapterAvailable('git', 'instance')).toBe(false)
+    expect(store.adapterAvailable('openscad', 'personal')).toBe(true)
+    expect(store.adapterAvailable('openscad', 'instance')).toBe(false)
     expect(store.catalogLoading).toBe(false)
   })
 
@@ -443,10 +428,11 @@ describe('integration store', () => {
     const responses = {
       '/integrations/search': searchResponse,
       '/integrations/calendar': calendarResponse,
+      '/integrations/mail': { configured: false, accounts: [] },
       '/integrations/knowledge': knowledgeResponse,
       '/integrations/recipes': recipesResponse,
-      '/integrations/git': gitResponse,
-      '/integrations/openscad': openScadResponse
+      '/integrations/openscad': openScadResponse,
+      '/integrations/coding': codingResponse
     }
     api.get.mockImplementation((url) => Promise.resolve({ data: responses[url] }))
     const store = useIntegrationStore()
@@ -454,36 +440,16 @@ describe('integration store', () => {
 
     await store.fetchAll()
 
+    expect(api.get).toHaveBeenCalledTimes(Object.keys(responses).length)
     for (const path of Object.keys(responses)) {
-      expect(api.get).toHaveBeenCalledWith(path, { params: { scope: 'personal' } })
+      expect(api.get).toHaveBeenCalledWith(path, {
+        params: { scope: 'personal' },
+        ...(path === '/integrations/coding' ? { suppressErrorToast: true } : {})
+      })
     }
     expect(store.search.providers).toHaveLength(1)
-    expect(store.git.instances).toHaveLength(1)
-  })
-
-  it('loads and dispatches Git instance operations with the Git payload', async () => {
-    api.get.mockResolvedValue({ data: gitResponse })
-    api.post.mockResolvedValue({})
-    api.put.mockResolvedValue({})
-    api.delete.mockResolvedValue({})
-    const store = useIntegrationStore()
-    const payload = {
-      executionAgentId: 'agent-1',
-      config: { allowNetwork: false },
-      name: 'Projekte',
-      enabled: true
-    }
-
-    await store.fetchGit()
-    await store.createGit(payload)
-    await store.updateGit('git-id', payload)
-    await store.removeGit('git-id')
-
-    expect(api.get).toHaveBeenCalledWith('/integrations/git', { params: { scope: 'instance' } })
-    expect(api.post).toHaveBeenCalledWith('/integrations/git', payload, { params: { scope: 'instance' } })
-    expect(api.put).toHaveBeenCalledWith('/integrations/git/git-id', payload, { params: { scope: 'instance' } })
-    expect(api.delete).toHaveBeenCalledWith('/integrations/git/git-id', { params: { scope: 'instance' } })
-    expect(store.git.instances).toEqual(gitResponse.instances)
+    expect(store.openscad.instances).toHaveLength(1)
+    expect(store.coding.instances).toHaveLength(1)
   })
 
   it('loads and dispatches OpenSCAD CRUD, discovery and test operations', async () => {

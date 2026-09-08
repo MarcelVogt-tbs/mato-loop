@@ -1,8 +1,6 @@
 {
   "homeDirectory": "/workspace",
   "allowInsecure": true,
-  "gitExecutable": "/usr/bin/git",
   "openscadExecutable": "/usr/bin/openscad",
-  "allowNetwork": true,
   "shellExecutable": "/bin/sh"
 }

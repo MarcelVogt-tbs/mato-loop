@@ -39,11 +39,6 @@ const emptyRecipes = () => ({
   accounts: []
 })
 
-const emptyGit = () => ({
-  configured: false,
-  instances: []
-})
-
 const emptyOpenScad = () => ({
   configured: false,
   instances: []
@@ -85,7 +80,6 @@ function clearIntegrations(store) {
   store.mail = emptyMail()
   store.knowledge = emptyKnowledge()
   store.recipes = emptyRecipes()
-  store.git = emptyGit()
   store.openscad = emptyOpenScad()
   store.coding = emptyCoding()
 }
@@ -103,7 +97,6 @@ export const useIntegrationStore = defineStore('integrations', {
     mail: emptyMail(),
     knowledge: emptyKnowledge(),
     recipes: emptyRecipes(),
-    git: emptyGit(),
     openscad: emptyOpenScad(),
     coding: emptyCoding(),
     scope: 'instance',
@@ -190,7 +183,6 @@ export const useIntegrationStore = defineStore('integrations', {
           this.fetchMail(),
           this.fetchKnowledge(),
           this.fetchRecipes(),
-          this.fetchGit(),
           this.fetchOpenScad(),
           ...(context.scope === 'personal' ? [this.fetchCoding()] : [])
         ])
@@ -364,26 +356,6 @@ export const useIntegrationStore = defineStore('integrations', {
     async testRecipes(id) {
       const scope = this.scope
       return (await api.post(`/integrations/recipes/accounts/${id}/test`, null, scopeConfig(scope))).data
-    },
-    fetchGit() {
-      return this.fetchResource('git', '/integrations/git')
-    },
-    async createGit(payload) {
-      const context = scopeContext(this)
-      await api.post('/integrations/git', payload, scopeConfig(context.scope))
-      if (contextIsCurrent(this, context)) await this.fetchGit()
-    },
-    async updateGit(id, payload) {
-      const context = scopeContext(this)
-      await api.put(`/integrations/git/${id}`, payload, scopeConfig(context.scope))
-      if (contextIsCurrent(this, context)) await this.fetchGit()
-    },
-    async removeGit(id) {
-      const context = scopeContext(this)
-      await api.delete(`/integrations/git/${id}`, scopeConfig(context.scope))
-      if (!contextIsCurrent(this, context)) return
-      clearAccess(this, id)
-      await this.fetchGit()
     },
     fetchOpenScad() {
       return this.fetchResource('openscad', '/integrations/openscad')

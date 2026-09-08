@@ -202,12 +202,9 @@
               {{ typeLabel(integration.integrationType) }} ·
               {{ providerLabel(integration.providerType) }}
             </q-item-label>
-            <q-item-label v-if="['git', 'openscad'].includes(integration.integrationType)" caption lines="1">
+            <q-item-label v-if="integration.integrationType === 'openscad'" caption lines="1">
               Computer: {{ executionAgentName(integration) }} ·
-              <template v-if="integration.integrationType === 'git'">
-                Netzwerkzugriff {{ gitAllowNetwork(integration) ? 'erlaubt' : 'gesperrt' }}
-              </template>
-              <template v-else>{{ integration.config.binaryPath }}</template>
+              {{ integration.config.binaryPath }}
             </q-item-label>
             <q-item-label v-else-if="integration.integrationType === 'mail'" caption lines="1">
               IMAP: {{ integration.config.imapHost }}:{{ integration.config.imapPort }} · SMTP: {{ integration.config.smtpHost }}:{{ integration.config.smtpPort }}
@@ -231,7 +228,6 @@
                 :to="{ name: 'settings-integration-access', params: { integrationId: integration.id }, query: { scope: integrations.scope } }"
               />
               <q-btn
-                v-if="integration.integrationType !== 'git'"
                 flat
                 dense
                 no-caps
@@ -309,7 +305,6 @@ const calendarAccounts = computed(() => integrations.calendar.accounts)
 const mailAccounts = computed(() => integrations.mail.accounts)
 const knowledgeBases = computed(() => integrations.knowledge.bases)
 const recipeAccounts = computed(() => integrations.recipes.accounts)
-const gitInstances = computed(() => integrations.git.instances)
 const openScadInstances = computed(() => integrations.openscad.instances)
 const codingInstances = computed(() => integrations.coding.instances)
 const searchProviderOptions = computed(() => integrations.search.providerOptions.map((provider) => ({
@@ -326,7 +321,6 @@ const configuredIntegrations = computed(
     ...mailAccounts.value,
     ...knowledgeBases.value,
     ...recipeAccounts.value,
-    ...gitInstances.value,
     ...openScadInstances.value,
     ...codingInstances.value
   ]
@@ -402,7 +396,7 @@ function openEditDialog(integration) {
 
 function providerLabel(providerType) {
   return {
-    searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', bookstack: 'BookStack', mealie: 'Mealie', git: 'Git', openscad: 'OpenSCAD', opencode: 'OpenCode'
+    searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', bookstack: 'BookStack', mealie: 'Mealie', openscad: 'OpenSCAD', opencode: 'OpenCode'
   }[providerType] || providerType
 }
 
@@ -413,7 +407,6 @@ function typeLabel(integrationType) {
     mail: 'E-Mail',
     knowledge: 'Wissensdatenbank',
     recipes: 'Rezepte & Essensplanung',
-    git: 'Versionsverwaltung',
     openscad: '3D-Modellierung',
     coding: 'Programmierung'
   }[integrationType] || integrationType || 'Unbekannter Integrationstyp'
@@ -421,7 +414,7 @@ function typeLabel(integrationType) {
 
 function typeIcon(integrationType) {
   return {
-    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', knowledge: 'menu_book', recipes: 'restaurant_menu', git: 'account_tree', openscad: 'view_in_ar', coding: 'code'
+    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', knowledge: 'menu_book', recipes: 'restaurant_menu', openscad: 'view_in_ar', coding: 'code'
   }[integrationType] || 'extension'
 }
 
@@ -437,19 +430,12 @@ function executionLocationIcon(executionLocation) {
   return 'help_outline'
 }
 
-function gitExecutionAgentId(integration) {
-  return integration.executionAgentId || integration.config?.executionAgentId || null
-}
-
 function executionAgentName(integration) {
-  return executionAgents.byId(gitExecutionAgentId(integration))?.alias
+  const agentId = integration.executionAgentId || integration.config?.executionAgentId || null
+  return executionAgents.byId(agentId)?.alias
     || integration.executionAgentName
     || integration.config?.executionAgentName
     || 'Nicht verfügbarer Computer'
-}
-
-function gitAllowNetwork(integration) {
-  return integration.allowNetwork ?? integration.config?.allowNetwork ?? false
 }
 
 async function testIntegration(integration) {
@@ -491,7 +477,6 @@ async function removeIntegration(integration) {
     else if (integration.integrationType === 'mail') await integrations.removeMail(integration.id)
     else if (integration.integrationType === 'knowledge') await integrations.removeKnowledge(integration.id)
     else if (integration.integrationType === 'recipes') await integrations.removeRecipes(integration.id)
-    else if (integration.integrationType === 'git') await integrations.removeGit(integration.id)
     else if (integration.integrationType === 'openscad') await integrations.removeOpenScad(integration.id)
     else if (integration.integrationType === 'coding') await integrations.removeOpenCode(integration.id)
     else await integrations.removeSearch(integration.id)

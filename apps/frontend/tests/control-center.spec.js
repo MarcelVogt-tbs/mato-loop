@@ -16,7 +16,7 @@ import {
 } from 'src/control-center/manifest'
 
 const originalLocalStorage = globalThis.localStorage
-const testIntegrationIds = ['calendar', 'git']
+const testIntegrationIds = ['calendar', 'test-app']
 
 function storage(initialValue = null) {
   let value = initialValue
@@ -150,7 +150,7 @@ describe('control center store', () => {
         tabs: [
           tab('files'),
           tab('notifications'),
-          { appId: 'git', pinned: true },
+          { appId: 'test-app', pinned: true },
           tab('approvals'),
           tab('calendar')
         ],
@@ -158,7 +158,7 @@ describe('control center store', () => {
       }
     })
 
-    expect(store.tabs).toEqual([tab('session'), tab('git'), tab('files'), tab('calendar')])
+    expect(store.tabs).toEqual([tab('session'), tab('test-app'), tab('files'), tab('calendar')])
     expect(store.activeAppId).toBe('session')
   })
 
@@ -177,19 +177,19 @@ describe('control center store', () => {
 
   it('reorders and removes integrations explicitly', async () => {
     api.patch
-      .mockResolvedValueOnce(response([tab('calendar'), tab('files'), tab('git')], 'files'))
-      .mockResolvedValueOnce(response([tab('calendar'), tab('git')], 'calendar'))
+      .mockResolvedValueOnce(response([tab('calendar'), tab('files'), tab('test-app')], 'files'))
+      .mockResolvedValueOnce(response([tab('calendar'), tab('test-app')], 'calendar'))
     const store = useControlCenterStore()
     store.syncSession({
       id: 'session-1',
-      controlCenter: { tabs: [tab('files'), tab('calendar'), tab('git')], activeAppId: 'files' }
+      controlCenter: { tabs: [tab('files'), tab('calendar'), tab('test-app')], activeAppId: 'files' }
     })
 
     await store.moveIntegration('files', 1)
-    expect(store.tabs.map((item) => item.appId)).toEqual(['session', 'calendar', 'files', 'git'])
+    expect(store.tabs.map((item) => item.appId)).toEqual(['session', 'calendar', 'files', 'test-app'])
 
     await store.removeIntegration('files')
-    expect(store.tabs.map((item) => item.appId)).toEqual(['session', 'calendar', 'git'])
+    expect(store.tabs.map((item) => item.appId)).toEqual(['session', 'calendar', 'test-app'])
     expect(store.activeAppId).toBe('calendar')
   })
 
@@ -208,19 +208,19 @@ describe('control center store', () => {
     let resolveFirst
     api.patch
       .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
-      .mockResolvedValueOnce(response([tab('files'), tab('git')], 'git'))
+      .mockResolvedValueOnce(response([tab('files'), tab('test-app')], 'test-app'))
     const store = useControlCenterStore()
     store.syncSession({ id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } })
     const oldSave = store.openApp('calendar')
 
     store.syncSession({ id: 'session-2', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } })
     expect(store.saving).toBe(false)
-    await store.openApp('git')
+    await store.openApp('test-app')
     resolveFirst(response([tab('files'), tab('calendar')], 'calendar'))
     await oldSave
 
     expect(store.sessionId).toBe('session-2')
-    expect(store.activeAppId).toBe('git')
+    expect(store.activeAppId).toBe('test-app')
     expect(store.saving).toBe(false)
   })
 
@@ -228,18 +228,18 @@ describe('control center store', () => {
     let resolveFirst
     api.patch
       .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
-      .mockResolvedValueOnce(response([tab('files'), tab('calendar'), tab('git')], 'git'))
+      .mockResolvedValueOnce(response([tab('files'), tab('calendar'), tab('test-app')], 'test-app'))
     const store = useControlCenterStore()
     store.syncSession({ id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } })
 
     const first = store.openApp('calendar')
-    await store.openApp('git')
+    await store.openApp('test-app')
     resolveFirst(response([tab('files'), tab('calendar')], 'calendar'))
     await first
 
     expect(api.patch).toHaveBeenCalledTimes(2)
-    expect(store.activeAppId).toBe('git')
-    expect(store.tabs.map((item) => item.appId)).toEqual(['session', 'files', 'calendar', 'git'])
+    expect(store.activeAppId).toBe('test-app')
+    expect(store.tabs.map((item) => item.appId)).toEqual(['session', 'files', 'calendar', 'test-app'])
   })
 
   it('persists draft integration changes made after session creation starts', async () => {

@@ -49,7 +49,7 @@
               :rules="[requiredRule]"
             />
             <q-input
-              v-if="!['git', 'openscad', 'mail'].includes(form.integration_type)"
+              v-if="!['openscad', 'mail'].includes(form.integration_type)"
               v-model="form.base_url"
               outlined
               :label="baseUrlLabel"
@@ -92,7 +92,7 @@
               <template #avatar><q-icon name="warning_amber" color="warning" /></template>
               HTTP überträgt Zugangsdaten unverschlüsselt. Verwende es nur in einem vertrauenswürdigen lokalen Netz.
             </q-banner>
-            <div v-if="['git', 'openscad'].includes(form.integration_type)" class="row items-start q-col-gutter-sm">
+            <div v-if="form.integration_type === 'openscad'" class="row items-start q-col-gutter-sm">
               <q-select
                 v-model="form.executionAgentId"
                 class="col"
@@ -113,7 +113,7 @@
                   </q-item>
                 </template>
               </q-select>
-              <div v-if="form.integration_type === 'openscad'" class="col-auto q-pt-sm">
+              <div class="col-auto q-pt-sm">
                 <q-btn
                   outline
                   dense
@@ -127,12 +127,6 @@
                 />
               </div>
             </div>
-            <q-toggle
-              v-if="form.integration_type === 'git'"
-              v-model="form.allowNetwork"
-              color="primary"
-              label="Netzwerkzugriff erlauben"
-            />
             <q-input
               v-if="form.integration_type === 'openscad'"
               v-model="form.binaryPath"
@@ -273,7 +267,6 @@ const allIntegrationTypes = [
   { label: 'Mail', value: 'mail' },
   { label: 'Wissensdatenbank', value: 'knowledge' },
   { label: 'Rezepte & Essensplanung', value: 'recipes' },
-  { label: 'Versionsverwaltung', value: 'git' },
   { label: '3D-Modellierung', value: 'openscad' },
   { label: 'Programmierung', value: 'coding' }
 ]
@@ -283,7 +276,6 @@ const PROVIDER_DEFAULTS = {
   mail: { provider: 'imap_smtp', label: 'IMAP/SMTP', placeholder: '' },
   knowledge: { provider: 'bookstack', label: 'BookStack', placeholder: 'https://wiki.example.com' },
   recipes: { provider: 'mealie', label: 'Mealie', placeholder: 'http://mealie.example.com' },
-  git: { provider: 'git', label: 'Git', placeholder: '' },
   openscad: { provider: 'openscad', label: 'OpenSCAD', placeholder: '' },
   coding: { provider: 'opencode', label: 'OpenCode', placeholder: 'http://localhost:4096' }
 }
@@ -345,7 +337,6 @@ function defaultForm() {
     token_secret: '',
     token: '',
     executionAgentId: null,
-    allowNetwork: false,
     binaryPath: '/usr/bin/openscad',
     enabled: true
   }
@@ -357,7 +348,7 @@ function selectIntegrationType(type) {
   form.name = preset.label
   if (type === 'coding' && !form.username) form.username = 'opencode'
   invalidateDiscovery()
-  if (['git', 'openscad'].includes(type)) void fetchComputers()
+  if (type === 'openscad') void fetchComputers()
 }
 
 async function fetchComputers() {
@@ -446,19 +437,6 @@ async function save() {
   }
   saving.value = true
   try {
-    if (form.integration_type === 'git') {
-      const payload = {
-        executionAgentId: form.executionAgentId,
-        config: { allowNetwork: form.allowNetwork },
-        name: form.name.trim(),
-        enabled: form.enabled
-      }
-      if (props.integration) await integrations.updateGit(props.integration.id, payload)
-      else await integrations.createGit(payload)
-      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
-      close()
-      return
-    }
     if (form.integration_type === 'openscad') {
       const payload = {
         executionAgentId: form.executionAgentId,
@@ -568,9 +546,6 @@ watch([() => props.modelValue, () => props.integration?.id], ([open]) => {
     executionAgentId: props.integration.executionAgentId
       || props.integration.config?.executionAgentId
       || null,
-    allowNetwork: props.integration.allowNetwork
-      ?? props.integration.config?.allowNetwork
-      ?? false,
     binaryPath: props.integration.config?.binaryPath || '/usr/bin/openscad',
     enabled: props.integration.enabled
   } : {})
@@ -578,6 +553,6 @@ watch([() => props.modelValue, () => props.integration?.id], ([open]) => {
     form.integration_type = integrationTypes.value[0].value
     selectIntegrationType(form.integration_type)
   }
-  if (['git', 'openscad'].includes(form.integration_type)) void fetchComputers()
+  if (form.integration_type === 'openscad') void fetchComputers()
 })
 </script>

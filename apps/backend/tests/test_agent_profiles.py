@@ -62,9 +62,6 @@ def test_builtin_agent_profile_defaults() -> None:
         "session.files.write": ToolExecutionPolicy.AUTO,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.DISABLED,
-        "git.stage": ToolExecutionPolicy.DISABLED,
-        "git.clone": ToolExecutionPolicy.DISABLED,
-        "git.commit": ToolExecutionPolicy.DISABLED,
     }
     assert build.private_permissions == build.public_permissions
     assert build.private_permissions.policies == {

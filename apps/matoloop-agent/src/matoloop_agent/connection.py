@@ -17,7 +17,6 @@ from pydantic import ValidationError
 from .cache import SessionCache
 from .config import AgentConfig
 from .filesystem import AgentError, Filesystem
-from .git import GIT_OPERATIONS, GitRunner
 from .openscad import OpenScadRunner
 from .process import ProcessRunner
 from .protocol import (
@@ -32,12 +31,6 @@ from .protocol import (
     Error,
     Event,
     ExportArguments,
-    GitAddArguments,
-    GitCloneArguments,
-    GitCommitArguments,
-    GitDiffArguments,
-    GitLogArguments,
-    GitStatusArguments,
     GlobArguments,
     GrepArguments,
     Hello,
@@ -121,7 +114,6 @@ class MatoLoopAgent:
         self.process = ProcessRunner(config, self.filesystem)
         self.terminal = TerminalManager(config, self.process)
         self.shared_terminal = SharedTerminals(self.terminal)
-        self.git = GitRunner(config, self.filesystem)
         self.search = FilesystemSearch(self.filesystem)
         self.transfer = transfer_client or TransferClient(
             max_bytes=config.max_transfer_bytes,
@@ -148,8 +140,6 @@ class MatoLoopAgent:
             operations |= {"terminal.read", "terminal.write", "terminal.resize", "terminal.close"}
         if self.search.executable is None:
             operations -= {"filesystem.glob", "filesystem.grep"}
-        if self.git.executable is None:
-            operations -= GIT_OPERATIONS
         if not self.openscad.render_available:
             operations -= {
                 "integration.openscad.render",
@@ -473,38 +463,6 @@ class MatoLoopAgent:
                 arguments,
                 backend_id,
                 six_views=request.operation == "integration.openscad.render6",
-            )
-        if isinstance(arguments, GitCloneArguments):
-            return await self.git.clone(
-                arguments.current_directory,
-                arguments.source,
-                arguments.destination,
-                arguments.allow_network,
-            )
-        if isinstance(arguments, GitStatusArguments):
-            return await self.git.status(arguments.current_directory)
-        if isinstance(arguments, GitDiffArguments):
-            return await self.git.diff(
-                arguments.current_directory,
-                arguments.staged,
-                arguments.paths,
-            )
-        if isinstance(arguments, GitLogArguments):
-            return await self.git.log(
-                arguments.current_directory,
-                arguments.limit,
-                arguments.paths,
-            )
-        if isinstance(arguments, GitAddArguments):
-            return await self.git.add(
-                arguments.current_directory,
-                arguments.paths,
-            )
-        if isinstance(arguments, GitCommitArguments):
-            return await self.git.commit(
-                arguments.current_directory,
-                arguments.message,
-                arguments.expected_index_tree,
             )
         # CacheClearArguments has no fields and is intentionally last.
         if request.operation == "cache.clear":

@@ -296,7 +296,6 @@ SOURCE_FILES = (
     "src/mato_loop_backend/error_contract.py",
     "src/mato_loop_backend/integrations/caldav.py",
     "src/mato_loop_backend/integrations/bookstack.py",
-    "src/mato_loop_backend/integrations/git.py",
     "src/mato_loop_backend/integrations/mail.py",
     "src/mato_loop_backend/integrations/mealie.py",
     "src/mato_loop_backend/integrations/openscad.py",
@@ -4828,13 +4827,6 @@ def _startup_integrations(maximal: bool) -> tuple[IntegrationSettings, ToolSetti
                     config={"base_url": "https://search.example.com"},
                 ),
                 IntegrationInstance(
-                    name="Git",
-                    integration_type="git",
-                    adapter_type="git",
-                    execution_agent_id=OPENSCAD_AGENT_ID,
-                    config={"allow_network": True},
-                ),
-                IntegrationInstance(
                     id=OPENSCAD_INTEGRATION_ID,
                     name="OpenSCAD",
                     integration_type="openscad",
@@ -5564,11 +5556,6 @@ def _rewrite_system_prompt_v2(prompt: str) -> str:
                 "Writes, copies, and moves already expose file destinations. Use provide_file only for "
                 "another existing file; paths and read output are not downloads. After success, use the "
                 "download card and never repeat its internal URL."
-            )
-        elif paragraph.startswith("Git tools use repository paths"):
-            paragraph = (
-                "Git paths are relative to the selected computer directory. Inspect status and diff before "
-                "mutations; git_commit commits only staged changes and never stages files."
             )
         elif paragraph.startswith("For calendar_update_event and calendar_delete_event"):
             paragraph = (

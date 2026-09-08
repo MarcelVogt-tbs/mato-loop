@@ -278,7 +278,6 @@ const actionIcon = computed(() => {
   if (props.approval.capability === 'execution.directory') return 'drive_file_move'
   if (props.approval.capability === 'system.info') return 'computer'
   if (props.approval.capability === 'process.execute') return 'terminal'
-  if (props.approval.capability?.startsWith('git.')) return 'account_tree'
   if (props.approval.capability === 'skills.load') return 'school'
   if (props.approval.actionKind === 'edit_skill') return 'edit_note'
   if (props.approval.capability === 'skills.write' || props.approval.actionKind === 'build_skill') return 'auto_awesome'

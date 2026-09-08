@@ -121,10 +121,10 @@ describe('approval display', () => {
       capability,
       resourceType: 'shell_command',
       resourceDisplay: '/home/user/project',
-      shellPrefixes: [['git', 'status'], ['cat']]
+      shellPrefixes: [['ls', '-l'], ['cat']]
     })).toEqual({
       label,
-      value: '/home/user/project · git status · cat',
+      value: '/home/user/project · ls -l · cat',
       icon: 'terminal'
     })
   })
@@ -254,19 +254,12 @@ describe('approval display', () => {
     }
   })
 
-  it('labels Git grants', () => {
-    for (const [capability, label, icon] of [
-      ['git.read', 'Git-Repository lesen', 'account_tree'],
-      ['git.stage', 'Git-Änderungen vormerken', 'add_task'],
-      ['git.clone', 'Git-Repository klonen', 'account_tree'],
-      ['git.commit', 'Git-Commit erstellen', 'commit']
-    ]) {
-      expect(permissionGrantDisplay({
-        capability,
-        resourceType: 'integration_operation',
-        resourceDisplay: 'Repository „MatoLoop“'
-      })).toEqual({ label, value: 'Repository „MatoLoop“', icon })
-    }
+  it('uses generic labels for unrecognized historical grants', () => {
+    expect(permissionGrantDisplay({
+      capability: 'retired.read',
+      resourceType: 'integration_operation',
+      resourceDisplay: 'Gespeicherte Ressource'
+    })).toEqual({ label: 'Tool-Zugriff', value: 'Gespeicherte Ressource', icon: 'verified_user' })
   })
 
   it('labels skill write grants', () => {

@@ -52,12 +52,12 @@ def test_integration_settings_normalizes_legacy_availability() -> None:
     disabled = IntegrationSettings.model_validate(
         {
             "personal_integrations_enabled": False,
-            "allowed_personal_adapter_types": ["caldav", "git"],
+            "allowed_personal_adapter_types": ["caldav", "openscad"],
             "disabled_integration_adapter_types": ["caldav"],
         }
     )
     partially_allowed = IntegrationSettings.model_validate(
-        {"allowed_personal_adapter_types": ["caldav", "git"]}
+        {"allowed_personal_adapter_types": ["caldav", "openscad"]}
     )
 
     assert disabled.availability_for("caldav") == IntegrationAdapterAvailability.DISABLED
@@ -65,16 +65,15 @@ def test_integration_settings_normalizes_legacy_availability() -> None:
         disabled.availability_for("searxng")
         == IntegrationAdapterAvailability.INSTANCE_ONLY
     )
-    assert disabled.availability_for("git") == IntegrationAdapterAvailability.DISABLED
+    assert disabled.availability_for("openscad") == IntegrationAdapterAvailability.DISABLED
     assert (
         partially_allowed.availability_for("searxng")
         == IntegrationAdapterAvailability.INSTANCE_ONLY
     )
     assert (
         partially_allowed.availability_for("openscad")
-        == IntegrationAdapterAvailability.DISABLED
+        == IntegrationAdapterAvailability.FULL
     )
-    assert partially_allowed.availability_for("git") == IntegrationAdapterAvailability.FULL
     assert set(disabled.model_dump()) == {"instances", "adapter_availability"}
 
 
@@ -126,16 +125,17 @@ async def test_effective_integrations_adds_only_allowed_personal_instances(monke
     user_id = uuid4()
     agent_id = uuid4()
     global_item = IntegrationInstance(
-        name="Global Git",
-        integration_type="repository",
-        adapter_type="git",
+        name="Global OpenSCAD",
+        integration_type="openscad",
+        adapter_type="openscad",
         execution_agent_id=agent_id,
+        config={"binary_path": "/usr/bin/openscad"},
     )
     allowed = IntegrationInstance(
         name="Personal Calendar",
         integration_type="calendar",
         adapter_type="caldav",
-        execution_agent_id=agent_id,
+        config={"base_url": "https://calendar.example.com", "username": "user"},
     )
     blocked = IntegrationInstance(
         name="Personal Knowledge",
@@ -162,16 +162,18 @@ async def test_effective_integrations_adds_only_allowed_personal_instances(monke
 async def test_effective_integrations_excludes_unowned_agent_bindings(monkeypatch) -> None:
     user_id = uuid4()
     global_agent = IntegrationInstance(
-        name="Legacy global Git",
-        integration_type="git",
-        adapter_type="git",
+        name="Global OpenSCAD",
+        integration_type="openscad",
+        adapter_type="openscad",
         execution_agent_id=uuid4(),
+        config={"binary_path": "/usr/bin/openscad"},
     )
     personal_agent = IntegrationInstance(
-        name="Personal Git",
-        integration_type="git",
-        adapter_type="git",
+        name="Personal OpenSCAD",
+        integration_type="openscad",
+        adapter_type="openscad",
         execution_agent_id=uuid4(),
+        config={"binary_path": "/usr/bin/openscad"},
     )
     instance = IntegrationSettings(instances=[global_agent])
     personal = UserIntegrationSettings(instances=[personal_agent])
@@ -324,7 +326,7 @@ def test_personal_integration_tool_settings_do_not_snapshot_policies() -> None:
 async def test_scoped_integration_management_enforces_admin_and_personal_gates(monkeypatch) -> None:
     user = type("User", (), {"id": uuid4(), "is_admin": False})()
     integrations = IntegrationSettings(
-        adapter_availability={"git": "instance_only"},
+        adapter_availability={"caldav": "instance_only"},
     )
 
     async def load(_db, settings_type, **_kwargs):
@@ -341,7 +343,7 @@ async def test_scoped_integration_management_enforces_admin_and_personal_gates(m
         await _load_scoped_integrations(db, "instance", user)
     with pytest.raises(ApiError, match="integration.personalAdapterDisabled"):
         await _load_scoped_integrations(
-            db, "personal", user, adapter_type="git"
+            db, "personal", user, adapter_type="caldav"
         )
 
 

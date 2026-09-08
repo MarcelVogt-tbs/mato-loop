@@ -38,12 +38,12 @@ describe('tool display', () => {
   it('presents process arguments without rebuilding a shell command', () => {
     expect(toolPresentation({
       name: 'process_exec',
-      arguments: { program: 'git', args: ['commit', '-m', 'hello world'] }
+      arguments: { program: 'printf', args: ['%s', 'hello world'] }
     })).toEqual({
-      summary: 'git · commit, -m, hello world',
+      summary: 'printf · %s, hello world',
       items: [
-        { label: 'Programm', value: 'git', format: 'code' },
-        { label: 'Parameter', value: ['commit', '-m', 'hello world'], format: 'list' }
+        { label: 'Programm', value: 'printf', format: 'code' },
+        { label: 'Parameter', value: ['%s', 'hello world'], format: 'list' }
       ]
     })
   })
@@ -181,62 +181,14 @@ describe('tool display', () => {
     ])
   })
 
-  it('labels and summarizes Git tools in German', () => {
-    expect([
-      'git_clone',
-      'git_status',
-      'git_diff',
-      'git_log',
-      'git_add',
-      'git_commit'
-    ].map((name) => toolIdentity(name).label)).toEqual([
-      'Git-Repository klonen',
-      'Git-Status anzeigen',
-      'Git-Änderungen anzeigen',
-      'Git-Verlauf anzeigen',
-      'Git-Änderungen vormerken',
-      'Git-Commit erstellen'
-    ])
-    expect(toolSummary({
-      name: 'git_clone',
-      arguments: {
-        repository_url: 'https://user:secret@example.com/team/project.git?token=secret',
-        destination: 'project'
-      }
-    })).toBe('https://example.com/team/project.git?… -> project')
-    expect(toolSummary({ name: 'git_status', arguments: { path: 'project' } })).toBe('project')
-    expect(toolSummary({ name: 'git_diff', arguments: { repository_path: 'project' } })).toBe('project')
-    expect(toolSummary({ name: 'git_log', arguments: { repositoryPath: 'project' } })).toBe('project')
-    expect(toolSummary({ name: 'git_add', arguments: { paths: ['src/app.js', 'README.md'] } }))
-      .toBe('src/app.js, README.md')
-    expect(toolSummary({ name: 'git_commit', arguments: { message: 'Git-Anzeige ergänzen' } }))
-      .toBe('Git-Anzeige ergänzen')
-    expect(toolSummary({ name: 'git_diff', arguments: { staged: true, paths: ['src/app.js'] } }))
-      .toBe('Vorgemerkt: src/app.js')
-    expect(toolSummary({ name: 'git_log', arguments: { limit: 10, paths: [] } }))
-      .toBe('Letzte 10 Commits')
-    expect(toolPresentation({
-      name: 'git_clone',
-      arguments: {
-        source: 'https://user:secret@example.com/team/project.git?token=secret',
-        destination: 'project'
-      }
-    })).toEqual({
-      summary: 'https://example.com/team/project.git?… -> project',
-      items: [{
-        label: 'Repository-URL',
-        value: 'https://example.com/team/project.git?…',
-        format: 'code'
-      }]
-    })
-    expect(toolPresentation({
-      name: 'git_clone',
-      arguments: { source: '/home/user/repository', destination: 'project' }
-    }).items).toEqual([{
-      label: 'Repository-Quelle',
-      value: '/home/user/repository',
-      format: 'code'
-    }])
+  it('uses generic presentation for unrecognized historical tools', () => {
+    const tool = { name: 'retired_tool', arguments: { path: 'project' } }
+    expect(toolIdentity(tool.name)).toEqual({ label: 'Tool ausführen', icon: 'build' })
+    expect(toolPresentation(tool)).toEqual({ summary: 'project', items: [] })
+    expect(toolPresentation({ name: tool.name, arguments: {} }))
+      .toEqual({ summary: tool.name, items: [] })
+    const items = [{ label: 'Aktion', value: 'Gespeicherte Aktion', format: 'text' }]
+    expect(toolPresentation(tool, items)).toEqual({ summary: 'project', items })
   })
 
   it('summarizes persona changes without rendering the complete instructions', () => {

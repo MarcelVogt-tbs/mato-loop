@@ -11,7 +11,6 @@ from mato_loop_backend.integrations.caldav import (
     load_caldav_resources,
 )
 from mato_loop_backend.integrations.evidence import evidence_source_id
-from mato_loop_backend.integrations.git import GitConfig
 from mato_loop_backend.integrations.mail import (
     MAIL_CREDENTIAL_KIND,
     MailConfig,
@@ -45,7 +44,6 @@ from mato_loop_backend.integrations.search import (
 from mato_loop_backend.integrations.service import (
     BookStackIntegrationService,
     CalDavIntegrationService,
-    GitIntegrationService,
     IntegrationSettingsError,
     MailIntegrationService,
     MealieIntegrationService,
@@ -81,8 +79,6 @@ __all__ = [
     "BookStackIntegrationService",
     "CalDavConfig",
     "CalDavIntegrationService",
-    "GitConfig",
-    "GitIntegrationService",
     "MealieClient",
     "MealieConfig",
     "MealieError",

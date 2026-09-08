@@ -166,16 +166,19 @@ async def test_directory_grant_is_not_created_for_unavailable_zone(policy):
     db.scalar.assert_not_awaited()
 
 
-def test_effective_operations_require_a_current_directory() -> None:
+def test_effective_operations_filter_directory_dependent_tools() -> None:
     run = AgentRun(
         execution_operations=[
             "filesystem.resolve",
             "filesystem.read",
-            "integration.git.status",
+            "integration.openscad.render",
             "shell.run",
         ]
     )
-    assert _effective_execution_operations(run) == {"filesystem.resolve"}
+    assert _effective_execution_operations(run) == {
+        "filesystem.resolve",
+        "integration.openscad.render",
+    }
     run.current_directory_snapshot = "/home/user"
     assert _effective_execution_operations(run) == set(run.execution_operations)
 

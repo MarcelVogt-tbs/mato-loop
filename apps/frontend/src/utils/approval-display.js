@@ -264,10 +264,6 @@ export function permissionGrantDisplay(grant, sessions = []) {
     'meal_plan.read': { label: 'Essensplan lesen', icon: 'calendar_month' },
     'meal_plan.write': { label: 'Essensplan ändern', icon: 'edit_calendar' },
     'meal_plan.delete': { label: 'Essensplan-Eintrag löschen', icon: 'event_busy' },
-    'git.read': { label: 'Git-Repository lesen', icon: 'account_tree' },
-    'git.stage': { label: 'Git-Änderungen vormerken', icon: 'add_task' },
-    'git.clone': { label: 'Git-Repository klonen', icon: 'account_tree' },
-    'git.commit': { label: 'Git-Commit erstellen', icon: 'commit' },
     'integration.private_data.release': { label: 'Private Integrationsdaten freigeben', icon: 'cloud_upload' }
   }[grant?.capability]
   return {

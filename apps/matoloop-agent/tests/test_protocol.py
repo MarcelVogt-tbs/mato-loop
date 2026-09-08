@@ -111,20 +111,7 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validate_arguments(request)
 
-    def test_git_pathspecs_remain_relative_and_openscad_source_is_absolute(self) -> None:
-        git = Request.model_validate(
-            {
-                "type": "request",
-                "id": REQUEST_ID,
-                "operation": "integration.git.add",
-                "arguments": {"currentDirectory": "/repo", "paths": ["src/app.py"]},
-            }
-        )
-        self.assertEqual(validate_arguments(git).paths, ["src/app.py"])
-        git.arguments["paths"] = ["/src/app.py"]
-        with self.assertRaises(ValidationError):
-            validate_arguments(git)
-
+    def test_openscad_source_is_absolute(self) -> None:
         render = Request.model_validate(
             {
                 "type": "request",

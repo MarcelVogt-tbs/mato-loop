@@ -117,12 +117,6 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "cache.clear",
         "system.info",
         "filesystem.resolve",
-        "integration.git.add",
-        "integration.git.clone",
-        "integration.git.commit",
-        "integration.git.diff",
-        "integration.git.log",
-        "integration.git.status",
         "integration.openscad.discover",
         "integration.openscad.render",
         "integration.openscad.render6",
@@ -225,9 +219,6 @@ async def test_latest_connection_replaces_old_and_disconnects_are_classified() -
     assert disconnect_error_code("filesystem.edit", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("filesystem.patch", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("filesystem.rename", True) == "executionAgent.outcomeUnknown"
-    assert disconnect_error_code("integration.git.clone", True) == "executionAgent.outcomeUnknown"
-    assert disconnect_error_code("integration.git.add", True) == "executionAgent.outcomeUnknown"
-    assert disconnect_error_code("integration.git.commit", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("shell.run", True) == "process.outcomeUnknown"
     assert disconnect_error_code("terminal.shared.execute", True) == "process.outcomeUnknown"
 

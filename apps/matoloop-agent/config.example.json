@@ -1,6 +1,4 @@
 {
   "homeDirectory": "/home/mato/workspace",
-  "gitExecutable": "/usr/bin/git",
-  "allowNetwork": true,
   "shellExecutable": "/bin/sh"
 }

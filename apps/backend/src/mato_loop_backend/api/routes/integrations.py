@@ -22,7 +22,6 @@ from mato_loop_backend.integrations import (
     MEALIE_CREDENTIAL_KIND,
     BookStackIntegrationService,
     CalDavIntegrationService,
-    GitIntegrationService,
     IntegrationSettingsError,
     MailIntegrationService,
     MealieClient,
@@ -279,26 +278,6 @@ class RecipeIntegrationRequest(BaseModel):
 
 class RecipeIntegrationCreateRequest(RecipeIntegrationRequest):
     token: str = Field(min_length=1, max_length=10_000)
-
-
-class GitIntegrationConfigRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    allow_network: bool = Field(
-        default=False,
-        validation_alias=AliasChoices("allow_network", "allowNetwork"),
-    )
-
-
-class GitIntegrationRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    execution_agent_id: UUID = Field(
-        validation_alias=AliasChoices("execution_agent_id", "executionAgentId")
-    )
-    name: str = Field(default="Git", min_length=1, max_length=160)
-    config: GitIntegrationConfigRequest = Field(default_factory=GitIntegrationConfigRequest)
-    enabled: bool = True
 
 
 class OpenScadIntegrationRequest(BaseModel):
@@ -763,34 +742,6 @@ def coding_settings_payload(settings: UserIntegrationSettings) -> dict:
     }
 
 
-def git_settings_payload(settings: IntegrationSettings) -> dict:
-    integrations = [
-        instance
-        for instance in settings.instances
-        if instance.integration_type == "git" and instance.adapter_type == "git"
-    ]
-    return {
-        "configured": bool(integrations),
-        "instances": [
-            {
-                "id": str(instance.id),
-                "name": instance.name,
-                "integrationType": "git",
-                "providerType": "git",
-                "executionLocation": "agent",
-                "executionKind": "git",
-                "executionAgentId": str(instance.execution_agent_id),
-                "enabled": instance.enabled,
-                "hasCredential": False,
-                "config": {
-                    "allowNetwork": bool(instance.config.get("allow_network", False))
-                },
-            }
-            for instance in integrations
-        ],
-    }
-
-
 def openscad_settings_payload(
     settings: IntegrationSettings, execution_agent_ids: set[UUID]
 ) -> dict:
@@ -933,102 +884,6 @@ async def update_search_selection(
     await SettingsStore.save(db, tools, user_id=owner_id)
     await db.commit()
     return search_settings_payload(settings, tools, available_settings)
-
-
-@router.get("/git")
-async def get_git_integrations(
-    user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-    scope: SettingsApiScope = "instance",
-) -> dict:
-    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
-    try:
-        await GitIntegrationService.check_ownership(db, settings, user_id=user.id)
-    except IntegrationSettingsError as exc:
-        raise ApiError(404, exc.code) from exc
-    return git_settings_payload(settings)
-
-
-@router.post("/git", status_code=status.HTTP_201_CREATED)
-async def create_git_integration(
-    payload: GitIntegrationRequest,
-    user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-    scope: SettingsApiScope = "personal",
-) -> dict:
-    if scope != "personal":
-        raise ApiError(409, "integration.agentPersonalOnly")
-    await _load_scoped_integrations(
-        db, scope, user, mutation=True, adapter_type="git"
-    )
-    try:
-        settings = await GitIntegrationService.create(
-            db,
-            user_id=user.id,
-            execution_agent_id=payload.execution_agent_id,
-            name=payload.name,
-            allow_network=payload.config.allow_network,
-            enabled=payload.enabled,
-            settings_owner_id=user.id,
-        )
-    except IntegrationSettingsError as exc:
-        status_code = 409 if exc.code == "git.alreadyConfigured" else 404
-        raise ApiError(status_code, exc.code, field="executionAgentId") from exc
-    return git_settings_payload(settings)
-
-
-@router.put("/git/{integration_id}")
-async def update_git_integration(
-    integration_id: UUID,
-    payload: GitIntegrationRequest,
-    user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-    scope: SettingsApiScope = "personal",
-) -> dict:
-    _settings, owner_id = await _load_scoped_integrations(
-        db, scope, user, mutation=True, adapter_type="git"
-    )
-    try:
-        settings = await GitIntegrationService.update(
-            db,
-            integration_id,
-            user_id=user.id,
-            execution_agent_id=payload.execution_agent_id,
-            name=payload.name,
-            allow_network=payload.config.allow_network,
-            enabled=payload.enabled,
-            settings_owner_id=owner_id,
-        )
-    except IntegrationSettingsError as exc:
-        status_code = (
-            409
-            if exc.code in {"git.alreadyConfigured", "integration.changed"}
-            else 404
-        )
-        field = "executionAgentId" if exc.code != "integration.notFound" else None
-        raise ApiError(status_code, exc.code, field=field) from exc
-    return git_settings_payload(settings)
-
-
-@router.delete("/git/{integration_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_git_integration(
-    integration_id: UUID,
-    user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-    scope: SettingsApiScope = "personal",
-) -> None:
-    _settings, owner_id = await _load_scoped_integrations(
-        db, scope, user, mutation=True
-    )
-    try:
-        await GitIntegrationService.delete(
-            db,
-            integration_id,
-            user_id=user.id,
-            settings_owner_id=owner_id,
-        )
-    except IntegrationSettingsError as exc:
-        raise ApiError(409 if exc.code == "integration.changed" else 404, exc.code) from exc
 
 
 @router.get("/openscad")

@@ -7,20 +7,18 @@ without a recognized write remain `shell.read`, even when analysis is incomplete
 The mutable shared shell is trusted; this is not a sandbox guarantee. Isolated
 command execution remains unchanged.
 
-Standalone Linux agent for bounded filesystem, process, POSIX terminal, transfer, Git, OpenSCAD, and session-cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
+Standalone Linux agent for bounded filesystem, process, POSIX terminal, transfer, OpenSCAD, and session-cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
 
 ## Configuration
 
 ```json
 {
   "homeDirectory": "/home/mato/workspace",
-  "gitExecutable": "/usr/bin/git",
-  "allowNetwork": true,
   "shellExecutable": "/bin/sh"
 }
 ```
 
-`homeDirectory` is mandatory and canonicalized at startup. The configuration file's parent directory is the agent data directory for credentials, transfers, Git state, and cache data. Native installations read `${XDG_DATA_HOME:-~/.local/share}/matoloop-agent/config.json` by default. `MATOLOOP_AGENT_CONFIG` or `--config` selects another file, including `/data/config.json`.
+`homeDirectory` is mandatory and canonicalized at startup. The configuration file's parent directory is the agent data directory for credentials, transfers, and cache data. Native installations read `${XDG_DATA_HOME:-~/.local/share}/matoloop-agent/config.json` by default. `MATOLOOP_AGENT_CONFIG` or `--config` selects another file, including `/data/config.json`.
 
 Personal terminal.open and terminal.run require POSIX PTYs and a configured
 `shellExecutable`. Managed shared Bash is a separate capability, independent of
@@ -85,7 +83,7 @@ uv run python -m unittest discover -s tests -v
 
 The authenticated WebSocket sends strict `hello`, `request`, `cancel`, `response`, and `event` messages with `protocolVersion: 1`. Hello advertises `agentId`, `agentVersion`, `computerName`, `platform`, canonical `homeDirectory`, and operations.
 
-Filesystem operations use normalized absolute POSIX paths and traverse from an open `/` descriptor with `O_NOFOLLOW` on every component. Copy and move use absolute source and destination paths. Process, shell, and Git repository working directories are absolute; Git pathspecs remain relative. `shell.inspect` returns absolute targets and an inspection revision without root metadata.
+Filesystem operations use normalized absolute POSIX paths and traverse from an open `/` descriptor with `O_NOFOLLOW` on every component. Copy and move use absolute source and destination paths. Process and shell working directories are absolute. `shell.inspect` returns absolute targets and an inspection revision without root metadata.
 
 The fixed terminal operations are `terminal.open`, `terminal.read`, `terminal.write`, `terminal.resize`, `terminal.close`, and `terminal.run`. Interactive shells and one-shot terminal runs execute with the agent operating-system user's rights. PTYs are live process state and are not persistent terminal sessions.
 

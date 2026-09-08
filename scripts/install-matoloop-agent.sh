@@ -447,12 +447,11 @@ update_agent() {
 }
 
 write_agent_config() {
-    local git_executable shell_executable openscad_executable
-    git_executable="$(command -v git || true)"
+    local shell_executable openscad_executable
     shell_executable="$(command -v bash || true)"
     openscad_executable="$(command -v openscad || true)"
     python3 - "$DATA_DIR/config.json" "$WORKSPACE_DIR" "$BACKEND_URL" \
-        "$git_executable" "$shell_executable" "$openscad_executable" <<'PY'
+        "$shell_executable" "$openscad_executable" <<'PY'
 import json
 import os
 import sys
@@ -460,17 +459,12 @@ import tempfile
 from pathlib import Path
 
 path = Path(sys.argv[1])
-workspace, backend_url, git, shell, openscad = sys.argv[2:]
+workspace, backend_url, shell, openscad = sys.argv[2:]
 if path.is_symlink():
     raise SystemExit("Refusing symlinked config.json.")
 data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 data["homeDirectory"] = workspace
 data["allowInsecure"] = backend_url.startswith("ws://")
-data.setdefault("allowNetwork", True)
-if git:
-    data["gitExecutable"] = git
-else:
-    data.pop("gitExecutable", None)
 if shell:
     data["shellExecutable"] = shell
 else:

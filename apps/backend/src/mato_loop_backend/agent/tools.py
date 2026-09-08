@@ -273,7 +273,7 @@ async def _allow(context: ToolContext, request: PermissionRequest) -> bool:
         current = await context.current_integrations()
         return integration_ids <= {str(item.id) for item in current.instances if item.enabled}
 
-    # Integration handlers can request additional approvals, such as Git directory access.
+    # Integration handlers can request additional approvals.
     return (
         await selected()
         and await context.ask(request) == PermissionDecision.ALLOW

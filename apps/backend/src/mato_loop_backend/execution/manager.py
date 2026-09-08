@@ -32,9 +32,6 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
 CANCEL_SEND_TIMEOUT_SECONDS = 1.0
 MAX_IGNORED_REQUESTS = 1_024
 _MUTATING_FILESYSTEM_OPERATIONS = {
-    "integration.git.add",
-    "integration.git.clone",
-    "integration.git.commit",
     "filesystem.copy",
     "filesystem.delete",
     "filesystem.edit",

@@ -42,9 +42,9 @@ Welche Tools tatsächlich erscheinen, hängt zusätzlich von Richtlinien, Sessio
 
 ## Instanz und persönliche Integrationen
 
-Unter **Einstellungen > Integrationen** liegen die technische Verbindungskonfiguration, die Vorgaben für Integrationen und einzelne Ressourcen sowie die Standardressourcen von CalDAV. Die Zugriffsrichtlinien werden getrennt für private und öffentliche Modelle gepflegt; Standardkalender und Standard-Aufgabenliste bleiben davon unabhängig. Instanz-Integrationen und ihre externen Ressourcen sind bewusst gemeinsam: Alle Benutzer können sie entsprechend den Instanzrichtlinien verwenden. Persönliche Integrationen und Zugangsdaten bleiben dem jeweiligen Benutzer zugeordnet. Administratoren können persönliche Integrationen vollständig sperren und einzeln erlauben, welche fest eingebauten Typen persönlich konfiguriert werden dürfen: SearXNG, CalDAV, BookStack, Mealie, Git, OpenSCAD und OpenCode. Konfigurationen können keine eigenen Tool-Schemas oder beliebigen ausführbaren Tools hinzufügen.
+Unter **Einstellungen > Integrationen** liegen die technische Verbindungskonfiguration, die Vorgaben für Integrationen und einzelne Ressourcen sowie die Standardressourcen von CalDAV. Die Zugriffsrichtlinien werden getrennt für private und öffentliche Modelle gepflegt; Standardkalender und Standard-Aufgabenliste bleiben davon unabhängig. Instanz-Integrationen und ihre externen Ressourcen sind bewusst gemeinsam: Alle Benutzer können sie entsprechend den Instanzrichtlinien verwenden. Persönliche Integrationen und Zugangsdaten bleiben dem jeweiligen Benutzer zugeordnet. Administratoren können persönliche Integrationen vollständig sperren und einzeln erlauben, welche fest eingebauten Typen persönlich konfiguriert werden dürfen: SearXNG, CalDAV, BookStack, Mealie, OpenSCAD und OpenCode. Konfigurationen können keine eigenen Tool-Schemas oder beliebigen ausführbaren Tools hinzufügen.
 
-Administratoren sehen den Umschalter **Persönlich** / **Instanz**. Normale Benutzer bearbeiten nur ihren persönlichen Bereich. Git und OpenSCAD werden immer persönlich an einen Computer des angemeldeten Benutzers gebunden.
+Administrators see the **Persönlich** / **Instanz** toggle. Other users edit only their personal scope. OpenSCAD is always personally bound to a computer owned by the signed-in user.
 
 ## OpenCode integrieren
 
@@ -70,7 +70,9 @@ Only verified static output to the real `/dev/null` device and narrowly supporte
 
 Upgrade the backend and MatoLoop Agent together for these shell semantics. Protocol v1 retains additive target kinds and errors without a shell-related database migration. Older agents remain conservative, and the backend does not reinterpret their write classifications as read. Existing grants keep their class binding and JSON format; historical approval text is not rewritten.
 
-In den Tool-Einstellungen können für beide Klassen erlaubte Befehlspräfixe hinterlegt werden, jeweils ein Präfix pro Zeile. Die Prüfung erfolgt tokenbasiert und alle Teilbefehle einer Pipeline oder Liste müssen passen. Eine Session-Freigabe gilt für die angezeigten Präfixe auf demselben Computer, in demselben absoluten Arbeitsordner und nur in derselben Klasse. Deaktivierte Tool-Richtlinien, ausgeschaltete Shell-Zonen und nicht erlaubte Pfade können dadurch nicht überstimmt werden. Für Git sollten die fest eingebauten Git-Tools statt Shell-Befehlen verwendet werden.
+In den Tool-Einstellungen können für beide Klassen erlaubte Befehlspräfixe hinterlegt werden, jeweils ein Präfix pro Zeile. Die Prüfung erfolgt tokenbasiert und alle Teilbefehle einer Pipeline oder Liste müssen passen. Eine Session-Freigabe gilt für die angezeigten Präfixe auf demselben Computer, in demselben absoluten Arbeitsordner und nur in derselben Klasse. Deaktivierte Tool-Richtlinien, ausgeschaltete Shell-Zonen und nicht erlaubte Pfade können dadurch nicht überstimmt werden.
+
+Git operations use shell commands on the selected, connected computer with Git installed. There is no dedicated Git integration, Git configuration page, or backend clone path. Model Git commands follow the shell policies, prefix allowlists, session grants, and hard boundaries above; automatically permitted commands need no individual approval. Configure Git and authentication on that computer. Existing installations must follow the [upgrade cleanup instructions](betrieb-und-datensicherung.md#removed-git-integration).
 
 ## Terminal im Control Center
 

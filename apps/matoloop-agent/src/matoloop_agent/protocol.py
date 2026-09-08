@@ -343,58 +343,6 @@ class SharedTerminalStatus(StrictModel):
     cancelled: bool
 
 
-GitPath = Annotated[str, Field(min_length=1, max_length=1000, pattern=r"^[^\x00]+$")]
-
-
-class GitCloneArguments(HostDirectoryArguments):
-    source: str = Field(min_length=1, max_length=4096, pattern=r"^[^\x00]+$")
-    destination: str = Field(min_length=1, max_length=1000, pattern=r"^[^\x00]+$")
-    allow_network: bool = Field(default=False, alias="allowNetwork")
-
-    @field_validator("destination")
-    @classmethod
-    def relative_destination(cls, value: str) -> str:
-        return _relative_path(value)
-
-
-class GitStatusArguments(HostDirectoryArguments):
-    pass
-
-
-class GitDiffArguments(HostDirectoryArguments):
-    staged: bool = False
-    paths: list[GitPath] = Field(default_factory=list, max_length=100)
-
-    @field_validator("paths")
-    @classmethod
-    def relative_paths(cls, values: list[str]) -> list[str]:
-        return [_relative_path(value) for value in values]
-
-
-class GitLogArguments(HostDirectoryArguments):
-    limit: int = Field(default=20, ge=1, le=100)
-    paths: list[GitPath] = Field(default_factory=list, max_length=100)
-
-    @field_validator("paths")
-    @classmethod
-    def relative_paths(cls, values: list[str]) -> list[str]:
-        return [_relative_path(value) for value in values]
-
-
-class GitAddArguments(HostDirectoryArguments):
-    paths: list[GitPath] = Field(min_length=1, max_length=100)
-
-    @field_validator("paths")
-    @classmethod
-    def relative_paths(cls, values: list[str]) -> list[str]:
-        return [_relative_path(value) for value in values]
-
-
-class GitCommitArguments(HostDirectoryArguments):
-    message: str = Field(min_length=1, max_length=10_000, pattern=r"^[^\x00]+$")
-    expected_index_tree: str = Field(alias="expectedIndexTree", pattern=r"^[0-9a-f]{64}$")
-
-
 class ArtifactDescriptor(StrictModel):
     artifact_id: str = Field(alias="artifactId", min_length=1, max_length=128)
     backend_id: str = Field(alias="backendId", min_length=1, max_length=128)
@@ -515,12 +463,6 @@ ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "terminal.shared.inspect": SharedInspectArguments,
     "terminal.shared.execute": SharedExecuteArguments,
     "terminal.shared.cancel": SharedCancelArguments,
-    "integration.git.clone": GitCloneArguments,
-    "integration.git.status": GitStatusArguments,
-    "integration.git.diff": GitDiffArguments,
-    "integration.git.log": GitLogArguments,
-    "integration.git.add": GitAddArguments,
-    "integration.git.commit": GitCommitArguments,
     "cache.ensure": CacheEnsureArguments,
     "cache.store": CacheStoreArguments,
     "cache.export": CacheExportArguments,

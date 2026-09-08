@@ -1,6 +1,5 @@
 import json
 from dataclasses import replace
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -247,7 +246,6 @@ def test_shared_accounts_opt_in_is_separate_from_permissions_and_does_not_mutate
 @pytest.mark.parametrize(
     "kind,adapter,tool_name",
     [
-        ("git", "git", "git_status"),
         ("openscad", "openscad", "render_openscad"),
         ("coding", "opencode", "coding_analyze"),
         ("search", "searxng", "web_search"),
@@ -255,10 +253,8 @@ def test_shared_accounts_opt_in_is_separate_from_permissions_and_does_not_mutate
 )
 def test_profile_selection_covers_execution_builtin_and_option_tools(kind, adapter, tool_name):
     integration = account(
-        kind, adapter, execution_agent_id=uuid4() if kind in {"git", "openscad"} else None
+        kind, adapter, execution_agent_id=uuid4() if kind == "openscad" else None
     )
-    if kind in {"git", "openscad"}:
-        integration.config = {}
     if kind == "openscad":
         integration.config = {"binary_path": "/usr/bin/openscad"}
     profile = AgentProfile(name="Agent", instructions="Task", integrationsEnabledByDefault=False)
@@ -430,34 +426,3 @@ async def test_account_discovery_and_helper_reloads_never_expand_the_selection(
         {"integrationId": str(first.id), "name": first.name}
     ]
     assert [item.id for item in (await context.current_integrations()).instances] == [first.id]
-
-
-async def test_git_nested_directory_approval_cannot_revive_excluded_integration(monkeypatch):
-    integration = account("git", "git", execution_agent_id=uuid4())
-    integration.config = {}
-    settings = IntegrationSettings(instances=[integration])
-    profile = AgentProfile(name="Agent", instructions="Task")
-    call = ToolCall(id="call", name="git_status", arguments={})
-    context = await tool_context(monkeypatch, settings, profile, call)
-    context.db.scalars.return_value = SimpleNamespace(all=lambda: [integration.execution_agent_id])
-    context.db.get.return_value = SimpleNamespace(
-        execution_agent_id=integration.execution_agent_id,
-        execution_operations=["integration.git.status"],
-    )
-    context.execution_client = SimpleNamespace(
-        agent_id=integration.execution_agent_id, current_directory="/workspace", request=AsyncMock()
-    )
-    requests = []
-
-    async def approve(request):
-        requests.append(request)
-        if request.action_kind == "use_directory":
-            profile.integration_availability[str(integration.id)] = False
-        return PermissionDecision.ALLOW
-
-    context.ask_handler = approve
-    effective = tool_registry.effective(settings, tool_settings=context.tool_settings)
-    result = await effective.execute(call, context)
-    assert result.is_error
-    assert [request.action_kind for request in requests] == ["git_read", "use_directory"]
-    context.execution_client.request.assert_not_awaited()

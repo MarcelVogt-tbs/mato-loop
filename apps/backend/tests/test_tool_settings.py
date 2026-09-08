@@ -247,9 +247,6 @@ def test_plan_profile_disables_computer_changes(trust: TrustLevel) -> None:
         "filesystem.write",
         "filesystem.delete",
         "shell.write",
-        "git.stage",
-        "git.clone",
-        "git.commit",
     ):
         assert (
             resolve_tool_execution_policy(settings, capability).policy
@@ -304,7 +301,7 @@ def test_build_profile_defaults_to_auto_writes_and_preserves_overrides(trust: Tr
     assert (
         resolve_tool_execution_policy(
             settings,
-            "git.commit",
+            "calendar.write",
             ToolExecutionPolicy.ASK,
             integration_id=uuid4(),
         ).policy

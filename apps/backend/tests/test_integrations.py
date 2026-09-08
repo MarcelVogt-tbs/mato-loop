@@ -144,7 +144,7 @@ def test_integration_catalog_read_and_admin_update(monkeypatch) -> None:
             "/api/integrations/catalog/caldav", json={"availability": "sometimes"}
         )
         invalid_agent = client.put(
-            "/api/integrations/catalog/git", json={"availability": "instance_only"}
+            "/api/integrations/catalog/openscad", json={"availability": "instance_only"}
         )
         updated = client.put(
             "/api/integrations/catalog/caldav", json={"availability": "full"}
@@ -155,6 +155,13 @@ def test_integration_catalog_read_and_admin_update(monkeypatch) -> None:
 
     adapters = listed.json()["adapters"]
     assert listed.status_code == 200
+    assert all(item["adapterType"] != "git" for item in adapters)
+    assert not any("/git" in path for path in app.openapi()["paths"])
+    assert not any(
+        tool.name.startswith("git_")
+        for adapter in integration_registry.integration_adapters()
+        for tool in (*adapter.shared_tools, *adapter.execution_tools)
+    )
     assert [(item["integrationType"], item["adapterType"]) for item in adapters] == sorted(
         (item["integrationType"], item["adapterType"]) for item in adapters
     )
@@ -297,7 +304,7 @@ async def test_personal_policy_read_exposes_no_integration_configuration(
 
     assert result == {
         "enabled": True,
-            "allowedAdapterTypes": ["caldav", "git", "imap_smtp", "opencode"],
+        "allowedAdapterTypes": ["caldav", "imap_smtp", "opencode"],
     }
 
 

@@ -762,18 +762,6 @@ def general_system_prompt(
         )
     if memory_context_enabled:
         parts.append(MEMORY_ASSISTANT_ENVELOPE_CONTRACT)
-    if offered_tool_names & {
-        "git_clone",
-        "git_status",
-        "git_diff",
-        "git_log",
-        "git_add",
-        "git_commit",
-    }:
-        parts.append(
-            "Git paths are relative to the selected computer directory. Inspect status and diff before "
-            "mutations; git_commit commits only staged changes and never stages files."
-        )
     if openscad_render_pending:
         runtime_parts.append(
             "OpenSCAD source was generated but has not been rendered successfully. Call "

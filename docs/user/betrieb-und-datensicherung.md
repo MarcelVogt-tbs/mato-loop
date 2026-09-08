@@ -61,7 +61,7 @@ MATOLOOP_AGENT_DATA=/opt/matoloop-agent/data
 MATOLOOP_AGENT_HOME=/opt/matoloop-agent/home
 ```
 
-Der Produktionsstack bindet `MATOLOOP_AGENT_DATA` als `/data` und `MATOLOOP_AGENT_HOME` als `/workspace` ein. Die Produktionsvorlage setzt dafür `/opt/matoloop-agent/data` und `/opt/matoloop-agent/home`; Compose behält für bestehende Installationen die früheren relativen Fallbacks. Der Entwicklungsdienst bindet zusätzlich den Quellcode und ein wegwerfbares Abhängigkeits-Volume ein. Die Konfiguration liegt unter `/data/config.json`; Zugang, Transfers, Git-Zustand und Cache bleiben ebenfalls unter `/data`. Das Backend verwaltet, migriert oder löscht den Inhalt des Agent-Arbeitsbereichs nicht.
+Der Produktionsstack bindet `MATOLOOP_AGENT_DATA` als `/data` und `MATOLOOP_AGENT_HOME` als `/workspace` ein. Die Produktionsvorlage setzt dafür `/opt/matoloop-agent/data` und `/opt/matoloop-agent/home`; Compose behält für bestehende Installationen die früheren relativen Fallbacks. Der Entwicklungsdienst bindet zusätzlich den Quellcode und ein wegwerfbares Abhängigkeits-Volume ein. Die Konfiguration liegt unter `/data/config.json`; Zugang, Transfers und Cache bleiben ebenfalls unter `/data`. Das Backend verwaltet, migriert oder löscht den Inhalt des Agent-Arbeitsbereichs nicht.
 
 Der normale Produktions- und Entwicklungsstack startet den Computer automatisch. Solange er ungekoppelt ist, wartet er auf die einmalige Kopplung. Führen Sie diese im laufenden Produktionscontainer aus:
 
@@ -111,6 +111,16 @@ Die Entwicklungsumgebung verwendet benannte Docker-Volumes. Der Befehl `./script
 Sichern Sie Datenbank und Datenverzeichnis vor einem Update gemeinsam. Datenbankschemaänderungen werden beim Start über Alembic-Migrationen angewendet. Prüfen Sie nach dem Update Anmeldung, Providerverbindungen, Dateizugriff, Memory und laufende Integrationen.
 
 Beim Wechsel vom früheren Compose-Dienst liegt dessen Zugang gewöhnlich im benannten Volume `<compose-projekt>_execution_agent_data`. Ermitteln Sie den exakten Namen mit `docker volume ls`, stoppen Sie den alten Dienst und kopieren Sie den vollständigen Volume-Inhalt einschließlich Dateirechten vor dem ersten neuen Start in `MATOLOOP_AGENT_DATA`. Prüfen Sie danach, dass `credential.json` und gegebenenfalls `credential.pending.json` nicht für andere Benutzer lesbar sind. Bleiben diese Daten nicht erhalten, entkoppeln Sie den bestehenden Computer zuerst in MatoLoop und koppeln ihn anschließend neu. Alte Umgebungsvariablen-Aliase werden nicht unterstützt.
+
+### Removed Git Integration
+
+Before restarting an upgraded MatoLoop Agent, stop the agent and update its existing configuration JSON:
+
+1. Remove only the `gitExecutable` and `allowNetwork` fields, if present. The strict schema rejects these removed fields; setting them to `null` or `false` is not sufficient. Preserve all other fields, especially pairing and connection configuration.
+2. Remove only `<config-parent>/git-home`, if present. `<config-parent>` is the directory containing the agent configuration file; for Compose's `/data/config.json`, this is `/data/git-home` inside the agent container, or `MATOLOOP_AGENT_DATA/git-home` on the host. This directory is state owned by the removed integration. Do not remove the parent directory, pairing credentials, repositories, workspaces, or history.
+3. Restart the upgraded agent. The backend data migration cleans obsolete Git integration settings automatically; do not manually delete database records or historical messages, tool results, or approvals. No re-pairing is needed when the existing connection configuration and credentials are preserved.
+
+Git remains available through shell commands on a selected, connected agent with Git installed, under the existing shell permissions. The backend does not clone repositories.
 
 ### Veröffentlichtes Image verwenden
 
