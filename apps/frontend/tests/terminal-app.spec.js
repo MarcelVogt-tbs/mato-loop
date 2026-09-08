@@ -199,6 +199,26 @@ it('reconnects A-B-A while mounted, replaces replay atomically and releases on u
   }
 })
 
+it.each([false, true])('restores output and the partial prompt after A-B-A with attached=%s', async (attached) => {
+  const history = '$ ls\r\none.txt  two.txt\r\n$ cat \x1b[2D'
+  socket.state({ attached })
+  socket.output(history)
+  await mountTerminal()
+  const before = lines(3)
+  const cursor = [xterm.buffer.active.cursorX, xterm.buffer.active.cursorY]
+  for (const sessionId of ['session-2', 'session-1']) {
+    useChatStore().current = { id: sessionId, preferredExecutionAgentId: 'agent-1', messages: [] }
+    useControlCenterStore().sessionId = sessionId
+    await nextTick()
+    const viewer = FakeWebSocket.instances.at(-1)
+    viewer.open()
+    viewer.snapshot({ attached, personalData: btoa(sessionId === 'session-1' ? history : '$ other session') })
+    await flushOutput()
+  }
+  expect(lines(3)).toEqual(before)
+  expect([xterm.buffer.active.cursorX, xterm.buffer.active.cursorY]).toEqual(cursor)
+})
+
 it('releases on unavailability and reconnects when the agent returns', async () => {
   await mountTerminal()
   useExecutionAgentStore().byId().connected = false
@@ -223,10 +243,13 @@ it('shows replacement without reclaiming on remount or stale control actions', a
   expect(FakeWebSocket.instances).toHaveLength(1)
 })
 
-it('shows new-shell and truncated replay notices without claiming restoration', async () => {
-  store.$patch({ restored: false, truncated: true })
+it('keeps an idle terminal free of informational labels but shows truncated replay', async () => {
+  store.$patch({ restored: false, currentDirectory: '/terminal/cwd' })
   await mountTerminal()
-  expect(root.textContent).toContain('Neue Shell gestartet')
+  expect(root.textContent).not.toMatch(/Neue Shell gestartet|Terminal-Ordner|Shell bereit/)
+  expect(root.querySelector('.terminal-app [role="status"]')).toBeNull()
+  store.truncated = true
+  await nextTick()
   expect(root.textContent).toContain('Frühere Ausgaben fehlen')
 })
 
@@ -266,7 +289,7 @@ it('keeps native pending editing enabled, forwards Enter and Ctrl+C, and stops t
   expect(root.querySelector('[role="dialog"]')).toBeNull()
   expect(root.querySelector('[aria-label="Vorgeschlagenen Befehl bearbeiten"]')).toBeNull()
   expect(root.textContent).not.toMatch(/Agent-Modus|Schreibgeschützt|Automatisch|Bestätigen|letzten Befehls/)
-  expect(root.textContent).toContain('Terminal-Ordner: /terminal/cwd')
+  expect(root.textContent).not.toContain('Terminal-Ordner:')
   expect(root.textContent).not.toContain('/session/workspace')
   expect(xterm.options.disableStdin).toBe(false)
   socket.send.mockClear()

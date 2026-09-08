@@ -22,16 +22,13 @@
       <q-banner v-else-if="terminal.suspended" dense class="bg-warning text-dark" role="status">
         Die Terminalverbindung ist vorübergehend ausgesetzt. Eingaben sind gesperrt, bis der Server sie wieder freigibt.
       </q-banner>
-      <q-banner v-else-if="terminal.restored === false" dense role="status">
-        Neue Shell gestartet. Ein früherer Shell-Zustand wurde nicht wiederhergestellt.
-      </q-banner>
       <q-banner v-if="terminal.truncated" dense class="bg-warning text-dark" role="status">
         Der Terminalverlauf wurde gekürzt. Frühere Ausgaben fehlen.
       </q-banner>
       <div class="terminal-app__stage col relative-position">
         <div ref="terminalHost" class="terminal-app__host fit" />
       </div>
-      <div class="q-px-sm q-py-xs text-caption app-muted" role="status" aria-live="polite" aria-atomic="true">
+      <div v-if="runtimeStatus" class="q-px-sm q-py-xs text-caption app-muted" role="status" aria-live="polite" aria-atomic="true">
         {{ runtimeStatus }}
       </div>
     </template>
@@ -88,13 +85,13 @@ const runtimeStatus = computed(() => {
   if (!terminal.ready) return 'Terminal wird verbunden.'
   if (terminal.suspended) return 'Terminal vorübergehend ausgesetzt.'
   return ({
-    idle: terminal.busy ? 'Die Shell ist beschäftigt.' : 'Shell bereit.',
+    idle: terminal.busy ? 'Die Shell ist beschäftigt.' : '',
     busy: 'Die Shell ist beschäftigt.',
     editing: 'Agent-Befehl direkt im Terminal bearbeiten. Enter erlaubt ihn einmalig, Strg+C verwirft die Anfrage.',
     checking: 'Befehl wird geprüft. Strg+C verwirft die Anfrage.',
     running: 'Befehl läuft. Strg+C unterbricht den Vordergrundprozess.',
     closed: 'Die Shell wurde beendet.'
-  })[terminal.runtimeState] || 'Terminalzustand wird geladen.'
+  })[terminal.runtimeState] ?? 'Terminalzustand wird geladen.'
 })
 
 let xterm

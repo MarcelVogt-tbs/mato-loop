@@ -17,7 +17,6 @@
       >
         <q-tooltip>Agent-Befehle verwenden diese Shell. Die geltenden Freigaben bleiben unverändert.</q-tooltip>
       </q-toggle>
-      <q-spinner-dots v-if="terminal.submitting" color="primary" size="20px" />
       <q-btn
         v-if="chat.running"
         class="col-auto"
@@ -31,10 +30,6 @@
       >
         <q-tooltip>Den gesamten Agent-Lauf stoppen, nicht nur den Vordergrundprozess.</q-tooltip>
       </q-btn>
-    </div>
-    <div class="text-caption app-muted ellipsis q-mt-xs" :title="terminal.currentDirectory || ''">
-      Terminal-Ordner: {{ terminal.currentDirectory || 'Noch nicht bekannt' }}
-      <q-tooltip v-if="terminal.currentDirectory">{{ terminal.currentDirectory }} · Unabhängig vom Arbeitsordner der Session.</q-tooltip>
     </div>
   </div>
 </template>
@@ -51,7 +46,7 @@ const chat = useChatStore()
 const executionAgents = useExecutionAgentStore()
 const terminal = useTerminalStore()
 const agent = computed(() => executionAgents.byId(chat.current?.preferredExecutionAgentId))
-const connectionDisabled = computed(() => !terminal.inputEnabled || Boolean(terminal.submitting)
+const connectionDisabled = computed(() => !terminal.inputEnabled
   || (terminal.attached && Boolean(terminal.activeToolCallId || terminal.pending)))
 
 function toggleAttachment(attached) {

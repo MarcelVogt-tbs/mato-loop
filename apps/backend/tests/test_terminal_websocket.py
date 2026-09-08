@@ -107,6 +107,28 @@ async def open_viewer(env):
     return await env.coordinator.open(env.user.id, env.session.id, env.agent.id, env.login.id, FakeWebSocket())
 
 
+@pytest.mark.parametrize("attached", [False, True])
+async def test_resume_keeps_output_and_partial_input_without_clearing_screen(env, attached):
+    first = await open_viewer(env)
+    first.runtime.attached = attached
+    history = b"$ ls\r\none.txt  two.txt\r\n$ cat \x1b[2D"
+    try:
+        await first.runtime.send_bytes(history)
+        await env.coordinator.release(first)
+        second = await open_viewer(env)
+        opened = json.loads(second.queue.get_nowait()[0])
+        snapshot = json.loads(second.queue.get_nowait()[0])
+        assert opened["restored"] and second.runtime is first.runtime
+        assert snapshot["attached"] is attached
+        assert base64.b64decode(snapshot["personalData"]) == history
+        assert all(
+            not arguments.get("redisplay", False)
+            for operation, arguments in env.calls if operation == "terminal.shared.status"
+        )
+    finally:
+        await env.coordinator.shutdown()
+
+
 @pytest.mark.parametrize("invalid", ["origin", "login", "session", "owner", "child", "automation", "agent", "tab", "revoked", "capability"])
 async def test_access_checked_before_open_or_replay(env, monkeypatch, invalid):
     socket = FakeWebSocket(env.session.id)

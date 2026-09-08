@@ -94,6 +94,8 @@ describe('shared terminal', () => {
     const { store, socket } = connectedStore({ personalData: btoa('user and agent\r\n') })
     const revision = store.bufferRevision
     store.attach()
+    store.attach()
+    expect(socket.send).toHaveBeenCalledTimes(1)
     expect(JSON.parse(socket.send.mock.calls.at(-1)[0])).toEqual({ type: 'attach', sessionId: 'session-1' })
     expect(store.attached).toBe(false)
     socket.state({ attached: false })
@@ -101,6 +103,8 @@ describe('shared terminal', () => {
     socket.state({ attached: true })
     expect(store.submitting).toBeNull()
     store.detach()
+    store.detach()
+    expect(socket.send).toHaveBeenCalledTimes(2)
     expect(JSON.parse(socket.send.mock.calls.at(-1)[0])).toEqual({ type: 'detach' })
     expect(store.attached).toBe(true)
     socket.state({ attached: false })

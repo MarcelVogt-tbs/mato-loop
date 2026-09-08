@@ -287,7 +287,7 @@ class TerminalCoordinator:
             await validate_terminal_access(user_id, session_id, agent_id, login_id)
             if runtime.closed or runtime.generation != agent_generation(agent_id):
                 raise ExecutionClientError("terminal.disconnected")
-            await runtime.refresh_status(redisplay=True)
+            await runtime.refresh_status()
             if runtime.closed or runtime.native_status.state == "closed":
                 raise ExecutionClientError("terminal.disconnected")
             async with runtime.send_lock:
