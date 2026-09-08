@@ -60,7 +60,7 @@ def disconnect_error_code(operation: str, dispatched: bool) -> str:
         return "executionAgent.unavailable"
     if operation in _MUTATING_FILESYSTEM_OPERATIONS:
         return "executionAgent.outcomeUnknown"
-    if operation.startswith("shell.") or operation == "terminal.run":
+    if operation.startswith("shell.") or operation in {"terminal.run", "terminal.shared.execute"}:
         return "process.outcomeUnknown"
     return "executionAgent.unavailable"
 
@@ -102,6 +102,10 @@ class ExecutionAgentConnectionManager:
     def snapshot(self, agent_id: UUID) -> frozenset[str] | None:
         connection = self._connections.get(agent_id)
         return connection.operations if connection else None
+
+    def generation(self, agent_id: UUID) -> int | None:
+        connection = self._connections.get(agent_id)
+        return connection.generation if connection else None
 
     def transfer_url(self, agent_id: UUID, ticket_id: UUID) -> str:
         connection = self._connections.get(agent_id)
@@ -175,6 +179,7 @@ class ExecutionAgentConnectionManager:
         *,
         timeout: float | None = None,
         on_event: EventHandler | None = None,
+        expected_generation: int | None = None,
     ) -> ResponseMessage:
         request = RequestMessage(id=uuid4(), operation=operation, arguments=arguments)
         payload = request.model_dump_json(by_alias=True)
@@ -184,6 +189,8 @@ class ExecutionAgentConnectionManager:
             connection = self._connections.get(agent_id)
             if connection is None:
                 raise ExecutionAgentError("executionAgent.unavailable")
+            if expected_generation is not None and connection.generation != expected_generation:
+                raise ExecutionAgentError("executionAgent.replaced")
             if operation not in connection.operations:
                 raise ExecutionAgentError("executionAgent.operationUnavailable")
             generation = connection.generation

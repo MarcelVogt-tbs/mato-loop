@@ -442,6 +442,7 @@ class AgentRunError(RuntimeError):
 class ApprovalResolution:
     decision: str
     expected_revision: str | None = None
+    reviewed_request: PermissionRequest | None = None
 
 
 def _skill_draft_output_tool(*, editing: bool = False) -> dict[str, Any]:
@@ -4645,6 +4646,8 @@ class AgentRuntime:
         request: PermissionRequest,
         root_files: RootFileService,
         approval_resolution: dict[str, str] | None = None,
+        *,
+        check_only: bool = False,
     ) -> PermissionDecision:
         origin = await permission_origin(db, chat_session)
         ceiling = await delegation_snapshot(db, run, chat_session)
@@ -4689,6 +4692,8 @@ class AgentRuntime:
             trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
             **permission_namespace,
         )
+        if check_only:
+            return decision
         if decision != PermissionDecision.ASK:
             draft_file = (request.approval_details or {}).get("draftFile")
             if (
@@ -4713,6 +4718,14 @@ class AgentRuntime:
             return PermissionDecision.USER_DENIED
         if approval_decision not in {"allow_once", "allow_session"}:
             return PermissionDecision.DENY
+        if request.shared_command_id is not None:
+            if (
+                not isinstance(resolution, ApprovalResolution)
+                or resolution.reviewed_request is None
+                or resolution.reviewed_request.shared_command_id != request.shared_command_id
+            ):
+                return PermissionDecision.DENY
+            request = resolution.reviewed_request
         if (
             isinstance(resolution, ApprovalResolution)
             and resolution.expected_revision is not None
@@ -4737,6 +4750,10 @@ class AgentRuntime:
         )
         current_policy = _tool_policy(tool_settings, integration_settings, request)
         if ceiling is not None:
+            ceiling_policy = _tool_policy(
+                ceiling_settings(ceiling, TrustLevel(run.trust_level)), integration_settings, request,
+                snapshot=ceiling,
+            )
             current_policy = max((current_policy, ceiling_policy), key=policies.index)
         current_decision = await PermissionPolicy.evaluate(
             db,
@@ -4821,6 +4838,8 @@ class AgentRuntime:
                 ),
                 "trustLevel": run.trust_level,
                 **(permission.approval_details or {}),
+                **({"initialReviewRevision": permission.approval_details["sharedDraft"]["inspectionRevision"]}
+                   if permission.shared_command_id is not None else {}),
                 **provenance(chat_session),
                 "displayItems": [
                     {
@@ -4846,7 +4865,14 @@ class AgentRuntime:
                 await enqueue_approval_prompt(db, approval)
         approval_id, run_id = approval.id, run.id
         waiter = approval_coordinator.register(approval_id)
+        shared_command = None
+        terminal_watch = None
         try:
+            if permission.shared_command_id is not None:
+                from mato_loop_backend.agent.shared_shell import get_command
+
+                shared_command = get_command(permission.shared_command_id)
+                shared_command.approval_id = approval_id
             await db.commit()
             await run_events.publish(
                 run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}
@@ -4859,6 +4885,14 @@ class AgentRuntime:
                     "activityLabel": run_activity_label("waiting_approval"),
                 },
             )
+            if shared_command is not None:
+                from mato_loop_backend.agent.shared_shell import watch_approval
+
+                shared_command.runtime.pending = {
+                    "approvalId": str(approval_id), **permission.approval_details["sharedDraft"],
+                }
+                await shared_command.runtime.send_status()
+                terminal_watch = asyncio.create_task(watch_approval(shared_command))
             await WebPushService.deliver_after_commit(
                 chat_session.user_id,
                 web_push_payload(
@@ -4870,6 +4904,9 @@ class AgentRuntime:
             )
             decision = await asyncio.shield(waiter)
         except asyncio.CancelledError:
+            if terminal_watch is not None:
+                terminal_watch.cancel()
+                await asyncio.gather(terminal_watch, return_exceptions=True)
             await db.rollback()
             current = await db.get(ApprovalRequest, approval_id)
             if current is not None and current.status == "pending":
@@ -4879,6 +4916,13 @@ class AgentRuntime:
                 await run_events.publish(run_id, {"type": "approval.expired", "approvalId": str(approval_id)})
             raise
         finally:
+            if terminal_watch is not None:
+                terminal_watch.cancel()
+                await asyncio.gather(terminal_watch, return_exceptions=True)
+            if shared_command is not None:
+                shared_command.approval_id = None
+                shared_command.runtime.pending = None
+                await shared_command.runtime.send_status()
             approval_coordinator.discard(approval_id)
         await db.refresh(approval)
         transition_run_status(run, "running")

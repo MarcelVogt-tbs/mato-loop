@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { emptyActivity } from 'src/features/chat/state'
 import { notifyError } from 'src/utils/notifications'
+import { useApprovalStore } from 'src/stores/approvals'
 
 const ACTIVE = new Set(['queued', 'running', 'waiting_approval', 'waiting_input'])
 
@@ -276,14 +277,19 @@ export const useSubagentStore = defineStore('subagents', () => {
       })
     }
     for (const [name, status] of [['approval.created', 'waiting_approval'], ['question.created', 'waiting_input']]) {
-      on(name, () => {
+      on(name, (payload) => {
+        if (name === 'approval.created') useApprovalStore().add(payload.approval)
         messageRevision += 1
         run.value.status = status
         activity.value.phase = status
       })
     }
+    on('approval.updated', (payload) => useApprovalStore().update(payload.approval))
     for (const name of ['approval.resolved', 'approval.expired', 'question.answered', 'question.rejected', 'question.expired']) {
-      on(name, () => { void refresh(parent) })
+      on(name, () => {
+        if (name.startsWith('approval.')) void useApprovalStore().fetchPending().catch(() => {})
+        void refresh(parent)
+      })
     }
     for (const status of ['completed', 'failed', 'cancelled']) on(`run.${status}`, () => {
       connection.close()

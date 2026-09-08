@@ -9,6 +9,8 @@ from pydantic import ValidationError
 from mato_loop_backend.execution.client import (
     ExecutionClient,
     ExecutionClientError,
+    SharedInspectResult,
+    SharedProcessResult,
     ShellInspectResult,
     TerminalOpenResult,
     TerminalReadResult,
@@ -132,6 +134,12 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "terminal.resize",
         "terminal.close",
         "terminal.run",
+        "terminal.shared.open",
+        "terminal.shared.status",
+        "terminal.shared.stage",
+        "terminal.shared.inspect",
+        "terminal.shared.execute",
+        "terminal.shared.cancel",
     }
 
 
@@ -221,6 +229,50 @@ async def test_latest_connection_replaces_old_and_disconnects_are_classified() -
     assert disconnect_error_code("integration.git.add", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("integration.git.commit", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("shell.run", True) == "process.outcomeUnknown"
+    assert disconnect_error_code("terminal.shared.execute", True) == "process.outcomeUnknown"
+
+
+async def test_generation_pinned_client_never_dispatches_to_replacement(monkeypatch) -> None:
+    from mato_loop_backend.execution import client as client_module
+
+    manager = ExecutionAgentConnectionManager()
+    hello = _hello(operations=["terminal.shared.execute"])
+    first, second = FakeWebSocket(), FakeWebSocket()
+    await manager.register(hello, first)
+    client = ExecutionClient(hello.agent_id, frozenset(hello.operations), expected_generation=manager.generation(hello.agent_id))
+    monkeypatch.setattr(client_module, "execution_agent_connections", manager)
+    await manager.register(hello, second)
+    with pytest.raises(ExecutionClientError, match="executionAgent.replaced"):
+        await client.request("terminal.shared.execute", {}, SharedProcessResult)
+    assert not first.sent and not second.sent
+
+
+@pytest.mark.parametrize("classification", ["read", "write"])
+@pytest.mark.parametrize("complete", [False, True])
+@pytest.mark.parametrize("prefix", [None, ["pwd"]])
+def test_shared_inspector_preserves_ordinary_inspection(classification, complete, prefix):
+    data = {
+        "command": "pwd", "currentDirectory": "/home/user", "revision": 1, "contextRevision": 1,
+        "inspection": {"targets": [{"kind": "toolchain_metadata", "path": "/usr/bin/python3"}],
+                       "commands": [{"tokens": ["pwd"], "prefix": prefix, "classification": classification}],
+                       "classification": classification, "readOnly": classification == "read",
+                       "analysisComplete": complete, "inspectionRevision": "a" * 64},
+    }
+    inspection = SharedInspectResult.model_validate(data).inspection
+    assert inspection.classification == classification
+    assert inspection.analysis_complete == complete
+    assert inspection.commands[0].prefix == prefix
+    assert inspection.targets[0].kind == "toolchain_metadata"
+
+
+@pytest.mark.parametrize("command", ["pwd\0", "\u00e4" * (256 * 1024)])
+def test_shared_inspector_keeps_command_validation(command):
+    with pytest.raises(ValidationError):
+        SharedInspectResult.model_validate({
+            "command": command, "currentDirectory": "/home/user", "revision": 1, "contextRevision": 1,
+            "inspection": {"targets": [], "commands": [], "classification": "read", "readOnly": True,
+                           "analysisComplete": False, "inspectionRevision": "a" * 64},
+        })
 
 
 async def test_replacement_cannot_miss_request_waiting_to_send() -> None:

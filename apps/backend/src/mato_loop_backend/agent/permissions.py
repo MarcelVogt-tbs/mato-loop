@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -25,6 +25,9 @@ from mato_loop_backend.settings import (
     TrustLevel,
 )
 from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
+
+if TYPE_CHECKING:
+    from mato_loop_backend.execution.client import ShellInspectResult
 
 
 class PermissionDecision(StrEnum):
@@ -65,6 +68,7 @@ class PermissionRequest:
     )
     # Derived from the current shell inspection, never from approval payloads or grants.
     shell_metadata_paths: frozenset[str] = frozenset()
+    shared_command_id: UUID | None = None
 
     @property
     def grant_capabilities(self) -> tuple[str, ...]:
@@ -799,6 +803,62 @@ def shell_command_scope(
     )
 
 
+def shell_command_permission(
+    agent_id: UUID, current_directory: str, command_line: str, inspection: ShellInspectResult,
+) -> PermissionRequest:
+    prefixes = (
+        [command.prefix for command in inspection.commands if command.prefix is not None]
+        if inspection.commands
+        and all(command.prefix is not None for command in inspection.commands)
+        else []
+    )
+    metadata_kinds = {"toolchain_metadata", "discard"}
+    metadata_paths = frozenset(
+        target.path for target in inspection.targets if target.kind in metadata_kinds
+    ) - {
+        target.path for target in inspection.targets if target.kind not in metadata_kinds
+    }
+    return PermissionRequest(
+        capability=f"shell.{inspection.classification}",
+        resource_type="shell_command",
+        resource_scope=shell_command_scope(
+            agent_id, current_directory, inspection.classification, prefixes,
+            [target.path for target in inspection.targets], inspection.analysis_complete,
+        ),
+        action_kind="shell_run",
+        risk_level="low" if inspection.classification == "read" else "high",
+        title=(
+            "Shell-Befehl ohne erkannte Schreibaktion ausführen?"
+            if inspection.classification == "read"
+            else "Als schreibend eingestuften Shell-Befehl ausführen?"
+        ),
+        summary=(
+            "Es wurden keine bekannten Schreibaktionen erkannt. Der Befehl kann dennoch Nebenwirkungen haben."
+            if inspection.classification == "read"
+            else "Der Befehl wurde als schreibend eingestuft und kann Dateien verändern, Programme starten und Netzwerkdienste verwenden."
+        ) + (
+            " Die Analyse ist unvollständig; nicht alle Befehle und Pfade konnten geprüft werden."
+            if not inspection.analysis_complete else ""
+        ),
+        resource_display=current_directory,
+        shell_metadata_paths=metadata_paths,
+        approval_details={
+            "shellClassification": inspection.classification,
+            "shellAnalysisComplete": inspection.analysis_complete,
+            "shellPrefixes": prefixes,
+        },
+        display_items=(PermissionDisplayItem("Shell-Befehl", command_line, "code"),),
+        available_decisions=(
+            ("allow_once", "allow_session", "deny")
+            if prefixes and not any(
+                confidential_execution_path(path)
+                for path in [current_directory, *(target.path for target in inspection.targets)]
+            )
+            else ("allow_once", "deny")
+        ),
+    )
+
+
 def _shell_command_scope(resource_scope: str) -> dict[str, Any] | None:
     try:
         value = json.loads(resource_scope)
@@ -1096,10 +1156,13 @@ class PermissionPolicy:
             ]
             if policy == ToolExecutionPolicy.DISABLED or "deny" in filesystem_policies:
                 return PermissionDecision.DENY
-            workspace = PurePosixPath(scope["currentDirectory"])
+            workspace = (
+                PurePosixPath(chat_session.current_directory)
+                if chat_session.current_directory is not None else None
+            )
             target_paths = [PurePosixPath(path) for path in paths]
             # Verified metadata-only targets still participate in every hard path check.
-            inside_workspace = all(
+            inside_workspace = workspace is not None and all(
                 _path_is_within(path, workspace)
                 for path in target_paths
                 if str(path) not in request.shell_metadata_paths

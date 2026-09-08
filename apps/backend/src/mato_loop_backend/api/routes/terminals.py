@@ -13,37 +13,25 @@ from uuid import UUID
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from mato_loop_backend.auth.sessions import hash_token
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution import (
-    ExecutionClient,
     ExecutionClientError,
     TerminalControlResult,
-    TerminalOpenResult,
-    TerminalReadResult,
-    execution_agent_connections,
 )
 from mato_loop_backend.execution.terminals import (
     BrowserTerminalConnection,
+    agent_generation,
     terminal_coordinator,
+    validate_terminal_access,
 )
-from mato_loop_backend.models import ExecutionAgent, LoginSession, UserAccount
-from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
+from mato_loop_backend.models import LoginSession, UserAccount
 
 router = APIRouter(prefix="/terminals")
-_TERMINAL_OPERATIONS = frozenset(
-    {
-        "terminal.open",
-        "terminal.read",
-        "terminal.write",
-        "terminal.resize",
-        "terminal.close",
-        "terminal.run",
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,27 +64,10 @@ class _CloseMessage(_BrowserMessage):
 class _AttachMessage(_BrowserMessage):
     type: Literal["attach"]
     session_id: UUID = Field(alias="sessionId")
-    mode: Literal["auto", "confirm"] = "auto"
 
 
 class _DetachMessage(_BrowserMessage):
     type: Literal["detach"]
-
-
-class _ModeMessage(_BrowserMessage):
-    type: Literal["mode"]
-    mode: Literal["auto", "confirm"]
-
-
-class _ExecuteMessage(_BrowserMessage):
-    type: Literal["command.execute"]
-    approval_id: UUID = Field(alias="approvalId")
-    command: str = Field(min_length=1, max_length=256 * 1024)
-
-
-class _DenyMessage(_BrowserMessage):
-    type: Literal["command.deny"]
-    approval_id: UUID = Field(alias="approvalId")
 
 
 _MESSAGES = TypeAdapter(
@@ -105,10 +76,7 @@ _MESSAGES = TypeAdapter(
         | _ResizeMessage
         | _CloseMessage
         | _AttachMessage
-        | _DetachMessage
-        | _ModeMessage
-        | _ExecuteMessage
-        | _DenyMessage,
+        | _DetachMessage,
         Field(discriminator="type"),
     ]
 )
@@ -150,120 +118,65 @@ def _origin_allowed(websocket: WebSocket, configured_origins: list[str]) -> bool
     )
 
 
-async def _watch_login(login: _BrowserLogin) -> None:
-    while True:
-        remaining = (login.expires_at - datetime.now(UTC)).total_seconds()
-        if remaining <= 0:
-            raise ExecutionClientError("auth.sessionExpired")
-        await asyncio.sleep(min(5, remaining))
-        async with AsyncSessionFactory() as db:
-            current_login = await db.get(LoginSession, login.login_id)
-            user = await db.get(UserAccount, login.user.id)
-        if (
-            current_login is None
-            or current_login.expires_at <= datetime.now(UTC)
-            or user is None
-            or not user.is_active
-        ):
-            raise ExecutionClientError("auth.sessionExpired")
-
-
 async def _reject(websocket: WebSocket, close_code: int, error_code: str) -> None:
     await websocket.close(code=close_code, reason=describe_error(error_code).message)
 
 
-async def _read_terminal(connection: BrowserTerminalConnection) -> None:
+async def _handle_browser(viewer: BrowserTerminalConnection) -> None:
+    connection = viewer.runtime
     while True:
-        try:
-            result = await connection.client.request(
-                "terminal.read",
-                {"terminalId": connection.terminal_id, "maxBytes": 65_536, "waitSeconds": 5},
-                TerminalReadResult,
-                timeout=10,
-            )
-        except ExecutionClientError as exc:
-            if exc.code == "executionAgent.timeout":
-                continue
-            raise
-        assert isinstance(result, TerminalReadResult)
-        if result.data:
-            try:
-                data = base64.b64decode(result.data, validate=True)
-            except (binascii.Error, ValueError) as exc:
-                raise ExecutionClientError("executionAgent.protocolError") from exc
-            if data:
-                await connection.send_bytes(data)
-        if result.eof:
-            return
-
-
-async def _handle_browser(connection: BrowserTerminalConnection) -> None:
-    while True:
-        raw = await connection.websocket.receive_json()
-        try:
-            message = _MESSAGES.validate_python(raw)
-            if isinstance(message, _InputMessage):
-                terminal_id = terminal_coordinator.input_terminal_id(connection)
-                if terminal_id is None:
-                    raise ValueError("terminal.readOnly")
-                try:
-                    decoded = base64.b64decode(message.data, validate=True)
-                except (binascii.Error, ValueError) as exc:
-                    raise ValueError("terminal.inputInvalid") from exc
-                if len(decoded) > 65_536:
-                    raise ValueError("terminal.inputInvalid")
-                await connection.client.request(
-                    "terminal.write",
-                    {"terminalId": terminal_id, "data": message.data},
-                    TerminalControlResult,
-                )
-            elif isinstance(message, _ResizeMessage):
-                terminal_id = terminal_coordinator.resize_terminal_id(
-                    connection, rows=message.rows, columns=message.columns
-                )
-                if terminal_id is not None:
-                    await connection.client.request(
-                        "terminal.resize",
-                        {
-                            "terminalId": terminal_id,
-                            "rows": message.rows,
-                            "columns": message.columns,
-                        },
-                        TerminalControlResult,
-                    )
-            elif isinstance(message, _AttachMessage):
-                async with AsyncSessionFactory() as db:
-                    session = await get_owned_session(db, message.session_id, connection.user_id)
-                    if session is None or session.user_id != connection.user_id:
-                        raise ValueError("session.notFound")
-                    if session.preferred_execution_agent_id != connection.agent_id:
-                        raise ValueError("terminal.agentMismatch")
-                    await terminal_coordinator.attach(connection, session, message.mode)
-            elif isinstance(message, _DetachMessage):
-                await terminal_coordinator.detach(connection)
-            elif isinstance(message, _ModeMessage):
-                await terminal_coordinator.set_mode(connection, message.mode)
-            elif isinstance(message, _ExecuteMessage):
-                async with AsyncSessionFactory() as db:
-                    await terminal_coordinator.resolve(
-                        db, connection, message.approval_id, command_line=message.command
-                    )
-            elif isinstance(message, _DenyMessage):
-                async with AsyncSessionFactory() as db:
-                    await terminal_coordinator.resolve(
-                        db, connection, message.approval_id, command_line=None
-                    )
-            else:
+        raw = await viewer.websocket.receive_json()
+        async with connection.control_lock:
+            if connection.viewer is not viewer or viewer.ended.is_set() or connection.closed:
                 return
-        except ValidationError:
-            await connection.error("terminal.messageInvalid")
-        except SessionServiceError as exc:
-            await connection.error(exc.code)
-        except ValueError as exc:
-            code = str(exc)
-            await connection.error(code if code.startswith("terminal.") or code == "session.notFound" else "terminal.messageInvalid")
-        except ExecutionClientError as exc:
-            await connection.error(exc.code)
+            if connection.generation != agent_generation(connection.agent_id):
+                return
+            if await _handle_control(viewer, raw):
+                break
+    await terminal_coordinator.terminate(connection, viewer)
+
+
+async def _handle_control(viewer: BrowserTerminalConnection, raw: object) -> bool:
+    connection = viewer.runtime
+    try:
+        message = _MESSAGES.validate_python(raw)
+        if isinstance(message, _CloseMessage):
+            return True
+        await connection.check_access()
+        if isinstance(message, _InputMessage):
+            try:
+                decoded = base64.b64decode(message.data, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError("terminal.inputInvalid") from exc
+            if len(decoded) > 65_536:
+                raise ValueError("terminal.inputInvalid")
+            await connection.client.request(
+                "terminal.write",
+                {"terminalId": connection.terminal_id, "data": message.data},
+                TerminalControlResult,
+                timeout=3,
+            )
+        elif isinstance(message, _ResizeMessage):
+            await connection.client.request(
+                "terminal.resize",
+                {"terminalId": connection.terminal_id, "rows": message.rows, "columns": message.columns},
+                TerminalControlResult, timeout=3,
+            )
+            connection.rows, connection.columns = message.rows, message.columns
+        elif isinstance(message, _AttachMessage):
+            if message.session_id != connection.owner_session_id:
+                raise ValueError("terminal.alreadyAttached")
+            await terminal_coordinator.attach(connection)
+        elif isinstance(message, _DetachMessage):
+            await terminal_coordinator.detach(connection)
+    except ValidationError:
+        await connection.error("terminal.messageInvalid")
+    except ValueError as exc:
+        code = str(exc)
+        await connection.error(code if code.startswith("terminal.") or code == "session.notFound" else "terminal.messageInvalid")
+    except ExecutionClientError as exc:
+        await connection.error(exc.code)
+    return False
 
 
 @router.websocket("/{agent_id}")
@@ -272,72 +185,52 @@ async def browser_terminal(websocket: WebSocket, agent_id: UUID) -> None:
     if not _origin_allowed(websocket, config.cors_origin_list):
         await _reject(websocket, 4403, "terminal.originDenied")
         return
-    login = await _browser_login(websocket)
+    try:
+        login = await _browser_login(websocket)
+    except (SQLAlchemyError, TimeoutError):
+        await _reject(websocket, 1013, "terminal.unavailable")
+        return
     if login is None:
         await _reject(websocket, 4401, "auth.notAuthenticated")
         return
-    user = login.user
-    operations = execution_agent_connections.snapshot(agent_id)
-    async with AsyncSessionFactory() as db:
-        agent = await db.get(ExecutionAgent, agent_id)
-        valid_agent = (
-            agent is not None
-            and agent.user_id == user.id
-            and agent.revoked_at is None
-            and agent.home_directory is not None
-            and operations is not None
-        )
-        home_directory = agent.home_directory if valid_agent else None
-    if not valid_agent:
-        await _reject(websocket, 4404, "executionAgent.notFound")
-        return
-    assert operations is not None and home_directory is not None
-    if not _TERMINAL_OPERATIONS.issubset(operations):
-        await _reject(websocket, 4403, "executionAgent.operationUnavailable")
-        return
-
-    await websocket.accept()
-    client = ExecutionClient(agent_id, operations, home_directory)
-    connection: BrowserTerminalConnection | None = None
     try:
-        opened = await client.request(
-            "terminal.open", {"rows": 24, "columns": 80}, TerminalOpenResult
+        session_id = UUID(websocket.query_params.get("sessionId", ""))
+    except ValueError:
+        await _reject(websocket, 4404, "session.notFound")
+        return
+    try:
+        await validate_terminal_access(login.user.id, session_id, agent_id, login.login_id)
+    except ExecutionClientError as exc:
+        await _reject(websocket, 4403 if exc.code == "executionAgent.operationUnavailable" else 4404, exc.code)
+        return
+    except (SQLAlchemyError, TimeoutError):
+        await _reject(websocket, 1013, "terminal.unavailable")
+        return
+    await websocket.accept()
+    viewer: BrowserTerminalConnection | None = None
+    tasks: set[asyncio.Task] = set()
+    try:
+        viewer = await terminal_coordinator.open(
+            login.user.id, session_id, agent_id, login.login_id, websocket
         )
-        assert isinstance(opened, TerminalOpenResult)
-        connection = BrowserTerminalConnection(
-            user.id, agent_id, str(opened.terminal_id), client, websocket
-        )
-        await connection.send_json(
-            {"type": "terminal.opened", "terminalId": str(opened.terminal_id)}
-        )
-        read_task = asyncio.create_task(_read_terminal(connection))
-        browser_task = asyncio.create_task(_handle_browser(connection))
-        login_task = asyncio.create_task(_watch_login(login))
-        done, pending = await asyncio.wait(
-            {read_task, browser_task, login_task}, return_when=asyncio.FIRST_COMPLETED
-        )
-        for task in pending:
-            task.cancel()
-        for task in pending:
-            with suppress(asyncio.CancelledError):
-                await task
+        tasks = {
+            asyncio.create_task(_handle_browser(viewer)), asyncio.create_task(viewer.send()),
+            asyncio.create_task(viewer.ended.wait()),
+        }
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             task.result()
     except WebSocketDisconnect:
         pass
     except ExecutionClientError as exc:
         with suppress(Exception):
-            if connection is not None:
-                await connection.error(exc.code)
-            else:
+            async with asyncio.timeout(1):
                 await websocket.send_json(
                     {"type": "error", "error": describe_error(exc.code).payload()}
                 )
     except Exception:
         with suppress(Exception):
-            if connection is not None:
-                await connection.error("terminal.unavailable")
-            else:
+            async with asyncio.timeout(1):
                 await websocket.send_json(
                     {
                         "type": "error",
@@ -345,23 +238,26 @@ async def browser_terminal(websocket: WebSocket, agent_id: UUID) -> None:
                     }
                 )
     finally:
-        if connection is not None:
-            active_terminal_id = connection.active_terminal_id
-            await terminal_coordinator.disconnect(connection)
-            if active_terminal_id is not None:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if viewer is not None:
+            if viewer.reason == "terminated" and viewer.runtime.cleanup_task is not None:
                 with suppress(Exception):
-                    await client.request(
-                        "terminal.close",
-                        {"terminalId": active_terminal_id},
-                        TerminalControlResult,
-                        timeout=5,
-                    )
-            with suppress(Exception):
-                await client.request(
-                    "terminal.close",
-                    {"terminalId": connection.terminal_id},
-                    TerminalControlResult,
-                    timeout=5,
-                )
+                    async with asyncio.timeout(16):
+                        await asyncio.shield(viewer.runtime.cleanup_task)
+            await terminal_coordinator.release(viewer)
+            if viewer.reason != "released":
+                with suppress(Exception):
+                    async with asyncio.timeout(1):
+                        await websocket.send_json({
+                            "type": "terminal.replaced" if viewer.reason == "replaced" else "terminal.closed",
+                            "reason": viewer.reason,
+                        })
         with suppress(Exception):
-            await websocket.close()
+            async with asyncio.timeout(1):
+                await websocket.close(
+                    code=4001 if viewer is not None and viewer.reason == "replaced" else
+                    4002 if viewer is not None and viewer.reason == "resyncRequired" else 1000,
+                    reason=viewer.reason if viewer is not None else "unavailable",
+                )

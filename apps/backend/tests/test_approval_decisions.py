@@ -76,6 +76,7 @@ async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None
     assert grant.trust_level == "public"
     assert approval.status == "approved"
     db.commit.assert_awaited_once()
+    db.refresh.assert_awaited_once_with(approval, with_for_update=True)
     resolve.assert_called_once_with(
         approval.id, ApprovalResolution(decision="allow_session")
     )

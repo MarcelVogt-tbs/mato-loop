@@ -293,6 +293,7 @@ const resource = computed(() => approvalResource(props.approval, chat.cachedSess
 const skillDraftApproval = computed(() => (
   props.approval.actionKind === 'build_skill' || props.approval.actionKind === 'edit_skill'
 ))
+const sharedDraft = computed(() => props.approval.payload?.sharedDraft)
 const approvalTool = computed(() => ({
   name: props.approval.details?.tool,
   arguments: props.approval.details?.arguments
@@ -300,7 +301,10 @@ const approvalTool = computed(() => ({
 const approvalPresentationKind = computed(() => resolveApprovalPresentationKind(approvalTool.value))
 const presentation = computed(() => toolPresentation(
   approvalTool.value,
-  props.approval.details?.displayItems
+  sharedDraft.value ? [
+    { label: 'Shell-Befehl', value: sharedDraft.value.command, format: 'code' },
+    { label: 'Terminal-Ordner', value: sharedDraft.value.currentDirectory, format: 'code' }
+  ] : props.approval.details?.displayItems
 ))
 const skillPreview = computed(() => skillDraftApproval.value
   ? props.approval.details?.skillPreview
@@ -367,7 +371,7 @@ function memoryAudienceIcon(value) {
 async function decide(decision) {
   loadingDecision.value = decision
   try {
-    await approvals.decide(props.approval.id, decision, draftRevision.value)
+    await approvals.decide(props.approval.id, decision, sharedDraft.value?.inspectionRevision ?? draftRevision.value)
   } finally {
     loadingDecision.value = null
   }

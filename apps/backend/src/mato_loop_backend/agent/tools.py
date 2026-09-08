@@ -34,7 +34,6 @@ from mato_loop_backend.agent.permissions import (
     agent_identity_permission,
     automation_collection_scope,
     automation_scope,
-    confidential_execution_path,
     execution_directory_permission,
     media_permission,
     memory_read_permission,
@@ -44,7 +43,7 @@ from mato_loop_backend.agent.permissions import (
     session_browse_permission,
     session_permission,
     session_search_permission,
-    shell_command_scope,
+    shell_command_permission,
     skill_edit_permission,
     skill_load_permission,
     skill_write_permission,
@@ -1451,7 +1450,6 @@ async def _run_process(
     *,
     requested_arguments: dict[str, Any],
     executed_arguments: dict[str, Any],
-    terminal_mode: Literal["auto", "confirm"] | None,
 ) -> ToolResult:
     output = {"stdout": "", "stderr": ""}
 
@@ -1467,31 +1465,9 @@ async def _run_process(
         )
 
     client = _workspace_client(context)
-    if terminal_mode is not None:
-        terminal_arguments = {
-            key: value
-            for key, value in arguments.items()
-            if key in {"command", "timeoutSeconds", "expectedInspectionRevision"}
-        }
-        result = await terminal_coordinator.run(
-            user_id=context.session.user_id,
-            session_id=context.session.id,
-            run_id=context.run_id,
-            tool_call_id=context.tool_call.id,
-            agent_id=client.agent_id,
-            current_directory=client.current_directory or "",
-            arguments=terminal_arguments,
-            confirm=terminal_mode == "confirm",
-            on_event=publish,
-        )
-    else:
-        result = await client.request(
-            operation,
-            arguments,
-            ProcessResult,
-            timeout=3_610,
-            on_event=publish,
-        )
+    result = await client.request(
+        operation, arguments, ProcessResult, timeout=3_610, on_event=publish,
+    )
     assert isinstance(result, ProcessResult)
     tool_result = ToolResult.json(
         {
@@ -1517,105 +1493,28 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
     client = _workspace_client(context)
     if client.current_directory is None:
         return ToolResult.error("permission.denied")
-    mode = terminal_coordinator.mode_for(
+    terminal = terminal_coordinator.attached_for(
         user_id=context.session.user_id,
         session_id=context.session.id,
         agent_id=client.agent_id,
-        current_directory=client.current_directory,
     )
+    if terminal is not None:
+        from mato_loop_backend.agent.shared_shell import run_shared_shell
+
+        return await run_shared_shell(context, arguments, terminal)
     requested = arguments.model_dump(exclude_none=True)
     executed = requested
-    if mode == "confirm":
-        decision = await terminal_coordinator.propose(
-            context.db,
-            user_id=context.session.user_id,
-            session_id=context.session.id,
-            run_id=context.run_id,
-            tool_call_id=context.tool_call.id,
-            tool="shell_run",
-            agent_id=client.agent_id,
-            current_directory=client.current_directory,
-            requested_arguments=requested,
-            command_line=arguments.command,
-        )
-        if not decision.execute or decision.command_line is None:
-            if decision.explicit_denial:
-                context.user_denied = True
-                return ToolResult.error("permission.userDenied")
-            return ToolResult.error("terminal.disconnected")
-        executed = {**requested, "command": decision.command_line}
     inspection = await client.request(
         "shell.inspect",
         {"command": executed["command"], "currentDirectory": client.current_directory},
         ShellInspectResult,
     )
     assert isinstance(inspection, ShellInspectResult)
-    if mode != "confirm":
-        prefixes = (
-            [command.prefix for command in inspection.commands if command.prefix is not None]
-            if inspection.commands
-            and all(command.prefix is not None for command in inspection.commands)
-            else []
-        )
-        metadata_kinds = {"toolchain_metadata", "discard"}
-        metadata_paths = frozenset(
-            target.path for target in inspection.targets if target.kind in metadata_kinds
-        ) - {
-            target.path for target in inspection.targets if target.kind not in metadata_kinds
-        }
-        permission = PermissionRequest(
-            capability=f"shell.{inspection.classification}",
-            resource_type="shell_command",
-            resource_scope=shell_command_scope(
-                client.agent_id,
-                client.current_directory,
-                inspection.classification,
-                prefixes,
-                [target.path for target in inspection.targets],
-                inspection.analysis_complete,
-            ),
-            action_kind="shell_run",
-            risk_level="low" if inspection.classification == "read" else "high",
-            title=(
-                "Shell-Befehl ohne erkannte Schreibaktion ausführen?"
-                if inspection.classification == "read"
-                else "Als schreibend eingestuften Shell-Befehl ausführen?"
-            ),
-            summary=(
-                "Es wurden keine bekannten Schreibaktionen erkannt. Der Befehl kann dennoch Nebenwirkungen haben."
-                if inspection.classification == "read"
-                else "Der Befehl wurde als schreibend eingestuft und kann Dateien verändern, Programme starten und Netzwerkdienste verwenden."
-            ) + (
-                " Die Analyse ist unvollständig; nicht alle Befehle und Pfade konnten geprüft werden."
-                if not inspection.analysis_complete else ""
-            ),
-            resource_display=client.current_directory,
-            shell_metadata_paths=metadata_paths,
-            approval_details={
-                "shellClassification": inspection.classification,
-                "shellAnalysisComplete": inspection.analysis_complete,
-                "shellPrefixes": prefixes,
-            },
-            display_items=(
-                PermissionDisplayItem(
-                    label="Shell-Befehl", value=arguments.command, format="code"
-                ),
-            ),
-            available_decisions=(
-                ("allow_once", "allow_session", "deny")
-                if prefixes
-                and not any(
-                    confidential_execution_path(path)
-                    for path in [
-                        client.current_directory,
-                        *(target.path for target in inspection.targets),
-                    ]
-                )
-                else ("allow_once", "deny")
-            ),
-        )
-        if not await _allow(context, permission):
-            return ToolResult.error("permission.denied")
+    permission = shell_command_permission(
+        client.agent_id, client.current_directory, executed["command"], inspection,
+    )
+    if not await _allow(context, permission):
+        return ToolResult.error("permission.denied")
     return await _run_process(
         context,
         "shell.run",
@@ -1627,7 +1526,6 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         },
         requested_arguments=requested,
         executed_arguments=executed,
-        terminal_mode=mode,
     )
 
 
@@ -5128,11 +5026,15 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "shell_run",
-            "Run one command directly with the host-configured shell in the current directory. "
+            "Run one command with the host-configured shell in the session directory. "
+            "If a terminal is attached, use its persistent Bash shell and actual directory instead. "
+            "Shell state and cd persist in an attached terminal, but do not change the session workspace. "
+            "Without an attached terminal, shell cd applies only to this call. "
             "The host inspects the command and its file targets before authorization. "
+            "The user can edit a staged command; results report the requested and executed arguments. "
             "Read classification means no known write action was detected, not absence of side effects. "
             "Analysis completeness is separate from classification. This is not an "
-            "operating-system sandbox; shell cd applies only to this call. "
+            "operating-system sandbox. "
             "Optional timeout is in seconds (0 < timeout <= 3600); null uses the agent default, "
             "subject to its local maximum. Nonzero exits and timeouts are errors with bounded "
             "output retained; interpret the exit code and output for the command's meaning.",

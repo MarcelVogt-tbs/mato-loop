@@ -10,7 +10,7 @@ Wenn eine Aktion nicht automatisch erlaubt ist, pausiert der Agent und zeigt ein
 - zu speichernden Memory-Inhalt
 - technische Details
 
-The global **Benachrichtigungen** view in the Control Center places normal pending approvals and agent questions at the top under **Aktion erforderlich**, with informational notices below under **Hinweise**. It shows the source session and lets you decide approvals and answer questions directly, without opening their chat. Contextual controls remain available in chat. Marking notices read individually or in bulk does not resolve pending approvals or questions. The center badge counts pending approvals, questions, and unread notices. Connected-terminal confirmation proposals are decided only in the terminal.
+The global **Benachrichtigungen** view in the Control Center places normal pending approvals and agent questions at the top under **Aktion erforderlich**, with informational notices below under **Hinweise**. It shows the source session and lets you decide approvals and answer questions directly, without opening their chat. Contextual controls remain available in chat. Marking notices read individually or in bulk does not resolve pending approvals or questions. The center badge counts pending approvals, questions, and unread notices. Shared-terminal shell requests use these same approvals and ordinary session grants. Review the command and terminal cwd read-only here, or edit the real terminal line and press Enter to allow the rechecked draft once. Pending **Strg+C** expires that same request without cancelling the parent run.
 
 ## Entscheidungen
 

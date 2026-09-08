@@ -12,6 +12,7 @@ import { useApprovalStore } from '../src/stores/approvals'
 import { useQuestionStore } from '../src/stores/questions'
 import { buildChatTranscript } from '../src/utils/chat-transcript'
 import { agentRunPresentation } from '../src/utils/agent-activity'
+import { sharedDraft } from './terminal-websocket'
 
 class EventSourceMock {
   static instances = []
@@ -63,6 +64,26 @@ afterEach(() => {
 })
 
 describe('read-only subagents', () => {
+  it.each(['parent', 'child'])('replaces shared approval reviews through the %s subscription and ignores stale streams', async (consumer) => {
+    chat.current = { id: 'parent', messages: [] }
+    chat.watchRun('parent', 'parent-run', { status: 'running' })
+    await store.open('parent', 'child')
+    const source = EventSourceMock.instances[consumer === 'parent' ? 0 : 1]
+    const approvals = useApprovalStore()
+    const approval = { id: 'shared', sessionId: 'parent', payload: { sharedDraft } }
+    source.emit('approval.created', { approval })
+    const updated = { ...approval, payload: { sharedDraft: { ...sharedDraft, command: 'edited', inspectionRevision: 'new' } } }
+    source.emit('approval.updated', { approval: updated })
+    expect(approvals.pending).toEqual([updated])
+    expect(api.post).not.toHaveBeenCalled()
+    source.emit('approval.expired', {})
+    await vi.waitFor(() => expect(approvals.pending).toEqual([]))
+    if (consumer === 'parent') chat.watchRun('parent', 'new-run', { status: 'running' })
+    else store.close()
+    source.emit('approval.updated', { approval })
+    expect(approvals.pending).toEqual([])
+  })
+
   it('discovers children with GET before any SSE and keeps only one child connection', async () => {
     await store.loadChildren('parent')
     expect(store.children).toEqual([child])

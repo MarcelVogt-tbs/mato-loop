@@ -33,9 +33,8 @@
           <q-tab
             :id="`control-center-tab-${tab.tabId}`"
             :name="tab.tabId"
-            :alert="tab.appId === 'terminal' && terminal.pendingProposal ? 'warning' : false"
             :alert-icon="tab.appId === 'terminal' ? 'priority_high' : undefined"
-            :aria-label="tabAriaLabel(tab)"
+            :aria-label="tabLabel(tab)"
             class="control-center__tab"
             :disable="controlCenter.saving || !controlCenter.ready"
           >
@@ -260,7 +259,6 @@ import {
   mailControlCenterAvailable,
   terminalControlCenterState
 } from 'src/control-center/manifest'
-import { terminalTabLabel } from 'src/utils/terminal-output'
 
 defineOptions({ name: 'ControlCenterPanel' })
 
@@ -321,11 +319,6 @@ function tabLabel(tab) {
   return content(tab.appId).label
 }
 
-function tabAriaLabel(tab) {
-  const label = tabLabel(tab)
-  return terminalTabLabel(label, tab.appId === 'terminal' && terminal.pendingProposal)
-}
-
 function badge(appId) {
   const count = appId === 'notifications'
     ? approvals.pending.length + questions.pending.length + notifications.unreadCount
@@ -359,6 +352,7 @@ async function closePanel() {
 }
 
 async function removeIntegration(appId) {
+  const sessionId = controlCenter.sessionId
   const item = content(appId)
   if (!item) return
   if (appId === 'terminal' && terminal.removalBlocked) {
@@ -376,10 +370,10 @@ async function removeIntegration(appId) {
     'App aus Session entfernen?',
     { okLabel: 'Entfernen', okColor: 'negative' }
   )
-  if (!accepted) return
+  if (!accepted || controlCenter.sessionId !== sessionId) return
   try {
     await controlCenter.removeIntegration(appId)
-    if (appId === 'terminal') terminal.close()
+    // Terminal cleanup follows persisted tabs on the backend, never optimistic browser state.
   } catch {
     // The central API interceptor displays the error and the store restores server state.
   }

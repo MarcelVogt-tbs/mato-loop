@@ -19,7 +19,7 @@ from mato_loop_backend.agent.permissions import (
 from mato_loop_backend.agent.runtime import _tool_policy
 from mato_loop_backend.agent.subagents import permission_snapshot
 from mato_loop_backend.agent.tool_arguments import ShellRunArguments
-from mato_loop_backend.agent.tool_registry import ToolContext
+from mato_loop_backend.agent.tool_registry import ToolContext, ToolResult
 from mato_loop_backend.agent.tools import (
     _execution_path,
     tool_registry,
@@ -36,7 +36,7 @@ from mato_loop_backend.execution import (
     transfer_tickets,
 )
 from mato_loop_backend.execution.protocol import ResponseMessage
-from mato_loop_backend.execution.terminals import TerminalDecision, terminal_coordinator
+from mato_loop_backend.execution.terminals import terminal_coordinator
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
@@ -748,71 +748,25 @@ async def test_shell_copy_separates_classification_and_completeness(
 
 
 @pytest.mark.parametrize("timeout", [None, 0.5, 3600])
-async def test_terminal_confirm_reinspects_edited_shell_and_reports_execution(
+async def test_attached_shell_routes_to_shared_runtime_without_isolated_transport(
     tmp_path, monkeypatch, timeout
 ) -> None:
     requested = {"command": "cat README.md", **({"timeout": timeout} if timeout else {})}
     call = ToolCall("shell", "shell_run", requested)
 
-    def inspection(arguments):
-        edited = arguments["command"] == "cat pyproject.toml"
-        return ShellInspectResult(
-            targets=[],
-            analysis_complete=True,
-            classification="read",
-            read_only=True,
-            commands=[{"tokens": ["cat"], "prefix": ["cat"], "classification": "read"}],
-            inspection_revision=("b" if edited else "a") * 64,
-        )
+    from mato_loop_backend.agent import shared_shell
 
-    client = FakeExecutionClient(
-        {"shell.inspect": inspection}, {"shell.inspect", "shell.run", "terminal.run"}
-    )
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
     context = _context(tmp_path, call, client)
-    monkeypatch.setattr(terminal_coordinator, "mode_for", lambda **_kwargs: "confirm")
-    evaluate = AsyncMock(side_effect=AssertionError("confirm must bypass policy"))
-    monkeypatch.setattr(PermissionPolicy, "evaluate", evaluate)
-    propose = AsyncMock(return_value=TerminalDecision(True, "cat pyproject.toml"))
-    monkeypatch.setattr(terminal_coordinator, "propose", propose)
-    run = AsyncMock(
-        return_value=ProcessResult(
-            exit_code=0,
-            timed_out=False,
-            duration_ms=2,
-            stdout_bytes=4,
-            stderr_bytes=0,
-            stdout_truncated=False,
-            stderr_truncated=False,
-        )
-    )
-    monkeypatch.setattr(terminal_coordinator, "run", run)
-
-    result = await _tools(client.operations).execute(call, context)
-    payload = json.loads(result.content)
-
-    assert context.ask_handler.await_count == 0
-    assert evaluate.await_count == 0
-    assert [request[1]["command"] for request in client.requests] == ["cat pyproject.toml"]
-    assert run.await_args.kwargs["arguments"] == {
-        "command": "cat pyproject.toml",
-        "timeoutSeconds": timeout,
-        "expectedInspectionRevision": "b" * 64,
-    }
-    assert propose.await_args.kwargs["requested_arguments"] == requested
-    assert payload["requestedArguments"] == requested
-    assert payload["executedArguments"] == {**requested, "command": "cat pyproject.toml"}
-    assert payload["userEdited"] is True
-
-    context.user_denied = False
-    propose.return_value = TerminalDecision(False)
-    unavailable = await _tools(client.operations).execute(call, context)
-    assert json.loads(unavailable.content)["error"]["code"] == "terminal.disconnected"
-    assert context.user_denied is False
-
-    propose.return_value = TerminalDecision(False, explicit_denial=True)
-    denied = await _tools(client.operations).execute(call, context)
-    assert json.loads(denied.content)["error"]["code"] == "permission.userDenied"
-    assert context.user_denied is True
+    terminal = object()
+    monkeypatch.setattr(terminal_coordinator, "attached_for", lambda **_kwargs: terminal)
+    run = AsyncMock(return_value=ToolResult.json({"ok": True}))
+    monkeypatch.setattr(shared_shell, "run_shared_shell", run)
+    assert not (await _tools(client.operations).execute(call, context)).is_error
+    assert client.requests == []
+    run.assert_awaited_once()
+    assert run.await_args.args[0] is context and run.await_args.args[2] is terminal
+    assert run.await_args.args[1].model_dump(exclude_none=True) == requested
 
 
 @pytest.mark.parametrize("timeout", [0, -1, 3600.1, float("inf"), float("nan"), True, "60"])
@@ -821,7 +775,6 @@ def test_shell_timeout_rejects_invalid_values(timeout) -> None:
         ShellRunArguments(command="pwd", timeout=timeout)
 
 
-@pytest.mark.parametrize("terminal_mode", [None, "auto"])
 @pytest.mark.parametrize("timeout", [None, 0.25, 3600])
 @pytest.mark.parametrize(
     ("exit_code", "timed_out", "error_code"),
@@ -829,7 +782,7 @@ def test_shell_timeout_rejects_invalid_values(timeout) -> None:
      (0, True, "process.timedOut")],
 )
 async def test_shell_timeout_and_process_evidence(
-    tmp_path, monkeypatch, terminal_mode, timeout, exit_code, timed_out, error_code,
+    tmp_path, timeout, exit_code, timed_out, error_code,
 ) -> None:
     call = ToolCall("shell", "shell_run", {"command": "printf evidence", "timeout": timeout})
     client = FakeExecutionClient({}, {"shell.inspect", "shell.run", "terminal.run"})
@@ -858,9 +811,6 @@ async def test_shell_timeout_and_process_evidence(
         return await execute(**kwargs)
 
     client.request = AsyncMock(side_effect=request)
-    run = AsyncMock(side_effect=execute)
-    monkeypatch.setattr(terminal_coordinator, "mode_for", lambda **_kwargs: terminal_mode)
-    monkeypatch.setattr(terminal_coordinator, "run", run)
     context = _context(tmp_path, call, client)
     result = await _tools(client.operations).execute(call, context)
     payload = json.loads(result.content)
@@ -874,14 +824,7 @@ async def test_shell_timeout_and_process_evidence(
     assert payload["stderrBytes"] == 10
     assert payload["output"] == {"stdout": "evidence", "stderr": "diagnostic", "truncated": True}
     assert context.ask_handler.await_count == 1
-    if terminal_mode:
-        assert run.await_args.kwargs["arguments"] == {
-            "command": "printf evidence", "timeoutSeconds": timeout,
-            "expectedInspectionRevision": "a" * 64,
-        }
-        assert client.request.await_count == 1
-    else:
-        run.assert_not_awaited()
+    assert client.request.await_count == 2
 
 
 @pytest.mark.parametrize("deny", [False, True])
@@ -1161,6 +1104,8 @@ async def test_shell_reinspection_keeps_existing_grants_class_bound(tmp_path) ->
 
 
 async def test_terminal_shell_failure_never_falls_back_to_shell_transport(tmp_path, monkeypatch) -> None:
+    from mato_loop_backend.agent import shared_shell
+
     call = ToolCall("shell", "shell_run", {"command": "pwd"})
     client = FakeExecutionClient({
         "shell.inspect": ShellInspectResult(
@@ -1169,12 +1114,11 @@ async def test_terminal_shell_failure_never_falls_back_to_shell_transport(tmp_pa
         ),
     }, {"shell.inspect", "shell.run", "terminal.run"})
     context = _context(tmp_path, call, client)
-    monkeypatch.setattr(terminal_coordinator, "mode_for", lambda **_kwargs: "auto")
+    monkeypatch.setattr(terminal_coordinator, "attached_for", lambda **_kwargs: object())
     run = AsyncMock(side_effect=ExecutionClientError("process.inspectionChanged"))
-    monkeypatch.setattr(terminal_coordinator, "run", run)
+    monkeypatch.setattr(shared_shell, "run_shared_shell", run)
     result = await _tools(client.operations).execute(call, context)
     assert result.is_error
     assert result.metadata["errorCode"] == "process.inspectionChanged"
-    assert [operation for operation, _ in client.requests] == ["shell.inspect"]
+    assert client.requests == []
     run.assert_awaited_once()
-    assert run.await_args.kwargs["arguments"]["expectedInspectionRevision"] == "a" * 64

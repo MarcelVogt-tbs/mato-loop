@@ -39,6 +39,6 @@ Den aktuellen absoluten Ordner wählen Sie bei Bedarf unter **Control Center > D
 
 Benötigt eine Aktion Ihre Zustimmung, erscheint die Anfrage direkt beim zugehörigen Tool-Aufruf. Prüfen Sie Ressource, Risikostufe und Details, bevor Sie **Einmal erlauben**, **Für Session erlauben** oder **Ablehnen** wählen.
 
-Under **Control Center > Benachrichtigungen**, normal pending approvals and agent questions from all sessions appear above informational notices and can both be answered directly. Marking notices read does not resolve these actions. Decide connected-terminal confirmation proposals in the terminal tab.
+Under **Control Center > Benachrichtigungen**, normal pending approvals and agent questions from all sessions appear above informational notices and can both be answered directly, including shared-terminal shell approvals. Marking notices read does not resolve these actions. For a pending terminal command, you can alternatively edit its real shell line and press Enter to allow the rechecked draft once.
 
 Als Nächstes: [Chat und Sessions](chat-und-sessions.md)

@@ -304,7 +304,8 @@ async def test_resolution_authorizes_relations_and_delegates_idempotently(
     )
 
     assert result == {"status": "approved", "decision": "allow_once"}
-    assert db.get.await_args_list[0].kwargs == {"with_for_update": True}
+    # The central decision service locks normal rows or the live shared-command binding.
+    assert db.get.await_args_list[0].kwargs == {}
     decide.assert_awaited_once_with(
         db, approval, "allow_once", idempotent_same_decision=True
     )

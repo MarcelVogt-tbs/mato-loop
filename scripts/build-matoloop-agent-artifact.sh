@@ -27,12 +27,14 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 printf 'from matoloop_agent.__main__ import main\nmain()\n' > "$TEMP_DIR/entry.py"
 cd "$ROOT/apps/matoloop-agent"
 uv sync --frozen --group build
+sh build-native.sh "$TEMP_DIR/shared.so"
 uv run --no-sync pyinstaller \
     --clean \
     --onefile \
     --name matoloop-agent \
     --copy-metadata matoloop-agent \
     --paths src \
+    --add-binary "$TEMP_DIR/shared.so:matoloop_agent/native" \
     --distpath "$TEMP_DIR/dist" \
     --workpath "$TEMP_DIR/work" \
     --specpath "$TEMP_DIR/spec" \
@@ -49,6 +51,7 @@ install -m 755 "$TEMP_DIR/dist/matoloop-agent" "$TEMP_DIR/$NAME/"
 install -m 755 "$TEMP_DIR/ripgrep-$RG_VERSION-x86_64-unknown-linux-musl/rg" \
     "$TEMP_DIR/$NAME/rg"
 install -m 644 README.md "$TEMP_DIR/$NAME/"
+install -m 644 SHARED_TERMINAL.md "$TEMP_DIR/$NAME/"
 install -m 644 config.example.json "$TEMP_DIR/$NAME/"
 printf 'version=%s\nrevision=%s\nplatform=linux-amd64\nlibc=%s\n' \
     "$(<"$ROOT/VERSION")" "$(git -C "$ROOT" rev-parse HEAD)" "$LIBC" > "$TEMP_DIR/$NAME/BUILD"

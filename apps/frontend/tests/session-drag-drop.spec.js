@@ -3,7 +3,7 @@ import { createApp, h, nextTick } from 'vue'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import MainLayout from '../src/layouts/MainLayout.vue'
 
-const { chat, projects, pending, quasar } = vi.hoisted(() => {
+const { chat, projects, pending, quasar, terminal, workspace } = vi.hoisted(() => {
   const sessions = [
     { id: 'standalone', title: 'Standalone', projectId: null },
     { id: 'project-session', title: 'Project session', projectId: 'a' }
@@ -12,6 +12,8 @@ const { chat, projects, pending, quasar } = vi.hoisted(() => {
     loaded: true, items: sessions.filter((session) => session.projectId === id)
   }]))
   return {
+    terminal: { syncContext: vi.fn(), release: vi.fn(), close: vi.fn() },
+    workspace: { hasDirtyEditors: false },
     chat: {
       cachedSessions: sessions, sessionLists,
       sessionList: (id) => sessionLists[id ?? 'standalone'],
@@ -38,11 +40,11 @@ vi.mock('stores/in-app-notifications', () => ({ useInAppNotificationStore: () =>
   unreadCount: 0, fetchLatest: vi.fn().mockResolvedValue(), reconcilePush: vi.fn().mockResolvedValue()
 }) }))
 vi.mock('stores/control-center', () => ({ useControlCenterStore: () => ({ open: false, tabs: [] }) }))
-vi.mock('stores/terminal', () => ({ useTerminalStore: () => ({ syncContext: vi.fn(), syncAgentOutput: vi.fn(), close: vi.fn() }) }))
+vi.mock('stores/terminal', () => ({ useTerminalStore: () => terminal }))
 vi.mock('stores/auth', () => ({ useAuthStore: () => ({ username: 'Tester' }) }))
 vi.mock('stores/automations', () => ({ useAutomationStore: () => ({}) }))
 vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({}) }))
-vi.mock('stores/workspace', () => ({ useWorkspaceStore: () => ({ hasDirtyEditors: false }) }))
+vi.mock('stores/workspace', () => ({ useWorkspaceStore: () => workspace }))
 vi.mock('stores/search', () => ({ useSearchStore: () => ({ openDialog: vi.fn() }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: vi.fn() }) }))
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
@@ -53,6 +55,7 @@ vi.mock('components/ControlCenterPanel.vue', () => ({ default: { render: () => n
 let app, root
 beforeEach(async () => {
   vi.clearAllMocks()
+  workspace.hasDirtyEditors = false
   vi.useFakeTimers()
   root = document.createElement('div')
   app = createApp(MainLayout)
@@ -89,6 +92,15 @@ beforeEach(async () => {
   await nextTick()
 })
 afterEach(() => { app?.unmount(); vi.useRealTimers() })
+
+it.each([false, true])('beforeunload only warns about dirty editors (%s), leaving a cancelled exit connected', (dirty) => {
+  workspace.hasDirtyEditors = dirty
+  const event = new Event('beforeunload', { cancelable: true })
+  window.dispatchEvent(event)
+  expect(event.defaultPrevented).toBe(dirty)
+  expect(terminal.release).not.toHaveBeenCalled()
+  expect(terminal.close).not.toHaveBeenCalled()
+})
 
 function source(id) {
   const scope = id === 'standalone' ? '#standalone-session-list' : '.project-list-item'

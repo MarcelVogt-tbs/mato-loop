@@ -298,6 +298,51 @@ class TerminalRunArguments(HostDirectoryArguments, TerminalIdArguments):
     )
 
 
+class SharedOpenArguments(TerminalOpenArguments):
+    terminal_id: str | None = Field(default=None, alias="terminalId", pattern=UUID_PATTERN)
+
+
+class SharedStatusArguments(TerminalIdArguments):
+    redisplay: bool = False
+
+
+class SharedCommandArguments(TerminalIdArguments):
+    command_id: str = Field(alias="commandId", pattern=UUID_PATTERN)
+
+
+class SharedStageArguments(SharedCommandArguments):
+    command: str = Field(min_length=1, max_length=256 * 1024, pattern=r"^[^\x00]+$")
+
+
+class SharedInspectArguments(SharedCommandArguments):
+    freeze: bool = True
+
+
+class SharedCancelArguments(SharedCommandArguments):
+    pass
+
+
+class SharedExecuteArguments(SharedStageArguments):
+    expected_revision: int = Field(alias="expectedRevision", ge=0)
+    expected_context_revision: int = Field(alias="expectedContextRevision", ge=0)
+    expected_inspection_revision: str = Field(
+        alias="expectedInspectionRevision", pattern=r"^[0-9a-f]{64}$"
+    )
+    timeout_seconds: float | None = Field(default=None, alias="timeoutSeconds", gt=0, le=3600)
+
+
+class SharedTerminalStatus(StrictModel):
+    terminal_id: str = Field(alias="terminalId", pattern=UUID_PATTERN)
+    current_directory: str = Field(alias="currentDirectory")
+    state: Literal["idle", "busy", "editing", "checking", "running", "closed"]
+    context_revision: int = Field(alias="contextRevision", ge=0)
+    command_id: str | None = Field(alias="commandId", pattern=UUID_PATTERN)
+    command: str | None
+    revision: int = Field(ge=0)
+    submitted: bool
+    cancelled: bool
+
+
 GitPath = Annotated[str, Field(min_length=1, max_length=1000, pattern=r"^[^\x00]+$")]
 
 
@@ -464,6 +509,12 @@ ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "terminal.resize": TerminalResizeArguments,
     "terminal.close": TerminalCloseArguments,
     "terminal.run": TerminalRunArguments,
+    "terminal.shared.open": SharedOpenArguments,
+    "terminal.shared.status": SharedStatusArguments,
+    "terminal.shared.stage": SharedStageArguments,
+    "terminal.shared.inspect": SharedInspectArguments,
+    "terminal.shared.execute": SharedExecuteArguments,
+    "terminal.shared.cancel": SharedCancelArguments,
     "integration.git.clone": GitCloneArguments,
     "integration.git.status": GitStatusArguments,
     "integration.git.diff": GitDiffArguments,

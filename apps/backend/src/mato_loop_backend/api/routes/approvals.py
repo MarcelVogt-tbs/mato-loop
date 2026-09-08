@@ -97,10 +97,11 @@ async def decide_approval(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, str]:
-    approval = await db.get(ApprovalRequest, approval_id, with_for_update=True)
+    approval = await db.get(ApprovalRequest, approval_id)
     if approval is None or approval.user_id != user.id:
         raise ApiError(404, "approval.notFound")
     if approval.request_type == "memory_change":
+        await db.refresh(approval, with_for_update=True)
         if approval.status != "pending":
             raise ApiError(409, "approval.alreadyDecided")
         if approval.action_kind == "terminal_command":

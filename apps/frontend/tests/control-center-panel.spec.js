@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), patch: vi.fn() } }))
+const { confirm } = vi.hoisted(() => ({ confirm: vi.fn() }))
+vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
 vi.mock('src/control-center/apps', async () => {
   const { h } = await import('vue')
   const { controlCenterIntegrationManifest, controlCenterGlobalSectionManifest } = await import('src/control-center/manifest')
@@ -27,6 +29,8 @@ import { useControlCenterStore } from '../src/stores/control-center'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useQuestionStore } from '../src/stores/questions'
 import { useInAppNotificationStore } from '../src/stores/in-app-notifications'
+import { useTerminalStore } from '../src/stores/terminal'
+import { FakeWebSocket } from './terminal-websocket'
 import { api } from 'src/boot/axios'
 
 const components = { QBadge, QBtn, QIcon, QItem, QItemSection, QList, QMenu, QSeparator, QTab, QTabs, QTooltip }
@@ -49,6 +53,7 @@ afterEach(() => {
   if (originalScrollIntoView) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView)
   else delete HTMLElement.prototype.scrollIntoView
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
   expect(api.get).not.toHaveBeenCalled()
   expect(api.post).not.toHaveBeenCalled()
   expect(api.patch).not.toHaveBeenCalled()
@@ -69,6 +74,53 @@ function notificationButton() {
 }
 
 describe('control center panel', () => {
+  it('does not remove a different session tab after a delayed confirmation', async () => {
+    controlCenter.syncSession({ id: 'session-1', controlCenter: { tabs: [{ appId: 'terminal' }] } })
+    let accept
+    confirm.mockImplementationOnce(() => new Promise((resolve) => { accept = resolve }))
+    const remove = vi.spyOn(controlCenter, 'removeIntegration')
+    await mountPanel()
+    root.querySelector('#control-center-tab-terminal').parentElement.querySelector('.control-center__tab-close').click()
+    await nextTick()
+    controlCenter.syncSession({ id: 'session-2', controlCenter: { tabs: [{ appId: 'terminal' }] } })
+    accept(true)
+    await nextTick()
+    expect(remove).not.toHaveBeenCalled()
+  })
+
+  it.each(['success', 'failure'])('never closes the current session shell after an older tab save settles (%s)', async (outcome) => {
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    const terminal = useTerminalStore()
+    terminal.connect({ sessionId: 'session-1', agentId: 'agent-1' })
+    const old = FakeWebSocket.instances.at(-1)
+    old.open()
+    old.snapshot()
+    controlCenter.syncSession({ id: 'session-1', controlCenter: { tabs: [{ appId: 'terminal' }] } })
+    confirm.mockResolvedValueOnce(true)
+    let finish, fail
+    vi.spyOn(controlCenter, 'removeIntegration').mockImplementationOnce(() => new Promise((resolve, reject) => {
+      finish = resolve
+      fail = reject
+    }))
+    await mountPanel()
+    root.querySelector('#control-center-tab-terminal').parentElement.querySelector('.control-center__tab-close').click()
+    await nextTick()
+    terminal.connect({ sessionId: 'session-2', agentId: 'agent-1' })
+    const current = FakeWebSocket.instances.at(-1)
+    current.open()
+    current.snapshot()
+    controlCenter.syncSession({ id: 'session-2', controlCenter: { tabs: [{ appId: 'terminal' }] } })
+    if (outcome === 'success') finish({ tabs: [] })
+    else fail(new Error('save failed'))
+    await nextTick()
+    expect(terminal.socket).toBe(current)
+    expect(terminal.ready).toBe(true)
+    expect(current.close).not.toHaveBeenCalled()
+    expect(current.send).not.toHaveBeenCalled()
+    expect(old.send).not.toHaveBeenCalled()
+    terminal.release()
+  })
+
   it('combines approvals, questions and unread hints and retains the pending badge at zero unread', async () => {
     const approvals = useApprovalStore()
     const questions = useQuestionStore()

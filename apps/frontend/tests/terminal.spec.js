@@ -1,326 +1,225 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useTerminalStore } from '../src/stores/terminal'
+import { useControlCenterStore } from '../src/stores/control-center'
+import { TERMINAL_OPERATIONS, terminalControlCenterState } from '../src/control-center/manifest'
+import { FakeWebSocket, sharedDraft } from './terminal-websocket'
 
-const { notifyCreate, notifyError } = vi.hoisted(() => ({
-  notifyCreate: vi.fn(),
-  notifyError: vi.fn()
-}))
-
-vi.mock('quasar', async (importOriginal) => ({
-  ...await importOriginal(),
-  Notify: { create: notifyCreate }
-}))
+const { api, notifyError } = vi.hoisted(() => ({ api: { patch: vi.fn() }, notifyError: vi.fn() }))
+vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('src/utils/notifications', () => ({ notifyError }))
 
-import {
-  TERMINAL_OPERATIONS,
-  terminalControlCenterState
-} from '../src/control-center/manifest'
-import { useTerminalStore } from '../src/stores/terminal'
-import {
-  cumulativeOutputDelta,
-  handleAutoTerminalData,
-  terminalProposalCommand,
-  terminalExitStatus,
-  terminalTabLabel
-} from '../src/utils/terminal-output'
-
-class FakeWebSocket {
-  static instances = []
-
-  constructor(url) {
-    this.url = url
-    this.readyState = 0
-    this.send = vi.fn()
-    this.close = vi.fn(() => { this.readyState = 3 })
-    FakeWebSocket.instances.push(this)
-  }
-
-  open() {
-    this.readyState = 1
-    this.onopen?.()
-  }
-
-  message(value) {
-    this.onmessage?.({ data: typeof value === 'string' ? value : JSON.stringify(value) })
-  }
-
-  binary(bytes) {
-    this.onmessage?.({ data: Uint8Array.from(bytes).buffer })
-  }
-}
-
-const agent = {
-  id: 'agent-1',
-  connected: true,
-  operations: [...TERMINAL_OPERATIONS]
-}
-const oldMessages = [{
-  toolCalls: [{ id: 'old-tool', name: 'shell_run', arguments: { command: 'printf old' } }]
-}]
-const oldOutputs = { 'old-tool': { stdout: 'old output', stderr: '' } }
-
-function connectedStore() {
+function connectedStore(state = {}) {
   const store = useTerminalStore()
   store.connect({ sessionId: 'session-1', agentId: 'agent-1' })
   const socket = FakeWebSocket.instances.at(-1)
   socket.open()
+  socket.snapshot(state)
   return { store, socket }
 }
 
-function attach(store, socket, messages = [], outputs = {}) {
-  store.attach(messages, outputs)
-  socket.message({ type: 'session.attached', sessionId: 'session-1', mode: 'auto' })
-}
-
-function confirmMode(store, socket) {
-  store.setMode('confirm')
-  socket.message({ type: 'mode.changed', mode: 'confirm' })
-}
-
-describe('control center terminal', () => {
+describe('shared terminal', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     FakeWebSocket.instances = []
-    globalThis.WebSocket = FakeWebSocket
+    vi.stubGlobal('WebSocket', FakeWebSocket)
     vi.clearAllMocks()
   })
+  afterEach(() => vi.unstubAllGlobals())
 
-  it('is launchable only for a selected connected agent with all terminal operations', () => {
-    const agents = { byId: (id) => id === agent.id ? agent : null }
-
-    expect(terminalControlCenterState({ preferredExecutionAgentId: agent.id }, agents).available).toBe(true)
+  it('requires native shared capabilities rather than falling back to an isolated terminal', () => {
+    const agent = { connected: true, operations: TERMINAL_OPERATIONS }
+    const context = { preferredExecutionAgentId: 'agent-1' }
+    const agents = { byId: () => agent }
+    expect(terminalControlCenterState(context, agents).available).toBe(true)
     expect(terminalControlCenterState({}, agents).reason).toBe('missing')
-    expect(terminalControlCenterState(
-      { preferredExecutionAgentId: agent.id },
-      { byId: () => ({ ...agent, connected: false }) }
-    ).reason).toBe('offline')
-    expect(terminalControlCenterState(
-      { preferredExecutionAgentId: agent.id },
-      { byId: () => ({ ...agent, operations: TERMINAL_OPERATIONS.slice(1) }) }
-    ).reason).toBe('unsupported')
+    agent.connected = false
+    expect(terminalControlCenterState(context, agents).reason).toBe('offline')
+    agent.connected = true
+    agent.operations = ['terminal.open', 'terminal.read', 'terminal.write', 'terminal.resize', 'terminal.close', 'terminal.run']
+    expect(terminalControlCenterState(context, agents).reason).toBe('unsupported')
+    expect(TERMINAL_OPERATIONS).toContain('terminal.shared.inspect')
   })
 
-  it('changes attachment and mode only after server acknowledgements', () => {
-    const { store, socket } = connectedStore()
-
-    store.attach(oldMessages, oldOutputs)
-    expect(store.attached).toBe(false)
-    expect(store.submitting).toBe('attach')
-    socket.message({ type: 'session.attached', sessionId: 'session-1', mode: 'auto' })
-    expect(store.attached).toBe(true)
-    expect(store.submitting).toBeNull()
-
-    store.setMode('confirm')
-    expect(store.mode).toBe('auto')
-    expect(store.submitting).toBe('mode')
-    socket.message({ type: 'mode.changed', mode: 'confirm' })
-    expect(store.mode).toBe('confirm')
-
-    store.detach()
-    expect(store.attached).toBe(true)
-    expect(store.submitting).toBe('detach')
-    socket.message({ type: 'session.detached', sessionId: 'session-1' })
-    expect(store.attached).toBe(false)
-    expect(store.submitting).toBeNull()
-  })
-
-  it('closes on context loss, supports controlled reconnect and ignores stale events', () => {
-    const { store, socket: oldSocket } = connectedStore()
-    oldSocket.message({ type: 'status', currentDirectory: '/home/one' })
-    oldSocket.onclose()
-    expect(store.status).toBe('closed')
-    expect(store.sessionId).toBe('session-1')
-
-    store.connect({ sessionId: 'session-1', agentId: 'agent-1' })
-    const currentSocket = FakeWebSocket.instances.at(-1)
-    currentSocket.open()
-    oldSocket.message({ type: 'status', currentDirectory: '/stale' })
-    expect(store.currentDirectory).toBe('/home/one')
-
-    store.syncContext({
-      sessionId: 'session-1', agentId: 'agent-1', connected: false,
-      supported: false, tabPresent: true, onChatRoute: true
-    })
-    expect(store.status).toBe('closed')
-    expect(store.sessionId).toBeNull()
-    expect(currentSocket.close).toHaveBeenCalledOnce()
-  })
-
-  it('clears a proposal that was cancelled while disconnected on reattach', () => {
-    const { store, socket: oldSocket } = connectedStore()
-    attach(store, oldSocket)
-    confirmMode(store, oldSocket)
-    oldSocket.message({ type: 'command.proposed', approvalId: 'request-1', command: 'sleep 1' })
-    oldSocket.onclose()
-
+  it('waits for acquisition and snapshot before input, resuming authoritative pending state', () => {
+    const store = useTerminalStore()
     store.connect({ sessionId: 'session-1', agentId: 'agent-1' })
     const socket = FakeWebSocket.instances.at(-1)
+    expect(socket.url).toContain('/api/terminals/agent-1?sessionId=session-1')
+    expect(store.status).toBe('connecting')
+    store.input('blocked')
     socket.open()
+    expect(store.status).toBe('acquiring')
     store.attach()
-    socket.message({ type: 'session.attached', sessionId: 'session-1', mode: 'confirm' })
-
-    expect(store.proposal).toBeNull()
-    expect(store.removalBlocked).toBe(false)
+    socket.message({ type: 'terminal.opened', terminalId: 'pty-1', restored: true })
+    expect(store.status).toBe('syncing')
+    store.input('\r')
+    expect(socket.send).not.toHaveBeenCalled()
+    const pending = { approvalId: 'approval-1', ...sharedDraft }
+    socket.snapshot({ attached: true, busy: true, state: 'editing', activeToolCallId: 'tool-1',
+      pending, currentDirectory: '/home/user/terminal', personalData: btoa('retained'), rows: 40, columns: 120 })
+    expect(store).toMatchObject({ ready: true, restored: true, inputEnabled: true, attached: true,
+      busy: true, runtimeState: 'editing', pending, activeToolCallId: 'tool-1',
+      currentDirectory: '/home/user/terminal', buffer: 'retained', rows: 40, columns: 120 })
+    expect(socket.send).not.toHaveBeenCalled()
+    socket.output(' live')
+    expect(store.buffer).toBe('retained live')
   })
 
-  it('restores an active proposal atomically on reattach', () => {
+  it.each(['idle', 'busy', 'editing', 'checking', 'running'])('forwards all human bytes in %s without frontend decisions', (state) => {
+    const { store, socket } = connectedStore({ attached: true, busy: state !== 'idle', state,
+      pending: { approvalId: 'approval-1', ...sharedDraft } })
+    const input = 'ä\x1b[D\x7f\r\n\x03\x1b[200~paste\r\x1b[201~'
+    store.input(input)
+    const messages = socket.send.mock.calls.map(([data]) => JSON.parse(data))
+    expect(messages.map((message) => message.type)).toEqual(['input'])
+    expect(new TextDecoder().decode(Uint8Array.from(atob(messages[0].data), (char) => char.charCodeAt(0)))).toBe(input)
+    expect(store.mode).toBeUndefined()
+    expect(store.resolveProposal).toBeUndefined()
+    expect(store.agentBuffer).toBeUndefined()
+  })
+
+  it.each([{ suspended: true }, { state: 'closed' }])('blocks input only for unavailable runtime state %j', (state) => {
+    const { store, socket } = connectedStore(state)
+    store.input('\r\x03')
+    expect(socket.send).not.toHaveBeenCalled()
+    socket.output('final output')
+    expect(store.buffer).toBe('final output')
+    socket.state({ suspended: false, state: 'idle' })
+    store.input('x')
+    expect(socket.send).toHaveBeenCalledOnce()
+  })
+
+  it('changes attachment only on matching status and never clears or reconstructs output', () => {
+    const { store, socket } = connectedStore({ personalData: btoa('user and agent\r\n') })
+    const revision = store.bufferRevision
+    store.attach()
+    expect(JSON.parse(socket.send.mock.calls.at(-1)[0])).toEqual({ type: 'attach', sessionId: 'session-1' })
+    expect(store.attached).toBe(false)
+    socket.state({ attached: false })
+    expect(store.submitting).toBe('attach')
+    socket.state({ attached: true })
+    expect(store.submitting).toBeNull()
+    store.detach()
+    expect(JSON.parse(socket.send.mock.calls.at(-1)[0])).toEqual({ type: 'detach' })
+    expect(store.attached).toBe(true)
+    socket.state({ attached: false })
+    expect(store.attached).toBe(false)
+    expect(store.submitting).toBeNull()
+    expect(store.buffer).toBe('user and agent\r\n')
+    expect(store.bufferRevision).toBe(revision)
+    socket.message({ type: 'command.output', data: btoa('duplicate') })
+    expect(store.buffer).toBe('user and agent\r\n')
+    expect(store.syncAgentOutput).toBeUndefined()
+  })
+
+  it('clears attachment submission on controlled errors without changing authoritative state', () => {
     const { store, socket } = connectedStore()
     store.attach()
-    socket.message({
-      type: 'session.attached',
-      sessionId: 'session-1',
-      mode: 'confirm',
-      proposal: { type: 'command.proposed', approvalId: 'request-1', command: 'pwd' }
-    })
-
-    expect(store.proposal).toEqual({ requestId: 'request-1', command: 'pwd' })
-    expect(store.removalBlocked).toBe(true)
+    socket.message({ type: 'error', error: { code: 'terminal.unavailable' } })
+    expect(store.attached).toBe(false)
+    expect(store.submitting).toBeNull()
+    expect(notifyError).toHaveBeenCalledWith({ error: { code: 'terminal.unavailable' } }, expect.any(String))
   })
 
-  it('decodes UTF-8 characters split across binary WebSocket frames', () => {
+  it('resizes one PTY and retries dimensions that could not be sent while suspended', () => {
     const { store, socket } = connectedStore()
-
-    socket.binary([0xe2, 0x82])
-    expect(store.personalBuffer).toBe('')
-    socket.binary([0xac])
-    expect(store.personalBuffer).toBe('€')
+    store.resize(120, 40)
+    store.resize(120, 40)
+    expect(socket.send).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ type: 'resize', columns: 120, rows: 40 }))
+    socket.state({ suspended: true })
+    store.resize(90, 30)
+    socket.state({ suspended: false })
+    store.resize(90, 30)
+    expect(socket.send).toHaveBeenCalledTimes(2)
+    store.resize(1001, 30)
+    expect(socket.send).toHaveBeenCalledTimes(2)
   })
 
-  it('chunks large multibyte terminal input within the wire limit', () => {
+  it('decodes truncated snapshot boundaries and subsequent split UTF-8 frames', () => {
+    const { store, socket } = connectedStore({ personalData: btoa('\x82\xacP\xe2\x82'), personalTruncated: true })
+    socket.binary([0xac, 0xc3])
+    socket.binary([0xa4])
+    expect(store.buffer).toBe('P€ä')
+    expect(store.truncated).toBe(true)
+  })
+
+  it('chunks large multibyte input within the wire limit', () => {
     const { store, socket } = connectedStore()
     const input = `${'a'.repeat(65_535)}€`
-
     store.input(input)
-
-    const messages = socket.send.mock.calls.map(([value]) => JSON.parse(value))
-    const bytes = messages.flatMap(({ data }) => [...Uint8Array.from(atob(data), (value) => value.charCodeAt(0))])
-    expect(messages).toHaveLength(2)
-    expect(messages.every(({ data }) => atob(data).length <= 65_536)).toBe(true)
-    expect(new TextDecoder().decode(Uint8Array.from(bytes))).toBe(input)
+    const chunks = socket.send.mock.calls.map(([value]) => atob(JSON.parse(value).data))
+    expect(chunks).toHaveLength(2)
+    expect(chunks.every((chunk) => chunk.length <= 65_536)).toBe(true)
+    expect(new TextDecoder().decode(Uint8Array.from(chunks.join(''), (char) => char.charCodeAt(0)))).toBe(input)
   })
 
-  it('starts Auto output at the attachment baseline and deduplicates cumulative deltas', () => {
-    expect(cumulativeOutputDelta('one', 'one two')).toBe(' two')
-    expect(cumulativeOutputDelta('one two', 'one')).toBe('')
+  it('replaces same-session replay after restart and ignores stale socket state and bytes', () => {
+    const { store, socket } = connectedStore({ personalData: btoa('old'), attached: true })
+    socket.onclose({ code: 1006 })
+    store.connect({ sessionId: 'session-1', agentId: 'agent-1' })
+    const next = FakeWebSocket.instances.at(-1)
+    next.open()
+    next.snapshot({ terminalId: 'new-pty', personalData: btoa('new shell') }, false)
+    socket.state({ attached: true, currentDirectory: '/stale' })
+    socket.output('stale')
+    socket.onclose({ code: 4001 })
+    expect(store).toMatchObject({ buffer: 'new shell', restored: false, terminalId: 'new-pty',
+      currentDirectory: '/home/user', attached: false, status: 'open' })
+  })
+
+  it.each(['message', 'close'])('does not reclaim replaced runtimes on stale actions or A-B-A navigation (%s)', (source) => {
     const { store, socket } = connectedStore()
-    attach(store, socket, oldMessages, oldOutputs)
-
-    store.syncAgentOutput(oldMessages, oldOutputs)
-    expect(store.agentBuffer).toBe('')
-
-    const messages = [...oldMessages, {
-      toolCalls: [{ id: 'new-tool', name: 'shell_run', arguments: { command: 'printf new' } }]
-    }]
-    store.syncAgentOutput(messages, {
-      ...oldOutputs,
-      'new-tool': { stdout: 'new', stderr: '' }
-    })
-    store.syncAgentOutput(messages, {
-      ...oldOutputs,
-      'new-tool': { stdout: 'new output', stderr: '' }
-    })
-
-    expect(store.agentBuffer).not.toContain('printf old')
-    expect(store.agentBuffer).not.toContain('old output')
-    expect(store.agentBuffer.match(/\$ printf new/g)).toHaveLength(1)
-    expect(store.agentBuffer).toContain('new output')
+    if (source === 'message') socket.message({ type: 'terminal.replaced' })
+    else socket.onclose({ code: 4001 })
+    store.input('x')
+    store.attach()
+    socket.open()
+    socket.snapshot()
+    expect(store.status).toBe('replaced')
+    store.connect({ sessionId: 'session-2', agentId: 'agent-1' })
+    const second = FakeWebSocket.instances.at(-1)
+    second.open()
+    second.snapshot()
+    store.release(socket)
+    expect(store.socket).toBe(second)
+    store.connect({ sessionId: 'session-1', agentId: 'agent-1' })
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    expect(store.status).toBe('replaced')
+    expect(socket.send).not.toHaveBeenCalled()
   })
 
-  it('formats multiline agent commands as terminal prompt lines', () => {
-    const store = useTerminalStore()
-
-    store.appendAgentCommand('set -eu\nprintf one\rprintf two\r\npwd')
-
-    expect(store.agentBuffer).toBe(
-      '\r\n\x1b[1;36m$ set -eu\r\n> printf one\r\n> printf two\r\n> pwd\x1b[0m\r\n'
-    )
-  })
-
-  it('retains proposals on errors and displays the final edited command after execute acknowledgement', () => {
+  it('offers manual resync without automatically retrying', () => {
     const { store, socket } = connectedStore()
-    attach(store, socket)
-    confirmMode(store, socket)
-    socket.message({ type: 'command.proposed', approvalId: 'request-1', command: 'rm old' })
-    socket.message({ type: 'command.proposed', approvalId: 'request-1', command: 'rm old' })
-
-    expect(terminalProposalCommand(store.proposal)).toBe('rm old')
-    expect(notifyCreate).toHaveBeenCalledOnce()
-    expect(store.resolveProposal('execute', 'printf safe')).toBe(true)
-    expect(store.proposal).not.toBeNull()
-    expect(store.commandRunning).toBe(false)
-    expect(store.submitting).toBe('execute')
-    socket.message({ type: 'error', error: { code: 'terminal.proposalStale' } })
-    expect(store.proposal).not.toBeNull()
-    expect(store.submitting).toBeNull()
-
-    store.resolveProposal('execute', 'printf final')
-    socket.message({ type: 'command.resolved', approvalId: 'request-1', decision: 'execute' })
-    expect(store.proposal).toBeNull()
-    expect(store.commandRunning).toBe(false)
-    socket.message({ type: 'command.started', toolCallId: 'tool-1' })
-    expect(store.commandRunning).toBe(true)
-    expect(store.agentBuffer).toContain('$ printf final')
-    expect(store.agentBuffer).not.toContain('$ rm old')
-    store.syncAgentOutput([], { 'tool-1': { stdout: 'result', stderr: '' } })
-    expect(store.agentBuffer.indexOf('$ printf final')).toBeLessThan(store.agentBuffer.indexOf('result'))
-    expect(store.resizeRevision).toBe(1)
-
-    store.input('\x03')
-    expect(JSON.parse(socket.send.mock.calls.at(-1)[0])).toEqual({ type: 'input', data: 'Aw==' })
+    socket.message({ type: 'terminal.closed', reason: 'resyncRequired' })
+    socket.onclose({ code: 4002 })
+    expect(store.status).toBe('resyncRequired')
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    store.connect({ sessionId: 'session-1', agentId: 'agent-1' })
+    expect(store.status).toBe('connecting')
   })
 
-  it('clears denied and cancelled proposals only on server messages', () => {
+  it.each(['onChatRoute', 'tabPresent', 'connected', 'supported'])('only releases on loss of %s', (field) => {
     const { store, socket } = connectedStore()
-    attach(store, socket)
-    confirmMode(store, socket)
-    socket.message({ type: 'command.proposed', approvalId: 'request-1', command: 'false' })
-    store.resolveProposal('deny')
-    expect(store.proposal).not.toBeNull()
-    socket.message({ type: 'command.resolved', approvalId: 'request-1', decision: 'deny' })
-    expect(store.proposal).toBeNull()
-    expect(store.commandExit.decision).toBe('deny')
-
-    socket.message({ type: 'command.proposed', approvalId: 'request-2', command: 'sleep 1' })
-    socket.message({ type: 'command.cancelled', approvalId: 'request-2' })
-    expect(store.proposal).toBeNull()
-    expect(store.commandRunning).toBe(false)
-    expect(store.commandExit.decision).toBe('cancelled')
+    store.syncContext({ sessionId: 'session-1', agentId: 'agent-1', onChatRoute: true,
+      tabPresent: true, connected: true, supported: true, [field]: false })
+    expect(socket.close).toHaveBeenCalledOnce()
+    expect(socket.send).not.toHaveBeenCalled()
   })
 
-  it('caches and sends acknowledged attachment dimensions with backend field names', () => {
+  it('only releases the viewer on optimistic tab removal when persistence fails', async () => {
     const { store, socket } = connectedStore()
-    attach(store, socket)
-
-    store.resize('agent', 120, 40)
-    expect(JSON.parse(socket.send.mock.calls.at(-1)[0])).toEqual({
-      type: 'resize', columns: 120, rows: 40
-    })
-    store.resize('agent', 120, 40)
-    expect(socket.send.mock.calls.filter(([value]) => JSON.parse(value).type === 'resize')).toHaveLength(1)
-    store.resize('agent', 120, 40, true)
-    expect(socket.send.mock.calls.filter(([value]) => JSON.parse(value).type === 'resize')).toHaveLength(2)
-  })
-
-  it('maps Auto Ctrl+C and exposes pending removal and accessible tab state', () => {
-    const stop = vi.fn()
-    expect(handleAutoTerminalData('x', stop)).toBe(false)
-    expect(handleAutoTerminalData('\x03', stop)).toBe(true)
-    expect(stop).toHaveBeenCalledOnce()
-
-    const { store, socket } = connectedStore()
-    attach(store, socket)
-    confirmMode(store, socket)
-    socket.message({ type: 'command.proposed', approvalId: 'request-1', command: 'true' })
-    expect(store.removalBlocked).toBe(true)
-    expect(terminalTabLabel('Terminal', store.pendingProposal))
-      .toBe('Terminal, Befehl wartet auf Bestätigung')
-  })
-
-  it('describes timeout and signal completion from process result fields', () => {
-    expect(terminalExitStatus({ timedOut: true, exitCode: -15 }))
-      .toBe('Zeitlimit des Befehls überschritten.')
-    expect(terminalExitStatus({ timedOut: false, exitCode: -15 }))
-      .toBe('Befehl durch Signal 15 beendet.')
+    const center = useControlCenterStore()
+    center.syncSession({ id: 'session-1', controlCenter: { tabs: [{ appId: 'terminal' }] } })
+    let reject
+    api.patch.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail }))
+    const removal = center.removeIntegration('terminal')
+    store.syncContext({ sessionId: 'session-1', agentId: 'agent-1', connected: true, supported: true,
+      tabPresent: center.tabs.some((tab) => tab.appId === 'terminal'), onChatRoute: true })
+    expect(socket.close).toHaveBeenCalledOnce()
+    reject(new Error('save failed'))
+    await expect(removal).rejects.toThrow('save failed')
+    expect(center.tabs.some((tab) => tab.appId === 'terminal')).toBe(true)
+    expect(socket.send).not.toHaveBeenCalled()
   })
 })

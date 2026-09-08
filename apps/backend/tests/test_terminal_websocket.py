@@ -1,275 +1,345 @@
 import asyncio
+import base64
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from fastapi import WebSocketDisconnect
+from fastapi import FastAPI, WebSocketDisconnect
+from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from mato_loop_backend.api.routes import terminals
 from mato_loop_backend.execution import (
     ExecutionClientError,
+    SharedTerminalStatus,
     TerminalControlResult,
     TerminalOpenResult,
-    TerminalReadResult,
 )
-from mato_loop_backend.execution.terminals import BrowserTerminalConnection
-from mato_loop_backend.models import ExecutionAgent, UserAccount
+from mato_loop_backend.execution import terminals as execution
+from mato_loop_backend.models import ChatSession, ExecutionAgent, LoginSession, UserAccount
 
 
 class FakeWebSocket:
-    def __init__(self, origin=None, host=None) -> None:
-        self.headers = {"origin": origin} if origin else {}
-        if host:
-            self.headers["host"] = host
+    def __init__(self, session_id=None, origin="https://ui.test"):
+        self.headers = {"origin": origin}
+        self.query_params = {"sessionId": str(session_id)} if session_id else {}
         self.cookies = {}
-        self.closed = []
+        self.sent, self.closed = [], []
         self.accepted = False
-        self.sent = []
 
-    async def close(self, code=1000, reason="") -> None:
-        self.closed.append((code, reason))
-
-    async def accept(self) -> None:
+    async def accept(self):
         self.accepted = True
 
-    async def send_json(self, payload) -> None:
-        self.sent.append(payload)
+    async def close(self, code=1000, reason=""):
+        self.closed.append((code, reason))
 
-    async def send_bytes(self, payload) -> None:
-        self.sent.append(payload)
+    async def send_text(self, data):
+        self.sent.append(json.loads(data))
+
+    async def send_json(self, data):
+        self.sent.append(data)
+
+    async def send_bytes(self, data):
+        self.sent.append(data)
 
     async def receive_json(self):
         raise WebSocketDisconnect()
 
 
-class FakeDb:
-    def __init__(self, agent) -> None:
-        self.agent = agent
-
-    async def get(self, model, key):
-        return self.agent if model is ExecutionAgent and key == self.agent.id else None
-
-
-class DbContext:
-    def __init__(self, db) -> None:
-        self.db = db
-
-    async def __aenter__(self):
-        return self.db
-
-    async def __aexit__(self, *_args):
-        pass
-
-
-async def test_terminal_websocket_rejects_origin_and_auth(monkeypatch) -> None:
-    agent_id = uuid4()
-    monkeypatch.setattr(
-        terminals, "get_runtime_config", lambda: SimpleNamespace(cors_origin_list=["https://ui.test"])
-    )
-    wrong_origin = FakeWebSocket("https://evil.test")
-    await terminals.browser_terminal(wrong_origin, agent_id)  # type: ignore[arg-type]
-    assert wrong_origin.closed[0][0] == 4403
-
-    same_origin = FakeWebSocket("https://mato.example", "mato.example")
-    monkeypatch.setattr(terminals, "_browser_login", AsyncMock(return_value=None))
-    await terminals.browser_terminal(same_origin, agent_id)  # type: ignore[arg-type]
-    assert same_origin.closed[0][0] == 4401
-
-    unauthenticated = FakeWebSocket("https://ui.test")
-    await terminals.browser_terminal(unauthenticated, agent_id)  # type: ignore[arg-type]
-    assert unauthenticated.closed[0][0] == 4401
-
-
-async def test_terminal_websocket_checks_owner_and_capabilities(monkeypatch) -> None:
-    user = UserAccount(id=uuid4(), username="user", is_active=True)
-    agent = ExecutionAgent(
-        id=uuid4(),
-        user_id=uuid4(),
-        alias="Other",
-        home_directory="/home/user",
-    )
-    monkeypatch.setattr(
-        terminals, "get_runtime_config", lambda: SimpleNamespace(cors_origin_list=["https://ui.test"])
-    )
-    login = terminals._BrowserLogin(user, uuid4(), datetime.now(UTC) + timedelta(hours=1))
-    monkeypatch.setattr(terminals, "_browser_login", AsyncMock(return_value=login))
-    monkeypatch.setattr(terminals, "AsyncSessionFactory", lambda: DbContext(FakeDb(agent)))
-    monkeypatch.setattr(
-        terminals.execution_agent_connections,
-        "snapshot",
-        lambda _agent_id: terminals._TERMINAL_OPERATIONS,
-    )
-
-    wrong_owner = FakeWebSocket("https://ui.test")
-    await terminals.browser_terminal(wrong_owner, agent.id)  # type: ignore[arg-type]
-    assert wrong_owner.closed[0][0] == 4404
-
-    agent.user_id = user.id
-    monkeypatch.setattr(
-        terminals.execution_agent_connections,
-        "snapshot",
-        lambda _agent_id: frozenset({"terminal.open"}),
-    )
-    missing_capability = FakeWebSocket("https://ui.test")
-    await terminals.browser_terminal(missing_capability, agent.id)  # type: ignore[arg-type]
-    assert missing_capability.closed[0][0] == 4403
-
-
-async def test_terminal_websocket_closes_agent_pty_on_browser_disconnect(monkeypatch) -> None:
-    user = UserAccount(id=uuid4(), username="user", is_active=True)
-    agent = ExecutionAgent(
-        id=uuid4(),
-        user_id=user.id,
-        alias="Computer",
-        home_directory="/home/user",
-    )
+@pytest.fixture
+def env(monkeypatch):
+    user = UserAccount(id=uuid4(), username="owner", is_active=True)
+    agent = ExecutionAgent(id=uuid4(), user_id=user.id, alias="Computer", home_directory="/home/user")
+    session = ChatSession(id=uuid4(), user_id=user.id, session_type="chat", preferred_execution_agent_id=agent.id,
+                          control_center={"tabs": [{"app_id": "terminal"}]})
+    login = LoginSession(id=uuid4(), user_id=user.id, expires_at=datetime.now(UTC) + timedelta(hours=1))
+    objects = {(type(obj), obj.id): obj for obj in (user, agent, session, login)}
     calls = []
-    personal_id = uuid4()
-    active_id = uuid4()
 
-    class FakeClient:
-        def __init__(self, *_args):
+    class Db:
+        failure = False
+
+        async def get(self, model, key):
+            if self.failure:
+                raise OperationalError("select", {}, Exception("unavailable"))
+            return objects.get((model, key))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
             pass
+
+    class Client:
+        def __init__(self, _id, _ops, current_directory, **_kwargs):
+            self.current_directory = current_directory
 
         async def request(self, operation, arguments, _model, **_kwargs):
             calls.append((operation, arguments))
-            if operation == "terminal.open":
-                return TerminalOpenResult(terminal_id=personal_id)
+            if operation == "terminal.shared.open":
+                return TerminalOpenResult(terminal_id=arguments["terminalId"])
+            if operation == "terminal.shared.status":
+                return SharedTerminalStatus(terminal_id=arguments["terminalId"], current_directory="/home/user",
+                                            state="idle", context_revision=1, command_id=None, command=None,
+                                            revision=0, submitted=False, cancelled=False)
             if operation == "terminal.read":
-                await asyncio.sleep(60)
+                await asyncio.Event().wait()
             return TerminalControlResult()
 
-    monkeypatch.setattr(
-        terminals, "get_runtime_config", lambda: SimpleNamespace(cors_origin_list=["https://ui.test"])
-    )
-    login = terminals._BrowserLogin(user, uuid4(), datetime.now(UTC) + timedelta(hours=1))
-    monkeypatch.setattr(terminals, "_browser_login", AsyncMock(return_value=login))
-    monkeypatch.setattr(terminals, "AsyncSessionFactory", lambda: DbContext(FakeDb(agent)))
-    monkeypatch.setattr(terminals, "ExecutionClient", FakeClient)
-
-    async def disconnect_during_run(connection):
-        connection.active_terminal_id = str(active_id)
-        raise WebSocketDisconnect()
-
-    monkeypatch.setattr(terminals, "_handle_browser", disconnect_during_run)
-    monkeypatch.setattr(
-        terminals.execution_agent_connections,
-        "snapshot",
-        lambda _agent_id: terminals._TERMINAL_OPERATIONS,
-    )
-    websocket = FakeWebSocket("https://ui.test")
-
-    await terminals.browser_terminal(websocket, agent.id)  # type: ignore[arg-type]
-
-    assert websocket.accepted is True
-    assert calls[-2:] == [
-        ("terminal.close", {"terminalId": str(active_id)}),
-        ("terminal.close", {"terminalId": str(personal_id)}),
-    ]
+    db = Db()
+    coordinator = execution.TerminalCoordinator()
+    monkeypatch.setattr(terminals, "get_runtime_config", lambda: SimpleNamespace(cors_origin_list=["https://ui.test"]))
+    monkeypatch.setattr(terminals, "_browser_login", AsyncMock(return_value=terminals._BrowserLogin(user, login.id, login.expires_at)))
+    monkeypatch.setattr(terminals, "AsyncSessionFactory", lambda: db)
+    monkeypatch.setattr(execution, "AsyncSessionFactory", lambda: db)
+    monkeypatch.setattr(execution, "ExecutionClient", Client)
+    monkeypatch.setattr(execution.execution_agent_connections, "generation", lambda _id: 1)
+    monkeypatch.setattr(execution.execution_agent_connections, "snapshot", lambda _id: execution.TERMINAL_OPERATIONS)
+    monkeypatch.setattr(terminals, "terminal_coordinator", coordinator)
+    return SimpleNamespace(user=user, agent=agent, session=session, login=login, db=db, objects=objects,
+                           calls=calls, coordinator=coordinator)
 
 
-async def test_terminal_login_watch_detects_revocation(monkeypatch) -> None:
-    user = UserAccount(id=uuid4(), username="user", is_active=True)
-    login = terminals._BrowserLogin(user, uuid4(), datetime.now(UTC) + timedelta(hours=1))
-    monkeypatch.setattr(terminals.asyncio, "sleep", AsyncMock(return_value=None))
-    monkeypatch.setattr(terminals, "AsyncSessionFactory", lambda: DbContext(FakeDb(None)))
-
-    with pytest.raises(terminals.ExecutionClientError, match="auth.sessionExpired"):
-        await terminals._watch_login(login)
+async def open_viewer(env):
+    return await env.coordinator.open(env.user.id, env.session.id, env.agent.id, env.login.id, FakeWebSocket())
 
 
-async def test_terminal_read_retries_agent_timeout() -> None:
-    class FakeClient:
-        calls = 0
-
-        async def request(self, *_args, **_kwargs):
-            self.calls += 1
-            if self.calls == 1:
-                raise ExecutionClientError("executionAgent.timeout")
-            return TerminalReadResult(data="", eof=True)
-
-    client = FakeClient()
-    websocket = FakeWebSocket()
-    connection = BrowserTerminalConnection(
-        uuid4(),
-        uuid4(),
-        str(uuid4()),
-        client,  # type: ignore[arg-type]
-        websocket,  # type: ignore[arg-type]
-    )
-
-    await terminals._read_terminal(connection)
-
-    assert client.calls == 2
-    assert websocket.sent == []
-
-
-async def test_attached_idle_terminal_rejects_input_without_writing_personal_pty() -> None:
-    class ControlWebSocket(FakeWebSocket):
-        def __init__(self):
-            super().__init__()
-            self.controls = [
-                {"type": "input", "data": "eA=="},
-                {"type": "close"},
-            ]
-
-        async def receive_json(self):
-            return self.controls.pop(0)
-
-    class ControlClient:
-        def __init__(self):
-            self.requests = []
-
-        async def request(self, *args, **kwargs):
-            self.requests.append((args, kwargs))
-            return TerminalControlResult()
-
-    websocket = ControlWebSocket()
-    client = ControlClient()
-    connection = BrowserTerminalConnection(
-        uuid4(),
-        uuid4(),
-        str(uuid4()),
-        client,  # type: ignore[arg-type]
-        websocket,  # type: ignore[arg-type]
-        session_id=uuid4(),
-        mode="auto",
-    )
-
-    await terminals._handle_browser(connection)
-
-    assert client.requests == []
-    assert websocket.sent[0]["error"]["code"] == "terminal.readOnly"
+@pytest.mark.parametrize("invalid", ["origin", "login", "session", "owner", "child", "automation", "agent", "tab", "revoked", "capability"])
+async def test_access_checked_before_open_or_replay(env, monkeypatch, invalid):
+    socket = FakeWebSocket(env.session.id)
+    if invalid == "origin":
+        socket.headers["origin"] = "https://evil.test"
+    elif invalid == "login":
+        monkeypatch.setattr(terminals, "_browser_login", AsyncMock(return_value=None))
+    elif invalid == "session":
+        socket.query_params = {}
+    elif invalid == "owner":
+        env.session.user_id = uuid4()
+    elif invalid == "child":
+        env.session.parent_session_id = uuid4()
+    elif invalid == "automation":
+        env.session.session_type = "automation"
+    elif invalid == "agent":
+        env.agent.user_id = uuid4()
+    elif invalid == "tab":
+        env.session.control_center = {"tabs": []}
+    elif invalid == "revoked":
+        env.agent.revoked_at = datetime.now(UTC)
+    else:
+        monkeypatch.setattr(execution.execution_agent_connections, "snapshot", lambda _id: frozenset({"terminal.open"}))
+    await terminals.browser_terminal(socket, env.agent.id)
+    assert not socket.accepted and socket.closed and not env.calls
 
 
-async def test_attached_idle_terminal_accepts_resize_without_error() -> None:
-    class ControlWebSocket(FakeWebSocket):
-        def __init__(self):
-            super().__init__()
-            self.controls = [
-                {"type": "resize", "rows": 41, "columns": 132},
-                {"type": "close"},
-            ]
+def test_actual_websocket_resume_takeover_and_native_input(env):
+    app = FastAPI()
+    app.include_router(terminals.router)
+    url = f"/terminals/{env.agent.id}?sessionId={env.session.id}"
+    with TestClient(app) as client:
+        with client.websocket_connect(url, headers={"origin": "https://ui.test"}) as first:
+            opened = first.receive_json()
+            assert not opened["restored"] and "mode" not in opened
+            assert "agentData" not in first.receive_json()
+            first.send_json({"type": "attach", "sessionId": str(env.session.id)})
+            assert first.receive_json()["attached"]
+            runtime = next(iter(env.coordinator._runtimes.values()))
+            client.portal.call(runtime.send_bytes, b"shared history")
+            assert first.receive_bytes() == b"shared history"
+        with client.websocket_connect(url, headers={"origin": "https://ui.test"}) as second:
+            restored = second.receive_json()
+            assert restored["restored"] and restored["attached"]
+            assert restored["terminalId"] == opened["terminalId"]
+            assert base64.b64decode(second.receive_json()["personalData"]) == b"shared history"
+            with client.websocket_connect(url, headers={"origin": "https://ui.test"}) as third:
+                assert third.receive_json()["terminalId"] == opened["terminalId"]
+                third.receive_json()
+                # Resume may refresh status on the old socket before replacement.
+                event = second.receive_json()
+                if event["type"] == "terminal.status":
+                    event = second.receive_json()
+                assert event == {"type": "terminal.replaced", "reason": "replaced"}
+                second.send_json({"type": "close"})
+                third.send_json({"type": "input", "data": "eA=="})
+                third.send_json({"type": "detach"})
+                assert third.receive_json()["attached"] is False
+                third.send_json({"type": "mode", "mode": "auto"})
+                assert third.receive_json()["error"]["code"] == "terminal.messageInvalid"
+                third.send_json({"type": "close"})
+                assert third.receive_json()["reason"] == "terminated"
+        client.portal.call(env.coordinator.shutdown)
+    assert sum(op == "terminal.shared.open" for op, _ in env.calls) == 1
+    assert sum(op == "terminal.close" for op, _ in env.calls) == 1
+    assert ("terminal.write", {"terminalId": opened["terminalId"], "data": "eA=="}) in env.calls
 
-        async def receive_json(self):
-            return self.controls.pop(0)
 
-    client = SimpleNamespace(request=AsyncMock(return_value=TerminalControlResult()))
-    websocket = ControlWebSocket()
-    connection = BrowserTerminalConnection(
-        uuid4(),
-        uuid4(),
-        str(uuid4()),
-        client,  # type: ignore[arg-type]
-        websocket,  # type: ignore[arg-type]
-        session_id=uuid4(),
-        mode="auto",
-    )
+@pytest.mark.parametrize("invalid", ["login", "expiry", "inactive", "session", "tab", "agent", "generation"])
+async def test_no_viewer_validity_cleanup(env, monkeypatch, invalid):
+    monkeypatch.setattr(execution, "VALIDITY_INTERVAL", 0.01)
+    viewer = await open_viewer(env)
+    await env.coordinator.release(viewer)
+    if invalid == "login":
+        env.objects.pop((LoginSession, env.login.id))
+    elif invalid == "expiry":
+        env.login.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    elif invalid == "inactive":
+        env.user.is_active = False
+    elif invalid == "session":
+        env.objects.pop((ChatSession, env.session.id))
+    elif invalid == "tab":
+        env.session.control_center = {"tabs": []}
+    elif invalid == "agent":
+        env.session.preferred_execution_agent_id = uuid4()
+    else:
+        monkeypatch.setattr(execution.execution_agent_connections, "generation", lambda _id: 2)
+    await asyncio.wait_for(viewer.runtime.task, 1)
+    assert viewer.runtime.closed and not env.coordinator._runtimes
 
-    await terminals._handle_browser(connection)
 
-    assert (connection.rows, connection.columns) == (41, 132)
-    client.request.assert_not_awaited()
-    assert websocket.sent == []
+async def test_transient_db_failure_suspends_controls_without_killing_shell(env, monkeypatch):
+    monkeypatch.setattr(execution, "VALIDITY_INTERVAL", 0.01)
+    viewer = await open_viewer(env)
+    env.db.failure = True
+    await asyncio.sleep(0.03)
+    assert viewer.runtime.suspended_since is not None and not viewer.runtime.closed
+    with pytest.raises(ExecutionClientError, match="terminal.unavailable"):
+        await viewer.runtime.check_access()
+    env.db.failure = False
+    await asyncio.sleep(0.03)
+    assert viewer.runtime.suspended_since is None
+    await env.coordinator.shutdown()
+
+
+async def test_db_failure_grace_is_bounded(env, monkeypatch):
+    monkeypatch.setattr(execution, "VALIDITY_INTERVAL", 0.01)
+    monkeypatch.setattr(execution, "VALIDITY_GRACE", 0.02)
+    viewer = await open_viewer(env)
+    env.db.failure = True
+    await asyncio.wait_for(viewer.runtime.task, 1)
+    assert viewer.runtime.closed and env.calls[-1][0] == "terminal.close"
+
+
+async def test_login_takeover_and_stale_controls(env):
+    first = await open_viewer(env)
+    login = LoginSession(id=uuid4(), user_id=env.user.id, expires_at=env.login.expires_at)
+    env.objects[LoginSession, login.id] = login
+    second = await env.coordinator.open(env.user.id, env.session.id, env.agent.id, login.id, FakeWebSocket())
+    env.objects.pop((LoginSession, env.login.id))
+    first.websocket.receive_json = AsyncMock(return_value={"type": "close"})
+    await terminals._handle_browser(first)
+    await env.coordinator.release(first)
+    await second.runtime.check_access()
+    assert second.runtime.viewer is second and not second.runtime.closed
+    await env.coordinator.shutdown()
+
+
+async def test_bounded_raw_replay_and_slow_viewer_resync(env):
+    first = await open_viewer(env)
+    for _ in range(140):
+        await first.runtime.send_bytes(b"x" * 65536)
+    assert first.reason == "resyncRequired" and first.queue.empty()
+    second = await open_viewer(env)
+    second.queue.get_nowait()
+    snapshot = json.loads(second.queue.get_nowait()[0])
+    await first.runtime.send_bytes(b"after")
+    assert second.queue.get_nowait()[0] == b"after"
+    assert snapshot["personalTruncated"]
+    assert len(base64.b64decode(snapshot["personalData"])) == execution.REPLAY_BYTES
+    await env.coordinator.shutdown()
+
+
+async def test_concurrent_open_cancel_and_uncertain_response_cleanup(env, monkeypatch):
+    started, release = asyncio.Event(), asyncio.Event()
+    original = execution.ExecutionClient.request
+
+    async def request(self, operation, *args, **kwargs):
+        if operation == "terminal.shared.open":
+            started.set()
+            await release.wait()
+        return await original(self, operation, *args, **kwargs)
+
+    monkeypatch.setattr(execution.ExecutionClient, "request", request)
+    first = asyncio.create_task(open_viewer(env))
+    await started.wait()
+    first.cancel()
+    second = asyncio.create_task(open_viewer(env))
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    viewer = await second
+    assert sum(op == "terminal.shared.open" for op, _ in env.calls) == 1
+    await env.coordinator.terminate(viewer.runtime)
+    assert env.calls[-1] == ("terminal.close", {"terminalId": viewer.runtime.terminal_id})
+
+    async def uncertain(self, operation, arguments, *args, **kwargs):
+        if operation == "terminal.shared.open":
+            env.calls.append((operation, arguments))
+            raise ExecutionClientError("executionAgent.timeout")
+        return await original(self, operation, arguments, *args, **kwargs)
+
+    monkeypatch.setattr(execution.ExecutionClient, "request", uncertain)
+    with pytest.raises(ExecutionClientError):
+        await open_viewer(env)
+    assert env.calls[-1][0] == "terminal.close"
+    assert env.calls[-1][1]["terminalId"] == env.calls[-2][1]["terminalId"]
+    assert not env.coordinator._runtimes
+
+
+@pytest.mark.parametrize("limit", ["MAX_RUNTIMES", "MAX_OWNER_RUNTIMES", "MAX_AGENT_RUNTIMES"])
+async def test_runtime_limits_allow_resume_but_not_another_shell(env, monkeypatch, limit):
+    first = await open_viewer(env)
+    monkeypatch.setattr(execution, limit, 1)
+    assert (await open_viewer(env)).runtime is first.runtime
+    env.session = ChatSession(id=uuid4(), user_id=env.user.id, session_type="chat", preferred_execution_agent_id=env.agent.id,
+                              control_center={"tabs": [{"app_id": "terminal"}]})
+    env.objects[ChatSession, env.session.id] = env.session
+    with pytest.raises(ExecutionClientError, match="terminal.unavailable"):
+        await open_viewer(env)
+    await env.coordinator.shutdown()
+
+
+async def test_slow_open_does_not_hold_a_global_rpc_lock(env, monkeypatch):
+    started, release = asyncio.Event(), asyncio.Event()
+    original = execution.ExecutionClient.request
+
+    async def request(self, operation, *args, **kwargs):
+        if operation == "terminal.shared.open" and not started.is_set():
+            started.set()
+            await release.wait()
+        return await original(self, operation, *args, **kwargs)
+
+    monkeypatch.setattr(execution.ExecutionClient, "request", request)
+    first = asyncio.create_task(open_viewer(env))
+    await started.wait()
+    env.session = ChatSession(id=uuid4(), user_id=env.user.id, session_type="chat", preferred_execution_agent_id=env.agent.id,
+                              control_center={"tabs": [{"app_id": "terminal"}]})
+    env.objects[ChatSession, env.session.id] = env.session
+    second = await asyncio.wait_for(open_viewer(env), 1)
+    assert second.runtime.terminal_id and not first.done()
+    release.set()
+    await first
+    await env.coordinator.shutdown()
+
+
+async def test_explicit_close_queued_during_open_precedes_failed_snapshot_send(env, monkeypatch):
+    started, release = asyncio.Event(), asyncio.Event()
+    original = execution.ExecutionClient.request
+
+    async def request(self, operation, *args, **kwargs):
+        if operation == "terminal.shared.open":
+            started.set()
+            await release.wait()
+        return await original(self, operation, *args, **kwargs)
+
+    monkeypatch.setattr(execution.ExecutionClient, "request", request)
+    socket = FakeWebSocket(env.session.id)
+    socket.receive_json = AsyncMock(return_value={"type": "close"})
+    socket.send_text = AsyncMock(side_effect=WebSocketDisconnect())
+    browser = asyncio.create_task(terminals.browser_terminal(socket, env.agent.id))
+    await started.wait()
+    release.set()
+    await asyncio.wait_for(browser, 1)
+    assert not env.coordinator._runtimes
+    assert sum(op == "terminal.close" for op, _ in env.calls) == 1

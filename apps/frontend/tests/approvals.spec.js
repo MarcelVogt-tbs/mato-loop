@@ -7,6 +7,7 @@ vi.mock('src/boot/axios', () => ({
 
 import { useApprovalStore } from '../src/stores/approvals'
 import { api } from 'src/boot/axios'
+import { sharedDraft } from './terminal-websocket'
 
 describe('inline approvals', () => {
   beforeEach(() => {
@@ -83,6 +84,45 @@ describe('inline approvals', () => {
     })
   })
 
+  it.each(['allow_once', 'allow_session'])('binds shared %s to the review, without substituting a newer explicit revision', async (decision) => {
+    api.post.mockResolvedValue({ data: {} })
+    const approvals = useApprovalStore()
+    approvals.add({ id: 'shared', payload: { sharedDraft } })
+    await approvals.decide('shared', decision)
+    expect(api.post).toHaveBeenLastCalledWith('/approvals/shared/decisions', {
+      decision, expected_revision: sharedDraft.inspectionRevision
+    })
+    approvals.add({ id: 'shared', payload: { sharedDraft: { ...sharedDraft, inspectionRevision: 'newer' } } })
+    await approvals.decide('shared', decision, 'displayed-review')
+    expect(api.post).toHaveBeenLastCalledWith('/approvals/shared/decisions', {
+      decision, expected_revision: 'displayed-review'
+    })
+  })
+
+  it('does not bind denial to a shared review revision', async () => {
+    api.post.mockResolvedValue({ data: {} })
+    const approvals = useApprovalStore()
+    approvals.add({ id: 'shared', payload: { sharedDraft } })
+    await approvals.decide('shared', 'deny', 'stale')
+    expect(api.post).toHaveBeenCalledWith('/approvals/shared/decisions', { decision: 'deny' })
+  })
+
+  it('replaces updated reviews rather than duplicating them and invalidates an older pending fetch', async () => {
+    const approvals = useApprovalStore()
+    const original = { id: 'shared', payload: { sharedDraft }, details: { arguments: { command: 'original' } } }
+    approvals.add(original)
+    let finish
+    api.get.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const loading = approvals.fetchPending()
+    const updated = { id: 'shared', payload: { sharedDraft: { ...sharedDraft, command: 'edited', inspectionRevision: 'new' } } }
+    approvals.update(updated)
+    finish({ data: [original] })
+    await loading
+    expect(approvals.pending).toEqual([updated])
+    expect(approvals.pending[0].details).toBeUndefined()
+    expect(api.post).not.toHaveBeenCalled()
+  })
+
   it('does not preview an invalid child draft path or a non-session root', async () => {
     const approvals = useApprovalStore()
     for (const draftFile of [
@@ -110,6 +150,7 @@ describe('inline approvals', () => {
   it.each([
     'approval.runInactive',
     'approval.targetChanged',
+    'approval.decisionUnavailable',
     'approval.policyChanged'
   ])('reconciles terminal approval error %s', async (code) => {
     api.post.mockRejectedValue({ response: { data: { error: { code } } } })

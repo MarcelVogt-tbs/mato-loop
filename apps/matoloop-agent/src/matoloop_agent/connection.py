@@ -53,6 +53,12 @@ from .protocol import (
     Request,
     ResolveDirectoryArguments,
     Response,
+    SharedCancelArguments,
+    SharedExecuteArguments,
+    SharedInspectArguments,
+    SharedOpenArguments,
+    SharedStageArguments,
+    SharedStatusArguments,
     ShellArguments,
     ShellInspectArguments,
     StatArguments,
@@ -70,6 +76,7 @@ from .protocol import (
     validate_arguments,
 )
 from .search import FilesystemSearch
+from .shared_terminal import SHARED_OPERATIONS, SharedTerminals
 from .terminal import TerminalManager
 from .transfer import TransferClient
 
@@ -113,6 +120,7 @@ class MatoLoopAgent:
         self.cache = SessionCache(config.data_dir, config.max_session_cache_bytes)
         self.process = ProcessRunner(config, self.filesystem)
         self.terminal = TerminalManager(config, self.process)
+        self.shared_terminal = SharedTerminals(self.terminal)
         self.git = GitRunner(config, self.filesystem)
         self.search = FilesystemSearch(self.filesystem)
         self.transfer = transfer_client or TransferClient(
@@ -134,6 +142,10 @@ class MatoLoopAgent:
                 "terminal.close",
                 "terminal.run",
             }
+        if not self.shared_terminal.available:
+            operations -= SHARED_OPERATIONS
+        else:
+            operations |= {"terminal.read", "terminal.write", "terminal.resize", "terminal.close"}
         if self.search.executable is None:
             operations -= {"filesystem.glob", "filesystem.grep"}
         if self.git.executable is None:
@@ -390,6 +402,36 @@ class MatoLoopAgent:
             )
             result.setdefault("inspectionRevision", self.process._inspection_revision(result))
             return result
+        if isinstance(arguments, SharedOpenArguments):
+            return await self.shared_terminal.open(
+                arguments.rows, arguments.columns, terminal_id=arguments.terminal_id
+            )
+        if isinstance(arguments, SharedStatusArguments):
+            return await self.shared_terminal.get(arguments.terminal_id).status(
+                redisplay=arguments.redisplay
+            )
+        if isinstance(arguments, SharedExecuteArguments):
+            return await self.shared_terminal.get(arguments.terminal_id).execute(
+                arguments.command_id,
+                arguments.command,
+                arguments.expected_revision,
+                arguments.expected_context_revision,
+                arguments.expected_inspection_revision,
+                arguments.timeout_seconds,
+                stream,
+            )
+        if isinstance(arguments, SharedStageArguments):
+            return await self.shared_terminal.get(arguments.terminal_id).stage(
+                arguments.command_id, arguments.command
+            )
+        if isinstance(arguments, SharedInspectArguments):
+            return await self.shared_terminal.get(arguments.terminal_id).inspect(
+                arguments.command_id, freeze=arguments.freeze
+            )
+        if isinstance(arguments, SharedCancelArguments):
+            return await self.shared_terminal.get(arguments.terminal_id).cancel(
+                arguments.command_id
+            )
         if isinstance(arguments, TerminalOpenArguments):
             return await self.terminal.open(arguments.rows, arguments.columns)
         if isinstance(arguments, TerminalReadArguments):

@@ -82,7 +82,7 @@ jobs:
         working-directory: apps/matoloop-agent
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y ripgrep
+          sudo apt-get install --no-install-recommends -y ripgrep gcc libc6-dev bash-builtins libreadline-dev
           python -m pip install uv==0.10.9
           uv sync --frozen
       - name: Check MatoLoop Agent
@@ -195,6 +195,8 @@ jobs:
           python-version: "3.13"
       - name: Build native MatoLoop Agent
         run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gcc libc6-dev bash-builtins libreadline-dev
           python -m pip install uv==0.10.9
           bash scripts/build-matoloop-agent-artifact.sh "develop-${GITHUB_SHA:0:12}"
       - name: Upload native MatoLoop Agent

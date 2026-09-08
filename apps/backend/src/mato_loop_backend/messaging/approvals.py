@@ -317,7 +317,7 @@ async def resolve_approval_action(
     decision: ApprovalDecision,
     source_external_message_id: str | None = None,
 ) -> dict[str, str]:
-    approval = await db.get(ApprovalRequest, approval_id, with_for_update=True)
+    approval = await db.get(ApprovalRequest, approval_id)
     if (
         approval is None
         or approval.id != approval_id

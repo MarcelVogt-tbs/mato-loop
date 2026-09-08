@@ -1,526 +1,482 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
+import logging
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import WebSocket
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError
 
-from mato_loop_backend.agent.coordinator import approval_coordinator
-from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
+from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import describe_error
-from mato_loop_backend.events import run_events
-from mato_loop_backend.execution.client import ExecutionClient, ExecutionClientError, ProcessResult
-from mato_loop_backend.models import AgentRun, ApprovalRequest, ChatSession
+from mato_loop_backend.execution.client import (
+    ExecutionClient,
+    ExecutionClientError,
+    SharedTerminalStatus,
+    TerminalControlResult,
+    TerminalOpenResult,
+    TerminalReadResult,
+)
+from mato_loop_backend.execution.manager import execution_agent_connections
+from mato_loop_backend.models import ChatSession, ExecutionAgent, LoginSession, UserAccount
 
-TerminalMode = Literal["auto", "confirm"]
+MAX_RUNTIMES = 64
+MAX_OWNER_RUNTIMES = 16
+MAX_AGENT_RUNTIMES = 6
+REPLAY_BYTES = 256 * 1024
+VIEWER_BYTES = 2 * 1024 * 1024
+VALIDITY_INTERVAL = 2
+VALIDITY_GRACE = 30
+TERMINAL_OPERATIONS = frozenset({
+    "terminal.read", "terminal.write", "terminal.resize", "terminal.close",
+    "terminal.shared.open", "terminal.shared.status", "terminal.shared.stage",
+    "terminal.shared.inspect", "terminal.shared.execute", "terminal.shared.cancel",
+})
+logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True, slots=True)
-class TerminalDecision:
-    execute: bool
-    command_line: str | None = None
-    explicit_denial: bool = False
+def agent_generation(agent_id: UUID) -> int | None:
+    return execution_agent_connections.generation(agent_id)
+
+
+async def validate_terminal_access(
+    user_id: UUID, session_id: UUID, agent_id: UUID, login_id: UUID,
+) -> ExecutionAgent:
+    async with asyncio.timeout(3), AsyncSessionFactory() as db:
+        login = await db.get(LoginSession, login_id)
+        user = await db.get(UserAccount, user_id)
+        if (
+            login is None or login.user_id != user_id
+            or login.expires_at <= datetime.now(UTC) or user is None or not user.is_active
+        ):
+            raise ExecutionClientError("auth.sessionExpired")
+        session = await db.get(ChatSession, session_id)
+        if (
+            session is None or session.user_id != user_id
+            or session.session_type != "chat" or session.parent_session_id is not None
+        ):
+            raise ExecutionClientError("session.notFound")
+        if session.preferred_execution_agent_id != agent_id:
+            raise ExecutionClientError("terminal.agentMismatch")
+        if not any(
+            tab.get("app_id") == "terminal" and tab.get("kind", "app") == "app"
+            for tab in (session.control_center or {}).get("tabs", [])
+        ):
+            raise ExecutionClientError("terminal.disconnected")
+        agent = await db.get(ExecutionAgent, agent_id)
+        if (
+            agent is None or agent.user_id != user_id or agent.revoked_at is not None
+            or agent.home_directory is None
+        ):
+            raise ExecutionClientError("executionAgent.notFound")
+        operations = execution_agent_connections.snapshot(agent_id)
+        if operations is None:
+            raise ExecutionClientError("executionAgent.unavailable")
+        if not TERMINAL_OPERATIONS.issubset(operations):
+            raise ExecutionClientError("executionAgent.operationUnavailable")
+        return agent
 
 
 @dataclass(slots=True)
 class BrowserTerminalConnection:
+    runtime: TerminalRuntime
+    websocket: WebSocket
+    queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=128))
+    queued_bytes: int = 0
+    ended: asyncio.Event = field(default_factory=asyncio.Event)
+    reason: str = "released"
+
+    def stop(self, reason: str) -> None:
+        self.reason = reason
+        self.ended.set()
+        while not self.queue.empty():
+            self.queue.get_nowait()
+        self.queued_bytes = 0
+
+    def enqueue(self, payload: dict[str, Any] | bytes) -> None:
+        if self.ended.is_set():
+            return
+        data = payload if isinstance(payload, bytes) else json.dumps(payload)
+        size = len(data) if isinstance(data, bytes) else len(data.encode())
+        if self.queue.full() or self.queued_bytes + size > VIEWER_BYTES:
+            self.stop("resyncRequired")
+            return
+        self.queue.put_nowait((data, size))
+        self.queued_bytes += size
+
+    async def send(self) -> None:
+        while not self.ended.is_set():
+            data, size = await self.queue.get()
+            self.queued_bytes -= size
+            try:
+                async with asyncio.timeout(5):
+                    if isinstance(data, bytes):
+                        await self.websocket.send_bytes(data)
+                    else:
+                        await self.websocket.send_text(data)
+            except TimeoutError:
+                self.stop("resyncRequired")
+
+
+@dataclass(slots=True)
+class TerminalRuntime:
     user_id: UUID
+    owner_session_id: UUID
     agent_id: UUID
+    login_id: UUID
     terminal_id: str
     client: ExecutionClient
-    websocket: WebSocket
-    session_id: UUID | None = None
-    mode: TerminalMode = "auto"
-    active_run_id: UUID | None = None
-    active_terminal_id: str | None = None
-    active_confirm: bool = False
+    generation: int
+    viewer: BrowserTerminalConnection | None = None
+    attached: bool = False
+    active_tool_call_id: str | None = None
+    command_id: UUID | None = None
+    pending: dict[str, Any] | None = None
+    command_task: asyncio.Task | None = None
+    task: asyncio.Task | None = None
+    opening_task: asyncio.Task | None = None
+    cleanup_task: asyncio.Task | None = None
+    closed: bool = False
+    suspended_since: float | None = None
+    personal_buffer: bytes = b""
+    personal_truncated: bool = False
+    native_status: SharedTerminalStatus | None = None
     rows: int = 24
     columns: int = 80
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    control_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def status(self) -> dict[str, Any]:
+        native = self.native_status
+        return {
+            "terminalId": self.terminal_id,
+            "attached": self.attached,
+            "busy": self.command_id is not None or (native is not None and native.state != "idle"),
+            "state": "closed" if self.closed else
+            "running" if self.command_task is not None and not self.command_task.done() else
+            native.state if native else "busy",
+            "activeToolCallId": self.active_tool_call_id,
+            "currentDirectory": native.current_directory if native else self.client.current_directory,
+            "suspended": self.suspended_since is not None,
+            "pending": self.pending,
+        }
 
     async def send_json(self, payload: dict[str, Any]) -> None:
         async with self.send_lock:
-            await self.websocket.send_json(payload)
+            if self.viewer is not None:
+                self.viewer.enqueue(payload)
 
     async def send_bytes(self, payload: bytes) -> None:
         async with self.send_lock:
-            await self.websocket.send_bytes(payload)
+            self.personal_truncated |= len(self.personal_buffer) + len(payload) > REPLAY_BYTES
+            self.personal_buffer = (self.personal_buffer + payload)[-REPLAY_BYTES:]
+            if self.viewer is not None:
+                self.viewer.enqueue(payload)
+
+    async def send_status(self) -> None:
+        await self.send_json({"type": "terminal.status", **self.status()})
+
+    async def refresh_status(self, *, redisplay: bool = False) -> SharedTerminalStatus:
+        result = await self.client.request(
+            "terminal.shared.status", {"terminalId": self.terminal_id, "redisplay": redisplay},
+            SharedTerminalStatus, timeout=2,
+        )
+        if str(result.terminal_id) != self.terminal_id:
+            raise ExecutionClientError("executionAgent.protocolError")
+        if self.native_status != result:
+            self.native_status = result
+            await self.send_status()
+        if result.state == "closed":
+            raise ExecutionClientError("terminal.disconnected")
+        return result
+
+    async def check_access(self) -> None:
+        while True:
+            if self.closed or self.generation != agent_generation(self.agent_id):
+                raise ExecutionClientError("terminal.disconnected")
+            login_id = self.login_id
+            try:
+                await validate_terminal_access(self.user_id, self.owner_session_id, self.agent_id, login_id)
+            except (SQLAlchemyError, TimeoutError) as exc:
+                if login_id != self.login_id:
+                    continue
+                if self.suspended_since is None:
+                    self.suspended_since = asyncio.get_running_loop().time()
+                raise ExecutionClientError("terminal.unavailable") from exc
+            except ExecutionClientError:
+                if login_id != self.login_id:
+                    continue
+                raise
+            if login_id == self.login_id:
+                break
+        if self.closed:
+            raise ExecutionClientError("terminal.disconnected")
+        self.suspended_since = None
 
     async def error(self, code: str) -> None:
         await self.send_json({"type": "error", "error": describe_error(code).payload()})
 
 
-@dataclass(slots=True)
-class _Proposal:
-    approval_id: UUID
-    user_id: UUID
-    session_id: UUID
-    run_id: UUID
-    tool_call_id: str
-    tool: Literal["shell_run"]
-    agent_id: UUID
-    current_directory: str
-    requested_arguments: dict[str, Any]
-    command_line: str
-    resolved: bool = False
-
-    def message(self) -> dict[str, Any]:
-        return {
-            "type": "command.proposed",
-            "approvalId": str(self.approval_id),
-            "sessionId": str(self.session_id),
-            "runId": str(self.run_id),
-            "toolCallId": self.tool_call_id,
-            "tool": self.tool,
-            "command": self.command_line,
-            "currentDirectory": self.current_directory,
-            "requestedArguments": self.requested_arguments,
-        }
+async def read_terminal(runtime: TerminalRuntime) -> None:
+    while not runtime.closed:
+        try:
+            result = await runtime.client.request(
+                "terminal.read",
+                {"terminalId": runtime.terminal_id, "maxBytes": 65_536, "waitSeconds": 5},
+                TerminalReadResult, timeout=10,
+            )
+        except ExecutionClientError as exc:
+            if exc.code == "executionAgent.timeout":
+                continue
+            raise
+        if result.data:
+            await runtime.send_bytes(base64.b64decode(result.data, validate=True))
+        if result.eof:
+            return
 
 
 class TerminalCoordinator:
     def __init__(self) -> None:
-        self._attachments: dict[UUID, BrowserTerminalConnection] = {}
-        self._proposals: dict[UUID, _Proposal] = {}
-        self._proposal_by_session: dict[UUID, UUID] = {}
-        self._running_by_session: dict[UUID, UUID] = {}
-        self._lock = asyncio.Lock()
+        self._runtimes: dict[tuple[UUID, UUID, UUID], TerminalRuntime] = {}
+        self._opening: dict[tuple[UUID, UUID, UUID], asyncio.Task] = {}
+        self._stopping = False
 
-    def mode_for(
-        self, *, user_id: UUID, session_id: UUID, agent_id: UUID, current_directory: str | None
-    ) -> TerminalMode | None:
-        connection = self._attachments.get(session_id)
-        if (
-            connection is None
-            or connection.user_id != user_id
-            or connection.agent_id != agent_id
-            or current_directory is None
-        ):
-            return None
-        return connection.mode
-
-    async def attach(
-        self,
-        connection: BrowserTerminalConnection,
-        session: ChatSession,
-        mode: TerminalMode,
-    ) -> None:
-        async with self._lock:
-            existing = self._attachments.get(session.id)
-            if existing is not None and existing is not connection:
-                raise ValueError("terminal.sessionAttached")
-            if connection.session_id is not None and connection.session_id != session.id:
-                raise ValueError("terminal.alreadyAttached")
-            connection.session_id = session.id
-            connection.mode = mode
-            self._attachments[session.id] = connection
-            proposal_id = self._proposal_by_session.get(session.id)
-            proposal = self._proposals.get(proposal_id) if proposal_id is not None else None
-            if proposal is not None and not proposal.resolved:
-                mode = "confirm"
-                connection.mode = mode
-        await connection.send_json(
-            {
-                "type": "session.attached",
-                "sessionId": str(session.id),
-                "mode": mode,
-                "proposal": (
-                    proposal.message()
-                    if proposal is not None and not proposal.resolved
-                    else None
-                ),
-            }
-        )
-
-    async def detach(self, connection: BrowserTerminalConnection) -> None:
-        async with self._lock:
-            session_id = connection.session_id
-            if session_id is None:
-                return
-            if self._busy(connection, session_id):
-                raise ValueError("terminal.commandActive")
-            if self._attachments.get(session_id) is connection:
-                self._attachments.pop(session_id, None)
-            connection.session_id = None
-        await connection.send_json({"type": "session.detached", "sessionId": str(session_id)})
-
-    async def set_mode(
-        self, connection: BrowserTerminalConnection, mode: TerminalMode
-    ) -> None:
-        async with self._lock:
-            session_id = connection.session_id
-            if session_id is None:
-                raise ValueError("terminal.notAttached")
-            if self._busy(connection, session_id):
-                raise ValueError("terminal.commandActive")
-            connection.mode = mode
-        await connection.send_json({"type": "mode.changed", "mode": mode})
-
-    async def disconnect(self, connection: BrowserTerminalConnection) -> None:
-        async with self._lock:
-            session_id = connection.session_id
-            if session_id is not None and self._attachments.get(session_id) is connection:
-                self._attachments.pop(session_id, None)
-            connection.session_id = None
-
-    @staticmethod
-    def input_terminal_id(connection: BrowserTerminalConnection) -> str | None:
-        if connection.session_id is None:
-            return connection.terminal_id
-        if connection.active_confirm:
-            return connection.active_terminal_id
-        return None
-
-    @staticmethod
-    def resize_terminal_id(
-        connection: BrowserTerminalConnection, *, rows: int, columns: int
-    ) -> str | None:
-        connection.rows = rows
-        connection.columns = columns
-        if connection.session_id is None:
-            return connection.terminal_id
-        return connection.active_terminal_id
-
-    async def propose(
-        self,
-        db: AsyncSession,
-        *,
-        user_id: UUID,
-        session_id: UUID,
-        run_id: UUID,
-        tool_call_id: str,
-        tool: Literal["shell_run"],
-        agent_id: UUID,
-        current_directory: str,
-        requested_arguments: dict[str, Any],
-        command_line: str,
-    ) -> TerminalDecision:
-        connection = self._attachments.get(session_id)
-        if connection is None or connection.mode != "confirm":
-            raise ExecutionClientError("terminal.disconnected")
-        run = await db.get(AgentRun, run_id)
-        if (
-            run is None
-            or run.session_id != session_id
-            or run.execution_agent_id != agent_id
-            or run.current_directory_snapshot != current_directory
-        ):
-            raise ExecutionClientError("terminal.disconnected")
-        approval = ApprovalRequest(
-            request_type="agent_action",
-            user_id=user_id,
-            session_id=session_id,
-            run_id=run_id,
-            action_kind="terminal_command",
-            risk_level="high",
-            title="Terminal-Befehl ausführen?",
-            reason="Im Control Center vorgeschlagener Befehl",
-            summary="Der Agent möchte einen Befehl im verbundenen Terminal ausführen.",
-            capability="terminal.command",
-            resource_type="terminal_command",
-            resource_scope=current_directory,
-            payload={
-                "terminalControl": True,
-                "toolCallId": tool_call_id,
-                "tool": tool,
-                "agentId": str(agent_id),
-                "currentDirectory": current_directory,
-                "requestedArguments": requested_arguments,
-                "command": command_line,
-            },
-            available_decisions=["execute", "deny"],
-            status="pending",
-        )
-        db.add(approval)
-        transition_run_status(run, "waiting_approval")
-        await db.flush()
-        proposal = _Proposal(
-            approval.id,
-            user_id,
-            session_id,
-            run_id,
-            tool_call_id,
-            tool,
-            agent_id,
-            current_directory,
-            requested_arguments,
-            command_line,
-        )
-        waiter = approval_coordinator.register(approval.id)
-        async with self._lock:
-            if session_id in self._proposal_by_session:
-                approval_coordinator.discard(approval.id)
-                raise RuntimeError("terminal proposal already exists")
-            self._proposals[approval.id] = proposal
-            self._proposal_by_session[session_id] = approval.id
-        try:
-            await db.commit()
-        except Exception:
-            await self._remove_proposal(proposal)
-            approval_coordinator.discard(approval.id)
-            raise
-        await run_events.publish(
-            run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}
-        )
-        current = self._attachments.get(session_id)
-        if current is not None:
-            with suppress(Exception):
-                await current.send_json(proposal.message())
-        try:
-            decision = await asyncio.shield(waiter)
-        except asyncio.CancelledError:
-            await db.rollback()
-            current_approval = await db.get(ApprovalRequest, approval.id)
-            if current_approval is not None and current_approval.status == "pending":
-                current_approval.status = "expired"
-                current_approval.resolved_at = datetime.now(UTC)
-                await db.commit()
-            self._complete_cancelled(proposal)
-            await self._notify_cancelled(proposal, "cancelled")
-            raise
-        finally:
-            await self._remove_proposal(proposal)
-            approval_coordinator.discard(approval.id)
-        await db.refresh(run)
-        if run.status == "waiting_approval":
-            transition_run_status(run, "running")
-            await db.commit()
-            await run_events.publish(
-                run.id,
-                {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)},
-            )
-        if not isinstance(decision, TerminalDecision):
-            raise ExecutionClientError("terminal.disconnected")
-        return decision
-
-    async def resolve(
-        self,
-        db: AsyncSession,
-        connection: BrowserTerminalConnection,
-        approval_id: UUID,
-        *,
-        command_line: str | None,
-    ) -> None:
-        proposal = self._proposals.get(approval_id)
-        if proposal is None or proposal.resolved:
-            raise ValueError("terminal.proposalUnavailable")
-        if (
-            connection.session_id != proposal.session_id
-            or connection.user_id != proposal.user_id
-            or connection.agent_id != proposal.agent_id
-            or connection.mode != "confirm"
-        ):
-            raise ValueError("terminal.proposalUnavailable")
-        if command_line is not None:
-            self._validate_command(proposal.tool, command_line)
-        approval = await db.get(ApprovalRequest, approval_id, with_for_update=True)
-        session = await db.get(ChatSession, proposal.session_id)
-        run = await db.get(AgentRun, proposal.run_id)
-        valid = (
-            approval is not None
-            and approval.status == "pending"
-            and approval.user_id == proposal.user_id
-            and approval.session_id == proposal.session_id
-            and approval.run_id == proposal.run_id
-            and approval.action_kind == "terminal_command"
-            and approval.payload.get("toolCallId") == proposal.tool_call_id
-            and approval.payload.get("agentId") == str(proposal.agent_id)
-            and approval.payload.get("currentDirectory") == proposal.current_directory
-            and session is not None
-            and session.user_id == proposal.user_id
-            and session.preferred_execution_agent_id == proposal.agent_id
-            and session.current_directory == proposal.current_directory
-            and run is not None
-            and run.status == "waiting_approval"
-            and run.session_id == proposal.session_id
-            and run.execution_agent_id == proposal.agent_id
-            and run.current_directory_snapshot == proposal.current_directory
-        )
-        if not valid or not approval_coordinator.claim_resolution(approval_id):
-            if approval is not None and approval.status == "pending":
-                approval.status = "expired"
-                approval.resolved_at = datetime.now(UTC)
-                await db.commit()
-            self._complete_cancelled(proposal)
-            await self._notify_cancelled(proposal, "expired")
-            raise ValueError("terminal.proposalStale")
-        assert approval is not None
-        approval.status = "approved" if command_line is not None else "denied"
-        approval.decision = "execute" if command_line is not None else "deny"
-        approval.resolved_at = datetime.now(UTC)
-        if command_line is not None:
-            approval.payload = {**approval.payload, "approvedCommand": command_line}
-        commit_task = asyncio.create_task(db.commit())
-        cancelled = False
-        try:
-            await asyncio.shield(commit_task)
-        except asyncio.CancelledError:
-            cancelled = True
-            try:
-                await commit_task
-            except Exception:
-                approval_coordinator.release_resolution(approval_id)
-                raise
-        except Exception:
-            approval_coordinator.release_resolution(approval_id)
-            raise
-        if not approval_coordinator.complete_resolution(
-            approval_id,
-            TerminalDecision(
-                command_line is not None,
-                command_line,
-                explicit_denial=command_line is None,
-            ),
-        ):
-            approval.status = "expired"
-            approval.decision = None
-            await db.commit()
-            proposal.resolved = True
-            await self._notify_cancelled(proposal, "expired")
-            raise ValueError("terminal.proposalStale")
-        proposal.resolved = True
-        if cancelled:
-            raise asyncio.CancelledError
-        await connection.send_json(
-            {
-                "type": "command.resolved",
-                "approvalId": str(approval_id),
-                "decision": approval.decision,
-            }
-        )
-
-    async def run(
-        self,
-        *,
-        user_id: UUID,
-        session_id: UUID,
-        run_id: UUID,
-        tool_call_id: str,
-        agent_id: UUID,
-        current_directory: str,
-        arguments: dict[str, Any],
-        confirm: bool,
-        on_event,
-    ) -> ProcessResult:
-        terminal_id = str(uuid4())
-        async with self._lock:
-            connection = self._attachments.get(session_id)
+    async def open(
+        self, user_id: UUID, session_id: UUID, agent_id: UUID, login_id: UUID,
+        websocket: WebSocket,
+    ) -> BrowserTerminalConnection:
+        agent = await validate_terminal_access(user_id, session_id, agent_id, login_id)
+        if self._stopping:
+            raise ExecutionClientError("terminal.unavailable")
+        key = (user_id, session_id, agent_id)
+        runtime = self._runtimes.get(key)
+        if runtime is not None and runtime.generation != agent_generation(agent_id):
+            await self.terminate(runtime)
+            runtime = None
+        restored = runtime is not None or key in self._opening
+        opening = self._opening.get(key)
+        if runtime is None and opening is None:
+            keys = self._runtimes.keys() | self._opening.keys()
             if (
-                connection is None
-                or connection.user_id != user_id
-                or connection.agent_id != agent_id
-                or connection.active_run_id is not None
-                or session_id in self._running_by_session
+                len(keys) >= MAX_RUNTIMES
+                or sum(item[0] == user_id for item in keys) >= MAX_OWNER_RUNTIMES
+                or sum(item[2] == agent_id for item in keys) >= MAX_AGENT_RUNTIMES
             ):
+                raise ExecutionClientError("terminal.unavailable")
+            # Reservations and publication are synchronous in the single worker.
+            opening = asyncio.create_task(self._create(user_id, session_id, agent_id, login_id, agent.home_directory))
+            self._opening[key] = opening
+
+            def finished(task: asyncio.Task) -> None:
+                if self._opening.get(key) is task:
+                    self._opening.pop(key)
+                if not task.cancelled():
+                    task.exception()
+
+            opening.add_done_callback(finished)
+        if opening is not None:
+            runtime = await asyncio.shield(opening)
+        assert runtime is not None
+        async with runtime.control_lock:
+            await validate_terminal_access(user_id, session_id, agent_id, login_id)
+            if runtime.closed or runtime.generation != agent_generation(agent_id):
                 raise ExecutionClientError("terminal.disconnected")
-            connection.active_run_id = run_id
-            connection.active_terminal_id = terminal_id
-            connection.active_confirm = confirm
-            self._running_by_session[session_id] = run_id
-        result: ProcessResult | None = None
-        cancelled = False
-        try:
-            await connection.send_json(
-                {
-                    "type": "command.started",
-                    "runId": str(run_id),
-                    "toolCallId": tool_call_id,
-                    "terminalId": terminal_id,
-                }
-            )
-            result = await connection.client.request(
-                "terminal.run",
-                {
-                    "terminalId": terminal_id,
-                    "currentDirectory": current_directory,
-                    "rows": connection.rows,
-                    "columns": connection.columns,
-                    **arguments,
-                },
-                ProcessResult,
-                timeout=3_610,
-                on_event=on_event,
-            )
-            assert isinstance(result, ProcessResult)
-            return result
-        except asyncio.CancelledError:
-            cancelled = True
-            raise
-        finally:
-            async with self._lock:
-                if connection.active_run_id == run_id:
-                    connection.active_run_id = None
-                    connection.active_terminal_id = None
-                    connection.active_confirm = False
-                if self._running_by_session.get(session_id) == run_id:
-                    self._running_by_session.pop(session_id, None)
-            with suppress(Exception):
-                await connection.send_json(
-                    {
-                        "type": "command.cancelled" if cancelled else "command.finished",
-                        "runId": str(run_id),
-                        "toolCallId": tool_call_id,
-                        "terminalId": terminal_id,
-                        **(result.model_dump(by_alias=True) if result is not None else {}),
-                    }
-                )
+            await runtime.refresh_status(redisplay=True)
+            if runtime.closed or runtime.native_status.state == "closed":
+                raise ExecutionClientError("terminal.disconnected")
+            async with runtime.send_lock:
+                if runtime.viewer is not None:
+                    runtime.viewer.stop("replaced")
+                viewer = BrowserTerminalConnection(runtime, websocket)
+                runtime.viewer = viewer
+                runtime.login_id = login_id
+                runtime.suspended_since = None
+                viewer.enqueue({"type": "terminal.opened", "restored": restored, **runtime.status()})
+                viewer.enqueue({
+                    "type": "terminal.snapshot", **runtime.status(),
+                    "personalData": base64.b64encode(runtime.personal_buffer).decode("ascii"),
+                    "personalTruncated": runtime.personal_truncated,
+                    "rows": runtime.rows, "columns": runtime.columns,
+                })
+                return viewer
 
-    def _busy(self, connection: BrowserTerminalConnection, session_id: UUID) -> bool:
-        return (
-            connection.active_run_id is not None
-            or session_id in self._proposal_by_session
-            or session_id in self._running_by_session
+    async def _create(self, user_id, session_id, agent_id, login_id, home) -> TerminalRuntime:
+        generation = agent_generation(agent_id)
+        if generation is None:
+            raise ExecutionClientError("executionAgent.unavailable")
+        runtime = TerminalRuntime(
+            user_id, session_id, agent_id, login_id, str(uuid4()),
+            ExecutionClient(agent_id, TERMINAL_OPERATIONS, home, expected_generation=generation), generation,
         )
-
-    async def _remove_proposal(self, proposal: _Proposal) -> None:
-        async with self._lock:
-            self._proposals.pop(proposal.approval_id, None)
-            if self._proposal_by_session.get(proposal.session_id) == proposal.approval_id:
-                self._proposal_by_session.pop(proposal.session_id, None)
-
-    @staticmethod
-    def _complete_cancelled(proposal: _Proposal) -> None:
-        if approval_coordinator.claim_resolution(proposal.approval_id):
-            approval_coordinator.complete_resolution(
-                proposal.approval_id, TerminalDecision(False)
+        key = (user_id, session_id, agent_id)
+        runtime.opening_task = asyncio.current_task()
+        self._runtimes[key] = runtime
+        try:
+            opened = await runtime.client.request(
+                "terminal.shared.open",
+                {"terminalId": runtime.terminal_id, "rows": 24, "columns": 80},
+                TerminalOpenResult, timeout=5,
             )
-        proposal.resolved = True
-
-    async def _notify_cancelled(self, proposal: _Proposal, reason: str) -> None:
-        connection = self._attachments.get(proposal.session_id)
-        if connection is not None:
+            if str(opened.terminal_id) != runtime.terminal_id:
+                raise ExecutionClientError("executionAgent.protocolError")
+            if self._stopping or runtime.closed:
+                raise ExecutionClientError("terminal.disconnected")
+            runtime.task = asyncio.create_task(self._supervise(runtime))
+            return runtime
+        except BaseException:
+            # The caller-specified ID also permits cleanup after an uncertain open response.
             with suppress(Exception):
-                await connection.send_json(
-                    {
-                        "type": "command.cancelled",
-                        "approvalId": str(proposal.approval_id),
-                        "runId": str(proposal.run_id),
-                        "toolCallId": proposal.tool_call_id,
-                        "reason": reason,
-                    }
-                )
+                async with asyncio.timeout(4):
+                    await runtime.client.request(
+                        "terminal.close", {"terminalId": runtime.terminal_id}, TerminalControlResult, timeout=3,
+                    )
+            if self._runtimes.get(key) is runtime:
+                self._runtimes.pop(key)
+            raise
 
-    @staticmethod
-    def _validate_command(tool: str, command_line: str) -> None:
-        if (
-            not command_line
-            or len(command_line) > 256 * 1024
-            or any(ord(character) < 32 and character not in "\t\n" for character in command_line)
-        ):
-            raise ValueError("terminal.commandInvalid")
+    async def release(self, viewer: BrowserTerminalConnection) -> None:
+        async with viewer.runtime.control_lock:
+            if viewer.runtime.viewer is viewer:
+                viewer.runtime.viewer = None
+            viewer.stop(viewer.reason)
+
+    async def _watch(self, runtime: TerminalRuntime) -> None:
+        while True:
+            await asyncio.sleep(VALIDITY_INTERVAL)
+            login_id = runtime.login_id
+            try:
+                await validate_terminal_access(runtime.user_id, runtime.owner_session_id, runtime.agent_id, login_id)
+            except (SQLAlchemyError, TimeoutError):
+                if login_id != runtime.login_id:
+                    continue
+                now = asyncio.get_running_loop().time()
+                if runtime.suspended_since is None:
+                    runtime.suspended_since = now
+                    await runtime.send_status()
+                if now - runtime.suspended_since < VALIDITY_GRACE:
+                    continue
+                raise ExecutionClientError("terminal.unavailable") from None
+            except ExecutionClientError:
+                if login_id != runtime.login_id:
+                    continue
+                raise
+            if runtime.generation != agent_generation(runtime.agent_id):
+                raise ExecutionClientError("executionAgent.replaced")
+            if runtime.suspended_since is not None:
+                runtime.suspended_since = None
+                await runtime.send_status()
+
+    async def _watch_status(self, runtime: TerminalRuntime) -> None:
+        while True:
+            await asyncio.sleep(VALIDITY_INTERVAL)
+            # Native foreground status may take a second; never delay login reconciliation.
+            if runtime.viewer is not None and runtime.command_id is None:
+                try:
+                    await runtime.refresh_status()
+                except ExecutionClientError as exc:
+                    if exc.code != "executionAgent.timeout":
+                        raise
+
+    async def _supervise(self, runtime: TerminalRuntime) -> None:
+        tasks = {
+            asyncio.create_task(read_terminal(runtime)), asyncio.create_task(self._watch(runtime)),
+            asyncio.create_task(self._watch_status(runtime)),
+        }
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
+        except ExecutionClientError as exc:
+            await runtime.error(exc.code)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Shared terminal runtime failed")
+        finally:
+            runtime.closed = True
+            if runtime.viewer is not None:
+                runtime.viewer.stop("terminated")
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if runtime.cleanup_task is None:
+                await self.terminate(runtime)
+
+    async def terminate(self, runtime: TerminalRuntime, viewer: BrowserTerminalConnection | None = None) -> None:
+        # Do not wait for browser controls before stopping the real process.
+        if viewer is not None and runtime.viewer is not viewer:
+            return
+        if runtime.cleanup_task is None:
+            runtime.closed = True
+            if runtime.viewer is not None:
+                runtime.viewer.stop("terminated")
+            runtime.cleanup_task = asyncio.create_task(self._terminate(runtime, asyncio.current_task()))
+        await asyncio.shield(runtime.cleanup_task)
+
+    async def _terminate(self, runtime: TerminalRuntime, initiator: asyncio.Task | None) -> None:
+        try:
+            if runtime.opening_task is not None and not runtime.opening_task.done():
+                with suppress(Exception, asyncio.CancelledError):
+                    async with asyncio.timeout(6):
+                        await asyncio.shield(runtime.opening_task)
+            with suppress(Exception):
+                async with asyncio.timeout(4):
+                    await runtime.client.request(
+                        "terminal.close", {"terminalId": runtime.terminal_id}, TerminalControlResult, timeout=3,
+                    )
+            tasks = [task for task in (runtime.task, runtime.command_task)
+                     if task is not None and task is not initiator]
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.wait(tasks, timeout=2)
+            # Process cleanup must precede database audit, which may be unavailable.
+            if runtime.command_id is not None:
+                from mato_loop_backend.agent.shared_shell import cancel_pending
+
+                with suppress(Exception):
+                    async with asyncio.timeout(3):
+                        await cancel_pending(runtime.command_id)
+        finally:
+            runtime.viewer = None
+            runtime.attached = False
+            runtime.personal_buffer = b""
+            key = (runtime.user_id, runtime.owner_session_id, runtime.agent_id)
+            if self._runtimes.get(key) is runtime:
+                self._runtimes.pop(key)
+
+    async def shutdown(self) -> None:
+        self._stopping = True
+        if self._opening:
+            _, pending = await asyncio.wait(list(self._opening.values()), timeout=10)
+            for task in pending:
+                task.cancel()
+        tasks = [asyncio.create_task(self.terminate(runtime)) for runtime in list(self._runtimes.values())]
+        if tasks:
+            await asyncio.wait(tasks, timeout=16)
+
+    def attached_for(self, *, user_id: UUID, session_id: UUID, agent_id: UUID) -> TerminalRuntime | None:
+        runtime = self._runtimes.get((user_id, session_id, agent_id))
+        # Keep failed/suspended bindings visible: a tool must not fall back to an isolated shell.
+        return runtime if runtime is not None and runtime.attached else None
+
+    async def attach(self, runtime: TerminalRuntime) -> None:
+        if runtime.closed:
+            raise ValueError("terminal.disconnected")
+        runtime.attached = True
+        await runtime.send_status()
+
+    async def detach(self, runtime: TerminalRuntime) -> None:
+        if runtime.command_id is not None:
+            raise ValueError("terminal.commandActive")
+        runtime.attached = False
+        await runtime.send_status()
 
 
 terminal_coordinator = TerminalCoordinator()
-
-
-__all__ = [
-    "BrowserTerminalConnection",
-    "TerminalDecision",
-    "TerminalMode",
-    "terminal_coordinator",
-]

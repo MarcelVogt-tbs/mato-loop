@@ -21,6 +21,7 @@ from mato_loop_backend.attachments import AttachmentService
 from mato_loop_backend.automations import AutomationScheduler, AutomationService
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
+from mato_loop_backend.execution.terminals import terminal_coordinator
 from mato_loop_backend.memory.dreaming import DreamingScheduler, DreamingService
 from mato_loop_backend.memory.embeddings import embedding_client
 from mato_loop_backend.memory.episode_indexing import (
@@ -160,7 +161,7 @@ async def lifespan(_app: FastAPI):
         await EpisodeIndexScheduler.stop()
         await CodingScheduler.stop()
         await TelegramScheduler.stop()
-        await AgentRuntime.shutdown()
+        await asyncio.gather(terminal_coordinator.shutdown(), AgentRuntime.shutdown())
         await embedding_client.close()
         await engine.dispose()
 

@@ -604,7 +604,7 @@ const showFloatingControls = computed(() => (
   showFloatingNavigation.value || showFloatingControlCenter.value
 ))
 const attentionCount = computed(() => (
-  approvals.pending.length + questions.pending.length + (terminal.pendingProposal ? 1 : 0)
+  approvals.pending.length + questions.pending.length
 ))
 const notificationBadgeCount = computed(() => attentionCount.value + notifications.unreadCount)
 const notificationBadgeLabel = computed(() => notificationBadgeCount.value > 99
@@ -1190,20 +1190,7 @@ watch(
   { immediate: true }
 )
 
-watch(
-  [
-    () => chat.current?.messages,
-    () => chat.processOutputs,
-    () => terminal.attached,
-    () => terminal.commandRunning,
-    () => terminal.mode
-  ],
-  ([messages, processOutputs]) => terminal.syncAgentOutput(messages, processOutputs),
-  { deep: true }
-)
-
-function closeTerminalForPageExit(event) {
-  terminal.close()
+function preventDiscardOnUnload(event) {
   if (!workspace.hasDirtyEditors) return
   event.preventDefault()
   event.returnValue = ''
@@ -1237,7 +1224,7 @@ onMounted(async () => {
   window.visualViewport?.addEventListener('scroll', updateVisualViewport)
   window.addEventListener('resize', updateVisualViewport)
   window.addEventListener('keydown', handleSearchShortcut)
-  window.addEventListener('beforeunload', closeTerminalForPageExit)
+  window.addEventListener('beforeunload', preventDiscardOnUnload)
   document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
   window.addEventListener('matoloop:service-worker-ready', refreshPushState)
   window.navigator.serviceWorker?.addEventListener('message', handlePushMessage)
@@ -1258,8 +1245,8 @@ onBeforeUnmount(() => {
   window.visualViewport?.removeEventListener('scroll', updateVisualViewport)
   window.removeEventListener('resize', updateVisualViewport)
   window.removeEventListener('keydown', handleSearchShortcut)
-  window.removeEventListener('beforeunload', closeTerminalForPageExit)
-  terminal.close()
+  window.removeEventListener('beforeunload', preventDiscardOnUnload)
+  terminal.release()
   document.removeEventListener('visibilitychange', refreshSessionsWhenVisible)
   window.removeEventListener('matoloop:service-worker-ready', refreshPushState)
   window.navigator.serviceWorker?.removeEventListener('message', handlePushMessage)

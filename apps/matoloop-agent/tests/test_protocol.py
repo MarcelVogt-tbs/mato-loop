@@ -158,6 +158,17 @@ class ProtocolTests(unittest.TestCase):
 
         opened = arguments("terminal.open", {"rows": 24, "columns": 80})
         self.assertEqual((opened.rows, opened.columns), (24, 80))
+        shared = arguments("terminal.shared.open", {"rows": 24, "columns": 80})
+        self.assertIsNone(shared.terminal_id)
+        shared = arguments(
+            "terminal.shared.open", {"rows": 24, "columns": 80, "terminalId": AGENT_ID}
+        )
+        self.assertEqual(shared.terminal_id, AGENT_ID)
+        inspected = arguments(
+            "terminal.shared.inspect", {"terminalId": AGENT_ID, "commandId": REQUEST_ID}
+        )
+        self.assertTrue(inspected.freeze)
+        self.assertFalse(arguments("terminal.shared.status", {"terminalId": AGENT_ID}).redisplay)
         read = arguments(
             "terminal.read",
             {"terminalId": AGENT_ID, "maxBytes": 65_536, "waitSeconds": 30},
@@ -170,6 +181,12 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(written.terminal_id, AGENT_ID)
 
         invalid = [
+            ("terminal.shared.open", {"rows": 24, "columns": 80, "terminalId": "invalid"}),
+            ("terminal.shared.status", {"terminalId": AGENT_ID, "redisplay": 1}),
+            (
+                "terminal.shared.inspect",
+                {"terminalId": AGENT_ID, "commandId": REQUEST_ID, "freeze": "false"},
+            ),
             ("terminal.open", {"rows": 0, "columns": 80}),
             ("terminal.read", {"terminalId": AGENT_ID, "maxBytes": 65_537}),
             ("terminal.read", {"terminalId": AGENT_ID, "waitSeconds": 31}),

@@ -146,6 +146,10 @@ class ProcessResult(ExecutionResult):
     stderr_truncated: bool
 
 
+class SharedProcessResult(ProcessResult):
+    exit_code: int | None
+
+
 class TerminalOpenResult(ExecutionResult):
     terminal_id: UUID = Field(strict=False)
 
@@ -193,6 +197,7 @@ class ShellTarget(ExecutionResult):
     kind: Literal[
         "directory", "input", "output", "executable", "source", "script", "path",
         "toolchain_metadata", "discard",
+        "path",
     ]
 
     _validate_path = field_validator("path")(_absolute_path)
@@ -251,6 +256,36 @@ class ExecutionClientError(Exception):
         super().__init__(code)
         self.code = code
         self.params = dict(params) if params is not None else None
+
+
+class SharedTerminalStatus(ExecutionResult):
+    terminal_id: UUID = Field(strict=False)
+    current_directory: str
+    state: Literal["idle", "busy", "editing", "checking", "running", "closed"]
+    context_revision: int = Field(ge=0)
+    command_id: UUID | None = Field(strict=False)
+    command: str | None = Field(max_length=256 * 1024)
+    revision: int = Field(ge=0)
+    submitted: bool
+    cancelled: bool
+
+    _validate_path = field_validator("current_directory")(_absolute_path)
+
+
+class SharedInspectResult(ExecutionResult):
+    command: str = Field(min_length=1, max_length=256 * 1024)
+    current_directory: str
+    revision: int = Field(ge=0)
+    context_revision: int = Field(ge=0)
+    inspection: ShellInspectResult
+
+    _validate_path = field_validator("current_directory")(_absolute_path)
+
+    @model_validator(mode="after")
+    def validate_command(self) -> Self:
+        if "\0" in self.command or len(self.command.encode()) > 256 * 1024:
+            raise ValueError("invalid shared shell command")
+        return self
 
 
 _REMOTE_ERROR_CODES = {
@@ -328,6 +363,9 @@ _REMOTE_ERROR_CODES = {
     "terminal.exists": "terminal.commandActive",
     "terminal.limitReached": "terminal.unavailable",
     "terminal.notFound": "terminal.disconnected",
+    "terminal.busy": "terminal.commandActive",
+    "terminal.stale": "approval.targetChanged",
+    "operation.unsupported": "executionAgent.operationUnavailable",
 }
 
 _MANAGER_ERROR_CODES = frozenset(
@@ -352,6 +390,7 @@ class ExecutionClient:
     agent_id: UUID
     operations: frozenset[str]
     current_directory: str | None = None
+    expected_generation: int | None = None
 
     def supports(self, operation: str) -> bool:
         return operation in self.operations
@@ -449,6 +488,7 @@ class ExecutionClient:
                 arguments,
                 timeout=timeout,
                 on_event=on_event,
+                **({"expected_generation": self.expected_generation} if self.expected_generation is not None else {}),
             )
         except ExecutionAgentError as exc:
             raise ExecutionClientError(
@@ -459,11 +499,11 @@ class ExecutionClient:
             if code == "operation.cancelled":
                 mapped_code = (
                     "process.interrupted"
-                    if operation.startswith("shell.") or operation == "terminal.run"
+                    if operation.startswith("shell.") or operation in {"terminal.run", "terminal.shared.execute"}
                     else "tool.executionInterrupted"
                 )
             elif code == "operation.failed" and (
-                operation.startswith("shell.") or operation == "terminal.run"
+                operation.startswith("shell.") or operation in {"terminal.run", "terminal.shared.execute"}
             ):
                 mapped_code = "process.failed"
             else:
@@ -485,6 +525,9 @@ __all__ = [
     "ExecutionClient",
     "ExecutionClientError",
     "ProcessResult",
+    "SharedProcessResult",
+    "SharedInspectResult",
+    "SharedTerminalStatus",
     "ShellInspectResult",
     "SystemInfoResult",
     "TerminalControlResult",

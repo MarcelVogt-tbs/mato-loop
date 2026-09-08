@@ -34,12 +34,16 @@ export function computerFilesControlCenterAvailable(context, executionAgents) {
 }
 
 export const TERMINAL_OPERATIONS = Object.freeze([
-  'terminal.open',
   'terminal.read',
   'terminal.write',
   'terminal.resize',
   'terminal.close',
-  'terminal.run'
+  'terminal.shared.open',
+  'terminal.shared.status',
+  'terminal.shared.stage',
+  'terminal.shared.inspect',
+  'terminal.shared.execute',
+  'terminal.shared.cancel'
 ])
 
 export function terminalControlCenterState(context, executionAgents) {
