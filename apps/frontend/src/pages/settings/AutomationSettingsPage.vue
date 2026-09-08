@@ -32,10 +32,12 @@
       <q-spinner color="primary" size="36px" />
       <div class="app-muted q-mt-sm">Automationen werden geladen ...</div>
     </q-card>
-    <q-card v-else-if="loaded && !automations.items.length" flat class="app-surface text-center q-pa-xl">
-      <q-icon name="schedule" size="48px" color="grey-6" />
-      <div class="text-subtitle1 text-weight-medium q-mt-sm">{{ showArchived ? 'Keine archivierten Automationen' : 'Noch keine Automationen' }}</div>
-      <div v-if="!showArchived" class="text-body2 app-muted q-mt-xs">Erstelle einen Auftrag mit mindestens einem Zeitplan.</div>
+    <q-card v-else-if="loaded && !automations.items.length" flat class="app-surface q-pa-xl">
+      <AppStateMessage
+        icon="schedule"
+        :title="showArchived ? 'Keine archivierten Automationen' : 'Noch keine Automationen'"
+        :description="!showArchived ? 'Erstelle einen Auftrag mit mindestens einem Zeitplan.' : ''"
+      />
     </q-card>
     <div v-else class="row q-col-gutter-md">
       <div v-for="automation in automations.items" :key="automation.id" class="col-12">
@@ -113,6 +115,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
+import AppStateMessage from 'components/AppStateMessage.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
 import { useAutomationStore } from 'stores/automations'

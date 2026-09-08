@@ -1,20 +1,26 @@
 <template>
   <section class="terminal-app column full-height no-wrap" aria-label="Gemeinsames Bash-Terminal">
-    <div v-if="!contextState.available" class="col column flex-center text-center q-pa-xl">
-      <q-icon :name="unavailableIcon" size="52px" color="grey-6" />
-      <div class="text-subtitle1 text-weight-medium q-mt-md">{{ unavailableTitle }}</div>
-      <div class="text-body2 app-muted q-mt-xs">{{ unavailableMessage }}</div>
-    </div>
-    <div v-else-if="disconnected" class="col column flex-center text-center q-pa-xl">
-      <q-icon name="link_off" size="52px" color="grey-6" />
-      <div class="text-subtitle1 text-weight-medium q-mt-md" role="status">{{ disconnectedTitle }}</div>
-      <div class="text-body2 app-muted q-mt-xs q-mb-md">
-        {{ terminal.status === 'replaced'
+    <AppStateMessage
+      v-if="!contextState.available"
+      class="col q-pa-xl"
+      icon="terminal"
+      title="Terminal nicht verfügbar"
+      :description="unavailableMessage"
+    />
+    <AppStateMessage
+      v-else-if="disconnected"
+      class="col q-pa-xl"
+      role="status"
+      icon="link_off"
+      :title="disconnectedTitle"
+      :description="terminal.status === 'replaced'
           ? 'Diese Ansicht steuert das Terminal nicht mehr. Verwende die andere Ansicht oder lade diese Seite bewusst neu.'
-          : 'Die Ansicht ist getrennt. Beim erneuten Verbinden wird der verfügbare Terminalzustand geladen.' }}
-      </div>
-      <q-btn v-if="terminal.status !== 'replaced'" unelevated no-caps color="primary" icon="refresh" label="Neu verbinden" @click="reconnect" />
-    </div>
+          : 'Die Ansicht ist getrennt. Beim erneuten Verbinden wird der verfügbare Terminalzustand geladen.'"
+    >
+      <template v-if="terminal.status !== 'replaced'" #actions>
+        <q-btn unelevated no-caps color="primary" icon="refresh" label="Neu verbinden" @click="reconnect" />
+      </template>
+    </AppStateMessage>
     <template v-else>
       <q-banner v-if="!terminal.ready" dense role="status">
         Terminalzustand wird geladen. Eingaben sind noch gesperrt.
@@ -39,6 +45,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import AppStateMessage from 'components/AppStateMessage.vue'
 import '@xterm/xterm/css/xterm.css'
 import { terminalControlCenterState } from 'src/control-center/manifest'
 import { useChatStore } from 'stores/chat'
@@ -68,19 +75,15 @@ const disconnectedTitle = computed(() => ({
   replaced: 'In einer anderen Ansicht geöffnet',
   resyncRequired: 'Terminalverlauf muss neu geladen werden'
 })[terminal.status] || 'Terminalverbindung getrennt')
-const unavailableTitle = computed(() => ({
-  missing: chat.current ? 'Kein Computer ausgewählt' : 'Keine aktive Session',
-  offline: 'Computer offline',
-  unsupported: 'Gemeinsames Bash-Terminal nicht unterstützt'
-})[contextState.value.reason])
-const unavailableMessage = computed(() => ({
-  missing: chat.current
-    ? 'Wähle für diese Session einen verbundenen Computer aus.'
-    : 'Öffne eine gespeicherte Session mit ausgewähltem Computer.',
-  offline: 'Der Computer ist nicht erreichbar. Nach dem Wiederverbinden wird der verfügbare Terminalzustand geladen.',
-  unsupported: 'Der ausgewählte Computer bietet die benötigten Funktionen für das gemeinsame Bash-Terminal nicht an.'
-})[contextState.value.reason])
-const unavailableIcon = computed(() => contextState.value.reason === 'offline' ? 'cloud_off' : 'terminal_off')
+const unavailableMessage = computed(() => {
+  if (!chat.current) return 'Es ist keine Session geöffnet.'
+  if (!chat.current.preferredExecutionAgentId) return 'Für diese Session ist kein Agent ausgewählt.'
+  return ({
+    missing: 'Der ausgewählte Agent ist nicht mehr verfügbar.',
+    offline: 'Der ausgewählte Agent ist nicht erreichbar.',
+    unsupported: 'Der ausgewählte Agent unterstützt das Terminal nicht.'
+  })[contextState.value.reason]
+})
 const runtimeStatus = computed(() => {
   if (!terminal.ready) return 'Terminal wird verbunden.'
   if (terminal.suspended) return 'Terminal vorübergehend ausgesetzt.'

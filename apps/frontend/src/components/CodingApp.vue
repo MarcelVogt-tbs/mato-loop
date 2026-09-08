@@ -1,33 +1,36 @@
 <template>
   <section class="column full-height no-wrap" aria-label="OpenCode">
-    <div v-if="!project" class="col column flex-center text-center q-pa-xl">
-      <q-icon name="code_off" size="52px" color="grey-6" />
-      <div class="text-subtitle1 text-weight-medium q-mt-md">Kein Projekt ausgewählt</div>
-      <div class="text-body2 app-muted q-mt-xs">Öffne eine Session in einem Projekt, um OpenCode zu verbinden.</div>
-    </div>
-    <div v-else-if="!bound" class="col column flex-center text-center q-pa-xl">
-      <q-icon name="link" size="52px" color="primary" />
-      <div class="text-subtitle1 text-weight-medium q-mt-md">OpenCode mit diesem Projekt verbinden</div>
-      <div class="text-body2 app-muted q-mt-xs">Wähle einen OpenCode-Server und das zugehörige Arbeitsverzeichnis.</div>
-      <q-btn
-        unelevated
-        no-caps
-        color="primary"
-        icon="link"
-        label="OpenCode verbinden"
-        class="q-mt-md"
-        @click="openBindingDialog"
-      />
-    </div>
-    <div v-else-if="coding.loadFailed && !coding.loaded" class="col column flex-center text-center q-pa-xl">
-      <q-icon name="cloud_off" size="52px" color="grey-6" />
-      <div class="text-subtitle1 text-weight-medium q-mt-md">Coding-Daten konnten nicht geladen werden</div>
-      <div class="row justify-center q-gutter-sm q-mt-md">
+    <AppStateMessage
+      v-if="!project"
+      class="col q-pa-xl"
+      icon="code_off"
+      title="Kein Projekt ausgewählt"
+      description="Öffne eine Session in einem Projekt, um OpenCode zu verbinden."
+    />
+    <AppStateMessage
+      v-else-if="!bound"
+      class="col q-pa-xl"
+      icon="link"
+      icon-color="primary"
+      title="OpenCode mit diesem Projekt verbinden"
+      description="Wähle einen OpenCode-Server und das zugehörige Arbeitsverzeichnis."
+    >
+      <template #actions>
+        <q-btn unelevated no-caps color="primary" icon="link" label="OpenCode verbinden" @click="openBindingDialog" />
+      </template>
+    </AppStateMessage>
+    <AppStateMessage
+      v-else-if="coding.loadFailed && !coding.loaded"
+      class="col q-pa-xl"
+      icon="cloud_off"
+      title="Coding-Daten konnten nicht geladen werden"
+    >
+      <template #actions>
         <q-btn outline no-caps color="primary" label="Erneut laden" @click="refresh" />
         <q-btn flat no-caps color="primary" label="Zuordnung ändern" @click="openBindingDialog" />
         <q-btn flat no-caps color="negative" label="Trennen" :loading="bindingSaving" @click="clearBinding" />
-      </div>
-    </div>
+      </template>
+    </AppStateMessage>
     <template v-else>
       <q-banner dense class="app-surface-tonal">
         <template #avatar><q-icon name="code" color="primary" /></template>
@@ -127,10 +130,7 @@
             <q-scroll-area class="col">
               <pre v-if="coding.content.type === 'text'" class="coding-text q-ma-none q-pa-md">{{ coding.content.content }}</pre>
               <div v-else-if="binaryImage" class="q-pa-md"><q-img :src="binaryImage" fit="contain" /></div>
-              <div v-else class="column flex-center text-center q-pa-xl app-muted">
-                <q-icon name="insert_drive_file" size="48px" />
-                <div class="q-mt-sm">Für diese Binärdatei ist keine Vorschau verfügbar.</div>
-              </div>
+              <AppStateMessage v-else class="q-pa-xl" icon="insert_drive_file" description="Für diese Binärdatei ist keine Vorschau verfügbar." />
             </q-scroll-area>
           </template>
           <template v-else>
@@ -320,6 +320,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import MessageContent from 'components/MessageContent.vue'
+import AppStateMessage from 'components/AppStateMessage.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { parentPath } from 'src/features/workspace/state'
 import { apiErrorMessage } from 'src/utils/api-errors'

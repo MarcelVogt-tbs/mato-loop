@@ -142,14 +142,12 @@
         </q-card>
 
         <q-card flat class="app-surface memory-list-card">
-          <q-card-section v-if="!memories.loading && !memories.items.length" class="memory-empty text-center">
-            <q-icon name="psychology_alt" size="48px" color="grey-6" />
-            <div class="text-subtitle1 text-weight-medium q-mt-sm">
-              {{ filtersActive ? 'Keine passenden Erinnerungen' : 'Noch keine Erinnerungen' }}
-            </div>
-            <div class="text-body2 app-muted q-mt-xs">
-              {{ filtersActive ? 'Passe die Suche oder die Filter an.' : 'Füge eine Erinnerung manuell hinzu oder nutze optional Dreaming.' }}
-            </div>
+          <q-card-section v-if="!memories.loading && !memories.items.length" class="memory-empty">
+            <AppStateMessage
+              icon="psychology_alt"
+              :title="filtersActive ? 'Keine passenden Erinnerungen' : 'Noch keine Erinnerungen'"
+              :description="filtersActive ? 'Passe die Suche oder die Filter an.' : 'Füge eine Erinnerung manuell hinzu oder nutze optional Dreaming.'"
+            />
           </q-card-section>
 
           <q-list v-else separator>
@@ -542,6 +540,7 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import AppStateMessage from 'components/AppStateMessage.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { useChatStore } from 'stores/chat'
 import { useMemoryStore } from 'stores/memories'

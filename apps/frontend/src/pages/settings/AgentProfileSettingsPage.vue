@@ -50,12 +50,12 @@
     </q-banner>
 
     <q-card flat class="app-surface relative-position">
-      <q-card-section v-if="agents.loaded && !agents.scopedAgents.length" class="text-center q-pa-xl">
-        <q-icon name="smart_toy" size="48px" color="grey-6" />
-        <div class="text-subtitle1 text-weight-medium q-mt-sm">Noch keine Agentenprofile</div>
-        <div class="text-body2 app-muted q-mt-xs">
-          Erstelle ein Profil mit eigenen Anweisungen und Berechtigungen.
-        </div>
+      <q-card-section v-if="agents.loaded && !agents.scopedAgents.length" class="q-pa-xl">
+        <AppStateMessage
+          icon="smart_toy"
+          title="Noch keine Agentenprofile"
+          description="Erstelle ein Profil mit eigenen Anweisungen und Berechtigungen."
+        />
       </q-card-section>
       <q-list v-else separator>
         <q-item v-for="agent in agents.scopedAgents" :key="agent.id" class="q-py-md">
@@ -105,6 +105,7 @@
 import { computed, onMounted } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
+import AppStateMessage from 'components/AppStateMessage.vue'
 import SettingsScopeToggle from 'components/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { resolveSettingsScope } from 'src/features/settings/scope'

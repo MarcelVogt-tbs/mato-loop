@@ -30,12 +30,12 @@
         <q-spinner color="primary" size="36px" />
         <div class="app-muted q-mt-sm">Skills werden geladen ...</div>
       </q-card-section>
-      <q-card-section v-else-if="loaded && !skills.items.length" class="text-center q-pa-xl">
-        <q-icon name="school" size="48px" color="grey-6" />
-        <div class="text-subtitle1 text-weight-medium q-mt-sm">Noch keine Skills</div>
-        <div class="text-body2 app-muted q-mt-xs">
-          Erstelle einen persönlichen Skill mit wiederverwendbaren Anweisungen.
-        </div>
+      <q-card-section v-else-if="loaded && !skills.items.length" class="q-pa-xl">
+        <AppStateMessage
+          icon="school"
+          title="Noch keine Skills"
+          description="Erstelle einen persönlichen Skill mit wiederverwendbaren Anweisungen."
+        />
       </q-card-section>
 
       <q-list v-else separator>
@@ -125,6 +125,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
+import AppStateMessage from 'components/AppStateMessage.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { useSkillStore } from 'stores/skills'
 

@@ -56,11 +56,18 @@
             <q-skeleton v-for="index in 4" :key="index" type="rect" height="64px" class="q-mb-sm" />
           </div>
 
-          <div v-else-if="search.loadFailed" class="text-center q-py-xl" role="alert">
-            <q-icon name="error_outline" color="negative" size="40px" />
-            <div class="text-subtitle1 q-mt-sm">Suche konnte nicht geladen werden</div>
-            <q-btn flat no-caps color="primary" icon="refresh" label="Erneut versuchen" class="q-mt-sm" @click="runSearch" />
-          </div>
+          <AppStateMessage
+            v-else-if="search.loadFailed"
+            class="q-py-xl"
+            role="alert"
+            icon="error_outline"
+            icon-color="negative"
+            title="Suche konnte nicht geladen werden"
+          >
+            <template #actions>
+              <q-btn flat no-caps color="primary" icon="refresh" label="Erneut versuchen" @click="runSearch" />
+            </template>
+          </AppStateMessage>
 
           <template v-else-if="search.searchedQuery">
             <q-banner
@@ -129,18 +136,22 @@
               </q-list>
             </section>
 
-            <div v-if="!hasResults" class="text-center q-py-xl">
-              <q-icon name="search_off" color="grey-6" size="44px" />
-              <div class="text-subtitle1 q-mt-sm">Keine Treffer gefunden</div>
-              <div class="text-caption app-muted">Versuche einen anderen Suchbegriff.</div>
-            </div>
+            <AppStateMessage
+              v-if="!hasResults"
+              class="q-py-xl"
+              icon="search_off"
+              title="Keine Treffer gefunden"
+              description="Versuche einen anderen Suchbegriff."
+            />
           </template>
 
-          <div v-else class="text-center q-py-xl">
-            <q-icon name="manage_search" color="grey-6" size="44px" />
-            <div class="text-subtitle1 q-mt-sm">Was möchtest du wiederfinden?</div>
-            <div class="text-caption app-muted">Gib mindestens zwei Zeichen ein und starte die Suche.</div>
-          </div>
+          <AppStateMessage
+            v-else
+            class="q-py-xl"
+            icon="manage_search"
+            title="Was möchtest du wiederfinden?"
+            description="Gib mindestens zwei Zeichen ein und starte die Suche."
+          />
         </div>
       </q-scroll-area>
     </q-card>
@@ -149,6 +160,7 @@
 
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
+import AppStateMessage from 'components/AppStateMessage.vue'
 import { useSearchStore } from 'stores/search'
 import { formatRelativeDateTime } from 'src/utils/date-time'
 

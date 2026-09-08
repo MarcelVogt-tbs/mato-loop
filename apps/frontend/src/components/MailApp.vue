@@ -3,16 +3,23 @@
     <div v-if="mail.accountsLoading && !mail.accountsLoaded" class="col flex flex-center">
       <q-spinner color="primary" size="40px" aria-label="Mail-Konten werden geladen" />
     </div>
-    <div v-else-if="mail.accountsLoadFailed && !mail.accountsLoaded" class="col column flex-center text-center q-pa-xl">
-      <q-icon name="cloud_off" size="52px" color="grey-6" />
-      <div class="text-subtitle1 text-weight-medium q-mt-md">Mail-Konten konnten nicht geladen werden</div>
-      <q-btn outline no-caps color="primary" label="Erneut laden" class="q-mt-md" @click="loadAccounts" />
-    </div>
-    <div v-else-if="mail.accountsLoaded && !mail.accounts.length" class="col column flex-center text-center q-pa-xl">
-      <q-icon name="mail_outline" size="52px" color="grey-6" />
-      <div class="text-subtitle1 text-weight-medium q-mt-md">Kein Mail-Konto verfügbar</div>
-      <div class="text-body2 app-muted q-mt-xs">Richte in den Einstellungen ein aktives Mail-Konto ein.</div>
-    </div>
+    <AppStateMessage
+      v-else-if="mail.accountsLoadFailed && !mail.accountsLoaded"
+      class="col q-pa-xl"
+      icon="cloud_off"
+      title="Mail-Konten konnten nicht geladen werden"
+    >
+      <template #actions>
+        <q-btn outline no-caps color="primary" label="Erneut laden" @click="loadAccounts" />
+      </template>
+    </AppStateMessage>
+    <AppStateMessage
+      v-else-if="mail.accountsLoaded && !mail.accounts.length"
+      class="col q-pa-xl"
+      icon="mail_outline"
+      title="Kein Mail-Konto verfügbar"
+      description="Richte in den Einstellungen ein aktives Mail-Konto ein."
+    />
 
     <template v-else>
       <div class="row q-col-gutter-sm q-pa-sm">
@@ -71,10 +78,11 @@
       </div>
       <q-separator />
 
-      <div v-if="mail.mailboxesLoadFailed" class="col column flex-center text-center q-pa-lg">
-        <div class="text-body1">Die Mail-Ordner konnten nicht geladen werden.</div>
-        <q-btn outline no-caps color="primary" label="Erneut laden" class="q-mt-md" @click="selectAccount(selectedAccountId)" />
-      </div>
+      <AppStateMessage v-if="mail.mailboxesLoadFailed" class="col q-pa-lg" title="Die Mail-Ordner konnten nicht geladen werden.">
+        <template #actions>
+          <q-btn outline no-caps color="primary" label="Erneut laden" @click="selectAccount(selectedAccountId)" />
+        </template>
+      </AppStateMessage>
       <div v-else class="mail-layout col">
         <div v-show="!mobileDetail" class="column no-wrap mail-list-pane">
           <q-scroll-area class="col">
@@ -135,13 +143,8 @@
           </q-toolbar>
           <q-separator v-if="$q.screen.lt.md && mobileDetail" />
           <div v-if="mail.detailLoading" class="col flex flex-center"><q-spinner color="primary" size="36px" /></div>
-          <div v-else-if="mail.detailLoadFailed" class="col column flex-center text-center q-pa-lg">
-            <div>Die E-Mail konnte nicht geladen werden.</div>
-          </div>
-          <div v-else-if="!mail.detail" class="col column flex-center text-center q-pa-xl app-muted">
-            <q-icon name="mail_outline" size="48px" />
-            <div class="q-mt-sm">Wähle eine E-Mail aus.</div>
-          </div>
+          <AppStateMessage v-else-if="mail.detailLoadFailed" class="col q-pa-lg" title="Die E-Mail konnte nicht geladen werden." />
+          <AppStateMessage v-else-if="!mail.detail" class="col q-pa-xl" icon="mail_outline" description="Wähle eine E-Mail aus." />
           <q-scroll-area v-else class="col">
             <article class="q-pa-md">
               <div class="row items-start no-wrap q-gutter-sm">
@@ -224,6 +227,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import AppStateMessage from 'components/AppStateMessage.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
 import { useMailStore } from 'stores/mail'

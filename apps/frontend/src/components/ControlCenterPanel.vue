@@ -201,28 +201,32 @@
         class="fit"
       />
       <div v-if="!controlCenter.activeContentId" class="fit column no-wrap">
-        <div class="col column flex-center text-center q-pa-xl">
-          <q-icon name="extension_off" size="52px" color="grey-6" />
-          <div class="text-subtitle1 text-weight-medium q-mt-md">Keine App in dieser Session</div>
-          <div class="text-body2 app-muted q-mt-xs q-mb-md">Füge eine App hinzu, um sie hier zu verwenden.</div>
-          <q-btn
-            unelevated
-            no-caps
-            color="primary"
-            icon="add"
-            label="App hinzufügen"
-            :disable="!launcherIntegrations.length || !controlCenter.ready"
-          >
-            <q-menu anchor="bottom middle" self="top middle" class="app-action-menu">
-              <q-list padding>
-                <q-item v-for="item in launcherIntegrations" :key="item.id" clickable v-ripple v-close-popup @click="openContent(item.id)">
-                  <q-item-section avatar><q-icon :name="item.icon" /></q-item-section>
-                  <q-item-section>{{ item.label }}</q-item-section>
-                </q-item>
-              </q-list>
-            </q-menu>
-          </q-btn>
-        </div>
+        <AppStateMessage
+          class="col q-pa-xl"
+          icon="extension_off"
+          title="Keine App in dieser Session"
+          description="Füge eine App hinzu, um sie hier zu verwenden."
+        >
+          <template #actions>
+            <q-btn
+              unelevated
+              no-caps
+              color="primary"
+              icon="add"
+              label="App hinzufügen"
+              :disable="!launcherIntegrations.length || !controlCenter.ready"
+            >
+              <q-menu anchor="bottom middle" self="top middle" class="app-action-menu">
+                <q-list padding>
+                  <q-item v-for="item in launcherIntegrations" :key="item.id" clickable v-ripple v-close-popup @click="openContent(item.id)">
+                    <q-item-section avatar><q-icon :name="item.icon" /></q-item-section>
+                    <q-item-section>{{ item.label }}</q-item-section>
+                  </q-item>
+                </q-list>
+              </q-menu>
+            </q-btn>
+          </template>
+        </AppStateMessage>
       </div>
     </div>
     <template v-if="activeFooter">
@@ -237,6 +241,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { Notify } from 'quasar'
+import AppStateMessage from 'components/AppStateMessage.vue'
 import { useApprovalStore } from 'stores/approvals'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'

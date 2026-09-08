@@ -9,6 +9,7 @@ import { useTerminalStore } from '../src/stores/terminal'
 import { useChatStore } from 'stores/chat'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useControlCenterStore } from 'stores/control-center'
+import { TERMINAL_OPERATIONS } from '../src/control-center/manifest'
 import { FakeWebSocket, sharedDraft } from './terminal-websocket'
 
 vi.hoisted(() => {
@@ -29,7 +30,7 @@ vi.mock('stores/execution-agents', async () => {
   const { reactive } = await import('vue')
   const { TERMINAL_OPERATIONS } = await import('../src/control-center/manifest')
   const agent = reactive({ connected: true, operations: TERMINAL_OPERATIONS })
-  return { useExecutionAgentStore: () => ({ byId: () => agent }) }
+  return { useExecutionAgentStore: () => ({ byId: (id = 'agent-1') => id === 'agent-1' ? agent : null }) }
 })
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 
@@ -45,7 +46,7 @@ beforeEach(() => {
   Object.assign(useControlCenterStore(), {
     ready: true, sessionId: 'session-1', tabs: [{ appId: 'terminal' }], confirmedState: { tabs: [{ appId: 'terminal' }] }
   })
-  useExecutionAgentStore().byId().connected = true
+  Object.assign(useExecutionAgentStore().byId(), { connected: true, operations: TERMINAL_OPERATIONS })
   store.connect({ sessionId: 'session-1', agentId: 'agent-1' })
   socket = FakeWebSocket.instances.at(-1)
   socket.open()
@@ -217,6 +218,23 @@ it.each([false, true])('restores output and the partial prompt after A-B-A with 
   }
   expect(lines(3)).toEqual(before)
   expect([xterm.buffer.active.cursorX, xterm.buffer.active.cursorY]).toEqual(cursor)
+})
+
+it.each([
+  ['no session', () => { useChatStore().current = null }, 'Es ist keine Session geöffnet.'],
+  ['no agent selected', () => { useChatStore().current.preferredExecutionAgentId = null }, 'Für diese Session ist kein Agent ausgewählt.'],
+  ['missing agent', () => { useChatStore().current.preferredExecutionAgentId = 'removed-agent' }, 'Der ausgewählte Agent ist nicht mehr verfügbar.'],
+  ['offline agent', () => { useExecutionAgentStore().byId().connected = false }, 'Der ausgewählte Agent ist nicht erreichbar.'],
+  ['unsupported agent', () => { useExecutionAgentStore().byId().operations = [] }, 'Der ausgewählte Agent unterstützt das Terminal nicht.']
+])('shows one unavailable message with the reason for %s', async (_reason, configure, description) => {
+  configure()
+  await mountTerminal()
+  const terminal = root.querySelector('.terminal-app')
+  expect(terminal.querySelectorAll('.app-state-message')).toHaveLength(1)
+  expect(terminal.querySelector('.text-subtitle1').textContent).toBe('Terminal nicht verfügbar')
+  expect(terminal.querySelector('.text-body2').textContent).toBe(description)
+  expect(terminal.querySelector('[name="terminal"]')).not.toBeNull()
+  expect(terminal.querySelector('.terminal-app__host')).toBeNull()
 })
 
 it('releases on unavailability and reconnects when the agent returns', async () => {

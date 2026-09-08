@@ -167,12 +167,18 @@
     </div>
     <div v-else class="col file-viewer__content q-pa-md">
       <div v-if="loading" class="fit flex flex-center"><q-spinner color="primary" size="36px" /></div>
-      <div v-else-if="loadError" class="fit column flex-center text-center q-pa-xl" role="alert">
-        <q-icon name="cloud_off" size="64px" class="app-muted q-mb-md" />
-        <div class="text-subtitle1">Vorschau konnte nicht geladen werden</div>
-        <div class="app-muted q-mt-xs">{{ loadErrorMessage }}</div>
-        <q-btn class="q-mt-lg" color="primary" no-caps label="Erneut versuchen" @click="loadPreview" />
-      </div>
+      <AppStateMessage
+        v-else-if="loadError"
+        class="fit q-pa-xl"
+        role="alert"
+        icon="cloud_off"
+        title="Vorschau konnte nicht geladen werden"
+        :description="loadErrorMessage"
+      >
+        <template #actions>
+          <q-btn color="primary" no-caps label="Erneut versuchen" @click="loadPreview" />
+        </template>
+      </AppStateMessage>
       <div v-else-if="preview.kind === 'image'" class="fit relative-position">
         <div v-if="imageLoading" class="fit flex flex-center"><q-spinner color="primary" size="36px" /></div>
         <img
@@ -198,21 +204,32 @@
             <span>OpenSCAD-Modell wird gerendert …</span>
           </div>
         </div>
-        <div v-else-if="openScadError" class="fit column flex-center text-center q-pa-xl" role="alert">
-          <q-icon name="view_in_ar" size="64px" class="app-muted q-mb-md" />
-          <div class="text-subtitle1">OpenSCAD-Modell konnte nicht gerendert werden</div>
-          <div class="app-muted q-mt-xs">{{ openScadErrorMessage }}</div>
-          <q-btn class="q-mt-lg" color="primary" no-caps label="Erneut versuchen" @click="renderOpenScad" />
-        </div>
+        <AppStateMessage
+          v-else-if="openScadError"
+          class="fit q-pa-xl"
+          role="alert"
+          icon="view_in_ar"
+          title="OpenSCAD-Modell konnte nicht gerendert werden"
+          :description="openScadErrorMessage"
+        >
+          <template #actions>
+            <q-btn color="primary" no-caps label="Erneut versuchen" @click="renderOpenScad" />
+          </template>
+        </AppStateMessage>
         <StlViewerPanel v-else-if="openScadUrl" :src="openScadUrl" format="off" />
       </template>
       <StlViewerPanel v-else-if="preview.kind === 'stl'" :src="stlUrl" :format="directModel?.format || 'stl'" />
-      <div v-else class="fit column flex-center text-center q-pa-xl">
-        <q-icon name="draft" size="64px" class="app-muted q-mb-md" />
-        <div class="text-subtitle1">Keine Vorschau verfügbar</div>
-        <div class="app-muted q-mt-xs">{{ unavailableMessage }}</div>
-        <q-btn v-if="canDownload" class="q-mt-lg" color="primary" no-caps icon="download" label="Datei herunterladen" @click="download" />
-      </div>
+      <AppStateMessage
+        v-else
+        class="fit q-pa-xl"
+        icon="draft"
+        title="Keine Vorschau verfügbar"
+        :description="unavailableMessage"
+      >
+        <template v-if="canDownload" #actions>
+          <q-btn color="primary" no-caps icon="download" label="Datei herunterladen" @click="download" />
+        </template>
+      </AppStateMessage>
     </div>
 
     <q-dialog
@@ -272,6 +289,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { copyToClipboard, useQuasar } from 'quasar'
 import { useRouter } from 'vue-router'
+import AppStateMessage from 'components/AppStateMessage.vue'
 import ImageViewerPanel from 'components/ImageViewerPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
 import StlViewerPanel from 'components/StlViewerPanel.vue'

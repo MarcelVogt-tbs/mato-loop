@@ -40,10 +40,13 @@
     <q-separator />
     <div class="col file-viewer__content q-pa-md">
       <div v-if="loading" class="fit flex flex-center"><q-spinner color="primary" size="36px" /></div>
-      <div v-else-if="failed" class="fit column flex-center text-center q-pa-xl" role="alert">
-        <q-icon name="broken_image" size="64px" class="app-muted q-mb-md" />
-        <div class="text-subtitle1">Bild konnte nicht dargestellt werden</div>
-      </div>
+      <AppStateMessage
+        v-else-if="failed"
+        class="fit q-pa-xl"
+        role="alert"
+        icon="broken_image"
+        title="Bild konnte nicht dargestellt werden"
+      />
       <img
         v-show="!loading && !failed"
         :src="image.url"
@@ -58,6 +61,7 @@
 
 <script setup>
 import { nextTick, ref, watch } from 'vue'
+import AppStateMessage from 'components/AppStateMessage.vue'
 
 defineOptions({ name: 'ImageViewerPanel' })
 

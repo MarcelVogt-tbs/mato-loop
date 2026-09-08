@@ -103,11 +103,13 @@
           Die Benachrichtigungen konnten nicht geladen werden.
           <template #action><q-btn flat no-caps color="white" label="Erneut laden" @click="refresh" /></template>
         </q-banner>
-        <div v-else-if="notifications.loaded && !notifications.items.length" class="column items-center text-center q-pa-xl">
-          <q-icon name="notifications_none" size="48px" color="grey-6" />
-          <div class="text-subtitle1 text-weight-medium q-mt-sm">Noch keine Hinweise</div>
-          <div class="text-body2 app-muted q-mt-xs">Ergebnisse und Fehler von Automationen erscheinen hier.</div>
-        </div>
+        <AppStateMessage
+          v-else-if="notifications.loaded && !notifications.items.length"
+          class="q-pa-xl"
+          icon="notifications_none"
+          title="Noch keine Hinweise"
+          description="Ergebnisse und Fehler von Automationen erscheinen hier."
+        />
         <q-list v-else bordered separator class="rounded-borders app-surface">
           <q-item
             v-for="notification in notifications.items"
@@ -147,6 +149,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { isNavigationFailure, NavigationFailureType, useRouter } from 'vue-router'
+import AppStateMessage from 'components/AppStateMessage.vue'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import QuestionDock from 'components/QuestionDock.vue'
 import { useApprovalStore } from 'stores/approvals'

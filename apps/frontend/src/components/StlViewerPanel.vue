@@ -8,12 +8,18 @@
         <span>3D-Modell wird geladen …</span>
       </div>
     </div>
-    <div v-else-if="errorMessage" class="stl-viewer__state fit column flex-center text-center q-pa-lg" role="alert">
-      <q-icon name="view_in_ar" size="64px" class="app-muted q-mb-md" />
-      <div class="text-subtitle1">3D-Modell konnte nicht dargestellt werden</div>
-      <div class="app-muted q-mt-xs">{{ errorMessage }}</div>
-      <q-btn class="q-mt-lg" color="primary" no-caps label="Erneut versuchen" @click="load" />
-    </div>
+    <AppStateMessage
+      v-else-if="errorMessage"
+      class="stl-viewer__state fit q-pa-lg"
+      role="alert"
+      icon="view_in_ar"
+      title="3D-Modell konnte nicht dargestellt werden"
+      :description="errorMessage"
+    >
+      <template #actions>
+        <q-btn color="primary" no-caps label="Erneut versuchen" @click="load" />
+      </template>
+    </AppStateMessage>
 
     <div v-show="!loading && !errorMessage" class="stl-viewer__controls app-surface row items-center justify-start no-wrap">
       <q-btn flat no-caps icon="restart_alt" label="Zurücksetzen" aria-label="3D-Ansicht zurücksetzen" @click="setView('iso')" />
@@ -32,6 +38,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import AppStateMessage from 'components/AppStateMessage.vue'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { parseOffBuffer } from 'src/utils/off'
 import { StlValidationError, validateStlBuffer, validateStlGeometry } from 'src/utils/stl'

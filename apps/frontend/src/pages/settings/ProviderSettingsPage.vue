@@ -179,22 +179,25 @@
               <template #prepend><q-icon name="search" /></template>
             </q-input>
 
-            <div v-if="!providerModels(provider).length" class="provider-models-empty app-surface-tonal q-mt-md">
-              <q-icon name="view_in_ar" size="32px" color="grey-7" />
-              <div class="text-weight-medium q-mt-sm">Keine Modelle verfügbar</div>
-              <div class="text-body2 app-muted q-mb-md">
-                Starte die Erkennung erneut oder hinterlege ein Modell manuell.
-              </div>
-              <q-btn
-                unelevated
-                no-caps
-                color="primary"
-                icon="add"
-                label="Modell manuell hinzufügen"
-                :disable="personalBlocked"
-                @click="openModelDialog(provider)"
-              />
-            </div>
+            <AppStateMessage
+              v-if="!providerModels(provider).length"
+              class="provider-models-empty app-surface-tonal q-mt-md"
+              icon="view_in_ar"
+              title="Keine Modelle verfügbar"
+              description="Starte die Erkennung erneut oder hinterlege ein Modell manuell."
+            >
+              <template #actions>
+                <q-btn
+                  unelevated
+                  no-caps
+                  color="primary"
+                  icon="add"
+                  label="Modell manuell hinzufügen"
+                  :disable="personalBlocked"
+                  @click="openModelDialog(provider)"
+                />
+              </template>
+            </AppStateMessage>
 
             <q-list v-else separator class="provider-model-list q-mt-md">
               <q-item v-for="model in filteredModels(provider)" :key="model.id" class="provider-model-item">
@@ -281,6 +284,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
+import AppStateMessage from 'components/AppStateMessage.vue'
 import ModelConfigDialog from 'components/ModelConfigDialog.vue'
 import ProviderConfigDialog from 'components/ProviderConfigDialog.vue'
 import SettingsScopeToggle from 'components/SettingsScopeToggle.vue'
