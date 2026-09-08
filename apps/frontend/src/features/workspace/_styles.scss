@@ -113,6 +113,7 @@
 }
 
 .workspace-editor {
+  container-type: inline-size;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -122,50 +123,16 @@
   flex: 0 0 auto;
 }
 
-.workspace-editor__status {
-  min-width: 0;
+@container (max-width: 400px) {
+  .workspace-editor__secondary {
+    display: none;
+  }
 }
 
-.workspace-editor__visual,
-.workspace-editor__toast,
-.workspace-editor__textarea,
-.workspace-editor__textarea .q-field__inner,
-.workspace-editor__textarea .q-field__control,
-.workspace-editor__textarea .q-field__control-container {
+.workspace-editor__source,
+.workspace-editor__preview {
   min-width: 0;
   min-height: 0;
-  height: 100%;
-}
-
-.workspace-editor__textarea textarea.workspace-editor__textarea-input {
-  height: 100% !important;
-  resize: none;
-  color: var(--app-text);
-  font: 0.875rem/1.55 monospace;
-  tab-size: 2;
-}
-
-.workspace-editor__toast .toastui-editor-defaultUI {
-  height: 100% !important;
-  border: 0;
-  border-radius: 0;
-}
-
-.workspace-editor__toast .toastui-editor-toolbar {
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-.workspace-editor__toast .toastui-editor-toolbar-group {
-  flex: 0 0 auto;
-}
-
-.workspace-editor__toast .toastui-editor-mode-switch {
-  display: none;
-}
-
-.workspace-editor__toast .toastui-editor-main {
-  height: calc(100% - 46px) !important;
 }
 
 .file-viewer__image {
@@ -202,25 +169,11 @@ body.body--dark .file-viewer .app-muted {
 }
 
 @container (max-width: 390px) {
-  .workspace-editor__actions {
-    flex-wrap: wrap;
-  }
-
-  .workspace-editor__actions .q-space {
-    display: none;
-  }
-
-  .workspace-editor__status {
-    flex: 1 0 100%;
-  }
-
-  .file-viewer__edit .q-btn__content .block,
   .file-viewer__view-toggle .q-btn__content .block,
   .file-upload-action .q-btn__content .block {
     display: none;
   }
 
-  .file-viewer__edit,
   .file-upload-action {
     min-width: 40px;
     padding-inline: 8px;

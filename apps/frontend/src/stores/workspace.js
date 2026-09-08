@@ -45,7 +45,9 @@ export const useWorkspaceStore = defineStore('workspace', {
     editorActive: false,
     editorDirty: false,
     editorDraft: null,
+    editorSession: null,
     editorExternalChange: false,
+    editorMutationVersion: 0,
     activeFileTabId: null,
     fileTabStates: {},
     fileChangeVersions: {},
@@ -176,6 +178,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorActive = false
       this.editorDirty = false
       this.editorDraft = null
+      this.editorSession = null
       this.editorExternalChange = false
       this.fileChangeVersions = {}
       this.fileRevisions = {}
@@ -282,6 +285,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorActive = edit
       this.editorDirty = false
       this.editorDraft = null
+      this.editorSession = null
       this.editorExternalChange = false
       this.persistView()
     },
@@ -319,6 +323,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.editorActive = saved.editorActive
         this.editorDirty = saved.editorDirty
         this.editorDraft = saved.editorDraft
+        this.editorSession = saved.editorSession
         this.editorExternalChange = saved.editorExternalChange
         this.fileChangeVersions = saved.fileChangeVersions
         this.fileRevisions = saved.fileRevisions
@@ -334,6 +339,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         editorActive: this.editorActive,
         editorDirty: this.editorDirty,
         editorDraft: this.editorDraft,
+        editorSession: this.editorSession,
         editorExternalChange: this.editorExternalChange,
         fileChangeVersions: this.fileChangeVersions,
         fileRevisions: this.fileRevisions
@@ -382,7 +388,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.discardEdit()
       this.fileTabStates = Object.fromEntries(Object.entries(this.fileTabStates).map(([tabId, value]) => [
         tabId,
-        { ...value, editorActive: false, editorDirty: false, editorDraft: null, editorExternalChange: false }
+        { ...value, editorActive: false, editorDirty: false, editorDraft: null, editorSession: null, editorExternalChange: false }
       ]))
     },
     fileTarget(entry, edit = false) {
@@ -429,6 +435,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorActive = false
       this.editorDirty = false
       this.editorDraft = null
+      this.editorSession = null
       this.editorExternalChange = false
       this.persistView()
     },
@@ -437,6 +444,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorActive = true
       this.editorDirty = false
       this.editorDraft = content
+      this.editorSession = null
       this.editorExternalChange = false
     },
     updateEditorDraft(content, original) {
@@ -448,6 +456,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.editorActive = false
       this.editorDirty = false
       this.editorDraft = null
+      this.editorSession = null
       this.editorExternalChange = false
       if (refreshPath) {
         this.fileChangeVersions[refreshPath] = (this.fileChangeVersions[refreshPath] || 0) + 1
@@ -455,11 +464,13 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
     noteFileMutation(path) {
       if (this.viewedEntry?.path !== path) return
+      this.editorMutationVersion += 1
       if (this.editorDirty) {
         this.editorExternalChange = true
         return
       }
       this.editorDraft = null
+      this.editorSession = null
       this.fileChangeVersions[path] = (this.fileChangeVersions[path] || 0) + 1
     },
     activeFileSnapshot(expectedExecutionAgentId = undefined) {
@@ -637,6 +648,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.loading = {}
       clearCachedSubtree(this, path)
       if (this.viewedEntry?.path === path || this.viewedEntry?.path.startsWith(`${path}/`)) {
+        this.discardEdit()
         this.viewedEntry = null
       }
       this.selectedPath = parentPath(path)
@@ -731,7 +743,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (storageSessionId) void this.refreshStorageUsage(storageSessionId)
       return data.entry
     },
-    async preview(path) {
+    async preview(path, { cache = true } = {}) {
       if (!this.operationAvailable('filesystem.read')) return null
       const contextVersion = this.contextVersion
       const previewVersion = (this.previewVersions[path] || 0) + 1
@@ -744,7 +756,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         contextVersion !== this.contextVersion
         || previewVersion !== this.previewVersions[path]
       ) return null
-      this.filePreviews[path] = data
+      if (cache) this.filePreviews[path] = data
       return data
     },
     async loadRevisions(path) {
@@ -806,6 +818,9 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (!this.operationAvailable('filesystem.write')) throw new Error('Filesystem operation is unavailable')
       const storageSessionId = this.managedStorageSessionId()
       const version = this.contextVersion
+      const viewVersion = this.viewVersion
+      const tabId = this.activeFileTabId
+      const mutationVersion = this.editorMutationVersion
       const { data } = await api.put('/workspace/files', {
         path,
         content,
@@ -814,7 +829,12 @@ export const useWorkspaceStore = defineStore('workspace', {
         params: this.requestParams(),
         suppressErrorToast: true
       })
-      if (version !== this.contextVersion) return null
+      if (
+        version !== this.contextVersion
+        || viewVersion !== this.viewVersion
+        || tabId !== this.activeFileTabId
+        || this.viewedEntry?.path !== path
+      ) return null
       this.contextVersion += 1
       this.loading = {}
       this.previewVersions[path] = (this.previewVersions[path] || 0) + 1
@@ -831,10 +851,10 @@ export const useWorkspaceStore = defineStore('workspace', {
       } : null)
       if (entry) {
         replaceCachedEntry(this, entry)
-        this.viewedEntry = entry
+        if (entry.path === path) this.viewedEntry = entry
       }
-      this.editorDirty = false
-      this.editorExternalChange = false
+      this.editorDirty = this.editorActive && this.editorDraft !== null && this.editorDraft !== content
+      if (mutationVersion === this.editorMutationVersion) this.editorExternalChange = false
       if (storageSessionId) void this.refreshStorageUsage(storageSessionId)
       return data
     },

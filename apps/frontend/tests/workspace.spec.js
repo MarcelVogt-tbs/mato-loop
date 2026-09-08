@@ -1,4 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia'
+import { markRaw } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { api } = vi.hoisted(() => ({
@@ -780,25 +781,84 @@ describe('workspace store', () => {
     workspace.filePreviews['a.md'] = { kind: 'markdown', content: 'A', revision: 'revision-a' }
     workspace.startEdit('A')
     workspace.updateEditorDraft('A geändert', 'A')
+    const editorState = markRaw({ doc: 'A changed', history: ['A'] })
+    workspace.editorSession = {
+      state: editorState, scrollTop: 120, scrollLeft: 24, wrap: false,
+      line: 3, column: 2, lines: 8, bytes: 64, language: 'markdown'
+    }
+    const editorSession = workspace.editorSession
     workspace.activateFileTab(fileTab('file-b', 'b.md'))
+    expect(workspace.editorSession).toBeNull()
+    expect(workspace.fileTabStates['file-a'].editorSession).toBe(editorSession)
     workspace.startEdit('B')
     workspace.updateEditorDraft('B geändert', 'B')
+    workspace.editorSession = { state: markRaw({ doc: 'B changed' }) }
 
     workspace.activateFileTab(fileTab('file-a', 'a.md'))
     expect(workspace.editorDraft).toBe('A geändert')
+    expect(workspace.editorSession).toBe(editorSession)
+    expect(workspace.editorSession.state).toBe(editorState)
+    expect(persistedFileView(workspace)).not.toHaveProperty('editorSession')
     expect(workspace.filePreviews['a.md'].revision).toBe('revision-a')
     expect(workspace.editorDirty).toBe(true)
     expect(workspace.fileTabDirty('file-b')).toBe(true)
     expect(workspace.hasDirtyEditors).toBe(true)
+
+    workspace.discardAllEdits()
+    expect(workspace.editorSession).toBeNull()
+    expect(workspace.hasDirtyEditors).toBe(false)
+    for (const state of Object.values(workspace.fileTabStates)) {
+      expect(state.editorSession).toBeNull()
+      expect(state.editorDraft).toBeNull()
+    }
+  })
+
+  it.each(['reset', 'openEntry', 'discardEdit', 'closeViewer', 'discardFileTab', 'configure'])(
+    'clears the editor session on %s',
+    (action) => {
+      const workspace = useWorkspaceStore()
+      expect(workspace.editorSession).toBeNull()
+      workspace.configure({ sessionId: 'session-a' })
+      workspace.openEntry({ kind: 'file', path: 'a.md' }, true)
+      workspace.activeFileTabId = 'file-a'
+      workspace.editorSession = { state: markRaw({ doc: 'A' }) }
+      const args = {
+        openEntry: { kind: 'file', path: 'b.md' },
+        discardFileTab: 'file-a',
+        configure: { sessionId: 'session-b' }
+      }
+
+      workspace[action](args[action])
+
+      expect(workspace.editorSession).toBeNull()
+    }
+  )
+
+  it('releases a closed inactive tab session without changing the active editor', () => {
+    const workspace = useWorkspaceStore()
+    workspace.activeFileTabId = 'file-a'
+    workspace.editorSession = { state: markRaw({ doc: 'A' }) }
+    workspace.stashActiveFileTab()
+    workspace.activeFileTabId = 'file-b'
+    workspace.editorSession = { state: markRaw({ doc: 'B' }) }
+    const activeSession = workspace.editorSession
+
+    workspace.discardFileTab('file-a')
+
+    expect(workspace.fileTabStates['file-a']).toBeUndefined()
+    expect(workspace.editorSession).toBe(activeSession)
   })
 
   it('keeps a dirty editor and marks an external file mutation', () => {
     const workspace = useWorkspaceStore()
     workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'notes.md' }, true)
     workspace.updateEditorDraft('neu', 'alt')
+    workspace.editorSession = { state: markRaw({ doc: 'neu' }) }
+    const editorSession = workspace.editorSession
 
     workspace.noteFileMutation('notes.md')
 
+    expect(workspace.editorSession).toBe(editorSession)
     expect(workspace.editorDraft).toBe('neu')
     expect(workspace.editorDirty).toBe(true)
     expect(workspace.editorExternalChange).toBe(true)
@@ -813,11 +873,13 @@ describe('workspace store', () => {
     const workspace = useWorkspaceStore()
     workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'notes.md' }, true)
     workspace.editorDraft = 'stale'
+    workspace.editorSession = { state: markRaw({ doc: 'stale' }) }
 
     workspace.noteFileMutation('notes.md')
 
     expect(workspace.editorActive).toBe(true)
     expect(workspace.editorDraft).toBeNull()
+    expect(workspace.editorSession).toBeNull()
     expect(workspace.fileChangeVersions['notes.md']).toBe(1)
   })
 
@@ -993,6 +1055,93 @@ describe('workspace store', () => {
       },
       suppressErrorToast: true
     })
+  })
+
+  it.each(['typed during save', 'sent', 'original', null])(
+    'keeps the current draft and session when saving completes with draft %s',
+    async (draft) => {
+      let resolveSave
+      api.put.mockImplementationOnce(() => new Promise((resolve) => { resolveSave = resolve }))
+      const workspace = useWorkspaceStore()
+      workspace.configure({ sessionId: 'session-a' })
+      workspace.openEntry({ kind: 'file', path: 'notes.md' }, true)
+      workspace.updateEditorDraft('sent', 'original')
+      const request = workspace.saveFile('notes.md', workspace.editorDraft, 'revision-1')
+      workspace.updateEditorDraft(draft, 'original')
+      workspace.editorSession = { state: markRaw({ doc: draft }) }
+      const editorSession = workspace.editorSession
+      resolveSave({ data: { revision: 'revision-2' } })
+
+      await expect(request).resolves.toEqual({ revision: 'revision-2' })
+
+      expect(api.put.mock.calls[0][1].content).toBe('sent')
+      expect(workspace.filePreviews['notes.md'].content).toBe('sent')
+      expect(workspace.editorDraft).toBe(draft)
+      expect(workspace.editorSession).toBe(editorSession)
+      expect(workspace.editorActive).toBe(true)
+      expect(workspace.editorDirty).toBe(draft !== null && draft !== 'sent')
+    }
+  )
+
+  it.each(['path', 'path round trip', 'tab', 'stash', 'context', 'close', 'direct path'])(
+    'ignores save completion after a %s change',
+    async (change) => {
+      let resolveSave
+      api.put.mockImplementationOnce(() => new Promise((resolve) => { resolveSave = resolve }))
+      const workspace = useWorkspaceStore()
+      workspace.configure({ sessionId: 'session-a' })
+      workspace.openEntry({ kind: 'file', path: 'a.md' }, true)
+      workspace.activeFileTabId = 'file-a'
+      workspace.updateEditorDraft('sent', 'original')
+      const request = workspace.saveFile('a.md', 'sent', 'revision-1')
+      if (change.startsWith('path')) workspace.openEntry({ kind: 'file', path: 'b.md' }, true)
+      if (change === 'path round trip') workspace.openEntry({ kind: 'file', path: 'a.md' }, true)
+      if (change === 'tab') workspace.activateFileTab({
+        tabId: 'file-b', kind: 'file', fileTarget: { scope: 'session', path: 'a.md', name: 'a.md' }
+      })
+      if (change === 'stash') workspace.stashActiveFileTab()
+      if (change === 'context') workspace.configure({ sessionId: 'session-b' })
+      if (change === 'close') workspace.closeViewer()
+      if (change === 'direct path') workspace.viewedEntry.path = 'b.md'
+      workspace.editorDraft = 'current draft'
+      workspace.editorDirty = true
+      workspace.editorExternalChange = true
+      workspace.editorSession = { state: markRaw({ doc: 'current draft' }) }
+      const currentState = { ...workspace.$state }
+      const currentPreviews = { ...workspace.filePreviews }
+      resolveSave({ data: {
+        entry: { kind: 'file', path: 'a.md', size: 4 }, revision: 'revision-2'
+      } })
+
+      await expect(request).resolves.toBeNull()
+
+      expect(workspace.$state).toEqual(currentState)
+      expect(workspace.filePreviews).toEqual(currentPreviews)
+      expect(workspace.editorSession).toBe(currentState.editorSession)
+    }
+  )
+
+  it.each([
+    [false, 'notes.md', true],
+    [true, 'notes.md', true],
+    [true, 'other.md', false],
+    [true, null, false]
+  ])('preserves external hints only for mutations observed during saving (%s, %s)', async (flag, mutation, expected) => {
+    let resolveSave
+    api.put.mockImplementationOnce(() => new Promise((resolve) => { resolveSave = resolve }))
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a' })
+    workspace.openEntry({ kind: 'file', path: 'notes.md' }, true)
+    workspace.updateEditorDraft('sent', 'original')
+    workspace.editorExternalChange = flag
+    const request = workspace.saveFile('notes.md', 'sent', 'revision-1')
+    if (mutation) workspace.noteFileMutation(mutation)
+    resolveSave({ data: { revision: 'revision-2' } })
+
+    await request
+
+    expect(workspace.editorDirty).toBe(false)
+    expect(workspace.editorExternalChange).toBe(expected)
   })
 
   it('requests OpenSCAD rendering with the latest revision and workspace context', async () => {

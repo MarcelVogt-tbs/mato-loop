@@ -12,159 +12,209 @@
     ref="viewerRoot"
     class="file-viewer column no-wrap full-height"
     tabindex="-1"
-    aria-labelledby="file-viewer-title"
+    :aria-label="viewerName"
     @keydown.esc="handleEscape"
   >
-    <q-toolbar class="file-viewer__toolbar q-px-md">
-      <q-toolbar-title id="file-viewer-title" class="text-subtitle1 text-weight-bold ellipsis">{{ viewerName }}</q-toolbar-title>
-      <q-btn-toggle
-        v-if="preview.kind === 'openscad' && !historical"
-        class="file-viewer__view-toggle"
-        :model-value="workspace.editorActive ? 'source' : openScadView"
-        unelevated
-        no-caps
-        toggle-color="primary"
-        :options="openScadViewOptions"
-        aria-label="OpenSCAD-Ansicht wählen"
-        @update:model-value="setOpenScadView"
-      />
-      <q-btn
-        v-if="preview.kind === 'openscad' && !historical && !workspace.editorActive"
-        class="file-viewer__export-stl"
-        unelevated
-        no-caps
-        color="primary"
-        icon="download"
-        :label="$q.screen.gt.xs ? 'STL erzeugen' : undefined"
-        :loading="exportingOpenScad"
-        :disable="renderingOpenScad"
-        aria-label="STL erzeugen und herunterladen"
-        @click="exportOpenScad"
-      >
-        <q-tooltip>STL erzeugen und herunterladen</q-tooltip>
-      </q-btn>
-      <q-btn
-        v-if="editable && !workspace.editorActive"
-        ref="editButton"
-        class="file-viewer__edit"
-        unelevated
-        no-caps
-        color="primary"
-        icon="edit"
-        label="Bearbeiten"
-        aria-label="Datei bearbeiten"
-        @click="startEditing"
-      >
-        <q-tooltip>Datei bearbeiten</q-tooltip>
-      </q-btn>
-      <q-btn
-        v-if="preview.kind === 'image' && imageUrl"
-        class="file-icon-action"
-        flat
-        round
-        dense
-        icon="open_in_new"
-        :href="imageUrl"
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="Bild in neuem Tab öffnen"
-      >
-        <q-tooltip>In neuem Tab öffnen</q-tooltip>
-      </q-btn>
-      <q-btn
-        v-if="preview.kind === 'markdown' && !historical && !workspace.editorActive"
-        class="file-icon-action"
-        flat
-        round
-        dense
-        icon="picture_as_pdf"
-        :href="printUrl"
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="Markdown als PDF speichern"
-      >
-        <q-tooltip>Als PDF speichern</q-tooltip>
-      </q-btn>
-      <q-btn
-        v-if="textualPreview(preview) && !workspace.editorActive"
-        class="file-icon-action"
-        flat
-        round
-        dense
-        icon="content_copy"
-        aria-label="Dateiinhalt kopieren"
-        @click="copyPreview(preview)"
-      >
-        <q-tooltip>Inhalt kopieren</q-tooltip>
-      </q-btn>
-      <q-btn
-        v-if="entry && !historical && workspace.scope === 'session' && !workspace.toolContext && !workspace.editorActive"
-        class="file-icon-action"
-        flat
-        round
-        dense
-        icon="history"
-        aria-label="Versionsverlauf öffnen"
-        @click="openRevisions"
-      >
-        <q-tooltip>Versionsverlauf</q-tooltip>
-      </q-btn>
-      <q-btn v-if="!workspace.editorActive && canDownload" class="file-icon-action" flat round dense icon="download" aria-label="Datei herunterladen" @click="download">
-        <q-tooltip>Datei herunterladen</q-tooltip>
-      </q-btn>
-      <q-btn
-        v-if="fullscreenToggle"
-        class="file-icon-action"
-        flat
-        round
-        dense
-        :icon="fullscreen ? 'fullscreen_exit' : 'fullscreen'"
-        :aria-label="fullscreen ? 'Vollbild verlassen' : 'Im Vollbild öffnen'"
-        @click="emit('toggle-fullscreen')"
-      >
-        <q-tooltip>{{ fullscreen ? 'Vollbild verlassen' : 'Im Vollbild öffnen' }}</q-tooltip>
-      </q-btn>
-    </q-toolbar>
-    <q-separator />
+    <slot name="toolbar">
+      <q-toolbar v-if="!usingTextEditor" class="file-viewer__toolbar q-px-md">
+        <q-toolbar-title class="text-subtitle1 text-weight-bold ellipsis">{{ viewerName }}</q-toolbar-title>
+        <q-btn-toggle
+          v-if="preview.kind === 'openscad' && !historical"
+          class="file-viewer__view-toggle"
+          :model-value="workspace.editorActive ? 'source' : openScadView"
+          unelevated
+          no-caps
+          toggle-color="primary"
+          :options="openScadViewOptions"
+          aria-label="OpenSCAD-Ansicht wählen"
+          @update:model-value="setOpenScadView"
+        />
+        <q-btn
+          v-if="preview.kind === 'openscad' && !historical && !workspace.editorActive"
+          class="file-viewer__export-stl"
+          unelevated
+          no-caps
+          color="primary"
+          icon="download"
+          :label="$q.screen.gt.xs ? 'STL erzeugen' : undefined"
+          :loading="exportingOpenScad"
+          :disable="renderingOpenScad"
+          aria-label="STL erzeugen und herunterladen"
+          @click="exportOpenScad"
+        >
+          <q-tooltip>STL erzeugen und herunterladen</q-tooltip>
+        </q-btn>
+        <q-btn
+          v-if="preview.kind === 'image' && imageUrl"
+          class="file-icon-action"
+          flat
+          round
+          dense
+          icon="open_in_new"
+          :href="imageUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Bild in neuem Tab öffnen"
+        >
+          <q-tooltip>In neuem Tab öffnen</q-tooltip>
+        </q-btn>
+        <q-btn
+          v-if="preview.kind === 'markdown' && !historical"
+          class="file-icon-action"
+          flat
+          round
+          dense
+          icon="picture_as_pdf"
+          :href="printUrl"
+          :disable="workspace.editorDirty"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Markdown als PDF speichern"
+        >
+          <q-tooltip>{{ workspace.editorDirty ? 'Speichere zuerst die Änderungen.' : 'Als PDF speichern' }}</q-tooltip>
+        </q-btn>
+        <q-btn
+          v-if="textualPreview(preview)"
+          class="file-icon-action"
+          flat
+          round
+          dense
+          icon="content_copy"
+          aria-label="Dateiinhalt kopieren"
+          @click="copyPreview(preview)"
+        >
+          <q-tooltip>Inhalt kopieren</q-tooltip>
+        </q-btn>
+        <q-btn
+          v-if="entry && !historical && workspace.scope === 'session' && !workspace.toolContext"
+          class="file-icon-action"
+          flat
+          round
+          dense
+          icon="history"
+          aria-label="Versionsverlauf öffnen"
+          :disable="workspace.editorDirty || saving"
+          @click="openRevisions"
+        >
+          <q-tooltip>Versionsverlauf</q-tooltip>
+        </q-btn>
+        <q-btn v-if="canDownload" class="file-icon-action" flat round dense icon="download" aria-label="Datei herunterladen" @click="download">
+          <q-tooltip>Gespeicherte Datei herunterladen</q-tooltip>
+        </q-btn>
+        <q-btn
+          v-if="fullscreenToggle"
+          class="file-icon-action"
+          flat
+          round
+          dense
+          :icon="fullscreen ? 'fullscreen_exit' : 'fullscreen'"
+          :aria-label="fullscreen ? 'Vollbild verlassen' : 'Im Vollbild öffnen'"
+          @click="emit('toggle-fullscreen')"
+        >
+          <q-tooltip>{{ fullscreen ? 'Vollbild verlassen' : 'Im Vollbild öffnen' }}</q-tooltip>
+        </q-btn>
+      </q-toolbar>
+    </slot>
+    <q-separator v-if="$slots.toolbar || !usingTextEditor" />
     <q-banner v-if="historical" dense class="app-surface-tonal">
       Version {{ entry.revision }} · Schreibgeschützt.
       <template v-if="preview.kind === 'openscad'">Historische OpenSCAD-Versionen zeigen nur den Quelltext. Abhängige Dateien werden nicht historisch gerendert.</template>
     </q-banner>
 
-    <div v-if="workspace.editorActive && editable" class="col column no-wrap file-viewer__editor">
-      <div v-if="saveError" class="file-save-error q-ma-sm q-pa-sm" role="alert">
-        <div class="text-weight-medium">{{ saveErrorMessage }}</div>
-        <div v-if="saveConflict" class="app-muted text-caption q-mt-xs">
-          Dein Entwurf bleibt erhalten. Lade die aktuelle Revision und prüfe ihn vor dem erneuten Speichern.
+    <TextEditorApp
+      v-if="usingTextEditor"
+      v-model="draft"
+      v-model:session="workspace.editorSession"
+      class="col file-viewer__editor"
+      :filename="entry.name"
+      :markdown="preview.kind === 'markdown'"
+      :saving="saving"
+      :dirty="workspace.editorDirty"
+      :show-toolbar="!$slots.toolbar"
+      @save="save"
+      @cancel="cancel"
+    >
+      <template #before-content>
+        <div v-if="saveError" class="file-save-error q-ma-sm q-pa-sm" role="alert">
+          <div class="text-weight-medium">{{ saveErrorMessage }}</div>
+          <div v-if="saveConflict" class="app-muted text-caption q-mt-xs">
+            Dein Entwurf bleibt erhalten. Vergleiche ihn mit der aktuellen Datei vor dem erneuten Speichern.
+            <template v-if="workspace.scope === 'session'">Von einem laufenden KI-Run belegte Ablage-Dateien können erst nach dessen Abschluss gespeichert werden.</template>
+          </div>
+          <div v-if="conflictLoadError" class="text-negative text-caption q-mt-xs">{{ conflictLoadErrorMessage }}</div>
+          <div class="row q-gutter-sm q-mt-sm">
+            <q-btn
+              v-if="saveConflict"
+              outline
+              no-caps
+              color="primary"
+              label="Änderungen vergleichen"
+              :loading="loadingLatest"
+              @click="loadLatestForConflict"
+            />
+            <q-btn v-else flat no-caps color="primary" label="Erneut versuchen" @click="save" />
+          </div>
         </div>
-        <div v-if="conflictLoadError" class="text-negative text-caption q-mt-xs">{{ conflictLoadErrorMessage }}</div>
-        <div class="row q-gutter-sm q-mt-sm">
-          <q-btn
-            v-if="saveConflict"
-            outline
-            no-caps
-            color="primary"
-            label="Aktuelle Revision laden"
-            :loading="loadingLatest"
-            @click="loadLatestForConflict"
-          />
-          <q-btn v-else flat no-caps color="primary" label="Erneut versuchen" @click="save" />
-        </div>
-      </div>
-      <q-banner v-if="workspace.editorExternalChange" dense rounded class="app-surface-tonal q-ma-sm" role="alert">
-        <template #avatar><q-icon name="warning_amber" color="warning" /></template>
-        Die Datei wurde außerhalb des Editors geändert. Dein ungespeicherter Entwurf bleibt erhalten.
-      </q-banner>
-      <WorkspaceFileEditor
-        v-model="draft"
-        class="col"
-        :markdown="preview.kind === 'markdown'"
-        :saving="saving"
-        :dirty="workspace.editorDirty"
-        @save="save"
-        @cancel="cancel"
-      />
-    </div>
+        <q-banner v-if="workspace.editorExternalChange" dense rounded class="app-surface-tonal q-ma-sm" role="alert">
+          <template #avatar><q-icon name="warning_amber" color="warning" /></template>
+          Die Datei wurde außerhalb des Editors geändert. Dein ungespeicherter Entwurf bleibt erhalten.
+          <template #action>
+            <q-btn flat no-caps color="primary" label="Aktuelle Datei laden" :disable="saving" @click="cancel" />
+          </template>
+        </q-banner>
+      </template>
+      <template #file-menu>
+        <q-item clickable v-close-popup aria-label="Dateiinhalt kopieren" @click="copyPreview({ ...preview, content: draft })">
+          <q-item-section avatar><q-icon name="content_copy" /></q-item-section>
+          <q-item-section>Inhalt kopieren</q-item-section>
+        </q-item>
+        <q-item
+          v-if="preview.kind === 'markdown'"
+          clickable v-close-popup
+          :href="printUrl"
+          :disable="workspace.editorDirty"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Markdown als PDF speichern"
+        >
+          <q-item-section avatar><q-icon name="picture_as_pdf" /></q-item-section>
+          <q-item-section>Als PDF speichern</q-item-section>
+        </q-item>
+        <q-item
+          v-if="entry && !historical && workspace.scope === 'session' && !workspace.toolContext"
+          clickable v-close-popup
+          :disable="workspace.editorDirty || saving"
+          aria-label="Versionsverlauf öffnen"
+          @click="openRevisions"
+        >
+          <q-item-section avatar><q-icon name="history" /></q-item-section>
+          <q-item-section>Versionsverlauf</q-item-section>
+        </q-item>
+        <q-item v-if="canDownload" clickable v-close-popup aria-label="Datei herunterladen" @click="download">
+          <q-item-section avatar><q-icon name="download" /></q-item-section>
+          <q-item-section>Gespeicherte Datei herunterladen</q-item-section>
+        </q-item>
+        <q-item
+          v-if="fullscreenToggle"
+          clickable v-close-popup
+          :aria-label="fullscreen ? 'Vollbild verlassen' : 'Im Vollbild öffnen'"
+          @click="emit('toggle-fullscreen')"
+        >
+          <q-item-section avatar><q-icon :name="fullscreen ? 'fullscreen_exit' : 'fullscreen'" /></q-item-section>
+          <q-item-section>{{ fullscreen ? 'Vollbild verlassen' : 'Im Vollbild öffnen' }}</q-item-section>
+        </q-item>
+        <q-item
+          v-if="preview.kind === 'openscad'"
+          clickable v-close-popup
+          :disable="workspace.editorDirty || saving"
+          aria-label="OpenSCAD-3D-Modell anzeigen"
+          @click="setOpenScadView('model')"
+        >
+          <q-item-section avatar><q-icon name="view_in_ar" /></q-item-section>
+          <q-item-section>3D-Modell anzeigen</q-item-section>
+        </q-item>
+      </template>
+    </TextEditorApp>
     <div v-else class="col file-viewer__content q-pa-md">
       <div v-if="loading" class="fit flex flex-center"><q-spinner color="primary" size="36px" /></div>
       <AppStateMessage
@@ -232,6 +282,27 @@
       </AppStateMessage>
     </div>
 
+    <q-dialog v-model="conflictOpen" :maximized="$q.screen.lt.sm" aria-labelledby="file-conflict-title">
+      <q-card class="file-revisions-dialog app-surface column no-wrap">
+        <q-toolbar>
+          <q-toolbar-title id="file-conflict-title" class="text-subtitle1 text-weight-bold">Änderungen vergleichen</q-toolbar-title>
+          <q-btn flat round dense icon="close" aria-label="Vergleich schließen" v-close-popup />
+        </q-toolbar>
+        <q-card-section class="col scroll">
+          <p>Es wird nichts automatisch zusammengeführt. Kopiere benötigte Stellen aus der aktuellen Datei in deinen Entwurf.</p>
+          <h3 class="text-subtitle2">Aktuelle Datei</h3>
+          <pre class="file-viewer__text" tabindex="0" aria-label="Aktuelle Datei">{{ conflictPreview?.content }}</pre>
+          <q-separator class="q-my-md" />
+          <h3 class="text-subtitle2">Dein Entwurf</h3>
+          <pre class="file-viewer__text" tabindex="0" aria-label="Dein Entwurf">{{ draft }}</pre>
+        </q-card-section>
+        <q-card-actions class="row q-gutter-sm" align="right">
+          <q-btn flat no-caps label="Aktuelle Datei übernehmen" @click="resolveConflict(false)" />
+          <q-btn unelevated no-caps color="primary" label="Entwurf weiterbearbeiten" @click="resolveConflict(true)" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <q-dialog
       v-model="revisionsOpen"
       :maximized="$q.screen.lt.sm"
@@ -286,20 +357,20 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { copyToClipboard, useQuasar } from 'quasar'
 import { useRouter } from 'vue-router'
 import AppStateMessage from 'components/AppStateMessage.vue'
 import ImageViewerPanel from 'components/ImageViewerPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
 import StlViewerPanel from 'components/StlViewerPanel.vue'
-import WorkspaceFileEditor from 'components/WorkspaceFileEditor.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { apiErrorMessage, errorDescriptor } from 'src/utils/api-errors'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useControlCenterStore } from 'stores/control-center'
 
 defineOptions({ name: 'FileViewerPanel' })
+const TextEditorApp = defineAsyncComponent(() => import('components/WorkspaceFileEditor.vue'))
 
 const props = defineProps({
   entry: { type: Object, default: null },
@@ -316,7 +387,6 @@ const workspace = useWorkspaceStore()
 const controlCenter = useControlCenterStore()
 const historical = computed(() => props.entry?.revision != null)
 const viewerRoot = ref(null)
-const editButton = ref(null)
 const loading = ref(false)
 const imageLoading = ref(false)
 const saving = ref(false)
@@ -324,6 +394,10 @@ const loadingLatest = ref(false)
 const loadError = ref(null)
 const saveError = ref(null)
 const conflictLoadError = ref(null)
+const conflictOpen = ref(false)
+const conflictPreview = ref(null)
+let conflictContextVersion = 0
+let conflictViewVersion = 0
 const preview = ref({ kind: 'none', reason: 'unsupported' })
 const loadedImageUrl = ref('')
 const openScadView = ref('model')
@@ -359,6 +433,7 @@ const editable = computed(() => (
   && ['text', 'markdown', 'openscad'].includes(preview.value.kind)
   && workspace.operationAvailable('filesystem.write')
 ))
+const usingTextEditor = computed(() => workspace.editorActive && editable.value)
 const canActivateRevision = computed(() => Boolean(
   props.entry?.path
   && workspace.scope === 'session'
@@ -419,6 +494,12 @@ const unavailableMessage = computed(() => ({
 
 async function loadPreview() {
   const version = ++previewVersion
+  saveError.value = null
+  conflictLoadError.value = null
+  conflictOpen.value = false
+  conflictPreview.value = null
+  loadingLatest.value = false
+  saving.value = false
   clearOpenScadRender()
   clearOpenScadExport()
   openScadView.value = historical.value ? 'source' : 'model'
@@ -436,8 +517,7 @@ async function loadPreview() {
     : null
   if (preservedPreview) {
     preview.value = preservedPreview
-    await nextTick()
-    viewerRoot.value?.focus()
+    if (workspace.editorActive) openScadView.value = 'source'
     return
   }
   loading.value = true
@@ -450,8 +530,11 @@ async function loadPreview() {
     if (version === previewVersion && result) {
       preview.value = result
       imageLoading.value = result.kind === 'image' && loadedImageUrl.value !== imageUrl.value
-      if (workspace.editorDraft === null) workspace.editorDraft = result.content || ''
-      if (result.kind === 'openscad' && !historical.value) void renderOpenScad()
+      if (editable.value && (result.kind !== 'openscad' || workspace.editorActive)) {
+        workspace.editorDraft = result.content || ''
+        workspace.editorActive = true
+        openScadView.value = 'source'
+      } else if (result.kind === 'openscad' && !historical.value) void renderOpenScad()
     }
   } catch (error) {
     if (version === previewVersion) loadError.value = error
@@ -545,19 +628,16 @@ async function activateRevision(revision) {
   }
 }
 
-function startEditing() {
-  clearOpenScadExport()
-  saveError.value = null
-  openScadView.value = 'source'
-  workspace.startEdit(preview.value.content)
-}
-
 async function setOpenScadView(view) {
   if (view === 'model' && workspace.editorDirty) {
     $q.notify({ type: 'warning', message: 'Speichere zuerst die Änderungen am Quelltext.' })
     return
   }
-  if (workspace.editorActive) workspace.discardEdit()
+  if (view === 'model') workspace.editorActive = false
+  else if (editable.value) {
+    workspace.editorDraft = preview.value.content
+    workspace.editorActive = true
+  }
   if (view === 'source' && renderingOpenScad.value) clearOpenScadRender()
   openScadView.value = view
   if (view === 'model') await renderOpenScad()
@@ -638,12 +718,9 @@ function clearOpenScadRender() {
   openScadUrl.value = ''
 }
 
-async function focusEditButton() {
-  await nextTick()
-  editButton.value?.focus?.()
-}
-
 async function cancel() {
+  const context = workspace.contextVersion
+  const version = workspace.viewVersion
   if (workspace.editorDirty) {
     const accepted = await confirm(
       'Sollen die ungespeicherten Änderungen verworfen werden?',
@@ -652,46 +729,77 @@ async function cancel() {
     )
     if (!accepted) return
   }
-  workspace.discardEdit()
-  focusEditButton()
+  if (context !== workspace.contextVersion || version !== workspace.viewVersion) return
+  workspace.updateEditorDraft(preview.value.content, preview.value.content)
+  workspace.editorSession = null
+  saveError.value = null
+  conflictPreview.value = null
+  if (workspace.editorExternalChange) {
+    workspace.editorExternalChange = false
+    await loadPreview()
+  }
 }
 
 async function save() {
   if (saving.value || !workspace.editorDirty) return
+  const version = previewVersion
   saveError.value = null
   conflictLoadError.value = null
   saving.value = true
   try {
     const result = await workspace.saveFile(props.entry.path, draft.value, preview.value.revision)
-    if (!result) return
+    if (!result || version !== previewVersion) return
     clearOpenScadRender()
     preview.value = workspace.filePreviews[props.entry.path]
-    workspace.discardEdit()
     $q.notify({ type: 'positive', message: 'Datei gespeichert.' })
-    focusEditButton()
   } catch (error) {
-    saveError.value = error
+    if (version === previewVersion) saveError.value = error
   } finally {
-    saving.value = false
+    if (version === previewVersion) saving.value = false
   }
 }
 
 async function loadLatestForConflict() {
   if (loadingLatest.value) return
+  const version = previewVersion
   loadingLatest.value = true
   conflictLoadError.value = null
+  conflictContextVersion = workspace.contextVersion
+  conflictViewVersion = workspace.viewVersion
   try {
-    const result = await workspace.preview(props.entry.path)
-    if (result) {
-      preview.value = result
-      workspace.updateEditorDraft(draft.value, result.content || '')
-      saveError.value = null
+    const result = await workspace.preview(props.entry.path, { cache: false })
+    if (result && version === previewVersion && conflictContextVersion === workspace.contextVersion && conflictViewVersion === workspace.viewVersion) {
+      if (!textualPreview(result)) {
+        conflictLoadError.value = { code: 'file.changed' }
+        return
+      }
+      conflictPreview.value = result
+      conflictOpen.value = true
     }
   } catch (error) {
-    conflictLoadError.value = error
+    if (version === previewVersion) conflictLoadError.value = error
   } finally {
-    loadingLatest.value = false
+    if (version === previewVersion) loadingLatest.value = false
   }
+}
+
+async function resolveConflict(keepDraft) {
+  const latest = conflictPreview.value
+  if (!latest) return
+  const accepted = await confirm(
+    keepDraft
+      ? 'Beim nächsten Speichern ersetzt dein Entwurf die angezeigte aktuelle Datei. Nicht übernommene Änderungen gehen dabei verloren. Entwurf auf dieser Grundlage weiterbearbeiten?'
+      : 'Soll dein ungespeicherter Entwurf durch die aktuelle Datei ersetzt werden?',
+    keepDraft ? 'Neue Speichergrundlage übernehmen?' : 'Entwurf verwerfen?',
+    { okLabel: keepDraft ? 'Weiterbearbeiten' : 'Verwerfen' }
+  )
+  if (!accepted || conflictContextVersion !== workspace.contextVersion || conflictViewVersion !== workspace.viewVersion) return
+  preview.value = latest
+  workspace.filePreviews[props.entry.path] = latest
+  workspace.updateEditorDraft(keepDraft ? draft.value : latest.content, latest.content)
+  workspace.editorExternalChange = false
+  saveError.value = null
+  conflictOpen.value = false
 }
 
 function download() {

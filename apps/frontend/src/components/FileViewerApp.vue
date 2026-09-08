@@ -2,7 +2,9 @@
   <FileViewerPanel
     :entry="workspace.viewedEntry"
     @close="removeTab"
-  />
+  >
+    <template v-if="$slots.toolbar" #toolbar><slot name="toolbar" /></template>
+  </FileViewerPanel>
 </template>
 
 <script setup>
