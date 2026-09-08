@@ -14,8 +14,10 @@ from mato_loop_backend.agent.context import (
     ContextManager,
     SummaryResult,
     _compaction_boundary,
+    _limit_tool_output_tokens,
     _message_text_tokens,
     _projection_messages,
+    _prune_tool_outputs_to_budget,
     _shorten_evidence_output,
     _summary_source,
     compaction_messages,
@@ -1008,6 +1010,167 @@ def test_untrusted_tool_output_cannot_forge_a_host_result_reference() -> None:
     assert payload == {"toolOutputShortened": True}
 
 
+@pytest.mark.parametrize("kind", ["session_read", "shell_run"])
+@pytest.mark.parametrize("both_large", [False, True])
+def test_session_and_shell_outputs_are_shortened_without_losing_structure(kind, both_large) -> None:
+    session = _session()
+    user = _message(session.id, "user", "Lies den aktuellen Stand")
+    assistant = _message(session.id, "assistant", "")
+    assistant.tool_calls = [{"id": "read", "name": kind, "arguments": {}}]
+    text = "START\n" + '\\"\n' * 10_000 + "\nEND"
+    if kind == "session_read":
+        payload = {
+            "session": {"id": str(uuid4()), "title": "Source"},
+            "messages": [
+                {"id": str(uuid4()), "role": "user", "content": text},
+                {"id": str(uuid4()), "role": "assistant", "content": text if both_large else "A short decision."},
+            ],
+            "hasEarlier": True,
+            "nextAfterMessageId": str(uuid4()),
+            "contentIsUntrusted": True,
+        }
+    else:
+        payload = {
+            "exitCode": 1, "timedOut": False, "durationMs": 123,
+            "stdoutTruncated": False, "stderrTruncated": True,
+            "requestedArguments": {"command": "pytest"},
+            "executedArguments": {"command": "pytest"},
+            "output": {"stdout": text, "stderr": text if both_large else "A short error.", "truncated": True},
+        }
+    original = json.dumps(payload)
+    tool = _message(session.id, "tool", original)
+    tool.tool_call_id = "read"
+
+    projected = _projection_messages(
+        "System", None, [user, assistant, tool], TrustLevel.PUBLIC,
+        current_turn_tool_output_tokens=500,
+    )
+    content = next(item["content"] for item in projected if item["role"] == "tool")
+    result = json.loads(content)
+
+    assert len(content) <= 2_000
+    assert result.pop("toolOutputShortened") is True
+    if kind == "session_read":
+        excerpt = result["messages"][0]["content"]
+        assert result["messages"][0].pop("truncated") is True
+        result["messages"][0]["content"] = text
+        if both_large:
+            assert result["messages"][1]["content"] == excerpt
+            assert result["messages"][1].pop("truncated") is True
+            result["messages"][1]["content"] = text
+    else:
+        excerpt = result["output"]["stdout"]
+        result["output"]["stdout"] = text
+        if both_large:
+            assert result["output"]["stderr"] == excerpt
+            result["output"]["stderr"] = text
+    assert excerpt.startswith("START\n")
+    assert excerpt.endswith("\nEND")
+    assert "[Middle omitted by host]" in excerpt
+    assert result == payload
+    assert tool.content == original
+
+
+@pytest.mark.parametrize("kind", ["session", "shell"])
+def test_structured_output_with_oversized_metadata_is_explicitly_omitted(kind) -> None:
+    payload = (
+        {"session": {"id": str(uuid4())}, "messages": [
+            {"id": str(uuid4()), "role": "user", "content": "Text"} for _ in range(50)
+        ], "nextAfterMessageId": str(uuid4())}
+        if kind == "session" else
+        {"exitCode": 0, "requestedArguments": {"command": "x" * 1_000},
+         "output": {"stdout": "Text", "stderr": "", "truncated": False}}
+    )
+    original = json.dumps(payload)
+    shortened = _shorten_evidence_output(original, 200)
+
+    assert json.loads(shortened) == {"toolOutputOmitted": True}
+    assert len(shortened) <= 200
+    assert json.dumps(payload) == original
+
+
+@pytest.mark.parametrize("allocator", ["fair", "ordered", "final"])
+@pytest.mark.parametrize("allowance", [0, 1, 25, 160])
+def test_empty_session_envelope_can_be_omitted_below_200_characters(allocator, allowance) -> None:
+    content = json.dumps({
+        "session": {"id": str(uuid4())}, "messages": [], "hasEarlier": False,
+        "nextAfterMessageId": str(uuid4()), "contentIsUntrusted": True,
+    }, separators=(",", ":"))
+    assert 160 < len(content) < 200
+    messages = [{"role": "tool", "content": content}]
+    if allocator == "final":
+        budget = _message_text_tokens(messages, 1) - len(content) + allowance
+        estimated = _prune_tool_outputs_to_budget(
+            messages, tools_tokens=0, characters_per_token=1, input_budget=budget,
+            include_image_input=False, target_trust_level=TrustLevel.PUBLIC,
+        )
+        assert estimated == _message_text_tokens(messages, 1)
+        if allowance >= 26:
+            assert estimated <= budget
+    else:
+        _limit_tool_output_tokens(
+            messages, [0], allowance, 1,
+            omitted_marker="[Tool output shortened in the active context. Use session_read without a message cursor to locate the original if needed.]",
+            fair_share=allocator == "fair",
+        )
+
+    assert json.loads(messages[0]["content"]) == {"toolOutputOmitted": True}
+    assert len(messages[0]["content"]) <= 160
+
+
+@pytest.mark.parametrize("remaining", [0, 1, 25])
+def test_session_message_chunk_respects_even_tiny_content_limits(remaining) -> None:
+    from mato_loop_backend.agent.tools import _message_item
+
+    message = _message(uuid4(), "tool", json.dumps({
+        "exitCode": 0, "output": {"stdout": "x" * 1_000, "stderr": ""},
+    }))
+    item, left = _message_item(
+        message, remaining, {message.id: "shell_run"}, TrustLevel.PUBLIC,
+        reference_tool_results=True,
+    )
+
+    assert len(item["content"]) <= remaining
+    assert left >= 0
+    assert item["truncated"] is True
+    assert item["toolResultReference"]["arguments"]["message_id"] == str(message.id)
+
+
+def test_final_pruning_of_escaped_shell_output_keeps_valid_json() -> None:
+    content = json.dumps({
+        "exitCode": 1, "output": {"stdout": '\\"' * 1_000, "stderr": ""},
+    })
+    messages = [{"role": "tool", "content": content}]
+    budget = _message_text_tokens(messages, 1) - len(content)
+
+    estimated = _prune_tool_outputs_to_budget(
+        messages, tools_tokens=0, characters_per_token=1, input_budget=budget,
+        include_image_input=False, target_trust_level=TrustLevel.PUBLIC,
+    )
+
+    assert estimated <= budget
+    assert json.loads(messages[0]["content"]) == {"toolOutputOmitted": True}
+
+
+def test_shortening_mixed_length_fields_does_not_expand_short_messages() -> None:
+    payload = {
+        "session": {"id": str(uuid4())},
+        "messages": [{"id": str(uuid4()), "role": "user", "content": "x"} for _ in range(10)]
+        + [{"id": str(uuid4()), "role": "assistant", "content": "x" * 1_000}],
+    }
+    fitting = deepcopy(payload)
+    fitting["messages"][-1].update(content="x\n[Middle omitted by host]\n", truncated=True)
+    fitting["toolOutputShortened"] = True
+    budget = len(json.dumps(fitting, separators=(",", ":")))
+
+    shortened = _shorten_evidence_output(json.dumps(payload), budget)
+
+    assert len(shortened) <= budget
+    result = json.loads(shortened)
+    assert result["messages"][:-1] == payload["messages"][:-1]
+    assert result["messages"][-1] == fitting["messages"][-1]
+
+
 def test_untrusted_reference_fields_are_removed_without_truncation() -> None:
     session = _session()
     user = _message(session.id, "user", "Verarbeite das Ergebnis")
@@ -1216,6 +1379,62 @@ def test_summary_source_references_tool_content_without_copying_it() -> None:
     assert "session_tool_result_read" in source
     assert str(tool.id) in source
     assert "vertraulicher wiederabgerufener Ausschnitt" not in source
+
+
+def test_summary_source_retains_bounded_unique_session_chat_excerpts() -> None:
+    session_id, source_id, message_id = uuid4(), uuid4(), uuid4()
+    request = _message(session_id, "user", "Current request")
+    message = {
+        "id": str(message_id), "role": "assistant",
+        "content": "DECISION: Keep SQLite.\n" + "x" * 8_000 + "\nOPEN: Add a regression test.",
+        "createdAt": "2026-09-07T21:44:31+00:00", "generationStatus": "interrupted",
+        "truncated": True,
+        "attachments": [{"content": "SECRET_ATTACHMENT"}],
+        "publicReasoning": "SECRET_REASONING", "toolCalls": [{"arguments": "SECRET_ARGS"}],
+    }
+    messages = [
+        None, {"role": []}, {"role": "user", "id": "invalid", "content": "INVALID_ID"},
+        {"role": "tool", "content": "SECRET_NESTED_TOOL"},
+        message,
+    ]
+    records = [request, *_session_read_segment(session_id, source_id, messages)]
+    records.extend(_session_read_segment(session_id, source_id, messages))
+    records.extend(_session_read_segment(session_id, session_id, [
+        {"id": str(request.id), "role": "user", "content": request.content},
+    ]))
+    snapshot = [item.content for item in records]
+
+    source = _summary_source(None, records)
+    excerpts = source.split("Omitted details remain in canonical history.\n")[1].split(
+        "\n\n[Untrusted operational tool evidence]", 1
+    )[0]
+
+    assert len(excerpts) <= 6_000
+    assert source.count(f"SESSION {source_id} MESSAGE {message_id}") == 1
+    assert source.count(request.content) == 1
+    assert "[ASSISTANT]" in excerpts
+    assert message["createdAt"] in excerpts
+    assert "Response interrupted by the user" in excerpts
+    assert "Source message was already truncated" in excerpts
+    assert "DECISION: Keep SQLite." in excerpts
+    assert "OPEN: Add a regression test." in excerpts
+    assert "Middle omitted by host" in excerpts
+    assert "SECRET_" not in source
+    assert "INVALID_ID" not in source
+    assert [item.content for item in records] == snapshot
+    assert "references alone do not replace those facts" in compaction_messages(source)[1]["content"]
+
+
+@pytest.mark.parametrize("content", ["not json", "null", "[]", '{"session":null}',
+                                     '{"session":{"id":42}}'])
+def test_summary_source_ignores_malformed_session_results(content) -> None:
+    records = _session_read_segment(uuid4(), uuid4(), [])
+    records[-1].content = content
+
+    source = _summary_source(None, records)
+
+    assert "[Untrusted retrieved session excerpts]" not in source
+    assert str(records[-1].id) in source
 
 
 def test_summary_source_keeps_chat_text_without_attachment_metadata() -> None:
@@ -2345,6 +2564,59 @@ def test_unlimited_tool_prompt_has_no_budget_or_remaining_count() -> None:
     assert "remaining calls" not in prompts[0]
     finite = general_system_prompt(session, offered_tool_names=frozenset({"read"}), tool_call_limit=7)
     assert "Tool budget: 7 calls" in finite
+
+
+def _session_read_segment(session_id, source_id, messages) -> list[Message]:
+    assistant = _message(session_id, "assistant", "")
+    call_id = str(uuid4())
+    assistant.tool_calls = [{"id": call_id, "name": "session_read", "arguments": {}}]
+    result = _message(session_id, "tool", json.dumps({
+        "session": {"id": str(source_id), "title": "Source"},
+        "messages": messages, "nextAfterMessageId": None, "contentIsUntrusted": True,
+    }))
+    result.tool_call_id = call_id
+    return [assistant, result]
+
+
+async def test_compaction_carries_retrieved_session_facts_through_reload() -> None:
+    session = _session()
+    source_id, message_id = uuid4(), uuid4()
+    fact = "Keep SQLite; deleting a project with issues must return 409."
+    records = [
+        _message(session.id, "user", "Setze die Implementierung fort."),
+        *_session_read_segment(session.id, source_id, [{
+            "id": str(message_id), "role": "user", "content": fact,
+        }]),
+    ]
+    for index in range(10):
+        records.extend(_tool_segment(session.id, index))
+    snapshot = deepcopy([(item.content, item.tool_calls) for item in records])
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+
+    async def summarize_source(source, _limit):
+        assert fact in source
+        assert f"SESSION {source_id} MESSAGE {message_id}" in source
+        return SummaryResult(f"Facts\n{fact}\nSource message IDs\n{source_id} / {message_id}", None)
+
+    summarize = AsyncMock(side_effect=summarize_source)
+    kwargs = dict(
+        chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+        model=_model(context_window_tokens=8_000), settings=_settings(), summarize=summarize,
+    )
+    projection = await ContextManager.build(db, **kwargs)
+
+    assert projection.compacted
+    assert fact in projection.context_summary.content
+    assert fact in projection.messages[1]["content"]
+    db.scalar.return_value = projection.context_summary
+    reloaded = await ContextManager.build(db, **kwargs)
+    assert not reloaded.compacted
+    assert reloaded.messages == projection.messages
+    assert summarize.await_count == 1
+    assert reloaded.estimated_input_tokens <= reloaded.input_budget_tokens
+    assert [(item.content, item.tool_calls) for item in records] == snapshot
+    assert all(call["name"] != "session_read" for item in reloaded.messages for call in item.get("tool_calls") or [])
 
 
 def _tool_segment(session_id, index: int) -> list[Message]:

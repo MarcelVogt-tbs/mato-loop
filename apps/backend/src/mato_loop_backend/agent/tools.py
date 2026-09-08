@@ -2954,7 +2954,7 @@ def _message_item(
         content = _sanitize_tool_result_reference_fields(content)
     full_content = content
     if len(full_content) > content_limit and message.role == "tool":
-        content = _shorten_evidence_output(full_content, content_limit) or full_content[:content_limit]
+        content = (_shorten_evidence_output(full_content, content_limit) or full_content)[:content_limit]
     else:
         content = full_content[:content_limit]
     item = {
