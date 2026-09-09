@@ -8,14 +8,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.context import (
-    IMAGE_INPUT_RESERVE_TOKENS,
+    _SHORTENED_TOOL_OUTPUT,
     MAX_ATTACHMENT_EXCERPT_CHARACTERS,
     ContextError,
     ContextManager,
     SummaryResult,
     _compaction_boundary,
     _limit_tool_output_tokens,
-    _message_text_tokens,
     _projection_messages,
     _prune_tool_outputs_to_budget,
     _shorten_evidence_output,
@@ -26,11 +25,16 @@ from mato_loop_backend.agent.context import (
     message_dict,
 )
 from mato_loop_backend.models import ChatSession, ContextSummary, Message, MessageAttachment
+from mato_loop_backend.providers import service as service_module
+from mato_loop_backend.providers.base import ProviderError, ProviderResult
 from mato_loop_backend.providers.output_budget import (
+    IMAGE_INPUT_RESERVE_TOKENS,
     allocate_output_tokens,
     generation_reserve,
+    guarded_input_tokens,
     raw_input_budget,
 )
+from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AgentProfile,
@@ -42,8 +46,34 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.settings.models import (
     BUILD_AGENT_PROFILE_ID,
     PLAN_AGENT_PROFILE_ID,
+    LlmProviderConfig,
     ModelConfig,
 )
+
+
+def _request_estimator(model, *, tools=None, target_trust_level=TrustLevel.PUBLIC, **options):
+    provider = LlmProviderConfig(
+        id=model.provider_id, name="Test", adapter_type="openai-compatible",
+        pseudonymization_enabled=False,
+    )
+
+    async def estimate(messages):
+        prepared = await ProviderService.prepare_request(
+            provider=provider, model=model, messages=messages, tools=tools or [],
+            target_trust_level=target_trust_level, **options,
+        )
+        return prepared.estimated_input_tokens
+
+    return estimate
+
+
+async def _build_context(db, **kwargs):
+    return await ContextManager.build(
+        db, **kwargs, estimate_request=_request_estimator(
+            kwargs["model"], tools=kwargs["tool_schemas"],
+            target_trust_level=kwargs.get("target_trust_level", TrustLevel.PUBLIC),
+        ),
+    )
 
 
 def _session() -> ChatSession:
@@ -1091,7 +1121,7 @@ def test_structured_output_with_oversized_metadata_is_explicitly_omitted(kind) -
 
 @pytest.mark.parametrize("allocator", ["fair", "ordered", "final"])
 @pytest.mark.parametrize("allowance", [0, 1, 25, 160])
-def test_empty_session_envelope_can_be_omitted_below_200_characters(allocator, allowance) -> None:
+async def test_empty_session_envelope_can_be_omitted_below_200_characters(allocator, allowance) -> None:
     content = json.dumps({
         "session": {"id": str(uuid4())}, "messages": [], "hasEarlier": False,
         "nextAfterMessageId": str(uuid4()), "contentIsUntrusted": True,
@@ -1099,12 +1129,12 @@ def test_empty_session_envelope_can_be_omitted_below_200_characters(allocator, a
     assert 160 < len(content) < 200
     messages = [{"role": "tool", "content": content}]
     if allocator == "final":
-        budget = _message_text_tokens(messages, 1) - len(content) + allowance
-        estimated = _prune_tool_outputs_to_budget(
-            messages, tools_tokens=0, characters_per_token=1, input_budget=budget,
-            include_image_input=False, target_trust_level=TrustLevel.PUBLIC,
+        estimate = _request_estimator(_model(context_window_tokens=10_000))
+        budget = await estimate(messages) - len(content) + allowance
+        estimated = await _prune_tool_outputs_to_budget(
+            messages, estimate_request=estimate, characters_per_token=1, input_budget=budget,
         )
-        assert estimated == _message_text_tokens(messages, 1)
+        assert estimated == await estimate(messages)
         if allowance >= 26:
             assert estimated <= budget
     else:
@@ -1136,16 +1166,16 @@ def test_session_message_chunk_respects_even_tiny_content_limits(remaining) -> N
     assert item["toolResultReference"]["arguments"]["message_id"] == str(message.id)
 
 
-def test_final_pruning_of_escaped_shell_output_keeps_valid_json() -> None:
+async def test_final_pruning_of_escaped_shell_output_keeps_valid_json() -> None:
     content = json.dumps({
         "exitCode": 1, "output": {"stdout": '\\"' * 1_000, "stderr": ""},
     })
     messages = [{"role": "tool", "content": content}]
-    budget = _message_text_tokens(messages, 1) - len(content)
+    estimate = _request_estimator(_model(context_window_tokens=10_000))
+    budget = await estimate(messages) - len(content)
 
-    estimated = _prune_tool_outputs_to_budget(
-        messages, tools_tokens=0, characters_per_token=1, input_budget=budget,
-        include_image_input=False, target_trust_level=TrustLevel.PUBLIC,
+    estimated = await _prune_tool_outputs_to_budget(
+        messages, estimate_request=estimate, characters_per_token=1, input_budget=budget,
     )
 
     assert estimated <= budget
@@ -1974,7 +2004,7 @@ async def test_current_tool_output_budget_scales_with_model_context() -> None:
     async def build(context_window_tokens: int):
         db = AsyncMock(spec=AsyncSession)
         db.scalar.return_value = None
-        return await ContextManager.build(
+        return await _build_context(
             db,
             chat_session=session,
             records=records,
@@ -2015,7 +2045,7 @@ async def test_context_uses_minimum_generation_reserve(manual, discovered, reser
     db.scalar.return_value = None
     summarize = AsyncMock()
 
-    projection = await ContextManager.build(
+    projection = await _build_context(
         db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
         model=model, settings=_settings(safety_reserve_tokens=512), summarize=summarize,
     )
@@ -2039,8 +2069,9 @@ async def test_context_raw_budget_boundary_fits_provider_allocation(manual):
     settings = _settings(safety_reserve_tokens=4096)
     reserve = generation_reserve(model)
     capacity = raw_input_budget(model.context_window_tokens - 4096 - reserve)
-    framing = _message_text_tokens(
-        _projection_messages("System", None, [current], TrustLevel.PUBLIC), 1,
+    estimate = _request_estimator(model)
+    framing = await estimate(
+        _projection_messages("System", None, [current], TrustLevel.PUBLIC),
     )
     current.content = "x" * (capacity - framing)
     db = AsyncMock(spec=AsyncSession)
@@ -2050,9 +2081,9 @@ async def test_context_raw_budget_boundary_fits_provider_allocation(manual):
         chat_session=session, records=[current], system_prompt="System", tool_schemas=[],
         model=model, settings=settings, summarize=summarize,
     )
-    projection = await ContextManager.build(db, **kwargs)
+    projection = await _build_context(db, **kwargs)
     assert projection.estimated_input_tokens == projection.input_budget_tokens == capacity
-    assert projection.estimated_input_tokens == _message_text_tokens(projection.messages, 1)
+    assert projection.estimated_input_tokens == await estimate(projection.messages)
     assert allocate_output_tokens(
         model, projection.estimated_input_tokens,
         reserved_output_tokens=projection.reserved_output_tokens,
@@ -2060,7 +2091,7 @@ async def test_context_raw_budget_boundary_fits_provider_allocation(manual):
     summarize.assert_not_awaited()
     current.content += "x"
     with pytest.raises(ContextError) as exc_info:
-        await ContextManager.build(db, **kwargs)
+        await _build_context(db, **kwargs)
     assert exc_info.value.code == "agent.contextWindowExceeded"
 
 
@@ -2084,14 +2115,14 @@ async def test_auto_context_trigger_applies_slack_once_without_recompacting_fitt
         chat_session=session, records=[covered, current], system_prompt="System", tool_schemas=[],
         model=model, settings=settings, summarize=summarize,
     )
-    projection = await ContextManager.build(db, **kwargs)
+    projection = await _build_context(db, **kwargs)
     assert projection.compacted is compacted
     if compacted:
         db.scalar.return_value = projection.context_summary
     else:
         assert projection.estimated_input_tokens > 40_000
     assert allocate_output_tokens(model, projection.estimated_input_tokens) >= 2048
-    reloaded = await ContextManager.build(db, **kwargs)
+    reloaded = await _build_context(db, **kwargs)
     assert not reloaded.compacted
     assert reloaded.estimated_input_tokens == projection.estimated_input_tokens
     assert summarize.await_count == int(compacted)
@@ -2123,7 +2154,7 @@ async def test_large_current_tool_output_does_not_compact_older_history() -> Non
     db.scalar.return_value = None
     summarize = AsyncMock()
 
-    projection = await ContextManager.build(
+    projection = await _build_context(
         db,
         chat_session=session,
         records=[old_user, old_assistant, current_user, assistant, tool_result],
@@ -2161,7 +2192,7 @@ async def test_existing_summary_boundary_excludes_covered_history() -> None:
     db.scalar.return_value = summary
     summarize = AsyncMock()
 
-    projection = await ContextManager.build(
+    projection = await _build_context(
         db,
         chat_session=session,
         records=records,
@@ -2203,7 +2234,7 @@ async def test_existing_summary_is_recompacted_for_smaller_context_window() -> N
     db.scalar.return_value = summary
     summarize = AsyncMock(return_value=SummaryResult("Neue Kurzfassung", None))
 
-    projection = await ContextManager.build(
+    projection = await _build_context(
         db,
         chat_session=session,
         records=[covered, current],
@@ -2268,16 +2299,25 @@ def test_message_dict_marks_interrupted_assistant_content_for_the_model() -> Non
     )
 
 
-async def test_active_image_reserves_conservative_context_budget() -> None:
+@pytest.mark.parametrize("ready", [False, True])
+async def test_active_image_reserves_conservative_context_budget(monkeypatch, ready) -> None:
     session = _session()
     plain = _message(session.id, "tool", "Screenshot")
     with_image = _message(session.id, "tool", "Screenshot")
-    _attach_image(with_image)
+    attachment = _attach_image(with_image)
+    if ready:
+        attachment.file_root_id = session.id
+        attachment.file_id = uuid4()
+        attachment.file_revision = 1
+        monkeypatch.setattr(
+            "mato_loop_backend.providers.service._read_image_data_url",
+            lambda _attachment: "data:image/png;base64,AA==",
+        )
     settings = _settings(compaction_trigger_ratio=0.95)
 
     plain_db = AsyncMock(spec=AsyncSession)
     plain_db.scalar.return_value = None
-    plain_projection = await ContextManager.build(
+    plain_projection = await _build_context(
         plain_db,
         chat_session=session,
         records=[plain],
@@ -2289,7 +2329,7 @@ async def test_active_image_reserves_conservative_context_budget() -> None:
     )
     image_db = AsyncMock(spec=AsyncSession)
     image_db.scalar.return_value = None
-    image_projection = await ContextManager.build(
+    image_projection = await _build_context(
         image_db,
         chat_session=session,
         records=[with_image],
@@ -2300,10 +2340,8 @@ async def test_active_image_reserves_conservative_context_budget() -> None:
         summarize=AsyncMock(),
     )
 
-    assert (
-        image_projection.estimated_input_tokens - plain_projection.estimated_input_tokens
-        >= IMAGE_INPUT_RESERVE_TOKENS
-    )
+    difference = image_projection.estimated_input_tokens - plain_projection.estimated_input_tokens
+    assert (difference >= IMAGE_INPUT_RESERVE_TOKENS) is ready
 
 
 async def test_unreferenced_historical_image_does_not_reserve_image_budget() -> None:
@@ -2316,7 +2354,7 @@ async def test_unreferenced_historical_image_does_not_reserve_image_budget() -> 
 
     text_db = AsyncMock(spec=AsyncSession)
     text_db.scalar.return_value = None
-    text_projection = await ContextManager.build(
+    text_projection = await _build_context(
         text_db,
         chat_session=session,
         records=records,
@@ -2328,7 +2366,7 @@ async def test_unreferenced_historical_image_does_not_reserve_image_budget() -> 
     )
     vision_db = AsyncMock(spec=AsyncSession)
     vision_db.scalar.return_value = None
-    vision_projection = await ContextManager.build(
+    vision_projection = await _build_context(
         vision_db,
         chat_session=session,
         records=records,
@@ -2361,7 +2399,7 @@ async def test_compaction_preserves_history_and_records_stable_summary_boundary(
     db.scalar.return_value = None
     summarize = AsyncMock(return_value=SummaryResult("Verdichteter Verlauf", None))
 
-    projection = await ContextManager.build(
+    projection = await _build_context(
         db,
         chat_session=session,
         records=records,
@@ -2406,7 +2444,7 @@ async def test_large_old_tool_output_is_pruned_without_mutating_message_history(
     db.scalar.return_value = None
     summarize = AsyncMock()
 
-    projection = await ContextManager.build(
+    projection = await _build_context(
         db,
         chat_session=session,
         records=records,
@@ -2437,7 +2475,7 @@ async def test_context_window_must_leave_an_input_budget() -> None:
     with pytest.raises(ContextError, match="agent.contextWindowTooSmall") as exc_info:
         model = _model(context_window_tokens=101, max_output_tokens=100)
         model.context_window_tokens = 100
-        await ContextManager.build(
+        await _build_context(
             db,
             chat_session=_session(),
             records=[],
@@ -2463,7 +2501,7 @@ async def test_empty_compaction_result_raises_stable_context_error() -> None:
     db.scalar.return_value = None
 
     with pytest.raises(ContextError, match="agent.compactionFailed") as exc_info:
-        await ContextManager.build(
+        await _build_context(
             db,
             chat_session=session,
             records=records,
@@ -2485,7 +2523,7 @@ async def test_unprunable_context_overflow_raises_stable_error() -> None:
     db.scalar.return_value = None
 
     with pytest.raises(ContextError, match="agent.contextWindowExceeded") as exc_info:
-        await ContextManager.build(
+        await _build_context(
             db,
             chat_session=session,
             records=[_message(session.id, "user", "x" * 2_000)],
@@ -2510,7 +2548,7 @@ async def test_failed_projection_does_not_commit_new_summary() -> None:
     db.scalar.return_value = None
 
     with pytest.raises(ContextError, match="agent.contextWindowExceeded"):
-        await ContextManager.build(
+        await _build_context(
             db,
             chat_session=session,
             records=records,
@@ -2605,13 +2643,13 @@ async def test_compaction_carries_retrieved_session_facts_through_reload() -> No
         chat_session=session, records=records, system_prompt="System", tool_schemas=[],
         model=_model(context_window_tokens=8_000), settings=_settings(), summarize=summarize,
     )
-    projection = await ContextManager.build(db, **kwargs)
+    projection = await _build_context(db, **kwargs)
 
     assert projection.compacted
     assert fact in projection.context_summary.content
     assert fact in projection.messages[1]["content"]
     db.scalar.return_value = projection.context_summary
-    reloaded = await ContextManager.build(db, **kwargs)
+    reloaded = await _build_context(db, **kwargs)
     assert not reloaded.compacted
     assert reloaded.messages == projection.messages
     assert summarize.await_count == 1
@@ -2662,7 +2700,7 @@ async def test_long_single_turn_compacts_reloads_and_keeps_honest_coverage() -> 
     summarize = AsyncMock(return_value=SummaryResult("Facts\nChecks failed; verify remaining measurements.", None))
 
     async def build():
-        return await ContextManager.build(
+        return await _build_context(
             db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
             model=_model(context_window_tokens=8_000), settings=_settings(), summarize=summarize,
         )
@@ -2763,7 +2801,7 @@ async def test_long_turn_compaction_keeps_pending_call_out_of_summary() -> None:
     db.scalar.return_value = None
     summarize = AsyncMock(return_value=SummaryResult("Continue checking.", None))
 
-    projection = await ContextManager.build(
+    projection = await _build_context(
         db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
         model=_model(context_window_tokens=8_000), settings=_settings(), summarize=summarize,
     )
@@ -2792,3 +2830,292 @@ def test_compaction_never_covers_pending_parallel_batch_or_later_history() -> No
     _assert_whole_tool_pairs(projected)
     assert projected[1]["tool_calls"] == pending[0].tool_calls
     assert any("tool.executionInterrupted" in item["content"] for item in projected if item["role"] == "tool")
+
+
+@pytest.mark.parametrize(
+    ("adapter_type", "api_type"),
+    [("openai-compatible", "chat_completions"), ("openai-compatible", "responses"),
+     ("openai-codex", "responses"), ("lemonade", "chat_completions")],
+)
+@pytest.mark.parametrize("scope_matches", [False, True])
+async def test_opaque_continuation_compacts_before_final_allocation(
+    monkeypatch, adapter_type, api_type, scope_matches,
+):
+    session = _session()
+    provider = LlmProviderConfig(
+        name="Test", adapter_type=adapter_type, credential_id=uuid4(),
+        pseudonymization_enabled=False,
+        config={"base_url": "https://local.test/v1", "api_type": api_type},
+    )
+    model = _model(context_window_tokens=9_000)
+    model.provider_id = provider.id
+    records = [_message(session.id, "user", "Earlier request"),
+               _message(session.id, "assistant", "Earlier answer"),
+               _message(session.id, "user", "Continue")]
+    options = dict(provider=provider, model=model, tools=[])
+    scope = (await ProviderService.prepare_request(messages=[], **options)).request.continuation_scope
+    records[1].provider_data = {
+        "continuation_scope": scope if scope_matches else {**scope, "endpoint": "different"},
+        "reasoning_encrypted_content": "opaque",
+        "chat_reasoning_details": [{"type": "reasoning.encrypted", "data": "opaque"}],
+    }
+    original = deepcopy(records[1].provider_data)
+    estimates = []
+
+    async def estimate(messages):
+        prepared = await ProviderService.prepare_request(messages=messages, **options)
+        estimates.append(prepared.estimated_input_tokens)
+        return prepared.estimated_input_tokens
+
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    summarize = AsyncMock(return_value=SummaryResult("Earlier facts", None))
+    projection = await ContextManager.build(
+        db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+        model=model, settings=_settings(), summarize=summarize, estimate_request=estimate,
+    )
+    assert projection.compacted is scope_matches
+    assert summarize.await_count == int(scope_matches)
+    assert (estimates[0] > projection.input_budget_tokens) is scope_matches
+    if scope_matches:
+        assert estimates[0] - projection.estimated_input_tokens > 8_000
+    else:
+        records[1].provider_data = {}
+        without_continuation = _projection_messages("System", None, records, TrustLevel.PUBLIC)
+        assert await estimate(without_continuation) == projection.estimated_input_tokens
+        records[1].provider_data = original
+
+    transport = AsyncMock(return_value=ProviderResult(content="Answer"))
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+    monkeypatch.setattr(service_module, "responses_api", transport)
+    load = AsyncMock(return_value=object())
+    monkeypatch.setattr(service_module, "load_credential", load)
+    monkeypatch.setattr(service_module, "read_credential", lambda _credential: {})
+    monkeypatch.setattr(service_module, "refresh_codex_credential", AsyncMock(return_value={"access": "dummy"}))
+    if scope_matches:
+        with pytest.raises(ProviderError, match="Insufficient context"):
+            await ProviderService.complete(
+                db, **options, messages=_projection_messages("System", None, records, TrustLevel.PUBLIC),
+                safety_reserve_tokens=0,
+            )
+        load.assert_not_awaited()
+        transport.assert_not_awaited()
+    result = await ProviderService.complete(
+        db, **options, messages=projection.messages, safety_reserve_tokens=0,
+        estimated_input_tokens=projection.estimated_input_tokens,
+        reserved_output_tokens=projection.reserved_output_tokens,
+    )
+    budget = result.provider_data["output_budget"]
+    assert budget["finalEstimatedInputTokens"] == projection.estimated_input_tokens
+    assert budget["allocatedOutputTokens"] >= projection.reserved_output_tokens
+    transport.assert_awaited_once()
+    assert records[1].provider_data == original
+
+
+@pytest.mark.parametrize("api_type", ["chat_completions", "responses"])
+async def test_privacy_expansion_compacts_original_candidates_and_final_request_restores(monkeypatch, api_type):
+    session = _session()
+    provider = LlmProviderConfig(
+        name="Public", adapter_type="openai-compatible",
+        config={"base_url": "https://public.test/v1", "api_type": api_type},
+    )
+    model = _model(context_window_tokens=10_000)
+    model.provider_id = provider.id
+    records = [_message(session.id, "user", "a@b.co " * 100),
+               _message(session.id, "assistant", "Earlier reply"),
+               _message(session.id, "user", "Reply to a@b.co")]
+    messages = _projection_messages("System", None, records, TrustLevel.PUBLIC)
+    options = dict(provider=provider, model=model, tools=[])
+    plain = await ProviderService.prepare_request(messages=messages, **options, pseudonymization_enabled=False)
+    protected = await ProviderService.prepare_request(messages=messages, **options)
+    assert protected.estimated_input_tokens > plain.estimated_input_tokens + 1_000
+    model.context_window_tokens = guarded_input_tokens(
+        (plain.estimated_input_tokens + protected.estimated_input_tokens) // 2
+    ) + 100
+    candidates = []
+
+    async def estimate(messages):
+        assert "[[MLP_" not in json.dumps(messages)
+        candidates.append(deepcopy(messages))
+        return (await ProviderService.prepare_request(messages=messages, **options)).estimated_input_tokens
+
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    projection = await ContextManager.build(
+        db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+        model=model, settings=_settings(), summarize=AsyncMock(return_value=SummaryResult("Earlier facts", None)),
+        estimate_request=estimate,
+    )
+    assert projection.compacted
+    assert len(candidates) >= 2
+    assert candidates[0] == messages
+    assert projection.messages[-1]["content"] == records[-1].content
+
+    async def transport(**kwargs):
+        return ProviderResult(content=kwargs["request"].messages[-1]["content"])
+
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+    monkeypatch.setattr(service_module, "responses_api", transport)
+    result = await ProviderService.complete(
+        db, **options, messages=projection.messages, safety_reserve_tokens=0,
+        estimated_input_tokens=projection.estimated_input_tokens,
+    )
+    assert result.content == "Reply to a@b.co"
+    assert result.provider_data["output_budget"]["finalEstimatedInputTokens"] == projection.estimated_input_tokens
+
+
+@pytest.mark.parametrize("historical", [False, True])
+@pytest.mark.parametrize("revision", [None, 1])
+async def test_run_attachment_filter_precedes_dedup_and_provider_estimate(monkeypatch, historical, revision):
+    from mato_loop_backend.attachments import AttachmentService
+
+    session = _session()
+    run_id = uuid4()
+    valid = _message(session.id, "user", "Inspect this image")
+    foreign = _message(session.id, "assistant", "Another run")
+    for record in (valid, foreign):
+        attachment = _attach_image(record)
+        attachment.file_root_id = session.id
+        attachment.file_id = session.id
+        attachment.file_revision = revision
+    foreign.attachments[0].run_id = uuid4()
+    available = [valid, foreign]
+    selected = [valid] if historical else available
+    projected = _projection_messages(
+        "System", None, selected, TrustLevel.PUBLIC, available_records=available,
+        attachment_service=AttachmentService(run_id=run_id),
+    )
+    references = [item for message in projected for item in message.get("attachments", [])]
+    assert [item["id"] for item in references] == [str(valid.attachments[0].id)]
+    assert references[0]["run_id"] == str(run_id)
+    unbound = _projection_messages(
+        "System", None, selected, TrustLevel.PUBLIC, available_records=available,
+    )
+    assert [item["id"] for message in unbound for item in message.get("attachments", [])] == [str(foreign.attachments[0].id)]
+    reads = []
+
+    def read(attachment):
+        reads.append(attachment)
+        assert attachment["run_id"] == str(run_id)
+        assert attachment["id"] == str(valid.attachments[0].id)
+        return "data:image/png;base64,AA=="
+
+    monkeypatch.setattr(service_module, "_read_image_data_url", read)
+    model = _model(context_window_tokens=10_000, supports_image_input=True)
+    estimate = _request_estimator(model)
+    estimated = await estimate(projected)
+    assert len(reads) == 1
+    text_only = [{**message, "attachments": []} for message in projected]
+    assert estimated > await estimate(text_only) + IMAGE_INPUT_RESERVE_TOKENS
+    assert getattr(valid.attachments[0], "run_id", None) is None
+
+
+@pytest.mark.parametrize("api_type", ["chat_completions", "responses"])
+@pytest.mark.parametrize("email_length", [1, 60])
+@pytest.mark.parametrize("history_length", [200, 9_000])
+async def test_private_tool_body_size_does_not_distort_history_compaction(
+    api_type, email_length, history_length,
+):
+    session = _session()
+    model = _model(context_window_tokens=9_000)
+    provider = LlmProviderConfig(
+        id=model.provider_id, name="Public", adapter_type="openai-compatible",
+        config={"api_type": api_type},
+    )
+    records = [_message(session.id, "user", "x" * history_length),
+               _message(session.id, "assistant", "Earlier reply"),
+               _message(session.id, "user", "Continue"),
+               _message(session.id, "assistant", ""),
+               _message(session.id, "tool", ("a" * email_length + "@example.com\n") * 500)]
+    records[-2].tool_calls = [{"id": "read", "name": "read", "arguments": {"path": "contacts.txt"}}]
+    records[-1].tool_call_id = "read"
+    original = deepcopy([(item.content, item.tool_calls, item.provider_data) for item in records])
+    candidates = []
+
+    async def estimate(messages):
+        _assert_whole_tool_pairs(messages)
+        snapshot = deepcopy(messages)
+        prepared = await ProviderService.prepare_request(
+            provider=provider, model=model, messages=messages, tools=[],
+        )
+        assert messages == snapshot
+        candidates.append(snapshot)
+        return prepared.estimated_input_tokens
+
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    summarize = AsyncMock(return_value=SummaryResult("Earlier facts", None))
+    projection = await ContextManager.build(
+        db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+        model=model, settings=_settings(), summarize=summarize, estimate_request=estimate,
+    )
+    assert projection.compacted is (history_length == 9_000)
+    assert summarize.await_count == int(projection.compacted)
+    marker = _SHORTENED_TOOL_OUTPUT.lstrip()
+    baselines = [candidate for candidate in candidates if candidate[-1]["content"] == marker]
+    assert len(baselines) == 1 + int(projection.compacted)
+    for baseline in baselines:
+        full = next(candidate for candidate in candidates if candidate[:-1] == baseline[:-1])
+        assert baseline[-1] == {**full[-1], "content": marker}
+    assert projection.estimated_input_tokens == await estimate(projection.messages)
+    assert allocate_output_tokens(
+        model, projection.estimated_input_tokens, safety_reserve_tokens=0,
+        reserved_output_tokens=projection.reserved_output_tokens,
+    ) >= projection.reserved_output_tokens
+    assert [(item.content, item.tool_calls, item.provider_data) for item in records] == original
+
+
+@pytest.mark.parametrize("api_type", ["chat_completions", "responses"])
+async def test_unshortenable_private_tool_body_keeps_privacy_overhead_in_compaction_baseline(api_type):
+    session = _session()
+    model = _model(context_window_tokens=1_200)
+    provider = LlmProviderConfig(
+        id=model.provider_id, name="Public", adapter_type="openai-compatible",
+        config={"api_type": api_type},
+    )
+    records = [_message(session.id, "user", "x"),
+               _message(session.id, "assistant", "Earlier reply"),
+               _message(session.id, "user", "Continue"),
+               _message(session.id, "assistant", ""),
+               _message(session.id, "tool", "a@b.co")]
+    records[-2].tool_calls = [{"id": "read", "name": "read", "arguments": {}}]
+    records[-1].tool_call_id = "read"
+
+    async def estimate(messages):
+        _assert_whole_tool_pairs(messages)
+        return (await ProviderService.prepare_request(
+            provider=provider, model=model, messages=messages, tools=[],
+        )).estimated_input_tokens
+
+    settings = _settings()
+    trigger = raw_input_budget(int(model.context_window_tokens * settings.compaction_trigger_ratio) - 100)
+    blank = _projection_messages("System", None, records, TrustLevel.PUBLIC)
+    blank[-1]["content"] = ""
+    records[0].content += "x" * (trigger - 6 - await estimate(blank))
+    messages = _projection_messages("System", None, records, TrustLevel.PUBLIC)
+    blank = [{**message} for message in messages]
+    blank[-1]["content"] = ""
+    assert await estimate(blank) == trigger - 6
+    assert await estimate(messages) > raw_input_budget(model.context_window_tokens - 100)
+    minimum = deepcopy(messages)
+    _limit_tool_output_tokens(
+        minimum, [len(minimum) - 1], 0, model.characters_per_token,
+        omitted_marker=_SHORTENED_TOOL_OUTPUT.lstrip(), fair_share=True,
+    )
+    assert minimum == messages
+
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    summarize = AsyncMock(return_value=SummaryResult("Earlier facts", None))
+    projection = await ContextManager.build(
+        db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+        model=model, settings=settings, summarize=summarize, estimate_request=estimate,
+    )
+    assert projection.compacted
+    summarize.assert_awaited_once()
+    assert projection.messages[-1]["content"] == records[-1].content == "a@b.co"
+    assert projection.estimated_input_tokens == await estimate(projection.messages)
+    assert allocate_output_tokens(
+        model, projection.estimated_input_tokens, safety_reserve_tokens=0,
+        reserved_output_tokens=projection.reserved_output_tokens,
+    ) >= projection.reserved_output_tokens

@@ -171,7 +171,7 @@ from mato_loop_backend.providers.base import (
     select_provider_images,
 )
 from mato_loop_backend.providers.media import MediaService, available_media_capabilities
-from mato_loop_backend.providers.output_budget import output_token_limit, raw_input_budget
+from mato_loop_backend.providers.output_budget import output_token_limit
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
@@ -2182,6 +2182,41 @@ class AgentRuntime:
 
             projection = None
             system_prompt = render_system_prompt()
+            request_options: dict[str, Any] = {
+                "provider": provider,
+                "model": model,
+                "tools": schemas,
+                "tool_choice": (
+                    "none" if tool_budget_exhausted else
+                    "required"
+                    if required_skill_pending
+                    or search_pending
+                    or memory_write_pending
+                    or openscad_render_pending
+                    or openscad_source_review_pending is not None
+                    else "auto"
+                ),
+                "timeout": runtime_settings.request_timeout_seconds,
+                "target_trust_level": model_trust_level,
+                "pseudonymization_enabled": run_pseudonymization_enabled,
+                "prompt_cache_key": str(chat_session.id),
+                "required_image_ids": (),
+                "reasoning_effort": (
+                    ReasoningEffort.NONE
+                    if empty_response_retries > 0 and can_disable_reasoning
+                    else chat_session.reasoning_effort
+                ),
+            }
+
+            async def estimate_request(
+                messages: list[dict[str, Any]],
+                options: dict[str, Any] = request_options,
+            ) -> int:
+                prepared = await ProviderService.prepare_request(
+                    messages=messages, **options
+                )
+                return prepared.estimated_input_tokens
+
             memory_scope_payload = (
                 {"total": memory_scope.total, "pinned": memory_scope.pinned}
                 if memory_scope is not None
@@ -2218,7 +2253,7 @@ class AgentRuntime:
                         settings=runtime_settings,
                         attachment_service=AttachmentService(settings=instance_limits, run_id=run.id),
                         summarize=summarize,
-                        required_image_ids=(),
+                        estimate_request=estimate_request,
                         live_tool_calls=live_tool_calls,
                     )
                     memory_text = candidate_text
@@ -2393,45 +2428,17 @@ class AgentRuntime:
                     providerAttemptTotal=total,
                 )
 
-            for projected_message in projection.messages:
-                projected_message["attachments"] = [
-                    {**attachment, "run_id": str(run.id)}
-                    for attachment in projected_message.get("attachments", [])
-                    if attachment.get("run_id") in {None, str(run.id)}
-                ]
             result = await ProviderService.complete(
                 db,
-                provider=provider,
-                model=model,
+                **request_options,
                 messages=projection.messages,
-                tools=schemas,
                 estimated_input_tokens=projection.estimated_input_tokens,
                 reserved_output_tokens=projection.reserved_output_tokens,
                 safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
-                tool_choice=(
-                    "none" if tool_budget_exhausted else
-                    "required"
-                    if required_skill_pending
-                    or search_pending
-                    or memory_write_pending
-                    or openscad_render_pending
-                    or openscad_source_review_pending is not None
-                    else "auto"
-                ),
                 on_delta=on_delta,
                 on_reasoning=on_reasoning,
                 on_warning=on_warning,
                 on_retry=on_provider_retry,
-                timeout=runtime_settings.request_timeout_seconds,
-                target_trust_level=model_trust_level,
-                pseudonymization_enabled=run_pseudonymization_enabled,
-                prompt_cache_key=str(chat_session.id),
-                required_image_ids=(),
-                reasoning_effort=(
-                    ReasoningEffort.NONE
-                    if empty_response_retries > 0 and can_disable_reasoning
-                    else chat_session.reasoning_effort
-                ),
             )
             provider_duration_ms = max(
                 0, round((time.monotonic() - provider_started_at) * 1_000)
@@ -4341,17 +4348,6 @@ class AgentRuntime:
             attempts += 1
             effective_output_tokens = output_token_limit(candidate, output_tokens)
             assert effective_output_tokens is not None
-            available_input_tokens = raw_input_budget(max(
-                0,
-                candidate.context_window_tokens
-                - effective_output_tokens
-                - runtime_settings.safety_reserve_tokens,
-            ))
-            if available_input_tokens <= 0:
-                continue
-            estimated_input_tokens = estimate_tokens(messages, candidate.characters_per_token)
-            if estimated_input_tokens > available_input_tokens:
-                continue
             streamed_parts: list[str] = []
 
             async def on_delta(text: str, parts: list[str] = streamed_parts) -> None:
@@ -4378,7 +4374,6 @@ class AgentRuntime:
                     tools=[],
                     timeout=runtime_settings.request_timeout_seconds,
                     max_output_tokens=effective_output_tokens,
-                    estimated_input_tokens=estimated_input_tokens,
                     reserved_output_tokens=effective_output_tokens,
                     safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
                     on_delta=on_delta,

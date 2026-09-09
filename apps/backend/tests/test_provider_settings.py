@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
+import httpx
 import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +37,7 @@ from mato_loop_backend.api.routes.providers import (
 from mato_loop_backend.api.routes.providers import (
     test_model as run_model_test,
 )
+from mato_loop_backend.providers import codex_oauth
 from mato_loop_backend.providers.openai_compatible import DiscoveredModel
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.providers.settings_service import ProviderSettingsService
@@ -299,34 +301,42 @@ async def test_sync_retains_discovered_input_modalities_without_name_inference(
     assert result["models"][0]["supportsImageInput"] is False
 
 
-async def test_codex_sync_adds_discovered_models(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "limits, expected_context",
+    [
+        ({"context_window": 272_000, "max_context_window": 872_000}, 872_000),
+        ({"context_window": 272_000}, 272_000),
+        ({"context_window": 272_000, "max_context_window": None}, 272_000),
+        ({"max_context_window": 872_000}, 872_000),
+        ({}, None),
+    ],
+)
+async def test_codex_sync_adds_discovered_models(monkeypatch, limits, expected_context) -> None:
     provider = LlmProviderConfig(name="Codex", adapter_type="openai-codex")
     settings = AiSettings(providers=[provider])
     _mock_settings(monkeypatch, settings)
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, json={
+        "models": [{
+            "slug": "gpt-test",
+            "display_name": "GPT Test",
+            "visibility": "list",
+            **limits,
+            "input_modalities": ["text", "image"],
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": [
+                {"effort": effort} for effort in ("low", "medium", "high", "xhigh", "max", "ultra")
+            ],
+        }],
+    }))
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        codex_oauth.httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+    discovered = await codex_oauth.discover_models(access_token="access", account_id=None)
     monkeypatch.setattr(
         ProviderService,
         "discover_models",
-        AsyncMock(
-            return_value=[
-                DiscoveredModel(
-                    id="openai-codex/gpt-test",
-                    name="GPT Test",
-                    max_model_len=272_000,
-                    supports_parallel_tool_calls=False,
-                    supports_image_input=True,
-                    default_reasoning_effort="medium",
-                    reasoning_efforts=["low", "medium", "high", "xhigh", "max", "ultra"],
-                ),
-                DiscoveredModel(
-                    id="openai-codex/gpt-image-2",
-                    name="GPT Image 2",
-                    capabilities={"image_generation", "image_editing"},
-                    capabilities_authoritative=True,
-                    native_for_chat_provider=True,
-                    supports_tools=False,
-                ),
-            ]
-        ),
+        AsyncMock(return_value=discovered),
     )
 
     result = await sync_provider_models(provider.id, _db())
@@ -335,8 +345,12 @@ async def test_codex_sync_adds_discovered_models(monkeypatch) -> None:
     assert model.model_id == "openai-codex/gpt-test"
     assert model.origin == ModelOrigin.DISCOVERED
     assert model.enabled is False
-    assert model.context_window_tokens == 272_000
-    assert model.discovered_context_window_tokens == 272_000
+    assert model.context_window_tokens == (expected_context or 128_000)
+    assert model.discovered_context_window_tokens == expected_context
+    assert model.discovery_metadata == discovered[0].metadata
+    assert result["models"][0]["contextWindowSource"] == (
+        "provider" if expected_context is not None else "fallback"
+    )
     assert model.use_discovered_context_window is True
     assert model.supports_parallel_tool_calls is False
     assert model.supports_image_input is True
@@ -355,6 +369,37 @@ async def test_codex_sync_adds_discovered_models(monkeypatch) -> None:
         ModelCapability.IMAGE_GENERATION,
         ModelCapability.IMAGE_EDITING,
     }
+
+
+@pytest.mark.parametrize("follow_provider", [True, False])
+async def test_codex_rediscovery_updates_context_without_replacing_override(
+    monkeypatch, follow_provider,
+) -> None:
+    provider = LlmProviderConfig(name="Codex", adapter_type="openai-codex")
+    model = ModelConfig(
+        provider_id=provider.id,
+        model_id="openai-codex/gpt-test",
+        origin=ModelOrigin.DISCOVERED,
+        context_window_tokens=272_000 if follow_provider else 64_000,
+        discovered_context_window_tokens=272_000,
+        use_discovered_context_window=follow_provider,
+    )
+    settings = AiSettings(providers=[provider], models=[model])
+    _mock_settings(monkeypatch, settings)
+    discovered = DiscoveredModel(
+        id=model.model_id, max_model_len=272_000, max_context_window=872_000,
+    )
+    monkeypatch.setattr(ProviderService, "discover_models", AsyncMock(return_value=[discovered]))
+
+    result = await sync_provider_models(provider.id, _db())
+
+    assert model.context_window_tokens == (872_000 if follow_provider else 64_000)
+    assert model.discovered_context_window_tokens == 872_000
+    assert model.use_discovered_context_window is follow_provider
+    assert model.discovery_metadata == discovered.metadata
+    assert result["models"][0]["contextWindowSource"] == (
+        "provider" if follow_provider else "override"
+    )
 
 
 async def test_lemonade_sync_updates_capabilities_without_replacing_context_override(

@@ -74,7 +74,22 @@ async def test_device_code_exchange_uses_registered_hosted_redirect(monkeypatch)
     assert token["refresh"] == "refresh"
 
 
-async def test_codex_model_discovery_filters_and_normalizes_models(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "limits, expected_limits",
+    [
+        ({"context_window": 272_000, "max_context_window": 872_000},
+         {"max_model_len": 272_000, "max_context_window": 872_000}),
+        ({"context_window": 272_000}, {"max_model_len": 272_000}),
+        ({"max_context_window": 872_000}, {"max_context_window": 872_000}),
+        ({}, {}),
+        ({"context_window": None, "max_context_window": None}, {}),
+        ({"context_window": 2, "max_context_window": 10_000_000},
+         {"max_model_len": 2, "max_context_window": 10_000_000}),
+    ],
+)
+async def test_codex_model_discovery_filters_and_normalizes_models(
+    monkeypatch, limits, expected_limits,
+) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.url.path == "/backend-api/codex/models"
@@ -91,7 +106,7 @@ async def test_codex_model_discovery_filters_and_normalizes_models(monkeypatch) 
                         "slug": "gpt-6-astra",
                         "display_name": "GPT-6-Astra",
                         "visibility": "list",
-                        "context_window": 272000,
+                        **limits,
                         "supports_parallel_tool_calls": True,
                         "input_modalities": ["text", "image"],
                         "default_reasoning_level": "medium",
@@ -123,7 +138,7 @@ async def test_codex_model_discovery_filters_and_normalizes_models(monkeypatch) 
     ]
     assert models[0].metadata == {
         "name": "GPT-6-Astra",
-        "max_model_len": 272000,
+        **expected_limits,
         "supports_parallel_tool_calls": True,
         "supports_image_input": True,
         "default_reasoning_effort": "medium",
@@ -138,11 +153,22 @@ async def test_codex_model_discovery_filters_and_normalizes_models(monkeypatch) 
     }
 
 
-async def test_codex_model_discovery_rejects_invalid_payload(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "model",
+    [
+        {"name": "missing"},
+        *(
+            {"slug": "test", "visibility": "list", field: value}
+            for field in ("context_window", "max_context_window")
+            for value in (0, -1, 1, True, 1.5, 2.0, "272000", 10_000_001)
+        ),
+    ],
+)
+async def test_codex_model_discovery_rejects_invalid_payload(monkeypatch, model) -> None:
     monkeypatch.setattr(
         codex_oauth.httpx,
         "AsyncClient",
-        _client_with(lambda _request: httpx.Response(200, json={"models": [{"name": "missing"}]})),
+        _client_with(lambda _request: httpx.Response(200, json={"models": [model]})),
     )
 
     with pytest.raises(ProviderError) as exc_info:

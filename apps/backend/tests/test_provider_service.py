@@ -1,6 +1,8 @@
 import base64
 import json
 import re
+from copy import deepcopy
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -333,13 +335,14 @@ async def test_complete_rejects_unconfigured_or_oversized_native_media(
     assert exc_info.value.public_code == "provider.responseTooLarge"
 
 
+@pytest.mark.parametrize("api_type", ["chat_completions", "responses"])
 async def test_public_complete_pseudonymizes_and_restores_request_scope(
-    monkeypatch,
+    monkeypatch, api_type,
 ) -> None:
     provider = LlmProviderConfig(
         name="Public",
         adapter_type="openai-compatible",
-        config={"base_url": "http://public.test/v1"},
+        config={"base_url": "http://public.test/v1", "api_type": api_type},
     )
     model = ModelConfig(provider_id=provider.id, model_id="public-model")
     streamed: list[str] = []
@@ -347,6 +350,9 @@ async def test_public_complete_pseudonymizes_and_restores_request_scope(
 
     async def fake_chat_completions(**kwargs):
         request = kwargs["request"]
+        serializer = _responses_body if api_type == "responses" else _chat_body
+        assert estimate_request_input_tokens(serializer(request)) == prepared.estimated_input_tokens
+        assert request.messages != prepared.request.messages
         protected = request.messages[-1]["content"]
         assert "anna@example.com" not in protected
         assert "provider_data" not in request.messages[-1]
@@ -376,18 +382,27 @@ async def test_public_complete_pseudonymizes_and_restores_request_scope(
         )
 
     monkeypatch.setattr(service_module, "chat_completions", fake_chat_completions)
+    monkeypatch.setattr(service_module, "responses_api", fake_chat_completions)
+    messages = [{
+        "role": "user",
+        "content": "Schreibe an anna@example.com",
+        "provider_data": {"responses_output_items": [{"id": "previous"}]},
+    }]
+    original = deepcopy(messages)
+    prepared = await ProviderService.prepare_request(
+        provider=provider, model=model, messages=messages, tools=[],
+    )
+    unprotected = await ProviderService.prepare_request(
+        provider=provider, model=model, messages=messages, tools=[],
+        pseudonymization_enabled=False,
+    )
+    assert prepared.estimated_input_tokens > unprotected.estimated_input_tokens
 
     result = await ProviderService.complete(
         AsyncMock(spec=AsyncSession),
         provider=provider,
         model=model,
-        messages=[
-            {
-                "role": "user",
-                "content": "Schreibe an anna@example.com",
-                "provider_data": {"responses_output_items": [{"id": "previous"}]},
-            }
-        ],
+        messages=messages,
         tools=[],
         on_delta=lambda text: _append_async(streamed, text),
         on_reasoning=lambda text, kind: _append_async(reasoned, (text, kind)),
@@ -403,6 +418,8 @@ async def test_public_complete_pseudonymizes_and_restores_request_scope(
     assert result.reasoning is not None
     assert result.reasoning.text == "Gedanke zu anna@example.com"
     assert set(result.provider_data) == {"output_budget"}
+    assert messages == original
+    assert result.provider_data["output_budget"]["finalEstimatedInputTokens"] == prepared.estimated_input_tokens
 
 
 async def test_public_complete_rejects_unknown_pseudonym_marker(monkeypatch) -> None:
@@ -2022,3 +2039,100 @@ async def test_complete_explicit_safety_snapshot_skips_settings_lookup(monkeypat
     assert budget["allocatedOutputTokens"] == (
         model.context_window_tokens - safety - budget["guardedInputTokens"]
     )
+
+
+@pytest.mark.parametrize(
+    ("adapter_type", "api_type"),
+    [("openai-compatible", "chat_completions"), ("openai-compatible", "responses"),
+     ("openai-codex", "responses"), ("lemonade", "chat_completions")],
+)
+async def test_prepare_is_local_and_matches_transmitted_request(monkeypatch, adapter_type, api_type):
+    provider = LlmProviderConfig(
+        name="Test", adapter_type=adapter_type, credential_id=uuid4(),
+        pseudonymization_enabled=False,
+        config={"base_url": "https://local.test/v1", "api_type": api_type},
+    )
+    model = ModelConfig(
+        provider_id=provider.id, model_id="openai-codex/test" if adapter_type == "openai-codex" else "test",
+        supports_streaming=False, supports_image_input=True,
+        discovery_metadata={"recipe": "llamacpp", "owned_by": "llamacpp"},
+    )
+    tools = [{"name": "inspect", "parameters": {
+        "type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 200},
+    }}]
+    messages = [{"role": "system", "content": "Instructions"},
+                {"role": "user", "content": "Inspect"},
+                {"role": "assistant", "content": "Checked", "tool_calls": [
+                    {"id": "call", "name": "inspect", "arguments": {"text": '\\"\n' * 100}},
+                ]},
+                {"role": "tool", "tool_call_id": "call", "content": "Result"}]
+    original = deepcopy((messages, tools))
+    load = AsyncMock(return_value=SimpleNamespace())
+    decrypt = Mock(return_value={"api_key": "dummy"})
+    refresh = AsyncMock(return_value={"access": "dummy", "account_id": "test"})
+    settings = AsyncMock(side_effect=AssertionError("Preparation must not load settings"))
+    adapter = service_module.PROVIDER_ADAPTERS[adapter_type]
+    operation = AsyncMock(wraps=adapter.operation)
+    monkeypatch.setattr(service_module, "PROVIDER_ADAPTERS", {
+        **service_module.PROVIDER_ADAPTERS, adapter_type: replace(adapter, operation=operation),
+    })
+    monkeypatch.setattr(service_module, "load_credential", load)
+    monkeypatch.setattr(service_module, "read_credential", decrypt)
+    monkeypatch.setattr(service_module, "refresh_codex_credential", refresh)
+    monkeypatch.setattr(service_module.SettingsStore, "load", settings)
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [], "status": "completed", "output": []})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "mato_loop_backend.providers.openai_compatible.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    options = dict(
+        provider=provider, model=model, messages=messages, tools=tools,
+        tool_choice="required", prompt_cache_key="test-session",
+        target_trust_level=TrustLevel.PRIVATE, reasoning_effort=ReasoningEffort.NONE,
+        image_inputs=[ProviderImageInput(
+            message_index=1, data=_png_bytes(), mime_type="image/png", trust_level="private",
+        )],
+    )
+    prepared = await ProviderService.prepare_request(**options)
+    assert prepared.api_type == api_type
+    assert prepared.request.continuation_scope["trustLevel"] == "private"
+    assert "Instructions" not in repr(prepared)
+    assert prepared.request.max_output_tokens is None
+    load.assert_not_awaited()
+    decrypt.assert_not_called()
+    refresh.assert_not_awaited()
+    settings.assert_not_awaited()
+    operation.assert_not_awaited()
+    assert bodies == []
+
+    with pytest.raises(ProviderError, match="Insufficient context"):
+        await ProviderService.complete(
+            AsyncMock(spec=AsyncSession), **options,
+            safety_reserve_tokens=model.context_window_tokens,
+        )
+    load.assert_not_awaited()
+    decrypt.assert_not_called()
+    refresh.assert_not_awaited()
+    operation.assert_not_awaited()
+    assert bodies == []
+
+    result = await ProviderService.complete(
+        AsyncMock(spec=AsyncSession), **options, safety_reserve_tokens=0,
+        estimated_input_tokens=prepared.estimated_input_tokens,
+    )
+    assert len(bodies) == 1
+    assert prepared.estimated_input_tokens == estimate_request_input_tokens(
+        bodies[0], model.characters_per_token,
+    ) == result.provider_data["output_budget"]["finalEstimatedInputTokens"]
+    load.assert_awaited_once()
+    operation.assert_awaited_once()
+    assert refresh.await_count == int(adapter.codex_auth)
+    assert decrypt.call_count == int(not adapter.codex_auth)
+    settings.assert_not_awaited()
+    assert (messages, tools) == original

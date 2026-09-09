@@ -85,7 +85,8 @@ class _CodexModel(BaseModel):
     slug: str = Field(min_length=1)
     display_name: str | None = None
     visibility: str = "none"
-    context_window: int | None = Field(default=None, gt=1)
+    context_window: int | None = Field(default=None, strict=True, ge=2, le=10_000_000)
+    max_context_window: int | None = Field(default=None, strict=True, ge=2, le=10_000_000)
     supports_parallel_tool_calls: bool = False
     input_modalities: list[str] = Field(default_factory=list)
     default_reasoning_level: str | None = Field(default=None, min_length=1, max_length=20)
@@ -339,6 +340,7 @@ async def discover_models(
                 id=f"openai-codex/{model.slug}",
                 name=model.display_name or model.slug,
                 max_model_len=model.context_window,
+                max_context_window=model.max_context_window,
                 supports_parallel_tool_calls=model.supports_parallel_tool_calls,
                 supports_image_input="image" in model.input_modalities,
                 default_reasoning_effort=default_effort,

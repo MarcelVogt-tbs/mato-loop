@@ -94,13 +94,14 @@ async def test_compaction_uses_global_model_before_session_model(
     assert complete.await_args.kwargs["tools"] == []
     assert complete.await_args.kwargs["max_output_tokens"] == expected
     assert complete.await_args.kwargs["reserved_output_tokens"] == expected
-    assert complete.await_args.kwargs["estimated_input_tokens"] == estimate_tokens(
-        compaction_messages("USER: Test"), compaction.characters_per_token,
-    )
+    assert "estimated_input_tokens" not in complete.await_args.kwargs
 
 
 async def test_compaction_fit_includes_system_message_and_envelope(monkeypatch) -> None:
-    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    provider = LlmProviderConfig(
+        name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "https://local.test/v1"},
+    )
     source = "USER: Test"
     output_tokens = 128
     prompt_tokens = estimate_tokens(compaction_messages(source)[1]["content"], 4)
@@ -109,7 +110,9 @@ async def test_compaction_fit_includes_system_message_and_envelope(monkeypatch) 
         context_window_tokens=prompt_tokens + output_tokens, characters_per_token=4,
     )
     active = ModelConfig(provider_id=provider.id, model_id="agent", max_output_tokens=None)
-    complete = AsyncMock(return_value=ProviderResult(content=_VALID_SUMMARY))
+    complete = AsyncMock(wraps=ProviderService.complete)
+    transport = AsyncMock(return_value=ProviderResult(content=_VALID_SUMMARY))
+    monkeypatch.setattr(service_module, "chat_completions", transport)
     monkeypatch.setattr(ProviderService, "complete", complete)
 
     result = await AgentRuntime._summarize(
@@ -121,22 +124,33 @@ async def test_compaction_fit_includes_system_message_and_envelope(monkeypatch) 
     )
 
     assert result.model_config_id == active.id
-    complete.assert_awaited_once()
+    assert complete.await_count == 2
+    transport.assert_awaited_once()
     assert complete.await_args.kwargs["model"] is active
 
 
 @pytest.mark.parametrize("headroom", [-1, 0])
 @pytest.mark.parametrize("output_tokens", [7, 512])
 async def test_compaction_candidate_fit_includes_shared_slack(monkeypatch, headroom, output_tokens):
-    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    provider = LlmProviderConfig(
+        name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "https://local.test/v1"},
+    )
     source = "x" * 1000
-    raw_estimate = estimate_tokens(compaction_messages(source), 4)
     compaction = ModelConfig(
         provider_id=provider.id, model_id="compact", characters_per_token=4,
-        context_window_tokens=guarded_input_tokens(raw_estimate) + output_tokens + 4096 + headroom,
+    )
+    prepared = await ProviderService.prepare_request(
+        provider=provider, model=compaction, messages=compaction_messages(source), tools=[],
+    )
+    raw_estimate = prepared.estimated_input_tokens
+    compaction.context_window_tokens = (
+        guarded_input_tokens(raw_estimate) + output_tokens + 4096 + headroom
     )
     active = ModelConfig(provider_id=provider.id, model_id="agent")
-    complete = AsyncMock(return_value=ProviderResult(content=_VALID_SUMMARY))
+    complete = AsyncMock(wraps=ProviderService.complete)
+    transport = AsyncMock(return_value=ProviderResult(content=_VALID_SUMMARY))
+    monkeypatch.setattr(service_module, "chat_completions", transport)
     monkeypatch.setattr(ProviderService, "complete", complete)
     result = await AgentRuntime._summarize(
         AsyncMock(spec=AsyncSession), source, output_tokens,
@@ -146,11 +160,12 @@ async def test_compaction_candidate_fit_includes_shared_slack(monkeypatch, headr
         active_model=active, runtime_settings=AgentRuntimeSettings(),
     )
     assert result.model_config_id == (compaction.id if headroom == 0 else active.id)
-    complete.assert_awaited_once()
+    assert complete.await_count == (1 if headroom == 0 else 2)
+    transport.assert_awaited_once()
     request = complete.await_args.kwargs
-    assert request["estimated_input_tokens"] == raw_estimate
+    assert "estimated_input_tokens" not in request
     assert allocate_output_tokens(
-        request["model"], request["estimated_input_tokens"],
+        request["model"], raw_estimate,
         requested=request["max_output_tokens"],
         reserved_output_tokens=request["reserved_output_tokens"],
         safety_reserve_tokens=request["safety_reserve_tokens"],

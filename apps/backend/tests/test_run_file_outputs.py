@@ -12,10 +12,11 @@ from uuid import uuid4
 import pytest
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
+from test_context_manager_contract import _build_context
 
 from mato_loop_backend.agent import runtime as runtime_module
 from mato_loop_backend.agent import tools as tools_module
-from mato_loop_backend.agent.context import ContextManager, message_dict
+from mato_loop_backend.agent.context import message_dict
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.tool_registry import ToolAttachment, ToolResult
 from mato_loop_backend.attachments import (
@@ -273,7 +274,8 @@ async def test_superseded_pending_images_do_not_exhaust_context_or_provider_budg
     raw = [message_dict(message) for message in records]
     assert sum(len(message["attachments"]) for message in raw) == 9
     db.scalar.return_value = None
-    context = await ContextManager.build(
+    monkeypatch.setattr(provider_service, "AttachmentService", lambda: service)
+    context = await _build_context(
         db,
         chat_session=session,
         records=records,
@@ -288,7 +290,6 @@ async def test_superseded_pending_images_do_not_exhaust_context_or_provider_budg
     assert {
         item["id"] for message in context.messages for item in message.get("attachments", [])
     } == expected_ids
-    monkeypatch.setattr(provider_service, "AttachmentService", lambda: service)
     expected_urls = {
         provider_service._read_image_data_url(message_dict(records[index])["attachments"][0])
         for index in (2, len(records) - 1)
@@ -579,7 +580,7 @@ async def test_actual_context_projection_does_not_excerpt_replaced_upload(tmp_pa
     files = RootFileService(session.id, session_storage=storage, run_id=run_id)
     files.append_output_revision(attachment.file_id, b"NEW_TEXT")
     db.scalar.return_value = None
-    projection = await ContextManager.build(
+    projection = await _build_context(
         db,
         chat_session=session,
         records=[message],

@@ -15,6 +15,7 @@ from mato_loop_backend.agent.subagents import integration_ceiling_ids, permissio
 from mato_loop_backend.agent.tools import ToolResult, tool_registry
 from mato_loop_backend.models import Message, WebSearchPolicy
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
+from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.sessions.serialization import message_payload
 from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings, ToolSettings
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
@@ -45,7 +46,14 @@ async def test_runtime_passes_projection_reserve_and_records_provider_allocation
     )
     await AgentRuntime._execute_loop(db, run)
 
-    assert requests[0]["estimated_input_tokens"] == 100
+    prepared = await ProviderService.prepare_request(**{
+        key: requests[0][key] for key in (
+            "provider", "model", "messages", "tools", "tool_choice", "timeout",
+            "target_trust_level", "pseudonymization_enabled", "prompt_cache_key",
+            "required_image_ids", "reasoning_effort",
+        )
+    })
+    assert requests[0]["estimated_input_tokens"] == prepared.estimated_input_tokens
     assert requests[0]["reserved_output_tokens"] == 2_048
     assert requests[0]["safety_reserve_tokens"] == 4_096
     assert "max_output_tokens" not in requests[0]

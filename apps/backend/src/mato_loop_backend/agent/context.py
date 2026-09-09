@@ -24,7 +24,6 @@ from mato_loop_backend.attachments import (
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.memory.service import memory_visible_to
 from mato_loop_backend.models import ChatSession, ContextSummary, Message
-from mato_loop_backend.providers.base import select_provider_images
 from mato_loop_backend.providers.output_budget import generation_reserve, raw_input_budget
 from mato_loop_backend.settings.models import (
     BUILD_AGENT_PROFILE_ID,
@@ -39,7 +38,6 @@ from mato_loop_backend.settings.models import (
     TrustLevel,
 )
 
-IMAGE_INPUT_RESERVE_TOKENS = 2_048
 MAX_ATTACHMENT_EXCERPT_CHARACTERS = 20_000
 _LOCAL_TIMEZONE = ZoneInfo("Europe/Berlin")
 WEEKDAY_NAMES = (
@@ -111,6 +109,7 @@ class ContextProjection:
 
 
 SummaryCallback = Callable[[str, int], Awaitable[SummaryResult]]
+EstimateCallback = Callable[[list[dict[str, Any]]], Awaitable[int]]
 
 
 def compaction_messages(source: str) -> list[dict[str, str]]:
@@ -1123,6 +1122,15 @@ def _projection_messages(
         if historical_references:
             messages[0]["attachments"] = historical_references
     _repair_tool_pairs(messages)
+    if attachment_service is not None and attachment_service.run_id is not None:
+        run_id = str(attachment_service.run_id)
+        for message in messages:
+            if "attachments" in message:
+                message["attachments"] = [
+                    {**attachment, "run_id": run_id}
+                    for attachment in message["attachments"]
+                    if attachment.get("run_id") in {None, run_id}
+                ]
     return latest_image_references(
         messages, run_id=attachment_service.run_id if attachment_service is not None else None
     )
@@ -1897,36 +1905,9 @@ def _summary_source(
     return "\n\n".join(parts)
 
 
-def _message_text_tokens(messages: list[dict[str, Any]], characters_per_token: float) -> int:
-    return estimate_tokens(
-        [
-            {
-                key: value
-                for key, value in message.items()
-                if key not in {"attachments", _HOST_TOOL_RESULT_REFERENCE}
-            }
-            for message in messages
-        ],
-        characters_per_token,
-    )
-
-
 def _strip_projection_metadata(messages: list[dict[str, Any]]) -> None:
     for message in messages:
         message.pop(_HOST_TOOL_RESULT_REFERENCE, None)
-
-
-def _image_input_tokens(
-    messages: list[dict[str, Any]],
-    target_trust_level: TrustLevel,
-    required_image_ids: tuple[str, ...] = (),
-) -> int:
-    selected = select_provider_images(
-        messages,
-        target_trust_level=target_trust_level.value,
-        required_image_ids=required_image_ids,
-    )
-    return IMAGE_INPUT_RESERVE_TOKENS * sum(item.allow_raw for item in selected)
 
 
 def _current_tool_output_indices(messages: list[dict[str, Any]]) -> list[int]:
@@ -1941,29 +1922,14 @@ def _current_tool_output_indices(messages: list[dict[str, Any]]) -> list[int]:
     ]
 
 
-def _prune_tool_outputs_to_budget(
+async def _prune_tool_outputs_to_budget(
     messages: list[dict[str, Any]],
     *,
-    tools_tokens: int,
+    estimate_request: EstimateCallback,
     characters_per_token: float,
     input_budget: int,
-    include_image_input: bool,
-    target_trust_level: TrustLevel,
-    required_image_ids: tuple[str, ...] = (),
 ) -> int:
-    def estimate() -> int:
-        image_tokens = (
-            _image_input_tokens(messages, target_trust_level, required_image_ids)
-            if include_image_input
-            else 0
-        )
-        return (
-            _message_text_tokens(messages, characters_per_token)
-            + tools_tokens
-            + image_tokens
-        )
-
-    estimated = estimate()
+    estimated = await estimate_request(messages)
     candidates = [message for message in messages if message.get("role") == "tool"]
     while estimated > input_budget:
         changed = False
@@ -1991,7 +1957,7 @@ def _prune_tool_outputs_to_budget(
             if len(shortened) >= len(content):
                 continue
             message["content"] = shortened
-            estimated = estimate()
+            estimated = await estimate_request(messages)
             changed = True
         if not changed:
             break
@@ -2010,12 +1976,13 @@ class ContextManager:
         model: ModelConfig,
         settings: AgentRuntimeSettings,
         summarize: SummaryCallback,
+        estimate_request: EstimateCallback,
         target_trust_level: TrustLevel = TrustLevel.PUBLIC,
-        required_image_ids: tuple[str, ...] = (),
         memory_context: str | None = None,
         live_tool_calls: dict[UUID, list[dict[str, Any]]] | None = None,
         attachment_service: AttachmentService | None = None,
     ) -> ContextProjection:
+        """Budget original projections with raw request estimates, before slack and safety."""
         records = [item for item in records if item.error_code is None]
         reserved_output_tokens = generation_reserve(model)
         input_budget = raw_input_budget(max(
@@ -2057,7 +2024,6 @@ class ContextManager:
                 latest = None
 
         characters_per_token = model.characters_per_token
-        tools_tokens = estimate_tokens(tool_schemas, characters_per_token) if tool_schemas else 0
 
         async def project(
             summary: ContextSummary | None, selected: list[Message]
@@ -2081,15 +2047,7 @@ class ContextManager:
                 historical_tool_output_tokens=settings.historical_tool_output_tokens,
                 live_tool_calls=live_tool_calls,
             )
-            total = (
-                _message_text_tokens(messages, characters_per_token)
-                + tools_tokens
-                + (
-                    _image_input_tokens(messages, target_trust_level, required_image_ids)
-                    if model.supports_image_input
-                    else 0
-                )
-            )
+            total = await estimate_request(messages)
             return messages, total
 
         messages, estimated = await project(latest, active_records)
@@ -2101,12 +2059,23 @@ class ContextManager:
             )
 
         current_tool_indices = _current_tool_output_indices(messages)
-        current_tool_tokens = sum(
-            estimate_tokens(
-                str(messages[index].get("content") or ""), characters_per_token
+
+        async def estimate_minimum_request() -> int:
+            if not current_tool_indices:
+                return estimated
+            minimum = [dict(message) for message in messages]
+            _limit_tool_output_tokens(
+                minimum,
+                current_tool_indices,
+                0,
+                characters_per_token,
+                omitted_marker=_SHORTENED_TOOL_OUTPUT.lstrip(),
+                fair_share=True,
             )
-            for index in current_tool_indices
-        )
+            # Retain privacy overhead for short bodies the real shortener cannot remove.
+            return estimated if minimum == messages else await estimate_request(minimum)
+
+        minimum_request_tokens = await estimate_minimum_request()
 
         protected_start = _compaction_boundary(
             active_records,
@@ -2118,7 +2087,7 @@ class ContextManager:
         compacted = False
         pending_summary: ContextSummary | None = None
         if (prefix or latest is not None) and (
-            estimated - current_tool_tokens > trigger_tokens
+            minimum_request_tokens > trigger_tokens
             or any(item.role == "tool" for item in prefix)
         ):
             target_tokens = max(256, int(input_budget * settings.compaction_target_ratio))
@@ -2152,16 +2121,11 @@ class ContextManager:
             latest = pending_summary
             messages, estimated = await project(latest, suffix)
             compacted = True
+            current_tool_indices = _current_tool_output_indices(messages)
+            minimum_request_tokens = await estimate_minimum_request()
 
-        current_tool_indices = _current_tool_output_indices(messages)
-        current_tool_tokens = sum(
-            estimate_tokens(
-                str(messages[index].get("content") or ""), characters_per_token
-            )
-            for index in current_tool_indices
-        )
         current_tool_budget = max(
-            0, trigger_tokens - (estimated - current_tool_tokens)
+            0, trigger_tokens - minimum_request_tokens
         )
         _limit_tool_output_tokens(
             messages,
@@ -2171,15 +2135,7 @@ class ContextManager:
             omitted_marker=_SHORTENED_TOOL_OUTPUT.lstrip(),
             fair_share=True,
         )
-        estimated = (
-            _message_text_tokens(messages, characters_per_token)
-            + tools_tokens
-            + (
-                _image_input_tokens(messages, target_trust_level, required_image_ids)
-                if model.supports_image_input
-                else 0
-            )
-        )
+        estimated = await estimate_request(messages)
         while estimated > trigger_tokens and current_tool_budget > 0:
             previous = estimated
             current_tool_budget = max(
@@ -2193,27 +2149,16 @@ class ContextManager:
                 omitted_marker=_SHORTENED_TOOL_OUTPUT.lstrip(),
                 fair_share=True,
             )
-            estimated = (
-                _message_text_tokens(messages, characters_per_token)
-                + tools_tokens
-                + (
-                    _image_input_tokens(messages, target_trust_level, required_image_ids)
-                    if model.supports_image_input
-                    else 0
-                )
-            )
+            estimated = await estimate_request(messages)
             if estimated >= previous:
                 break
 
         if estimated > input_budget:
-            estimated = _prune_tool_outputs_to_budget(
+            estimated = await _prune_tool_outputs_to_budget(
                 messages,
-                tools_tokens=tools_tokens,
+                estimate_request=estimate_request,
                 characters_per_token=characters_per_token,
                 input_budget=input_budget,
-                include_image_input=model.supports_image_input,
-                target_trust_level=target_trust_level,
-                required_image_ids=required_image_ids,
             )
         if estimated > input_budget:
             raise ContextError("agent.contextWindowExceeded")

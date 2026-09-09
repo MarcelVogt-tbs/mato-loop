@@ -244,15 +244,16 @@ async def _runtime_setup(
 
     async def build_context(*_args, **kwargs):
         projections.append(kwargs)
-        return ContextProjection(
-            messages=[
-                {"role": "system", "content": kwargs["system_prompt"]},
-                *[
-                    message_dict(record, include_attachment_markers=False)
-                    for record in records
-                ],
+        messages = [
+            {"role": "system", "content": kwargs["system_prompt"]},
+            *[
+                message_dict(record, include_attachment_markers=False)
+                for record in records
             ],
-            estimated_input_tokens=100,
+        ]
+        return ContextProjection(
+            messages=messages,
+            estimated_input_tokens=await kwargs["estimate_request"](messages),
             input_budget_tokens=1_000,
         )
 
@@ -712,7 +713,7 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
         ],
     }
     assert requests[3]["required_image_ids"] == ()
-    assert projections[2]["required_image_ids"] == ()
+    assert "required_image_ids" not in projections[2]
     render_message = next(
         call.args[0]
         for call in db.add.call_args_list

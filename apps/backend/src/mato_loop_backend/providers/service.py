@@ -5,6 +5,7 @@ import base64
 import logging
 import math
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Any, Literal
@@ -28,7 +29,12 @@ from mato_loop_backend.privacy import (
     StreamingPseudonymRestorer,
 )
 from mato_loop_backend.providers import codex_oauth, lemonade, openai_compatible
-from mato_loop_backend.providers.adapters import PROVIDER_ADAPTERS, AdapterRuntime
+from mato_loop_backend.providers.adapters import (
+    PROVIDER_ADAPTERS,
+    AdapterRuntime,
+    ApiType,
+    ProviderAdapter,
+)
 from mato_loop_backend.providers.base import (
     MAX_PROVIDER_AUDIO_BYTES,
     MAX_PROVIDER_IMAGE_BYTES,
@@ -460,6 +466,15 @@ async def _with_retries(
     raise ProviderError("Provider request failed", code="provider.requestFailed")
 
 
+@dataclass(slots=True, repr=False)
+class _PreparedRequest:
+    request: ProviderRequest
+    adapter: ProviderAdapter
+    api_type: ApiType
+    pseudonymizer: RequestPseudonymizer | None
+    estimated_input_tokens: int
+
+
 class ProviderService:
     @staticmethod
     async def discover_models(
@@ -489,23 +504,14 @@ class ProviderService:
         )
 
     @staticmethod
-    async def complete(
-        db: AsyncSession,
+    async def prepare_request(
         *,
         provider: LlmProviderConfig,
         model: ModelConfig,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         tool_choice: Literal["auto", "required", "none"] = "auto",
-        on_delta: Callable[[str], Awaitable[None]] | None = None,
-        on_reasoning: ReasoningDeltaCallback | None = None,
-        on_warning: Callable[[str], Awaitable[None]] | None = None,
-        on_retry: Callable[[int, int, int | None, str], Awaitable[None]] | None = None,
         timeout: float = 300,
-        max_output_tokens: int | None = None,
-        estimated_input_tokens: int | None = None,
-        reserved_output_tokens: int | None = None,
-        safety_reserve_tokens: int | None = None,
         target_trust_level: TrustLevel | None = None,
         pseudonymization_enabled: bool | None = None,
         image_inputs: list[ProviderImageInput] | None = None,
@@ -513,15 +519,8 @@ class ProviderService:
         prompt_cache_key: str | None = None,
         required_image_ids: tuple[str, ...] = (),
         reasoning_effort: ReasoningEffort | str | None = None,
-    ) -> ProviderResult:
-        """Complete with an adaptive budget checked after all input transformations.
-
-        estimated_input_tokens is an optional raw projection estimate, without
-        proportional slack or fixed safety. Diagnostics are returned separately
-        from provider usage in provider_data["output_budget"].
-        An omitted safety reserve uses the stored global runtime setting; an
-        explicit value preserves the caller's snapshot without another lookup.
-        """
+    ) -> _PreparedRequest:
+        """Prepare original candidate messages locally, without settings, auth, or transport."""
         if model.provider_id != provider.id:
             raise ProviderError(
                 "Model and provider do not belong together",
@@ -557,16 +556,6 @@ class ProviderService:
                 else effective_model_pseudonymization(provider, model)
             )
         )
-        credential = (
-            await load_credential(
-                db,
-                provider.credential_id,
-                owner_id=provider.owner_id,
-                populate_existing=True,
-            )
-            if provider.credential_id
-            else None
-        )
         profile = (
             reasoning_profile(model.model_id, model.discovery_metadata)
             if api_type == "chat_completions" or adapter.reasoning_profile_for_responses
@@ -582,7 +571,6 @@ class ProviderService:
                 "Model does not support the selected reasoning effort",
                 code="provider.modelCapabilityUnavailable",
             )
-        payload = read_credential(credential) if credential and not adapter.codex_auth else {}
         endpoint = adapter.endpoint(provider)
         continuation_scope = {
             "adapterType": provider.adapter_type,
@@ -656,12 +644,70 @@ class ProviderService:
             media=media,
         )
         body = _responses_body(request) if api_type == "responses" else _chat_body(request)
-        final_input_tokens = estimate_request_input_tokens(body, model.characters_per_token)
+        return _PreparedRequest(
+            request, adapter, api_type, pseudonymizer,
+            estimate_request_input_tokens(body, model.characters_per_token),
+        )
+
+    @staticmethod
+    async def complete(
+        db: AsyncSession,
+        *,
+        provider: LlmProviderConfig,
+        model: ModelConfig,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: Literal["auto", "required", "none"] = "auto",
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_reasoning: ReasoningDeltaCallback | None = None,
+        on_warning: Callable[[str], Awaitable[None]] | None = None,
+        on_retry: Callable[[int, int, int | None, str], Awaitable[None]] | None = None,
+        timeout: float = 300,
+        max_output_tokens: int | None = None,
+        estimated_input_tokens: int | None = None,
+        reserved_output_tokens: int | None = None,
+        safety_reserve_tokens: int | None = None,
+        target_trust_level: TrustLevel | None = None,
+        pseudonymization_enabled: bool | None = None,
+        image_inputs: list[ProviderImageInput] | None = None,
+        media_inputs: list[ProviderMediaInput] | None = None,
+        prompt_cache_key: str | None = None,
+        required_image_ids: tuple[str, ...] = (),
+        reasoning_effort: ReasoningEffort | str | None = None,
+    ) -> ProviderResult:
+        """Complete with an adaptive budget checked after all input transformations.
+
+        estimated_input_tokens is an optional raw projection estimate, without
+        proportional slack or fixed safety. Diagnostics are returned separately
+        from provider usage in provider_data["output_budget"].
+        An omitted safety reserve uses the stored global runtime setting; an
+        explicit value preserves the caller's snapshot without another lookup.
+        """
+        prepared = await ProviderService.prepare_request(
+            provider=provider,
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            timeout=timeout,
+            target_trust_level=target_trust_level,
+            pseudonymization_enabled=pseudonymization_enabled,
+            image_inputs=image_inputs,
+            media_inputs=media_inputs,
+            prompt_cache_key=prompt_cache_key,
+            required_image_ids=required_image_ids,
+            reasoning_effort=reasoning_effort,
+        )
+        request = prepared.request
+        adapter = prepared.adapter
+        api_type = prepared.api_type
+        pseudonymizer = prepared.pseudonymizer
+        final_input_tokens = prepared.estimated_input_tokens
         if estimated_input_tokens is not None:
             # Validate before max(), which could otherwise conceal invalid negative inputs.
             guarded_input_tokens(estimated_input_tokens)
         input_tokens = max(final_input_tokens, estimated_input_tokens or 0)
-        unknown_media = any(item.modality in {"audio", "video"} for item in media)
+        unknown_media = any(item.modality in {"audio", "video"} for item in request.media)
         limit = output_token_limit(model, max_output_tokens)
         reserve = (
             min(2_048, limit) if limit is not None else 2_048
@@ -799,12 +845,23 @@ class ProviderService:
                 or result.provider_data.get("reasoning_encrypted_content")
                 or result.provider_data.get("chat_reasoning_details")
             ):
-                result.provider_data["continuation_scope"] = continuation_scope
+                result.provider_data["continuation_scope"] = request.continuation_scope
             return result
 
         def can_retry() -> bool:
             return not stream_started
 
+        credential = (
+            await load_credential(
+                db,
+                provider.credential_id,
+                owner_id=provider.owner_id,
+                populate_existing=True,
+            )
+            if provider.credential_id
+            else None
+        )
+        payload = read_credential(credential) if credential and not adapter.codex_auth else {}
         operation = await adapter.operation(
             _adapter_runtime(),
             db,

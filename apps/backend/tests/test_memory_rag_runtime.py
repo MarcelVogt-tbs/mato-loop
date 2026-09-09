@@ -385,7 +385,7 @@ async def _runtime_setup(
         messages.append({"role": "user", "content": records[-1].content})
         return ContextProjection(
             messages=messages,
-            estimated_input_tokens=100,
+            estimated_input_tokens=await kwargs["estimate_request"](messages),
             input_budget_tokens=1_000,
         )
 
