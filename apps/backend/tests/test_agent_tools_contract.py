@@ -60,6 +60,7 @@ from mato_loop_backend.memory.retrieval import (
 from mato_loop_backend.models import (
     Automation,
     AutomationRun,
+    AutomationSchedule,
     ChatSession,
     MemoryRecord,
     Message,
@@ -1136,9 +1137,6 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     assert "Reminders set deliver_to_current_session=true" in definitions[
         "create_automation"
     ].description
-    assert "Multiple schedules forbid archive_after_success" in definitions[
-        "create_automation"
-    ].description
     assert "cron+timezone or offset run_at" in definitions["create_automation"].description
     assert "cron+timezone or offset run_at" in definitions["edit_automation"].description
     assert tool_registry.action_default("automation.read") == ToolExecutionPolicy.AUTO
@@ -1162,6 +1160,26 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     edit = definitions["edit_automation"].schema()["parameters"]
     assert edit["properties"]["output_mode"]["enum"] == ["keep", "current", "none"]
     assert "expected_revision" in edit["required"]
+    for name in ("create_automation", "edit_automation"):
+        schema = definitions[name].schema()["parameters"]
+        assert "schedules" in schema["required"]
+        assert schema["properties"]["schedules"].get("minItems", 0) == 0
+        assert schema["properties"]["schedules"]["maxItems"] == 50
+        assert "Empty for manual runs only" in schema["properties"]["schedules"]["description"]
+
+
+@pytest.mark.parametrize("arguments", [tools_module.CreateAutomationArguments, tools_module.EditAutomationArguments])
+def test_manual_automation_arguments_require_explicit_schedules_and_forbid_archiving(arguments):
+    draft = {"name": "Manual", "task": "Do work"}
+    if arguments is tools_module.EditAutomationArguments:
+        draft.update(automation_id=uuid4(), expected_revision=1)
+    assert arguments(**draft, schedules=[]).schedules == []
+    with pytest.raises(ValidationError):
+        arguments(**draft)
+    with pytest.raises(ValidationError):
+        arguments(**draft, schedules=[], archive_after_success=True)
+    with pytest.raises(ValidationError):
+        arguments(**draft, schedules=[{"cron": "0 8 * * *", "timezone": "UTC"}] * 51)
 
 
 async def test_automation_argument_validation_rejects_invalid_schedule_and_output_mode(
@@ -1265,8 +1283,9 @@ def test_automation_schedule_arguments_accept_one_time_schedule() -> None:
         )
 
 
+@pytest.mark.parametrize("manual", [False, True])
 async def test_create_automation_approval_uses_current_session_boundaries(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, manual
 ) -> None:
     call = ToolCall(
         "create",
@@ -1275,7 +1294,7 @@ async def test_create_automation_approval_uses_current_session_boundaries(
             "name": "Bericht",
             "task": "Erstelle den Bericht",
             "enabled": True,
-            "schedules": [
+            "schedules": [] if manual else [
                 {
                     "cron": "0 8 * * *",
                     "timezone": "Europe/Berlin",
@@ -1312,15 +1331,48 @@ async def test_create_automation_approval_uses_current_session_boundaries(
     assert permission.capability == "automation.create"
     assert permission.title == "Automation erstellen?"
     assert permission.approval_details["automationPreview"]["output"] == "current"
-    assert permission.approval_details["automationPreview"]["schedules"][0][
-        "valid_until"
-    ] == "2026-08-28T08:00:00+02:00"
+    if manual:
+        assert permission.approval_details["automationPreview"]["schedules"] == []
+        assert next(item for item in permission.display_items if item.label == "Zeitpläne").value == ("Nur manuell",)
+        assert create.await_args.kwargs["schedules"] == []
+    else:
+        assert permission.approval_details["automationPreview"]["schedules"][0][
+            "valid_until"
+        ] == "2026-08-28T08:00:00+02:00"
+        assert create.await_args.kwargs["schedules"][0]["valid_until"] == datetime(
+            2026, 8, 28, 6, tzinfo=UTC
+        )
     assert create.await_args.kwargs["source_session_id"] == context.session.id
     assert create.await_args.kwargs["output_session_id"] == context.session.id
     assert create.await_args.kwargs["archive_after_success"] is False
-    assert create.await_args.kwargs["schedules"][0]["valid_until"] == datetime(
-        2026, 8, 28, 6, tzinfo=UTC
+
+
+async def test_edit_automation_approval_labels_removing_schedules_as_manual(tmp_path, monkeypatch):
+    automation_id = uuid4()
+    call = ToolCall("edit", "edit_automation", {
+        "automation_id": str(automation_id), "expected_revision": 1,
+        "name": "Manual", "task": "Do work", "schedules": [],
+    })
+    context = _context(tmp_path, call)
+    automation = Automation(
+        id=automation_id, user_id=context.session.user_id, revision=1, name="Manual",
+        task="Do work", enabled=True, archive_after_success=False,
+        output_session_required=False, schedules=[AutomationSchedule(
+            cron_expression="0 8 * * *", timezone="UTC", enabled=True,
+        )],
     )
+    monkeypatch.setattr(tools_module.AutomationService, "owned", AsyncMock(return_value=automation))
+    monkeypatch.setattr(tools_module.AutomationService, "skill", AsyncMock(return_value=None))
+    replace = AsyncMock(return_value=automation)
+    monkeypatch.setattr(tools_module.AutomationService, "replace", replace)
+    result = await tool_registry.execute(call, context)
+    assert not result.is_error
+    permission = context.ask_handler.await_args.args[0]
+    assert permission.capability == "automation.update"
+    changes = permission.approval_details["automationChange"]["changes"]
+    assert len(changes) == 1 and changes[0].endswith(" -> Nur manuell")
+    assert replace.await_args.kwargs["schedules"] == []
+    assert replace.await_args.kwargs["expected_revision"] == 1
 
 
 async def test_run_automation_rechecks_revision_after_approval_and_queues_only(

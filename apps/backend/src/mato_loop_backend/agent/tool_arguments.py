@@ -753,7 +753,9 @@ class AutomationDefinitionArguments(ToolArguments):
     task: str = Field(min_length=1, max_length=40_000)
     skill_id: UUID | None = None
     enabled: bool = True
-    schedules: list[AutomationScheduleArguments] = Field(min_length=1, max_length=50)
+    schedules: list[AutomationScheduleArguments] = Field(
+        max_length=50, description="Empty for manual runs only."
+    )
     output_session_required: bool = False
     archive_after_success: bool = Field(
         default=False,

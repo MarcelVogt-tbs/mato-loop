@@ -3398,7 +3398,7 @@ def _automation_schedule_lines(schedules: list[dict[str, Any]]) -> tuple[str, ..
         f'{"aktiv" if item["enabled"] else "inaktiv"}'
         f'{" | gültig bis " + item["valid_until"] if item.get("valid_until") else ""}'
         for item in _automation_schedule_json(schedules)
-    )
+    ) or ("Nur manuell",)
 
 
 async def _automation_definition_payload(
@@ -3655,8 +3655,8 @@ def _automation_edit_diff(
         ),
         (
             "Zeitpläne",
-            json.dumps(before_schedules),
-            json.dumps(_automation_schedule_json(schedules)),
+            json.dumps(before_schedules) if before_schedules else "Nur manuell",
+            json.dumps(_automation_schedule_json(schedules)) if schedules else "Nur manuell",
         ),
         (
             "Ausgabe",
@@ -4860,7 +4860,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "create_automation",
-            "Create if asked. Same task uses one automation. Reminders set deliver_to_current_session=true. Use cron+timezone or offset run_at; valid_until is cron-only. Multiple schedules forbid archive_after_success.",
+            "Create if asked. Same task uses one automation. Reminders set deliver_to_current_session=true. Use cron+timezone or offset run_at; valid_until is cron-only.",
             CreateAutomationArguments,
             _create_automation,
             group="automations",
@@ -4870,7 +4870,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "edit_automation",
-            "Edit exact revision. Use cron+timezone or offset run_at; valid_until is cron-only. Archive requires one run_at.",
+            "Edit exact revision. Use cron+timezone or offset run_at; valid_until is cron-only.",
             EditAutomationArguments,
             _edit_automation,
             group="automations",

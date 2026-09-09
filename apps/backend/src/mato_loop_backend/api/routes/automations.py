@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import load_only, selectinload
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.automations import (
@@ -89,7 +89,7 @@ class AutomationRequest(BaseModel):
         default=None, alias="deliveryEndpointId", strict=False
     )
     archive_after_success: bool = Field(default=False, alias="archiveAfterSuccess")
-    schedules: list[ScheduleRequest] = Field(min_length=1, max_length=50)
+    schedules: list[ScheduleRequest] = Field(max_length=50)
     expected_revision: int | None = Field(default=None, alias="expectedRevision", ge=1)
 
     @field_validator("name", "task")
@@ -114,6 +114,92 @@ class AutomationRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
     expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+
+class AutomationEffectiveState(BaseModel):
+    enabled: bool
+    active_run_status: str | None = Field(alias="activeRunStatus")
+    next_run_at: datetime | None = Field(alias="nextRunAt")
+
+
+class AutomationStatusResponse(BaseModel):
+    id: UUID
+    revision: int
+    enabled: bool
+    archived_at: datetime | None = Field(alias="archivedAt")
+    schedule_count: int = Field(alias="scheduleCount")
+    effective_state: AutomationEffectiveState = Field(alias="effectiveState")
+
+
+class AutomationSummaryResponse(AutomationStatusResponse):
+    name: str
+    task_excerpt: str = Field(alias="taskExcerpt", max_length=240)
+
+
+class AutomationSummaryListResponse(BaseModel):
+    items: list[AutomationSummaryResponse]
+
+
+class AutomationRunDeliverySummary(BaseModel):
+    status: str
+    attempts: int
+    next_attempt_at: datetime | None = Field(alias="nextAttemptAt")
+
+
+class AutomationRunSummaryResponse(BaseModel):
+    id: UUID
+    automation_id: UUID = Field(alias="automationId")
+    status: str
+    trigger: Literal["scheduled", "manual"]
+    automation_revision: int = Field(alias="automationRevision")
+    scheduled_for: datetime | None = Field(alias="scheduledFor")
+    created_at: datetime | None = Field(alias="createdAt")
+    started_at: datetime | None = Field(alias="startedAt")
+    completed_at: datetime | None = Field(alias="completedAt")
+    delivery: AutomationRunDeliverySummary
+
+
+class AutomationRunSummaryListResponse(BaseModel):
+    items: list[AutomationRunSummaryResponse]
+    page: int
+    has_more: bool = Field(alias="hasMore")
+
+
+async def _active_run_statuses(
+    db: AsyncSession, automation_ids: list[UUID]
+) -> dict[UUID, str]:
+    if not automation_ids:
+        return {}
+    rows = await db.execute(
+        select(AutomationRun.automation_id, AutomationRun.status)
+        .where(
+            AutomationRun.automation_id.in_(automation_ids),
+            AutomationRun.status.in_(ACTIVE_STATUSES),
+        )
+        .order_by(AutomationRun.created_at, AutomationRun.id)
+    )
+    return dict(rows.all())
+
+
+def _automation_status(
+    item: Automation, active_run_status: str | None
+) -> AutomationStatusResponse:
+    next_at = min(
+        (schedule.next_run_at for schedule in item.schedules if schedule.enabled),
+        default=None,
+    ) if item.enabled and item.archived_at is None else None
+    return AutomationStatusResponse(
+        id=item.id,
+        revision=item.revision,
+        enabled=item.enabled,
+        archivedAt=item.archived_at,
+        scheduleCount=len(item.schedules),
+        effectiveState=AutomationEffectiveState(
+            enabled=next_at is not None,
+            activeRunStatus=active_run_status,
+            nextRunAt=next_at,
+        ),
+    )
 
 
 def _raise(exc: AutomationError) -> None:
@@ -308,7 +394,8 @@ async def list_automations(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
     archived: bool = False,
-) -> dict[str, Any]:
+    summary: bool = False,
+) -> AutomationSummaryListResponse | dict[str, Any]:
     items = list(
         (
             await db.scalars(
@@ -324,6 +411,16 @@ async def list_automations(
             )
         ).all()
     )
+    if summary:
+        active_statuses = await _active_run_statuses(db, [item.id for item in items])
+        return AutomationSummaryListResponse(items=[
+            AutomationSummaryResponse(
+                **_automation_status(item, active_statuses.get(item.id)).model_dump(by_alias=True),
+                name=item.name,
+                taskExcerpt=item.task[:240],
+            )
+            for item in items
+        ])
     return {"items": [await _automation_payload(db, item) for item in items]}
 
 
@@ -363,10 +460,25 @@ async def get_automation(
     automation_id: UUID,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    include_history: Annotated[bool, Query(alias="includeHistory")] = True,
 ) -> dict[str, Any]:
     try:
         item = await AutomationService.owned(db, automation_id, user.id)
-        return await _automation_payload(db, item, detail=True)
+        return await _automation_payload(db, item, detail=include_history)
+    except AutomationError as exc:
+        _raise(exc)
+
+
+@router.get("/{automation_id}/status")
+async def get_automation_status(
+    automation_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AutomationStatusResponse:
+    try:
+        item = await AutomationService.owned(db, automation_id, user.id)
+        active_statuses = await _active_run_statuses(db, [item.id])
+        return _automation_status(item, active_statuses.get(item.id))
     except AutomationError as exc:
         _raise(exc)
 
@@ -432,22 +544,54 @@ async def list_automation_runs(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 20,
-) -> dict[str, Any]:
+    summary: bool = False,
+) -> AutomationRunSummaryListResponse | dict[str, Any]:
     try:
         await AutomationService.owned(db, automation_id, user.id)
     except AutomationError as exc:
         _raise(exc)
-    rows = list(
-        (
-            await db.scalars(
-                select(AutomationRun)
-                .where(AutomationRun.automation_id == automation_id)
-                .order_by(AutomationRun.created_at.desc(), AutomationRun.id.desc())
-                .offset((page - 1) * page_size)
-                .limit(page_size + 1)
-            )
-        ).all()
+    statement = (
+        select(AutomationRun)
+        .where(AutomationRun.automation_id == automation_id)
+        .order_by(AutomationRun.created_at.desc(), AutomationRun.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size + 1)
     )
+    if summary:
+        statement = statement.options(load_only(
+            AutomationRun.id, AutomationRun.automation_id, AutomationRun.status,
+            AutomationRun.trigger, AutomationRun.automation_revision,
+            AutomationRun.scheduled_for, AutomationRun.created_at,
+            AutomationRun.started_at, AutomationRun.completed_at,
+            AutomationRun.delivery_status, AutomationRun.delivery_attempts,
+            AutomationRun.delivery_next_attempt_at,
+            raiseload=True,
+        ))
+    rows = list((await db.scalars(statement)).all())
+    if summary:
+        return AutomationRunSummaryListResponse(
+            items=[
+                AutomationRunSummaryResponse(
+                    id=run.id,
+                    automationId=run.automation_id,
+                    status=run.status,
+                    trigger=run.trigger,
+                    automationRevision=run.automation_revision,
+                    scheduledFor=run.scheduled_for,
+                    createdAt=run.created_at,
+                    startedAt=run.started_at,
+                    completedAt=run.completed_at,
+                    delivery=AutomationRunDeliverySummary(
+                        status=run.delivery_status,
+                        attempts=run.delivery_attempts,
+                        nextAttemptAt=run.delivery_next_attempt_at,
+                    ),
+                )
+                for run in rows[:page_size]
+            ],
+            page=page,
+            hasMore=len(rows) > page_size,
+        )
     return {
         "items": [await _run_payload(db, run) for run in rows[:page_size]],
         "page": page,
