@@ -298,7 +298,7 @@ it('waits for persisted tab creation and resumes after a failed optimistic remov
   expect(store.attached).toBe(true)
 })
 
-it('keeps native pending editing enabled, forwards Enter and Ctrl+C, and stops the run only by button', async () => {
+it('keeps native pending editing enabled and forwards Enter and Ctrl+C without stopping the run', async () => {
   useChatStore().running = true
   useChatStore().current.currentDirectory = '/session/workspace'
   socket.state({ attached: true, busy: true, state: 'editing', currentDirectory: '/terminal/cwd',
@@ -317,8 +317,7 @@ it('keeps native pending editing enabled, forwards Enter and Ctrl+C, and stops t
     { type: 'input', data: btoa('edit\r') }, { type: 'input', data: btoa('\x03') }
   ])
   expect(useChatStore().stop).not.toHaveBeenCalled()
-  ;[...root.querySelectorAll('button')].find((button) => button.textContent === 'Agent stoppen').click()
-  expect(useChatStore().stop).toHaveBeenCalledOnce()
+  expect(root.textContent).not.toContain('Agent stoppen')
   socket.state({ suspended: true })
   await nextTick()
   expect(xterm.options.disableStdin).toBe(true)

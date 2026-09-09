@@ -17,19 +17,6 @@
       >
         <q-tooltip>Agent-Befehle verwenden diese Shell. Die geltenden Freigaben bleiben unverändert.</q-tooltip>
       </q-toggle>
-      <q-btn
-        v-if="chat.running"
-        class="col-auto"
-        flat dense no-caps
-        color="negative"
-        icon="stop_circle"
-        label="Agent stoppen"
-        :loading="chat.stopping"
-        :disable="chat.stopping || terminal.status === 'replaced'"
-        @click="stopAgent"
-      >
-        <q-tooltip>Den gesamten Agent-Lauf stoppen, nicht nur den Vordergrundprozess.</q-tooltip>
-      </q-btn>
     </div>
   </div>
 </template>
@@ -52,9 +39,5 @@ const connectionDisabled = computed(() => !terminal.inputEnabled
 function toggleAttachment(attached) {
   if (attached) terminal.attach()
   else terminal.detach()
-}
-
-function stopAgent() {
-  if (chat.running && !chat.stopping && terminal.status !== 'replaced') void chat.stop()
 }
 </script>
