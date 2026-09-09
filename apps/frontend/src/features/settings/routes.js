@@ -85,12 +85,12 @@ export const settingsRoutes = [
       {
         path: ':automationId/edit',
         name: 'settings-automation-edit',
-        component: () => import('pages/settings/AutomationEditorPage.vue')
+        redirect: (to) => ({ name: 'settings-automation-detail', params: to.params, query: to.query })
       },
       {
         path: ':automationId',
         name: 'settings-automation-detail',
-        component: () => import('pages/settings/AutomationDetailPage.vue')
+        component: () => import('pages/settings/AutomationEditorPage.vue')
       }
     ]
   },

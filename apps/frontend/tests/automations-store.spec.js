@@ -35,7 +35,7 @@ describe('automation store', () => {
     resolveFirst({ data: { items: [{ id: 'old' }] } })
     await first
 
-    expect(api.get).toHaveBeenCalledWith('/automations', { params: { archived: false } })
+    expect(api.get).toHaveBeenCalledWith('/automations', { params: { archived: false, summary: true } })
     expect(store.items).toEqual([automation])
     expect(store.loading).toBe(false)
   })
@@ -46,7 +46,7 @@ describe('automation store', () => {
 
     await store.fetchAutomations({ archived: true })
 
-    expect(api.get).toHaveBeenCalledWith('/automations', { params: { archived: true } })
+    expect(api.get).toHaveBeenCalledWith('/automations', { params: { archived: true, summary: true } })
     expect(store.items[0].archivedAt).toBeTruthy()
   })
 
@@ -56,7 +56,7 @@ describe('automation store', () => {
 
     await store.fetchAutomation(automation.id)
 
-    expect(api.get).toHaveBeenCalledWith('/automations/automation-1')
+    expect(api.get).toHaveBeenCalledWith('/automations/automation-1', { params: { includeHistory: false } })
     expect(store.detail).toEqual(automation)
   })
 
@@ -99,7 +99,7 @@ describe('automation store', () => {
     await store.fetchRuns(automation.id, 2)
 
     expect(api.get).toHaveBeenNthCalledWith(1, '/automations/automation-1/runs', {
-      params: { page: 1, pageSize: 20 }
+      params: { page: 1, pageSize: 20, summary: true }
     })
     expect(store.runs.map((item) => item.id)).toEqual(['run-1', 'run-2'])
     expect(store.page).toBe(2)
@@ -122,6 +122,40 @@ describe('automation store', () => {
     expect(api.post).toHaveBeenCalledWith('/automations/automation-1/runs', { expectedRevision: 1 })
     expect(store.runs).toEqual([run])
     expect(store.items[0].effectiveState.activeRunStatus).toBe('queued')
+  })
+
+  it('keeps live status separate from the editing definition and invalidates late responses', async () => {
+    const store = useAutomationStore()
+    store.detail = automation
+    api.get.mockResolvedValueOnce({ data: { ...automation, revision: 2 } })
+    await store.fetchAutomationStatus(automation.id)
+    expect(api.get).toHaveBeenLastCalledWith('/automations/automation-1/status', {})
+    expect(store.status.revision).toBe(2)
+    expect(store.detail.revision).toBe(1)
+    let resolveStatus
+    api.get.mockReturnValueOnce(new Promise((resolve) => { resolveStatus = resolve }))
+    const request = store.fetchAutomationStatus(automation.id)
+    store.clearDetail()
+    resolveStatus({ data: automation })
+    await request
+    expect(store.status).toBeNull()
+    expect(store.detail).toBeNull()
+  })
+
+  it('updates first-page pagination on refresh while retaining already loaded later pages', async () => {
+    const store = useAutomationStore()
+    api.get.mockResolvedValueOnce({ data: { items: [run], page: 1, hasMore: false } })
+    await store.fetchRuns(automation.id)
+    api.get.mockResolvedValueOnce({ data: { items: [run], page: 1, hasMore: true } })
+    await store.fetchRuns(automation.id, 1, { preserveLoaded: true })
+    expect(store.hasMore).toBe(true)
+    api.get.mockResolvedValueOnce({ data: { items: [{ ...run, id: 'older' }], page: 2, hasMore: false } })
+    await store.fetchRuns(automation.id, 2)
+    api.get.mockResolvedValueOnce({ data: { items: [run], page: 1, hasMore: true } })
+    await store.fetchRuns(automation.id, 1, { preserveLoaded: true })
+    expect(store.runs.map((item) => item.id)).toEqual(['run-1', 'older'])
+    expect(store.page).toBe(2)
+    expect(store.hasMore).toBe(false)
   })
 
   it('loads a run and retries failed delivery', async () => {

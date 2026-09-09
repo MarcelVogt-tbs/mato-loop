@@ -1,8 +1,23 @@
 import { describe, expect, it } from 'vitest'
+import { createMemoryHistory, createRouter } from 'vue-router'
 
 import routes, { settingsRoutes } from '../src/router/routes'
 
 describe('MatoLoop frontend scaffold', () => {
+  it('routes legacy automation editing and exact-run links to the shared page', async () => {
+    const automation = settingsRoutes.find((route) => route.name === 'settings-automations')
+    const component = { render: () => null }
+    const router = createRouter({ history: createMemoryHistory(), routes: [{
+      ...automation, path: '/settings/automations', component,
+      children: automation.children.map((route) => ({ ...route, component }))
+    }] })
+    expect(router.resolve('/settings/automations/new').name).toBe('settings-automation-create')
+    await router.push('/settings/automations/automation-1/edit?run=run-1')
+    expect(router.currentRoute.value.name).toBe('settings-automation-detail')
+    expect(router.currentRoute.value.path).toBe('/settings/automations/automation-1')
+    expect(router.currentRoute.value.query).toEqual({ run: 'run-1' })
+  })
+
   it('exposes chat and the complete settings navigation', () => {
     const appRoute = routes.find((route) => Array.isArray(route.children))
     const routeNames = appRoute.children.map((route) => route.name)

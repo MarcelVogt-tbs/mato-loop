@@ -1,113 +1,59 @@
 <template>
-  <router-view v-if="showSubpage" />
+  <router-view v-if="!listVisible" />
   <section v-else>
     <header class="settings-section-header">
       <div>
-        <h2 class="text-h6 text-weight-bold q-my-none">Automationen</h2>
-        <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Agent-Aufträge mit einmaligen oder wiederkehrenden Zeitplänen und eigener Laufhistorie verwalten.
-        </p>
+        <h2 class="text-h6 q-my-none">Automationen</h2>
+        <p class="text-body2 app-muted q-mb-none q-mt-xs">Aufträge manuell oder nach Zeitplan ausführen.</p>
       </div>
-      <div class="row items-center q-gutter-sm wrap">
-        <q-toggle v-model="showArchived" color="primary" label="Archiv anzeigen" />
-        <q-btn
-          v-if="!showArchived"
-          unelevated
-          no-caps
-          color="primary"
-          icon="add"
-          label="Automation erstellen"
-          :to="{ name: 'settings-automation-create' }"
-        />
-      </div>
+      <q-btn unelevated no-caps no-wrap color="primary" icon="add" label="Automation erstellen" :to="{ name: 'settings-automation-create' }" />
     </header>
-
-    <q-banner v-if="loadFailed" rounded class="bg-negative text-white q-mb-md">
-      <template #avatar><q-icon name="error_outline" /></template>
+    <q-tabs v-model="listTab" dense no-caps align="left" active-color="primary" indicator-color="primary">
+      <q-tab name="current" label="Automationen" />
+      <q-tab name="archive" label="Archiv" />
+    </q-tabs>
+    <q-separator />
+    <q-banner v-if="loadFailed" class="bg-negative text-white q-mt-md">
       Die Automationen konnten nicht geladen werden.
       <template #action><q-btn flat no-caps color="white" label="Erneut laden" @click="loadAutomations" /></template>
     </q-banner>
-
-    <q-card v-if="automations.loading && !loaded" flat class="app-surface text-center q-pa-xl">
-      <q-spinner color="primary" size="36px" />
-      <div class="app-muted q-mt-sm">Automationen werden geladen ...</div>
-    </q-card>
-    <q-card v-else-if="loaded && !automations.items.length" flat class="app-surface q-pa-xl">
-      <AppStateMessage
-        icon="schedule"
-        :title="showArchived ? 'Keine archivierten Automationen' : 'Noch keine Automationen'"
-        :description="!showArchived ? 'Erstelle einen Auftrag mit mindestens einem Zeitplan.' : ''"
-      />
-    </q-card>
-    <div v-else class="row q-col-gutter-md">
-      <div v-for="automation in automations.items" :key="automation.id" class="col-12">
-        <q-card flat class="app-surface full-height column">
-          <q-card-section class="row items-start no-wrap q-gutter-md">
-            <q-avatar :color="automation.effectiveState?.enabled ? 'primary' : 'grey-6'" text-color="white" icon="schedule" />
-            <div class="col">
-              <div class="row items-center q-gutter-sm">
-                <div class="text-subtitle1 text-weight-bold">{{ automation.name }}</div>
-                <q-chip dense :color="stateColor(automation)" :text-color="statusTextColor(stateColor(automation))">{{ stateLabel(automation) }}</q-chip>
-              </div>
-              <div class="text-body2 app-muted q-mt-xs text-pre-wrap ellipsis-3-lines">{{ automation.task }}</div>
-            </div>
-          </q-card-section>
-          <q-card-section class="q-pt-none row q-col-gutter-sm">
-            <div class="col-12 col-sm-6">
-              <div class="text-caption app-muted">Zeitpläne</div>
-              <div class="text-body2">{{ automation.schedules.length }} · {{ activeScheduleCount(automation) }} aktiv</div>
-            </div>
-            <div class="col-12 col-sm-6">
-              <div class="text-caption app-muted">Nächster Lauf</div>
-              <div class="text-body2">{{ automation.archivedAt ? `Archiviert am ${formatDate(automation.archivedAt)}` : automation.enabled ? formatDate(automation.effectiveState?.nextRunAt) || 'Nicht geplant' : 'Pausiert' }}</div>
-            </div>
-          </q-card-section>
-          <q-space />
-          <q-separator />
-          <q-card-actions align="right" class="q-pa-sm">
-            <q-btn
-              v-if="!automation.archivedAt"
-              flat
-              no-caps
-              icon="play_arrow"
-              label="Jetzt ausführen"
-              :loading="runningId === automation.id"
-              :disable="Boolean(activeStatus(automation)) || Boolean(runningId)"
-              @click="runNow(automation)"
-            >
-              <q-tooltip v-if="activeStatus(automation)">Es läuft bereits ein Auftrag.</q-tooltip>
+    <div v-if="automations.loading && !loaded" class="text-center q-pa-lg">
+      <q-spinner color="primary" size="24px" aria-label="Automationen werden geladen" />
+    </div>
+    <p v-else-if="loaded && !automations.items.length" class="text-body2 app-muted q-py-md">
+      {{ showArchived ? 'Keine archivierten Automationen.' : 'Noch keine Automationen. Erstelle deinen ersten Auftrag.' }}
+    </p>
+    <q-list v-else separator>
+      <q-item v-for="automation in automations.items" :key="automation.id" clickable role="link" :aria-label="`${automation.name} öffnen`" class="q-py-md" @click="router.push({ name: 'settings-automation-detail', params: { automationId: automation.id } })">
+        <q-item-section>
+          <q-item-label class="text-weight-medium automation-name">{{ automation.name }}</q-item-label>
+          <q-item-label caption lines="1" class="q-mt-xs">{{ automation.taskExcerpt ?? automation.task }}</q-item-label>
+          <q-item-label caption class="q-mt-xs">
+            <q-icon :name="automationStatus(automation).icon" :color="automationStatus(automation).color" class="q-mr-xs" />{{ automationStatus(automation).label }}
+            <span v-if="automation.effectiveState?.activeRunStatus || (automation.enabled && automation.effectiveState?.nextRunAt) || automation.archivedAt"> · {{ automationTiming(automation) }}</span>
+          </q-item-label>
+        </q-item-section>
+        <q-item-section side top @click.stop @keydown.stop @keyup.stop>
+          <div class="row no-wrap q-gutter-xs">
+            <q-btn v-if="!automation.archivedAt" flat round dense icon="play_arrow" :aria-label="`${automation.name} jetzt ausführen`" :loading="runningId === automation.id" :disable="Boolean(automation.effectiveState?.activeRunStatus) || Boolean(runningId)" @click="runNow(automation)">
+              <q-tooltip>{{ automation.effectiveState?.activeRunStatus ? 'Es läuft bereits ein Auftrag.' : 'Jetzt ausführen' }}</q-tooltip>
             </q-btn>
-            <q-btn
-              flat
-              no-caps
-              icon="history"
-              label="Details/Verlauf"
-              :to="{ name: 'settings-automation-detail', params: { automationId: automation.id } }"
-            />
-            <q-btn flat round icon="more_vert" :aria-label="`Aktionen für ${automation.name}`">
-              <q-menu class="app-action-menu">
-                <q-list padding>
-                  <q-item
-                    v-if="!automation.archivedAt"
-                    clickable
-                    v-ripple
-                    v-close-popup
-                    :to="{ name: 'settings-automation-edit', params: { automationId: automation.id } }"
-                  >
-                    <q-item-section avatar><q-icon name="edit" /></q-item-section>
-                    <q-item-section>Bearbeiten</q-item-section>
+            <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${automation.name}`">
+              <q-menu>
+                <q-list>
+                  <q-item clickable v-close-popup :to="{ name: 'settings-automation-detail', params: { automationId: automation.id } }">
+                    <q-item-section>Öffnen</q-item-section>
                   </q-item>
-                  <q-item clickable v-ripple v-close-popup class="text-negative" @click="removeAutomation(automation)">
-                    <q-item-section avatar><q-icon name="delete_outline" /></q-item-section>
+                  <q-item clickable v-close-popup class="text-negative" @click="removeAutomation(automation)">
                     <q-item-section>Löschen</q-item-section>
                   </q-item>
                 </q-list>
               </q-menu>
             </q-btn>
-          </q-card-actions>
-        </q-card>
-      </div>
-    </div>
+          </div>
+        </q-item-section>
+      </q-item>
+    </q-list>
   </section>
 </template>
 
@@ -115,14 +61,11 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
-import AppStateMessage from 'components/AppStateMessage.vue'
 import { useConfirm } from 'src/composables/confirm'
-import { formatAbsoluteDateTime } from 'src/utils/date-time'
+import { automationStatus, automationTiming } from 'src/utils/automation-status'
 import { useAutomationStore } from 'stores/automations'
 
 defineOptions({ name: 'AutomationSettingsPage' })
-
-const ACTIVE_STATUSES = new Set(['queued', 'running', 'waiting_approval', 'waiting_input'])
 const $q = useQuasar()
 const route = useRoute()
 const router = useRouter()
@@ -130,32 +73,32 @@ const { confirm } = useConfirm()
 const automations = useAutomationStore()
 const loaded = ref(false)
 const loadFailed = ref(false)
-const showArchived = ref(false)
+const listTab = ref('current')
+const showArchived = computed(() => listTab.value === 'archive')
 const runningId = ref(null)
-let refreshTimer = null
+let refreshTimer
 let refreshPending = false
+let alive = true
 
-const legacyAutomationId = computed(() => route.name === 'settings-automations' ? route.query.automation : null)
+const legacyAutomationId = computed(() => route.name === 'settings-automations' ? [route.query.automation].flat()[0] : null)
 const listVisible = computed(() => route.name === 'settings-automations' && !legacyAutomationId.value)
-const showSubpage = computed(() => !listVisible.value)
 
-async function loadAutomations() {
-  loadFailed.value = false
+async function loadAutomations(background = false) {
+  if (!listVisible.value || (background && (refreshPending || document.visibilityState !== 'visible'))) return
+  refreshPending = true
   try {
-    await automations.fetchAutomations({ archived: showArchived.value })
+    await automations.fetchAutomations({ archived: showArchived.value, suppressErrorToast: background })
     loaded.value = true
+    loadFailed.value = false
   } catch {
-    loadFailed.value = true
+    if (!background) loadFailed.value = true
+  } finally {
+    refreshPending = false
   }
 }
 
 async function removeAutomation(automation) {
-  const accepted = await confirm(
-    `Soll die Automation „${automation.name}“ samt Laufhistorie dauerhaft gelöscht werden?`,
-    'Automation löschen?',
-    { okLabel: 'Löschen', okColor: 'negative' }
-  )
-  if (!accepted) return
+  if (!await confirm(`Soll die Automation „${automation.name}“ samt Laufhistorie dauerhaft gelöscht werden?`, 'Automation löschen?', { okLabel: 'Löschen', okColor: 'negative' })) return
   try {
     await automations.deleteAutomation(automation.id, automation.revision)
     $q.notify({ type: 'positive', message: 'Automation gelöscht' })
@@ -165,15 +108,11 @@ async function removeAutomation(automation) {
 }
 
 async function runNow(automation) {
+  if (runningId.value || automation.archivedAt || automation.effectiveState?.activeRunStatus) return
   runningId.value = automation.id
   try {
     const run = await automations.runNow(automation.id, automation.revision)
-    $q.notify({ type: 'positive', message: 'Automation wurde gestartet' })
-    await router.push({
-      name: 'settings-automation-detail',
-      params: { automationId: automation.id },
-      query: { run: run.id }
-    })
+    if (alive && listVisible.value) await router.push({ name: 'settings-automation-detail', params: { automationId: automation.id }, query: { run: run.id } })
   } catch {
     // The central Axios interceptor displays the error.
   } finally {
@@ -181,94 +120,28 @@ async function runNow(automation) {
   }
 }
 
-function activeStatus(automation) {
-  const status = automation.effectiveState?.activeRunStatus
-  return ACTIVE_STATUSES.has(status) ? status : null
-}
+function refresh() { void loadAutomations(true) }
 
-function stateLabel(automation) {
-  if (automation.archivedAt) return 'Archiviert'
-  return activeStatus(automation)
-    ? runStatus(activeStatus(automation)).label
-    : automation.effectiveState?.enabled ? 'Aktiv' : automation.enabled ? 'Nicht geplant' : 'Pausiert'
-}
-
-function stateColor(automation) {
-  return activeStatus(automation) ? runStatus(activeStatus(automation)).color : automation.effectiveState?.enabled ? 'positive' : 'grey-6'
-}
-
-function runStatus(status) {
-  return ({
-    queued: { label: 'Eingereiht', color: 'primary' },
-    running: { label: 'Läuft', color: 'primary' },
-    waiting_approval: { label: 'Wartet auf Freigabe', color: 'warning' },
-    waiting_input: { label: 'Wartet auf Eingabe', color: 'warning' }
-  })[status] || { label: status || 'Unbekannt', color: 'grey-7' }
-}
-
-function activeScheduleCount(automation) {
-  return automation.enabled ? automation.schedules.filter((schedule) => schedule.enabled).length : 0
-}
-
-function statusTextColor(color) {
-  return ['positive', 'warning'].includes(color) ? 'dark' : 'white'
-}
-
-function formatDate(value) {
-  return formatAbsoluteDateTime(value)
-}
-
-async function refreshAutomationState() {
-  if (refreshPending || !listVisible.value) return
-  refreshPending = true
-  try {
-    await automations.fetchAutomations({ archived: showArchived.value, suppressErrorToast: true })
-    loaded.value = true
-    loadFailed.value = false
-  } catch {
-    // Background refresh keeps the last canonical state and retries later.
-  } finally {
-    refreshPending = false
-  }
-}
-
-function stopRefresh() {
+watch([listVisible, legacyAutomationId, showArchived], () => {
   window.clearInterval(refreshTimer)
-  refreshTimer = null
-}
+  if (legacyAutomationId.value) {
+    const run = [route.query.run].flat()[0]
+    void router.replace({ name: 'settings-automation-detail', params: { automationId: legacyAutomationId.value }, query: run ? { run } : {} })
+  } else if (listVisible.value) {
+    loaded.value = false
+    void loadAutomations()
+    refreshTimer = window.setInterval(refresh, 5000)
+  }
+}, { immediate: true })
 
-function activateList() {
-  void loadAutomations()
-  if (!refreshTimer) refreshTimer = window.setInterval(refreshAutomationState, 5000)
-}
-
-function redirectLegacyDetail() {
-  const automationId = Array.isArray(legacyAutomationId.value) ? legacyAutomationId.value[0] : legacyAutomationId.value
-  if (!automationId) return false
-  const runValue = Array.isArray(route.query.run) ? route.query.run[0] : route.query.run
-  stopRefresh()
-  void router.replace({
-    name: 'settings-automation-detail',
-    params: { automationId },
-    ...(runValue ? { query: { run: runValue } } : {})
-  })
-  return true
-}
-
-watch(showArchived, () => {
-  if (!listVisible.value) return
-  loaded.value = false
-  void loadAutomations()
+onMounted(() => document.addEventListener('visibilitychange', refresh))
+onBeforeUnmount(() => {
+  alive = false
+  window.clearInterval(refreshTimer)
+  document.removeEventListener('visibilitychange', refresh)
 })
-
-watch(listVisible, (visible) => {
-  if (redirectLegacyDetail()) return
-  if (visible) activateList()
-  else stopRefresh()
-})
-
-onMounted(() => {
-  if (!redirectLegacyDetail() && listVisible.value) activateList()
-})
-onBeforeUnmount(stopRefresh)
 </script>
+
+<style scoped>
+.automation-name { overflow-wrap: anywhere; }
+</style>

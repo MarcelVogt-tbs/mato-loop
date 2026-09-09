@@ -7,6 +7,8 @@ export const useAutomationStore = defineStore('automations', {
   state: () => ({
     items: [],
     detail: null,
+    status: null,
+    statusRevision: 0,
     runs: [],
     selectedRun: null,
     page: 0,
@@ -27,8 +29,8 @@ export const useAutomationStore = defineStore('automations', {
       this.loading = true
       try {
         const { data } = await (suppressErrorToast
-          ? api.get('/automations', { params: { archived }, suppressErrorToast: true })
-          : api.get('/automations', { params: { archived } }))
+          ? api.get('/automations', { params: { archived, summary: true }, suppressErrorToast: true })
+          : api.get('/automations', { params: { archived, summary: true } }))
         if (revision === this.listRevision) this.items = data.items
         return data
       } finally {
@@ -40,13 +42,21 @@ export const useAutomationStore = defineStore('automations', {
       this.loadingDetail = true
       try {
         const { data } = await (suppressErrorToast
-          ? api.get(`/automations/${id}`, { suppressErrorToast: true })
-          : api.get(`/automations/${id}`))
+          ? api.get(`/automations/${id}`, { params: { includeHistory: false }, suppressErrorToast: true })
+          : api.get(`/automations/${id}`, { params: { includeHistory: false } }))
         if (revision === this.detailRevision) this.detail = data
         return data
       } finally {
         if (revision === this.detailRevision) this.loadingDetail = false
       }
+    },
+    async fetchAutomationStatus(id, { suppressErrorToast = false } = {}) {
+      const revision = ++this.statusRevision
+      const { data } = await api.get(`/automations/${id}/status`, {
+        ...(suppressErrorToast ? { suppressErrorToast: true } : {})
+      })
+      if (revision === this.statusRevision) this.status = data
+      return data
     },
     async createAutomation(payload) {
       const { data } = await api.post('/automations', payload)
@@ -56,6 +66,8 @@ export const useAutomationStore = defineStore('automations', {
       this.loadingDetail = false
       this.items = [data, ...this.items.filter((item) => item.id !== data.id)]
       this.detail = data
+      this.statusRevision += 1
+      this.status = null
       return data
     },
     async updateAutomation(id, payload) {
@@ -67,6 +79,8 @@ export const useAutomationStore = defineStore('automations', {
       const index = this.items.findIndex((item) => item.id === id)
       if (index >= 0) this.items[index] = data
       this.detail = data
+      this.statusRevision += 1
+      this.status = null
       return data
     },
     async deleteAutomation(id, expectedRevision) {
@@ -77,13 +91,17 @@ export const useAutomationStore = defineStore('automations', {
       this.loadingDetail = false
       this.items = this.items.filter((item) => item.id !== id)
       if (this.detail?.id === id) this.detail = null
+      if (this.status?.id === id) {
+        this.statusRevision += 1
+        this.status = null
+      }
     },
     async fetchRuns(id, page = 1, { suppressErrorToast = false, preserveLoaded = false } = {}) {
       const revision = page === 1 ? ++this.runsRevision : this.runsRevision
       this.loadingRuns = true
       try {
         const { data } = await api.get(`/automations/${id}/runs`, {
-          params: { page, pageSize: PAGE_SIZE },
+          params: { page, pageSize: PAGE_SIZE, summary: true },
           ...(suppressErrorToast ? { suppressErrorToast: true } : {})
         })
         if (revision !== this.runsRevision) return data
@@ -93,7 +111,7 @@ export const useAutomationStore = defineStore('automations', {
             : data.items
           : [...this.runs, ...data.items.filter((run) => !this.runs.some((item) => item.id === run.id))]
         this.page = preserveLoaded ? Math.max(this.page, data.page) : data.page
-        if (!preserveLoaded) this.hasMore = data.hasMore
+        if (!preserveLoaded || this.page === 1) this.hasMore = data.hasMore
         return data
       } finally {
         if (revision === this.runsRevision) this.loadingRuns = false
@@ -134,6 +152,8 @@ export const useAutomationStore = defineStore('automations', {
       return data
     },
     clearDetail() {
+      this.statusRevision += 1
+      this.status = null
       this.detailRevision += 1
       this.runsRevision += 1
       this.runDetailRevision += 1
