@@ -131,10 +131,15 @@ services:
       context: ./apps/matoloop-agent
       dockerfile: Dockerfile.dev
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    shm_size: 256mb
     security_opt:
       - no-new-privileges:true
+      - seccomp:./apps/matoloop-agent/docker/browser-seccomp.json
     environment:
       UV_PROJECT_ENVIRONMENT: /opt/matoloop-agent/venv
+      MATOLOOP_AGENT_CONTAINER: "1"
       UV_CACHE_DIR: /opt/matoloop-agent/uv-cache
       MATOLOOP_AGENT_BACKEND_URL: ws://backend:${MATO_LOOP_BIND_BACKEND_PORT:-6020}/api/execution-agents/connect
       MATOLOOP_AGENT_ID: ${MATOLOOP_AGENT_ID:-}

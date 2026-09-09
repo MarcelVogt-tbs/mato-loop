@@ -104,7 +104,9 @@ The following command deletes containers and all development named volumes, incl
 
 ## Production Preparation
 
-`docker-compose.yaml` prepares a combined MatoLoop container, PostgreSQL with pgvector, an internal Infinity CPU service, and a MatoLoop Agent. The prepared `matoloop-agent` image includes OpenSCAD for CAD rendering. `docker-compose.no-agent.yaml` is the production stack without a MatoLoop Agent; use `--remove-orphans` when switching an existing deployment to it. Published images currently target `linux/amd64` only.
+`docker-compose.yaml` prepares a combined MatoLoop container, PostgreSQL with pgvector, an internal Infinity CPU service, and a MatoLoop Agent. The prepared `matoloop-agent` image includes OpenSCAD for CAD rendering and headed Chromium for the optional Browser integration. `docker-compose.no-agent.yaml` is the production stack without a MatoLoop Agent; use `--remove-orphans` when switching an existing deployment to it. Published images currently target `linux/amd64` only.
+
+When copying the production configuration, include `apps/matoloop-agent/docker/browser-seccomp.json` at that same relative path beside `docker-compose.yaml` and `.env`. Compose requires this companion security profile; the host must also permit Chromium's unprivileged user-namespace sandbox. See [Browser architecture and operations](docs/browser.md) before enabling the integration.
 
 Copy `.env.example` to `.env`, replace the database password and both image placeholders, and use the same immutable Forgejo CI tag in `MATO_LOOP_IMAGE` and `MATOLOOP_AGENT_IMAGE`. Development publications use `sha-` followed by the first 12 characters of the Git commit ID. Then authenticate to the registry when required and start the stack:
 

@@ -39,8 +39,12 @@ vi.mock('stores/agent-identity', () => ({ useAgentIdentityStore: () => ({ fetchI
 vi.mock('stores/in-app-notifications', () => ({ useInAppNotificationStore: () => ({
   unreadCount: 0, fetchLatest: vi.fn().mockResolvedValue(), reconcilePush: vi.fn().mockResolvedValue()
 }) }))
-vi.mock('stores/control-center', () => ({ useControlCenterStore: () => ({ open: false, tabs: [] }) }))
+vi.mock('stores/control-center', () => ({ useControlCenterStore: () => ({ sessionId: null, open: false, tabs: [], confirmedState: { tabs: [] } }) }))
 vi.mock('stores/terminal', () => ({ useTerminalStore: () => terminal }))
+vi.mock('stores/browser', () => ({ useBrowserStore: () => ({ syncContext: vi.fn(), release: vi.fn() }) }))
+vi.mock('stores/integrations', () => ({ useIntegrationStore: () => ({
+  fetchCatalog: vi.fn().mockResolvedValue(), fetchBrowser: vi.fn().mockResolvedValue()
+}) }))
 vi.mock('stores/auth', () => ({ useAuthStore: () => ({ username: 'Tester' }) }))
 vi.mock('stores/automations', () => ({ useAutomationStore: () => ({}) }))
 vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({}) }))

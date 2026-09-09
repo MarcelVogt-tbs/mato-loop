@@ -5,6 +5,8 @@ from mato_loop_backend.api.routes.agent_profiles import router as agent_profiles
 from mato_loop_backend.api.routes.approvals import router as approvals_router
 from mato_loop_backend.api.routes.auth import router as auth_router
 from mato_loop_backend.api.routes.automations import router as automations_router
+from mato_loop_backend.api.routes.browser_integrations import router as browser_integrations_router
+from mato_loop_backend.api.routes.browsers import router as browsers_router
 from mato_loop_backend.api.routes.channels import router as channels_router
 from mato_loop_backend.api.routes.execution_agents import router as execution_agents_router
 from mato_loop_backend.api.routes.health import router as health_router
@@ -41,6 +43,8 @@ api_router.include_router(providers_router, tags=["providers"])
 api_router.include_router(projects_router, tags=["projects"])
 api_router.include_router(project_coding_router, tags=["project-coding"])
 api_router.include_router(integrations_router, tags=["integrations"])
+api_router.include_router(browser_integrations_router, tags=["integrations"])
+api_router.include_router(browsers_router, tags=["browsers"])
 api_router.include_router(mail_router, tags=["mail"])
 api_router.include_router(memories_router, tags=["memories"])
 api_router.include_router(notifications_router, tags=["notifications"])

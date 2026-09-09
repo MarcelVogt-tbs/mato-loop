@@ -49,7 +49,7 @@
               :rules="[requiredRule]"
             />
             <q-input
-              v-if="!['openscad', 'mail'].includes(form.integration_type)"
+              v-if="!['openscad', 'mail', 'browser'].includes(form.integration_type)"
               v-model="form.base_url"
               outlined
               :label="baseUrlLabel"
@@ -92,7 +92,7 @@
               <template #avatar><q-icon name="warning_amber" color="warning" /></template>
               HTTP überträgt Zugangsdaten unverschlüsselt. Verwende es nur in einem vertrauenswürdigen lokalen Netz.
             </q-banner>
-            <div v-if="form.integration_type === 'openscad'" class="row items-start q-col-gutter-sm">
+            <div v-if="['openscad', 'browser'].includes(form.integration_type)" class="row items-start q-col-gutter-sm">
               <q-select
                 v-model="form.executionAgentId"
                 class="col"
@@ -113,7 +113,7 @@
                   </q-item>
                 </template>
               </q-select>
-              <div class="col-auto q-pt-sm">
+              <div v-if="form.integration_type === 'openscad'" class="col-auto q-pt-sm">
                 <q-btn
                   outline
                   dense
@@ -221,6 +221,11 @@
               :rules="isEditing ? [tokenPairRule] : [requiredRule]"
             />
             <q-toggle v-model="form.enabled" color="primary" label="Integration aktivieren" />
+            <template v-if="form.integration_type === 'browser'">
+              <p class="text-caption app-muted">Ein dauerhaftes Browserprofil pro Computer. Die Agent-Freigabe erfolgt in der Browser-App; die Integrationsauswahl im Agentenprofil bleibt maßgeblich.</p>
+              <q-btn v-if="integration?.id" outline no-caps icon="terminal" label="Browser einrichten / Status anzeigen" @click="setupOpen = true" />
+              <div v-else class="text-caption">Nach dem Speichern kannst du die Einrichtung öffnen.</div>
+            </template>
           </template>
         </q-card-section>
       </q-form>
@@ -240,6 +245,7 @@
       </q-card-actions>
     </q-card>
   </q-dialog>
+  <BrowserSetupDialog v-if="setupOpen && integration?.id" v-model="setupOpen" :integration-id="integration.id" />
 </template>
 
 <script setup>
@@ -247,6 +253,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
+import BrowserSetupDialog from 'components/BrowserSetupDialog.vue'
 
 defineOptions({ name: 'IntegrationConfigDialog' })
 
@@ -261,6 +268,7 @@ const integrations = useIntegrationStore()
 const executionAgents = useExecutionAgentStore()
 const formRef = ref(null)
 const saving = ref(false)
+const setupOpen = ref(false)
 const allIntegrationTypes = [
   { label: 'Websuche', value: 'search' },
   { label: 'Kalender & Aufgaben', value: 'calendar' },
@@ -268,7 +276,8 @@ const allIntegrationTypes = [
   { label: 'Wissensdatenbank', value: 'knowledge' },
   { label: 'Rezepte & Essensplanung', value: 'recipes' },
   { label: '3D-Modellierung', value: 'openscad' },
-  { label: 'Programmierung', value: 'coding' }
+  { label: 'Programmierung', value: 'coding' },
+  { label: 'Browser', value: 'browser' }
 ]
 const PROVIDER_DEFAULTS = {
   search: { provider: 'searxng', label: 'SearXNG', placeholder: 'https://search.example.com' },
@@ -277,7 +286,8 @@ const PROVIDER_DEFAULTS = {
   knowledge: { provider: 'bookstack', label: 'BookStack', placeholder: 'https://wiki.example.com' },
   recipes: { provider: 'mealie', label: 'Mealie', placeholder: 'http://mealie.example.com' },
   openscad: { provider: 'openscad', label: 'OpenSCAD', placeholder: '' },
-  coding: { provider: 'opencode', label: 'OpenCode', placeholder: 'http://localhost:4096' }
+  coding: { provider: 'opencode', label: 'OpenCode', placeholder: 'http://localhost:4096' },
+  browser: { provider: 'browser', label: 'Browser', placeholder: '' }
 }
 const integrationTypes = computed(() => allIntegrationTypes.filter((type) => {
   const adapterType = PROVIDER_DEFAULTS[type.value].provider
@@ -294,7 +304,7 @@ const baseUrlPlaceholder = computed(
   () => (PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).placeholder
 )
 const requiresHttps = computed(() => !['search', 'recipes', 'coding'].includes(form.integration_type))
-const dialogIcon = computed(() => ({ coding: 'code', mail: 'mail', openscad: 'view_in_ar' })[form.integration_type] || 'extension')
+const dialogIcon = computed(() => ({ coding: 'code', mail: 'mail', openscad: 'view_in_ar', browser: 'web' })[form.integration_type] || 'extension')
 const securityOptions = [
   { label: 'TLS', value: 'tls' },
   { label: 'STARTTLS', value: 'starttls' }
@@ -348,7 +358,7 @@ function selectIntegrationType(type) {
   form.name = preset.label
   if (type === 'coding' && !form.username) form.username = 'opencode'
   invalidateDiscovery()
-  if (type === 'openscad') void fetchComputers()
+  if (['openscad', 'browser'].includes(type)) void fetchComputers()
 }
 
 async function fetchComputers() {
@@ -437,6 +447,14 @@ async function save() {
   }
   saving.value = true
   try {
+    if (form.integration_type === 'browser') {
+      await integrations.saveBrowser(props.integration?.id, {
+        name: form.name.trim(), executionAgentId: form.executionAgentId, enabled: form.enabled, config: {}
+      })
+      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
+      close()
+      return
+    }
     if (form.integration_type === 'openscad') {
       const payload = {
         executionAgentId: form.executionAgentId,
@@ -518,6 +536,7 @@ async function save() {
 }
 
 function close() {
+  setupOpen.value = false
   invalidateDiscovery()
   emit('update:modelValue', false)
 }
@@ -553,6 +572,6 @@ watch([() => props.modelValue, () => props.integration?.id], ([open]) => {
     form.integration_type = integrationTypes.value[0].value
     selectIntegrationType(form.integration_type)
   }
-  if (form.integration_type === 'openscad') void fetchComputers()
+  if (['openscad', 'browser'].includes(form.integration_type)) void fetchComputers()
 })
 </script>

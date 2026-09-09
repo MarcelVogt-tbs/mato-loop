@@ -140,6 +140,12 @@ Session projects cross the backend boundary as bounded ZIP archives; computer pr
 
 The file browser keeps `.scad` editable as UTF-8 source and offers an explicit 3D view when a matching integration is connected. Binary STL files use a client-side interactive viewer with fixed byte and triangle limits, orbit, pan, zoom, and standard camera positions. Oversized models remain downloadable instead of being parsed in the browser.
 
+## Browser
+
+Browser is a personal-only, Linux agent-bound integration with one immutable instance assignment per owned MatoLoop Agent. It reuses global adapter availability, profile integration selection and trust-scoped `browser.read`/`browser.write` policies (both default to `auto` for private and public models; explicit policies remain effective). Its static model tool is offered only for the run-bound agent and a live viewer explicitly attached to that chat. Plan and Build exclude it by default unless enabled through the existing profile settings; manual browsing remains independent of model selection and approvals.
+
+Optional native setup runs only from the integration's dedicated interactive setup dialog using the fixed packaged script; agent images already contain the runtime. Persistent website profiles belong to the backend/agent/owner binding, not the chat. See [Browser architecture and operations](browser.md) for deployment requirements, the required Compose seccomp companion, viewer lifetime, clipboard/file transfers and the limits of action snapshot checks.
+
 ## Web Search
 
 For the model, `web_search` exposes only the `query` field. The host selects primary and fallback providers from the effective scoped integration settings; model arguments cannot override this choice. The no-key metasearch is always present in the tool-provider catalog as `no_key`, but it is not an integration. Every active SearXNG instance adds `searxng:<uuid>`. Display names are labels only; renaming does not change the stable tool identifier.

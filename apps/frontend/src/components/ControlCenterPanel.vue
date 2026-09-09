@@ -12,14 +12,20 @@
         :breakpoint="0"
         indicator-color="transparent"
         @update:model-value="activate"
-        @keydown.capture="navigateTabs"
       >
-        <div
+        <AppClosableTab
           v-for="tab in flexibleTabs"
           :key="tab.tabId"
-          class="control-center__tab-shell row items-stretch no-wrap"
+          :tab-id="`control-center-tab-${tab.tabId}`"
+          :name="tab.tabId"
+          :label="tabLabel(tab)"
+          :icon="content(tab.appId).icon"
+          :alert-icon="tab.appId === 'terminal' ? 'priority_high' : undefined"
+          :active="activeFlexibleTabId === tab.tabId"
+          :disable="controlCenter.saving || !controlCenter.ready"
+          :close-tooltip="tab.kind === 'file' ? 'Datei schließen' : 'App aus Session entfernen'"
+          class="control-center__tab-shell"
           :class="{
-            'control-center__tab-shell--active': controlCenter.activeAppId === tab.tabId && !controlCenter.activeGlobalSectionId,
             'control-center__tab--dragging': draggedIntegrationId === tab.tabId,
             'control-center__tab--drop-before': dropTarget?.appId === tab.tabId && !dropTarget.after,
             'control-center__tab--drop-after': dropTarget?.appId === tab.tabId && dropTarget.after
@@ -29,33 +35,8 @@
           @dragover.prevent="updateDropTarget($event, tab.tabId)"
           @drop.prevent="dropIntegration"
           @dragend="endDrag"
-        >
-          <q-tab
-            :id="`control-center-tab-${tab.tabId}`"
-            :name="tab.tabId"
-            :alert-icon="tab.appId === 'terminal' ? 'priority_high' : undefined"
-            :aria-label="tabLabel(tab)"
-            class="control-center__tab"
-            :disable="controlCenter.saving || !controlCenter.ready"
-          >
-            <q-icon :name="content(tab.appId).icon" size="20px" class="control-center__tab-icon" />
-            <span class="control-center__tab-label">{{ tabLabel(tab) }}</span>
-            <q-tooltip>{{ tabLabel(tab) }}</q-tooltip>
-          </q-tab>
-          <q-btn
-            flat
-            square
-            dense
-            icon="close"
-            class="control-center__tab-close"
-            :aria-label="`${tabLabel(tab)} schließen`"
-            :disable="controlCenter.saving || !controlCenter.ready"
-            @click.stop="closeTab(tab)"
-            @keydown.stop
-          >
-            <q-tooltip>{{ tab.kind === 'file' ? 'Datei schließen' : 'App aus Session entfernen' }}</q-tooltip>
-          </q-btn>
-        </div>
+          @close="closeTab(tab)"
+        />
 
         <q-btn
           v-if="launcherIntegrations.length"
@@ -239,8 +220,9 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { Notify } from 'quasar'
+import AppClosableTab from 'components/AppClosableTab.vue'
 import AppStateMessage from 'components/AppStateMessage.vue'
 import { useApprovalStore } from 'stores/approvals'
 import { useControlCenterStore } from 'stores/control-center'
@@ -251,6 +233,7 @@ import { useMailStore } from 'stores/mail'
 import { useChatStore } from 'stores/chat'
 import { useProjectStore } from 'stores/projects'
 import { useTerminalStore } from 'stores/terminal'
+import { useIntegrationStore } from 'stores/integrations'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
 import {
@@ -260,6 +243,7 @@ import {
 } from 'src/control-center/apps'
 import {
   codingControlCenterAvailable,
+  browserControlCenterAvailable,
   computerFilesControlCenterAvailable,
   mailControlCenterAvailable,
   terminalControlCenterState
@@ -278,6 +262,7 @@ const chat = useChatStore()
 const projects = useProjectStore()
 const executionAgents = useExecutionAgentStore()
 const terminal = useTerminalStore()
+const integrations = useIntegrationStore()
 const workspace = useWorkspaceStore()
 const draggedIntegrationId = ref(null)
 const dropTarget = ref(null)
@@ -287,12 +272,6 @@ const activeFlexibleTabId = computed(() => (
     ? null
     : controlCenter.activeAppId
 ))
-watch(activeFlexibleTabId, async (tabId) => {
-  if (!tabId) return
-  await nextTick()
-  document.getElementById(`control-center-tab-${tabId}`)?.parentElement
-    ?.querySelector('.control-center__tab-close')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-})
 const activeFooter = computed(() => (
   controlCenter.activeGlobalSectionId
     ? content(controlCenter.activeGlobalSectionId)?.footerComponent
@@ -309,6 +288,7 @@ const launcherIntegrations = computed(() => closedIntegrations.value.filter((ite
   && (item.id !== 'coding' || codingControlCenterAvailable(activeProject.value))
   && (item.id !== 'computer-files' || computerFilesControlCenterAvailable(chat.activeContext, executionAgents))
   && (item.id !== 'terminal' || terminalControlCenterState(chat.current, executionAgents).available)
+  && (item.id !== 'browser' || browserControlCenterAvailable(chat.current, executionAgents, integrations))
 )))
 function content(contentId) {
   return controlCenterContentsById.get(contentId)
@@ -317,7 +297,7 @@ function content(contentId) {
 function tabLabel(tab) {
   if (tab.kind === 'file') return tab.fileTarget.name
     + (tab.fileTarget.revision != null ? ` · Version ${tab.fileTarget.revision}` : '')
-  if (['terminal', 'computer-files'].includes(tab.appId)) {
+  if (['terminal', 'computer-files', 'browser'].includes(tab.appId)) {
     const agent = executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
     return agent?.alias ? `${content(tab.appId).label} · ${agent.alias}` : content(tab.appId).label
   }
@@ -329,19 +309,6 @@ function badge(appId) {
     ? approvals.pending.length + questions.pending.length + notifications.unreadCount
     : 0
   return count > 99 ? '99+' : count || null
-}
-
-function navigateTabs(event) {
-  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)
-    || !event.target.matches('.control-center__tab')) return
-  // Tab shells contain separate close buttons, so QTabs cannot traverse them itself.
-  const tabs = [...event.currentTarget.querySelectorAll('.control-center__tab:not([aria-disabled="true"])')]
-  const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
-    : tabs.indexOf(event.target) + (event.key === 'ArrowLeft' ? -1 : 1)
-  event.preventDefault()
-  event.stopPropagation()
-  tabs[index]?.focus({ preventScroll: true })
-  tabs[index]?.parentElement.scrollIntoView({ block: 'nearest', inline: 'nearest' })
 }
 
 async function closePanel() {

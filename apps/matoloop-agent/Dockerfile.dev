@@ -1,12 +1,20 @@
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y git openscad ripgrep xauth xvfb \
+    && apt-get install --no-install-recommends -y git openscad ripgrep xauth xvfb x11-xserver-utils x11-utils openbox x11vnc xclip \
         gcc libc6-dev bash-builtins libreadline-dev \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data /workspace /opt/matoloop-agent/venv /opt/matoloop-agent/uv-cache \
     && mv /usr/local/bin/uv /usr/local/bin/uv-real
 COPY --chmod=755 docker/uv /usr/local/bin/uv
+ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/lib/matoloop-agent/tools/browser \
+    MATOLOOP_AGENT_CONTAINER=1
+RUN uv venv /tmp/browser-build \
+    && uv pip install --python /tmp/browser-build/bin/python playwright==1.58.0 \
+    && /tmp/browser-build/bin/playwright install --with-deps --no-shell chromium \
+    && chmod -R a+rX /usr/local/lib/matoloop-agent/tools/browser \
+    && useradd --system --uid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin matoloop-browser \
+    && rm -rf /tmp/browser-build /var/lib/apt/lists/*
 COPY config.json /usr/share/matoloop-agent/config.json
 COPY --chmod=755 docker/entrypoint /usr/local/bin/matoloop-agent-entrypoint
 COPY build-native.sh /tmp/build-native.sh

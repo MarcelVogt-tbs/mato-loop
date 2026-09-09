@@ -481,7 +481,9 @@ def parse_inbound(data: str | bytes) -> Welcome | Request | Cancel:
 
 
 def validate_arguments(request: Request) -> StrictModel:
-    model = ARGUMENT_MODELS.get(request.operation)
+    from .browser_contracts import BROWSER_ARGUMENT_MODELS
+
+    model = ARGUMENT_MODELS.get(request.operation) or BROWSER_ARGUMENT_MODELS.get(request.operation)
     if model is None:
         raise ValueError("unsupported operation")
     return model.model_validate(request.arguments)

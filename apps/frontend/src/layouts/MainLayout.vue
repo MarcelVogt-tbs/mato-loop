@@ -547,8 +547,10 @@ import { useSearchStore } from 'stores/search'
 import { useProjectStore } from 'stores/projects'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useTerminalStore } from 'stores/terminal'
+import { useBrowserStore } from 'stores/browser'
+import { useIntegrationStore } from 'stores/integrations'
 import { useConfirm } from 'src/composables/confirm'
-import { terminalControlCenterState } from 'src/control-center/manifest'
+import { browserControlCenterAvailable, terminalControlCenterState } from 'src/control-center/manifest'
 import { notifyError } from 'src/utils/notifications'
 import { sessionSidebarStatus } from 'src/utils/session-groups'
 import { searchShortcutAction } from 'src/utils/search-shortcut'
@@ -568,6 +570,8 @@ const chat = useChatStore()
 const controlCenter = useControlCenterStore()
 const executionAgents = useExecutionAgentStore()
 const terminal = useTerminalStore()
+const browser = useBrowserStore()
+const integrations = useIntegrationStore()
 const workspace = useWorkspaceStore()
 const { confirm } = useConfirm()
 const approvals = useApprovalStore()
@@ -1196,6 +1200,19 @@ function preventDiscardOnUnload(event) {
   event.returnValue = ''
 }
 
+watch(() => route.name, (name) => {
+  if (name === 'chat') void Promise.allSettled([integrations.fetchCatalog(), integrations.fetchBrowser()])
+}, { immediate: true })
+
+watch(() => [
+  chat.current?.id, chat.current?.preferredExecutionAgentId,
+  browserControlCenterAvailable(chat.current, executionAgents, integrations, browser.integrationId),
+  controlCenter.sessionId === chat.current?.id && controlCenter.confirmedState.tabs.some((tab) => tab.appId === 'browser'),
+  route.name === 'chat' && routeSessionId.value === chat.current?.id
+], ([sessionId, agentId, available, tabPresent, onChatRoute]) => {
+  browser.syncContext({ sessionId, agentId, available, tabPresent, onChatRoute })
+}, { immediate: true, flush: 'sync' })
+
 watch(
   selectedProjectId,
   (projectId, previousProjectId) => {
@@ -1247,6 +1264,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleSearchShortcut)
   window.removeEventListener('beforeunload', preventDiscardOnUnload)
   terminal.release()
+  browser.release()
   document.removeEventListener('visibilitychange', refreshSessionsWhenVisible)
   window.removeEventListener('matoloop:service-worker-ready', refreshPushState)
   window.navigator.serviceWorker?.removeEventListener('message', handlePushMessage)

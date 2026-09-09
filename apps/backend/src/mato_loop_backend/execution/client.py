@@ -289,6 +289,21 @@ class SharedInspectResult(ExecutionResult):
 
 
 _REMOTE_ERROR_CODES = {
+    "browser.unavailable": "browser.unavailable",
+    "browser.notReady": "browser.notReady",
+    "browser.busy": "browser.busy",
+    "browser.notConnected": "browser.notConnected",
+    "browser.bindingChanged": "browser.bindingChanged",
+    "browser.setupFailed": "browser.setupFailed",
+    "browser.dependenciesMissing": "browser.dependenciesMissing",
+    "browser.unsupported": "browser.unsupported",
+    "browser.sandboxUnavailable": "browser.sandboxUnavailable",
+    "browser.actionFailed": "browser.actionFailed",
+    "browser.invalidTarget": "browser.invalidTarget",
+    "browser.fileTooLarge": "browser.fileTooLarge",
+    "browser.profileOwnerMismatch": "browser.profileOwnerMismatch",
+    "browser.profileInUse": "browser.profileInUse",
+    "browser.outcomeUnknown": "browser.outcomeUnknown",
     "file.changed": "file.changed",
     "file.editTextNotFound": "file.editTextNotFound",
     "file.editTextNotUnique": "file.editTextNotUnique",
@@ -351,6 +366,7 @@ _REMOTE_ERROR_CODES = {
 
 _MANAGER_ERROR_CODES = frozenset(
     {
+        "browser.outcomeUnknown",
         "executionAgent.operationUnavailable",
         "executionAgent.outcomeUnknown",
         "executionAgent.protocolError",
@@ -477,7 +493,12 @@ class ExecutionClient:
             ) from exc
         if not response.ok:
             code = response.error.code if response.error is not None else None
-            if code == "operation.cancelled":
+            if operation.startswith("integration.browser.") and code in {"operation.failed", "operation.cancelled"}:
+                mapped_code = (
+                    "browser.outcomeUnknown" if code == "operation.cancelled"
+                    else "browser.actionFailed"
+                )
+            elif code == "operation.cancelled":
                 mapped_code = (
                     "process.interrupted"
                     if operation.startswith("shell.") or operation in {"terminal.run", "terminal.shared.execute"}
@@ -493,7 +514,8 @@ class ExecutionClient:
                 )
             raise ExecutionClientError(
                 mapped_code,
-                response.error.params if response.error is not None else None,
+                response.error.params if response.error is not None
+                and not operation.startswith("integration.browser.") else None,
             )
         try:
             return result_model.model_validate(response.result)

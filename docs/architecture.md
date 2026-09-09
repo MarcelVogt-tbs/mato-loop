@@ -120,6 +120,10 @@ Profile-level integration selection is independent of these action policies and 
 
 Selection, binding revisions, and resource policy remain revocable before effects and after approval, including nested directory approvals and aggregate resource reads. An approval never revives an excluded integration or revoked resource. Delegation freezes concrete enabled integration UUIDs and the intersection of offered and spawn-time permission ceilings, then applies stricter live policy. Newly configured or newly enabled integrations cannot widen a running child. Resource filtering reuses the existing sparse maps and typed matchers rather than introducing another permission store. See [harness.md](harness.md#tool-contract).
 
+## Browser Boundary
+
+Browser runtime architecture and operations are documented in [browser.md](browser.md). This optional personal agent integration combines a persistent per-agent Chromium profile with one live noVNC viewer and explicit chat attachment. The backend retains policies and approvals; the agent owns setup, sandboxed headed Chromium and private desktop transport. Connected-viewer gating and bounded action snapshots coordinate model access without claiming full page-semantic or whole-agent isolation.
+
 ## Channel Boundary
 
 Channels are owner-bound message ingress and egress endpoints, not integration instances. They do not contribute agent tools, prompts, policies, or resources. Administrators control a separate global allowlist of host-installed channel providers; personal endpoint records and encrypted credentials remain stored but are not effective or shown while their provider is disabled. Administrators manage only this allowlist and cannot inspect another user's endpoints or credentials.

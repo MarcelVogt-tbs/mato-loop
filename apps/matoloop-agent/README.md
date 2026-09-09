@@ -9,6 +9,9 @@ command execution remains unchanged.
 
 Standalone Linux agent for bounded filesystem, process, POSIX terminal, transfer, OpenSCAD, and session-cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
 
+The [Linux browser runtime](BROWSER.md) provides a persistent owner-bound headed Chromium,
+private graphical viewing, interactive prerequisite setup, and bounded browser actions.
+
 ## Configuration
 
 ```json

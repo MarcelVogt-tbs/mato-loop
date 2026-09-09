@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, HttpUrl
 
 from mato_loop_backend.integrations.bookstack import BOOKSTACK_ADAPTER
+from mato_loop_backend.integrations.browser import BROWSER_ADAPTER
 from mato_loop_backend.integrations.caldav import CALDAV_ADAPTER
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
@@ -68,6 +69,7 @@ _ADAPTERS = {
     ("recipes", "mealie"): MEALIE_ADAPTER,
     ("openscad", "openscad"): OPENSCAD_ADAPTER,
     ("coding", "opencode"): OPENCODE_ADAPTER,
+    ("browser", "browser"): BROWSER_ADAPTER,
 }
 
 
@@ -129,6 +131,8 @@ def effective_execution_integration_settings(
     settings: IntegrationSettings,
     execution_agent_id: UUID | None,
     execution_operations: set[str] | frozenset[str],
+    *,
+    browser_integration_id: UUID | None = None,
 ) -> IntegrationSettings:
     effective = settings.model_copy(deep=True)
     for instance in effective.instances:
@@ -147,6 +151,10 @@ def effective_execution_integration_settings(
             continue
         if instance.execution_agent_id != execution_agent_id:
             instance.enabled = False
+        if instance.adapter_type == "browser":
+            instance._browser_attached = instance.id == browser_integration_id
+            if not instance._browser_attached:
+                instance.enabled = False
         instance._execution_operations = frozenset(execution_operations)
     return effective
 
@@ -161,6 +169,7 @@ def effective_integration_contributions(
     for instance in settings.instances:
         if (
             not instance.enabled
+            or (instance.adapter_type == "browser" and not instance._browser_attached)
             or settings.availability_for(instance.adapter_type)
             == IntegrationAdapterAvailability.DISABLED
         ):

@@ -274,7 +274,8 @@ const integration = computed(() => [
   ...integrations.search.providers,
   ...integrations.calendar.accounts,
   ...integrations.mail.accounts,
-  ...integrations.knowledge.bases
+  ...integrations.knowledge.bases,
+  ...integrations.browser.instances.map((item) => ({ ...item, integrationType: 'browser', providerType: 'browser' }))
 ].find((item) => item.id === integrationId.value))
 const adapterBlocked = computed(() => (
   !integration.value || !integrations.adapterAvailable(integration.value.providerType, scope.value)

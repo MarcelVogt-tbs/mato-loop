@@ -229,6 +229,7 @@ _DIRECTORY_INDEPENDENT_EXECUTION_OPERATIONS = frozenset(
         "filesystem.resolve",
         "integration.openscad.render",
         "integration.openscad.render6",
+        "integration.browser.execute",
         "system.info",
     }
 )
@@ -1968,10 +1969,19 @@ class AgentRuntime:
                 if run.execution_agent_id is not None
                 else frozenset()
             )
+            from mato_loop_backend.integrations.browser import attached_browser_integration_id
+
             integration_settings = effective_execution_integration_settings(
                 integration_settings,
                 run.execution_agent_id,
                 execution_operations,
+                browser_integration_id=(
+                    attached_browser_integration_id(
+                        chat_session.id, run.execution_agent_id, chat_session.user_id,
+                    )
+                    if any(item.adapter_type == "browser" for item in integration_settings.instances)
+                    else None
+                ),
             )
             effective_toolset = (
                 tool_registry.effective(

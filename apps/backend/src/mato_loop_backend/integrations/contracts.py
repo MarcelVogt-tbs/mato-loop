@@ -63,7 +63,7 @@ class ToolContribution:
     instance_argument: str | None = None
     resource_argument: str | None = None
     releases_private_data: bool = False
-    authorization_factory: Callable[[Any, Any], tuple[Any, ...]] | None = None
+    authorization_factory: Callable[[Any, Any], tuple[Any, ...] | Awaitable[tuple[Any, ...]]] | None = None
     execution_operation: str | None = None
     execution_config_arguments: tuple[str, ...] = ()
     required_execution_operations: tuple[str, ...] = ()

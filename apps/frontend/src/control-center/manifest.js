@@ -6,6 +6,7 @@ export const controlCenterIntegrationManifest = Object.freeze([
   { id: 'mail', label: 'E-Mail', icon: 'mail' },
   { id: 'coding', label: 'OpenCode', icon: 'code' },
   { id: 'terminal', label: 'Terminal', icon: 'terminal' },
+  { id: 'browser', label: 'Browser', icon: 'web' },
   { id: 'file-viewer', label: 'Datei', icon: 'description', resource: true }
 ])
 
@@ -31,6 +32,14 @@ export function codingControlCenterAvailable(project) {
 export function computerFilesControlCenterAvailable(context, executionAgents) {
   const agent = executionAgents.byId(context?.preferredExecutionAgentId)
   return Boolean(agent?.connected && agent.operations?.includes('filesystem.list'))
+}
+
+export function browserControlCenterAvailable(context, executionAgents, integrations, integrationId = null) {
+  return Boolean(context?.id && integrations.adapterAvailable('browser', 'personal')
+    && executionAgents.byId(context.preferredExecutionAgentId)?.connected
+    && integrations.browser.instances.some((item) => item.enabled
+      && item.executionAgentId === context.preferredExecutionAgentId
+      && (!integrationId || item.id === integrationId)))
 }
 
 export const TERMINAL_OPERATIONS = Object.freeze([

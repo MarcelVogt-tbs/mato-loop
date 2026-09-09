@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { api } = vi.hoisted(() => ({
-  api: { delete: vi.fn(), get: vi.fn(), post: vi.fn(), put: vi.fn() }
+  api: { delete: vi.fn(), get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn() }
 }))
 
 vi.mock('src/boot/axios', () => ({ api }))
@@ -432,7 +432,8 @@ describe('integration store', () => {
       '/integrations/knowledge': knowledgeResponse,
       '/integrations/recipes': recipesResponse,
       '/integrations/openscad': openScadResponse,
-      '/integrations/coding': codingResponse
+      '/integrations/coding': codingResponse,
+      '/integrations/browser': { configured: false, instances: [] }
     }
     api.get.mockImplementation((url) => Promise.resolve({ data: responses[url] }))
     const store = useIntegrationStore()
@@ -444,7 +445,7 @@ describe('integration store', () => {
     for (const path of Object.keys(responses)) {
       expect(api.get).toHaveBeenCalledWith(path, {
         params: { scope: 'personal' },
-        ...(path === '/integrations/coding' ? { suppressErrorToast: true } : {})
+        ...(['/integrations/coding', '/integrations/browser'].includes(path) ? { suppressErrorToast: true } : {})
       })
     }
     expect(store.search.providers).toHaveLength(1)

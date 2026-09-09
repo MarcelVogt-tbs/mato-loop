@@ -11,6 +11,8 @@ import SessionApp from 'components/SessionApp.vue'
 import SessionFooter from 'components/SessionFooter.vue'
 import TerminalApp from 'components/TerminalApp.vue'
 import TerminalFooter from 'components/TerminalFooter.vue'
+import BrowserApp from 'components/BrowserApp.vue'
+import BrowserFooter from 'components/BrowserFooter.vue'
 import {
   controlCenterGlobalSectionManifest,
   controlCenterIntegrationManifest
@@ -25,6 +27,7 @@ const components = {
   mail: MailApp,
   coding: CodingApp,
   terminal: TerminalApp,
+  browser: BrowserApp,
   notifications: NotificationCenterApp
 }
 
@@ -32,7 +35,8 @@ const footerComponents = {
   session: SessionFooter,
   files: FileExplorerFooter,
   'file-viewer': FileViewerFooter,
-  terminal: TerminalFooter
+  terminal: TerminalFooter,
+  browser: BrowserFooter
 }
 
 function withComponents(items) {

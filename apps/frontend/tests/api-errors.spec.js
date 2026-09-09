@@ -3,6 +3,13 @@ import { describe, expect, it } from 'vitest'
 import { apiErrorMessage, decodeBlobApiError, errorDescriptor } from '../src/utils/api-errors'
 
 describe('API error messages', () => {
+  it('distinguishes a locked browser profile without suggesting reinstall or reset', () => {
+    const message = apiErrorMessage({ error: { code: 'browser.profileInUse', message: 'private profile path' } })
+    expect(message).toContain('gesperrt')
+    expect(message).toContain('nicht zurückgesetzt')
+    expect(message).not.toContain('private profile path')
+    expect(message).not.toContain('Einrichtung')
+  })
   it('uses controlled shell-inspection messages instead of parser details', () => {
     expect(apiErrorMessage({ error: { code: 'process.invalidSyntax', message: 'private parser detail' } })).toBe(
       'Der Shell-Befehl enthält einen Syntaxfehler. Korrigiere den Befehl vor einem erneuten Versuch.'

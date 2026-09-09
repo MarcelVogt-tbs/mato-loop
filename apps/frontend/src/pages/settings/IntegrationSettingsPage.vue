@@ -209,6 +209,14 @@
             <q-item-label v-else-if="integration.integrationType === 'mail'" caption lines="1">
               IMAP: {{ integration.config.imapHost }}:{{ integration.config.imapPort }} · SMTP: {{ integration.config.smtpHost }}:{{ integration.config.smtpPort }}
             </q-item-label>
+            <template v-else-if="integration.integrationType === 'browser'">
+              <q-item-label caption>Computer: {{ executionAgentName(integration) }}</q-item-label>
+              <q-item-label caption role="status">{{ browserStatusLabel(integrations.browserStatuses[integration.id]) }}</q-item-label>
+              <div class="row q-gutter-xs q-mt-xs">
+                <q-btn flat dense no-caps icon="terminal" label="Einrichtung / Status" :disable="!canEditIntegration(integration)" @click="setupId = integration.id" />
+                <q-btn flat dense no-caps color="negative" icon="restart_alt" label="Profil zurücksetzen" :disable="!canEditIntegration(integration) || resettingId !== null" @click="resetBrowser(integration)" />
+              </div>
+            </template>
             <q-item-label v-else caption lines="1">
               {{ integration.config.baseUrl }}{{ integration.config.username ? ` · ${integration.config.username}` : '' }}
             </q-item-label>
@@ -269,6 +277,7 @@
     </q-card>
 
     <IntegrationConfigDialog v-if="showInstances" v-model="dialogOpen" :integration="selectedIntegration" />
+    <BrowserSetupDialog v-if="setupId" :model-value="Boolean(setupId)" :integration-id="setupId" @update:model-value="setupId = null" />
   </section>
 </template>
 
@@ -277,6 +286,8 @@ import { computed, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'
 import IntegrationConfigDialog from 'components/IntegrationConfigDialog.vue'
+import BrowserSetupDialog from 'components/BrowserSetupDialog.vue'
+import { browserStatusLabel } from 'src/utils/browser'
 import SettingsScopeToggle from 'components/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { resolveSettingsScope } from 'src/features/settings/scope'
@@ -294,6 +305,8 @@ const auth = useAuthStore()
 const executionAgents = useExecutionAgentStore()
 const dialogOpen = ref(false)
 const selectedIntegration = ref(null)
+const setupId = ref(null)
+const resettingId = ref(null)
 const testingId = ref(null)
 const removingId = ref(null)
 const searchSelectionSaving = ref(false)
@@ -322,7 +335,8 @@ const configuredIntegrations = computed(
     ...knowledgeBases.value,
     ...recipeAccounts.value,
     ...openScadInstances.value,
-    ...codingInstances.value
+    ...codingInstances.value,
+    ...(integrations.scope === 'personal' ? integrations.browser.instances.map((item) => ({ ...item, integrationType: 'browser', providerType: 'browser' })) : [])
   ]
 )
 const backendAvailabilityOptions = [
@@ -354,6 +368,7 @@ function integrationAvailable(integration) {
 }
 
 async function changeScope(scope) {
+  setupId.value = null
   dialogOpen.value = false
   integrations.selectScope(scope)
   await reload()
@@ -396,7 +411,7 @@ function openEditDialog(integration) {
 
 function providerLabel(providerType) {
   return {
-    searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', bookstack: 'BookStack', mealie: 'Mealie', openscad: 'OpenSCAD', opencode: 'OpenCode'
+    searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', bookstack: 'BookStack', mealie: 'Mealie', openscad: 'OpenSCAD', opencode: 'OpenCode', browser: 'Chromium'
   }[providerType] || providerType
 }
 
@@ -408,13 +423,14 @@ function typeLabel(integrationType) {
     knowledge: 'Wissensdatenbank',
     recipes: 'Rezepte & Essensplanung',
     openscad: '3D-Modellierung',
-    coding: 'Programmierung'
+    coding: 'Programmierung',
+    browser: 'Browser'
   }[integrationType] || integrationType || 'Unbekannter Integrationstyp'
 }
 
 function typeIcon(integrationType) {
   return {
-    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', knowledge: 'menu_book', recipes: 'restaurant_menu', openscad: 'view_in_ar', coding: 'code'
+    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', knowledge: 'menu_book', recipes: 'restaurant_menu', openscad: 'view_in_ar', coding: 'code', browser: 'web'
   }[integrationType] || 'extension'
 }
 
@@ -448,6 +464,11 @@ async function testIntegration(integration) {
     else if (integration.integrationType === 'recipes') result = await integrations.testRecipes(integration.id)
     else if (integration.integrationType === 'openscad') result = await integrations.testOpenScad(integration.id)
     else if (integration.integrationType === 'coding') result = await integrations.testOpenCode(integration.id)
+    else if (integration.integrationType === 'browser') {
+      result = await integrations.browserStatus(integration.id, true)
+      $q.notify({ type: result.state === 'ready' ? 'positive' : 'warning', message: browserStatusLabel(result) })
+      return
+    }
     else result = await integrations.testSearch(integration.id)
     if (integration.integrationType === 'openscad' && result?.headlessPreview === false) {
       $q.notify({
@@ -479,6 +500,7 @@ async function removeIntegration(integration) {
     else if (integration.integrationType === 'recipes') await integrations.removeRecipes(integration.id)
     else if (integration.integrationType === 'openscad') await integrations.removeOpenScad(integration.id)
     else if (integration.integrationType === 'coding') await integrations.removeOpenCode(integration.id)
+    else if (integration.integrationType === 'browser') await integrations.removeBrowser(integration.id)
     else await integrations.removeSearch(integration.id)
     $q.notify({ type: 'positive', message: 'Integration gelöscht' })
   } finally {
@@ -496,6 +518,16 @@ async function reload() {
   } catch {
     // The central API interceptor displays the error as a toast.
   }
+}
+
+async function resetBrowser(integration) {
+  if (!await confirm('Alle Browser-Anmeldungen, Cookies und Profildaten auf diesem Computer löschen? Die Installation bleibt erhalten. Schließe vorher alle Browser-Verbindungen.', 'Browserprofil zurücksetzen?', { okLabel: 'Zurücksetzen', okColor: 'negative' })) return
+  resettingId.value = integration.id
+  try {
+    await integrations.resetBrowser(integration.id)
+    $q.notify({ type: 'positive', message: 'Browserprofil zurückgesetzt' })
+  } catch { /* Central API toast. */ }
+  finally { resettingId.value = null }
 }
 
 async function loadCatalog() {

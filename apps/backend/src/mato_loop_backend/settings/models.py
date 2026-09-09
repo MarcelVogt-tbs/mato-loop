@@ -569,6 +569,7 @@ class IntegrationInstance(BaseModel):
     owner_id: UUID | None = Field(default=None, exclude=True)
     config: dict[str, Any] = Field(default_factory=dict)
     _execution_operations: frozenset[str] | None = PrivateAttr(default=None)
+    _browser_attached: bool = PrivateAttr(default=False)
 
 
 class WebFetchSettings(BaseModel):

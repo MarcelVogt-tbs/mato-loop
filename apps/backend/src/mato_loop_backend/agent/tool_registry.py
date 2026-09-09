@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -217,13 +218,25 @@ class ToolContext:
                 profile = await load_agent_profile(self.db, self.session.user_id, profile_id)
             except AgentProfileUnavailable:
                 return filter_agent_profile_integrations(settings, None, allowed_ids=())
-        return filter_agent_profile_integrations(
+        settings = filter_agent_profile_integrations(
             settings, profile,
             allowed_ids=(
                 () if self.tool_settings._agent_profile_unavailable
                 else integration_ceiling_ids(self.tool_settings._delegation_ceiling)
             ),
         )
+        if any(item.adapter_type == "browser" for item in settings.instances):
+            from mato_loop_backend.integrations.browser import attached_browser_integration_id
+
+            integration_id = attached_browser_integration_id(
+                self.session.id,
+                self.execution_client.agent_id if self.execution_client else None,
+                self.session.user_id,
+            )
+            for item in settings.instances:
+                if item.adapter_type == "browser":
+                    item._browser_attached = item.id == integration_id
+        return settings
 
     async def ask(self, request: PermissionRequest) -> PermissionDecision:
         if self.user_denied:
@@ -276,7 +289,7 @@ class ToolDefinition:
     resource_argument: str | None = None
     releases_private_data: bool = False
     authorization_factory: (
-        Callable[[Any, ToolContext], tuple[PermissionRequest, ...]] | None
+        Callable[[Any, ToolContext], tuple[PermissionRequest, ...] | Awaitable[tuple[PermissionRequest, ...]]] | None
     ) = None
     prompt_fragments: tuple[str, ...] = ()
 
@@ -1164,6 +1177,8 @@ class ToolRegistry:
                             "tool.invalidArguments", field=definition.resource_argument
                         )
                 requests = definition.authorization_factory(arguments, context)
+                if inspect.isawaitable(requests):
+                    requests = await requests
                 if selected_integration_id is not None:
                     requests = tuple(
                         replace(

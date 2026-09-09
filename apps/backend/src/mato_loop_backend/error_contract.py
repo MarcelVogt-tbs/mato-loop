@@ -9,6 +9,21 @@ _CODE_PATTERN = re.compile(r"^[a-z][A-Za-z]*(?:\.[a-z][A-Za-z]*)+$")
 _GENERIC_MESSAGE = "The action failed."
 
 _MESSAGES = {
+    "browser.unavailable": "The browser integration is unavailable.",
+    "browser.notReady": "The browser runtime is not ready.",
+    "browser.busy": "This MatoLoop Agent already has a browser integration or an active browser operation.",
+    "browser.notConnected": "Attach a live browser viewer to this chat before using browser tools.",
+    "browser.bindingChanged": "The browser binding changed. Attach the browser again before retrying.",
+    "browser.setupFailed": "Browser setup failed.",
+    "browser.dependenciesMissing": "Required browser dependencies are missing.",
+    "browser.unsupported": "This system does not support the browser integration.",
+    "browser.sandboxUnavailable": "The browser security sandbox is unavailable.",
+    "browser.actionFailed": "The browser action failed.",
+    "browser.invalidTarget": "The browser target is invalid or no longer available.",
+    "browser.fileTooLarge": "The browser file exceeds the transfer limit.",
+    "browser.profileOwnerMismatch": "The browser profile belongs to a different owner.",
+    "browser.profileInUse": "The browser profile is locked by another browser process. Confirm that it is no longer in use before recovering it.",
+    "browser.outcomeUnknown": "The browser operation was interrupted after dispatch. Its outcome is unknown. Inspect current state before retrying; do not repeat a mutation blindly.",
     "agent.backendRestarted": "The agent run was interrupted by a backend restart.",
     "agent.emptyResponse": "The model returned no usable response.",
     "agent.contextWindowExceeded": "The request does not fit in the model's context window.",

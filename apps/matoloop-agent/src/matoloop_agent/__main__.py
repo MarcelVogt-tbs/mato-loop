@@ -5,7 +5,10 @@ import asyncio
 import getpass
 import logging
 import os
+import signal
 import sys
+import threading
+from collections.abc import Coroutine
 from pathlib import Path
 
 from .cache import SessionCache
@@ -171,7 +174,62 @@ async def _execute(
     await MatoLoopAgent(config, credential.access_key).run_forever(reload_access_key)
 
 
+def _run(coroutine: Coroutine) -> None:
+    stopping = False
+    previous = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)}
+    # asyncio.run also waits for cancellation-resistant requests and executor threads.
+    deadline = threading.Timer(25, os._exit, args=(1,))
+    deadline.daemon = True
+
+    async def run() -> None:
+        task = asyncio.current_task()
+
+        def stop() -> None:
+            nonlocal stopping
+            if not stopping:
+                stopping = True
+                deadline.start()
+                task.cancel()
+
+        loop = asyncio.get_running_loop()
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(signum, stop)
+        try:
+            await coroutine
+        except asyncio.CancelledError:
+            if not stopping:
+                raise
+
+    try:
+        asyncio.run(run())
+    finally:
+        deadline.cancel()
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] in {
+        "browser-worker",
+        "browser-install",
+        "browser-install-worker",
+    }:
+        if sys.argv[1] == "browser-install":
+            from .browser import finish_setup
+
+            raise SystemExit(asyncio.run(finish_setup()))
+        elif sys.argv[1] == "browser-install-worker":
+            from playwright.__main__ import main as install_playwright
+
+            if os.getuid() == 0:
+                raise SystemExit(1)
+            sys.argv = ["playwright", "install", "--no-shell", "chromium"]
+            install_playwright()
+        else:
+            from .browser_worker import serve
+
+            asyncio.run(serve(Path(sys.argv[2])))
+        return
     parser = argparse.ArgumentParser(description="Standalone MatoLoop Agent")
     parser.add_argument(
         "command",
@@ -205,7 +263,7 @@ def main() -> None:
             connection, pairing_token = _pairing_inputs(parser, arguments, config)
         else:
             connection, pairing_token = _automatic_inputs(parser, arguments, config)
-        asyncio.run(_execute(arguments.command, config, connection, pairing_token))
+        _run(_execute(arguments.command, config, connection, pairing_token))
     except CredentialError as exc:
         logging.getLogger(__name__).error("%s", exc)
         raise SystemExit(1) from None

@@ -89,6 +89,8 @@ def _request_limit(scope: Scope) -> int | None:
         return MAIL_UPLOAD_REQUEST_LIMIT
     if method != "POST":
         return None
+    if len(parts) == 5 and parts[1:3] == ["api", "browsers"] and parts[4] == "upload":
+        return 64 * 1024 * 1024 + _MULTIPART_OVERHEAD_BYTES
     if _is_question_answer_path(path):
         return QUESTION_ANSWERS_REQUEST_LIMIT
     if path == "/api/media/transcriptions":

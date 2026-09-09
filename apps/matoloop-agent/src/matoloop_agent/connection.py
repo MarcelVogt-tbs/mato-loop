@@ -14,6 +14,8 @@ from typing import Any
 import websockets
 from pydantic import ValidationError
 
+from .browser import BrowserManager
+from .browser_contracts import BROWSER_ARGUMENT_MODELS
 from .cache import SessionCache
 from .config import AgentConfig
 from .filesystem import AgentError, Filesystem
@@ -113,6 +115,7 @@ class MatoLoopAgent:
         self.cache = SessionCache(config.data_dir, config.max_session_cache_bytes)
         self.process = ProcessRunner(config, self.filesystem)
         self.terminal = TerminalManager(config, self.process)
+        self.browser = BrowserManager(config, self.terminal)
         self.shared_terminal = SharedTerminals(self.terminal)
         self.search = FilesystemSearch(self.filesystem)
         self.transfer = transfer_client or TransferClient(
@@ -122,7 +125,7 @@ class MatoLoopAgent:
         )
         self.openscad = OpenScadRunner(config, self.filesystem, self.cache, self.transfer)
         self._access_key = access_key
-        operations = set(ARGUMENT_MODELS)
+        operations = set(ARGUMENT_MODELS) | set(BROWSER_ARGUMENT_MODELS)
         if self.process.shell is None:
             operations.remove("shell.run")
         if not self.terminal.available:
@@ -210,8 +213,12 @@ class MatoLoopAgent:
         try:
             arguments = validate_arguments(request)
         except (ValidationError, ValueError) as exc:
+            if request.operation.startswith("integration.browser."):
+                raise AgentError("browser.invalidTarget", "Invalid browser arguments") from exc
             raise AgentError("request.invalid", "Invalid operation arguments") from exc
 
+        if request.operation in BROWSER_ARGUMENT_MODELS:
+            return await self.browser.dispatch(request.operation, arguments)
         if isinstance(arguments, SystemInfoArguments):
             return await asyncio.to_thread(self.system_info, arguments.current_directory)
         if isinstance(arguments, ResolveDirectoryArguments):
@@ -472,26 +479,32 @@ class MatoLoopAgent:
     async def run_forever(
         self, access_key_loader: Callable[[], Awaitable[str]] | None = None
     ) -> None:
-        self.cache.evict()
-        delay = 1.0
-        async with self.transfer:
-            while True:
-                connected = asyncio.Event()
-                try:
-                    if access_key_loader is not None:
-                        self._access_key = await access_key_loader()
-                        self.transfer.set_access_key(self._access_key)
-                    await self._connect_once(connected)
-                    delay = 1.0
-                    await asyncio.sleep(delay)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    if connected.is_set():
+        try:
+            self.cache.evict()
+            delay = 1.0
+            async with self.transfer:
+                while True:
+                    connected = asyncio.Event()
+                    try:
+                        if access_key_loader is not None:
+                            self._access_key = await access_key_loader()
+                            self.transfer.set_access_key(self._access_key)
+                        await self._connect_once(connected)
                         delay = 1.0
-                    logger.warning("MatoLoop Agent connection failed; retrying")
-                    await asyncio.sleep(delay)
-                    delay = min(delay * 2, 30.0)
+                        await asyncio.sleep(delay)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        if connected.is_set():
+                            delay = 1.0
+                        logger.warning("MatoLoop Agent connection failed; retrying")
+                        await asyncio.sleep(delay)
+                        delay = min(delay * 2, 30.0)
+        finally:
+            try:
+                await self.browser.close()
+            finally:
+                await self.terminal.close_all()
 
     async def _connect_once(self, connected: asyncio.Event) -> None:
         async with websockets.connect(
@@ -501,6 +514,7 @@ class MatoLoopAgent:
             ping_interval=20,
             ping_timeout=20,
             open_timeout=15,
+            close_timeout=2,
         ) as socket:
             send_lock = asyncio.Lock()
 
@@ -535,16 +549,29 @@ class MatoLoopAgent:
                             Response(
                                 id=request.id,
                                 ok=False,
-                                error=Error(code="operation.cancelled"),
+                                error=Error(
+                                    code="browser.outcomeUnknown"
+                                    if request.operation in BROWSER_ARGUMENT_MODELS
+                                    else "operation.cancelled"
+                                ),
                             )
                         )
                     raise
                 except AgentError as exc:
+                    code = exc.code
+                    if request.operation in BROWSER_ARGUMENT_MODELS and not code.startswith(
+                        "browser."
+                    ):
+                        code = (
+                            "browser.fileTooLarge"
+                            if code == "operation.tooLarge"
+                            else "browser.actionFailed"
+                        )
                     await send(
                         Response(
                             id=request.id,
                             ok=False,
-                            error=Error(code=exc.code, params=exc.params),
+                            error=Error(code=code, params=exc.params),
                         )
                     )
                 except Exception:
@@ -553,7 +580,11 @@ class MatoLoopAgent:
                         Response(
                             id=request.id,
                             ok=False,
-                            error=Error(code="operation.failed"),
+                            error=Error(
+                                code="browser.actionFailed"
+                                if request.operation in BROWSER_ARGUMENT_MODELS
+                                else "operation.failed"
+                            ),
                         )
                     )
                 finally:
@@ -590,5 +621,8 @@ class MatoLoopAgent:
             finally:
                 for task in tasks.values():
                     task.cancel()
+                try:
+                    await self.browser.close()
+                finally:
+                    await self.terminal.close_all()
                 await asyncio.gather(*tasks.values(), return_exceptions=True)
-                await self.terminal.close_all()

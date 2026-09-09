@@ -83,6 +83,21 @@ function fieldLabel(field) {
 }
 
 const messages = {
+  'browser.unavailable': () => 'Der Browser ist derzeit nicht erreichbar.',
+  'browser.notReady': () => 'Der Browser ist noch nicht einsatzbereit. Öffne die Einrichtung in den Integrationen.',
+  'browser.busy': () => 'Der Browser ist bereits belegt oder führt eine Aktion aus. Warte, bis er freigegeben ist.',
+  'browser.notConnected': () => 'Die Browserverbindung wurde getrennt. Öffne den Browser bei Bedarf erneut.',
+  'browser.bindingChanged': () => 'Die Browserzuordnung hat sich geändert. Öffne den Browser erneut und verbinde den Agenten bewusst.',
+  'browser.setupFailed': () => 'Die Browser-Einrichtung ist fehlgeschlagen. Prüfe die Ausgabe im Einrichtungsterminal.',
+  'browser.dependenciesMissing': () => 'Erforderliche Browser-Komponenten fehlen. Öffne die Einrichtung.',
+  'browser.unsupported': () => 'Dieser Computer unterstützt die Browser-Integration nicht.',
+  'browser.sandboxUnavailable': () => 'Die sichere Browser-Sandbox ist nicht verfügbar. Der Browser kann nicht gestartet werden.',
+  'browser.actionFailed': () => 'Die Browseraktion ist fehlgeschlagen.',
+  'browser.invalidTarget': () => 'Das Browserziel ist ungültig oder nicht erlaubt.',
+  'browser.fileTooLarge': () => 'Die Datei überschreitet die zulässige Größe für Browser-Übertragungen.',
+  'browser.profileOwnerMismatch': () => 'Das Browserprofil gehört zu einer anderen Benutzerzuordnung und kann nicht verwendet werden.',
+  'browser.profileInUse': () => 'Das Browserprofil ist durch einen anderen oder früheren Browserprozess gesperrt. Vor einer Freigabe muss geprüft werden, dass es nicht mehr verwendet wird. Die Browserdaten müssen nicht zurückgesetzt werden.',
+  'browser.outcomeUnknown': () => 'Der Ausgang der Browseraktion ist unklar. Prüfe den Browser, bevor du die Aktion wiederholst.',
   'agent.backendRestarted': () => 'Der Agent-Run wurde durch einen Neustart unterbrochen.',
   'agent.failed': () => 'Die Agent-Anfrage ist fehlgeschlagen.',
   'agent.contextWindowExceeded': () => 'Der Gesprächskontext ist für das ausgewählte Modell zu groß.',

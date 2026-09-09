@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
+import { notifyError } from 'src/utils/notifications'
 
 const emptySearch = () => ({
   configured: false,
@@ -82,6 +83,9 @@ function clearIntegrations(store) {
   store.recipes = emptyRecipes()
   store.openscad = emptyOpenScad()
   store.coding = emptyCoding()
+  store.browser = { configured: false, instances: [] }
+  store.browserLoadVersion += 1
+  store.browserStatuses = {}
 }
 
 function clearAccess(store, id) {
@@ -99,6 +103,9 @@ export const useIntegrationStore = defineStore('integrations', {
     recipes: emptyRecipes(),
     openscad: emptyOpenScad(),
     coding: emptyCoding(),
+    browser: { configured: false, instances: [] },
+    browserStatuses: {},
+    browserLoadVersion: 0,
     scope: 'instance',
     trust: 'private',
     catalog: [],
@@ -184,7 +191,7 @@ export const useIntegrationStore = defineStore('integrations', {
           this.fetchKnowledge(),
           this.fetchRecipes(),
           this.fetchOpenScad(),
-          ...(context.scope === 'personal' ? [this.fetchCoding()] : [])
+          ...(context.scope === 'personal' ? [this.fetchCoding(), this.fetchBrowser()] : [])
         ])
       } catch (error) {
         if (contextIsCurrent(this, context)) this.loadFailed = true
@@ -446,6 +453,54 @@ export const useIntegrationStore = defineStore('integrations', {
     },
     async testOpenCode(id) {
       return (await api.post(`/integrations/coding/opencode/${id}/test`)).data
+    },
+    async fetchBrowser() {
+      const version = ++this.browserLoadVersion
+      let data = { configured: false, instances: [] }
+      if (!this.catalogLoaded || this.adapterAvailable('browser', 'personal')) {
+        try {
+          data = (await api.get('/integrations/browser', scopeConfig('personal', { suppressErrorToast: true }))).data
+        } catch (error) {
+          if (!['integration.adapterDisabled', 'integration.personalAdapterDisabled'].includes(error?.response?.data?.error?.code)) {
+            notifyError(error)
+            throw error
+          }
+        }
+      }
+      if (version === this.browserLoadVersion) this.browser = data
+      return data
+    },
+    async saveBrowser(id, payload) {
+      const version = ++this.browserLoadVersion
+      const { data } = id
+        ? await api.patch(`/integrations/browser/${id}`, payload, scopeConfig('personal'))
+        : await api.post('/integrations/browser', payload, scopeConfig('personal'))
+      if (version === this.browserLoadVersion) {
+        this.browser = data
+        if (id) delete this.browserStatuses[id]
+      }
+      return data
+    },
+    async removeBrowser(id) {
+      const version = ++this.browserLoadVersion
+      const { data } = await api.delete(`/integrations/browser/${id}`, scopeConfig('personal'))
+      if (version === this.browserLoadVersion) {
+        this.browser = data
+        delete this.browserStatuses[id]
+        clearAccess(this, id)
+      }
+    },
+    async browserStatus(id, test = false) {
+      const version = this.browserLoadVersion
+      const { data } = test
+        ? await api.post(`/integrations/browser/${id}/test`, null, scopeConfig('personal'))
+        : await api.get(`/integrations/browser/${id}/status`, scopeConfig('personal'))
+      if (version === this.browserLoadVersion) this.browserStatuses[id] = data
+      return data
+    },
+    async resetBrowser(id) {
+      await api.post(`/integrations/browser/${id}/reset`, null, scopeConfig('personal'))
+      delete this.browserStatuses[id]
     },
     async fetchAccess(id) {
       const context = {

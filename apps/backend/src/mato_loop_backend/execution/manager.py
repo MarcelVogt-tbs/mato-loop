@@ -55,6 +55,13 @@ class ExecutionAgentError(Exception):
 def disconnect_error_code(operation: str, dispatched: bool) -> str:
     if not dispatched:
         return "executionAgent.unavailable"
+    if operation in {
+        "integration.browser.execute", "integration.browser.setup",
+        "integration.browser.setupwrite", "integration.browser.open",
+        "integration.browser.close", "integration.browser.reset",
+        "integration.browser.file", "integration.browser.navigation",
+    }:
+        return "browser.outcomeUnknown"
     if operation in _MUTATING_FILESYSTEM_OPERATIONS:
         return "executionAgent.outcomeUnknown"
     if operation.startswith("shell.") or operation in {"terminal.run", "terminal.shared.execute"}:

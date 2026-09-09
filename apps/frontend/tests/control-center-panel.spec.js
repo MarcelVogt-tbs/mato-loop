@@ -80,7 +80,7 @@ describe('control center panel', () => {
     confirm.mockImplementationOnce(() => new Promise((resolve) => { accept = resolve }))
     const remove = vi.spyOn(controlCenter, 'removeIntegration')
     await mountPanel()
-    root.querySelector('#control-center-tab-terminal').parentElement.querySelector('.control-center__tab-close').click()
+    root.querySelector('#control-center-tab-terminal').parentElement.querySelector('.app-closable-tab__close').click()
     await nextTick()
     controlCenter.syncSession({ id: 'session-2', controlCenter: { tabs: [{ appId: 'terminal' }] } })
     accept(true)
@@ -103,7 +103,7 @@ describe('control center panel', () => {
       fail = reject
     }))
     await mountPanel()
-    root.querySelector('#control-center-tab-terminal').parentElement.querySelector('.control-center__tab-close').click()
+    root.querySelector('#control-center-tab-terminal').parentElement.querySelector('.app-closable-tab__close').click()
     await nextTick()
     terminal.connect({ sessionId: 'session-2', agentId: 'agent-1' })
     const current = FakeWebSocket.instances.at(-1)
@@ -190,23 +190,25 @@ describe('control center panel', () => {
     expect(controlCenter.open).toBe(false)
   })
 
-  it('navigates nested tabs with ArrowRight, Home and End without consuming close-button keys', async () => {
+  it('navigates shared tab shells without consuming close-button keys or selecting on focus', async () => {
     await controlCenter.openApp('agent-coding')
     await controlCenter.openApp('mail')
     await mountPanel()
-    const tabs = [...root.querySelectorAll('.control-center__tab')]
+    const tabs = [...root.querySelectorAll('.app-closable-tab__tab')]
     expect(tabs).toHaveLength(3)
     tabs[0].focus()
 
-    for (const [key, index] of [['ArrowRight', 1], ['End', 2], ['Home', 0]]) {
+    for (const [key, index] of [['ArrowLeft', 0], ['ArrowRight', 1], ['End', 2], ['ArrowRight', 2], ['ArrowLeft', 1], ['Home', 0]]) {
       const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
       document.activeElement.dispatchEvent(event)
       await nextTick()
       expect(event.defaultPrevented).toBe(true)
       expect(document.activeElement).toBe(tabs[index])
+      expect(controlCenter.activeAppId).toBe('mail')
     }
 
-    const close = tabs[0].parentElement.querySelector('.control-center__tab-close')
+    const close = tabs[0].parentElement.querySelector('.app-closable-tab__close')
+    expect(tabs[0].contains(close)).toBe(false)
     close.focus()
     for (const key of ['ArrowRight', 'Home', 'End']) {
       const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
@@ -216,6 +218,38 @@ describe('control center panel', () => {
       expect(document.activeElement).toBe(close)
     }
     expect(controlCenter.tabs).toHaveLength(4)
+  })
+
+  it('forwards drag events and drop markers on the shared shell without selecting it', async () => {
+    await controlCenter.openApp('mail')
+    const reorder = vi.spyOn(controlCenter, 'reorderIntegration').mockResolvedValue()
+    await mountPanel()
+    const source = root.querySelector('#control-center-tab-files').parentElement
+    const target = root.querySelector('#control-center-tab-mail').parentElement
+    expect(source.draggable).toBe(true)
+    expect(target.classList.contains('app-closable-tab--active')).toBe(true)
+    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue({ left: 0, width: 240 })
+    const dataTransfer = { setData: vi.fn() }
+    const drag = (element, type, clientX = 0) => element.dispatchEvent(Object.assign(
+      new Event(type, { bubbles: true, cancelable: true }), { dataTransfer, clientX }
+    ))
+    drag(source, 'dragstart')
+    expect(dataTransfer.setData).toHaveBeenCalledWith('text/plain', 'files')
+    await nextTick()
+    expect(source.classList.contains('control-center__tab--dragging')).toBe(true)
+    drag(target, 'dragover', 10)
+    await nextTick()
+    expect(target.classList.contains('control-center__tab--drop-before')).toBe(true)
+    drag(target, 'dragover', 230)
+    await nextTick()
+    expect(target.classList.contains('control-center__tab--drop-before')).toBe(false)
+    expect(target.classList.contains('control-center__tab--drop-after')).toBe(true)
+    drag(target, 'drop', 230)
+    await nextTick()
+    expect(reorder).toHaveBeenCalledExactlyOnceWith('files', 'mail', true)
+    expect(source.classList.contains('control-center__tab--dragging')).toBe(false)
+    expect(target.classList.contains('control-center__tab--drop-after')).toBe(false)
+    expect(controlCenter.activeAppId).toBe('mail')
   })
 
   it('activates a tab through the real desktop overflow menu', async () => {

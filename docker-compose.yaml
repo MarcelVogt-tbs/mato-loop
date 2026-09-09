@@ -82,10 +82,15 @@ services:
   matoloop-agent:
     image: ${MATOLOOP_AGENT_IMAGE:?MATOLOOP_AGENT_IMAGE is required}
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    shm_size: 256mb
     security_opt:
       - no-new-privileges:true
+      - seccomp:./apps/matoloop-agent/docker/browser-seccomp.json
     environment:
       MATOLOOP_AGENT_BACKEND_URL: ws://mato-loop:6020/api/execution-agents/connect
+      MATOLOOP_AGENT_CONTAINER: "1"
       MATOLOOP_AGENT_ID: ${MATOLOOP_AGENT_ID:-}
       MATOLOOP_AGENT_PAIRING_TOKEN: ${MATOLOOP_AGENT_PAIRING_TOKEN:-}
     volumes:

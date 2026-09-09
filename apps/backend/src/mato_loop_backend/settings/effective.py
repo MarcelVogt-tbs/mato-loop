@@ -177,6 +177,8 @@ async def load_effective_ai(db: AsyncSession, user_id: UUID) -> AiSettings:
 async def load_effective_integrations(
     db: AsyncSession, user_id: UUID
 ) -> IntegrationSettings:
+    from mato_loop_backend.integrations.registry import integration_adapter
+
     instance = (await SettingsStore.load(db, IntegrationSettings)).model_copy(deep=True)
     for item in instance.instances:
         item.owner_id = None
@@ -185,6 +187,10 @@ async def load_effective_integrations(
         for item in instance.instances
         if instance.availability_for(item.adapter_type)
         != IntegrationAdapterAvailability.DISABLED
+        and not (
+            (adapter := integration_adapter(item.integration_type, item.adapter_type))
+            and adapter.personal_only
+        )
     ]
 
     personal = await SettingsStore.load_optional(

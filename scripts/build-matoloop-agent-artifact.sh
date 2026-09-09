@@ -33,6 +33,9 @@ uv run --no-sync pyinstaller \
     --onefile \
     --name matoloop-agent \
     --copy-metadata matoloop-agent \
+    --copy-metadata playwright \
+    --collect-all playwright \
+    --add-data "$ROOT/apps/matoloop-agent/src/matoloop_agent/browser-setup.sh:matoloop_agent" \
     --paths src \
     --add-binary "$TEMP_DIR/shared.so:matoloop_agent/native" \
     --distpath "$TEMP_DIR/dist" \
@@ -52,6 +55,8 @@ install -m 755 "$TEMP_DIR/ripgrep-$RG_VERSION-x86_64-unknown-linux-musl/rg" \
     "$TEMP_DIR/$NAME/rg"
 install -m 644 README.md "$TEMP_DIR/$NAME/"
 install -m 644 SHARED_TERMINAL.md "$TEMP_DIR/$NAME/"
+install -m 644 BROWSER.md "$TEMP_DIR/$NAME/"
+install -m 755 src/matoloop_agent/browser-setup.sh "$TEMP_DIR/$NAME/"
 install -m 644 config.example.json "$TEMP_DIR/$NAME/"
 printf 'version=%s\nrevision=%s\nplatform=linux-amd64\nlibc=%s\n' \
     "$(<"$ROOT/VERSION")" "$(git -C "$ROOT" rev-parse HEAD)" "$LIBC" > "$TEMP_DIR/$NAME/BUILD"
