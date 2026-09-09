@@ -65,6 +65,15 @@ class MemoryApprovalAfter(BaseModel):
     audience: MemoryAudience
 
 
+class MemoryApprovalEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    content: str = Field(min_length=1, max_length=20_000)
+    category: MemoryCategory
+    audience: MemoryAudience
+    pinned: bool = Field(strict=True)
+
+
 class MemoryApprovalPayload(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -1052,7 +1061,11 @@ class MemoryService:
 
     @staticmethod
     async def apply_approved_change(
-        db: AsyncSession, approval: ApprovalRequest, *, owner_id: UUID
+        db: AsyncSession,
+        approval: ApprovalRequest,
+        *,
+        owner_id: UUID,
+        memory_edit: MemoryApprovalEdit | None = None,
     ) -> Literal["applied", "target_changed", "policy_changed"]:
         if approval.user_id != owner_id or approval.request_type != "memory_change":
             return "target_changed"
@@ -1066,6 +1079,8 @@ class MemoryService:
             "memory_remove": "remove",
         }.get(approval.action_kind)
         if action is None:
+            return "target_changed"
+        if memory_edit is not None and action not in {"update", "merge"}:
             return "target_changed"
         session = await db.get(
             ChatSession, payload.source_session_id, with_for_update=True
@@ -1174,46 +1189,62 @@ class MemoryService:
         )
         if payload.after.audience != expected_audience:
             return "target_changed"
-        if action == "update":
-            if len(targets) != 1:
-                return "target_changed"
-            mutation = await MemoryService.update_dreaming(
-                db,
-                owner_id=owner_id,
-                memory_id=targets[0].id,
-                expected_revision=targets[0].revision,
-                content=payload.after.content,
-                category=payload.after.category,
-                trust_level=payload.trust_level,
-                session_id=session.id,
-                dream_run_id=dream_run.id,
-                evidence_message_ids=payload.evidence_message_ids,
+        after = memory_edit if memory_edit is not None else payload.after
+        try:
+            async with db.begin_nested():
+                if action == "update":
+                    if len(targets) != 1:
+                        return "target_changed"
+                    mutation = await MemoryService.update_dreaming(
+                        db,
+                        owner_id=owner_id,
+                        memory_id=targets[0].id,
+                        expected_revision=targets[0].revision,
+                        content=after.content,
+                        category=after.category,
+                        trust_level=payload.trust_level,
+                        session_id=session.id,
+                        dream_run_id=dream_run.id,
+                        evidence_message_ids=payload.evidence_message_ids,
+                    )
+                else:
+                    mutation = await MemoryService.merge_dreaming(
+                        db,
+                        owner_id=owner_id,
+                        memory_ids=target_ids,
+                        expected_revisions={item.id: item.revision for item in targets},
+                        expected_audience={
+                            item.id: MemoryAudience(item.audience) for item in targets
+                        },
+                        content=after.content,
+                        category=after.category,
+                        trust_level=payload.trust_level,
+                        readable_by=payload.readable_by,
+                        session_id=session.id,
+                        dream_run_id=dream_run.id,
+                        evidence_message_ids=payload.evidence_message_ids,
+                    )
+                if mutation.item is None or mutation.conflict:
+                    return "target_changed"
+                if memory_edit is not None:
+                    # Owner-only overrides; model mutations keep their audience and pin rules.
+                    # Duplicate protection is owner-wide, independent of the final audience.
+                    mutation.item.audience = memory_edit.audience.value
+                    mutation.item.pinned = memory_edit.pinned
+                await db.flush()
+        except IntegrityError:
+            _, content_hash = normalize_content(after.content)
+            duplicate = await MemoryService._duplicate_by_hash(
+                db, owner_id=owner_id, content_hash=content_hash
             )
-            if mutation.item is None or mutation.conflict:
-                return "target_changed"
-            dream_run.updated_memory_count = (dream_run.updated_memory_count or 0) + 1
-            return "applied"
-
-        mutation = await MemoryService.merge_dreaming(
-            db,
-            owner_id=owner_id,
-            memory_ids=target_ids,
-            expected_revisions={item.id: item.revision for item in targets},
-            expected_audience={item.id: MemoryAudience(item.audience) for item in targets},
-            content=payload.after.content,
-            category=payload.after.category,
-            trust_level=payload.trust_level,
-            readable_by=payload.readable_by,
-            session_id=session.id,
-            dream_run_id=dream_run.id,
-            evidence_message_ids=payload.evidence_message_ids,
-        )
-        if mutation.item is None or mutation.conflict:
+            if duplicate is None or duplicate.id in target_ids:
+                raise
             return "target_changed"
         dream_run.updated_memory_count = (dream_run.updated_memory_count or 0) + 1
-        dream_run.removed_memory_count = (
-            dream_run.removed_memory_count or 0
-        ) + len(targets) - 1
+        if action == "merge":
+            dream_run.removed_memory_count = (
+                dream_run.removed_memory_count or 0
+            ) + len(targets) - 1
         return "applied"
 
     @staticmethod

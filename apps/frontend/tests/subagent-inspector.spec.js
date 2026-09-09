@@ -2,7 +2,7 @@
 import { computed, createApp, defineComponent, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
-import { Quasar, QAvatar, QBanner, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QDialog, QExpansionItem, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QRadio, QScrollArea, QSeparator, QSpace, QSpinner, QTooltip } from 'quasar'
+import { Quasar, QAvatar, QBanner, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QDialog, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QRadio, QScrollArea, QSelect, QSeparator, QSpace, QSpinner, QToggle, QTooltip } from 'quasar'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
@@ -24,7 +24,7 @@ import { buildChatTranscript } from '../src/utils/chat-transcript'
 import { agentRunPresentation } from '../src/utils/agent-activity'
 import { api } from 'src/boot/axios'
 
-const components = { QAvatar, QBanner, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QDialog, QExpansionItem, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QRadio, QScrollArea, QSeparator, QSpace, QSpinner, QTooltip }
+const components = { QAvatar, QBanner, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QDialog, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QRadio, QScrollArea, QSelect, QSeparator, QSpace, QSpinner, QToggle, QTooltip }
 let app, root, store
 afterEach(() => {
   app?.unmount()

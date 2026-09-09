@@ -2,7 +2,7 @@
 import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QExpansionItem, QIcon, QItem, QItemLabel, QItemSection, QList, QSeparator, QSpace } from 'quasar'
+import { Quasar, QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QSelect, QSeparator, QSpace, QToggle, QTooltip } from 'quasar'
 import ApprovalCard from '../src/components/ApprovalCard.vue'
 import { useApprovalStore } from '../src/stores/approvals'
 import { api } from 'src/boot/axios'
@@ -36,7 +36,7 @@ it.each(['read', 'write'])('displays the exact read-only shared review and actua
   root = document.createElement('div')
   document.body.append(root)
   app = createApp({ render: () => approvals.pending[0] ? h(ApprovalCard, { approval: approvals.pending[0] }) : null })
-  app.use(pinia).use(Quasar, { components: { QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QExpansionItem, QIcon, QItem, QItemLabel, QItemSection, QList, QSeparator, QSpace } })
+  app.use(pinia).use(Quasar, { components: { QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QSelect, QSeparator, QSpace, QToggle, QTooltip } })
   app.mount(root)
   await nextTick()
   expect(root.querySelector('.tool-call__details').textContent).toBe(sharedDraft.command)

@@ -82,12 +82,13 @@ export const useApprovalStore = defineStore('approvals', {
       this.loaded = true
       this.loadFailed = false
     },
-    async decide(id, decision, expectedRevision) {
+    async decide(id, decision, expectedRevision, memoryEdit) {
       expectedRevision ??= this.pending.find((item) => item.id === id)?.payload?.sharedDraft?.inspectionRevision
       this.submittingId = id
       try {
         await api.post(`/approvals/${id}/decisions`, {
           decision,
+          ...(decision === 'approve' && memoryEdit != null ? { memory_edit: memoryEdit } : {}),
           ...(decision.startsWith('allow') && expectedRevision != null
             ? { expected_revision: expectedRevision }
             : {})

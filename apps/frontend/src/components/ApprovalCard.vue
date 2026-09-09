@@ -39,13 +39,62 @@
           Diese Erinnerung wird dauerhaft gelöscht. Dieser Vorgang kann nicht rückgängig gemacht werden.
         </q-banner>
         <div v-if="approval.actionKind !== 'memory_pin' && memoryPayload.after" class="q-mt-md">
-          <div class="text-caption app-muted q-mb-xs">Vorgeschlagenes Ergebnis</div>
-          <div class="approval-resource">
+          <div class="row items-center q-gutter-xs q-mb-xs">
+            <div class="text-caption app-muted">Vorgeschlagenes Ergebnis</div>
+            <q-btn
+              v-if="canEditMemory && !memoryEdit"
+              flat round dense icon="edit" color="primary"
+              aria-label="Vorschlag bearbeiten"
+              :disable="Boolean(loadingDecision)"
+              @click="startMemoryEdit"
+            >
+              <q-tooltip>Vorschlag bearbeiten</q-tooltip>
+            </q-btn>
+            <q-btn
+              v-if="memoryEdit"
+              flat dense no-caps icon="undo" label="Bearbeitung verwerfen"
+              :disable="Boolean(loadingDecision)"
+              @click="memoryEdit = null"
+            />
+          </div>
+          <q-form v-if="memoryEdit" ref="memoryFormRef" class="approval-resource" @submit.prevent="decide('approve')">
+            <q-input
+              v-model="memoryEdit.content"
+              outlined autofocus autogrow type="textarea" label="Inhalt" maxlength="20000"
+              :disable="Boolean(loadingDecision)"
+              :rules="[(value) => Boolean(value?.trim()) || 'Bitte einen Inhalt eingeben.']"
+            />
+            <q-select
+              v-model="memoryEdit.category"
+              outlined emit-value map-options label="Kategorie" class="q-mt-sm"
+              :options="memoryCategoryOptions" :disable="Boolean(loadingDecision)"
+            />
+            <q-select
+              v-model="memoryEdit.audience"
+              outlined emit-value map-options label="Verfügbar für" class="q-mt-md"
+              hint="Legt fest, welche Modellarten diese Erinnerung verwenden dürfen."
+              :options="memoryAudienceOptions" :disable="Boolean(loadingDecision)"
+            >
+              <template #selected><span>{{ memoryAudienceLabel(memoryEdit.audience) }}</span></template>
+            </q-select>
+            <q-toggle
+              v-model="memoryEdit.pinned"
+              color="primary" label="Immer im Kontext" class="q-mt-md"
+              :disable="Boolean(loadingDecision)"
+            />
+            <div class="text-caption app-muted">
+              Ausgeschaltet bleibt die Erinnerung gespeichert und erscheint automatisch nur bei einer passenden Anfrage; vollständige Details bleiben gezielt abrufbar.
+            </div>
+          </q-form>
+          <div v-else class="approval-resource">
             <div class="text-body2">{{ memoryPayload.after.content }}</div>
             <div class="row items-center q-gutter-xs q-mt-sm">
               <q-chip dense square>{{ memoryCategoryLabel(memoryPayload.after.category) }}</q-chip>
               <q-chip dense square :icon="memoryAudienceIcon(memoryPayload.after.audience)">
                 {{ memoryAudienceLabel(memoryPayload.after.audience) }}
+              </q-chip>
+              <q-chip dense square :icon="memoryPinned ? 'push_pin' : 'bookmark_border'">
+                {{ memoryPinned ? 'Immer im Kontext' : 'Bei passender Anfrage' }}
               </q-chip>
             </div>
           </div>
@@ -180,7 +229,7 @@
         unelevated
         no-caps
         :color="isMemoryRemove ? 'negative' : 'primary'"
-        :label="isMemoryRemove ? 'Entfernen genehmigen' : 'Genehmigen'"
+        :label="isMemoryRemove ? 'Entfernen genehmigen' : memoryEdit ? 'Speichern und genehmigen' : 'Genehmigen'"
         :loading="loadingDecision === 'approve'"
         :disable="Boolean(loadingDecision) || invalidMemoryApproval"
         @click="decide('approve')"
@@ -223,6 +272,7 @@
 import { computed, ref } from 'vue'
 import ToolPresentation from 'components/ToolPresentation.vue'
 import SubagentRequestLink from 'components/SubagentRequestLink.vue'
+import { useConfirm } from 'src/composables/confirm'
 import {
   approvalResource,
   memoryApprovalDisplay,
@@ -248,7 +298,14 @@ const emit = defineEmits(['open-approval-draft'])
 const approvals = useApprovalStore()
 const chat = useChatStore()
 const workspace = useWorkspaceStore()
+const { confirm } = useConfirm()
 const loadingDecision = ref(null)
+const memoryEdit = ref(null)
+const memoryFormRef = ref(null)
+const memoryCategoryOptions = ['context', 'fact', 'goal', 'identity', 'preference']
+  .map((value) => ({ value, label: memoryCategoryLabel(value) }))
+const memoryAudienceOptions = ['private_only', 'public_only', 'both']
+  .map((value) => ({ value, label: memoryAudienceLabel(value) }))
 const showFullDetails = ref(false)
 const rememberForSession = ref(false)
 const shellClassification = computed(() => shellClassificationDisplay(props.approval))
@@ -263,6 +320,11 @@ const isMemoryApproval = computed(() => props.approval.requestType === 'memory_c
 const memoryDisplay = computed(() => memoryApprovalDisplay(props.approval))
 const memoryPayload = computed(() => memoryDisplay.value.payload)
 const memoryTargets = computed(() => memoryDisplay.value.targets)
+const memoryPinned = computed(() => memoryTargets.value.some((memory) => memory.pinned))
+const canEditMemory = computed(() => isMemoryApproval.value
+  && props.approval.status === 'pending'
+  && ['memory_update', 'memory_merge'].includes(props.approval.actionKind)
+  && !invalidMemoryApproval.value && hasDecision('approve'))
 const invalidMemoryApproval = computed(() => isMemoryApproval.value && memoryDisplay.value.invalid)
 const isMemoryRemove = computed(() => isMemoryApproval.value && memoryDisplay.value.destructive)
 const cardTitle = computed(() => isMemoryApproval.value ? memoryDisplay.value.title : props.approval.title)
@@ -367,10 +429,40 @@ function memoryAudienceIcon(value) {
   return ({ private_only: 'lock', public_only: 'public', both: 'groups' })[value] || 'help_outline'
 }
 
+function startMemoryEdit() {
+  memoryEdit.value = { ...memoryPayload.value.after, pinned: memoryPinned.value }
+}
+
 async function decide(decision) {
+  if (loadingDecision.value) return
+  if (decision === 'approve' && memoryEdit.value && !await memoryFormRef.value?.validate()) return
+  if (loadingDecision.value) return
   loadingDecision.value = decision
   try {
-    await approvals.decide(props.approval.id, decision, sharedDraft.value?.inspectionRevision ?? draftRevision.value)
+    const edit = decision === 'approve' && memoryEdit.value
+      ? { ...memoryEdit.value, content: memoryEdit.value.content.trim() }
+      : undefined
+    if (edit) {
+      if (memoryPayload.value.after.audience === 'private_only' && edit.audience !== 'private_only') {
+        const accepted = await confirm(
+          'Die Erinnerung wird danach auch für öffentliche Modelle verfügbar. Bereits übermittelte Inhalte lassen sich nicht zurückholen. Wirklich freigeben?',
+          'Für öffentliche Modelle freigeben',
+          { okLabel: 'Freigeben', okColor: 'warning' }
+        )
+        if (!accepted) return
+      }
+      if (edit.pinned && !memoryPinned.value) {
+        const accepted = await confirm(
+          'Diese Erinnerung wird bei erlaubten Anfragen vollständig in den Modellkontext eingefügt und vergrößert ihn.',
+          'Immer im Kontext',
+          { okLabel: 'Bestätigen', okColor: 'primary' }
+        )
+        if (!accepted) return
+      }
+    }
+    await approvals.decide(props.approval.id, decision, sharedDraft.value?.inspectionRevision ?? draftRevision.value, edit)
+  } catch {
+    // The central API interceptor displays the error; local edits remain available.
   } finally {
     loadingDecision.value = null
   }

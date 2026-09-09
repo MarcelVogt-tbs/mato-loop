@@ -16,7 +16,7 @@ from mato_loop_backend.agent.approval_decisions import (
 from mato_loop_backend.agent.runtime import approval_payload
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.memory.service import MemoryService
+from mato_loop_backend.memory.service import MemoryApprovalEdit, MemoryService
 from mato_loop_backend.models import ApprovalRequest, ChatSession, PermissionGrant, UserAccount
 from mato_loop_backend.security import require_user
 from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
@@ -26,6 +26,7 @@ router = APIRouter(prefix="/approvals", dependencies=[Depends(require_user)])
 
 class ApprovalDecisionRequest(BaseModel):
     decision: Literal["allow_once", "allow_session", "approve", "deny"]
+    memory_edit: MemoryApprovalEdit | None = None
     expected_revision: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",
@@ -100,6 +101,12 @@ async def decide_approval(
     approval = await db.get(ApprovalRequest, approval_id)
     if approval is None or approval.user_id != user.id:
         raise ApiError(404, "approval.notFound")
+    if payload.memory_edit is not None and (
+        payload.decision != "approve"
+        or approval.request_type != "memory_change"
+        or approval.action_kind not in {"memory_update", "memory_merge"}
+    ):
+        raise ApiError(400, "validation.invalid", field="memory_edit")
     if approval.request_type == "memory_change":
         await db.refresh(approval, with_for_update=True)
         if approval.status != "pending":
@@ -112,7 +119,9 @@ async def decide_approval(
             raise ApiError(400, "approval.decisionUnavailable")
         if payload.expected_revision is not None:
             raise ApiError(400, "validation.invalid", field="expected_revision")
-        return await _decide_memory_change(approval, payload.decision, user.id, db)
+        return await _decide_memory_change(
+            approval, payload.decision, user.id, db, memory_edit=payload.memory_edit
+        )
 
     try:
         return await decide_agent_action(
@@ -130,6 +139,8 @@ async def _decide_memory_change(
     decision: str,
     user_id: UUID,
     db: AsyncSession,
+    *,
+    memory_edit: MemoryApprovalEdit | None = None,
 ) -> dict[str, str]:
     now = datetime.now(UTC)
     if decision == "deny":
@@ -142,7 +153,9 @@ async def _decide_memory_change(
     resolver = getattr(MemoryService, "apply_approved_change", None)
     if resolver is None:
         raise ApiError(503, "memory.unavailable")
-    outcome = await resolver(db, approval=approval, owner_id=user_id)
+    outcome = await resolver(
+        db, approval=approval, owner_id=user_id, memory_edit=memory_edit
+    )
     error_code = {
         "target_changed": "approval.targetChanged",
         "policy_changed": "approval.policyChanged",
@@ -155,6 +168,11 @@ async def _decide_memory_change(
     if outcome != "applied":
         raise ApiError(503, "memory.unavailable")
 
+    if memory_edit is not None:
+        approval.payload = {
+            **approval.payload,
+            "ownerEdit": memory_edit.model_dump(mode="json"),
+        }
     approval.status = "approved"
     approval.decision = decision
     approval.resolved_at = now
