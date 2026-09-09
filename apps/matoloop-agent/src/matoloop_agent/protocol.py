@@ -45,6 +45,22 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
 
+class SystemInfo(StrictModel):
+    operating_system: str | None = Field(
+        default=None, alias="operatingSystem", min_length=1, max_length=80
+    )
+    distribution: str | None = Field(default=None, min_length=1, max_length=255)
+    kernel: str | None = Field(default=None, min_length=1, max_length=160)
+    architecture: str | None = Field(default=None, min_length=1, max_length=80)
+    cpu_model: str | None = Field(default=None, alias="cpuModel", min_length=1, max_length=255)
+    logical_cpu_count: int | None = Field(
+        default=None, alias="logicalCpuCount", ge=1, le=2147483647
+    )
+    total_memory_bytes: int | None = Field(
+        default=None, alias="totalMemoryBytes", ge=1, le=9223372036854775807
+    )
+
+
 class Hello(StrictModel):
     type: Literal["hello"] = "hello"
     protocol_version: Literal[1] = Field(default=1, alias="protocolVersion")
@@ -54,6 +70,7 @@ class Hello(StrictModel):
     platform: str = Field(min_length=1, max_length=80)
     home_directory: str = Field(alias="homeDirectory", min_length=1, max_length=4096)
     operations: list[str] = Field(max_length=64)
+    system_info: SystemInfo | None = Field(default=None, alias="systemInfo")
 
     _home_is_absolute = field_validator("home_directory")(_absolute_path)
 

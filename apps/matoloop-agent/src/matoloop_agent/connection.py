@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import platform
+import shlex
 import shutil
 import socket
 import sys
@@ -57,6 +57,7 @@ from .protocol import (
     ShellArguments,
     ShellInspectArguments,
     StatArguments,
+    SystemInfo,
     SystemInfoArguments,
     TerminalCloseArguments,
     TerminalOpenArguments,
@@ -151,20 +152,21 @@ class MatoLoopAgent:
         self.operations = sorted(operations)
 
     def hello(self) -> Hello:
-        try:
-            from importlib.metadata import version
-
-            agent_version = version("matoloop-agent")
-        except Exception:
-            agent_version = "0.1.0"
         home = self.filesystem.resolve_directory(os.fspath(self.config.home_directory))
+        info = self.system_info(None)
         return Hello(
             agentId=self.config.agent_id,
-            agentVersion=agent_version,
+            agentVersion=info["agentVersion"],
             computerName=socket.gethostname(),
             platform=sys.platform,
             homeDirectory=home["path"],
             operations=self.operations,
+            systemInfo=SystemInfo.model_validate(
+                {
+                    field.alias or name: info.get(field.alias or name)
+                    for name, field in SystemInfo.model_fields.items()
+                }
+            ),
         )
 
     def system_info(self, current_directory: str | None) -> dict[str, Any]:
@@ -177,26 +179,81 @@ class MatoLoopAgent:
         result: dict[str, Any] = {
             "agentVersion": agent_version,
             "platform": sys.platform[:80],
-            "operatingSystem": platform.system()[:80],
-            "kernel": platform.release()[:160],
-            "architecture": platform.machine()[:80],
-            "logicalCpuCount": os.cpu_count(),
+            "operatingSystem": None,
+            "kernel": None,
+            "architecture": None,
+            "logicalCpuCount": None,
         }
+        with suppress(OSError, ValueError):
+            uname = os.uname()
+            result.update(
+                operatingSystem=uname.sysname, kernel=uname.release, architecture=uname.machine
+            )
+        with suppress(OSError, ValueError):
+            count = os.cpu_count()
+            if type(count) is int and 1 <= count <= 2147483647:
+                result["logicalCpuCount"] = count
         if sys.platform.startswith("linux"):
+            # Read directly because platform.freedesktop_os_release caches across reconnects.
+            for path in ("/etc/os-release", "/usr/lib/os-release"):
+                try:
+                    with open(path, encoding="utf-8") as handle:
+                        for line in handle:
+                            name, _, value = line.partition("=")
+                            if name.strip() == "PRETTY_NAME":
+                                parts = shlex.split(value, comments=True)
+                                if len(parts) == 1:
+                                    result["distribution"] = parts[0]
+                                break
+                    break
+                except (OSError, ValueError):
+                    continue
+            with suppress(OSError, ValueError):
+                models = {}
+                with open("/proc/cpuinfo", encoding="utf-8") as handle:
+                    for line in handle:
+                        name, _, value = line.partition(":")
+                        name, value = name.strip(), value.strip()
+                        if name in {"model name", "Hardware", "Processor"} and value:
+                            if not value.isdecimal():
+                                models.setdefault(name, value)
+                result["cpuModel"] = next(
+                    (
+                        models[name]
+                        for name in ("model name", "Hardware", "Processor")
+                        if name in models
+                    ),
+                    None,
+                )
+            values = {}
             try:
-                values = {}
                 with open("/proc/meminfo", encoding="ascii") as handle:
                     for line in handle:
-                        name, value = line.split(":", 1)
+                        name, _, value = line.partition(":")
                         if name in {"MemTotal", "MemAvailable"}:
-                            values[name] = int(value.split()[0]) * 1024
-                if values.keys() >= {"MemTotal", "MemAvailable"}:
-                    result["memory"] = {
-                        "totalBytes": values["MemTotal"],
-                        "availableBytes": values["MemAvailable"],
-                    }
-            except (OSError, ValueError, IndexError):
+                            with suppress(ValueError):
+                                amount, unit = value.split()
+                                size = int(amount) * 1024
+                                minimum = 1 if name == "MemTotal" else 0
+                                if unit == "kB" and minimum <= size <= 9223372036854775807:
+                                    values[name] = size
+            except (OSError, ValueError):
                 pass
+            result["totalMemoryBytes"] = values.get("MemTotal")
+            if values.keys() >= {"MemTotal", "MemAvailable"}:
+                result["memory"] = {
+                    "totalBytes": values["MemTotal"],
+                    "availableBytes": values["MemAvailable"],
+                }
+        for name, limit in (
+            ("operatingSystem", 80),
+            ("distribution", 255),
+            ("kernel", 160),
+            ("architecture", 80),
+            ("cpuModel", 255),
+        ):
+            value = result.get(name)
+            result[name] = value.strip()[:limit] or None if isinstance(value, str) else None
         if current_directory is not None:
             directory = self.filesystem.resolve_directory(current_directory)
             usage = shutil.disk_usage(directory["path"])

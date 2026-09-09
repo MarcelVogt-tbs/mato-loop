@@ -4,7 +4,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from matoloop_agent.protocol import Hello, Request, parse_inbound, validate_arguments
+from matoloop_agent.protocol import Hello, Request, SystemInfo, parse_inbound, validate_arguments
 
 REQUEST_ID = "bbc46aa8-698d-4554-92c2-1cd5c6cc33a6"
 AGENT_ID = "2ea504cc-e3c6-4e0d-aa05-080328100fe8"
@@ -37,12 +37,42 @@ class ProtocolTests(unittest.TestCase):
             operations=["filesystem.read"],
         )
         self.assertEqual(hello.protocol_version, 1)
+        self.assertIsNone(hello.system_info)
+        self.assertNotIn("systemInfo", hello.model_dump(by_alias=True, exclude_none=True))
         with self.assertRaises(ValidationError):
             parse_inbound(
                 json.dumps({"type": "welcome", "protocolVersion": 3, "agentId": AGENT_ID})
             )
         with self.assertRaises(ValidationError):
             Hello.model_validate({**hello.model_dump(by_alias=True), "roots": []})
+
+    def test_system_info_fields_are_nullable_strict_and_bounded(self) -> None:
+        self.assertTrue(all(value is None for value in SystemInfo().model_dump().values()))
+        for field, maximum in (
+            ("operatingSystem", 80),
+            ("distribution", 255),
+            ("kernel", 160),
+            ("architecture", 80),
+            ("cpuModel", 255),
+            ("logicalCpuCount", 2147483647),
+            ("totalMemoryBytes", 9223372036854775807),
+        ):
+            numeric = field in {"logicalCpuCount", "totalMemoryBytes"}
+            valid = (None, 1, maximum) if numeric else (None, "x", "x" * maximum)
+            invalid = (
+                (0, -1, maximum + 1, True, 1.0, "1")
+                if numeric
+                else ("", "x" * (maximum + 1), 1, True, b"Linux")
+            )
+            for value in valid:
+                with self.subTest(field=field, value=value):
+                    info = SystemInfo.model_validate({field: value})
+                    self.assertEqual(info.model_dump(by_alias=True)[field], value)
+            for value in invalid:
+                with self.subTest(field=field, value=value), self.assertRaises(ValidationError):
+                    SystemInfo.model_validate({field: value})
+        with self.assertRaises(ValidationError):
+            SystemInfo.model_validate({"memory": {"availableBytes": 1024}})
 
     def test_filesystem_arguments_require_normalized_absolute_paths(self) -> None:
         request = Request.model_validate(

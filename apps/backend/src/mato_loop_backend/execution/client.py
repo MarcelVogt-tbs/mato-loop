@@ -184,10 +184,13 @@ class DirectoryResult(ExecutionResult):
 class SystemInfoResult(ExecutionResult):
     agent_version: str
     platform: str
-    operating_system: str
-    kernel: str
-    architecture: str
-    logical_cpu_count: int | None
+    operating_system: str | None = None
+    kernel: str | None = None
+    architecture: str | None = None
+    logical_cpu_count: int | None = None
+    distribution: str | None = Field(default=None, min_length=1, max_length=255)
+    cpu_model: str | None = Field(default=None, min_length=1, max_length=255)
+    total_memory_bytes: int | None = Field(default=None, ge=1, le=9223372036854775807)
     memory: dict[str, int] | None = None
     disk: dict[str, Any] | None = None
 

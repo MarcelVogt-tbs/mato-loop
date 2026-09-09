@@ -1288,11 +1288,14 @@ def test_general_system_prompt_keeps_permission_denials_host_scoped() -> None:
 
 
 def test_general_system_prompt_reports_selected_offline_computer() -> None:
+    from mato_loop_backend.execution.protocol import SystemInfo
+
     prompt = general_system_prompt(
         _session(),
         execution_agent_name="Laptop",
         execution_agent_platform="linux",
         execution_agent_connected=False,
+        execution_agent_system_info=SystemInfo(cpu_model="Stale CPU"),
         current_directory="/home/user/project",
     )
 
@@ -1300,6 +1303,8 @@ def test_general_system_prompt_reports_selected_offline_computer() -> None:
     assert '"status": "offline"' in prompt
     assert '"currentDirectory": "/home/user/project"' in prompt
     assert "No live computer operations are available." in prompt
+    assert "Stale CPU" not in prompt
+    assert '"systemInfo"' not in prompt
 
 
 def test_skill_catalog_contains_selection_metadata_without_instructions() -> None:
