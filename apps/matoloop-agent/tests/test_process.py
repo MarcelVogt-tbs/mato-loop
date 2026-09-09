@@ -828,6 +828,105 @@ class ShellInspectionTests(unittest.TestCase):
         )
         self.which.assert_called_with("ls", path=EXECUTION_PATH)
 
+    def test_python_execution_operand_preserves_paths_and_mutation_classification(self) -> None:
+        for command in (
+            "python -m unittest -v",
+            "python3 -munittest -v",
+            "python3.13 -IB -W error -X dev -m unittest -v",
+            "python3 -BWerror -Xdev -Imunittest -v",
+        ):
+            with self.subTest(command=command):
+                result = self.inspect(command)
+                self.assertTrue(result["analysisComplete"])
+                self.assertEqual(result["classification"], "read")
+                self.assertEqual(result["targets"], [])
+                self.assertEqual(result["commands"][0]["prefix"][-1], "unittest")
+        for arguments in (
+            "-m pip install package",
+            "-Im pip uninstall package",
+            "-mpip install package",
+        ):
+            with self.subTest(arguments=arguments):
+                self.assertEqual(self.inspect("python3 " + arguments)["classification"], "write")
+        for arguments in (
+            "/outside/file -m unittest",
+            "-W error -X dev /outside/file -c pass",
+            "-- /outside/file -m unittest",
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.inspect("python3 " + arguments)
+                self.assertIn(
+                    ("/outside/file", "script"),
+                    {(t["path"], t["kind"]) for t in result["targets"]},
+                )
+        result = self.inspect("python3 -m unittest /outside/file > /confidential/output")
+        self.assertEqual(result["classification"], "write")
+        self.assertEqual(
+            {t["path"] for t in result["targets"]}, {"/outside/file", "/confidential/output"}
+        )
+        (self.root / "workspace/link").symlink_to("../outside/file")
+        for command in ("python3 link -m unittest", "python3 --future link"):
+            with self.subTest(command=command), self.assertRaises(AgentError):
+                self.inspect(command)
+        for command in (
+            "python3 --future value -m unittest",
+            "python3 -m",
+            "python3 -W",
+            "python3 -m $MODULE",
+        ):
+            with self.subTest(command=command):
+                result = self.inspect(command)
+                self.assertFalse(result["analysisComplete"])
+                self.assertTrue(all("prefix" not in unit for unit in result["commands"]))
+        for command in ("python3 -cpass", "python3 -Ic 'pass' -m pip install package"):
+            with self.subTest(command=command):
+                result = self.inspect(command)
+                self.assertEqual(result["targets"], [])
+                self.assertNotIn("prefix", result["commands"][0])
+
+    def test_literal_argument_whitespace_preserves_shell_boundaries_and_revision(self) -> None:
+        code = "if True:\n\tprint(1)"
+        for quote in ("'", '"'):
+            command = f"python3 -c {quote}{code}{quote}"
+            result = self.inspect(command)
+            self.assertTrue(result["analysisComplete"])
+            self.assertEqual(result["commands"][0]["tokens"], ["python3", "-c", code])
+            self.assertNotIn("prefix", result["commands"][0])
+            argv, _ = self.runner.execution_argv(
+                current_directory="/workspace",
+                command=command,
+                expected_inspection_revision=result["inspectionRevision"],
+            )
+            self.assertEqual(argv[-2:], ["-c", command])
+            with self.assertRaises(AgentError) as raised:
+                self.runner.execution_argv(
+                    current_directory="/workspace",
+                    command=command.replace("print(1)", "print(2)"),
+                    expected_inspection_revision=result["inspectionRevision"],
+                )
+            self.assertEqual(raised.exception.code, "process.inspectionChanged")
+        result = self.inspect("python3 -c 'print(1)\nprint(2)'\nrm /outside/file")
+        self.assertTrue(result["analysisComplete"])
+        self.assertEqual(result["classification"], "write")
+        self.assertIn("/outside/file", [t["path"] for t in result["targets"]])
+        self.assertEqual(result["commands"][1]["tokens"], ["rm", "/outside/file"])
+        with self.assertRaises(AgentError) as raised:
+            self.inspect("python3 -c 'print(1)\nprint(2)")
+        self.assertEqual(raised.exception.code, "process.invalidSyntax")
+
+    def test_argument_whitespace_keeps_executable_prefix_and_control_restrictions(self) -> None:
+        for whitespace in ("\n", "\t"):
+            result = self.inspect(f"'py{whitespace}thon3' -c pass")
+            self.assertFalse(result["analysisComplete"])
+            self.assertEqual(result["commands"], [])
+            result = self.inspect(f"git 'sta{whitespace}tus'")
+            self.assertTrue(result["analysisComplete"])
+            self.assertNotIn("prefix", result["commands"][0])
+        for control in ("\r", "\x01", "\x1b", "\x7f", "\x80", "\x9f"):
+            result = self.inspect(f"printf 'a{control}b'")
+            self.assertFalse(result["analysisComplete"])
+            self.assertEqual(result["commands"], [])
+
     def test_metadata_literals_globs_no_matches_aliases_and_normal_access(self) -> None:
         for operand in (
             "/usr/bin",

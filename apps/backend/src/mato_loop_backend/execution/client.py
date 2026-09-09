@@ -8,7 +8,15 @@ from pathlib import PurePosixPath
 from typing import Any, BinaryIO, Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from mato_loop_backend.execution.manager import (
     ExecutionAgentError,
@@ -222,12 +230,19 @@ class ShellCommand(ExecutionResult):
 
     @field_validator("tokens", "prefix")
     @classmethod
-    def validate_tokens(cls, value: list[str] | None) -> list[str] | None:
+    def validate_tokens(cls, value: list[str] | None, info: ValidationInfo) -> list[str] | None:
+        # Arguments are semantic data, never reparsed as shell source or grant prefixes.
         if value is not None and any(
             not token
             or len(token) > 1_024
-            or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in token)
-            for token in value
+            or any(
+                (ord(character) < 32 and not (
+                    info.field_name == "tokens" and index > 0 and character in "\n\t"
+                ))
+                or 127 <= ord(character) <= 159
+                for character in token
+            )
+            for index, token in enumerate(value)
         ):
             raise ValueError("invalid shell token")
         return value

@@ -113,6 +113,22 @@ async def test_lists_pages_reads_utf8_and_searches_session_files(tmp_path: Path)
         "b.txt",
         "c.txt",
     ]
+    assert await search.glob(FileRoot.SESSION, ".", "**/*.md") == {
+        "paths": [], "truncated": False,
+    }
+
+
+async def test_glob_preserves_execution_failures(tmp_path: Path, monkeypatch) -> None:
+    service, _ = make_service(tmp_path)
+    search = RootFileSearch(service)
+
+    async def failed_run(*args):
+        return 2, False
+
+    monkeypatch.setattr(search, "_run", failed_run)
+    with pytest.raises(RootFileError) as exc_info:
+        await search.glob(FileRoot.SESSION, ".", "*.txt")
+    assert exc_info.value.code == "tool.executionFailed"
 
 
 def test_mutations_are_atomic_and_limited_to_session_files(tmp_path: Path) -> None:

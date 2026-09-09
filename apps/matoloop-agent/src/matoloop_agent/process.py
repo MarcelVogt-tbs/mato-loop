@@ -490,9 +490,41 @@ def _container_command_writes(tokens: list[str], depth: int) -> bool:
     return False
 
 
+def _python_command(arguments: list[str]) -> tuple[str, list[str]] | None:
+    # Stop at the execution operand: subsequent options belong to the script/module.
+    while arguments:
+        argument, *remaining = arguments
+        if argument == "--":
+            return "script", remaining
+        if argument == "-" or not argument.startswith("-"):
+            return "script", arguments
+        if argument in {"--help", "--help-env", "--help-xoptions", "--help-all", "--version"}:
+            return "", []
+        for index, option in enumerate(argument[1:], start=1):
+            if option in "cmWX":
+                value = argument[index + 1 :]
+                if not value:
+                    if not remaining:
+                        return None
+                    value, *remaining = remaining
+                if option in "cm":
+                    return option, [value, *remaining]
+                break
+            if option in "hV?":
+                return "", []
+            if option not in "bBdEiIOPqRsSuvx":
+                return None
+        arguments = remaining
+    return "", []
+
+
 def _definitely_writes(tokens: list[str], *, depth: int = 0) -> bool:
     executable = Path(tokens[0]).name
     arguments = tokens[1:]
+    if executable.startswith("python"):
+        python = _python_command(arguments)
+        if python is not None and python[0] == "m" and python[1][:1] == ["pip"]:
+            return _definitely_writes(python[1], depth=depth)
     if executable in _ALWAYS_WRITES:
         return True
     if executable == "docker":
@@ -733,6 +765,12 @@ def _path_operands(tokens: list[str]) -> list[tuple[str, str, bool]]:
             for index, argument in enumerate(arguments[:-1])
             if argument == "-C"
         ]
+    if executable.startswith("python"):
+        python = _python_command(arguments)
+        if python is not None:
+            if python[0] != "script" or not python[1] or python[1][0] == "-":
+                return []
+            return [(python[1][0], "script", True)]
     if executable in _INTERPRETERS or executable.startswith("python"):
         if any(argument in {"-c", "--command", "-e", "--eval"} for argument in arguments):
             return []
@@ -877,6 +915,12 @@ def _command_prefix(tokens: list[str]) -> list[str] | None:
         return None
     executable = tokens[0]
     arguments = tokens[1:]
+    if executable.startswith("python"):
+        python = _python_command(arguments)
+        if python is None or python[0] == "c":
+            return None
+        if python[0] == "m":
+            return [executable, python[1][0]]
     if executable == "docker":
         command = _docker_command(arguments)
         if command is not None and command[0] in _DOCKER_EXEC_COMMANDS:
@@ -898,8 +942,6 @@ def _command_prefix(tokens: list[str]) -> list[str] | None:
                 arguments = arguments[1:]
             else:
                 return None
-    elif executable.startswith("python") and arguments[:1] == ["-m"]:
-        arguments = arguments[1:]
     elif arguments and arguments[0].startswith("-") and (executable,) in _PREFIX_ARITY:
         return [executable]
 
@@ -1067,6 +1109,8 @@ class ProcessRunner:
             command_writes |= unit_writes
             if not tokens:
                 continue
+            if Path(tokens[0]).name.startswith("python") and _python_command(tokens[1:]) is None:
+                extraction_complete = False
             if len(words) != len(tokens) or any(c in tokens[0] for c in "*?[]{}~"):
                 extraction_complete = False
             command_unit = {
@@ -1080,15 +1124,19 @@ class ProcessRunner:
                 or any(
                     not token
                     or len(token) > 1_024
-                    or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in token)
-                    for token in tokens
+                    or any(
+                        (ord(c) < 32 and not (index > 0 and c in "\n\t")) or 127 <= ord(c) <= 159
+                        for c in token
+                    )
+                    for index, token in enumerate(tokens)
                 )
             ):
                 extraction_complete = False
             else:
                 prefix = _command_prefix(tokens)
                 if prefix is not None and not any(
-                    any(c in token for c in "$`*?[]{}~") for token in prefix
+                    any(c in "$`*?[]{}~" or ord(c) < 32 or 127 <= ord(c) <= 159 for c in token)
+                    for token in prefix
                 ):
                     command_unit["prefix"] = prefix
                 commands.append(command_unit)

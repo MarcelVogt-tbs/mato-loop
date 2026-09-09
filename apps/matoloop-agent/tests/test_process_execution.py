@@ -80,6 +80,19 @@ class ProcessExecutionTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(result["exitCode"], 0, output)
                     self.assertEqual(output, f"{helper}|argument with spaces|second")
 
+    async def test_inspected_multiline_python_executes_unchanged(self) -> None:
+        command = "python3 -c 'if True:\n\tprint(42)'"
+        inspection = self.runner.inspect_shell(command, str(self.current))
+        self.assertTrue(inspection["analysisComplete"])
+        self.assertNotIn("prefix", inspection["commands"][0])
+        for pty in (False, True):
+            with self.subTest(pty=pty):
+                result, output = await self.execute(
+                    pty, command, expected_inspection_revision=inspection["inspectionRevision"]
+                )
+                self.assertEqual(result["exitCode"], 0, output)
+                self.assertEqual(output.strip(), "42")
+
     async def test_nested_programs_observe_stable_paths_and_restricted_environment(self) -> None:
         credential = self.home / "credential"
         credential.write_text("inherited-secret")

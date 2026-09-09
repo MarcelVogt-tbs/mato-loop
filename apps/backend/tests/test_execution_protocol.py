@@ -11,6 +11,7 @@ from mato_loop_backend.execution.client import (
     ExecutionClientError,
     SharedInspectResult,
     SharedProcessResult,
+    ShellCommand,
     ShellInspectResult,
     TerminalOpenResult,
     TerminalReadResult,
@@ -506,6 +507,31 @@ def test_shell_inspection_accepts_redirect_only_writes() -> None:
         "inspectionRevision": "a" * 64,
     })
     assert result.read_only is False
+
+
+@pytest.mark.parametrize("whitespace", ["\n", "\t"])
+def test_shell_argument_whitespace_is_data_not_executable_or_prefix(whitespace) -> None:
+    argument = f"first{whitespace}rm /outside/file"
+    result = ShellCommand.model_validate({
+        "tokens": ["printf", argument], "prefix": ["printf"], "classification": "read",
+    })
+    assert result.tokens == ["printf", argument]
+    assert ShellCommand.model_validate_json(result.model_dump_json()).tokens == result.tokens
+    for overrides in (
+        {"tokens": [argument]},
+        {"prefix": [argument]},
+        {"prefix": ["printf", argument]},
+    ):
+        with pytest.raises(ValidationError):
+            ShellCommand.model_validate({**result.model_dump(), **overrides})
+
+
+@pytest.mark.parametrize("control", ["\0", "\r", "\x01", "\x1b", "\x7f", "\x80", "\x9f"])
+def test_shell_argument_other_controls_remain_rejected(control) -> None:
+    with pytest.raises(ValidationError):
+        ShellCommand.model_validate({
+            "tokens": ["printf", f"first{control}second"], "classification": "read",
+        })
 
 
 @pytest.mark.parametrize("operation", ["shell.inspect", "shell.run", "terminal.run"])

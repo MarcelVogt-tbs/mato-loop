@@ -393,6 +393,7 @@ class _VisibleResponse:
     content_parts: list[str] = field(default_factory=list)
     reasoning: dict[str, Any] | None = None
     warnings: list[str] = field(default_factory=list)
+    generation_diagnostics: dict[str, Any] | None = None
 
     @property
     def content(self) -> str:
@@ -402,6 +403,7 @@ class _VisibleResponse:
         self.content_parts.clear()
         self.reasoning = None
         self.warnings.clear()
+        self.generation_diagnostics = None
 
 
 def _hidden_tool_round_provider_data(provider_data: dict[str, Any]) -> dict[str, Any]:
@@ -1385,6 +1387,8 @@ class AgentRuntime:
                             error_message = await cls._persist_error_message(
                                 db, failed_run, public_error
                             )
+                            if visible_response.generation_diagnostics is not None:
+                                error_message.provider_data = visible_response.generation_diagnostics
                             await cls._persist_run_duration(db, failed_run)
                             await db.commit()
                             failure_committed = True
@@ -2063,6 +2067,7 @@ class AgentRuntime:
             render_system_prompt = partial(
                 general_system_prompt,
                 chat_session,
+                model_id=model.model_id,
                 delegated=delegated,
                 agent_identity=agent_identity,
                 persona=agent_identity.persona,
@@ -2451,6 +2456,58 @@ class AgentRuntime:
                 else "agent.outputLimitReached" if truncated_batch else None
             )
             tool_calls_used += len(normalized_calls)
+            output_budget = result.provider_data.get("output_budget", {})
+            if not isinstance(output_budget, dict):
+                output_budget = {}
+            first_signals = [
+                value for value in provider_timing.values() if isinstance(value, int)
+            ]
+            performance = {
+                "modelRequest": model_requests,
+                "toolCallsUsed": tool_calls_used,
+                "researchToolCallsUsed": research_tool_calls_used,
+                "maxToolCalls": tool_call_limit,
+                "effectiveToolCount": effective_tool_count,
+                "offeredToolCount": len(schemas),
+                "offeredToolNames": [schema["name"] for schema in schemas],
+                "toolSchemaTokens": tool_schema_tokens,
+                "estimatedInputTokens": projection.estimated_input_tokens,
+                "inputBudgetTokens": projection.input_budget_tokens,
+                "reservedOutputTokens": projection.reserved_output_tokens,
+                "safetyReserveTokens": runtime_settings.safety_reserve_tokens,
+                **{
+                    key: output_budget[key]
+                    for key in (
+                        "estimatedInputTokens", "finalEstimatedInputTokens", "guardedInputTokens",
+                        "reservedOutputTokens", "allocatedOutputTokens", "transmittedMaxOutputTokens",
+                        "safetyReserveTokens", "manualLimit", "providerLimit", "helperLimit",
+                        "mode", "estimationPolicy", "mediaInputTokensUnknown",
+                    )
+                    if key in output_budget
+                },
+                "contextPreparationMs": max(
+                    0, round((provider_started_at - context_started_at) * 1_000)
+                ),
+                "providerDurationMs": provider_duration_ms,
+                "timeToFirstSignalMs": min(first_signals) if first_signals else None,
+                "durableMemoryReferences": injected_memory_count,
+                "priorSessionEpisodes": injected_episode_count,
+                **provider_timing,
+            }
+            # Keep completed-generation evidence across rollback, without provider replay data.
+            visible_response.generation_diagnostics = {
+                "_matoloop": {"performance": performance},
+                "usage": {
+                    key: value for key, value in result.usage.items()
+                    if key in {
+                        "input_tokens", "output_tokens", "total_tokens", "reasoning_tokens",
+                        "cached_input_tokens", "cache_write_input_tokens",
+                    } and type(value) is int and value >= 0
+                },
+                **({"finish_reason": result.finish_reason} if result.finish_reason in {
+                    "stop", "tool_calls", "content_filter", *_OUTPUT_LIMIT_REASONS,
+                } else {}),
+            }
             if required_skill_pending and not rejected_batch_code and (
                 len(normalized_calls) != 1 or normalized_calls[0].name != "load_skill"
             ):
@@ -2545,9 +2602,7 @@ class AgentRuntime:
             if tool_budget_exhausted:
                 message_warnings.append("agent.toolCallLimitReached")
             provider_data = _safe_provider_data(result.provider_data, normalized_calls)
-            output_budget = provider_data.pop("output_budget", {})
-            if not isinstance(output_budget, dict):
-                output_budget = {}
+            provider_data.pop("output_budget", None)
             if hide_tool_round:
                 provider_data = _hidden_tool_round_provider_data(provider_data)
             if result.usage:
@@ -2557,44 +2612,10 @@ class AgentRuntime:
             runtime_state = provider_data.get("_matoloop")
             if not isinstance(runtime_state, dict):
                 runtime_state = {}
-            first_signals = [
-                value for value in provider_timing.values() if isinstance(value, int)
-            ]
             provider_data["_matoloop"] = {
                 **runtime_state,
                 **({"completionCause": "agent.toolCallLimitReached"} if tool_budget_exhausted else {}),
-                "performance": {
-                    "modelRequest": model_requests,
-                    "toolCallsUsed": tool_calls_used,
-                    "researchToolCallsUsed": research_tool_calls_used,
-                    "maxToolCalls": tool_call_limit,
-                    "effectiveToolCount": effective_tool_count,
-                    "offeredToolCount": len(schemas),
-                    "offeredToolNames": [schema["name"] for schema in schemas],
-                    "toolSchemaTokens": tool_schema_tokens,
-                    "estimatedInputTokens": projection.estimated_input_tokens,
-                    "inputBudgetTokens": projection.input_budget_tokens,
-                    "reservedOutputTokens": projection.reserved_output_tokens,
-                    "safetyReserveTokens": runtime_settings.safety_reserve_tokens,
-                    **{
-                        key: output_budget[key]
-                        for key in (
-                            "estimatedInputTokens", "finalEstimatedInputTokens", "guardedInputTokens",
-                            "reservedOutputTokens", "allocatedOutputTokens", "transmittedMaxOutputTokens",
-                            "safetyReserveTokens", "manualLimit", "providerLimit", "helperLimit",
-                            "mode", "estimationPolicy", "mediaInputTokensUnknown",
-                        )
-                        if key in output_budget
-                    },
-                    "contextPreparationMs": max(
-                        0, round((provider_started_at - context_started_at) * 1_000)
-                    ),
-                    "providerDurationMs": provider_duration_ms,
-                    "timeToFirstSignalMs": min(first_signals) if first_signals else None,
-                    "durableMemoryReferences": injected_memory_count,
-                    "priorSessionEpisodes": injected_episode_count,
-                    **provider_timing,
-                },
+                "performance": performance,
                 **({"warnings": message_warnings} if message_warnings else {}),
             }
             if memory_overview_runtime_state is not None:

@@ -290,6 +290,7 @@ SOURCE_FILES = (
     "src/mato_loop_backend/agent/tool_arguments.py",
     "src/mato_loop_backend/agent/tool_registry.py",
     "src/mato_loop_backend/agent/media_prompt_profiles.py",
+    "src/mato_loop_backend/agent/model_prompt_profiles.py",
     "src/mato_loop_backend/agent/runtime.py",
     "src/mato_loop_backend/agent/title_generation.py",
     "src/mato_loop_backend/agent/tools.py",
@@ -5888,6 +5889,7 @@ def _general_case(
     schema_variant: SchemaVariant = "production",
     message_layout: MessageLayout = "current",
     slimming_variant: SlimmingVariant = "current",
+    model_id: str = "",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     tool_case = (
         replace(case, tools=SCHEMA_AB_TOOL_NAMES, calendar_fixture=True)
@@ -5917,6 +5919,7 @@ def _general_case(
     tools = slimming_tool_schemas(tools, slimming_variant)
     offered_names = frozenset(tool["name"] for tool in narrow_tools)
     system_options = dict(case.system_options)
+    system_options["model_id"] = model_id
     if offered_names & set(tool_registry._operation_definitions):
         system_options.setdefault("execution_agent_name", "Evaluator")
         system_options.setdefault("execution_agent_platform", "linux")
@@ -6391,9 +6394,10 @@ def build_case(
     schema_variant: SchemaVariant = "production",
     message_layout: MessageLayout = "current",
     slimming_variant: SlimmingVariant = "current",
+    model_id: str = "",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if case.kind == "general":
-        return _general_case(case, schema_variant, message_layout, slimming_variant)
+        return _general_case(case, schema_variant, message_layout, slimming_variant, model_id)
     if case.kind == "title":
         messages = [
             {"role": "system", "content": TITLE_SYSTEM_PROMPT},
@@ -7161,7 +7165,7 @@ async def _request_case(
     list[dict[str, Any]],
     list[ProviderResult],
 ]:
-    messages, tools = build_case(case, schema_variant, message_layout, slimming_variant)
+    messages, tools = build_case(case, schema_variant, message_layout, slimming_variant, model_id=model)
     reasoning_effort = (
         ReasoningEffort(args.reasoning_effort) if args.reasoning_effort else None
     )

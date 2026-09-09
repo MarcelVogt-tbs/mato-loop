@@ -72,7 +72,7 @@ class RootFileSearch:
             b"\0",
             consume,
         )
-        if return_code != 0 and not truncated:
+        if return_code not in {0, 1} and not truncated:
             raise RootFileError("tool.executionFailed", "Glob search failed")
         paths.sort()
         return {"paths": paths, "truncated": truncated}
