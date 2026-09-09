@@ -1477,7 +1477,11 @@ class AgentRuntime:
             if run.execution_agent_id is not None
             else None
         )
-        if not isinstance(selected_execution_agent, ExecutionAgent):
+        if (
+            not isinstance(selected_execution_agent, ExecutionAgent)
+            or selected_execution_agent.user_id != chat_session.user_id
+            or selected_execution_agent.revoked_at is not None
+        ):
             selected_execution_agent = None
         model_id = run.model_config_id or chat_session.model_config_id or ai_settings.default_model_id
         model = _model_for_id(ai_settings, model_id)
@@ -2112,9 +2116,14 @@ class AgentRuntime:
                     selected_execution_agent.platform if selected_execution_agent else None
                 ),
                 execution_agent_connected=(
-                    execution_agent_connections.is_connected(run.execution_agent_id)
-                    if run.execution_agent_id is not None
+                    execution_agent_connections.is_connected(selected_execution_agent.id)
+                    if selected_execution_agent is not None
                     else False
+                ),
+                execution_agent_system_info=(
+                    execution_agent_connections.system_info(selected_execution_agent.id)
+                    if selected_execution_agent is not None
+                    else None
                 ),
                 current_directory=run.current_directory_snapshot,
             )

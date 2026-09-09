@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import io
 import json
 import os
 import socket
@@ -15,7 +16,7 @@ from pydantic import ValidationError
 from matoloop_agent.config import AgentConfig
 from matoloop_agent.connection import MatoLoopAgent, serialize_message
 from matoloop_agent.filesystem import AgentError
-from matoloop_agent.protocol import Error, Request, Response
+from matoloop_agent.protocol import Error, Hello, Request, Response, SystemInfo
 
 AGENT_ID = "2ea504cc-e3c6-4e0d-aa05-080328100fe8"
 REQUEST_ID = "bbc46aa8-698d-4554-92c2-1cd5c6cc33a6"
@@ -65,11 +66,11 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             config_path = base / "config.json"
-            received = {}
+            received = {"hellos": []}
 
             async def handler(websocket) -> None:
                 received["authorization"] = websocket.request.headers["Authorization"]
-                received["hello"] = json.loads(await websocket.recv())
+                received["hellos"].append(json.loads(await websocket.recv()))
                 await websocket.send(
                     json.dumps({"type": "welcome", "protocolVersion": 1, "agentId": AGENT_ID})
                 )
@@ -88,9 +89,35 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                     )
                 )
                 config = AgentConfig.load(config_path)
-                await MatoLoopAgent(config, "agent-secret")._connect_once(asyncio.Event())
+                agent = MatoLoopAgent(config, "agent-secret")
+                snapshots = [
+                    {
+                        "operatingSystem": "Linux",
+                        "distribution": f"Test Linux {number}",
+                        "kernel": "6.12.0",
+                        "architecture": "x86_64",
+                        "cpuModel": f"Test CPU {number}",
+                        "logicalCpuCount": number,
+                        "totalMemoryBytes": number * 1024,
+                    }
+                    for number in (1, 2)
+                ]
+                with patch.object(
+                    agent,
+                    "system_info",
+                    side_effect=[
+                        {**info, "agentVersion": "1.2.3", "memory": {"availableBytes": 0}}
+                        for info in snapshots
+                    ],
+                ) as collect:
+                    await agent._connect_once(asyncio.Event())
+                    await agent._connect_once(asyncio.Event())
+                self.assertEqual([call.args for call in collect.call_args_list], [(None,), (None,)])
 
-            hello = received["hello"]
+            for hello, info in zip(received["hellos"], snapshots, strict=True):
+                self.assertEqual(hello["systemInfo"], info)
+                self.assertIsInstance(Hello.model_validate(hello).system_info, SystemInfo)
+            hello = received["hellos"][-1]
             self.assertEqual(received["authorization"], "Bearer agent-secret")
             self.assertEqual(hello["protocolVersion"], 1)
             self.assertEqual(hello["computerName"], socket.gethostname())
@@ -99,6 +126,110 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("name", hello)
             self.assertNotIn("roots", hello)
             self.assertNotIn("dataDir", hello)
+
+    def test_system_info_refreshes_linux_probes_and_preserves_live_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            agent = MatoLoopAgent(configuration(Path(temporary)), "secret")
+            files = {
+                "/etc/os-release": 'NAME=Test\nPRETTY_NAME="Test Linux 1.2"\n',
+                "/proc/cpuinfo": "Processor: fallback\nHardware: board\nmodel name: Test CPU\n",
+                "/proc/meminfo": "MemTotal: 8192 kB\nMemAvailable: 2048 kB\n",
+            }
+            with (
+                patch("matoloop_agent.connection.sys.platform", "linux"),
+                patch(
+                    "matoloop_agent.connection.os.uname",
+                    return_value=os.uname_result(("Linux", "host", "6.12", "version", "x86_64")),
+                ),
+                patch("matoloop_agent.connection.os.cpu_count", return_value=8),
+                patch(
+                    "matoloop_agent.connection.open",
+                    side_effect=lambda path, **_: io.StringIO(files[path]),
+                ),
+            ):
+                info = agent.hello().system_info
+                self.assertEqual(
+                    info.model_dump(by_alias=True),
+                    {
+                        "operatingSystem": "Linux",
+                        "distribution": "Test Linux 1.2",
+                        "kernel": "6.12",
+                        "architecture": "x86_64",
+                        "cpuModel": "Test CPU",
+                        "logicalCpuCount": 8,
+                        "totalMemoryBytes": 8192 * 1024,
+                    },
+                )
+                live = agent.system_info(temporary)
+                self.assertEqual(
+                    live["memory"], {"totalBytes": 8192 * 1024, "availableBytes": 2048 * 1024}
+                )
+                self.assertEqual(live["disk"]["path"], temporary)
+                self.assertGreater(live["disk"]["totalBytes"], 0)
+                self.assertIn("availableBytes", live["disk"])
+                self.assertEqual(live["platform"], "linux")
+                files["/etc/os-release"] = 'PRETTY_NAME="Test Linux 2.0"\n'
+                files["/proc/cpuinfo"] = "Processor: fallback\nHardware: new board\n"
+                files["/proc/meminfo"] = "malformed\nMemAvailable: bad\nMemTotal: 16384 kB\n"
+                refreshed = agent.hello().system_info
+                self.assertEqual(refreshed.distribution, "Test Linux 2.0")
+                self.assertEqual(refreshed.cpu_model, "new board")
+                self.assertEqual(refreshed.total_memory_bytes, 16384 * 1024)
+                files["/proc/meminfo"] = "MemTotal: 32768 kB\n"
+                files["/proc/cpuinfo"] = "processor: 0\nProcessor: 0\n"
+                with patch("matoloop_agent.connection.os.cpu_count", return_value=16):
+                    refreshed = agent.hello().system_info
+                self.assertEqual(refreshed.logical_cpu_count, 16)
+                self.assertEqual(refreshed.total_memory_bytes, 32768 * 1024)
+                self.assertIsNone(refreshed.cpu_model)
+                files["/proc/meminfo"] += "MemAvailable: 0 kB\n"
+                self.assertEqual(agent.system_info(None)["memory"]["availableBytes"], 0)
+
+    def test_hello_tolerates_missing_and_malformed_system_probes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            agent = MatoLoopAgent(configuration(Path(temporary)), "secret")
+            with (
+                patch("matoloop_agent.connection.sys.platform", "linux"),
+                patch("matoloop_agent.connection.os.uname", side_effect=OSError),
+                patch("matoloop_agent.connection.os.cpu_count", side_effect=OSError),
+                patch("matoloop_agent.connection.open", side_effect=FileNotFoundError),
+            ):
+                self.assertEqual(json.loads(serialize_message(agent.hello()))["systemInfo"], {})
+            files = {
+                "/etc/os-release": 'PRETTY_NAME="unterminated\n',
+                "/usr/lib/os-release": "PRETTY_NAME=\n",
+                "/proc/cpuinfo": "processor: 0\nmodel name: \nProcessor: fallback\n",
+                "/proc/meminfo": "MemTotal: bad kB\nMemAvailable: 0 kB\n",
+            }
+            with (
+                patch("matoloop_agent.connection.sys.platform", "linux"),
+                patch(
+                    "matoloop_agent.connection.os.uname",
+                    return_value=os.uname_result(("L" * 100, "host", "K" * 200, "version", " ")),
+                ),
+                patch(
+                    "matoloop_agent.connection.open",
+                    side_effect=lambda path, **_: io.StringIO(files[path]),
+                ),
+            ):
+                for count in (None, 0, -1, True, "8", 2147483648):
+                    with patch("matoloop_agent.connection.os.cpu_count", return_value=count):
+                        info = agent.hello().system_info
+                        self.assertIsNone(info.logical_cpu_count)
+                        self.assertIsNone(info.total_memory_bytes)
+                        self.assertIsNone(info.distribution)
+                        self.assertIsNone(info.architecture)
+                        self.assertEqual(info.operating_system, "L" * 80)
+                        self.assertEqual(info.kernel, "K" * 160)
+                        self.assertEqual(info.cpu_model, "fallback")
+                files["/etc/os-release"] = 'PRETTY_NAME="' + "D" * 300 + '"\n'
+                files["/proc/cpuinfo"] = "model name: " + "C" * 300
+                for total in ("", "0 kB", "-1 kB", "9007199254740992 kB", "1 MB", "1.5 kB"):
+                    files["/proc/meminfo"] = f"MemTotal: {total}\nMemAvailable: 0 kB\n"
+                    info = agent.hello().system_info
+                    self.assertIsNone(info.total_memory_bytes)
+                    self.assertEqual(info.distribution, "D" * 255)
+                    self.assertEqual(info.cpu_model, "C" * 255)
 
     async def test_mutation_cancellation_waits_for_truthful_thread_outcome(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

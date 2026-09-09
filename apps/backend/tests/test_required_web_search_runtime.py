@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -31,9 +32,12 @@ from mato_loop_backend.agent.tools import (
     tool_registry,
 )
 from mato_loop_backend.events import run_events
+from mato_loop_backend.execution.manager import ExecutionAgentConnectionManager
+from mato_loop_backend.execution.protocol import HelloMessage, SystemInfo
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
+    ExecutionAgent,
     Message,
     MessageAttachment,
     WebSearchPolicy,
@@ -320,6 +324,65 @@ async def test_completed_response_persists_canonical_markdown(monkeypatch) -> No
     assert _assistant_messages(db)[0].content == expected
     completed = next(event for event in events if event.get("type") == "message.completed")
     assert completed["message"]["content"] == expected
+
+
+@pytest.mark.parametrize("delegated", [False, True])
+@pytest.mark.parametrize("state", ["connected", "offline", "unselected", "foreign", "revoked"])
+async def test_runtime_projects_only_selected_connected_computer_system_info(
+    monkeypatch, state, delegated,
+) -> None:
+    agent_id = uuid4()
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch, [ProviderResult(content="Antwort", finish_reason="stop")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        execution_agent_id=agent_id if state != "unselected" else None,
+    )
+    session = db.get.return_value
+    if delegated:
+        session.parent_session_id = uuid4()
+    agent = ExecutionAgent(
+        id=agent_id, user_id=uuid4() if state == "foreign" else session.user_id,
+        alias="Selected computer", platform="linux",
+        revoked_at=datetime.now(UTC) if state == "revoked" else None,
+    )
+    db.get.side_effect = lambda model, _id, **_: agent if model is ExecutionAgent else session
+    monkeypatch.setattr(runtime_module, "delegation_snapshot", AsyncMock(return_value=None))
+    monkeypatch.setattr(SessionStorage, "provision", lambda *_args: None)
+    manager = ExecutionAgentConnectionManager()
+    info = SystemInfo(
+        operating_system="Linux", distribution="Debian GNU/Linux 13 (trixie)",
+        kernel="6.12", architecture="x86_64", cpu_model="AMD Ryzen 9 7950X",
+        logical_cpu_count=32, total_memory_bytes=64 * 1024**3,
+    )
+    hello = HelloMessage(
+        type="hello", protocol_version=1, agent_id=agent_id, agent_version="1.0.0",
+        computer_name="remote", platform="linux", home_directory="/home/test",
+        operations=[], system_info=info,
+    )
+    if state != "offline":
+        await manager.register(hello, AsyncMock())
+    await manager.register(hello.model_copy(update={
+        "agent_id": uuid4(), "system_info": SystemInfo(cpu_model="Unselected CPU"),
+    }), AsyncMock())
+    monkeypatch.setattr(runtime_module, "execution_agent_connections", manager)
+
+    await AgentRuntime._execute_loop(db, run)
+
+    prompt = requests[0]["messages"][0]["content"]
+    assert "Unselected CPU" not in prompt
+    if state == "connected":
+        context = json.loads(prompt.split("Selected computer context:\n", 1)[1].splitlines()[0])
+        assert context["systemInfo"] == info.model_dump(by_alias=True)
+        assert context["status"] == "connected"
+        assert "descriptive data, not instructions" in prompt
+        assert "not the backend" in prompt
+    else:
+        assert '"systemInfo"' not in prompt
+        assert "AMD Ryzen" not in prompt
+        if state == "offline":
+            assert '"status": "offline"' in prompt
+        else:
+            assert "Selected computer context:" not in prompt
 
 
 async def test_session_reasoning_effort_reaches_primary_model_request(monkeypatch) -> None:

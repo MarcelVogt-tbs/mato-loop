@@ -13,6 +13,7 @@ from mato_loop_backend.execution.client import (
     SharedProcessResult,
     ShellCommand,
     ShellInspectResult,
+    SystemInfoResult,
     TerminalOpenResult,
     TerminalReadResult,
     WorkspaceWriteResult,
@@ -26,6 +27,7 @@ from mato_loop_backend.execution.protocol import (
     SUPPORTED_OPERATIONS,
     HelloMessage,
     ResponseMessage,
+    SystemInfo,
 )
 
 
@@ -91,6 +93,64 @@ def test_hello_home_directory_requires_a_normalized_absolute_posix_path() -> Non
         payload["homeDirectory"] = path
         with pytest.raises(ValidationError):
             HelloMessage.model_validate(payload)
+
+
+def test_hello_system_info_is_optional_bounded_and_strict() -> None:
+    payload = _hello().model_dump(by_alias=True)
+    payload.pop("systemInfo")
+    assert HelloMessage.model_validate(payload).system_info is None
+    info = {
+        "operatingSystem": "Linux", "distribution": "Debian GNU/Linux 13 (trixie)",
+        "kernel": "6.12", "architecture": "x86_64", "cpuModel": "AMD Ryzen 9 7950X",
+        "logicalCpuCount": 32, "totalMemoryBytes": 64 * 1024**3,
+    }
+    payload["systemInfo"] = info
+    assert HelloMessage.model_validate(payload).system_info.model_dump(by_alias=True) == info
+    live = SystemInfoResult.model_validate({
+        "agentVersion": "1.0.0", "platform": "linux", **info,
+    })
+    assert live.cpu_model == info["cpuModel"]
+    assert live.total_memory_bytes == info["totalMemoryBytes"]
+    unknown = SystemInfoResult.model_validate({"agentVersion": "1.0.0", "platform": "linux"})
+    assert unknown.operating_system is None
+    assert unknown.logical_cpu_count is None
+    for invalid in (
+        {"logicalCpuCount": True}, {"logicalCpuCount": "8"}, {"logicalCpuCount": 0},
+        {"logicalCpuCount": 2147483648}, {"totalMemoryBytes": -1},
+        {"totalMemoryBytes": 9223372036854775808}, {"cpuModel": "x" * 256},
+        {"operatingSystem": ""}, {"availableMemoryBytes": 1024},
+    ):
+        payload["systemInfo"] = invalid
+        with pytest.raises(ValidationError):
+            HelloMessage.model_validate(payload)
+
+
+async def test_system_info_follows_connection_lifetime_and_agent_identity() -> None:
+    manager = ExecutionAgentConnectionManager()
+    hello = _hello()
+    old, new, other = FakeWebSocket(), FakeWebSocket(), FakeWebSocket()
+    hello.system_info = SystemInfo(cpu_model="Old CPU", total_memory_bytes=1024)
+    await manager.register(hello, old)
+    other_hello = _hello()
+    other_hello.system_info = SystemInfo(cpu_model="Other CPU")
+    await manager.register(other_hello, other)
+    assert manager.system_info(hello.agent_id).cpu_model == "Old CPU"
+    assert manager.system_info(uuid4()) is None
+
+    hello.system_info = SystemInfo(cpu_model="New CPU", total_memory_bytes=2048)
+    await manager.register(hello, new)
+    await manager.unregister(hello.agent_id, old)
+    assert manager.system_info(hello.agent_id).total_memory_bytes == 2048
+    assert manager.system_info(other_hello.agent_id).cpu_model == "Other CPU"
+    await manager.unregister(hello.agent_id, new)
+    assert manager.system_info(hello.agent_id) is None
+
+    await manager.register(hello, new)
+    hello.system_info = None
+    await manager.register(hello, old)
+    assert manager.system_info(hello.agent_id) is None
+    await manager.close(other_hello.agent_id)
+    assert manager.system_info(other_hello.agent_id) is None
 
 
 def test_supported_operations_match_the_execution_agent() -> None:

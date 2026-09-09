@@ -104,6 +104,16 @@ class WireModel(BaseModel):
     )
 
 
+class SystemInfo(WireModel):
+    operating_system: str | None = Field(default=None, min_length=1, max_length=80)
+    distribution: str | None = Field(default=None, min_length=1, max_length=255)
+    kernel: str | None = Field(default=None, min_length=1, max_length=160)
+    architecture: str | None = Field(default=None, min_length=1, max_length=80)
+    cpu_model: str | None = Field(default=None, min_length=1, max_length=255)
+    logical_cpu_count: int | None = Field(default=None, ge=1, le=2147483647)
+    total_memory_bytes: int | None = Field(default=None, ge=1, le=9223372036854775807)
+
+
 class HelloMessage(WireModel):
     type: Literal["hello"]
     protocol_version: Literal[1]
@@ -113,6 +123,7 @@ class HelloMessage(WireModel):
     platform: str = Field(min_length=1, max_length=120)
     operations: Annotated[list[Annotated[str, Field(pattern=r"^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$", max_length=80)]], Field(max_length=64)]
     home_directory: str = Field(min_length=1, max_length=4096)
+    system_info: SystemInfo | None = None
 
     @model_validator(mode="after")
     def validate_hello(self) -> HelloMessage:

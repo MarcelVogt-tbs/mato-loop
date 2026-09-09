@@ -25,6 +25,7 @@ from mato_loop_backend.execution.protocol import (
     HelloMessage,
     RequestMessage,
     ResponseMessage,
+    SystemInfo,
 )
 
 EventHandler = Callable[[EventMessage], Awaitable[None] | None]
@@ -84,6 +85,7 @@ class _Connection:
     websocket: WebSocket
     generation: int
     operations: frozenset[str]
+    system_info: SystemInfo | None = None
     pending: dict[UUID, _PendingRequest] = field(default_factory=dict)
     ignored: dict[UUID, None] = field(default_factory=dict)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -110,6 +112,10 @@ class ExecutionAgentConnectionManager:
     def generation(self, agent_id: UUID) -> int | None:
         connection = self._connections.get(agent_id)
         return connection.generation if connection else None
+
+    def system_info(self, agent_id: UUID) -> SystemInfo | None:
+        connection = self._connections.get(agent_id)
+        return connection.system_info if connection else None
 
     def transfer_url(self, agent_id: UUID, ticket_id: UUID) -> str:
         connection = self._connections.get(agent_id)
@@ -140,6 +146,7 @@ class ExecutionAgentConnectionManager:
                 websocket=websocket,
                 generation=self._generation,
                 operations=frozenset(hello.operations) & SUPPORTED_OPERATIONS,
+                system_info=hello.system_info,
             )
             old = self._connections.get(hello.agent_id)
             self._connections[hello.agent_id] = connection
