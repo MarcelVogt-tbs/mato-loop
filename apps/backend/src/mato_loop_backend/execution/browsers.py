@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import secrets
-from contextlib import suppress
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from time import monotonic
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -36,6 +38,34 @@ from mato_loop_backend.settings.effective import AgentProfileUnavailable, load_a
 ACCESS_INTERVAL = 2
 IDLE_SECONDS = 30
 MAX_BROWSERS = 32
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _browser_timing(timings: dict, phase: str):
+    started = monotonic()
+    try:
+        yield
+    finally:
+        timings[phase] = (monotonic() - started) * 1000
+
+
+@contextmanager
+def _browser_latency(operation: str, session_id: UUID):
+    timings = {}
+    outcome = "error"
+    try:
+        with _browser_timing(timings, "total_ms"):
+            yield timings
+        outcome = "ok"
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        raise
+    finally:
+        logger.info(
+            "Browser coordinator latency operation=%s session_id=%s outcome=%s timings=%s",
+            operation, session_id, outcome, timings,
+        )
 
 
 async def validate_browser_access(
@@ -412,7 +442,7 @@ class BrowserCoordinator:
                     connection.resetting_view = False
                 await connection.state()
 
-    async def _snapshot(self, connection: BrowserConnection, tab_id: str) -> str:
+    async def _snapshot(self, connection: BrowserConnection, tab_id: str) -> tuple[str, BrowserActionResult]:
         result = await connection.client.request(
             "integration.browser.execute",
             {"browserId": str(connection.browser_id), "action": "inspect", "tabId": tab_id},
@@ -424,7 +454,7 @@ class BrowserCoordinator:
             inspection = BrowserInspectionData.model_validate(result.data)
         except ValidationError as exc:
             raise ExecutionClientError("executionAgent.protocolError") from exc
-        return hashlib.sha256(f"{result.url}\n{inspection.snapshot_sha256}".encode()).hexdigest()
+        return hashlib.sha256(f"{result.url}\n{inspection.snapshot_sha256}".encode()).hexdigest(), result
 
     async def resize(self, connection: BrowserConnection, width: int, height: int) -> BrowserResizeResult:
         dimensions = BrowserResizeResult(width=width, height=height)
@@ -463,47 +493,70 @@ class BrowserCoordinator:
             return result
 
     async def snapshot(self, session_id, agent_id, integration_id, tab_id) -> str:
-        connection = self.attached_for(session_id, agent_id)
-        if connection is None or connection.integration_id != integration_id:
-            raise ExecutionClientError("browser.notConnected")
-        async with connection.action_lock:
-            await connection.check_access()
-            if self.attached_for(session_id, agent_id) is not connection:
-                raise ExecutionClientError("browser.bindingChanged")
-            return await self._snapshot(connection, tab_id)
+        with _browser_latency("snapshot", session_id) as timings:
+            connection = self.attached_for(session_id, agent_id)
+            if connection is None or connection.integration_id != integration_id:
+                raise ExecutionClientError("browser.notConnected")
+            timings["browser_id"] = str(connection.browser_id)
+            with ExitStack() as waiting:
+                waiting.enter_context(_browser_timing(timings, "lock_wait_ms"))
+                async with connection.action_lock:
+                    waiting.close()
+                    with _browser_timing(timings, "access_ms"):
+                        await connection.check_access()
+                    if self.attached_for(session_id, agent_id) is not connection:
+                        raise ExecutionClientError("browser.bindingChanged")
+                    with _browser_timing(timings, "reinspection_rpc_ms"):
+                        digest, _ = await self._snapshot(connection, tab_id)
+                    return digest
 
     async def execute(self, session_id, agent_id, integration_id, arguments: dict[str, Any]) -> BrowserActionResult:
-        connection = self.attached_for(session_id, agent_id)
-        if connection is None or connection.integration_id != integration_id:
-            raise ExecutionClientError("browser.notConnected")
-        payload = dict(arguments)
-        expected_id = payload.pop("expectedBrowserId", None)
-        expected_revision = payload.pop("expectedAttachmentRevision", None)
-        expected_snapshot = payload.pop("expectedSnapshot", None)
-        action = BrowserActionArguments.model_validate(payload)
-        async with connection.action_lock:
-            await connection.check_access()
-            def check_binding():
-                if (self.attached_for(session_id, agent_id) is not connection
-                        or str(connection.browser_id) != expected_id
-                        or connection.attachment_revision != expected_revision):
-                    raise ExecutionClientError("browser.bindingChanged")
-            check_binding()
-            connection.busy = True
-            try:
-                await connection.state()
-                if action.action in BROWSER_SNAPSHOT_ACTIONS:
-                    if expected_snapshot is None or expected_snapshot != await self._snapshot(connection, action.tab_id):
-                        raise ExecutionClientError("browser.bindingChanged")
-                check_binding()
-                wire = BrowserExecuteArguments(browser_id=connection.browser_id, **action.model_dump(by_alias=False))
-                return await connection.client.request(
-                    "integration.browser.execute", wire.model_dump(mode="json"), BrowserActionResult, timeout=60,
-                )
-            finally:
-                connection.busy = False
-                with suppress(Exception):
-                    await connection.state()
+        with _browser_latency("execute", session_id) as timings:
+            connection = self.attached_for(session_id, agent_id)
+            if connection is None or connection.integration_id != integration_id:
+                raise ExecutionClientError("browser.notConnected")
+            timings["browser_id"] = str(connection.browser_id)
+            payload = dict(arguments)
+            expected_id = payload.pop("expectedBrowserId", None)
+            expected_revision = payload.pop("expectedAttachmentRevision", None)
+            expected_snapshot = payload.pop("expectedSnapshot", None)
+            action = BrowserActionArguments.model_validate(payload)
+            timings["action"] = action.action
+            with ExitStack() as waiting:
+                waiting.enter_context(_browser_timing(timings, "lock_wait_ms"))
+                async with connection.action_lock:
+                    waiting.close()
+                    with _browser_timing(timings, "access_ms"):
+                        await connection.check_access()
+                    def check_binding():
+                        if (self.attached_for(session_id, agent_id) is not connection
+                                or str(connection.browser_id) != expected_id
+                                or connection.attachment_revision != expected_revision):
+                            raise ExecutionClientError("browser.bindingChanged")
+                    check_binding()
+                    connection.busy = True
+                    try:
+                        await connection.state()
+                        if action.action in BROWSER_SNAPSHOT_ACTIONS:
+                            if expected_snapshot is None:
+                                raise ExecutionClientError("browser.bindingChanged")
+                            with _browser_timing(timings, "reinspection_rpc_ms"):
+                                digest, inspection = await self._snapshot(connection, action.tab_id)
+                            if expected_snapshot != digest:
+                                raise ExecutionClientError("browser.bindingChanged")
+                            check_binding()
+                            if action.action == "inspect":
+                                return inspection
+                        check_binding()
+                        wire = BrowserExecuteArguments(browser_id=connection.browser_id, **action.model_dump(by_alias=False))
+                        with _browser_timing(timings, "action_rpc_ms"):
+                            return await connection.client.request(
+                                "integration.browser.execute", wire.model_dump(mode="json"), BrowserActionResult, timeout=60,
+                            )
+                    finally:
+                        connection.busy = False
+                        with suppress(Exception):
+                            await connection.state()
 
     async def manual(self, owner_id, integration_id, session_id, browser_id,
                      view_id: UUID, login_id: UUID) -> BrowserConnection:

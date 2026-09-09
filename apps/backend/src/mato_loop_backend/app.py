@@ -42,6 +42,9 @@ from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import InstanceLimits, SettingsStore
 
 runtime_config = get_runtime_config()
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.WARNING)
+    logging.getLogger("mato_loop_backend").setLevel(runtime_config.log_level)
 logger = logging.getLogger(__name__)
 
 

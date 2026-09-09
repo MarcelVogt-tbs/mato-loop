@@ -12,6 +12,7 @@ import signal
 import stat
 import sys
 from pathlib import Path
+from time import monotonic
 from uuid import uuid4
 
 import websockets
@@ -20,7 +21,9 @@ from .browser_contracts import (
     BROWSER_FILE_RESULT,
     BrowserActionResult,
     BrowserClipboardResult,
+    BrowserExecuteArguments,
     BrowserFileOkResult,
+    BrowserIdArguments,
     BrowserNavigationResult,
     BrowserResizeResult,
     BrowserSetupReadResult,
@@ -168,9 +171,32 @@ class BrowserManager:
             raise AgentError("browser.notConnected", "Browser worker is unavailable")
         try:
             async with asyncio.timeout(55):
+                started = monotonic()
                 self.worker.stdin.write(json.dumps({"op": op, **values}).encode() + b"\n")
                 await self.worker.stdin.drain()
-                response = json.loads(await self.worker.stdout.readline())
+                raw = await self.worker.stdout.readline()
+                roundtrip_ms = max(0, (monotonic() - started) * 1000)
+                response = json.loads(raw)
+            if op == "execute":
+                elapsed_ms = response.get("elapsedMs")
+                # Optional private diagnostics must not affect the operation's outcome.
+                if not (type(elapsed_ms) in (int, float) and 0 <= elapsed_ms <= 55_000):
+                    elapsed_ms = None
+                with contextlib.suppress(ValueError):
+                    args = BrowserExecuteArguments.model_validate(values.get("args"))
+                    browser_id = (
+                        BrowserIdArguments(browserId=self.browser_id).browser_id
+                        if self.browser_id is not None
+                        else None
+                    )
+                    logger.info(
+                        "Browser execution latency: method=integration.browser.execute "
+                        "action=%s browser_id=%s pipe_roundtrip_ms=%.3f worker_elapsed_ms=%s",
+                        args.action,
+                        browser_id,
+                        roundtrip_ms,
+                        elapsed_ms,
+                    )
             if not response["ok"]:
                 code = BrowserStatus(state="error", errorCode=response["error"]).error_code
                 logger.warning("Browser worker operation failed: %s", code)

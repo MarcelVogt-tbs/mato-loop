@@ -23,6 +23,7 @@ import tempfile
 from collections import deque
 from importlib.metadata import version
 from pathlib import Path
+from time import monotonic
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -1343,6 +1344,7 @@ async def serve(root: Path) -> None:
     try:
         while raw := await reader.readline():
             op = None
+            elapsed_ms = None
             try:
                 request = json.loads(raw)
                 op = request["op"]
@@ -1352,9 +1354,12 @@ async def serve(root: Path) -> None:
                         allow_network=request.get("allowNetwork", True),
                     )
                 elif op == "execute":
-                    result = await worker.execute(
-                        BrowserExecuteArguments.model_validate(request["args"])
-                    )
+                    args = BrowserExecuteArguments.model_validate(request["args"])
+                    started = monotonic()
+                    try:
+                        result = await worker.execute(args)
+                    finally:
+                        elapsed_ms = max(0, (monotonic() - started) * 1000)
                 elif op == "navigation":
                     result = await worker.navigation(
                         BrowserNavigationArguments.model_validate(request["args"])
@@ -1392,6 +1397,8 @@ async def serve(root: Path) -> None:
                 response = {"ok": False, "error": "browser.actionFailed"}
             if not response["ok"] and op == "start":
                 response["stage"] = worker.startup_stage
+            if elapsed_ms is not None:
+                response["elapsedMs"] = elapsed_ms
             payload = json.dumps(response, ensure_ascii=True)
             if len(payload) > 950_000:
                 payload = '{"ok":false,"error":"browser.fileTooLarge"}'
