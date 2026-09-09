@@ -19,6 +19,7 @@ from matoloop_agent.browser import CONTAINER_INSTALLATION, BrowserManager, brows
 from matoloop_agent.browser_contracts import (
     BROWSER_ARGUMENT_MODELS,
     BROWSER_FILE_RESULT,
+    BrowserActionResult,
     BrowserClipboardArguments,
     BrowserControlArguments,
     BrowserExecuteArguments,
@@ -32,7 +33,7 @@ from matoloop_agent.browser_contracts import (
     BrowserSetupReadArguments,
     BrowserStatusArguments,
 )
-from matoloop_agent.browser_worker import BrowserWorker, launch_error_code
+from matoloop_agent.browser_worker import BrowserWorker, launch_error_code, serve
 from matoloop_agent.config import AgentConfig
 from matoloop_agent.connection import MatoLoopAgent
 from matoloop_agent.filesystem import AgentError
@@ -469,6 +470,149 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                     "Browser startup failed: stage=unknown profile=persistent",
                 ],
             )
+
+    async def test_execute_latency_is_private_and_logs_only_safe_metadata(self):
+        args = BrowserExecuteArguments(
+            browserId=str(uuid4()),
+            action="fill",
+            selector="#private-selector",
+            text="private-input-token",
+            url="https://private.test/path?token=private-url-token",
+        )
+        result = BrowserActionResult(text="private-page-content").model_dump(by_alias=True)
+        self.manager.browser_id = self.browser_id
+        self.manager.worker = SimpleNamespace(
+            returncode=None,
+            stdin=SimpleNamespace(write=Mock(), drain=AsyncMock()),
+            stdout=SimpleNamespace(readline=AsyncMock()),
+        )
+        for ok in (True, False):
+            with self.subTest(ok=ok):
+                response = {"ok": ok, "elapsedMs": 12.5, "action": "private-worker-action"}
+                response.update({"result": result} if ok else {"error": "browser.actionFailed"})
+                self.manager.worker.stdout.readline.return_value = json.dumps(response).encode()
+                with (
+                    patch("matoloop_agent.browser.monotonic", side_effect=[10, 10.25]),
+                    self.assertLogs("matoloop_agent.browser", level="INFO") as logs,
+                ):
+                    if ok:
+                        self.assertEqual(
+                            await self.manager.rpc("execute", args=args.model_dump(by_alias=True)),
+                            result,
+                        )
+                    else:
+                        with self.assertRaises(AgentError) as error:
+                            await self.manager.rpc("execute", args=args.model_dump(by_alias=True))
+                        self.assertEqual(error.exception.code, "browser.actionFailed")
+                self.assertEqual(
+                    logs.records[0].getMessage(),
+                    "Browser execution latency: method=integration.browser.execute "
+                    f"action=fill browser_id={self.browser_id} "
+                    "pipe_roundtrip_ms=250.000 worker_elapsed_ms=12.5",
+                )
+                self.assertNotIn("private", "\n".join(logs.output))
+                self.assertNotIn(args.browser_id, "\n".join(logs.output))
+
+    async def test_execute_latency_ignores_malformed_optional_diagnostics(self):
+        args = {"browserId": self.browser_id, "action": "tabs"}
+        result = BrowserActionResult().model_dump(by_alias=True)
+        self.manager.worker = SimpleNamespace(
+            returncode=None,
+            stdin=SimpleNamespace(write=Mock(), drain=AsyncMock()),
+            stdout=SimpleNamespace(readline=AsyncMock()),
+        )
+        for diagnostic in (
+            {},
+            *(
+                {"elapsedMs": value}
+                for value in (
+                    None,
+                    True,
+                    False,
+                    -1,
+                    55_001,
+                    10**1000,
+                    float("nan"),
+                    float("inf"),
+                    -float("inf"),
+                    "private-token",
+                    [],
+                    {"private": "token"},
+                )
+            ),
+            {"elapsedMs": 0},
+            {"elapsedMs": 55_000},
+        ):
+            with self.subTest(diagnostic=diagnostic):
+                self.manager.worker.stdout.readline.return_value = json.dumps(
+                    {"ok": True, "result": result, **diagnostic}
+                ).encode()
+                with self.assertLogs("matoloop_agent.browser", level="INFO") as logs:
+                    self.assertEqual(await self.manager.rpc("execute", args=args), result)
+                value = diagnostic.get("elapsedMs")
+                expected = value if type(value) is int and value in (0, 55_000) else None
+                self.assertEqual(logs.records[0].args[:2], ("tabs", None))
+                self.assertGreaterEqual(logs.records[0].args[2], 0)
+                self.assertEqual(logs.records[0].args[3], expected)
+                self.assertNotIn("private", "\n".join(logs.output))
+        for op, arguments in (
+            ("private-method", args),
+            ("execute", {**args, "action": "private-action"}),
+            ("execute", {**args, "action": "fill"}),
+            ("execute", None),
+        ):
+            with self.subTest(op=op, arguments=arguments):
+                with self.assertNoLogs("matoloop_agent.browser", level="INFO"):
+                    self.assertEqual(await self.manager.rpc(op, args=arguments), result)
+
+    async def test_worker_times_only_validated_execute_in_private_envelope(self):
+        args = {"browserId": self.browser_id, "action": "tabs"}
+        requests = [
+            {"op": "execute", "args": args},
+            {"op": "execute", "args": args},
+            {"op": "execute", "args": {**args, "action": "private-invalid-action"}},
+            {"op": "health"},
+        ]
+        reader = asyncio.StreamReader()
+        for request in requests:
+            reader.feed_data(json.dumps(request).encode() + b"\n")
+        reader.feed_eof()
+        worker = BrowserWorker(self.root)
+        result = BrowserActionResult().model_dump(by_alias=True)
+        loop = asyncio.get_running_loop()
+        with (
+            patch("matoloop_agent.browser_worker.os.getuid", return_value=1000),
+            patch("matoloop_agent.browser_worker.os.umask"),
+            patch("matoloop_agent.browser_worker.sys.stdin", SimpleNamespace(buffer=Mock())),
+            patch("matoloop_agent.browser_worker.resource.setrlimit"),
+            patch("matoloop_agent.browser_worker.BrowserWorker", return_value=worker),
+            patch("matoloop_agent.browser_worker.asyncio.StreamReader", return_value=reader),
+            patch.object(loop, "connect_read_pipe", new=AsyncMock()),
+            patch.object(loop, "add_signal_handler"),
+            patch.object(
+                worker,
+                "execute",
+                new=AsyncMock(
+                    side_effect=[result, AgentError("browser.actionFailed", "private-error-token")]
+                ),
+            ) as execute,
+            patch.object(worker, "close", new=AsyncMock()),
+            patch("matoloop_agent.browser_worker.monotonic", side_effect=[1, 1.25, 2, 2.5]),
+            patch("builtins.print") as output,
+        ):
+            await serve(self.root)
+        responses = [json.loads(call.args[0]) for call in output.call_args_list]
+        self.assertEqual(
+            responses,
+            [
+                {"ok": True, "result": result, "elapsedMs": 250.0},
+                {"ok": False, "error": "browser.actionFailed", "elapsedMs": 500.0},
+                {"ok": False, "error": "browser.actionFailed"},
+                {"ok": True, "result": {"ok": False}},
+            ],
+        )
+        self.assertEqual(execute.await_count, 2)
+        self.assertIsInstance(execute.await_args.args[0], BrowserExecuteArguments)
 
     def test_profile_lock_error_is_specific_without_mutating_singletons(self):
         lock = self.root / "SingletonLock"

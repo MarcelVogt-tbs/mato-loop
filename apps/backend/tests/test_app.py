@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -5,6 +8,27 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from mato_loop_backend.app import _mount_documentation, _static_headers, _static_path, app
+
+
+def test_browser_latency_logging_under_default_uvicorn_configuration() -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", """
+import logging.config
+from uuid import UUID
+from uvicorn.config import LOGGING_CONFIG
+logging.config.dictConfig(LOGGING_CONFIG)
+import mato_loop_backend.app
+logging.getLogger('httpx').info('private-request-url')
+from mato_loop_backend.execution.browsers import _browser_latency
+with _browser_latency('snapshot', UUID(int=1)):
+    pass
+"""],
+        env={**os.environ, "MATO_LOOP_LOG_LEVEL": "INFO"},
+        capture_output=True, text=True, check=True, timeout=30,
+    )
+    assert "Browser coordinator latency operation=snapshot" in result.stderr
+    assert "outcome=ok" in result.stderr and "total_ms" in result.stderr
+    assert "private-request-url" not in result.stderr
 
 
 def test_liveness() -> None:

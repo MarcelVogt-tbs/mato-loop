@@ -451,7 +451,8 @@ def test_detach_during_busy_action_is_immediate_and_does_not_cancel_rpc(env):
             assert detached["browserId"] == state["browserId"] and env.manual
 
 
-def test_detach_during_locked_snapshot_prevents_approved_action_dispatch(env):
+@pytest.mark.parametrize("action", ["click", "inspect"])
+def test_detach_during_locked_snapshot_prevents_approved_action_dispatch(env, action):
     started, finish = asyncio.Event(), asyncio.Event()
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
@@ -468,7 +469,7 @@ def test_detach_during_locked_snapshot_prevents_approved_action_dispatch(env):
                     await finish.wait()
 
             env.reply = reply
-            args = {"action": "click", "tabId": tab_id, "selector": "button", "expectedSnapshot": snapshot,
+            args = {"action": action, "tabId": tab_id, **({"selector": "button"} if action == "click" else {}), "expectedSnapshot": snapshot,
                     "expectedBrowserId": state["browserId"], "expectedAttachmentRevision": connection.attachment_revision}
             task = env.client.portal.start_task_soon(env.coordinator.execute, env.session.id, env.agent.id, env.instance.id, args)
             try:
@@ -488,8 +489,10 @@ def test_detach_during_locked_snapshot_prevents_approved_action_dispatch(env):
             assert not any(arguments.get("action") == "click" for _, arguments in env.calls)
 
 
-@pytest.mark.parametrize("change", ["digest", "url", "tab", "missing", "revision"])
-def test_stale_snapshot_after_approval_never_dispatches_action(env, change):
+@pytest.mark.parametrize("action", ["click", "inspect"])
+@pytest.mark.parametrize("change", ["digest", "url", "tab", "missing", "revision", "absent"])
+def test_stale_snapshot_after_approval_never_dispatches_action(env, change, action, caplog):
+    caplog.set_level("INFO", logger=execution.__name__)
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
@@ -498,7 +501,7 @@ def test_stale_snapshot_after_approval_never_dispatches_action(env, change):
             connection = env.coordinator.connections[env.agent.id]
             tab_id = str(uuid4())
             snapshot = env.client.portal.call(env.coordinator.snapshot, env.session.id, env.agent.id, env.instance.id, tab_id)
-            args = {"action": "click", "tabId": tab_id, "selector": "button", "expectedSnapshot": snapshot,
+            args = {"action": action, "tabId": tab_id, **({"selector": "button"} if action == "click" else {}), "expectedSnapshot": snapshot,
                     "expectedBrowserId": state["browserId"], "expectedAttachmentRevision": connection.attachment_revision}
 
             async def reply(operation, arguments):
@@ -510,10 +513,97 @@ def test_stale_snapshot_after_approval_never_dispatches_action(env, change):
             env.reply = reply
             if change == "revision":
                 connection.attachment_revision += 2
+            elif change == "absent":
+                args.pop("expectedSnapshot")
             with pytest.raises(ExecutionClientError, match="browser.bindingChanged"):
                 env.client.portal.call(env.coordinator.execute, env.session.id, env.agent.id, env.instance.id, args)
             assert not connection.busy
             assert not any(args.get("action") == "click" for _, args in env.calls)
+            record = [item for item in caplog.records if item.name == execution.__name__][-1]
+            assert record.args[0] == "execute" and record.args[2] == "error"
+            timings = record.args[-1]
+            assert "total_ms" in timings and "action_rpc_ms" not in timings
+            assert ("reinspection_rpc_ms" in timings) == (change not in {"revision", "absent"})
+
+
+@pytest.mark.parametrize("action", ["inspect", "click"])
+def test_browser_inspection_reuse_and_latency_phases(env, monkeypatch, caplog, action):
+    caplog.set_level("INFO", logger=execution.__name__)
+    clock, inspections = [0.0], []
+    monkeypatch.setattr(execution, "monotonic", lambda: clock[0])
+    check_access = execution.BrowserConnection.check_access
+
+    async def access(connection):
+        await check_access(connection)
+        clock[0] += 0.2
+
+    monkeypatch.setattr(execution.BrowserConnection, "check_access", access)
+
+    async def reply(operation, arguments):
+        if operation != "integration.browser.execute":
+            return None
+        if arguments["action"] == "inspect":
+            clock[0] += 0.4
+            result = {"tabId": arguments["tabId"], "url": "https://private.test/",
+                      "text": f"private-inspection-{len(inspections) + 1}",
+                      "tabs": [{"id": arguments["tabId"], "url": "https://private.test/", "title": "private title"}],
+                      "data": {"snapshotSha256": "a" * 64}}
+            inspections.append(result)
+            return result
+        assert arguments["action"] == "click"
+        clock[0] += 0.5
+        return {}
+
+    env.reply = reply
+    with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
+        state = control.receive_json()
+        with open_view(env, state):
+            control.send_json({"type": "attach"})
+            assert control.receive_json()["attached"]
+            connection = env.coordinator.connections[env.agent.id]
+            tab_id = str(uuid4())
+            snapshot = env.client.portal.call(env.coordinator.snapshot, env.session.id, env.agent.id, env.instance.id, tab_id)
+            args = {"action": action, "tabId": tab_id, "expectedSnapshot": snapshot,
+                    **({"selector": "#private-selector"} if action == "click" else {}),
+                    "expectedBrowserId": state["browserId"], "expectedAttachmentRevision": connection.attachment_revision}
+
+            async def execute_after_lock_wait():
+                await connection.action_lock.acquire()
+                task = asyncio.create_task(env.coordinator.execute(env.session.id, env.agent.id, env.instance.id, args))
+                try:
+                    await asyncio.sleep(0)
+                    assert not task.done()
+                    clock[0] += 1
+                finally:
+                    connection.action_lock.release()
+                return await task
+
+            result = env.client.portal.call(execute_after_lock_wait)
+            assert control.receive_json()["busy"]
+            assert not control.receive_json()["busy"]
+            assert len(inspections) == 2
+            calls = [args["action"] for op, args in env.calls if op == "integration.browser.execute"]
+            assert calls == (["inspect", "inspect"] if action == "inspect" else ["inspect", "inspect", "click"])
+            if action == "inspect":
+                assert result == execution.BrowserActionResult.model_validate(inspections[-1])
+                assert result.text == "private-inspection-2"
+            assert not connection.busy
+            records = [item for item in caplog.records if item.name == execution.__name__]
+            assert len(records) == 2
+            authorization, executed = records
+            assert authorization.args[:3] == ("snapshot", env.session.id, "ok")
+            assert executed.args[:3] == ("execute", env.session.id, "ok")
+            assert authorization.args[-1]["total_ms"] == pytest.approx(600)
+            timings = executed.args[-1]
+            assert timings["lock_wait_ms"] == pytest.approx(1000)
+            assert timings["access_ms"] == pytest.approx(200)
+            assert timings["reinspection_rpc_ms"] == pytest.approx(400)
+            assert timings["total_ms"] == pytest.approx(1600 if action == "inspect" else 2100)
+            if action == "inspect":
+                assert "action_rpc_ms" not in timings
+            else:
+                assert timings["action_rpc_ms"] == pytest.approx(500)
+            assert "private" not in caplog.text and snapshot not in caplog.text
 
 
 @pytest.mark.parametrize("digest", [None, 123, "not-a-digest"])
@@ -530,6 +620,55 @@ def test_malformed_snapshot_is_rejected_before_becoming_approval_binding(env, di
             control.receive_json()
             with pytest.raises(ExecutionClientError, match="executionAgent.protocolError"):
                 env.client.portal.call(env.coordinator.snapshot, env.session.id, env.agent.id, env.instance.id, str(uuid4()))
+
+
+@pytest.mark.parametrize("phase", ["lock", "reinspection"])
+def test_cancelled_inspect_never_returns_content_and_records_partial_latency(env, caplog, phase):
+    caplog.set_level("INFO", logger=execution.__name__)
+    started = asyncio.Event()
+    with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
+        state = control.receive_json()
+        with open_view(env, state):
+            control.send_json({"type": "attach"})
+            assert control.receive_json()["attached"]
+            connection = env.coordinator.connections[env.agent.id]
+            tab_id = str(uuid4())
+            snapshot = env.client.portal.call(env.coordinator.snapshot, env.session.id, env.agent.id, env.instance.id, tab_id)
+
+            async def reply(operation, arguments):
+                if operation == "integration.browser.execute":
+                    assert arguments["action"] == "inspect"
+                    started.set()
+                    await asyncio.Event().wait()
+
+            env.reply = reply
+            args = {"action": "inspect", "tabId": tab_id, "expectedSnapshot": snapshot,
+                    "expectedBrowserId": state["browserId"], "expectedAttachmentRevision": connection.attachment_revision}
+
+            async def cancel():
+                if phase == "lock":
+                    await connection.action_lock.acquire()
+                task = asyncio.create_task(env.coordinator.execute(env.session.id, env.agent.id, env.instance.id, args))
+                try:
+                    if phase == "lock":
+                        await asyncio.sleep(0)
+                    else:
+                        await asyncio.wait_for(started.wait(), 1)
+                finally:
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+                    if phase == "lock":
+                        connection.action_lock.release()
+
+            env.client.portal.call(cancel)
+            assert not connection.busy and not connection.action_lock.locked()
+            assert len([op for op, _ in env.calls if op == "integration.browser.execute"]) == (1 if phase == "lock" else 2)
+            record = [item for item in caplog.records if item.name == execution.__name__][-1]
+            assert record.args[:3] == ("execute", env.session.id, "cancelled")
+            timings = record.args[-1]
+            assert "total_ms" in timings and "lock_wait_ms" in timings and "action_rpc_ms" not in timings
+            assert ("reinspection_rpc_ms" in timings) == (phase == "reinspection")
 
 
 def test_setup_only_explicit_start_and_viewer_close_does_not_cancel_installer(env):

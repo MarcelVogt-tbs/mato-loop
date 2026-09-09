@@ -135,7 +135,7 @@ class BrowserSetupResizeArguments(WireModel):
 
 
 class BrowserActionArguments(WireModel):
-    action: BrowserAction = Field(description="Browser action. Use inspect before interacting with a page.")
+    action: BrowserAction = Field(description="Browser action. Inspect to discover targets; inspect again when page changes may affect them.")
     tab_id: BrowserOpaqueId | None = Field(default=None, description="Tab id returned by tabs or newtab; required for page actions.")
     url: str | None = Field(default=None, min_length=1, max_length=4096, description="HTTP(S) URL for navigate or newtab only. No credentials or local files.")
     selector: str | None = Field(default=None, min_length=1, max_length=2000, description="Playwright selector from page inspection; required for click, fill, and upload.")
