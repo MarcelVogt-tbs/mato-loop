@@ -47,6 +47,19 @@ _IMAGE_TYPES = {
     "image/webp": ".webp",
 }
 _TEXT_TYPES = {"application/xhtml+xml", "text/html", "text/markdown", "text/plain"}
+_STRUCTURED_TEXT_TYPES = {
+    "application/atom+xml",
+    "application/json",
+    "application/ndjson",
+    "application/rss+xml",
+    "application/x-ndjson",
+    "application/xml",
+    "text/csv",
+    "text/xml",
+}
+_MEDIA_TYPE = re.compile(
+    r"[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}"
+)
 _PDF_TYPE = "application/pdf"
 _METADATA_ADDRESSES = {
     ipaddress.ip_address("100.100.100.200"),
@@ -82,7 +95,8 @@ _UNSAFE_URL_SCHEME = re.compile(r"^[\x00-\x20]*(?:data|javascript|vbscript):", r
 _CHARSET_PATTERN = re.compile(br"charset\s*=\s*['\"]?\s*([a-zA-Z0-9._:+-]+)", re.IGNORECASE)
 _DEFAULT_ACCEPT = (
     "text/html, text/markdown, text/plain, application/pdf, "
-    "image/png, image/jpeg, image/webp, image/gif"
+    "image/png, image/jpeg, image/webp, image/gif, "
+    + ", ".join(sorted(_STRUCTURED_TEXT_TYPES))
 )
 DOWNLOAD_TYPES = {
     "application/gzip": ".gz",
@@ -215,6 +229,11 @@ class _PinnedResolver(AbstractResolver):
 
 def _error(code: str, **params: object) -> WebFetchError:
     return WebFetchError(f"webfetch.{code}", params=params or None)
+
+
+def _unsupported_content_type(content_type: str) -> WebFetchError:
+    params = {"contentType": content_type} if _MEDIA_TYPE.fullmatch(content_type) else {}
+    return _error("contentTypeUnsupported", **params)
 
 
 def _canonical_host(host: str) -> str:
@@ -538,6 +557,8 @@ def _convert_text(
     format: str,
     charset: str | None,
     base_url: URL,
+    *,
+    preserve_text: bool = False,
 ) -> str:
     is_html = content_type in {"application/xhtml+xml", "text/html"}
     value = _decode_text(body, charset, html_content=is_html)
@@ -553,6 +574,8 @@ def _convert_text(
         return _normalize_lines(markdownify(str(root), heading_style="ATX"))
     if format == "html":
         return f"<pre>{html.escape(value)}</pre>"
+    if preserve_text:
+        return value
     if content_type == "text/markdown":
         soup = _sanitize_html(value)
         if format == "text":
@@ -776,8 +799,26 @@ async def _build_result(
             page_count=page_count,
             unavailable_pages=unavailable_pages,
         )
+    if response.content_type in _STRUCTURED_TEXT_TYPES or (
+        response.content_type.startswith("application/")
+        and response.content_type.endswith("+json")
+        and _MEDIA_TYPE.fullmatch(response.content_type)
+    ):
+        # Preserve structured data as text; parsing or prose conversion can change values.
+        format = "html" if format == "html" else "text"
+        content = await asyncio.to_thread(
+            _convert_text, response.body, response.content_type, format,
+            response.charset, target.url, preserve_text=True,
+        )
+        return WebFetchResult(
+            final_url=str(target.url),
+            content_type=response.content_type,
+            content=content,
+            status_code=response.status,
+            output_format=format,
+        )
     if response.content_type not in _TEXT_TYPES:
-        raise _error("contentTypeUnsupported")
+        raise _unsupported_content_type(response.content_type)
     content, title = await asyncio.to_thread(
         _text_content_and_title, response, format, target.url
     )
@@ -957,11 +998,11 @@ def _resolve_download_type(
     if content_type in DOWNLOAD_TYPES:
         return content_type
     if content_type != _OPAQUE_DOWNLOAD_TYPE:
-        raise _error("contentTypeUnsupported")
+        raise _unsupported_content_type(content_type)
     suffix = PurePosixPath(_raw_download_name(url, content_disposition)).suffix.lower()
     resolved = _EXTENSION_TYPES.get(suffix)
     if resolved is None:
-        raise _error("contentTypeUnsupported")
+        raise _unsupported_content_type(content_type)
     return resolved
 
 
@@ -1056,8 +1097,7 @@ async def fetch_web(
                 )
             return result
         except WebFetchError as exc:
-            if exc.params is None:
-                exc.params = {"statusCode": response.status}
+            exc.params = {"statusCode": response.status, **(exc.params or {})}
             raise
     except WebFetchError:
         raise

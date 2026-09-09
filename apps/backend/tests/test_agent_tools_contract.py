@@ -3972,6 +3972,9 @@ def test_webfetch_schema_has_the_expected_contract() -> None:
     assert schema["name"] == "webfetch"
     assert schema["parameters"]["properties"]["url"]["maxLength"] == 1200
     assert schema["parameters"]["properties"]["format"]["default"] == "markdown"
+    assert schema["parameters"]["properties"]["format"]["enum"] == ["markdown", "text", "html"]
+    assert "verbatim text" in schema["description"]
+    assert all(name in schema["description"] for name in ("JSON", "CSV", "XML", "NDJSON"))
     assert schema["parameters"]["properties"]["timeout"] == {
         "default": 30,
         "maximum": 120,
@@ -4369,16 +4372,23 @@ async def test_webfetch_rejects_changed_bound_settings(tmp_path, monkeypatch) ->
     fetch.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    ("content_type", "content", "output_format"),
+    [
+        ("text/plain", "Inhalt", "markdown"),
+        ("application/json", '{"title":"A & B <value>","items":[1,2]}\n', "text"),
+    ],
+)
 async def test_webfetch_source_ids_distinguish_redacted_query_values(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, content_type, content, output_format,
 ) -> None:
     async def fake_fetch(url, **_kwargs):
         return WebFetchResult(
             final_url=url,
-            content_type="text/plain",
-            content="Inhalt",
+            content_type=content_type,
+            content=content,
             status_code=200,
-            output_format="markdown",
+            output_format=output_format,
         )
 
     monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", fake_fetch)
@@ -4407,6 +4417,38 @@ async def test_webfetch_source_ids_distinguish_redacted_query_values(
     assert payloads[0]["url"] == payloads[1]["url"] == (
         "https://example.com/product?REDACTED"
     )
+    for payload in payloads:
+        assert payload["content"] == content
+        assert payload["contentType"] == content_type
+        assert payload["outputFormat"] == output_format
+        assert payload["attachments"] == []
+        assert "notice" not in payload
+
+
+@pytest.mark.parametrize("content", ["", " \t\r\n", "[]", "null", "{}"])
+async def test_webfetch_notices_empty_content_without_guessing_the_cause(
+    tmp_path, monkeypatch, content,
+) -> None:
+    monkeypatch.setattr(tools_module, "fetch_web", AsyncMock(return_value=WebFetchResult(
+        final_url="https://example.com/data", content_type="application/json",
+        content=content, status_code=200, output_format="text",
+    )))
+    call = ToolCall(id="fetch", name="webfetch", arguments={"url": "https://example.com/data"})
+
+    result = await tool_registry.execute(
+        call, _context(tmp_path, call, web_fetch_policy=ToolExecutionPolicy.AUTO),
+    )
+
+    payload = json.loads(result.content)
+    assert payload["content"] == content
+    assert payload["statusCode"] == 200
+    assert "errorCode" not in result.metadata
+    if not content.strip():
+        assert payload["notice"] == (
+            "No extractable text or attachments were returned. The cause is unknown."
+        )
+    else:
+        assert "notice" not in payload
 
 
 async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch) -> None:
@@ -4441,6 +4483,7 @@ async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch
     assert payload["outputFormat"] == "image"
     assert payload["content"] == ""
     assert payload["attachments"] == [{"filename": "diagram.png"}]
+    assert "notice" not in payload
     assert result.metadata["sources"][0]["sourceId"] == payload["sourceId"]
     assert result.attachments == (
         ToolAttachment(
@@ -4511,9 +4554,19 @@ async def test_webfetch_returns_pdf_text_and_selected_page_images(
     )
 
 
-async def test_webfetch_returns_stable_integration_errors(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("code", "params", "message"),
+    [
+        ("webfetch.requestFailed", {"statusCode": 404}, "The web server rejected the request."),
+        ("webfetch.contentTypeUnsupported", {"statusCode": 200, "contentType": "application/zip"},
+         "The web server sent an unsupported content type."),
+    ],
+)
+async def test_webfetch_returns_stable_integration_errors(
+    tmp_path, monkeypatch, code, params, message,
+) -> None:
     async def failing_fetch(*args, **kwargs):
-        raise WebFetchError("webfetch.requestFailed", params={"statusCode": 404})
+        raise WebFetchError(code, params=params)
 
     monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", failing_fetch)
     call = ToolCall(id="fetch", name="webfetch", arguments={"url": "https://example.com"})
@@ -4525,8 +4578,10 @@ async def test_webfetch_returns_stable_integration_errors(tmp_path, monkeypatch)
 
     result = await tool_registry.execute(call, context)
 
-    assert result.metadata == {"errorCode": "webfetch.requestFailed"}
-    assert json.loads(result.content)["error"]["params"] == {"statusCode": 404}
+    assert result.metadata == {"errorCode": code}
+    assert json.loads(result.content)["error"] == {
+        "code": code, "params": params, "message": message,
+    }
 
 
 def test_permission_for_is_safe_for_webfetch_and_unknown_tools(tmp_path) -> None:

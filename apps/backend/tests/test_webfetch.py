@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import html
 import ipaddress
 import logging
 import socket
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from io import BytesIO
@@ -14,6 +16,7 @@ import aiohttp
 import pytest
 from PIL import Image
 from pypdf import PdfWriter
+from yarl import URL
 
 from mato_loop_backend.integrations import (
     WebFetchError,
@@ -288,6 +291,9 @@ async def test_dns_is_pinned_and_request_headers_are_safe(monkeypatch) -> None:
     )
     assert seen_headers["accept-encoding"] == "gzip, deflate"
     assert "application/pdf" in seen_headers["accept"]
+    assert "application/json" in seen_headers["accept"]
+    assert "text/csv" in seen_headers["accept"]
+    assert "application/rss+xml" in seen_headers["accept"]
     assert {"authorization", "cookie", "referer"}.isdisjoint(seen_headers)
 
 
@@ -481,6 +487,66 @@ async def test_plain_text_is_escaped_for_html() -> None:
     assert result.content == "<pre>&lt;script&gt;alert(1)&lt;/script&gt;</pre>"
 
 
+@pytest.mark.parametrize("format", [None, "text", "html"])
+@pytest.mark.parametrize(
+    ("content_type", "document"),
+    [
+        ("Application/JSON; charset=utf-8", ' \r\n{"name":"A & B <script>\\u003c</script>",'
+         '"nested":[null,true,{"value":1.2300}],"name":"M\u00fcnchen"}\r\n '),
+        ("application/ld+json", '[{"@id":"https://example.com/?a=1&b=2"}]\n'),
+        ("application/problem+json", '{"status":200,"detail":"<b>data</b>"}'),
+        ("application/vnd.example.v1+json", '"scalar & <value>"'),
+        ("text/csv; charset=utf-8", 'name,value\r\n"A & B","first\r\nsecond"\r\n'),
+        ("application/xml", '<!DOCTYPE data [<!ENTITY secret SYSTEM "file:///etc/passwd">]>'
+         '<data>&secret;<value>A &amp; B</value></data>\n'),
+        ("text/xml", '<data><![CDATA[<script>literal</script>]]></data>\n'),
+        ("application/rss+xml", '<rss><channel><title>A &amp; B</title></channel></rss>\n'),
+        ("application/atom+xml", '<feed xmlns="http://www.w3.org/2005/Atom"><title>A</title></feed>'),
+        ("application/x-ndjson", '{"line":1}\n{"line":2}\n'),
+        ("application/ndjson", '{"line":1}\r\n{"line":2}\r\n'),
+        ("application/json", '{"incomplete":'),
+    ],
+)
+async def test_structured_text_preserves_source_without_parsing(
+    content_type: str, document: str, format: str | None,
+) -> None:
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        assert target == "/data"
+        return _response(document.encode(), headers={"Content-Type": content_type})
+
+    async with _server(responder) as port:
+        result = await fetch_web(
+            f"{_origin(port)}/data", public_addresses_only=False,
+            **({"format": format} if format is not None else {}),
+        )
+
+    assert result.content == (
+        f"<pre>{html.escape(document)}</pre>" if format == "html" else document
+    )
+    assert result.content_type == content_type.partition(";")[0].lower()
+    assert result.output_format == ("html" if format == "html" else "text")
+    assert result.status_code == 200
+    assert result.title is None
+    assert result.images == ()
+
+
+@pytest.mark.parametrize("format", ["markdown", "html"])
+async def test_structured_text_conversion_obeys_remaining_timeout(monkeypatch, format) -> None:
+    target = webfetch._Target(URL("https://example.com/data"), "example.com", 443, ())
+    response = webfetch._Response(200, None, "application/json", None, None, b"{}")
+    monkeypatch.setattr(
+        webfetch, "_follow_redirects", AsyncMock(return_value=(target, response, 0.01)),
+    )
+
+    def slow_decode(*args, **kwargs):
+        time.sleep(0.05)
+        return "{}"
+
+    monkeypatch.setattr(webfetch, "_decode_text", slow_decode)
+
+    assert await _error_code(fetch_web(str(target.url), format=format)) == "webfetch.timeout"
+
+
 async def test_html_title_ignores_title_elements_outside_the_head() -> None:
     document = b"<html><body><svg><title>Diagram title</title></svg><p>Text</p></body></html>"
 
@@ -650,6 +716,10 @@ async def test_blank_pdf_does_not_require_vision() -> None:
     [
         ("image/svg+xml", b"<svg/>", "webfetch.contentTypeUnsupported"),
         ("application/octet-stream", b"binary", "webfetch.contentTypeUnsupported"),
+        ("application/octet-stream", b'{"value":1}', "webfetch.contentTypeUnsupported"),
+        ("text/vnd.example+json", b"{}", "webfetch.contentTypeUnsupported"),
+        ("application/*+json", b"{}", "webfetch.contentTypeUnsupported"),
+        ("application/+json", b"{}", "webfetch.contentTypeUnsupported"),
         ("image/png", b"not a png", "webfetch.contentTypeMismatch"),
     ],
 )
@@ -661,17 +731,45 @@ async def test_rejects_unsupported_or_spoofed_binary_content(
 
     async with _server(responder) as port:
         assert await _error_code(
-            fetch_web(f"{_origin(port)}/file", public_addresses_only=False)
+            fetch_web(f"{_origin(port)}/file.json", public_addresses_only=False)
         ) == code
 
 
-async def test_content_length_is_rejected_before_body() -> None:
+@pytest.mark.parametrize(
+    ("header", "expected_type"),
+    [
+        ('Application/Zip; filename="private-value"', "application/zip"),
+        ("application/" + "x" * 127, "application/" + "x" * 127),
+        ("application/" + "x" * 128, None),
+        ("text/plain <script>private-value</script>", None),
+        ("", None),
+    ],
+)
+async def test_unsupported_mime_diagnostics_are_bounded_and_do_not_expose_parameters(
+    header: str, expected_type: str | None,
+) -> None:
+    async def responder(target: str, headers: dict[str, str]) -> bytes:
+        return _response(b"private response", headers={"Content-Type": header})
+
+    async with _server(responder) as port:
+        with pytest.raises(WebFetchError) as exc_info:
+            await fetch_web(f"{_origin(port)}/data", public_addresses_only=False)
+
+    assert exc_info.value.code == "webfetch.contentTypeUnsupported"
+    assert exc_info.value.params == {
+        "statusCode": 200,
+        **({"contentType": expected_type} if expected_type is not None else {}),
+    }
+
+
+@pytest.mark.parametrize("content_type", ["text/plain", "application/json"])
+async def test_content_length_is_rejected_before_body(content_type: str) -> None:
     limit = 1_024
 
     async def responder(target: str, headers: dict[str, str]) -> bytes:
         return _response(
             headers={
-                "Content-Type": "text/plain",
+                "Content-Type": content_type,
                 "Content-Length": str(limit + 1),
             },
             content_length=False,
@@ -688,13 +786,16 @@ async def test_content_length_is_rejected_before_body() -> None:
 
 
 @pytest.mark.parametrize("compressed", [False, True])
-async def test_streamed_and_decompressed_bodies_are_limited(compressed: bool) -> None:
+@pytest.mark.parametrize("content_type", ["text/plain", "application/json"])
+async def test_streamed_and_decompressed_bodies_are_limited(
+    compressed: bool, content_type: str,
+) -> None:
     limit = 1_024
     body = b"x" * (limit + 1)
     wire_body = gzip.compress(body) if compressed else body
 
     async def responder(target: str, headers: dict[str, str]) -> bytes:
-        response_headers = {"Content-Type": "text/plain"}
+        response_headers = {"Content-Type": content_type}
         if compressed:
             response_headers["Content-Encoding"] = "gzip"
         return _response(
@@ -713,12 +814,16 @@ async def test_streamed_and_decompressed_bodies_are_limited(compressed: bool) ->
         ) == "webfetch.responseTooLarge"
 
 
-async def test_timeout_and_http_errors_have_stable_codes() -> None:
+@pytest.mark.parametrize("content_type", ["text/plain", "application/problem+json"])
+async def test_timeout_and_http_errors_have_stable_codes(content_type: str) -> None:
     async def responder(target: str, headers: dict[str, str]) -> bytes:
         if target == "/slow":
             await asyncio.sleep(2)
             return _response(b"late", headers={"Content-Type": "text/plain"})
-        return _response(b"upstream details", status=404, headers={"Content-Type": "text/plain"})
+        return _response(
+            b'{"detail":"upstream details"}', status=404,
+            headers={"Content-Type": content_type},
+        )
 
     async with _server(responder) as port:
         assert await _error_code(

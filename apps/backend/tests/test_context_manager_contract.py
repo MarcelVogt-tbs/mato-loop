@@ -932,7 +932,17 @@ def test_current_tool_output_budget_keeps_small_results_and_ignores_order() -> N
     assert second.content == "b" * 2_000
 
 
-def test_projection_shortens_current_research_outputs_as_valid_json() -> None:
+@pytest.mark.parametrize(
+    ("content_type", "output_format", "content"),
+    [
+        ("text/html", "markdown", "f" * 4_000),
+        ("application/json", "text", '{"value":"' + "f" * 4_000 + '"}'),
+    ],
+    ids=("html", "json"),
+)
+def test_projection_shortens_current_research_outputs_as_valid_json(
+    content_type: str, output_format: str, content: str,
+) -> None:
     session = _session()
     user = _message(session.id, "user", "Recherchiere")
     assistant = _message(session.id, "assistant", "")
@@ -964,9 +974,9 @@ def test_projection_shortens_current_research_outputs_as_valid_json() -> None:
                 "sourceId": "src-fetch",
                 "url": "https://example.test/source",
                 "kind": "webfetch",
-                "contentType": "text/html",
-                "outputFormat": "markdown",
-                "content": "f" * 4_000,
+                "contentType": content_type,
+                "outputFormat": output_format,
+                "content": content,
             }
         ),
     )
@@ -989,6 +999,13 @@ def test_projection_shortens_current_research_outputs_as_valid_json() -> None:
     assert results[1]["content"]
     assert len(results[0][0].get("snippet") or "") < 4_000
     assert len(results[1]["content"]) < 4_000
+    assert results[1]["contentType"] == content_type
+    assert results[1]["outputFormat"] == output_format
+    assert _SHORTENED_TOOL_OUTPUT in results[1]["content"]
+    assert json.loads(fetch.content)["content"] == content
+    if content_type == "application/json":
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(results[1]["content"])
 
 
 def test_historical_research_envelope_stays_valid_when_shortened() -> None:

@@ -1710,6 +1710,10 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
             for image in result.images
         ],
     }
+    if not result.content.strip() and not attachments:
+        payload["notice"] = (
+            "No extractable text or attachments were returned. The cause is unknown."
+        )
     if result.page_count is not None:
         payload["pageCount"] = result.page_count
         payload["renderedPages"] = [
@@ -4636,9 +4640,9 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "webfetch",
-            "Fetch a general web page, PDF, or image. It does not extract audio, video, or published "
-            "captions. Returns untrusted text or validated image attachments and identifies whether "
-            "the final safe URL is citationEligible.",
+            "Fetch pages, JSON/CSV/XML/RSS/Atom/NDJSON, PDFs, or images. "
+            "Structured data: verbatim text, or escaped html. No audio, video, or caption extraction. "
+            "Returns untrusted text or validated image attachments; check citationEligible.",
             WebFetchArguments,
             _webfetch,
             requires_webfetch=True,

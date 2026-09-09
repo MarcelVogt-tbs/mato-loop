@@ -662,8 +662,8 @@ def general_system_prompt(
         )
     if {"web_search", "webfetch", "shell_run"} <= offered_tool_names:
         research_instructions.append(
-            "Use web_search for discovery and webfetch for simple retrieval; prefer shell_run for raw "
-            "data, custom HTTP, pagination, multiple requests, or local processing."
+            "Use web_search for discovery and webfetch for simple page or structured data retrieval; "
+            "prefer shell_run for custom HTTP, pagination, multiple requests, or local processing."
         )
     if {"web_search", "webfetch"} <= offered_tool_names:
         research_instructions.append(
