@@ -282,6 +282,9 @@ export function supportedAttachments(attachments) {
 
 export function toolOutputAttachments(tool, attachments) {
   const supported = supportedAttachments(attachments)
+  if (tool?.name === 'browser') {
+    return supported.filter((attachment) => attachment.kind !== 'image')
+  }
   if (tool?.name === 'render_openscad') {
     return supported.filter((attachment) => attachment.kind !== 'image'
       && attachment.mimeType !== 'model/vnd.off' && !/\.off$/i.test(attachment.filename || ''))

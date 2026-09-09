@@ -318,6 +318,21 @@ describe('persisted attachments', () => {
     expect(attachmentIcon(attachments[5])).toBe('folder_zip')
   })
 
+  it('hides browser screenshots only from the visible tool output', () => {
+    const attachments = [
+      { id: 'screenshot', kind: 'image', mimeType: 'image/png', filename: 'browser.png', url },
+      { id: 'renamed', kind: 'image', mimeType: 'image/png', filename: 'page.png', url },
+      { id: 'file', kind: 'file', mimeType: 'application/pdf', url }
+    ]
+    const original = structuredClone(attachments)
+
+    expect(toolOutputAttachments({ name: 'browser' }, attachments))
+      .toEqual([expect.objectContaining({ id: 'file' })])
+    expect(toolOutputAttachments({ name: 'other_tool' }, attachments)).toHaveLength(3)
+    expect(supportedAttachments(attachments)).toHaveLength(3)
+    expect(attachments).toEqual(original)
+  })
+
   it('hides OpenSCAD previews only from the visible tool output', () => {
     const attachments = [
       { id: 'model', kind: 'file', mimeType: 'model/stl', url },
