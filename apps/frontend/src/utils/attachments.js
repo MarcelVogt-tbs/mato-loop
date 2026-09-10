@@ -282,7 +282,7 @@ export function supportedAttachments(attachments) {
 
 export function toolOutputAttachments(tool, attachments) {
   const supported = supportedAttachments(attachments)
-  if (tool?.name === 'browser') {
+  if (tool?.name === 'browser' || tool?.name === 'browser_take_screenshot') {
     return supported.filter((attachment) => attachment.kind !== 'image')
   }
   if (tool?.name === 'render_openscad') {

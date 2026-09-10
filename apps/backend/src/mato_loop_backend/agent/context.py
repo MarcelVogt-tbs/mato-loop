@@ -6,6 +6,7 @@ import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from difflib import unified_diff
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -247,6 +248,80 @@ def _model_browser_inspection(content: str) -> str:
     ]
     payload["text"] = inspection
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _browser_action(call: dict[str, Any]) -> str | None:
+    from mato_loop_backend.integrations.browser import BROWSER_TOOL_ACTIONS
+
+    arguments = call.get("arguments")
+    name = call.get("name")
+    if not isinstance(arguments, dict) or not isinstance(name, str):
+        return None
+    if name == "browser":
+        action = arguments.get("action")
+        return action if isinstance(action, str) else None
+    action = BROWSER_TOOL_ACTIONS.get(name)
+    if action == "tabs":
+        tab_action = arguments.get("action")
+        return {"list": "tabs", "new": "newtab", "close": "closetab", "select": "select"}.get(tab_action) if isinstance(tab_action, str) else None
+    return action
+
+
+def model_browser_observations(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Encode deltas only against complete observations in this exact request projection."""
+    projected = list(messages)
+    baselines: dict[tuple[str, str], tuple[str, str]] = {}
+    calls: dict[str, str] = {}
+    for index, message in enumerate(messages):
+        if message.get("role") == "user":
+            baselines.clear()
+        if message.get("role") == "assistant":
+            calls = {
+                call["id"]: action
+                for call in message.get("tool_calls") or []
+                if isinstance(call, dict) and isinstance(call.get("id"), str)
+                and (action := _browser_action(call)) is not None
+            }
+        if message.get("role") != "tool" or message.get("tool_call_id") not in calls:
+            continue
+        action = calls[message["tool_call_id"]]
+        if action in {"navigate", "newtab", "closetab"}:
+            baselines.clear()
+        try:
+            payload = json.loads(message.get("content") or "")
+            result = BrowserActionResult.model_validate(payload)
+            if result.data is None:
+                continue
+            inspection = BrowserInspectionData.model_validate(result.data)
+            if (
+                result.tab_id is None or result.url is None or result.text is None
+                or result.text and not result.text.startswith("- ")
+            ):
+                baselines.clear()
+                continue
+        except (TypeError, ValueError, RecursionError):
+            # A shortened, missing or failed result cannot be a delta base.
+            baselines.clear()
+            continue
+        key = (result.tab_id, result.url)
+        previous = baselines.get(key)
+        if previous is not None and action not in {"inspect", "diagnostics"} and not any(
+            part is not None and part.error_code is not None
+            for part in (result.batch, result.script, result.playwright_code)
+        ):
+            delta = "".join(unified_diff(
+                [line + "\n" for line in previous[0].splitlines()],
+                [line + "\n" for line in result.text.splitlines()],
+                fromfile="previous", tofile="current", n=2,
+            ))
+            content = json.dumps({
+                **payload, "text": delta, "snapshotFormat": "diff",
+                "baseSnapshotSha256": previous[1],
+            }, ensure_ascii=False, separators=(",", ":"))
+            if len(content) < len(message["content"]):
+                projected[index] = {**message, "content": content}
+        baselines[key] = (result.text, inspection.snapshot_sha256)
+    return projected
 
 
 def _model_provider_file_roots(provider_data: dict[str, Any]) -> dict[str, Any]:
@@ -1119,9 +1194,7 @@ def _projection_messages(
         if item.role == "assistant":
             browser_inspect_calls = {
                 call["id"] for call in (projected["tool_calls"] or [])
-                if call.get("name") == "browser" and call.get("id")
-                and isinstance(call.get("arguments"), dict)
-                and call["arguments"].get("action") == "inspect"
+                if call.get("id") and _browser_action(call) == "inspect"
             }
         marker = _active_file_marker(item)
         if marker is not None:
@@ -1156,7 +1229,7 @@ def _projection_messages(
                 )
             else:
                 if (
-                    latest_user_index >= 0 and tool_name == "browser"
+                    latest_user_index >= 0 and tool_name in {"browser", "browser_snapshot"}
                     and item.tool_call_id in browser_inspect_calls
                 ):
                     projected["content"] = _model_browser_inspection(projected["content"])
@@ -1263,6 +1336,33 @@ def _shorten_evidence_output(
 
     def serialized(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    if isinstance(payload, dict) and any(key in payload for key in ("batch", "script", "playwrightCode")):
+        try:
+            browser = BrowserActionResult.model_validate({
+                key: value for key, value in payload.items()
+                if key not in {"toolOutputShortened", "scriptValueOmitted"}
+            })
+        except (TypeError, ValueError, RecursionError):
+            pass
+        else:
+            if any(part is not None for part in (browser.batch, browser.script, browser.playwright_code)):
+                if len(content) <= max_characters:
+                    return content
+                outcome = {"toolOutputShortened": True}
+                if browser.batch is not None:
+                    outcome["batch"] = browser.batch.model_dump(exclude_none=True)
+                if browser.script is not None:
+                    outcome["script"] = {"errorCode": browser.script.error_code, "outputTruncated": True}
+                    outcome["scriptValueOmitted"] = True
+                if browser.playwright_code is not None:
+                    outcome["playwrightCode"] = browser.playwright_code.model_dump(exclude_none=True)
+                    if len(serialized(outcome)) > max_characters:
+                        outcome["playwrightCode"] = {
+                            "truncated": True, "errorCode": browser.playwright_code.error_code,
+                        }
+                # Effect/outcome metadata is irreducible, even under a tiny soft text budget.
+                return serialized(outcome)
 
     def shortened_content(value: str, keep: int, output_format: object) -> str:
         if keep >= len(value):

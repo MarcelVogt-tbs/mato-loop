@@ -1,13 +1,19 @@
-"""Credential-free Linux browser process. Only the parent owns the control pipes."""
+"""Linux browser worker; run_code has full worker-account OS and profile access.
+
+Python imports are unrestricted. Output capture protects ordinary print framing,
+not malicious descriptor writes such as os.write; this is not an OS sandbox.
+"""
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import contextlib
 import ctypes
 import hashlib
 import hmac
+import inspect
 import json
 import mimetypes
 import os
@@ -22,7 +28,7 @@ import sys
 import tempfile
 from collections import deque
 from importlib.metadata import version
-from io import BytesIO
+from io import BytesIO, TextIOBase
 from pathlib import Path
 from time import monotonic
 from urllib.parse import urlsplit, urlunsplit
@@ -38,13 +44,16 @@ from .browser_contracts import (
     BrowserActionResult,
     BrowserClipboardArguments,
     BrowserClipboardResult,
+    BrowserCodeFeedback,
     BrowserControlArguments,
     BrowserExecuteArguments,
     BrowserFileArguments,
+    BrowserFormField,
     BrowserNavigationArguments,
     BrowserNavigationResult,
     BrowserResizeArguments,
     BrowserResizeResult,
+    BrowserScriptResult,
     BrowserStatus,
     decode_chunk,
 )
@@ -53,6 +62,21 @@ from .filesystem import AgentError
 
 def fail(code: str) -> AgentError:
     return AgentError(f"browser.{code}", "Browser operation failed")
+
+
+class ScriptOutput(TextIOBase):
+    def __init__(self):
+        self.text = ""
+        self.truncated = False
+
+    def writable(self):
+        return True
+
+    def write(self, text):
+        remaining = 32_768 - len(self.text)
+        self.text += text[:remaining]
+        self.truncated |= len(text) > remaining
+        return len(text)
 
 
 def launch_error_code(error: Exception) -> str:
@@ -95,6 +119,8 @@ class BrowserWorker:
         self.resize_mode = None
         self.page_sessions: dict[object, asyncio.Task] = {}
         self.loading_frames: dict[object, set[str]] = {}
+        self.pending_requests: dict[object, set[object]] = {}
+        self.request_activity: dict[object, float] = {}
         self.page_focus_state: dict[object, dict] = {}
         self.page_history: dict[object, dict] = {}
         self.active_tab_id = None
@@ -736,6 +762,26 @@ class BrowserWorker:
         self.tabs[tab_id] = page
         self.document_ids[page] = str(uuid4())
         self.loading_frames[page] = set()
+        self.pending_requests[page] = set()
+
+        def request_started(request):
+            if page in self.pending_requests and request.resource_type in {
+                "document",
+                "xhr",
+                "fetch",
+            }:
+                self.pending_requests[page].add(request)
+                self.request_activity[page] = monotonic()
+
+        def request_finished(request):
+            pending = self.pending_requests.get(page, set())
+            if request in pending:
+                pending.discard(request)
+                self.request_activity[page] = monotonic()
+
+        page.on("request", request_started)
+        page.on("requestfinished", request_finished)
+        page.on("requestfailed", request_finished)
         observation = asyncio.create_task(self.observe_page(page))
         self.page_sessions[page] = observation
         self.tasks.add(observation)
@@ -752,6 +798,8 @@ class BrowserWorker:
             self.pending_choosers.pop(page, None)
             self.document_ids.pop(page, None)
             self.loading_frames.pop(page, None)
+            self.pending_requests.pop(page, None)
+            self.request_activity.pop(page, None)
             self.page_focus_state.pop(page, None)
             self.page_history.pop(page, None)
             self.page_sessions.pop(page, None)
@@ -1199,57 +1247,161 @@ class BrowserWorker:
         page = self.tabs.get(args.tab_id or self.active_tab_id)
         if args.tab_id and page is None:
             raise fail("invalidTarget")
-        text = screenshot = result_data = None
-        if action == "newtab":
-            if len(self.tabs) >= 32:
-                raise fail("busy")
-            page = await self.context.new_page()
-        if action not in {"tabs", "diagnostics"} and page is None:
-            raise fail("invalidTarget")
-        if page is not None and action not in {"tabs", "diagnostics"}:
-            await page.bring_to_front()
-        if action in {"navigate", "newtab"} and args.url:
-            await page.goto(args.url, wait_until="domcontentloaded", timeout=15_000)
-        elif action == "closetab":
-            if len(self.tabs) == 1:
-                await self.context.new_page()
-            await page.close()
-            await self.navigation_state()
-            page = self.tabs.get(self.active_tab_id)
-        elif action == "inspect":
-            text, result_data = await self._inspect(page)
-        elif action == "screenshot":
-            screenshot = await self.screenshot(page, args.browser_id)
-        elif action in {"click", "fill", "upload"}:
-            # Playwright selectors are locators, never caller-controlled JavaScript.
-            locator = page.locator(args.selector)
-            if action == "click":
-                await locator.click()
-            elif action == "fill":
-                await locator.fill(args.text)
+        text = screenshot = result_data = batch = script = None
+        completed, attempted, code_error = [], None, None
+
+        async def step(line, operation, *values, **options):
+            nonlocal attempted
+            attempted = line
+            value = await operation(*values, **options)
+            completed.append(line)
+            attempted = None
+            return value
+
+        try:
+            if action == "newtab":
+                if len(self.tabs) >= 32:
+                    raise fail("busy")
+                page = await step("page = await page.context.new_page()", self.context.new_page)
+            if action not in {"tabs", "diagnostics"} and page is None:
+                raise fail("invalidTarget")
+            if page is not None and action not in {"tabs", "diagnostics"}:
+                if action == "select":
+                    await step("await page.bring_to_front()", page.bring_to_front)
+                else:
+                    await page.bring_to_front()
+            if action == "select":
+                self.active_tab_id = args.tab_id
+            if action in {"navigate", "newtab"} and args.url:
+                await step(
+                    f"await page.goto({args.url!r}, wait_until='domcontentloaded', timeout=15000)",
+                    page.goto,
+                    args.url,
+                    wait_until="domcontentloaded",
+                    timeout=15_000,
+                )
+            elif action == "closetab":
+                if len(self.tabs) == 1:
+                    await step("await page.context.new_page()", self.context.new_page)
+                await step("await page.close()", page.close)
+                await self.navigation_state()
+                page = self.tabs.get(self.active_tab_id)
+            elif action == "inspect":
+                if args.settle:
+                    await self._settle(page)
+                text, result_data = await self._inspect(page, guard=args.guard)
+            elif action == "screenshot":
+                screenshot = await self.screenshot(page, args.browser_id)
+            elif action in {"click", "fill", "upload"}:
+                # Playwright selectors are locators, never caller-controlled JavaScript.
+                locator = page.locator(args.selector)
+                target = f"page.locator({args.selector!r})"
+                if action == "click":
+                    await step(f"await {target}.click()", locator.click)
+                elif action == "fill":
+                    if args.slowly:
+                        if not await locator.is_editable() or not await locator.evaluate("""node =>
+                            node.isContentEditable || node.tagName === 'TEXTAREA' ||
+                            (node.tagName === 'INPUT' &&
+                                ['text','search','email','tel','url','password','number']
+                                    .includes(node.type))"""):
+                            raise fail("invalidTarget")
+                        await step(
+                            f"await {target}.press_sequentially({args.text!r})",
+                            locator.press_sequentially,
+                            args.text,
+                        )
+                    else:
+                        await step(f"await {target}.fill({args.text!r})", locator.fill, args.text)
+                    if args.submit:
+                        await step(f"await {target}.press('Enter')", locator.press, "Enter")
+                else:
+                    await locator.set_input_files(self.upload_payload(args.upload_id))
+            elif action == "press":
+                if args.selector:
+                    await step(
+                        f"await page.locator({args.selector!r}).press({args.key!r})",
+                        page.locator(args.selector).press,
+                        args.key,
+                    )
+                else:
+                    await step(
+                        f"await page.keyboard.press({args.key!r})", page.keyboard.press, args.key
+                    )
+            elif action == "fill_form":
+                batch = await self._fill_form(page, args.fields)
+                code_error = batch.get("errorCode")
+                # Execution freezes ElementHandles; these are equivalent locator patterns only.
+                count = batch["completed"] + (code_error == "browser.outcomeUnknown")
+                for index, field in enumerate(args.fields[:count]):
+                    target = f"page.locator({'aria-ref=' + field.ref!r})"
+                    if field.type == "textbox":
+                        call = f"fill({field.value!r}, timeout=1000)"
+                    elif field.type == "combobox":
+                        call = f"select_option(label={field.value!r}, timeout=1000)"
+                    else:
+                        call = f"set_checked({field.value == 'true'!r}, timeout=1000)"
+                    line = f"await {target}.{call}"
+                    if index < batch["completed"]:
+                        completed.append(line)
+                    else:
+                        attempted = line
+            elif action == "scroll":
+                delta = -600 if args.direction == "up" else 600
+                await step(f"await page.mouse.wheel(0, {delta})", page.mouse.wheel, 0, delta)
+            elif action == "diagnostics":
+                text = "\n".join(self.diagnostics)[:32_768]
+            elif action in {"run_code", "evaluate"}:
+                script = await self._script(page, args)
+        except Exception:
+            if attempted is not None:
+                code_error = "browser.outcomeUnknown"
+            elif completed and action == "newtab" and args.url:
+                code_error = "browser.outcomeUnknown"
+            elif completed:
+                result_data = {"observationFailed": True}
             else:
-                await locator.set_input_files(self.upload_payload(args.upload_id))
-        elif action == "press":
-            if args.selector:
-                await page.locator(args.selector).press(args.key)
-            else:
-                await page.keyboard.press(args.key)
-        elif action == "scroll":
-            await page.mouse.wheel(0, -600 if args.direction == "up" else 600)
-        elif action == "diagnostics":
-            text = "\n".join(self.diagnostics)[:32_768]
+                raise
+
+        feedback = None
+        if completed or attempted is not None or batch is not None:
+            feedback = BrowserCodeFeedback(errorCode=code_error)
+            # Omit whole repr-based lines, never cut a literal or exceed the combined budget.
+            for line in completed:
+                candidate = "\n".join(filter(None, (feedback.completed, line)))
+                if len(candidate) <= 32_768:
+                    feedback.completed = candidate
+                else:
+                    feedback.truncated = True
+            if attempted is not None:
+                if len(feedback.completed) + len(attempted) <= 32_768:
+                    feedback.attempted = attempted
+                else:
+                    feedback.truncated = True
+        observation_deadline = (
+            asyncio.get_running_loop().time() + 8
+            if batch is not None or script is not None or feedback is not None
+            else None
+        )
         if args.observe and action != "inspect" and page is not None:
             try:
-                text, result_data = await self._inspect(page)
+                async with asyncio.timeout_at(observation_deadline):
+                    await self._settle(page)
+                    text, result_data = await self._inspect(page, guard=False)
             except Exception:
                 # The mutation completed; a failed optional observation must not invite replay.
                 text, result_data = None, {"observationFailed": True}
         tabs = []
         for tab_id, tab in list(self.tabs.items()):
             if not tab.is_closed():
-                tabs.append(
-                    {"id": tab_id, "url": tab.url[:4096], "title": (await tab.title())[:500]}
-                )
+                try:
+                    async with asyncio.timeout_at(observation_deadline):
+                        title = (await tab.title())[:500]
+                except Exception:
+                    if batch is None and script is None and feedback is None:
+                        raise
+                    title = ""
+                tabs.append({"id": tab_id, "url": tab.url[:4096], "title": title})
         return BrowserActionResult(
             tabs=tabs,
             tabId=next((k for k, v in self.tabs.items() if v is page), None),
@@ -1257,6 +1409,9 @@ class BrowserWorker:
             text=text,
             screenshot=screenshot,
             data=result_data,
+            batch=batch,
+            script=script,
+            playwrightCode=feedback,
             downloads=[
                 {key: entry[key] for key in ("id", "filename", "size")}
                 for entry in self.files.values()
@@ -1264,9 +1419,286 @@ class BrowserWorker:
             ],
         ).model_dump(by_alias=True)
 
-    async def _inspect(self, page) -> tuple[str, dict[str, str]]:
+    async def _script(self, page, args: BrowserExecuteArguments) -> BrowserScriptResult:
+        compiled = None
+        if args.action == "run_code":
+            try:
+                tree = ast.parse(args.code, filename="<browser-run-code>")
+                runs = [
+                    node
+                    for node in tree.body
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == "run"
+                ]
+                if len(runs) != 1 or not isinstance(runs[0], ast.AsyncFunctionDef):
+                    raise ValueError("An async run(page) function is required")
+                arguments = runs[0].args
+                positional = arguments.posonlyargs + arguments.args
+                if (
+                    len(positional) != 1
+                    or positional[0].arg != "page"
+                    or arguments.vararg
+                    or arguments.kwarg
+                    or arguments.kwonlyargs
+                    or arguments.defaults
+                ):
+                    raise ValueError("An async run(page) function is required")
+                # Contract check only, not a sandbox. Module-level statements execute once.
+                compiled = compile(tree, "<browser-run-code>", "exec")
+            except (SyntaxError, ValueError, TypeError, RecursionError):
+                raise fail("invalidTarget") from None
+        output = ScriptOutput()
+        result = BrowserScriptResult()
+        try:
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                async with asyncio.timeout(40) as deadline:
+                    if compiled is not None:
+                        namespace = {"__name__": "__browser_script__"}
+                        exec(compiled, namespace)
+                        if not inspect.iscoroutinefunction(namespace.get("run")):
+                            raise ValueError("An async run(page) function is required")
+                        value = await namespace["run"](page)
+                    else:
+                        target = page.locator(args.selector) if args.selector else page
+                        # Validate before Playwright converts non-JSON JS values to null/objects.
+                        value = await target.evaluate(
+                            "async element => { const value = await ("
+                            + args.function
+                            + """
+                            )(element);
+                            let budget = 32768;
+                            const check = (v, depth = 0) => {
+                                if (--budget < 0 || depth > 32) throw Error('JSON limit');
+                                if (v === null || typeof v === 'boolean') return;
+                                if (typeof v === 'string') {
+                                    budget -= v.length;
+                                    if (budget < 0) throw Error('JSON limit');
+                                    return;
+                                }
+                                if (typeof v === 'number' && Number.isFinite(v)) return;
+                                if (typeof v !== 'object' ||
+                                    (!Array.isArray(v) &&
+                                        Object.getPrototypeOf(v) !== Object.prototype &&
+                                        Object.getPrototypeOf(v) !== null))
+                                    throw Error('Not JSON');
+                                if (Array.isArray(v) && v.length > budget)
+                                    throw Error('JSON limit');
+                                for (const key of Reflect.ownKeys(v)) {
+                                    if (typeof key !== 'string') throw Error('Not JSON');
+                                    budget -= key.length;
+                                    check(v[key], depth + 1);
+                                }
+                            };
+                            check(value);
+                            const json = JSON.stringify(value);
+                            if (new TextEncoder().encode(json).length > 32768)
+                                throw Error('JSON limit');
+                            return JSON.parse(json);
+                        }"""
+                        )
+                    if deadline.expired():
+                        raise TimeoutError
+                    result = BrowserScriptResult(value=value)
+        except BaseException:
+            if asyncio.current_task().cancelling():
+                # External RPC cancellation must still tear down the worker, not drain/retry it.
+                raise
+            result = BrowserScriptResult(errorCode="browser.outcomeUnknown")
+        result.output, result.output_truncated = output.text, output.truncated
+        return result
+
+    async def _settle(self, page) -> None:
+        # Observe in an isolated world: page scripts cannot replace the native APIs.
+        # Each observer self-destructs even if the pipe, task, or document disappears.
+        deadline = monotonic() + 1.8
+        session = None
+        group = "matoloop-settle-" + uuid4().hex
+        observers = []
+        try:
+            async with asyncio.timeout_at(asyncio.get_running_loop().time() + 1.8):
+                session = await asyncio.shield(self.page_sessions[page])
+                while self.pending_requests.get(page) or self.loading_frames.get(page):
+                    await asyncio.sleep(0.025)
+                tree = await session.send("Page.getFrameTree")
+                frames = [tree["frameTree"]]
+                for frame in frames:
+                    frames.extend(frame.get("childFrames", []))
+                    world = await session.send(
+                        "Page.createIsolatedWorld",
+                        {"frameId": frame["frame"]["id"], "worldName": "matoloop-settle"},
+                    )
+                    remaining = max(1, int((deadline - monotonic()) * 1000))
+                    result = await session.send(
+                        "Runtime.evaluate",
+                        {
+                            "contextId": world["executionContextId"],
+                            "objectGroup": group,
+                            "expression": """(() => {
+                                let last = performance.now(), expired = false;
+                                const observer = new MutationObserver(() => {
+                                    last = performance.now();
+                                });
+                                observer.observe(document, {subtree:true, childList:true,
+                                    attributes:true, characterData:true});
+                                const close = () => {
+                                    expired = true; observer.disconnect(); clearTimeout(limit);
+                                };
+                                const limit = setTimeout(close, """
+                            + str(remaining)
+                            + """);
+                                return {close, ready:() => {
+                                    const busy = document.readyState !== 'complete' ||
+                                        document.getAnimations().some(animation =>
+                                            (animation.playState === 'running' || animation.pending)
+                                            && Number.isFinite(
+                                                animation.effect?.getComputedTiming().endTime));
+                                    if (busy) last = performance.now();
+                                    return !expired && performance.now() - last >= 150;
+                                }};
+                            })()""",
+                        },
+                    )
+                    observers.append(result["result"]["objectId"])
+                while True:
+                    states = await asyncio.gather(
+                        *(
+                            session.send(
+                                "Runtime.callFunctionOn",
+                                {
+                                    "objectId": observer,
+                                    "functionDeclaration": "function(){return this.ready()}",
+                                    "returnByValue": True,
+                                },
+                            )
+                            for observer in observers
+                        )
+                    )
+                    if (
+                        all(state.get("result", {}).get("value") is True for state in states)
+                        and monotonic() - self.request_activity.get(page, 0) >= 0.15
+                        and not self.pending_requests.get(page)
+                        and not self.loading_frames.get(page)
+                    ):
+                        return
+                    await asyncio.sleep(0.025)
+        except (TimeoutError, PlaywrightError, KeyError):
+            pass
+        finally:
+            # The timer is the fallback for a lost renderer or cancellation during registration.
+            with contextlib.suppress(Exception):
+                async with asyncio.timeout(0.1):
+                    for observer in observers:
+                        await session.send(
+                            "Runtime.callFunctionOn",
+                            {
+                                "objectId": observer,
+                                "functionDeclaration": "function(){this.close()}",
+                            },
+                        )
+                        await session.send("Runtime.releaseObject", {"objectId": observer})
+            if session is not None:
+                with contextlib.suppress(Exception):
+                    async with asyncio.timeout(0.1):
+                        await session.send("Runtime.releaseObjectGroup", {"objectGroup": group})
+        raise fail("observationUnstable")
+
+    async def _fill_form(self, page, fields: list[BrowserFormField]) -> dict:
+        handles, guards = [], []
+        completed, dispatched = 0, False
+        document_id = self.document_ids.get(page)
+        try:
+            async with asyncio.timeout(25):
+                for field in fields:
+                    targets = await page.locator("aria-ref=" + field.ref).element_handles()
+                    handles.extend(targets)
+                    if len(targets) != 1:
+                        raise fail("invalidTarget")
+                    guard = await targets[0].evaluate_handle(
+                        r"""(node, field) => {
+                        const doc = node.ownerDocument, form = node.form;
+                        const state = () => JSON.stringify({
+                            tag:node.tagName, type:node.type, name:node.name, id:node.id,
+                            role:node.getAttribute('role'), aria:node.getAttribute('aria-label'),
+                            labelledby:node.getAttribute('aria-labelledby'),
+                            labelledText:(node.getAttribute('aria-labelledby') || '').split(/\s+/)
+                                .map(id => doc.getElementById(id)?.textContent),
+                            attributes:Array.from(node.attributes, attr => [attr.name, attr.value])
+                                .filter(([name]) => !['class','style','tabindex'].includes(name)),
+                            labels:Array.from(node.labels || [], label => label.textContent),
+                            value:node.isContentEditable ? node.textContent : node.value,
+                            checked:node.checked, disabled:node.disabled, readOnly:node.readOnly,
+                            editable:node.isContentEditable,
+                            action:form?.action, method:form?.method, target:form?.target,
+                            enctype:form?.enctype,
+                            options:node.options && Array.from(node.options, option =>
+                                [option.value, option.label,
+                                    option.disabled || option.parentElement.disabled,
+                                    option.selected])
+                        });
+                        const textbox = node.tagName === 'TEXTAREA' || node.isContentEditable ||
+                            (node.tagName === 'INPUT' &&
+                                ['text','search','email','tel','url','password','number']
+                                    .includes(node.type));
+                        const matches = node.tagName === 'SELECT' ? Array.from(node.options)
+                            .filter(option => option.label === field.value) : [];
+                        const valid = field.type === 'textbox' ? textbox :
+                            field.type === 'combobox' ? node.tagName === 'SELECT' &&
+                                !node.multiple && matches.length === 1 && !matches[0].disabled &&
+                                    !matches[0].parentElement.disabled :
+                                (node.tagName === 'INPUT' && node.type === field.type) ||
+                                    (node.getAttribute('role') === field.type &&
+                                        ['true','false'].includes(node.getAttribute('aria-checked')));
+                        const initial = state();
+                        return {valid:valid && !node.disabled && !node.readOnly &&
+                                initial.length <= 524288,
+                            unchanged:() => node.isConnected && node.ownerDocument === doc &&
+                                node.form === form && state() === initial};
+                    }""",
+                        field.model_dump(),
+                    )
+                    guards.append(guard)
+                    if not await guard.evaluate("guard => guard.valid && guard.unchanged()"):
+                        raise fail("invalidTarget")
+                    if not await targets[0].is_visible() or not await targets[0].is_enabled():
+                        raise fail("invalidTarget")
+                for field, handle, guard in zip(fields, handles, guards, strict=True):
+                    if (
+                        not await handle.is_visible()
+                        or not await handle.is_enabled()
+                        or not await guard.evaluate("guard => guard.unchanged()")
+                        or self.document_ids.get(page) != document_id
+                    ):
+                        raise fail("snapshotChanged")
+                    dispatched = True
+                    if field.type == "textbox":
+                        await handle.fill(field.value, timeout=1000)
+                    elif field.type == "combobox":
+                        await handle.select_option(label=field.value, timeout=1000)
+                    else:
+                        await handle.set_checked(field.value == "true", timeout=1000)
+                    completed += 1
+                    dispatched = False
+            return {"completed": completed, "total": len(fields)}
+        except Exception as exc:
+            if not completed and not dispatched:
+                if isinstance(exc, AgentError):
+                    raise
+                raise fail("snapshotChanged") from None
+            return {
+                "completed": completed,
+                "total": len(fields),
+                "errorCode": "browser.outcomeUnknown" if dispatched else "browser.snapshotChanged",
+            }
+        finally:
+            for handle in [*guards, *handles]:
+                with contextlib.suppress(Exception):
+                    async with asyncio.timeout(0.1):
+                        await handle.dispose()
+
+    async def _inspect(self, page, *, guard: bool = True) -> tuple[str, dict[str, str]]:
         document_id = self.document_ids[page]
-        state = await page.locator("body").evaluate("""body => {
+        state = (
+            await page.locator("body").evaluate("""body => {
                 const query = 'a[href],button,input,select,textarea,form,' +
                     '[role],[contenteditable=true]';
                 const state = [];
@@ -1302,6 +1734,9 @@ class BrowserWorker:
                     scrollX, scrollY});
                 return {state};
             }""")
+            if guard
+            else {}
+        )
         if state.get("tooLarge"):
             raise fail("fileTooLarge")
         impl = page._impl_obj
@@ -1317,7 +1752,8 @@ class BrowserWorker:
             {
                 "pageId": next(k for k, v in self.tabs.items() if v is page),
                 "documentId": document_id,
-                "geometry": self.geometry,
+                "url": page.url,
+                **({"geometry": self.geometry} if guard else {}),
                 "text": text,
                 **state,
             }
@@ -1397,6 +1833,8 @@ async def serve(root: Path) -> None:
     await asyncio.get_running_loop().connect_read_pipe(lambda: protocol, sys.stdin.buffer)
     current = asyncio.current_task()
     asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, current.cancel)
+    # Late task prints must not become a second pipe response after script capture ends.
+    protocol_output, sys.stdout = sys.stdout, sys.stderr
     try:
         while raw := await reader.readline():
             op = None
@@ -1458,8 +1896,11 @@ async def serve(root: Path) -> None:
             payload = json.dumps(response, ensure_ascii=True)
             if len(payload) > 950_000:
                 payload = '{"ok":false,"error":"browser.fileTooLarge"}'
-            print(payload, flush=True)
+            print(payload, file=protocol_output, flush=True)
     except asyncio.CancelledError:
         pass
     finally:
-        await worker.close()
+        try:
+            await worker.close()
+        finally:
+            sys.stdout = protocol_output

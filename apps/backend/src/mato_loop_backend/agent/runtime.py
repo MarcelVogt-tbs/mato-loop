@@ -29,6 +29,7 @@ from mato_loop_backend.agent.context import (
     estimate_tokens,
     general_system_prompt,
     memory_context_prompt,
+    model_browser_observations,
     valid_compaction_summary,
 )
 from mato_loop_backend.agent.coordinator import approval_coordinator, question_coordinator
@@ -2296,7 +2297,8 @@ class AgentRuntime:
                 options: dict[str, Any] = request_options,
             ) -> int:
                 messages, images = _project_ephemeral_images(
-                    messages, ephemeral_images, model=model, target_trust_level=model_trust_level,
+                    model_browser_observations(messages), ephemeral_images,
+                    model=model, target_trust_level=model_trust_level,
                 )
                 prepared = await ProviderService.prepare_request(
                     messages=messages, image_inputs=images, **options
@@ -2515,7 +2517,7 @@ class AgentRuntime:
                 )
 
             request_messages, request_images = _project_ephemeral_images(
-                projection.messages, ephemeral_images,
+                model_browser_observations(projection.messages), ephemeral_images,
                 model=model, target_trust_level=model_trust_level,
             )
             result = await ProviderService.complete(
@@ -4858,7 +4860,26 @@ class AgentRuntime:
             trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
             **permission_namespace,
         )
+        browser_approval_key = None
+        if (
+            request.action_kind == "browser_action" and approval_resolution is not None
+            and (check_only or decision == PermissionDecision.ASK)
+        ):
+            browser_approval_key = "browser_approved:" + json.dumps([
+                str(run.id), call.id, call.name, str(chat_session.id), str(chat_session.user_id),
+                str(origin.id), str(agent_profile_id), run.trust_level or TrustLevel.PUBLIC.value,
+                request.capability, request.resource_type, request.resource_scope,
+                request.use_integration_policy, str(request.policy_integration_id),
+                request.policy_resource_key, request.force_ask,
+            ])
         if check_only:
+            # Only a real approval for this call and exact scope can satisfy a remaining ASK.
+            if (
+                decision == PermissionDecision.ASK
+                and browser_approval_key is not None
+                and approval_resolution.get(browser_approval_key) in {"allow_once", "allow_session"}
+            ):
+                return PermissionDecision.ALLOW
             return decision
         if decision != PermissionDecision.ASK:
             draft_file = (request.approval_details or {}).get("draftFile")
@@ -4870,6 +4891,12 @@ class AgentRuntime:
             ):
                 approval_resolution["expected_revision"] = draft_file["initialRevision"]
             return decision
+        if request.action_kind == "browser_action":
+            from mato_loop_backend.integrations.browser import capture_browser_approval
+
+            request = await capture_browser_approval(
+                request, call, chat_session, run, approval_resolution,
+            )
         resolution = await cls._request_approval(
             db,
             run,
@@ -4931,6 +4958,8 @@ class AgentRuntime:
             trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
             **permission_namespace,
         )
+        if current_decision != PermissionDecision.DENY and browser_approval_key is not None:
+            approval_resolution[browser_approval_key] = approval_decision
         return (
             PermissionDecision.DENY
             if current_decision == PermissionDecision.DENY

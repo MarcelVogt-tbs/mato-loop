@@ -141,9 +141,11 @@ class IntegrationAdapterDefinition:
                 is None
                 for operation in operations
             )
-            or len(operations) != len(set(operations))
         ):
-            raise ValueError("agent integration operations must be unique and match their kind")
+            raise ValueError("agent integration operations must match their kind")
+        names = [tool.name for tool in self.execution_tools]
+        if len(names) != len(set(names)):
+            raise ValueError("agent integration tool names must be unique")
         if any(
             len(tool.required_execution_operations)
             != len(set(tool.required_execution_operations))

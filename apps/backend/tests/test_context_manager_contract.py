@@ -23,6 +23,7 @@ from mato_loop_backend.agent.context import (
     general_system_prompt,
     memory_context_prompt,
     message_dict,
+    model_browser_observations,
 )
 from mato_loop_backend.models import ChatSession, ContextSummary, Message, MessageAttachment
 from mato_loop_backend.providers import service as service_module
@@ -969,6 +970,97 @@ def test_browser_inspection_projection_is_lossless_and_append_stable() -> None:
     assert canonical == [
         (item.content, item.provider_data, item.tool_calls) for item in records[:-2]
     ]
+
+
+@pytest.mark.parametrize("reset", [None, "shortened", "missing", "new_turn", "error", "navigation"])
+@pytest.mark.parametrize("interface", ["legacy", "narrow", "mixed"])
+def test_browser_deltas_require_a_complete_base_in_the_actual_request(reset, interface):
+    tab_id = str(uuid4())
+    original = "\n".join(f'- textbox "Field {i}" [ref=e{i + 1}]: original' for i in range(40))
+    changed = original.replace('"Field 20" [ref=e21]: original', '"Field 20" [ref=e21]: updated')
+
+    def exchange(action, text, token):
+        names = {"inspect": "browser_snapshot", "fill": "browser_type", "press": "browser_press_key",
+                 "navigate": "browser_navigate", "click": "browser_click"}
+        legacy = interface == "legacy" or interface == "mixed" and action == "inspect"
+        return [
+            {"role": "assistant", "tool_calls": [{
+                "id": "reused", "name": "browser" if legacy else names[action],
+                "arguments": {"action": action} if legacy else {"tabId": tab_id},
+            }]},
+            {"role": "tool", "tool_call_id": "reused", "content": json.dumps({
+                "tabId": tab_id, "url": "https://example.test/", "text": text,
+                "data": {"snapshotSha256": token * 64},
+                **({"playwrightCode": {"completed": "await page.keyboard.press('Enter')"}} if action == "press" else {}),
+            })},
+        ]
+
+    messages = [{"role": "user", "content": "Fill the form"}, *exchange("inspect", original, "a")]
+    if reset == "shortened":
+        messages[-1]["content"] = messages[-1]["content"][:200] + "[shortened]"
+    elif reset == "missing":
+        messages = messages[:1]
+    elif reset == "new_turn":
+        messages.append({"role": "user", "content": "Continue"})
+    elif reset == "error":
+        messages.extend(exchange("click", "", "b"))
+        messages[-1]["content"] = '{"error":{"code":"browser.snapshotChanged"}}'
+    messages.extend(exchange("navigate" if reset == "navigation" else "fill", changed, "c"))
+    canonical = deepcopy(messages)
+    projected = model_browser_observations(messages)
+    assert messages == canonical
+    output = json.loads(projected[-1]["content"])
+    assert output["data"]["snapshotSha256"] == "c" * 64
+    if reset is None:
+        assert projected[:-1] == messages[:-1]
+        assert output["snapshotFormat"] == "diff"
+        assert output["baseSnapshotSha256"] == "a" * 64
+        assert '- textbox "Field 20" [ref=e21]: original' in output["text"]
+        assert '+- textbox "Field 20" [ref=e21]: updated' in output["text"]
+        assert len(projected[-1]["content"]) < len(messages[-1]["content"]) / 2
+        # Rebuild from canonical results, never advance a hidden worker-side delta baseline.
+        assert model_browser_observations(messages) == projected
+        extended = model_browser_observations([*messages, *exchange("press", changed, "d")])
+        assert extended[:len(projected)] == projected
+        assert json.loads(extended[-1]["content"])["text"] == ""
+        assert json.loads(extended[-1]["content"])["baseSnapshotSha256"] == "c" * 64
+        assert json.loads(extended[-1]["content"])["playwrightCode"] == {
+            "completed": "await page.keyboard.press('Enter')",
+        }
+    else:
+        assert output["text"] == changed and "snapshotFormat" not in output
+
+
+@pytest.mark.parametrize("kind", ["script", "batch", "playwrightCode"])
+@pytest.mark.parametrize("error", [None, "browser.outcomeUnknown"])
+def test_browser_effect_outcomes_survive_context_shortening(kind, error):
+    value = {"text": "- generic: " + "x" * 20000}
+    if kind == "script":
+        value["script"] = {"value": {"details": "v" * 10000}, "output": "o" * 20000, "errorCode": error}
+    elif kind == "batch":
+        value["batch"] = {"completed": 1 if error else 3, "total": 3, "errorCode": error}
+    else:
+        value["playwrightCode"] = {"completed": "await page.keyboard.press('Tab')", "errorCode": error}
+        if error:
+            value["playwrightCode"]["attempted"] = "await page.keyboard.press('Enter')"
+    content = json.dumps(value)
+    shortened = _shorten_evidence_output(content, 300)
+    payload = json.loads(shortened)
+    assert payload["toolOutputShortened"] is True
+    assert payload[kind].get("errorCode") == error
+    if kind == "batch":
+        assert payload["batch"]["completed"] == (1 if error else 3)
+    elif kind == "script":
+        assert payload["script"]["outputTruncated"] is True
+        assert payload["scriptValueOmitted"] is True
+    else:
+        assert payload["playwrightCode"]["completed"] == value["playwrightCode"]["completed"]
+        assert payload["playwrightCode"].get("attempted") == value["playwrightCode"].get("attempted")
+    minimal = _shorten_evidence_output(shortened, 0)
+    assert json.loads(minimal)[kind].get("errorCode") == error
+    messages = [{"role": "tool", "content": content}]
+    _limit_tool_output_tokens(messages, [0], 10, 4, omitted_marker="omitted", fair_share=True)
+    assert json.loads(messages[0]["content"]) == json.loads(minimal)
 
 
 def test_projection_distributes_current_tool_output_budget_fairly() -> None:

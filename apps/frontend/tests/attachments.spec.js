@@ -328,6 +328,8 @@ describe('persisted attachments', () => {
 
     expect(toolOutputAttachments({ name: 'browser' }, attachments))
       .toEqual([expect.objectContaining({ id: 'file' })])
+    expect(toolOutputAttachments({ name: 'browser_take_screenshot' }, attachments))
+      .toEqual([expect.objectContaining({ id: 'file' })])
     expect(toolOutputAttachments({ name: 'other_tool' }, attachments)).toHaveLength(3)
     expect(supportedAttachments(attachments)).toHaveLength(3)
     expect(attachments).toEqual(original)

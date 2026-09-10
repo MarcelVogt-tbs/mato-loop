@@ -19,7 +19,6 @@ from pydantic import ValidationError
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution.browser_contracts import (
-    BROWSER_SNAPSHOT_ACTIONS,
     BrowserActionArguments,
     BrowserActionResult,
     BrowserControlResult,
@@ -445,14 +444,16 @@ class BrowserCoordinator:
                     connection.resetting_view = False
                 await connection.state()
 
-    async def _snapshot(self, connection: BrowserConnection, tab_id: str) -> tuple[str, BrowserActionResult]:
+    async def _snapshot(self, connection: BrowserConnection, tab_id: str, *, settle: bool = False) -> tuple[str, BrowserActionResult]:
         result = await connection.client.request(
             "integration.browser.execute",
-            {"browserId": str(connection.browser_id), "action": "inspect", "tabId": tab_id},
+            {"browserId": str(connection.browser_id), "action": "inspect", "tabId": tab_id, "settle": settle, "guard": True},
             BrowserActionResult, timeout=30,
         )
         if result.tab_id != tab_id or result.data is None or "snapshotSha256" not in result.data:
             raise ExecutionClientError("browser.bindingChanged")
+        if result.batch is not None or result.script is not None:
+            raise ExecutionClientError("executionAgent.protocolError")
         try:
             inspection = BrowserInspectionData.model_validate(result.data)
         except ValidationError as exc:
@@ -511,7 +512,7 @@ class BrowserCoordinator:
                     if self.attached_for(session_id, agent_id) is not connection:
                         raise ExecutionClientError("browser.bindingChanged")
                     with _browser_timing(timings, "reinspection_rpc_ms"):
-                        digest, _ = await self._snapshot(connection, tab_id)
+                        digest, _ = await self._snapshot(connection, tab_id, settle=True)
                     return digest
 
     async def execute(self, session_id, agent_id, integration_id, arguments: dict[str, Any]) -> BrowserActionResult:
@@ -541,27 +542,35 @@ class BrowserCoordinator:
                     connection.busy = True
                     try:
                         await connection.state()
-                        if action.action in BROWSER_SNAPSHOT_ACTIONS:
-                            if expected_snapshot is None:
-                                raise ExecutionClientError("browser.bindingChanged")
+                        if expected_snapshot is not None:
+                            try:
+                                BrowserInspectionData(snapshotSha256=expected_snapshot)
+                            except ValidationError as exc:
+                                raise ExecutionClientError("browser.bindingChanged") from exc
                             with _browser_timing(timings, "reinspection_rpc_ms"):
                                 digest, inspection = await self._snapshot(connection, action.tab_id)
-                            if expected_snapshot != digest:
-                                raise ExecutionClientError("browser.bindingChanged")
                             check_binding()
+                            if expected_snapshot != digest:
+                                raise ExecutionClientError("browser.snapshotChanged")
                             if action.action == "inspect":
                                 return inspection
                         check_binding()
                         read_action = action.action in {"tabs", "inspect", "screenshot", "diagnostics"}
                         wire = BrowserExecuteArguments(
                             browser_id=connection.browser_id,
+                            settle=action.action == "inspect",
                             **action.model_dump(
                                 by_alias=False, exclude={"observe"} if read_action else set()
                             ),
                         )
-                        wire_payload = wire.model_dump(
-                            mode="json", exclude={"snapshot_sha256"} | ({"observe"} if read_action else set())
-                        )
+                        excluded = {"snapshot_sha256"} | ({"observe"} if read_action else set())
+                        if action.action != "run_code":
+                            excluded.add("code")
+                        if action.action != "evaluate":
+                            excluded.add("function")
+                        if action.action != "fill":
+                            excluded.update({"slowly", "submit"})
+                        wire_payload = wire.model_dump(mode="json", exclude=excluded)
                         with _browser_timing(timings, "action_rpc_ms"):
                             if action.action == "screenshot":
                                 result = await self._screenshot(connection, wire_payload, check_binding)
@@ -569,6 +578,10 @@ class BrowserCoordinator:
                                 result = await connection.client.request(
                                     "integration.browser.execute", wire_payload, BrowserActionResult, timeout=60,
                                 )
+                        if not result.matches_action(action):
+                            raise ExecutionClientError("executionAgent.protocolError")
+                        if action.action == "inspect" and result.tab_id != action.tab_id:
+                            raise ExecutionClientError("browser.bindingChanged")
                         if result.data is not None and "snapshotSha256" in result.data:
                             try:
                                 observation = BrowserInspectionData.model_validate(result.data)

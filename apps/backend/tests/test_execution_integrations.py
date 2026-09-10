@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -196,6 +197,20 @@ def test_agent_tool_definition_requires_a_result_model() -> None:
                 ),
             ),
         )
+
+
+def test_agent_tools_may_share_an_operation_but_keep_names_and_result_contracts():
+    adapter = _adapter()
+    tool = adapter.execution_tools[0]
+    second = replace(tool, name="example_other")
+    assert replace(adapter, execution_tools=(tool, second)).execution_tools == (tool, second)
+    with pytest.raises(ValueError, match="tool names must be unique"):
+        replace(adapter, execution_tools=(tool, tool))
+    for operation in ("integration.other.run", "integration.example.run_code", "integration.example."):
+        with pytest.raises(ValueError, match="operations must match"):
+            replace(adapter, execution_tools=(tool, replace(second, execution_operation=operation)))
+    with pytest.raises(ValueError, match="result models"):
+        replace(adapter, execution_tools=(tool, replace(second, result_model=None)))
 
 
 def test_static_agent_adapter_registration_admits_only_declared_operations(

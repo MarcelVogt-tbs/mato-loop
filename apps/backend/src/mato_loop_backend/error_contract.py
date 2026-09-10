@@ -14,6 +14,8 @@ _MESSAGES = {
     "browser.busy": "This MatoLoop Agent already has a browser integration or an active browser operation.",
     "browser.notConnected": "Attach a live browser viewer to this chat before using browser tools.",
     "browser.bindingChanged": "The browser binding changed. Attach the browser again before retrying.",
+    "browser.snapshotChanged": "The browser page changed. Inspect the same known tabId before choosing another action; do not reattach or replay completed fields.",
+    "browser.observationUnstable": "The browser page did not settle within the observation limit. Inspect the same known tabId again; do not reattach or repeat a mutation blindly.",
     "browser.setupFailed": "Browser setup failed.",
     "browser.dependenciesMissing": "Required browser dependencies are missing.",
     "browser.unsupported": "This system does not support the browser integration.",

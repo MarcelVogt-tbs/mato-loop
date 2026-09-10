@@ -32,8 +32,12 @@ startup stages and temporary versus persistent profiles without raw subprocess t
 
 Root agents start a subprocess as the dedicated `matoloop-browser` account, with no
 supplementary groups and an allowlisted environment containing no agent credentials.
-The worker accepts only narrow JSON commands over inherited private pipes. It never
-accepts Python, JavaScript, shell commands, arbitrary paths or browser endpoints.
+The worker accepts typed JSON commands over inherited private pipes. Host-authorized
+`run_code` explicitly accepts unrestricted Python and `evaluate` accepts page JavaScript.
+Both require the backend's read/write/code permissions; all default to AUTO for public and
+private models. Python has the worker account's file/process/network/profile rights, not a
+browser-only sandbox. A clean environment does not hide credentials accessible on disk.
+Model arguments cannot choose the parent-managed browser endpoint or installation.
 Chromium always uses `chromium_sandbox=True`. Sandbox launch failures are reported as
 `browser.sandboxUnavailable`; there is no `--no-sandbox` fallback. Hosts must permit
 unprivileged user namespaces in their kernel, container seccomp and AppArmor policy.
@@ -118,15 +122,15 @@ The shared contract is implemented with these explicit additions:
 - `inspect.text` is Playwright 1.58's page-level AI accessibility snapshot, at most 32,768
   characters. It includes semantic hierarchy, accessible names and states, current form
   values, iframe content and Playwright `ref` markers. Callers target a marker with
-  `aria-ref=e12` or its frame-qualified form and the host binds it to the returned
-  `snapshotSha256`. The implementation deliberately uses the
+  `aria-ref=e12` or its frame-qualified form. Normal AUTO calls do not require a source
+  hash. The implementation deliberately uses the
   version-bound `snapshotForAI` channel so its output and locator behavior match Playwright
   rather than a local accessibility approximation. `inspect.data.snapshotSha256` is an
-  opaque HMAC-SHA256 token using a per-runtime key. It includes page and document identities,
-  the accessibility snapshot, bounded field values, checked/selected/disabled/read-only state,
-  form targets/methods, focus,
-   applied desktop geometry, page viewport/screen geometry and scroll position.
-  The key prevents guessing private low-entropy field values from a digest. Individual
+  opaque observation identity using a per-runtime key and page/document identity. Host-only
+  `guard=true` additionally captures bounded fields, checked/selected/disabled/read-only state,
+  form targets/methods, focus, desktop/viewport geometry and scroll position. That extra scan
+  is reserved for actual ASK approval guards; it is not run for normal observations.
+  The key prevents guessing private low-entropy field values from guard digests. Individual
   values above 65,536 characters or private state above 512 KiB are rejected, not silently
   truncated. Playwright constructs the accessibility tree before the worker applies its
   32,768-character release limit; the worker process boundary and eight-second capture timeout
@@ -138,6 +142,44 @@ The shared contract is implemented with these explicit additions:
 - Host-authorized write actions may set `observe=true` to return the resulting accessibility
   snapshot in the same RPC. A post-write capture failure returns `observationFailed=true`
   without changing the completed action into a retryable failure.
+- Host-only `settle=true` requests bounded settling before `inspect`; it defaults to false
+  for immediate final guards. Post-write observations always settle. Isolated-world observers
+  require 150 ms DOM/request quiet, document readiness and completed finite animations, within
+  1.8 seconds plus bounded cleanup. Infinite animations and WebSockets are ignored. Unsettled
+  inspection raises `browser.observationUnstable`, while post-write failure preserves the result.
+- `fill_form` accepts `tabId` and 1-20 `fields` with `name`, bare `ref`, `type` and string
+  `value`; refs must be unique and combined values at most 32,768 characters. Supported types
+  are textbox, checkbox (`true`/`false`), radio (`true`) and native single-select combobox
+  (exact unique option label). All targets are preflighted into fixed handles; each field is rechecked
+  before dispatch without rejecting the batch's own earlier edits. The host binds the whole
+  ordered list to the browser binding and permissions. Result `batch` contains `completed`,
+  `total` and optional `errorCode`; the completed prefix must never be replayed. Target/document
+  changes before a later dispatch report `browser.snapshotChanged`; dispatched failures report
+  `browser.outcomeUnknown`. Handles are disposed after success, failure or cancellation.
+  One optional final observation covers the batch. This is not a general script/submit API.
+- `run_code` requires a `tabId` and `code` defining `async def run(page)`; `evaluate` requires
+  `tabId` and a JavaScript `function`, optionally with a selector. Source limits are 32,768
+  characters. `script` returns finite JSON `value` (32,768 UTF-8 bytes, depth 32), bounded
+  combined print output, `outputTruncated`, and optional controlled `errorCode`. Python runs
+  once in a fresh unrestricted namespace; syntax/function-shape checks are a contract, not
+  a language sandbox. A 40-second cooperative deadline and the manager's 55-second RPC
+  termination protect normal operation; blocking or hostile code can force a browser restart.
+  Errors after execution starts report an unknown outcome, never an automatic retry. User
+  code can deliberately create background work or write outside managed staging, so ordinary
+  output capture and process cleanup are not adversarial containment.
+- `fill` accepts `slowly` and `submit`, both default false. `select` selects a known `tabId`.
+  The backend's small public `browser_*` tools translate to this existing internal execute
+  envelope. Historical `browser(action=...)` calls remain readable but are no longer offered.
+- Ordinary action results may contain `playwrightCode: {completed, attempted, truncated,
+  errorCode}`. The worker records confirmed Python action patterns and the next dispatched
+  operation whose completion is unknown, using actual selectors and `repr`-escaped literals.
+  Form batches report only their confirmed prefix and a next attempted field for unknown
+  outcomes, not for pre-dispatch guard failures. The combined code limit is 32,768 characters;
+  omit whole oversized lines instead of returning broken Python. Feedback is equivalent code,
+  not a replay guarantee, application-success proof, or a complete trace of internal guards.
+  Internal inspections and free-code callbacks do not add feedback. A failed observation or
+  title read does not discard already confirmed statements. This text is tool-result data,
+  never logged or automatically executed.
 - `screenshot` returns `screenshot: {fileId, size}` instead of inline base64. The worker
   captures the viewport as PNG and uses Pillow LANCZOS resizing with Playwright MCP's bounds:
   at most 1568 pixels per edge and `1.15 * 1024 * 1024` pixels total, never upscaling or

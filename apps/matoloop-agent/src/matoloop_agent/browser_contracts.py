@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import json
+import math
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, TypeAdapter, field_validator, model_validator
+from pydantic import Field, JsonValue, TypeAdapter, field_validator, model_validator
 
 from .protocol import UUID_PATTERN, StrictModel
 
@@ -24,6 +26,8 @@ BrowserErrorCode = Literal[
     "browser.sandboxUnavailable",
     "browser.actionFailed",
     "browser.invalidTarget",
+    "browser.snapshotChanged",
+    "browser.observationUnstable",
     "browser.fileTooLarge",
     "browser.profileOwnerMismatch",
     "browser.profileInUse",
@@ -123,20 +127,43 @@ class BrowserSetupResizeArguments(BrowserSetupIdArguments):
     columns: int = Field(ge=1, le=1000)
 
 
+class BrowserFormField(StrictModel):
+    name: str = Field(min_length=1, max_length=200)
+    ref: str = Field(pattern=r"^(?:f[0-9]+)?e[0-9]+$")
+    type: Literal["textbox", "checkbox", "radio", "combobox"]
+    value: str = Field(
+        max_length=32_768,
+        description="Text for textbox; true/false for checkbox; true for radio; "
+        "exact unique visible option label for a native select combobox.",
+    )
+
+    @model_validator(mode="after")
+    def valid_value(self):
+        if self.type in {"checkbox", "radio"} and self.value not in {"true", "false"}:
+            raise ValueError("Checked values must be true or false")
+        if self.type == "radio" and self.value != "true":
+            raise ValueError("Radio fields cannot be unchecked")
+        return self
+
+
 class BrowserExecuteArguments(BrowserIdArguments):
     action: Literal[
         "tabs",
         "newtab",
         "closetab",
+        "select",
         "navigate",
         "inspect",
         "screenshot",
         "click",
         "fill",
+        "fill_form",
         "press",
         "scroll",
         "diagnostics",
         "upload",
+        "run_code",
+        "evaluate",
     ]
     tab_id: Id | None = Field(default=None, alias="tabId")
     url: str | None = Field(default=None, max_length=4096)
@@ -148,6 +175,13 @@ class BrowserExecuteArguments(BrowserIdArguments):
     upload_id: Id | None = Field(default=None, alias="uploadId")
     allow_network: bool = Field(default=True, alias="allowNetwork")
     observe: bool = False
+    settle: bool = False
+    guard: bool = False
+    slowly: bool = False
+    submit: bool = False
+    code: str | None = Field(default=None, max_length=32_768)
+    function: str | None = Field(default=None, max_length=32_768)
+    fields: list[BrowserFormField] | None = Field(default=None, min_length=1, max_length=20)
 
     @field_validator("url")
     @classmethod
@@ -170,12 +204,29 @@ class BrowserExecuteArguments(BrowserIdArguments):
             "navigate": (self.url,),
             "click": (self.selector,),
             "fill": (self.selector, self.text),
+            "fill_form": (self.tab_id, self.fields),
             "press": (self.key,),
             "scroll": (self.direction,),
             "upload": (self.selector, self.upload_id),
+            "select": (self.tab_id,),
+            "run_code": (self.tab_id, self.code),
+            "evaluate": (self.tab_id, self.function),
         }
         if any(value is None for value in required.get(self.action, ())):
             raise ValueError("Action requires additional fields")
+        if (self.slowly or self.submit) and self.action != "fill":
+            raise ValueError("Only fill accepts slowly and submit")
+        if self.code is not None and self.action != "run_code":
+            raise ValueError("Only run_code accepts code")
+        if self.function is not None and self.action != "evaluate":
+            raise ValueError("Only evaluate accepts function")
+        if self.fields is not None:
+            if self.action != "fill_form":
+                raise ValueError("Only fill_form accepts fields")
+            if len({field.ref for field in self.fields}) != len(self.fields):
+                raise ValueError("Form refs must be unique")
+            if sum(len(field.value) for field in self.fields) > 32_768:
+                raise ValueError("Form values exceed 32768 characters")
         return self
 
 
@@ -314,6 +365,81 @@ class BrowserScreenshot(StrictModel):
     size: int = Field(ge=0, le=MAX_FILE_BYTES)
 
 
+class BrowserBatchResult(StrictModel):
+    completed: int = Field(ge=0, le=20)
+    total: int = Field(ge=1, le=20)
+    error_code: BrowserErrorCode | None = Field(default=None, alias="errorCode")
+
+    @model_validator(mode="after")
+    def valid_prefix(self):
+        if self.completed > self.total or (self.error_code is None) != (
+            self.completed == self.total
+        ):
+            raise ValueError("Batch completion and error must agree")
+        return self
+
+
+class BrowserScriptResult(StrictModel):
+    value: JsonValue = None
+    output: str = Field(default="", max_length=32_768)
+    output_truncated: bool = Field(default=False, alias="outputTruncated")
+    error_code: BrowserErrorCode | None = Field(default=None, alias="errorCode")
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def bounded_json(cls, value):
+        # Check exact JSON types before Pydantic can coerce or describe arbitrary objects.
+        remaining = 32_768
+
+        def visit(item, depth):
+            nonlocal remaining
+            if depth > 32 or remaining < 0:
+                raise ValueError("Script result exceeds JSON limits")
+            kind = type(item)
+            if kind in (list, dict):
+                remaining -= 2 + max(0, len(item) - 1)
+                if kind is dict:
+                    for key, child in item.items():
+                        if type(key) is not str:
+                            raise ValueError("Script result requires string keys")
+                        visit(key, depth + 1)
+                        remaining -= 1
+                        visit(child, depth + 1)
+                else:
+                    for child in item:
+                        visit(child, depth + 1)
+            elif (
+                item is None or kind in (str, bool, int) or (kind is float and math.isfinite(item))
+            ):
+                if kind is str and len(item) > 32_768:
+                    raise ValueError("Script result exceeds JSON limits")
+                remaining -= len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+            else:
+                raise ValueError("Script result must be finite JSON")
+            if remaining < 0:
+                raise ValueError("Script result exceeds JSON limits")
+
+        visit(value, 0)
+        return value
+
+
+class BrowserCodeFeedback(StrictModel):
+    """Equivalent Python patterns, not executed source or a guarantee of safe replay."""
+
+    completed: str = Field(default="", max_length=32_768)
+    attempted: str | None = Field(default=None, max_length=32_768)
+    truncated: bool = False
+    error_code: BrowserErrorCode | None = Field(default=None, alias="errorCode")
+
+    @model_validator(mode="after")
+    def bounded_code(self):
+        if len(self.completed) + len(self.attempted or "") > 32_768:
+            raise ValueError("Code feedback exceeds 32768 characters")
+        if self.attempted is not None and self.error_code is None:
+            raise ValueError("Attempted code requires an error outcome")
+        return self
+
+
 class BrowserActionResult(StrictModel):
     tabs: list[BrowserTab] = Field(default_factory=list, max_length=32)
     tab_id: Id | None = Field(default=None, alias="tabId")
@@ -322,6 +448,9 @@ class BrowserActionResult(StrictModel):
     screenshot: BrowserScreenshot | None = None
     downloads: list[BrowserDownload] = Field(default_factory=list, max_length=32)
     data: dict[str, str | bool | int] | None = None
+    batch: BrowserBatchResult | None = None
+    script: BrowserScriptResult | None = None
+    playwright_code: BrowserCodeFeedback | None = Field(default=None, alias="playwrightCode")
 
 
 BROWSER_ARGUMENT_MODELS = {

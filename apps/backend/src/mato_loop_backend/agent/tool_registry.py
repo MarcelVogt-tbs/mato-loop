@@ -5,7 +5,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, ValidationError
@@ -68,7 +68,13 @@ from mato_loop_backend.workspace import RootFileError, RootFileService
 
 logger = logging.getLogger("mato_loop_backend.agent.tools")
 
-AskHandler = Callable[[PermissionRequest], Awaitable[PermissionDecision]]
+
+class AskHandler(Protocol):
+    def __call__(
+        self, request: PermissionRequest, *, check_only: bool = False,
+    ) -> Awaitable[PermissionDecision]: ...
+
+
 SkillDraftHandler = Callable[
     [str, str | None, SkillDefinition | None], Awaitable[SkillDraft]
 ]
@@ -314,12 +320,22 @@ class ToolDefinition:
         )
 
 
+def _tool_available(name: str, settings: ToolSettings) -> bool:
+    if name.startswith("browser_"):
+        if not settings.tool_availability.get("browser", True):
+            return False
+        ceiling = settings._delegation_ceiling
+        if ceiling is not None and name not in ceiling["toolNames"]:
+            return False
+    return settings.tool_availability.get(name, True)
+
+
 def _actions_enabled(
     definition: ToolDefinition,
     tool_settings: ToolSettings,
     policy_resolver: PolicyResolver,
 ) -> bool:
-    if not tool_settings.tool_availability.get(definition.name, True):
+    if not _tool_available(definition.name, tool_settings):
         return False
     enabled = {
         action.capability
@@ -906,9 +922,7 @@ class ToolRegistry:
                         ],
                     },
                     "actions": actions,
-                    "available": tool_settings.tool_availability.get(
-                        definition.name, True
-                    ),
+                    "available": _tool_available(definition.name, tool_settings),
                 }
             )
         group_metadata = {item["id"]: item for item in TOOL_GROUPS}
@@ -978,8 +992,9 @@ class ToolRegistry:
     ) -> ToolResult:
         definition = tool.definition
         context.bound_options = dict(tool.selected_options)
+        browser_requests: tuple[PermissionRequest, ...] = ()
 
-        if not context.tool_settings.tool_availability.get(definition.name, True):
+        if not _tool_available(definition.name, context.tool_settings):
             return ToolResult.error("tool.unavailable")
 
         async def integration_is_current(selected_id: str | None) -> bool:
@@ -1211,7 +1226,7 @@ class ToolRegistry:
                     context.tool_settings = await _profile_tool_settings(context)
                     if (
                         context.tool_settings._agent_profile_unavailable
-                        or not context.tool_settings.tool_availability.get(definition.name, True)
+                        or not _tool_available(definition.name, context.tool_settings)
                     ):
                         return ToolResult.error("tool.unavailable")
                     if self._policy_resolver is not None and any(
@@ -1244,6 +1259,13 @@ class ToolRegistry:
                         )
                         for request in requests
                     )
+                browser_requests = tuple(
+                    request for request in requests if request.action_kind == "browser_action"
+                )
+                if browser_requests:
+                    for key in tuple(context.approval_resolution):
+                        if key.startswith("browser_approved:"):
+                            context.approval_resolution.pop(key)
                 for request in requests:
                     if not await self._allow(context, request):
                         return ToolResult.error("permission.denied")
@@ -1269,6 +1291,8 @@ class ToolRegistry:
 
                 # Aggregate handlers filter resource data using these policies after approval.
                 context.tool_settings = await _profile_tool_settings(context)
+                if not _tool_available(definition.name, context.tool_settings):
+                    return ToolResult.error("tool.unavailable")
                 context.integration_settings = await context.current_integrations()
                 bound_ids = set(aggregate_integration_ids)
                 if selected_integration_id is not None:
@@ -1278,6 +1302,13 @@ class ToolRegistry:
                 )
                 if bound_ids != {str(item.id) for item in context.integration_settings.instances}:
                     return ToolResult.error("tool.unavailable")
+            if browser_requests and any(
+                key.startswith("browser_approved:") for key in context.approval_resolution
+            ):
+                # An approval wait may invalidate earlier capabilities; never prompt in this fence.
+                for request in browser_requests:
+                    if await context.ask_handler(request, check_only=True) != PermissionDecision.ALLOW:
+                        return ToolResult.error("permission.denied")
             result = await definition.handler(arguments, context)
             if definition.releases_private_data and not result.is_error:
                 result.metadata["privateIntegrationData"] = True

@@ -1845,6 +1845,7 @@ def resolve_tool_execution_policy(
             if settings.trust_level == TrustLevel.PUBLIC
             and default == ToolExecutionPolicy.AUTO
             and capability not in {
+                "browser.code",
                 "browser.read",
                 "browser.write",
                 "session.files.read",

@@ -1,19 +1,24 @@
 import asyncio
 import base64
+import hashlib
 import json
 from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI, UploadFile, WebSocketDisconnect
 from fastapi.testclient import TestClient
+from PIL import Image
 
 # Initialize the runtime before routes, matching application import order.
+from mato_loop_backend.agent import tools as tools_module
+from mato_loop_backend.agent.permissions import PermissionDecision
 from mato_loop_backend.agent.runtime import AgentRuntime  # noqa: F401
+from mato_loop_backend.agent.tool_registry import ToolContext
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import browsers as routes
 from mato_loop_backend.api.routes.terminals import _BrowserLogin
@@ -23,12 +28,14 @@ from mato_loop_backend.execution.client import ExecutionClientError
 from mato_loop_backend.execution.manager import ExecutionAgentConnectionManager
 from mato_loop_backend.execution.protocol import SUPPORTED_OPERATIONS, HelloMessage, ResponseMessage
 from mato_loop_backend.models import ChatSession, ExecutionAgent, LoginSession, UserAccount
+from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
     AgentProfile,
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
+    ToolSettings,
     UserIntegrationSettings,
 )
 
@@ -490,7 +497,7 @@ def test_detach_during_locked_snapshot_prevents_approved_action_dispatch(env, ac
 
 
 @pytest.mark.parametrize("action", ["click", "inspect"])
-@pytest.mark.parametrize("change", ["digest", "url", "tab", "missing", "revision", "absent"])
+@pytest.mark.parametrize("change", ["digest", "url", "tab", "missing", "revision"])
 def test_stale_snapshot_after_approval_never_dispatches_action(env, change, action, caplog):
     caplog.set_level("INFO", logger=execution.__name__)
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
@@ -513,9 +520,8 @@ def test_stale_snapshot_after_approval_never_dispatches_action(env, change, acti
             env.reply = reply
             if change == "revision":
                 connection.attachment_revision += 2
-            elif change == "absent":
-                args.pop("expectedSnapshot")
-            with pytest.raises(ExecutionClientError, match="browser.bindingChanged"):
+            code = "browser.snapshotChanged" if change in {"digest", "url"} else "browser.bindingChanged"
+            with pytest.raises(ExecutionClientError, match=code):
                 env.client.portal.call(env.coordinator.execute, env.session.id, env.agent.id, env.instance.id, args)
             assert not connection.busy
             assert not any(args.get("action") == "click" for _, args in env.calls)
@@ -523,7 +529,308 @@ def test_stale_snapshot_after_approval_never_dispatches_action(env, change, acti
             assert record.args[0] == "execute" and record.args[2] == "error"
             timings = record.args[-1]
             assert "total_ms" in timings and "action_rpc_ms" not in timings
-            assert ("reinspection_rpc_ms" in timings) == (change not in {"revision", "absent"})
+            assert ("reinspection_rpc_ms" in timings) == (change != "revision")
+
+
+@pytest.mark.parametrize("action", ["tabs", "inspect", "screenshot", "diagnostics"])
+def test_browser_auto_read_from_registry_through_coordinator(env, monkeypatch, action):
+    env.instance._browser_attached = True
+    integrations = IntegrationSettings(instances=[env.instance])
+    monkeypatch.setattr(execution, "browser_coordinator", env.coordinator)
+    monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
+    monkeypatch.setattr(tools_module, "_profile_tool_settings", AsyncMock(return_value=ToolSettings()))
+    output = BytesIO()
+    Image.new("RGB", (2, 2), "white").save(output, format="PNG")
+    image = output.getvalue()
+
+    async def reply(operation, arguments):
+        if operation == "integration.browser.execute":
+            assert "observe" not in arguments
+            assert "snapshotSha256" not in arguments
+            if arguments["action"] == "inspect":
+                return {"tabId": arguments["tabId"], "text": "- document",
+                        "data": {"snapshotSha256": "a" * 64}}
+            if arguments["action"] == "screenshot":
+                return {"screenshot": {"fileId": env.file_id, "size": len(image)}}
+            return {}
+        if operation == "integration.browser.file" and arguments["action"] == "read":
+            return {"fileId": env.file_id, "size": len(image), "offset": len(image),
+                    "complete": True, "data": base64.b64encode(image).decode()}
+
+    env.reply = reply
+    with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
+        state = control.receive_json()
+        with open_view(env, state):
+            control.send_json({"type": "attach"})
+            assert control.receive_json()["attached"]
+            connection = env.coordinator.connections[env.agent.id]
+            name = {"tabs": "browser_tabs", "inspect": "browser_snapshot", "screenshot": "browser_take_screenshot", "diagnostics": "browser_diagnostics"}[action]
+            arguments = {"tabId": env.navigation["activeTabId"]} if action in {"inspect", "screenshot"} else {"action": "list"} if action == "tabs" else {}
+            call = ToolCall("browser-read", name, arguments)
+            context = ToolContext(
+                db=AsyncMock(), run_id=uuid4(), session=env.session, tool_call=call,
+                root_files=Mock(), integration_settings=integrations, execution_client=connection.client,
+                ask_handler=AsyncMock(return_value=PermissionDecision.ALLOW),
+            )
+            context.db.get.return_value = SimpleNamespace(
+                execution_agent_id=env.agent.id, execution_operations=["integration.browser.execute"],
+            )
+            registry = tools_module.ToolRegistry([]).effective(integrations)
+            result = env.client.portal.call(registry.execute, call, context)
+            assert not result.is_error, result.content
+            context.ask_handler.assert_awaited_once()
+            assert context.ask_handler.await_args.args[0].capability == "browser.read"
+            calls = [args["action"] for op, args in env.calls if op == "integration.browser.execute"]
+            assert calls == [action]
+            inspections = [args for op, args in env.calls if op == "integration.browser.execute" and args["action"] == "inspect"]
+            assert [args["settle"] for args in inspections] == ([True] if inspections else [])
+            assert all(args["guard"] is False for args in inspections)
+            if action == "screenshot":
+                assert result.attachments[0].ephemeral and result.attachments[0].data == image
+
+
+@pytest.fixture
+def browser_tool(env, monkeypatch, wire):
+    env.instance._browser_attached = True
+    integrations = IntegrationSettings(instances=[env.instance])
+    monkeypatch.setattr(execution, "browser_coordinator", env.coordinator)
+    monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
+    monkeypatch.setattr(tools_module, "_profile_tool_settings", AsyncMock(return_value=ToolSettings()))
+
+    async def reply(operation, arguments):
+        if operation != "integration.browser.execute":
+            return None
+        if arguments["action"] == "inspect":
+            return {"tabId": arguments["tabId"], "url": "https://page.test/", "text": "- document",
+                    "data": {"snapshotSha256": "a" * 64}}
+        assert arguments["action"] == "fill_form"
+        return {"batch": {"completed": len(arguments["fields"]), "total": len(arguments["fields"])},
+                **({"url": "https://page.test/", "text": "- document after fill",
+                    "data": {"snapshotSha256": "b" * 64}} if arguments["observe"] else {})}
+
+    env.reply = reply
+    with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
+        state = control.receive_json()
+        with open_view(env, state):
+            control.send_json({"type": "attach"})
+            assert control.receive_json()["attached"]
+            connection = env.coordinator.connections[env.agent.id]
+            fields = [
+                {"name": "Name", "ref": "e1", "type": "textbox", "value": "Ada"},
+                {"name": "Active", "ref": "e2", "type": "checkbox", "value": "false"},
+                {"name": "Choice", "ref": "f1e3", "type": "radio", "value": "true"},
+                {"name": "Country", "ref": "e4", "type": "combobox", "value": "de"},
+            ]
+            call = ToolCall("browser-form", "browser_fill_form", {
+                "tabId": env.navigation["activeTabId"], "fields": fields,
+            })
+            context = ToolContext(
+                db=AsyncMock(), run_id=uuid4(), session=env.session, tool_call=call,
+                root_files=Mock(), integration_settings=integrations, execution_client=connection.client,
+                ask_handler=AsyncMock(return_value=PermissionDecision.ALLOW),
+            )
+            context.db.get.return_value = SimpleNamespace(
+                execution_agent_id=env.agent.id, execution_operations=["integration.browser.execute"],
+            )
+            yield SimpleNamespace(
+                env=env, call=call, context=context, connection=connection, frames=wire,
+                registry=tools_module.ToolRegistry([]).effective(integrations),
+            )
+
+
+@pytest.mark.parametrize("observe", [True, False])
+@pytest.mark.parametrize("error_code", [None, "browser.snapshotChanged", "browser.outcomeUnknown"])
+@pytest.mark.parametrize("observation_failed", [False, True])
+def test_fill_form_permission_wire_and_partial_prefix(browser_tool, observe, error_code, observation_failed):
+    case = browser_tool
+    case.call.arguments["observe"] = observe
+    reply = case.env.reply
+    lines = [
+        "await page.locator('aria-ref=e1').fill('Ada', timeout=1000)",
+        "await page.locator('aria-ref=e2').set_checked(False, timeout=1000)",
+        "await page.locator('aria-ref=f1e3').set_checked(True, timeout=1000)",
+        "await page.locator('aria-ref=e4').select_option(label='de', timeout=1000)",
+    ]
+    feedback = {
+        "completed": "\n".join(lines[:1] if error_code else lines), "truncated": False,
+        **({"errorCode": error_code} if error_code else {}),
+        **({"attempted": lines[1]} if error_code == "browser.outcomeUnknown" else {}),
+    }
+
+    async def result_reply(operation, arguments):
+        result = await reply(operation, arguments)
+        if operation == "integration.browser.execute" and arguments["action"] == "fill_form":
+            result["playwrightCode"] = feedback
+            if error_code:
+                result["batch"].update(completed=1, errorCode=error_code)
+            if observe and observation_failed:
+                result.pop("text")
+                result["data"] = {"observationFailed": True}
+        return result
+
+    case.env.reply = result_reply
+    result = case.env.client.portal.call(case.registry.execute, case.call, case.context)
+    assert result.is_error == (error_code is not None), result.content
+    payload = json.loads(result.content)
+    assert payload["playwrightCode"] == feedback
+    assert payload["batch"] == {
+        "completed": 1 if error_code else 4, "total": 4,
+        **({"errorCode": error_code} if error_code else {}),
+    }
+    assert result.metadata == {"privateIntegrationData": True, **({"errorCode": error_code} if error_code else {})}
+    if observe:
+        assert payload["data"] == ({"observationFailed": True} if observation_failed else {
+            "snapshotSha256": hashlib.sha256(f"https://page.test/\n{'b' * 64}".encode()).hexdigest(),
+        })
+    else:
+        assert "data" not in payload and "text" not in payload
+    requests = [call.args[0] for call in case.context.ask_handler.await_args_list]
+    assert [request.capability for request in requests] == ["browser.write", *(["browser.read"] if observe else [])]
+    for request in requests:
+        arguments = case.registry.tools[case.call.name].definition.validate_arguments(case.call.arguments).to_action().model_dump(mode="json")
+        operation = {
+            **arguments, "browserId": str(case.connection.browser_id),
+            "attachmentRevision": case.connection.attachment_revision,
+            "capability": request.capability,
+        }
+        key = json.loads(request.resource_scope)["operationKey"]
+        assert key == hashlib.sha256(json.dumps(operation, sort_keys=True).encode()).hexdigest()
+        assert request.approval_details["browser"]["fields"] == case.call.arguments["fields"]
+        for fields in (list(reversed(operation["fields"])), [{**operation["fields"][0], "value": "Changed"}, *operation["fields"][1:]]):
+            assert key != hashlib.sha256(json.dumps({**operation, "fields": fields}, sort_keys=True).encode()).hexdigest()
+    calls = [frame["arguments"] for frame in case.frames if frame.get("operation") == "integration.browser.execute"]
+    assert [call["action"] for call in calls] == ["fill_form"]
+    assert [call["settle"] for call in calls] == [False]
+    assert all("snapshotSha256" not in call for call in calls)
+    assert calls[-1] == {
+        **case.registry.tools[case.call.name].definition.validate_arguments(case.call.arguments).to_action().model_dump(mode="json", exclude={"snapshot_sha256", "code", "function", "slowly", "submit"}),
+        "browserId": str(case.connection.browser_id), "allowNetwork": True, "settle": False, "guard": False,
+    }
+
+
+@pytest.mark.parametrize("change,code", [
+    ("source", "tool.invalidArguments"), ("digest", "browser.snapshotChanged"),
+    ("url", "browser.snapshotChanged"), ("revision", "browser.bindingChanged"),
+    ("binding", "browser.bindingChanged"), ("deny-write", "permission.denied"),
+    ("deny-read", "permission.denied"),
+])
+def test_fill_form_stale_or_denied_never_dispatches(browser_tool, change, code):
+    case = browser_tool
+    reply = case.env.reply
+    if change == "source":
+        case.call.arguments["snapshotSha256"] = "0" * 64
+
+    async def approve(request):
+        from mato_loop_backend.integrations.browser import capture_browser_approval
+
+        await capture_browser_approval(
+            request, case.call, case.context.session,
+            SimpleNamespace(execution_agent_id=case.env.agent.id), case.context.approval_resolution,
+        )
+        if change == "revision":
+            case.connection.attachment_revision += 1
+        elif change == "binding":
+            case.connection.browser_id = uuid4()
+        if change == f"deny-{request.capability.split('.')[-1]}":
+            return PermissionDecision.USER_DENIED
+        return PermissionDecision.ALLOW
+
+    async def changed_reply(operation, arguments):
+        result = await reply(operation, arguments)
+        if operation == "integration.browser.execute" and arguments["action"] == "inspect" and not arguments["settle"]:
+            if change == "digest":
+                result["data"]["snapshotSha256"] = "b" * 64
+            elif change == "url":
+                result["url"] = "https://changed.test/"
+        return result
+
+    case.context.ask_handler.side_effect = approve
+    case.env.reply = changed_reply
+    result = case.env.client.portal.call(case.registry.execute, case.call, case.context)
+    assert result.is_error and result.metadata["errorCode"] == code
+    calls = [frame["arguments"] for frame in case.frames if frame.get("operation") == "integration.browser.execute"]
+    assert all(call["action"] == "inspect" for call in calls)
+    assert len(calls) == (0 if change == "source" else 2 if change in {"digest", "url"} else 1)
+    assert all(call["guard"] is True for call in calls)
+    if change == "source":
+        case.context.ask_handler.assert_not_awaited()
+
+
+@pytest.mark.parametrize("action,batch", [
+    ("fill_form", None), ("fill_form", {"completed": 1, "total": 1}),
+    ("tabs", {"completed": 1, "total": 1}), ("inspect", {"completed": 1, "total": 1}),
+])
+def test_browser_wire_rejects_batch_for_wrong_action_or_total(browser_tool, action, batch):
+    case = browser_tool
+    if action != "fill_form":
+        case.call.name = "browser_snapshot" if action == "inspect" else "browser_tabs"
+        case.call.arguments = {"tabId": case.call.arguments["tabId"]} if action == "inspect" else {"action": "list"}
+    reply = case.env.reply
+
+    async def invalid_reply(operation, arguments):
+        if operation == "integration.browser.execute" and arguments["action"] == action:
+            return {"batch": batch} if action != "inspect" else {
+                **await reply(operation, arguments), "batch": batch,
+            }
+        return await reply(operation, arguments)
+
+    case.env.reply = invalid_reply
+    result = case.env.client.portal.call(case.registry.execute, case.call, case.context)
+    assert result.is_error and result.metadata["errorCode"] == "executionAgent.protocolError"
+
+
+@pytest.mark.parametrize("name,action,arguments", [
+    ("browser_run_code", "run_code", {"code": "async def run(page):\n    return await page.title()"}),
+    ("browser_evaluate", "evaluate", {"function": "element => element.textContent", "ref": "e1"}),
+    ("browser_type", "fill", {"ref": "e1", "text": "Ada", "slowly": True, "submit": True}),
+    ("browser_tabs", "select", {"action": "select"}),
+])
+def test_slim_browser_tools_convert_to_one_unguarded_rpc(browser_tool, name, action, arguments):
+    case = browser_tool
+    case.call.name = name
+    case.call.arguments = {"tabId": case.env.navigation["activeTabId"], "observe": False, **arguments}
+    script = action in {"run_code", "evaluate"}
+
+    async def reply(operation, wire):
+        if operation == "integration.browser.execute":
+            assert wire["action"] == action
+            assert wire["guard"] is False and wire["settle"] is False
+            assert "snapshotSha256" not in wire and "ref" not in wire
+            assert ("code" in wire) == (action == "run_code")
+            assert ("function" in wire) == (action == "evaluate")
+            assert ("slowly" in wire) == (action == "fill")
+            assert ("submit" in wire) == (action == "fill")
+            if "ref" in arguments:
+                assert wire["selector"] == "aria-ref=e1"
+            if action == "fill":
+                assert wire["slowly"] is True and wire["submit"] is True
+            return {"script": {"value": {"changed": True}, "output": "bounded", "errorCode": "browser.actionFailed"}} if script else {}
+
+    case.env.reply = reply
+    result = case.env.client.portal.call(case.registry.execute, case.call, case.context)
+    assert result.is_error == script, result.content
+    if script:
+        assert json.loads(result.content)["script"]["value"] == {"changed": True}
+        assert result.metadata == {"errorCode": "browser.actionFailed", "privateIntegrationData": True}
+    calls = [frame["arguments"] for frame in case.frames if frame.get("operation") == "integration.browser.execute"]
+    assert len(calls) == 1
+
+
+def test_auto_inspection_still_checks_returned_tab_binding(browser_tool):
+    case = browser_tool
+    case.call.name = "browser_snapshot"
+    case.call.arguments = {"tabId": case.env.navigation["activeTabId"]}
+
+    async def reply(operation, _arguments):
+        if operation == "integration.browser.execute":
+            return {"tabId": str(uuid4()), "text": "wrong page", "data": {"snapshotSha256": "a" * 64}}
+
+    case.env.reply = reply
+    result = case.env.client.portal.call(case.registry.execute, case.call, case.context)
+    assert result.metadata["errorCode"] == "browser.bindingChanged"
+    assert "wrong page" not in result.content
+    calls = [frame["arguments"] for frame in case.frames if frame.get("operation") == "integration.browser.execute"]
+    assert len(calls) == 1 and calls[0]["guard"] is False
 
 
 @pytest.mark.parametrize("action", ["inspect", "click"])

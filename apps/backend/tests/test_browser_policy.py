@@ -1,4 +1,7 @@
+import asyncio
+import json
 import sys
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -15,12 +18,14 @@ from mato_loop_backend.agent.subagents import permission_snapshot
 from mato_loop_backend.agent.tool_registry import ToolContext
 from mato_loop_backend.execution.browser_contracts import BrowserActionResult
 from mato_loop_backend.execution.client import ExecutionClient
+from mato_loop_backend.integrations.browser import BROWSER_TOOL_ACTIONS
 from mato_loop_backend.models import AgentRun, ChatSession
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
     AgentProfile,
     IntegrationInstance,
     IntegrationSettings,
+    ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
 )
@@ -50,8 +55,13 @@ def browser_policy_case(request, monkeypatch):
     )
     async def execute(*args):
         arguments = args[-1]
-        if arguments["action"] == "click" and arguments.get("observe", True):
-            return BrowserActionResult(text="- document", data={"snapshotSha256": "a" * 64})
+        if arguments["action"] in {"evaluate", "run_code"}:
+            return BrowserActionResult(script={})
+        if arguments["action"] in {"click", "fill_form"} and arguments.get("observe", True):
+            return BrowserActionResult(
+                text="- document", data={"snapshotSha256": "a" * 64},
+                batch={"completed": 1, "total": 1} if arguments["action"] == "fill_form" else None,
+            )
         return BrowserActionResult()
 
     coordinator = SimpleNamespace(
@@ -77,10 +87,14 @@ def browser_policy_case(request, monkeypatch):
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = run
     db.scalars.return_value = Mock(all=Mock(return_value=[]))
-    call = ToolCall("browser-policy", "browser", {})
+    call = ToolCall("browser-policy", "browser_tabs", {})
 
-    async def authorize(permission):
-        return await AgentRuntime._authorize(db, run, session, call, permission, context.root_files)
+    async def authorize(permission, *, check_only=False):
+        return await AgentRuntime._authorize(
+            db, run, session, call, permission, context.root_files,
+            approval_resolution=context.approval_resolution,
+            check_only=check_only,
+        )
 
     context = ToolContext(
         db=db, run_id=run.id, session=session, tool_call=call,
@@ -95,15 +109,62 @@ def browser_policy_case(request, monkeypatch):
     )
 
 
-@pytest.fixture(params=["read", "write"])
+@pytest.fixture(params=["read", "write", "fill_form", "evaluate", "run_code"])
 def browser_action_case(browser_policy_case, request):
     case = browser_policy_case
-    case.capability = f"browser.{request.param}"
+    case.capability = "browser.read" if request.param == "read" else "browser.write"
+    case.call.name = "browser_tabs" if request.param == "read" else "browser_click"
     case.call.arguments = (
-        {"action": "tabs"} if request.param == "read"
-        else {"action": "click", "tabId": str(uuid4()), "selector": "button"}
+        {"action": "list"} if request.param == "read"
+        else {"tabId": str(uuid4()), "ref": "e1"}
     )
+    if request.param == "fill_form":
+        case.call.name = "browser_fill_form"
+        case.call.arguments = {
+            "tabId": str(uuid4()),
+            "fields": [{"name": "Name", "ref": "e1", "type": "textbox", "value": "Ada"}],
+        }
+    if request.param in {"evaluate", "run_code"}:
+        case.capability = "browser.code"
+        case.call.name = f"browser_{request.param}"
+        case.call.arguments = {
+            "tabId": str(uuid4()), "observe": False,
+            **({"function": "() => 1"} if request.param == "evaluate" else {"code": "async def run(page):\n    return 1"}),
+        }
+    case.capabilities = {
+        "browser.read": ["browser.read"],
+        "browser.write": ["browser.write", "browser.read"],
+        "browser.code": ["browser.read", "browser.write", "browser.code"],
+    }[case.capability]
     return case
+
+
+@pytest.fixture(params=["evaluate", "run_code"])
+def browser_script_case(browser_policy_case, request):
+    case = browser_policy_case
+    case.call.name = f"browser_{request.param}"
+    case.call.arguments = {
+        "tabId": str(uuid4()), "observe": False,
+        **({"function": "() => 1"} if request.param == "evaluate" else {"code": "async def run(page):\n    return 1"}),
+    }
+    case.settings.permissions.policies["browser.code"] = "ask"
+    return case
+
+
+def test_browser_catalog_defaults_survive_central_trust_resolution(browser_policy_case):
+    case = browser_policy_case
+    actions = tools_module.tool_registry.integration_resource_actions(case.instance)
+    assert {action.capability for action in actions} == {"browser.read", "browser.write", "browser.code"}
+    for action in actions:
+        assert action.default_policy == ToolExecutionPolicy.AUTO
+        for integration_id in (None, case.instance.id):
+            resolution = tools_module.resolve_tool_execution_policy(
+                case.settings, action.capability, action.default_policy,
+                integration_id=integration_id,
+            )
+            assert (resolution.policy, resolution.source, resolution.reason) == (
+                ToolExecutionPolicy.AUTO, "default", "trust_default",
+            )
 
 
 async def test_inherited_browser_actions_use_runtime_auto_without_approvals(browser_action_case):
@@ -111,11 +172,10 @@ async def test_inherited_browser_actions_use_runtime_auto_without_approvals(brow
     result = await case.effective.execute(case.call, case.context)
     assert not result.is_error
     capabilities = [call.args[0].capability for call in case.context.ask_handler.await_args_list]
-    assert capabilities == (
-        ["browser.write", "browser.read"] if case.capability == "browser.write"
-        else ["browser.read"]
-    )
+    assert capabilities == case.capabilities
     case.approval.assert_not_awaited()
+    case.coordinator.snapshot.assert_not_awaited()
+    assert "expectedSnapshot" not in case.coordinator.execute.await_args.args[-1]
     case.context.db.add.assert_not_called()
     case.context.db.scalars.assert_not_awaited()
     case.coordinator.execute.assert_awaited_once()
@@ -134,13 +194,16 @@ async def test_explicit_browser_policy_survives_auto_defaults(browser_action_cas
     else:
         case.settings._agent_permissions = AgentProfilePermissions(policies={case.capability: policy})
     result = await case.effective.execute(case.call, case.context)
-    expected_checks = 2 if policy == "ask" and case.capability == "browser.write" else 1
-    assert case.context.ask_handler.await_count == expected_checks
+    expected_checks = len(case.capabilities) if policy == "ask" else case.capabilities.index(case.capability) + 1
+    assert sum(not call.kwargs.get("check_only", False) for call in case.context.ask_handler.await_args_list) == expected_checks
     if policy == "ask":
         assert not result.is_error
         case.approval.assert_awaited_once()
         assert case.approval.await_args.args[-1].capability == case.capability
         case.coordinator.execute.assert_awaited_once()
+        if "tabId" in case.call.arguments:
+            case.coordinator.snapshot.assert_awaited_once()
+            assert case.coordinator.execute.await_args.args[-1]["expectedSnapshot"] == "a" * 64
     else:
         assert result.metadata["errorCode"] == "permission.denied"
         case.approval.assert_not_awaited()
@@ -167,7 +230,7 @@ async def test_inherited_auto_cannot_restore_excluded_browser(browser_action_cas
             integration_availability={str(case.instance.id): False},
         )
     else:
-        case.settings._delegation_ceiling = permission_snapshot(case.settings, {"browser"})
+        case.settings._delegation_ceiling = permission_snapshot(case.settings, set(BROWSER_TOOL_ACTIONS))
     result = await case.effective.execute(case.call, case.context)
     assert result.metadata["errorCode"] == "tool.unavailable"
     case.approval.assert_not_awaited()
@@ -178,7 +241,7 @@ async def test_inherited_auto_cannot_restore_excluded_browser(browser_action_cas
 @pytest.mark.parametrize("policy", ["ask", "disabled"])
 async def test_browser_delegation_ceiling_is_not_relaxed(browser_action_case, monkeypatch, source, policy):
     case = browser_action_case
-    ceiling = permission_snapshot(case.settings, {"browser"}, case.integrations)
+    ceiling = permission_snapshot(case.settings, set(BROWSER_TOOL_ACTIONS), case.integrations)
     if source == "policy":
         ceiling["permissions"]["policies"][case.capability] = policy
     else:
@@ -210,3 +273,190 @@ async def test_explicit_browser_ask_still_denies_or_revalidates(browser_action_c
     case.approval.assert_awaited_once()
     case.coordinator.execute.assert_not_awaited()
     assert case.context.user_denied == (change == PermissionDecision.USER_DENIED.value)
+
+
+async def test_existing_grant_under_ask_does_not_capture_guard(browser_action_case, monkeypatch):
+    case = browser_action_case
+    case.settings.permissions.policies[case.capability] = "ask"
+    evaluate = AsyncMock(return_value=PermissionDecision.ALLOW)
+    monkeypatch.setattr(runtime_module.PermissionPolicy, "evaluate", evaluate)
+    result = await case.effective.execute(case.call, case.context)
+    assert not result.is_error
+    assert any(call.args[4].value == "ask" for call in evaluate.await_args_list)
+    case.approval.assert_not_awaited()
+    case.coordinator.snapshot.assert_not_awaited()
+    assert "expectedSnapshot" not in case.coordinator.execute.await_args.args[-1]
+
+
+@pytest.mark.parametrize("capability", ["browser.read", "browser.write", "browser.code"])
+@pytest.mark.parametrize("action,source", [("evaluate", {"function": "() => 1"}), ("run_code", {"code": "async def run(page):\n    return 1"})])
+async def test_script_requires_each_permission_even_without_observation(browser_policy_case, capability, action, source):
+    case = browser_policy_case
+    case.call.name = f"browser_{action}"
+    case.call.arguments = {"tabId": str(uuid4()), "observe": False, **source}
+    case.settings.permissions.policies[capability] = "disabled"
+    result = await case.effective.execute(case.call, case.context)
+    assert result.metadata["errorCode"] == "permission.denied"
+    case.coordinator.snapshot.assert_not_awaited()
+    case.coordinator.execute.assert_not_awaited()
+
+
+async def test_multiple_asks_share_one_independent_guard_and_exact_source(browser_policy_case):
+    case = browser_policy_case
+    case.call.name = "browser_run_code"
+    code = "async def run(page):\n    await page.goto('https://example.org')\n    return 1"
+    case.call.arguments = {"tabId": str(uuid4()), "code": code, "observe": False}
+    case.settings.permissions.policies.update(dict.fromkeys(("browser.read", "browser.write", "browser.code"), "ask"))
+    case.coordinator.snapshot.return_value = "b" * 64
+
+    async def approve(*args):
+        case.coordinator.snapshot.assert_awaited_once()
+        details = args[-1].approval_details["browser"]
+        assert details["code"] == code
+        assert details["tabId"] == case.call.arguments["tabId"]
+        assert details["browserId"] == str(case.context.bound_options["browser_id"])
+        assert details["attachmentRevision"] == 1
+        assert details["snapshotSha256"] == "b" * 64
+        return "allow_once"
+
+    case.approval.side_effect = approve
+    result = await case.effective.execute(case.call, case.context)
+    assert not result.is_error
+    assert case.approval.await_count == 3
+    case.coordinator.snapshot.assert_awaited_once()
+    assert case.coordinator.execute.await_args.args[-1]["expectedSnapshot"] == "b" * 64
+
+
+async def test_legacy_availability_and_delegation_never_enable_new_browser_tools(browser_policy_case, monkeypatch):
+    case = browser_policy_case
+    case.settings.tool_availability = {"browser": False, "browser_run_code": True}
+    assert not set(BROWSER_TOOL_ACTIONS) & tools_module.ToolRegistry([]).effective(
+        case.integrations, tool_settings=case.settings,
+    ).tools.keys()
+    case.call.name = "browser_run_code"
+    case.call.arguments = {"tabId": str(uuid4()), "code": "async def run(page):\n    return 1", "observe": False}
+    result = await case.effective.execute(case.call, case.context)
+    assert result.metadata["errorCode"] == "tool.unavailable"
+    case.settings.tool_availability.clear()
+    ceiling = permission_snapshot(case.settings, {"browser"}, case.integrations)
+    ceiling["integrationDefaults"][str(case.instance.id)].pop("browser.code")
+    ceiling["actionDefaults"].pop("browser.code")
+    monkeypatch.setattr(runtime_module, "delegation_snapshot", AsyncMock(return_value=ceiling))
+    result = await case.effective.execute(case.call, case.context)
+    assert result.metadata["errorCode"] == "permission.denied"
+    case.approval.assert_not_awaited()
+    case.coordinator.execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("capability", ["browser.read", "browser.write"])
+@pytest.mark.parametrize("policy", ["ask", "disabled"])
+@pytest.mark.parametrize("scope", ["global", "integration", "profile", "delegation"])
+async def test_browser_final_fence_rejects_revoked_earlier_permission_during_code_approval(
+    browser_script_case, monkeypatch, capability, policy, scope,
+):
+    case = browser_script_case
+    if scope == "global":
+        policies = case.settings.permissions.policies
+    elif scope == "integration":
+        policies = case.settings.permissions.integration_policies.setdefault(str(case.instance.id), {})
+    elif scope == "profile":
+        case.settings._agent_permissions = AgentProfilePermissions()
+        policies = case.settings._agent_permissions.policies
+    else:
+        ceiling = permission_snapshot(case.settings, set(BROWSER_TOOL_ACTIONS), case.integrations)
+        monkeypatch.setattr(runtime_module, "delegation_snapshot", AsyncMock(return_value=ceiling))
+        policies = ceiling["integrationDefaults"][str(case.instance.id)]
+    pending, release = asyncio.Event(), asyncio.Event()
+
+    async def approve(*args):
+        assert args[-1].capability == "browser.code"
+        pending.set()
+        await release.wait()
+        return "allow_once"
+
+    case.approval.side_effect = approve
+    task = asyncio.create_task(case.effective.execute(case.call, case.context))
+    try:
+        await asyncio.wait_for(pending.wait(), timeout=2)
+        policies[capability] = policy
+    finally:
+        release.set()
+        result = await task
+    assert result.metadata["errorCode"] == "permission.denied"
+    case.approval.assert_awaited_once()
+    case.coordinator.snapshot.assert_awaited_once()
+    case.coordinator.execute.assert_not_awaited()
+    case.context.db.add.assert_not_called()
+    rechecks = [call.args[0].capability for call in case.context.ask_handler.await_args_list if call.kwargs.get("check_only")]
+    assert capability in rechecks
+
+
+@pytest.mark.parametrize("capability", ["browser.read", "browser.write"])
+@pytest.mark.parametrize("policy", ["auto", "ask", "disabled"])
+async def test_browser_final_fence_retains_exact_once_approval_but_never_overrides_disabled(
+    browser_script_case, capability, policy,
+):
+    case = browser_script_case
+    case.settings.permissions.policies[capability] = "ask"
+
+    async def approve(*args):
+        if args[-1].capability == "browser.code":
+            case.settings.permissions.policies[capability] = policy
+        return "allow_once"
+
+    case.approval.side_effect = approve
+    result = await case.effective.execute(case.call, case.context)
+    assert [call.args[-1].capability for call in case.approval.await_args_list] == [capability, "browser.code"]
+    assert result.is_error == (policy == "disabled")
+    assert case.coordinator.execute.await_count == (policy != "disabled")
+    if policy == "disabled":
+        assert result.metadata["errorCode"] == "permission.denied"
+    else:
+        assert [call.args[0].capability for call in case.context.ask_handler.await_args_list if call.kwargs.get("check_only")] == [
+            "browser.read", "browser.write", "browser.code",
+        ]
+    case.coordinator.snapshot.assert_awaited_once()
+    case.context.db.add.assert_not_called()
+    assert case.context.db.scalars.return_value.all() == []
+
+
+@pytest.mark.parametrize("change", ["scope", "capability", "profile", "call", "generic"])
+async def test_browser_once_proof_is_not_a_grant_for_other_scopes(browser_script_case, change):
+    case = browser_script_case
+    result = await case.effective.execute(case.call, case.context)
+    assert not result.is_error
+    request = case.approval.await_args.args[-1]
+    assert await case.context.ask_handler(request, check_only=True) == PermissionDecision.ALLOW
+    if change == "scope":
+        scope = json.loads(request.resource_scope)
+        scope["operationKey"] = "changed-source-or-target"
+        request = replace(request, resource_scope=json.dumps(scope, sort_keys=True, separators=(",", ":")))
+    elif change == "capability":
+        request = replace(request, capability="browser.read")
+        case.settings.permissions.policies["browser.read"] = "ask"
+    elif change == "profile":
+        case.context.session.agent_profile_id = uuid4()
+    elif change == "call":
+        case.call.id = "another-call"
+    else:
+        request = replace(request, action_kind="integration_operation")
+    assert await case.context.ask_handler(request, check_only=True) == PermissionDecision.ASK
+    case.approval.assert_awaited_once()
+    case.coordinator.snapshot.assert_awaited_once()
+    case.context.db.add.assert_not_called()
+
+
+async def test_browser_once_proofs_are_cleared_before_the_next_execution(browser_script_case):
+    case = browser_script_case
+    result = await case.effective.execute(case.call, case.context)
+    assert not result.is_error
+    assert any(key.startswith("browser_approved:") for key in case.context.approval_resolution)
+
+    async def approve(*_args):
+        assert not any(key.startswith("browser_approved:") for key in case.context.approval_resolution)
+        return "allow_once"
+
+    case.approval.side_effect = approve
+    result = await case.effective.execute(case.call, case.context)
+    assert not result.is_error
+    assert case.approval.await_count == 2

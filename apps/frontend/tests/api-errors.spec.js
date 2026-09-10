@@ -3,6 +3,13 @@ import { describe, expect, it } from 'vitest'
 import { apiErrorMessage, decodeBlobApiError, errorDescriptor } from '../src/utils/api-errors'
 
 describe('API error messages', () => {
+  it.each(['browser.snapshotChanged', 'browser.observationUnstable'])('reinspects instead of reconnecting for %s', (code) => {
+    const message = apiErrorMessage({ error: { code, message: 'private worker detail' } })
+    expect(message).toContain('Prüfe denselben Tab erneut')
+    expect(message).not.toContain('private worker detail')
+    expect(message).not.toContain('verbinde')
+    expect(message).not.toContain('Öffne den Browser')
+  })
   it('distinguishes a locked browser profile without suggesting reinstall or reset', () => {
     const message = apiErrorMessage({ error: { code: 'browser.profileInUse', message: 'private profile path' } })
     expect(message).toContain('gesperrt')

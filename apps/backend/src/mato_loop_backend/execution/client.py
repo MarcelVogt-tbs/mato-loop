@@ -312,6 +312,8 @@ _REMOTE_ERROR_CODES = {
     "browser.busy": "browser.busy",
     "browser.notConnected": "browser.notConnected",
     "browser.bindingChanged": "browser.bindingChanged",
+    "browser.snapshotChanged": "browser.snapshotChanged",
+    "browser.observationUnstable": "browser.observationUnstable",
     "browser.setupFailed": "browser.setupFailed",
     "browser.dependenciesMissing": "browser.dependenciesMissing",
     "browser.unsupported": "browser.unsupported",

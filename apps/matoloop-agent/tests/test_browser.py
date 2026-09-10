@@ -1098,7 +1098,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             extra_tab = (await execute("newtab", url=url))["tabId"]
             original_tabs = (await execute("tabs"))["tabs"]
             worker_pid = manager.worker.pid
-            fingerprint = (await execute("inspect"))["data"]["snapshotSha256"]
+            fingerprint = (await execute("inspect", guard=True))["data"]["snapshotSha256"]
             for width, height in (
                 (1921, 1081),
                 (641, 481),
@@ -1151,7 +1151,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                         await asyncio.sleep(0.1)
                 self.assertEqual(manager.worker.pid, worker_pid)
                 self.assertEqual((await execute("tabs"))["tabs"], original_tabs)
-                changed = (await execute("inspect"))["data"]["snapshotSha256"]
+                changed = (await execute("inspect", guard=True))["data"]["snapshotSha256"]
                 self.assertNotEqual(changed, fingerprint)
                 fingerprint = changed
                 print(
@@ -1214,18 +1214,18 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIn("Selector works", observed["text"])
             await execute("fill", selector="#password", text="SECRET_FIELD_VALUE")
-            before = await execute("inspect")
+            before = await execute("inspect", guard=True)
             self.assertIn("SECRET_FIELD_VALUE", before["text"])
             await execute("fill", selector="#password", text="CHANGED_PRIVATE_VALUE")
-            after = await execute("inspect")
+            after = await execute("inspect", guard=True)
             self.assertIn("CHANGED_PRIVATE_VALUE", after["text"])
             self.assertNotEqual(before["text"], after["text"])
             self.assertNotEqual(before["data"]["snapshotSha256"], after["data"]["snapshotSha256"])
             await execute("click", selector="#checked")
-            checked = await execute("inspect")
+            checked = await execute("inspect", guard=True)
             self.assertNotEqual(after["data"]["snapshotSha256"], checked["data"]["snapshotSha256"])
             await execute("click", selector="#retarget")
-            changed = await execute("inspect")
+            changed = await execute("inspect", guard=True)
             self.assertNotEqual(
                 checked["data"]["snapshotSha256"], changed["data"]["snapshotSha256"]
             )
