@@ -844,7 +844,7 @@ def general_system_prompt(
         )
     if "provide_file" in offered_tool_names:
         parts.append(
-            "provide_file is only for another file; exact files revision or fixed computer snapshot; paths and reads are "
+            "provide_file supplies another file or a ZIP of a folder or file list; paths and reads are "
             "not downloads. Use its card."
         )
     if "transcribe_audio" in offered_tool_names:

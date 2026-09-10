@@ -463,7 +463,8 @@ async def test_provided_working_file_and_actions_publish_only_final_output(tmp_p
     monkeypatch.setattr(tools_module, "_filesystem_permission", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tools_module, "_allow", AsyncMock(return_value=True))
     provided = await tools_module._provide_file(
-        SimpleNamespace(root="session", path="model.scad"), SimpleNamespace(run_id=run_id)
+        tools_module.ProvideFileArguments(root="session", path="model.scad"),
+        SimpleNamespace(run_id=run_id),
     )
     assert provided.attachments[0].file_revision is None
     assert provided.attachments[0].file_id == working.file_id
@@ -509,6 +510,57 @@ async def test_provided_working_file_and_actions_publish_only_final_output(tmp_p
     assert messages[0].provider_data["_matoloop"]["fileOutputsHidden"] is True
     assert messages[1].provider_data["_matoloop"]["fileOutputsPending"] is False
     assert messages[1].provider_data["_matoloop"]["fileActions"] == []
+
+
+async def test_provided_zip_persists_fixed_snapshot_after_source_edit(tmp_path, monkeypatch):
+    session = ChatSession(id=uuid4(), user_id=uuid4())
+    run_id = uuid4()
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session.id)
+    files = RootFileService(session.id, session_storage=storage, run_id=run_id)
+    files.create_directory("session", "reports")
+    files.write_file("session", "reports/notes.txt", "original")
+    source = files.working_revision("reports/notes.txt")
+    monkeypatch.setattr(
+        tools_module, "_project_read_files", AsyncMock(return_value=(files, session.id))
+    )
+    monkeypatch.setattr(tools_module, "_filesystem_permission", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tools_module, "_allow", AsyncMock(return_value=True))
+    provided = await tools_module._provide_file(
+        tools_module.ProvideFileArguments(root="session", path="reports"),
+        SimpleNamespace(run_id=run_id),
+    )
+    assert not provided.is_error
+    output, = provided.attachments
+    assert output.mime_type == "application/zip"
+    assert output.file_id is None
+    message = tool_message(session, run_id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = session
+    service = AttachmentService(storage, run_id=run_id)
+    pending = await service.create_attachment(
+        db, message, output.data, output.mime_type, kind=output.kind,
+        filename=output.filename, position=0, category=output.category, purpose="artifact",
+    )
+    assert pending.file_revision is None
+    assert pending.file_id != source.file_id
+    db.add.assert_not_called()
+    files.append_output_revision(source.file_id, b"edited")
+    db.scalars.return_value = Mock(all=Mock(return_value=[message]))
+    await service.finalize_run(db, session, run_id)
+    db.add.assert_called_once()
+    attachment = db.add.call_args.args[0]
+    assert isinstance(attachment, MessageAttachment)
+    assert attachment.id == pending.id and attachment.file_revision == 1
+    assert (attachment.purpose, attachment.mime_type) == ("artifact", "application/zip")
+    assert pending_attachments(message) == []
+    assert message.provider_data["_matoloop"]["fileOutputsPending"] is False
+    path = await AttachmentService(storage).verified_path(attachment, session.id)
+    stored = path.read_bytes()
+    assert stored == output.data
+    with zipfile.ZipFile(BytesIO(stored)) as archive:
+        assert archive.read("reports/notes.txt") == b"original"
+    assert files.read_bytes("session", "reports/notes.txt", limit=100) == b"edited"
 
 
 @pytest.mark.parametrize("quota_mib,used_mib,allowed", [(1, 2, False), (1000, 600, True)])

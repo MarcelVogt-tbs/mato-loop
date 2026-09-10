@@ -136,6 +136,25 @@ class FilesystemTests(unittest.TestCase):
         self.assertEqual(target.read_text(), "original\n")
         self.assertTrue(link.is_symlink())
 
+    def test_export_rejects_fifo_replacement_without_blocking(self) -> None:
+        source = self.root / "source"
+        source.write_text("public")
+        self.assertEqual(self.filesystem.stat(str(source))["kind"], "file")
+        original_open = os.open
+
+        def replace_before_open(path, flags, *args, **kwargs):
+            if path == "source":
+                self.assertTrue(flags & os.O_NONBLOCK, "FIFO rejection must not block")
+                source.unlink()
+                os.mkfifo(source)
+            return original_open(path, flags, *args, **kwargs)
+
+        with patch.object(filesystem_module.os, "open", side_effect=replace_before_open):
+            with self.assertRaises(AgentError) as raised:
+                with self.filesystem.open_export(str(source)):
+                    self.fail("FIFO must not be exported")
+        self.assertEqual(raised.exception.code, "path.notFile")
+
     def test_import_export_are_atomic_and_bounded(self) -> None:
         source = self.root / "download"
         source.write_bytes(b"binary\x00data")

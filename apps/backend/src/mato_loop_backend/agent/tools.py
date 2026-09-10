@@ -6,8 +6,10 @@ import json
 import logging
 import os
 import posixpath
+import zipfile
 from datetime import datetime
 from io import BytesIO
+from tempfile import SpooledTemporaryFile
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
@@ -773,23 +775,140 @@ async def _provide_file(
             for operation in ("filesystem.stat", "filesystem.export")
         ):
             return ToolResult.error("executionAgent.operationUnavailable")
-    request = _filesystem_permission(
-        context,
-        root=arguments.root,
-        path=arguments.path,
-        capability="filesystem.read",
-        action_kind="provide_file",
-        action_label="Datei bereitstellen",
-        root_files=root_files,
-        target_session_id=target_session_id,
-    )
-    if not await _allow(context, request):
-        return ToolResult.error("permission.denied")
-    path = (
-        _execution_path(context, arguments.path)
+    paths = list(dict.fromkeys(
+        _execution_path(context, path)
         if arguments.root == "workspace"
-        else root_files.normalize_relative_path(arguments.path)
-    )
+        else root_files.normalize_relative_path(path)
+        for path in (arguments.paths or [arguments.path])
+    ))
+    pending = paths.copy()
+    entries: dict[str, str | None] = dict.fromkeys(paths)
+    if len(entries) > root_files.MAX_OPERATION_ENTRIES:
+        return ToolResult.error("file.operationTooLarge")
+    for path in pending:
+        request = _filesystem_permission(
+            context,
+            root=arguments.root,
+            path=path,
+            capability="filesystem.read",
+            action_kind="provide_file",
+            action_label="Datei bereitstellen",
+            root_files=root_files,
+            target_session_id=target_session_id,
+        )
+        if not await _allow(context, request):
+            return ToolResult.error("permission.denied")
+        kind = entries[path]
+        if kind is None:
+            if arguments.root == "workspace":
+                stat_result = await client.request(
+                    "filesystem.stat", {"path": path}, WorkspaceStatResult
+                )
+                _require_workspace_path(stat_result.path, path)
+                kind = stat_result.kind
+            else:
+                kind = await asyncio.to_thread(root_files.path_kind, arguments.root, path)
+            entries[path] = kind
+        if kind not in {"file", "directory"}:
+            return ToolResult.error("file.unsupportedType")
+        if kind == "file":
+            continue
+        if arguments.paths is not None:
+            return ToolResult.error("file.notAFile", field="paths")
+        if arguments.root == "workspace" and not client.supports("filesystem.list"):
+            return ToolResult.error("executionAgent.operationUnavailable")
+        offset = 0
+        while True:
+            if arguments.root == "workspace":
+                page = await client.request(
+                    "filesystem.list",
+                    {"path": path, "offset": offset, "limit": root_files.MAX_LIST_LIMIT},
+                    WorkspaceListResult,
+                )
+            else:
+                page = await asyncio.to_thread(
+                    root_files.list_directory, arguments.root, path,
+                    offset=offset, limit=root_files.MAX_LIST_LIMIT,
+                )
+            for entry in page.entries:
+                child = posixpath.normpath(posixpath.join(path, entry.name))
+                if (
+                    not entry.name or entry.name in {".", ".."} or "/" in entry.name
+                    or entry.path != child or child in entries
+                ):
+                    return ToolResult.error("file.changed")
+                # Validate ZIP names as well as source paths, including agent listings.
+                root_files.normalize_relative_path(entry.name)
+                if entry.kind not in {"file", "directory"}:
+                    return ToolResult.error("file.unsupportedType")
+                entries[child] = entry.kind
+                if len(entries) > root_files.MAX_OPERATION_ENTRIES:
+                    return ToolResult.error("file.operationTooLarge")
+                pending.append(child)
+            if not page.has_more:
+                break
+            if not page.entries or page.next_offset != offset + len(page.entries):
+                return ToolResult.error("file.changed")
+            offset = page.next_offset
+
+    path = paths[0]
+    if arguments.paths is not None or entries[path] == "directory":
+        root_contents = arguments.path is not None and (
+            posixpath.normpath(arguments.path) == "." or path == "/"
+        )
+        base = path if root_contents else posixpath.commonpath(
+            [posixpath.dirname(item) for item in paths]
+        )
+        filename = (
+            f"{posixpath.basename(path)}.zip"
+            if arguments.path is not None and not root_contents
+            else "download.zip"
+        )
+        source_bytes = 0
+        with SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as output:
+            with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for source, kind in entries.items():
+                    member = posixpath.relpath(source, base or ".")
+                    if member == ".":
+                        continue
+                    if kind == "directory":
+                        archive.writestr(member + "/", b"")
+                    else:
+                        limit = root_files.MAX_OPERATION_BYTES - source_bytes
+                        data = (
+                            await client.read_bytes(source, limit=limit)
+                            if arguments.root == "workspace"
+                            else await asyncio.to_thread(
+                                root_files.read_bytes, arguments.root, source, limit=limit
+                            )
+                        )
+                        source_bytes += len(data)
+                        if source_bytes > root_files.MAX_OPERATION_BYTES:
+                            return ToolResult.error("file.operationTooLarge")
+                        with archive.open(member, "w") as target:
+                            for start in range(0, len(data), 1024 * 1024):
+                                target.write(data[start:start + 1024 * 1024])
+                                if output.tell() > MAX_FILE_ATTACHMENT_BYTES:
+                                    return ToolResult.error("file.operationTooLarge")
+                                await asyncio.sleep(0)
+                    if output.tell() > MAX_FILE_ATTACHMENT_BYTES:
+                        return ToolResult.error("file.operationTooLarge")
+            if output.tell() > MAX_FILE_ATTACHMENT_BYTES:
+                return ToolResult.error("file.operationTooLarge")
+            output.seek(0)
+            data = output.read()
+        result = ToolResult.json({
+            "root": arguments.root,
+            "filename": filename,
+            "sizeBytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "snapshotImported": True,
+        })
+        result.attachments = (
+            ToolAttachment(data, "application/zip", filename, kind="file", category="downloaded"),
+        )
+        return result
+
     if arguments.root == "workspace":
         client = _workspace_client(context)
         data = await client.read_bytes(path, limit=MAX_FILE_ATTACHMENT_BYTES)
@@ -4529,7 +4648,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "provide_file",
-            "Provide an exact files revision or fixed computer snapshot.",
+            "Provide path (file unchanged or folder ZIP) or paths (files ZIP). ZIPs are snapshots.",
             ProvideFileArguments,
             _provide_file,
             tool_type="shared",
@@ -5092,6 +5211,8 @@ def permission_for(
     root_files: RootFileService,
 ) -> PermissionRequest | None:
     arguments = internal_file_roots(arguments)
+    if tool_name == "provide_file" and arguments.get("paths") is not None:
+        return None
     if tool_name in {
         "web_search",
         "session_read",

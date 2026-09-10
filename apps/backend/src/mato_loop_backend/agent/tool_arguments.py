@@ -201,7 +201,16 @@ class GrepArguments(GlobArguments):
 
 
 class ProvideFileArguments(SessionFileReadArguments):
-    path: str = Field(min_length=1, max_length=1_000)
+    path: str | None = Field(default=None, min_length=1, max_length=1_000)
+    paths: list[Annotated[str, Field(min_length=1, max_length=1_000)]] | None = Field(
+        default=None, min_length=1, max_length=1_000
+    )
+
+    @model_validator(mode="after")
+    def select_source(self) -> ProvideFileArguments:
+        if (self.path is None) == (self.paths is None):
+            raise ValueError("provide exactly one of path or paths")
+        return self
 
 
 class WriteFileArguments(ToolArguments):

@@ -451,7 +451,11 @@ class Filesystem:
 
     def _open_regular(self, parent_fd: int, name: str) -> tuple[int, os.stat_result]:
         try:
-            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
+            fd = os.open(
+                name,
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=parent_fd,
+            )
             metadata = os.fstat(fd)
             if not stat.S_ISREG(metadata.st_mode):
                 raise OSError

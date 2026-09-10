@@ -1867,7 +1867,7 @@ def test_system_prompt_describes_managed_file_roots() -> None:
     assert "revisioned" not in prompt
     assert "No computer directory selected. Use root=files." in prompt
     assert "paths and reads are not downloads" in prompt
-    assert "provide_file is only for another file" in prompt
+    assert "provide_file supplies another file or a ZIP of a folder or file list" in prompt
     assert "Use its card" in prompt
 
 

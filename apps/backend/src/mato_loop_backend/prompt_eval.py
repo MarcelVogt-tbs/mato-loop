@@ -5258,7 +5258,7 @@ _V2_TOOL_DESCRIPTIONS = {
         "root=files includes hidden; include overrides ignores. "
         "truncated=true: more/clipped text/size limit."
     ),
-    "provide_file": "Provide an exact files revision or fixed computer snapshot.",
+    "provide_file": "Provide path (file unchanged or folder ZIP) or paths (files ZIP). ZIPs are snapshots.",
     "write_file": "Write complete UTF-8 content to one file, creating or replacing it.",
     "create_directory": "Create one directory; its parent must exist.",
     "delete_path": "Delete one path; non-empty directories require recursive=true.",
@@ -5606,7 +5606,7 @@ def _rewrite_system_prompt_v2(prompt: str) -> str:
         elif paragraph.startswith("Successful file writes, copies, and moves already expose"):
             paragraph = (
                 "Writes, copies, and moves already expose file destinations. Use provide_file only for "
-                "another existing file; paths and read output are not downloads. After success, use the "
+                "another file or a ZIP of a folder or file list; paths and reads are not downloads. Use the "
                 "download card and never repeat its internal URL."
             )
         elif paragraph.startswith("For calendar_update_event and calendar_delete_event"):

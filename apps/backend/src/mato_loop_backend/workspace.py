@@ -384,7 +384,7 @@ def _open_regular_file(
 ) -> BinaryIO:
     if not parts:
         raise error("file.fileNotFound", "File not found")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
     try:
         with _directory_descriptor(root, parts[:-1], error) as parent_descriptor:
             descriptor = os.open(parts[-1], flags, dir_fd=parent_descriptor)
