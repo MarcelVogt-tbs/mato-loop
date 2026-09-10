@@ -50,7 +50,7 @@ class AgentRun(Base):
     agent_profile_id: Mapped[UUID | None] = mapped_column(nullable=True)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="queued", index=True)
     input_message_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("messages.id", ondelete="SET NULL", use_alter=True), nullable=True, unique=True
+        ForeignKey("messages.id", ondelete="SET NULL", use_alter=True), nullable=True, index=True
     )
     result_message_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("messages.id", ondelete="SET NULL", use_alter=True), nullable=True, unique=True

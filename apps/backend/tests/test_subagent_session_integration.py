@@ -1,8 +1,8 @@
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
-from uuid import uuid4
+from unittest.mock import AsyncMock, Mock
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import selectinload
 from sqlalchemy.pool import NullPool
 
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api import workspace_service
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import approvals, projects, sessions, terminals, workspace
@@ -31,6 +32,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.sessions import cleanup
+from mato_loop_backend.settings.models import AiSettings, LlmProviderConfig, ModelConfig
 from mato_loop_backend.workspace import FileRoot, RootFileService
 
 
@@ -130,6 +132,73 @@ async def client(tree):
     app.dependency_overrides[get_db_session] = db_override
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
         yield client
+
+
+async def test_http_repeat_retry_preserves_failed_runs_and_original_input(tree, client, monkeypatch):
+    db = tree.db
+    parent, run, message = tree.records[0]
+    session_id, message_id = parent.id, message.id
+    original_message = (message_id, message.role, message.content, message.created_at)
+    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="model", name="Renamed model")
+    settings = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
+    parent.model_config_id = uuid4()
+    run.model_config_id = model.id
+    run.model_name = "Original model"
+    run.trust_level = "private"
+    run.pseudonymization_enabled = False
+    schedule = Mock()
+    monkeypatch.setattr(AgentRuntime, "_schedule_run", schedule)
+    monkeypatch.setattr("mato_loop_backend.agent.runtime.load_effective_ai", AsyncMock(return_value=settings))
+    # Descendant cancellation uses a separate connection outside the fixture transaction.
+    monkeypatch.setattr(AgentRuntime, "cancel_descendants", AsyncMock())
+    run_ids = [run.id]
+    failures = {}
+
+    for attempt, error_code in enumerate(("agent.backendRestarted", "provider.requestFailed"), start=1):
+        run.status = "failed"
+        run.error = error_code
+        run.completed_at = original_message[3] + timedelta(seconds=attempt + 1)
+        error = Message(
+            session_id=session_id, role="assistant", content="", error_code=error_code,
+            error_run_id=run.id, created_at=run.completed_at,
+        )
+        db.add(error)
+        await db.flush()
+        run.result_message_id = error.id
+        failures[run.id] = error_code
+        error_id = error.id
+        await db.commit()
+        await db.refresh(tree.user)
+
+        response = await client.post(f"/api/sessions/{session_id}/messages/{error_id}/retry")
+
+        assert response.status_code == 202, response.text
+        assert response.json()["modelName"] == "Original model"
+        retry_id = UUID(response.json()["runId"])
+        assert retry_id not in run_ids
+        run_ids.append(retry_id)
+        runs = list((await db.scalars(
+            select(AgentRun).where(AgentRun.session_id == session_id)
+            .execution_options(populate_existing=True)
+        )).all())
+        assert {item.id for item in runs} == set(run_ids)
+        assert all(item.input_message_id == message_id for item in runs)
+        assert all(
+            (item.model_config_id, item.model_name, item.trust_level, item.pseudonymization_enabled)
+            == (model.id, "Original model", "private", False)
+            for item in runs
+        )
+        assert {item.id: item.error for item in runs if item.status == "failed"} == failures
+        assert all(item.result_message_id is None for item in runs)
+        assert [tuple(row) for row in (await db.execute(
+            select(Message.id, Message.role, Message.content, Message.created_at)
+            .where(Message.session_id == session_id)
+        )).all()] == [original_message]
+        run = next(item for item in runs if item.id == retry_id)
+        assert run.status == "queued" and run.error is None
+        assert schedule.call_count == attempt
+        assert schedule.call_args.args == (run,)
 
 
 async def test_child_http_mutations_block_real_storage_and_grants(tree, client):
