@@ -14,7 +14,9 @@ import pytest
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.context import ContextManager
 from mato_loop_backend.attachments import AttachmentService, validate_image
+from mato_loop_backend.models import ChatSession, Message
 from mato_loop_backend.providers import lemonade
 from mato_loop_backend.providers import service as service_module
 from mato_loop_backend.providers.base import (
@@ -43,6 +45,7 @@ from mato_loop_backend.providers.output_budget import (
 from mato_loop_backend.providers.service import ProviderService, _with_retries
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings.models import (
+    AgentRuntimeSettings,
     LlmProviderConfig,
     ModelCapability,
     ModelConfig,
@@ -889,6 +892,61 @@ async def test_projection_accepts_bounded_transient_images() -> None:
         )
     assert exc_info.value.public_code == "provider.imageLimitExceeded"
     assert exc_info.value.params == {"maxImages": service_module.MAX_PROVIDER_IMAGES}
+
+
+@pytest.mark.parametrize("api_type", ["chat_completions", "responses"])
+async def test_projection_combines_persisted_and_direct_images_with_shared_limits(monkeypatch, api_type):
+    data = _png_bytes()
+    reference = _attachment_reference(uuid4(), "reference.png", data)
+    data_url = "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+    monkeypatch.setattr(service_module, "_read_image_data_url", lambda _attachment: data_url)
+    messages = [
+        {"role": "user", "content": "Compare this reference.", "attachments": [reference]},
+        {"role": "assistant", "content": "Ephemeral tool-result image; not saved."},
+    ]
+    original = deepcopy(messages)
+    image = ProviderImageInput(1, data, "private", "image/png")
+    provider = LlmProviderConfig(
+        name="Test", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "https://llm.test/v1", "api_type": api_type},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="vision", supports_image_input=True)
+    options = dict(provider=provider, model=model, messages=messages, tools=[], image_inputs=[image])
+    prepared = await ProviderService.prepare_request(**options)
+    assert [(item.message_index, item.data_url) for item in prepared.request.media] == [
+        (0, data_url), (1, data_url),
+    ]
+    transport = AsyncMock(return_value=ProviderResult(content="Compared."))
+    monkeypatch.setattr(service_module, "responses_api" if api_type == "responses" else "chat_completions", transport)
+    result = await ProviderService.complete(
+        AsyncMock(spec=AsyncSession), **options, safety_reserve_tokens=0,
+        estimated_input_tokens=prepared.estimated_input_tokens,
+    )
+    assert transport.await_args.kwargs["request"].media == prepared.request.media
+    assert result.provider_data["output_budget"]["finalEstimatedInputTokens"] == prepared.estimated_input_tokens
+    assert messages == original
+    with pytest.raises(ProviderError) as error:
+        await ProviderService.prepare_request(**{**options, "image_inputs": [image] * 8})
+    assert error.value.code == "provider.imageLimitExceeded"
+    monkeypatch.setattr(service_module, "MAX_PROVIDER_IMAGE_BYTES", len(data) * 2 - 1)
+    with pytest.raises(ProviderError) as error:
+        await ProviderService.prepare_request(**options)
+    assert error.value.code == "provider.responseTooLarge"
+    monkeypatch.setattr(service_module, "MAX_PROVIDER_IMAGE_BYTES", len(data) * 2)
+    with pytest.raises(ProviderError) as error:
+        await ProviderService.prepare_request(**{
+            **options, "image_inputs": [replace(image, trust_level="invalid")],
+        })
+    assert error.value.code == "provider.configurationInvalid"
+    with pytest.raises(ProviderError) as error:
+        await ProviderService.prepare_request(**{
+            **options, "image_inputs": [replace(image, data=b"invalid")],
+        })
+    assert error.value.code == "provider.invalidResponse"
+    text_only = await ProviderService.prepare_request(**{
+        **options, "model": model.model_copy(update={"input_modalities": {ModelInputModality.TEXT}}),
+    })
+    assert text_only.request.media == []
 
 
 async def test_projection_accepts_and_downsizes_mpo_images_for_provider() -> None:
@@ -1978,6 +2036,125 @@ async def test_output_budget_large_native_media_has_only_explicit_caps(
         assert budget["allocatedOutputTokens"] > 2048
         assert budget["mode"] == ("auto" if manual is None else "manual")
     assert transport.await_args.kwargs["request"].max_output_tokens == budget["allocatedOutputTokens"]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("usage,known", [
+    ({"reasoning_tokens": 0, "output_tokens": 100}, True),
+    ({"reasoning_tokens": 32, "output_tokens": 100}, True),
+    ({"reasoning_tokens": 20_000, "output_tokens": 21_000}, True),
+    (None, False), ({}, False),
+    ({"reasoning_tokens": -1, "output_tokens": 100}, False),
+    ({"reasoning_tokens": True, "output_tokens": 100}, False),
+    ({"reasoning_tokens": "32", "output_tokens": 100}, False),
+    ({"reasoning_tokens": 32.0, "output_tokens": 100}, False),
+    ({"reasoning_tokens": 32}, False),
+    ({"reasoning_tokens": 101, "output_tokens": 100}, False),
+])
+def test_responses_opaque_usage_is_local_and_charged_per_source_response(legacy, usage, known):
+    scope = {"providerId": "same"}
+    data = {"continuation_scope": scope, "usage": usage,
+            "reasoning_encrypted_content": "legacy"}
+    if not legacy:
+        data["responses_output_items"] = [
+            {"type": "reasoning", "encrypted_content": f"opaque-{index}"}
+            for index in range(2)
+        ]
+    request = ProviderRequest(
+        model="test", continuation_scope=scope,
+        messages=[{"role": "user", "content": "Inspect"}, {
+            "role": "assistant", "content": "", "provider_data": data,
+            "tool_calls": [{"id": "call", "name": "browser", "arguments": {"action": "tabs"}}],
+        }],
+        media=[ProviderMedia(0, "image/png", data_url="data:image/png;base64,a", status="ready")],
+    )
+    original = deepcopy(request)
+    estimates = {}
+    body = _responses_body(request, reasoning_token_estimates=estimates)
+    assert body == _responses_body(request)
+    assert request == original
+    count = 1 if legacy else 2
+    if known:
+        reserve = (usage["reasoning_tokens"] + 256 + count - 1) // count
+        assert list(estimates.values()) == [reserve] * count
+        assert all(body["input"][index]["type"] == "reasoning" for index in estimates)
+    else:
+        assert estimates == {}
+    assert estimate_request_input_tokens(body, reasoning_token_estimates=estimates) == (
+        estimate_request_input_tokens(body) - (count * 8192 if known else 0)
+        + sum(estimates.values())
+    )
+    request.continuation_scope = {"providerId": "different"}
+    body = _responses_body(request, reasoning_token_estimates=estimates)
+    assert estimates == {}
+    assert not any(item.get("encrypted_content") for item in body["input"])
+
+
+async def test_long_responses_tool_chain_uses_same_estimate_before_transport(monkeypatch):
+    provider = LlmProviderConfig(
+        name="Cloud", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "https://cloud.test/v1", "api_type": "responses"},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="test", context_window_tokens=272_000)
+    messages = [{"role": "user", "content": "Test the browser"}]
+    first = await ProviderService.prepare_request(provider=provider, model=model, messages=messages, tools=[])
+    for index in range(40):
+        messages.extend([{
+            "role": "assistant", "content": "",
+            "tool_calls": [{"id": str(index), "name": "browser", "arguments": {"action": "tabs"}}],
+            "provider_data": {
+                "continuation_scope": first.request.continuation_scope,
+                "usage": {"reasoning_tokens": 12, "output_tokens": 80},
+                "responses_output_items": [{"type": "reasoning", "encrypted_content": f"opaque-{index}"}],
+            },
+        }, {"role": "tool", "tool_call_id": str(index), "content": "{\"tabs\":[]}"}])
+    original = deepcopy(messages)
+    prepared = await ProviderService.prepare_request(provider=provider, model=model, messages=messages, tools=[])
+    body = _responses_body(prepared.request)
+    assert estimate_request_input_tokens(body) > model.context_window_tokens
+    assert prepared.estimated_input_tokens < 20_000
+    session = ChatSession(id=uuid4())
+    records = [Message(id=uuid4(), session_id=session.id, **deepcopy(message)) for message in messages]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    summarize = AsyncMock()
+
+    async def estimate(projected):
+        return (await ProviderService.prepare_request(
+            provider=provider, model=model, messages=projected, tools=[],
+        )).estimated_input_tokens
+
+    projection = await ContextManager.build(
+        db, chat_session=session, records=records, system_prompt="Use the browser", tool_schemas=[],
+        model=model, settings=AgentRuntimeSettings(), summarize=summarize, estimate_request=estimate,
+    )
+    summarize.assert_not_awaited()
+    db.commit.assert_not_awaited()
+    projected = await ProviderService.prepare_request(
+        provider=provider, model=model, messages=projection.messages, tools=[],
+    )
+    assert projection.estimated_input_tokens == projected.estimated_input_tokens
+    transport = AsyncMock(return_value=ProviderResult())
+    monkeypatch.setattr(service_module, "responses_api", transport)
+    result = await ProviderService.complete(
+        AsyncMock(spec=AsyncSession), provider=provider, model=model, messages=messages, tools=[],
+        estimated_input_tokens=prepared.estimated_input_tokens,
+    )
+    budget = result.provider_data["output_budget"]
+    assert budget["finalEstimatedInputTokens"] == prepared.estimated_input_tokens
+    sent = _responses_body(transport.await_args.kwargs["request"])
+    assert sent["input"] == body["input"]
+    assert len([item for item in sent["input"] if item.get("encrypted_content")]) == 40
+    assert messages == original
+    # Reported reasoning above the old fixed reserve still consumes real capacity.
+    messages[-2]["provider_data"]["usage"] = {"reasoning_tokens": 300_000, "output_tokens": 300_100}
+    transport.reset_mock()
+    with pytest.raises(ProviderError) as error:
+        await ProviderService.complete(
+            AsyncMock(spec=AsyncSession), provider=provider, model=model, messages=messages, tools=[],
+        )
+    assert error.value.code == "agent.contextWindowExceeded"
+    transport.assert_not_awaited()
 
 
 @pytest.mark.parametrize("api_type", ["chat_completions", "responses"])

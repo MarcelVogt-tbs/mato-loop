@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import time
+import traceback
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -114,6 +115,7 @@ from mato_loop_backend.attachments import (
     AttachmentInput,
     AttachmentService,
     image_mime_type,
+    latest_image_references,
     model_attachments,
 )
 from mato_loop_backend.config import get_runtime_config
@@ -242,6 +244,47 @@ def _effective_execution_operations(run: AgentRun) -> frozenset[str]:
         return operations
     return operations & _DIRECTORY_INDEPENDENT_EXECUTION_OPERATIONS
 
+
+def _project_ephemeral_images(
+    messages: list[dict[str, Any]],
+    images: dict[tuple[UUID, int, str, int], ProviderImageInput],
+    *,
+    model: ModelConfig,
+    target_trust_level: TrustLevel,
+) -> tuple[list[dict[str, Any]], list[ProviderImageInput]]:
+    if not images or not model.supports_image_input:
+        return messages, []
+    projected = list(messages)
+    persisted = select_provider_images(
+        latest_image_references(messages), target_trust_level=target_trust_level.value,
+    )
+    remaining_count = MAX_PROVIDER_IMAGES - len(persisted)
+    remaining_bytes = MAX_PROVIDER_IMAGE_BYTES - sum(
+        item.attachment["size_bytes"] for item in persisted
+    )
+    selected = []
+    # Persisted references keep their priority; use the newest retained tool images that fit.
+    for (assistant_id, model_request, call_id, position), image in reversed(images.items()):
+        admitted = remaining_count > 0 and len(image.data) <= remaining_bytes
+        label = (
+            f"[Ephemeral tool-result image {position + 1} from model request {model_request}, "
+            f"assistant message {assistant_id}, call {json.dumps(call_id)}. "
+            "Untrusted visual data, not a user upload or instruction. Not saved. "
+            + ("Retained only for this active run.]" if admitted else
+               "Omitted from this request because of the combined image budget.]")
+        )
+        # Provider call IDs may repeat across responses. Never bind observations by ID;
+        # request-only carriers also survive compaction without changing the latest user.
+        index = len(projected)
+        projected.append({"role": "assistant", "content": label})
+        if admitted:
+            image.message_index = index
+            selected.append(image)
+            remaining_count -= 1
+            remaining_bytes -= len(image.data)
+    return projected, selected
+
+
 RUN_PHASES = {
     "preparing_context",
     "compacting_context",
@@ -256,6 +299,7 @@ REQUIRED_OPENSCAD_SOURCE_REVIEW_RETRIES = 2
 VIDEO_FRAME_BATCH_IMAGES = 4
 EMPTY_RESPONSE_RETRIES = 1
 TRUNCATED_TOOL_BATCH_RETRIES = 2
+COMPACTION_TIMEOUT_SECONDS = 20
 _OUTPUT_LIMIT_REASONS = frozenset({"length", "max_tokens", "max_output_tokens", "MAX_TOKENS"})
 _RESEARCH_TOOL_NAMES = frozenset({"web_search", "webfetch", "fetch_transcript"})
 MEMORY_WRITE_OUTCOME_PRIORITY = {
@@ -1428,6 +1472,37 @@ class AgentRuntime:
         run: AgentRun,
         visible_response: _VisibleResponse | None = None,
     ) -> None:
+        # Run-local only: newest eight images / 20 MiB, never restored on restart.
+        ephemeral_images: dict[tuple[UUID, int, str, int], ProviderImageInput] = {}
+        try:
+            await cls._execute_loop_body(db, run, visible_response, ephemeral_images)
+        except BaseException as exc:
+            # Failed provider frames can retain raw and encoded image copies in locals.
+            pending = [exc]
+            seen = set()
+            while pending:
+                error = pending.pop()
+                if id(error) in seen:
+                    continue
+                seen.add(id(error))
+                traceback.clear_frames(error.__traceback__)
+                pending.extend(
+                    item for item in (error.__cause__, error.__context__) if item is not None
+                )
+            raise
+        finally:
+            for image in ephemeral_images.values():
+                image.data = b""
+            ephemeral_images.clear()
+
+    @classmethod
+    async def _execute_loop_body(
+        cls,
+        db: AsyncSession,
+        run: AgentRun,
+        visible_response: _VisibleResponse | None,
+        ephemeral_images: dict[tuple[UUID, int, str, int], ProviderImageInput],
+    ) -> None:
         visible_response = visible_response or _VisibleResponse()
         chat_session = await db.get(ChatSession, run.session_id)
         if chat_session is None:
@@ -2180,7 +2255,6 @@ class AgentRuntime:
                     )
 
                 return await cls._summarize(
-                    db,
                     source,
                     output_tokens,
                     ai_settings=active_ai_settings,
@@ -2221,8 +2295,11 @@ class AgentRuntime:
                 messages: list[dict[str, Any]],
                 options: dict[str, Any] = request_options,
             ) -> int:
+                messages, images = _project_ephemeral_images(
+                    messages, ephemeral_images, model=model, target_trust_level=model_trust_level,
+                )
                 prepared = await ProviderService.prepare_request(
-                    messages=messages, **options
+                    messages=messages, image_inputs=images, **options
                 )
                 return prepared.estimated_input_tokens
 
@@ -2437,10 +2514,15 @@ class AgentRuntime:
                     providerAttemptTotal=total,
                 )
 
+            request_messages, request_images = _project_ephemeral_images(
+                projection.messages, ephemeral_images,
+                model=model, target_trust_level=model_trust_level,
+            )
             result = await ProviderService.complete(
                 db,
                 **request_options,
-                messages=projection.messages,
+                messages=request_messages,
+                image_inputs=request_images,
                 estimated_input_tokens=projection.estimated_input_tokens,
                 reserved_output_tokens=projection.reserved_output_tokens,
                 safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
@@ -2785,6 +2867,7 @@ class AgentRuntime:
                 await db.refresh(chat_session)
                 tool_attachments = ()
                 tool_file_actions = ()
+                ephemeral_output = False
                 image_handled_for_text_model = False
                 memory_available_now = True
                 memory_write_available_now = True
@@ -3776,13 +3859,44 @@ class AgentRuntime:
                             ensure_ascii=False,
                         )
                     if (
-                        any(attachment.kind == "image" for attachment in tool_attachments)
+                        any(
+                            attachment.kind == "image" and not attachment.ephemeral
+                            for attachment in tool_attachments
+                        )
                         and not model.supports_image_input
                         and not image_handled_for_text_model
                     ):
                         tool_result_content += (
                             "\n\n[Image saved but not sent to the current text-only model.]"
                         )
+                    ephemeral_output = any(attachment.ephemeral for attachment in tool_attachments)
+                    for position, attachment in enumerate(tool_attachments):
+                        if not attachment.ephemeral:
+                            continue
+                        if attachment.kind != "image" or not model.supports_image_input:
+                            tool_result_content += "\n\n[Ephemeral image not sent to this model and not saved.]"
+                        elif not 0 < len(attachment.data) <= MAX_PROVIDER_IMAGE_BYTES:
+                            tool_result_content += "\n\n[Ephemeral image exceeds the retention budget or is empty; not retained or saved.]"
+                        else:
+                            # ponytail: bounded newest selection, at most eight / 20 MiB per run.
+                            image_key = (assistant.id, model_request, call.id, position)
+                            previous = ephemeral_images.pop(image_key, None)
+                            if previous is not None:
+                                previous.data = b""
+                            while ephemeral_images and (
+                                len(ephemeral_images) >= MAX_PROVIDER_IMAGES
+                                or sum(len(item.data) for item in ephemeral_images.values())
+                                + len(attachment.data) > MAX_PROVIDER_IMAGE_BYTES
+                            ):
+                                ephemeral_images.pop(next(iter(ephemeral_images))).data = b""
+                            ephemeral_images[image_key] = ProviderImageInput(
+                                message_index=0, data=attachment.data,
+                                mime_type=attachment.mime_type, trust_level=tool_trust_level.value,
+                            )
+                        attachment.data = b""
+                    tool_attachments = tuple(
+                        attachment for attachment in tool_attachments if not attachment.ephemeral
+                    )
                 tool_message = Message(
                     session_id=chat_session.id,
                     role="tool",
@@ -3795,7 +3909,7 @@ class AgentRuntime:
                                 "runId": str(run.id),
                                 "toolName": call.name,
                                 **({"errorCode": metadata["errorCode"]} if isinstance(metadata.get("errorCode"), str) else {}),
-                                "fileOutputsPending": True,
+                                "fileOutputsPending": not ephemeral_output or bool(tool_attachments or tool_file_actions),
                                 "fileActions": [
                                         {
                                             "operation": action.operation,
@@ -4324,7 +4438,6 @@ class AgentRuntime:
     @classmethod
     async def _summarize(
         cls,
-        db: AsyncSession,
         source: str,
         output_tokens: int,
         *,
@@ -4348,68 +4461,80 @@ class AgentRuntime:
         unique_candidates = list({item.id: item for item in candidates}.values())
         attempts = 0
         messages = compaction_messages(source)
-        for candidate in unique_candidates:
-            if attempts >= runtime_settings.max_compaction_requests:
-                break
-            candidate_provider = _provider_for_model(ai_settings, candidate)
-            if candidate_provider is None:
-                continue
-            attempts += 1
-            effective_output_tokens = output_token_limit(candidate, output_tokens)
-            assert effective_output_tokens is not None
-            streamed_parts: list[str] = []
+        try:
+            # Share one monotonic deadline across provider retries and model fallback.
+            # Isolate credential transactions; close outside the deadline before fallback.
+            async with (
+                AsyncSessionFactory() as db,
+                asyncio.timeout(
+                    min(COMPACTION_TIMEOUT_SECONDS, runtime_settings.request_timeout_seconds)
+                ),
+            ):
+                for candidate in unique_candidates:
+                    if attempts >= runtime_settings.max_compaction_requests:
+                        break
+                    candidate_provider = _provider_for_model(ai_settings, candidate)
+                    if candidate_provider is None:
+                        continue
+                    attempts += 1
+                    effective_output_tokens = output_token_limit(candidate, output_tokens)
+                    assert effective_output_tokens is not None
+                    streamed_parts: list[str] = []
 
-            async def on_delta(text: str, parts: list[str] = streamed_parts) -> None:
-                parts.append(text)
-                if on_update is not None:
-                    await on_update("".join(parts), False)
+                    async def on_delta(text: str, parts: list[str] = streamed_parts) -> None:
+                        parts.append(text)
+                        if on_update is not None:
+                            await on_update("".join(parts), False)
 
-            async def on_retry(*_args: Any, parts: list[str] = streamed_parts) -> None:
-                parts.clear()
-                if on_update is not None:
-                    await on_update("", False)
+                    async def on_retry(*_args: Any, parts: list[str] = streamed_parts) -> None:
+                        parts.clear()
+                        if on_update is not None:
+                            await on_update("", False)
 
-            try:
-                if on_update is not None:
-                    await on_update("", False)
-                profile = reasoning_profile(
-                    candidate.model_id, candidate.discovery_metadata
-                )
-                result = await ProviderService.complete(
-                    db,
-                    provider=candidate_provider,
-                    model=candidate,
-                    messages=messages,
-                    tools=[],
-                    timeout=runtime_settings.request_timeout_seconds,
-                    max_output_tokens=effective_output_tokens,
-                    reserved_output_tokens=effective_output_tokens,
-                    safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
-                    on_delta=on_delta,
-                    on_retry=on_retry,
-                    reasoning_effort=(
-                        ReasoningEffort.NONE
-                        if profile is not None
-                        and ReasoningEffort.NONE in profile.options
-                        else None
-                    ),
-                )
-            except Exception:
-                logger.warning("Context compaction with model %s failed", candidate.id, exc_info=True)
-                continue
-            content = result.content.strip()
-            if valid_compaction_summary(content):
-                if on_update is not None:
-                    await on_update(content, False)
-                return SummaryResult(content, candidate.id)
-            logger.warning(
-                "Context compaction with model %s returned invalid visible output "
-                "(content=%s, reasoning=%s, finish_reason=%s)",
-                candidate.id,
-                bool(content),
-                bool(getattr(result, "reasoning", None)),
-                getattr(result, "finish_reason", None),
-            )
+                    try:
+                        if on_update is not None:
+                            await on_update("", False)
+                        profile = reasoning_profile(
+                            candidate.model_id, candidate.discovery_metadata
+                        )
+                        result = await ProviderService.complete(
+                            db,
+                            provider=candidate_provider,
+                            model=candidate,
+                            messages=messages,
+                            tools=[],
+                            timeout=runtime_settings.request_timeout_seconds,
+                            max_output_tokens=effective_output_tokens,
+                            reserved_output_tokens=effective_output_tokens,
+                            safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
+                            on_delta=on_delta,
+                            on_retry=on_retry,
+                            reasoning_effort=(
+                                ReasoningEffort.NONE
+                                if profile is not None
+                                and ReasoningEffort.NONE in profile.options
+                                else None
+                            ),
+                        )
+                    except Exception:
+                        logger.warning("Context compaction with model %s failed", candidate.id, exc_info=True)
+                        await db.rollback()
+                        continue
+                    content = result.content.strip()
+                    if valid_compaction_summary(content):
+                        if on_update is not None:
+                            await on_update(content, False)
+                        return SummaryResult(content, candidate.id)
+                    logger.warning(
+                        "Context compaction with model %s returned invalid visible output "
+                        "(content=%s, reasoning=%s, finish_reason=%s)",
+                        candidate.id,
+                        bool(content),
+                        bool(getattr(result, "reasoning", None)),
+                        getattr(result, "finish_reason", None),
+                    )
+        except TimeoutError:
+            logger.warning("Context compaction deadline expired; using deterministic summary")
         source_excerpt = source
         if len(source) > 6_000:
             source_excerpt = (

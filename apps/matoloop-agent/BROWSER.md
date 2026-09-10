@@ -115,20 +115,38 @@ events surfaced by Playwright, not a complete audit of Chromium or service-worke
 
 The shared contract is implemented with these explicit additions:
 
-- `inspect.text` is a JSON snapshot, at most 32,768 characters, containing `url`, a bounded
-  visible-text excerpt, and up to 80 interactive `elements` with usable Playwright
-  `selector`, `tag`, `role`, `type`, `label`, `placeholder`, `href`, `formAction` and
-  `checked`, plus the focused element selector. Input/textarea/contenteditable values
-  are not returned. `inspect.data.snapshotSha256` is an opaque HMAC-SHA256 token using a
-  per-runtime key. It includes page and document identities, public metadata, and private
-   field values, checked/selected/disabled/read-only state, form targets/methods, focus,
+- `inspect.text` is Playwright 1.58's page-level AI accessibility snapshot, at most 32,768
+  characters. It includes semantic hierarchy, accessible names and states, current form
+  values, iframe content and Playwright `ref` markers. Callers target a marker with
+  `aria-ref=e12` or its frame-qualified form and the host binds it to the returned
+  `snapshotSha256`. The implementation deliberately uses the
+  version-bound `snapshotForAI` channel so its output and locator behavior match Playwright
+  rather than a local accessibility approximation. `inspect.data.snapshotSha256` is an
+  opaque HMAC-SHA256 token using a per-runtime key. It includes page and document identities,
+  the accessibility snapshot, bounded field values, checked/selected/disabled/read-only state,
+  form targets/methods, focus,
    applied desktop geometry, page viewport/screen geometry and scroll position.
   The key prevents guessing private low-entropy field values from a digest. Individual
   values above 65,536 characters or private state above 512 KiB are rejected, not silently
-  truncated. The host must compare agent-produced tokens, not recompute SHA256(text).
-  This bounded top-document subset is not a complete page semantic guarantee, does not
-  cover arbitrary JavaScript or every iframe, and does not enforce a stale-approval
+  truncated. Playwright constructs the accessibility tree before the worker applies its
+  32,768-character release limit; the worker process boundary and eight-second capture timeout
+  bound this unavoidable private-API behavior. The host must compare agent-produced tokens,
+  not recompute SHA256(text).
+  This bounded inspection is not a complete page semantic guarantee, does not cover
+  arbitrary JavaScript, and does not enforce a stale-approval
   precondition itself; the host must re-inspect and compare before execution.
+- Host-authorized write actions may set `observe=true` to return the resulting accessibility
+  snapshot in the same RPC. A post-write capture failure returns `observationFailed=true`
+  without changing the completed action into a retryable failure.
+- `screenshot` returns `screenshot: {fileId, size}` instead of inline base64. The worker
+  captures the viewport as PNG and uses Pillow LANCZOS resizing with Playwright MCP's bounds:
+  at most 1568 pixels per edge and `1.15 * 1024 * 1024` pixels total, never upscaling or
+  changing the viewport. Only the scaled PNG is staged; no original is saved. The special
+  500 KB capture limit is removed without increasing RPC limits. Read the image through
+  `integration.browser.file` chunks and delete it afterward, including on errors/cancellation.
+  Screenshot staging is hidden from downloads and cannot be selected for upload; abandoned
+  captures are removed at the next capture or runtime close. The backend keeps screenshots
+  only in active-run memory, not durable session attachments.
 - `tabs` and `diagnostics` enumerate/read without bringing any page to the foreground.
 - Host-only `integration.browser.navigation` takes `{browserId:UUID,action,tabId?:UUID,
   url?:string,nativeChrome?:bool}`. `state` accepts no optional fields; `new` optionally
@@ -247,17 +265,18 @@ The shared contract is implemented with these explicit additions:
   cleared on runtime close. A background page's pending chooser is not selected. Native
   focus is checked with Playwright focus emulation disabled in a private CDP session and
   an isolated JavaScript world, not a page-script-overridable `document.hasFocus` function.
-- `read` accepts a completed download UUID from any execute result's `downloads[].id`,
+- `read` accepts a completed download UUID from any execute result's `downloads[].id`
+  or a temporary `screenshot.fileId`,
   `offset` and `maxBytes`; returns `{fileId,filename,size,offset:<next>,complete:<eof>,data}`.
-- `delete` requires `fileId`; removes either staged upload or retained download and
+- `delete` requires `fileId`; removes a staged upload, retained download or screenshot and
   returns `{ok:true}`. Closing the runtime removes all staging but preserves the profile.
   File results are a strict union of the chunk result and `{ok:true}` for `choose`/`delete`.
 - Chunk data is at most 65,536 decoded bytes. Files are at most 64 MiB, at most 32
   entries and 256 MiB reserved/retained staging per runtime. Each pending download
   reserves 64 MiB until its actual size is known. Download processes also
   inherit a 64 MiB per-file OS limit; incomplete downloads are never listed as ready.
-- Tabs are limited to 32, text to 32,768 characters, PNG screenshots to 500,000 bytes,
-  and diagnostics to 50 entries of 500 characters. Downloads are captured from both
+- Tabs are limited to 32, text to 32,768 characters, and diagnostics to 50 entries of
+  500 characters. Scaled screenshots use the ordinary staging limits. Downloads are captured from both
   native clicks and model actions. User uploads are ordinary file-input selections.
 
 The native artifact includes the setup script and Playwright driver resources, but
@@ -294,6 +313,12 @@ and desktop content geometry, new/select/close/navigation/history/SPA/reload/sto
 popup discovery and focus, manual locks, the 32-tab cap, and the same browser PID/VNC socket.
 
 ## Fullscreen Presentation
+
+At startup, the worker disables automatic translation offers with Chromium's
+`translate.enabled` preference through the native settings API, then closes the temporary
+settings tab before exposing the browser. It does not rewrite profile files or disable
+manual translation from the context menu. Existing cookies and unrelated preferences stay
+intact. This applies to newly opened runtimes; already running browsers must be reopened.
 
 The fixed `--force-app-mode` launch flag suppresses Chromium's browser-fullscreen entry
 instruction and top-edge exit control, without changing the sandbox, profile or transport.

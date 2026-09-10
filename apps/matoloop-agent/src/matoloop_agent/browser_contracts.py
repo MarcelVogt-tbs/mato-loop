@@ -147,6 +147,7 @@ class BrowserExecuteArguments(BrowserIdArguments):
     download_id: Id | None = Field(default=None, alias="downloadId")
     upload_id: Id | None = Field(default=None, alias="uploadId")
     allow_network: bool = Field(default=True, alias="allowNetwork")
+    observe: bool = False
 
     @field_validator("url")
     @classmethod
@@ -308,12 +309,17 @@ class BrowserNavigationResult(StrictModel):
     native_chrome: bool = Field(alias="nativeChrome")
 
 
+class BrowserScreenshot(StrictModel):
+    file_id: Id = Field(alias="fileId")
+    size: int = Field(ge=0, le=MAX_FILE_BYTES)
+
+
 class BrowserActionResult(StrictModel):
     tabs: list[BrowserTab] = Field(default_factory=list, max_length=32)
     tab_id: Id | None = Field(default=None, alias="tabId")
     url: str | None = Field(default=None, max_length=4096)
     text: str | None = Field(default=None, max_length=32_768)
-    screenshot: str | None = Field(default=None, max_length=700_000)
+    screenshot: BrowserScreenshot | None = None
     downloads: list[BrowserDownload] = Field(default_factory=list, max_length=32)
     data: dict[str, str | bool | int] | None = None
 

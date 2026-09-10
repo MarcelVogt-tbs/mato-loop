@@ -102,6 +102,18 @@ def test_config_empty_action_requirements_and_wire_host_fields():
         BrowserConfig(profilePath="/tmp/profile")
     args = BrowserActionArguments(action="fill", tabId=str(uuid4()), selector="input", text="")
     assert args.text == ""
+    snapshot = "a" * 64
+    assert BrowserActionArguments(
+        action="click", tabId=str(uuid4()), selector="aria-ref=e12", snapshotSha256=snapshot
+    ).snapshot_sha256 == snapshot
+    for selector, token in (
+        ("aria-ref=e12", None), ("button", snapshot), ("aria-ref=bad", snapshot),
+        ("aria-ref=e12 >> nth=0", None),
+    ):
+        with pytest.raises(ValidationError):
+            BrowserActionArguments(
+                action="click", tabId=str(uuid4()), selector=selector, snapshotSha256=token
+            )
     assert BrowserActionArguments(action="newtab").tab_id is None
     wire = BrowserExecuteArguments(browserId=str(uuid4()), allowNetwork=False, **args.model_dump())
     assert wire.model_dump()["allowNetwork"] is False
@@ -109,6 +121,22 @@ def test_config_empty_action_requirements_and_wire_host_fields():
     assert schema["additionalProperties"] is False
     assert not {"browserId", "ownerId", "allowNetwork", "profilePath", "command", "script"} & schema["properties"].keys()
     assert BROWSER_ADAPTER.personal_only
+
+
+def test_browser_guidance_groups_known_actions_without_blind_mutations():
+    description = BROWSER_TOOL.description
+    for guidance in (
+        "independent known form fills and known safe keyboard steps",
+        "together when they do not need earlier results",
+        "accessibility snapshots with refs",
+        "include that result's snapshotSha256",
+        "Write actions return the resulting accessibility snapshot by default",
+        "wait for that result before choosing further mutations",
+        "Do not target newly discovered elements or tabs until their result is available",
+        "tabs and diagnostics are browser-level actions: use tabId=null",
+        "inspect current state before retrying; do not repeat mutations blindly",
+    ):
+        assert guidance in description
 
 
 @pytest.mark.parametrize("payload", [
@@ -172,8 +200,14 @@ def browser_case(monkeypatch):
         agent_id=instance.execution_agent_id, owner_id=instance.owner_id,
         session_id=session.id, attached=True, closed=False,
     )
+    async def execute(*args):
+        arguments = args[-1]
+        if arguments["action"] not in {"tabs", "inspect", "screenshot", "diagnostics"} and arguments.get("observe", True):
+            return BrowserActionResult(text="- document", data={"snapshotSha256": "a" * 64})
+        return BrowserActionResult()
+
     coordinator = SimpleNamespace(
-        attached_for=Mock(return_value=connection), execute=AsyncMock(return_value=BrowserActionResult()),
+        attached_for=Mock(return_value=connection), execute=AsyncMock(side_effect=execute),
         snapshot=AsyncMock(return_value="a" * 64),
     )
     # The parent owns the coordinator; this test exercises only its published interface.
@@ -240,8 +274,9 @@ async def test_approval_scope_binds_exact_action_and_live_attachment(browser_cas
     case = browser_case
     result = await case.effective.execute(case.call, case.context)
     assert not result.is_error
-    request = case.context.ask_handler.await_args.args[0]
-    assert request.capability == "browser.write"
+    requests = [call.args[0] for call in case.context.ask_handler.await_args_list]
+    assert [request.capability for request in requests] == ["browser.write", "browser.read"]
+    request = requests[0]
     assert request.policy_integration_id == case.instance.id
     scope = json.loads(request.resource_scope)
     assert scope["integrationId"] == str(case.instance.id)
@@ -263,23 +298,66 @@ async def test_denial_never_dispatch(browser_case):
     case.coordinator.execute.assert_not_awaited()
 
 
+async def test_ref_action_requires_the_current_observation(browser_case):
+    case = browser_case
+    case.call.arguments = {
+        "action": "click", "tabId": str(uuid4()), "selector": "aria-ref=e12",
+        "snapshotSha256": "b" * 64,
+    }
+    result = await case.effective.execute(case.call, case.context)
+    assert result.metadata["errorCode"] == "browser.bindingChanged"
+    case.context.ask_handler.assert_not_awaited()
+    case.coordinator.execute.assert_not_awaited()
+
+
+async def test_write_observation_can_be_disabled_or_fail_after_success(browser_case):
+    case = browser_case
+    case.call.arguments = {
+        "action": "navigate", "tabId": str(uuid4()), "url": "https://example.org",
+        "observe": False,
+    }
+    result = await case.effective.execute(case.call, case.context)
+    assert not result.is_error
+    assert [call.args[0].capability for call in case.context.ask_handler.await_args_list] == [
+        "browser.write"
+    ]
+
+    case.context.ask_handler.reset_mock()
+    case.call.arguments["observe"] = True
+    case.coordinator.execute.side_effect = None
+    case.coordinator.execute.return_value = BrowserActionResult(data={"observationFailed": True})
+    result = await case.effective.execute(case.call, case.context)
+    assert not result.is_error
+    assert json.loads(result.content)["data"] == {"observationFailed": True}
+    assert [call.args[0].capability for call in case.context.ask_handler.await_args_list] == [
+        "browser.write", "browser.read"
+    ]
+
+
 async def test_screenshot_is_a_model_image_not_base64_text(browser_case):
     case = browser_case
     output = BytesIO()
     Image.new("RGB", (2, 2), "white").save(output, format="PNG")
     image = output.getvalue()
-    case.coordinator.execute.return_value = BrowserActionResult(screenshot=base64.b64encode(image).decode())
+    case.coordinator.execute.side_effect = None
+    case.coordinator.execute.return_value = BrowserActionResult(
+        screenshot={"fileId": str(uuid4()), "size": len(image)},
+    )
+    case.coordinator.execute.return_value._screenshot_bytes = image
     case.call.arguments = {"action": "screenshot", "tabId": str(uuid4())}
     result = await case.effective.execute(case.call, case.context)
     assert not result.is_error
     assert result.attachments[0].data == image
     assert result.attachments[0].kind == "image"
+    assert result.attachments[0].ephemeral
     assert "screenshot" not in result.content
     assert case.context.ask_handler.await_args.args[0].capability == "browser.read"
+    assert "observe" not in case.coordinator.execute.await_args.args[-1]
 
 
 async def test_flexible_result_data_is_only_diagnostics(browser_case):
     case = browser_case
+    case.coordinator.execute.side_effect = None
     case.coordinator.execute.return_value = BrowserActionResult(data={"secret": "unexpected"})
     result = await case.effective.execute(case.call, case.context)
     assert result.metadata["errorCode"] == "executionAgent.protocolError"
@@ -341,14 +419,21 @@ async def test_page_actions_bind_host_snapshot_before_approval(browser_case, arg
         assert args[-1]["expectedAttachmentRevision"] == 1
         if arguments["action"] == "inspect":
             return BrowserActionResult(text=inspection, data={"snapshotSha256": snapshot})
-        return BrowserActionResult()
+        if arguments["action"] in {"screenshot"}:
+            output = BytesIO()
+            Image.new("RGB", (2, 2), "white").save(output, format="PNG")
+            result = BrowserActionResult(screenshot={"fileId": str(uuid4()), "size": len(output.getvalue())})
+            result._screenshot_bytes = output.getvalue()
+            return result
+        return BrowserActionResult(text=inspection, data={"snapshotSha256": snapshot})
 
     case.coordinator.snapshot.side_effect = capture
     case.context.ask_handler.side_effect = approve
     case.coordinator.execute.side_effect = execute
     result = await case.effective.execute(case.call, case.context)
     assert not result.is_error
-    assert events == ["snapshot", "approval", "execute"]
+    approvals = 1 if arguments["action"] in {"inspect", "screenshot"} else 2
+    assert events == ["snapshot", *("approval" for _ in range(approvals)), "execute"]
     if arguments["action"] == "inspect":
         assert json.loads(result.content)["data"] == {"snapshotSha256": snapshot}
         assert json.loads(result.content)["text"] == inspection
@@ -427,7 +512,7 @@ async def test_page_action_cannot_dispatch_without_captured_snapshot(browser_cas
     case.call.arguments = {"action": "click", "tabId": str(uuid4()), "selector": "button"}
 
     async def approve(_request):
-        case.context.bound_options.pop("expected_snapshot")
+        case.context.bound_options.pop("expected_snapshot", None)
         return PermissionDecision.ALLOW
 
     case.context.ask_handler.side_effect = approve

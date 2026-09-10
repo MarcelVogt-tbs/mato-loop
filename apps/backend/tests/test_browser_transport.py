@@ -585,7 +585,8 @@ def test_browser_inspection_reuse_and_latency_phases(env, monkeypatch, caplog, a
             calls = [args["action"] for op, args in env.calls if op == "integration.browser.execute"]
             assert calls == (["inspect", "inspect"] if action == "inspect" else ["inspect", "inspect", "click"])
             if action == "inspect":
-                assert result == execution.BrowserActionResult.model_validate(inspections[-1])
+                expected = execution.BrowserActionResult.model_validate(inspections[-1])
+                assert result == expected.model_copy(update={"data": {"snapshotSha256": snapshot}})
                 assert result.text == "private-inspection-2"
             assert not connection.busy
             records = [item for item in caplog.records if item.name == execution.__name__]
@@ -604,6 +605,114 @@ def test_browser_inspection_reuse_and_latency_phases(env, monkeypatch, caplog, a
             else:
                 assert timings["action_rpc_ms"] == pytest.approx(500)
             assert "private" not in caplog.text and snapshot not in caplog.text
+
+
+@pytest.mark.parametrize("failure", [None, "missing", "id", "size", "empty", "offset", "complete", "detach", "detach-delete", "detach-state"])
+def test_screenshot_chunks_are_private_bounded_and_deleted(env, failure, monkeypatch):
+    image = b"temporary screenshot bytes" * 30000
+    screenshot_id = str(uuid4())
+    with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
+        state = control.receive_json()
+        with open_view(env, state):
+            control.send_json({"type": "attach"})
+            control.receive_json()
+            connection = env.coordinator.connections[env.agent.id]
+            tab_id = str(uuid4())
+            snapshot = env.client.portal.call(env.coordinator.snapshot, env.session.id, env.agent.id, env.instance.id, tab_id)
+            send_state = execution.BrowserConnection.state
+
+            async def changed_state(current):
+                if failure == "detach-state" and current is connection and not current.busy:
+                    current.detach()
+                await send_state(current)
+
+            monkeypatch.setattr(execution.BrowserConnection, "state", changed_state)
+
+            async def reply(operation, arguments):
+                if operation == "integration.browser.execute" and arguments["action"] == "screenshot":
+                    assert "snapshotSha256" not in arguments and "observe" not in arguments
+                    return {} if failure == "missing" else {
+                        "tabId": tab_id, "screenshot": {"fileId": screenshot_id, "size": len(image)},
+                    }
+                if operation == "integration.browser.file" and arguments["action"] == "read":
+                    assert connection.busy and arguments["fileId"] == screenshot_id
+                    offset = arguments["offset"]
+                    data = image[offset:offset + arguments["maxBytes"]]
+                    assert len(data) <= 65536
+                    if failure == "detach":
+                        connection.detach()
+                    return {
+                        "fileId": str(uuid4()) if failure == "id" else screenshot_id,
+                        "size": len(image) + (failure == "size"),
+                        "offset": offset + len(data) + (failure == "offset"),
+                        "complete": True if failure == "complete" else offset + len(data) == len(image),
+                        "data": base64.b64encode(b"" if failure == "empty" else data).decode(),
+                    }
+                if operation == "integration.browser.file" and arguments["action"] == "delete" and failure == "detach-delete":
+                    connection.detach()
+
+            env.reply = reply
+            args = {"action": "screenshot", "tabId": tab_id, "expectedSnapshot": snapshot,
+                    "expectedBrowserId": state["browserId"], "expectedAttachmentRevision": connection.attachment_revision}
+            if failure is None:
+                result = env.client.portal.call(env.coordinator.execute, env.session.id, env.agent.id, env.instance.id, args)
+                assert len(result._screenshot_bytes) > 500000
+                assert result._screenshot_bytes == image
+                assert "temporary screenshot bytes" not in result.model_dump_json()
+                assert len(result.model_dump_json()) < 1000
+            else:
+                code = "browser.bindingChanged" if failure in {"detach", "detach-delete", "detach-state"} else "executionAgent.protocolError"
+                with pytest.raises(ExecutionClientError, match=code):
+                    env.client.portal.call(env.coordinator.execute, env.session.id, env.agent.id, env.instance.id, args)
+            deletions = [args for op, args in env.calls if op == "integration.browser.file" and args["action"] == "delete"]
+            assert [args["fileId"] for args in deletions] == ([] if failure == "missing" else [screenshot_id])
+            assert not connection.busy
+
+
+@pytest.mark.parametrize("phase", ["capture", "read"])
+def test_cancelled_screenshot_drains_capture_and_deletes_staging(env, phase):
+    started, finish = asyncio.Event(), asyncio.Event()
+    screenshot_id = str(uuid4())
+    with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
+        state = control.receive_json()
+        with open_view(env, state):
+            control.send_json({"type": "attach"})
+            control.receive_json()
+            connection = env.coordinator.connections[env.agent.id]
+            tab_id = str(uuid4())
+            snapshot = env.client.portal.call(env.coordinator.snapshot, env.session.id, env.agent.id, env.instance.id, tab_id)
+
+            async def reply(operation, arguments):
+                capture = operation == "integration.browser.execute" and arguments["action"] == "screenshot"
+                read = operation == "integration.browser.file" and arguments["action"] == "read"
+                if capture and phase == "capture" or read and phase == "read":
+                    started.set()
+                    await finish.wait()
+                if capture:
+                    return {"screenshot": {"fileId": screenshot_id, "size": 3}}
+                if read:
+                    return {"fileId": screenshot_id, "size": 3, "offset": 3, "complete": True, "data": "YWJj"}
+
+            env.reply = reply
+            args = {"action": "screenshot", "tabId": tab_id, "expectedSnapshot": snapshot,
+                    "expectedBrowserId": state["browserId"], "expectedAttachmentRevision": connection.attachment_revision}
+
+            async def cancel():
+                task = asyncio.create_task(env.coordinator.execute(env.session.id, env.agent.id, env.instance.id, args))
+                try:
+                    await asyncio.wait_for(started.wait(), 2)
+                    task.cancel()
+                    await asyncio.sleep(0)
+                    assert not task.done() and connection.busy
+                finally:
+                    finish.set()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+
+            env.client.portal.call(cancel)
+            deletions = [args for op, args in env.calls if op == "integration.browser.file" and args["action"] == "delete"]
+            assert [args["fileId"] for args in deletions] == [screenshot_id]
+            assert not connection.busy
 
 
 @pytest.mark.parametrize("digest", [None, 123, "not-a-digest"])

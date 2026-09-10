@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import logging
 import secrets
@@ -23,6 +24,8 @@ from mato_loop_backend.execution.browser_contracts import (
     BrowserActionResult,
     BrowserControlResult,
     BrowserExecuteArguments,
+    BrowserFileArguments,
+    BrowserFileResult,
     BrowserInspectionData,
     BrowserNavigationArguments,
     BrowserNavigationResult,
@@ -454,7 +457,8 @@ class BrowserCoordinator:
             inspection = BrowserInspectionData.model_validate(result.data)
         except ValidationError as exc:
             raise ExecutionClientError("executionAgent.protocolError") from exc
-        return hashlib.sha256(f"{result.url}\n{inspection.snapshot_sha256}".encode()).hexdigest(), result
+        digest = hashlib.sha256(f"{result.url}\n{inspection.snapshot_sha256}".encode()).hexdigest()
+        return digest, result.model_copy(update={"data": {"snapshotSha256": digest}})
 
     async def resize(self, connection: BrowserConnection, width: int, height: int) -> BrowserResizeResult:
         dimensions = BrowserResizeResult(width=width, height=height)
@@ -548,15 +552,90 @@ class BrowserCoordinator:
                             if action.action == "inspect":
                                 return inspection
                         check_binding()
-                        wire = BrowserExecuteArguments(browser_id=connection.browser_id, **action.model_dump(by_alias=False))
+                        read_action = action.action in {"tabs", "inspect", "screenshot", "diagnostics"}
+                        wire = BrowserExecuteArguments(
+                            browser_id=connection.browser_id,
+                            **action.model_dump(
+                                by_alias=False, exclude={"observe"} if read_action else set()
+                            ),
+                        )
+                        wire_payload = wire.model_dump(
+                            mode="json", exclude={"snapshot_sha256"} | ({"observe"} if read_action else set())
+                        )
                         with _browser_timing(timings, "action_rpc_ms"):
-                            return await connection.client.request(
-                                "integration.browser.execute", wire.model_dump(mode="json"), BrowserActionResult, timeout=60,
-                            )
+                            if action.action == "screenshot":
+                                result = await self._screenshot(connection, wire_payload, check_binding)
+                            else:
+                                result = await connection.client.request(
+                                    "integration.browser.execute", wire_payload, BrowserActionResult, timeout=60,
+                                )
+                        if result.data is not None and "snapshotSha256" in result.data:
+                            try:
+                                observation = BrowserInspectionData.model_validate(result.data)
+                            except ValidationError as exc:
+                                raise ExecutionClientError("executionAgent.protocolError") from exc
+                            digest = hashlib.sha256(
+                                f"{result.url}\n{observation.snapshot_sha256}".encode()
+                            ).hexdigest()
+                            result = result.model_copy(update={"data": {"snapshotSha256": digest}})
                     finally:
                         connection.busy = False
                         with suppress(Exception):
                             await connection.state()
+                    if action.action == "screenshot":
+                        await connection.check_access()
+                        check_binding()
+                    return result
+
+    async def _screenshot(self, connection: BrowserConnection, payload: dict, check_binding) -> BrowserActionResult:
+        result = None
+        pending = asyncio.create_task(connection.client.request(
+            "integration.browser.execute", payload, BrowserActionResult, timeout=60,
+        ))
+        try:
+            try:
+                result = await asyncio.shield(pending)
+            except asyncio.CancelledError:
+                # Drain capture to recover its staging ID before releasing the shared action lock.
+                with CancelScope(shield=True), suppress(Exception):
+                    result = await pending
+                raise
+            if result.screenshot is None:
+                raise ExecutionClientError("executionAgent.protocolError")
+            image = bytearray()
+            async with asyncio.timeout(60):
+                while len(image) < result.screenshot.size:
+                    await connection.check_access()
+                    check_binding()
+                    wire = BrowserFileArguments(
+                        browser_id=connection.browser_id, action="read",
+                        file_id=result.screenshot.file_id, offset=len(image),
+                    )
+                    chunk = await connection.request(
+                        "integration.browser.file", wire.model_dump(mode="json"), BrowserFileResult,
+                    )
+                    data = base64.b64decode(chunk.data or "", validate=True)
+                    if (
+                        chunk.file_id != result.screenshot.file_id
+                        or chunk.size != result.screenshot.size
+                        or chunk.offset != len(image) + len(data) or not data
+                        or chunk.complete != (chunk.offset == chunk.size)
+                    ):
+                        raise ExecutionClientError("executionAgent.protocolError")
+                    image.extend(data)
+                await connection.check_access()
+                check_binding()
+            result._screenshot_bytes = bytes(image)
+            return result
+        finally:
+            if result is not None and result.screenshot is not None:
+                with CancelScope(shield=True), suppress(Exception):
+                    wire = BrowserFileArguments(
+                        browser_id=connection.browser_id, action="delete", file_id=result.screenshot.file_id,
+                    )
+                    await connection.request(
+                        "integration.browser.file", wire.model_dump(mode="json"), BrowserControlResult, timeout=10,
+                    )
 
     async def manual(self, owner_id, integration_id, session_id, browser_id,
                      view_id: UUID, login_id: UUID) -> BrowserConnection:

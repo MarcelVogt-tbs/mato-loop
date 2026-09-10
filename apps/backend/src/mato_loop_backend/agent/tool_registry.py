@@ -117,6 +117,8 @@ class ToolAttachment:
     file_id: UUID | None = None
     file_revision: int | None = None
     file_path: str | None = None
+    # Host-only: never create a session file or attachment record for these bytes.
+    ephemeral: bool = False
 
 
 @dataclass(frozen=True, slots=True)

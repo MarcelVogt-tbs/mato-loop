@@ -861,6 +861,116 @@ def test_public_projection_receives_authorized_private_history() -> None:
     assert "toolResultReference" in summary_source
 
 
+def test_browser_inspection_projection_is_lossless_and_append_stable() -> None:
+    session = _session()
+    tab_id = str(uuid4())
+    inspection = {
+        "url": "https://example.test/form",
+        "text": 'All page text, including "quotes" and whitespace.\n\nEnd.\n',
+        "focusedElement": "#field",
+        "elements": [
+            {
+                "selector": "#field", "tag": "input", "role": "textbox", "type": "text",
+                "label": "Field", "placeholder": "", "href": "", "formAction": "",
+                "checked": False, "index": 0,
+            },
+            {
+                "selector": "#submit", "tag": "button", "role": "button", "type": "",
+                "label": "Submit", "placeholder": None, "href": "", "checked": None,
+                "formAction": "https://example.test/submit",
+            },
+        ],
+    }
+    payload = {
+        "tabs": [{"id": tab_id, "url": inspection["url"], "title": "Form"}],
+        "tabId": tab_id, "url": inspection["url"], "text": json.dumps(inspection),
+        "downloads": [], "data": {"snapshotSha256": "a" * 64},
+    }
+    original = json.dumps(payload)
+    records = [_message(session.id, "user", "Previous request")]
+
+    def append_output(content, *, name="browser", action="inspect"):
+        assistant = _message(session.id, "assistant", "")
+        # Reused call IDs must be matched to their own action, not a later call.
+        assistant.tool_calls = [{
+            "id": "action", "name": name, "arguments": {"action": action, "tabId": tab_id},
+        }]
+        assistant.provider_data = {
+            "responses_output_items": [{"type": "reasoning", "encrypted_content": "opaque"}],
+            "_matoloop": {"approvalSnapshot": {"snapshotSha256": "b" * 64}},
+        }
+        tool = _message(session.id, "tool", content)
+        tool.tool_call_id = "action"
+        records.extend([assistant, tool])
+        return tool
+
+    historical = append_output(original)
+    latest_user = _message(session.id, "user", "Inspect every observation")
+    records.append(latest_user)
+    first = append_output(original)
+    second_inspection = deepcopy(inspection)
+    second_inspection.update(text="Second observation\n", focusedElement=None)
+    second = append_output(json.dumps({**payload, "text": json.dumps(second_inspection)}))
+    malformed_element = {**inspection, "elements": [{"tag": "input"}]}
+    unchanged = [
+        append_output("not JSON"),
+        append_output(json.dumps({**payload, "text": "not JSON"})),
+        append_output(json.dumps({**payload, "text": "[" * 2000 + "0" + "]" * 2000})),
+        append_output(json.dumps({**payload, "text": "[]"})),
+        append_output(json.dumps({**payload, "text": json.dumps(malformed_element)})),
+        append_output(json.dumps({**payload, "text": json.dumps({
+            **inspection, "elements": [{"selector": "#field", "tag": "input", "checked": "false"}],
+        })})),
+        append_output(json.dumps({**payload, "tabs": "invalid"})),
+        append_output(json.dumps({**payload, "data": {"snapshotSha256": "invalid"}})),
+        append_output(json.dumps({"error": {"code": "browser.actionFailed"}})),
+        append_output(json.dumps({**payload, "error": {"code": "browser.actionFailed"}})),
+        append_output(original, action="diagnostics"),
+        append_output(original, action="click"),
+        append_output(original, name="example"),
+    ]
+    canonical = [(item.content, deepcopy(item.provider_data), deepcopy(item.tool_calls)) for item in records]
+    projected = _projection_messages("System", None, records, TrustLevel.PRIVATE)
+    by_id = {item.id: output for item, output in zip(records, projected[1:], strict=True)}
+
+    for tool, source in ((first, inspection), (second, second_inspection)):
+        compacted = json.loads(by_id[tool.id]["content"])
+        expected = deepcopy(source)
+        expected["elements"][0] = {
+            "selector": "#field", "tag": "input", "role": "textbox", "type": "text",
+            "label": "Field", "checked": False, "index": 0,
+        }
+        expected["elements"][1] = {
+            "selector": "#submit", "tag": "button", "role": "button", "label": "Submit",
+            "formAction": "https://example.test/submit",
+        }
+        assert compacted == {**payload, "text": expected}
+        assert compacted["text"]["elements"][0]["checked"] is False
+        assert type(compacted["text"]["elements"][0]["index"]) is int
+        assert len(by_id[tool.id]["content"]) < len(tool.content)
+    assert all(by_id[item.id]["content"] == item.content for item in unchanged)
+    assert json.loads(by_id[historical.id]["content"]) == {
+        "toolResultOmitted": True,
+        "toolResultReference": {
+            "tool": "session_tool_result_read",
+            "arguments": {"message_id": str(historical.id), "offset": 0},
+            "totalCharacters": len(original),
+        },
+    }
+    assert by_id[latest_user.id] == message_dict(latest_user)
+    assert [item["provider_data"] for item in projected[1:]] == [
+        message_dict(item)["provider_data"] for item in records
+    ]
+    append_output(original)
+    appended = _projection_messages("System", None, records, TrustLevel.PRIVATE)
+    assert appended[:len(projected)] == projected
+    assert json.dumps(appended[:len(projected)]) == json.dumps(projected)
+    assert appended[-1]["content"] == by_id[first.id]["content"]
+    assert canonical == [
+        (item.content, item.provider_data, item.tool_calls) for item in records[:-2]
+    ]
+
+
 def test_projection_distributes_current_tool_output_budget_fairly() -> None:
     session = _session()
     user = _message(session.id, "user", "Arbeite mit mehreren Quellen")

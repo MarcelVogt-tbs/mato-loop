@@ -240,6 +240,13 @@ async def _provider_projection(
         target_trust_level=target_trust_level.value,
         required_image_ids=required_image_ids,
     )
+    direct_inputs = image_inputs or []
+    if len(selected) + len(direct_inputs) > MAX_PROVIDER_IMAGES:
+        raise ProviderError(
+            "Too many combined image inputs",
+            code="provider.imageLimitExceeded",
+            params={"maxImages": MAX_PROVIDER_IMAGES},
+        )
     media = [
         ProviderMedia(
             message_index=item.message_index,
@@ -294,20 +301,8 @@ async def _provider_projection(
         logger.warning(
             "%s attachment file(s) could not be sent to the provider", unavailable_count
         )
-    direct_inputs = image_inputs or []
     if direct_inputs:
-        if selected:
-            raise ProviderError(
-                "Direct and persisted image inputs cannot be combined",
-                code="provider.configurationInvalid",
-            )
-        if len(direct_inputs) > MAX_PROVIDER_IMAGES:
-            raise ProviderError(
-                "Too many direct image inputs",
-                code="provider.imageLimitExceeded",
-                params={"maxImages": MAX_PROVIDER_IMAGES},
-            )
-        total_bytes = 0
+        total_bytes = sum(item.attachment["size_bytes"] for item in selected)
         for image in direct_inputs:
             if image.trust_level not in {"public", "private"}:
                 raise ProviderError(
@@ -327,7 +322,7 @@ async def _provider_projection(
             total_bytes += len(normalized)
             if total_bytes > MAX_PROVIDER_IMAGE_BYTES:
                 raise ProviderError(
-                    "Direct image inputs are too large", code="provider.responseTooLarge"
+                    "Combined image inputs are too large", code="provider.responseTooLarge"
                 )
             encoded = base64.b64encode(normalized).decode("ascii")
             media.append(
@@ -643,10 +638,17 @@ class ProviderService:
             continuation_scope=continuation_scope,
             media=media,
         )
-        body = _responses_body(request) if api_type == "responses" else _chat_body(request)
+        reasoning_token_estimates: dict[int, int] = {}
+        body = (
+            _responses_body(request, reasoning_token_estimates=reasoning_token_estimates)
+            if api_type == "responses" else _chat_body(request)
+        )
         return _PreparedRequest(
             request, adapter, api_type, pseudonymizer,
-            estimate_request_input_tokens(body, model.characters_per_token),
+            estimate_request_input_tokens(
+                body, model.characters_per_token,
+                reasoning_token_estimates=reasoning_token_estimates,
+            ),
         )
 
     @staticmethod

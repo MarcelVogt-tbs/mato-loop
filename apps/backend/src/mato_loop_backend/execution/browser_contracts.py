@@ -3,11 +3,12 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
 from typing import Annotated, Literal, Self
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import ConfigDict, Field, JsonValue, PrivateAttr, field_validator, model_validator
 
 from mato_loop_backend.execution.client import ExecutionResult
 from mato_loop_backend.execution.protocol import WireModel
@@ -144,6 +145,8 @@ class BrowserActionArguments(WireModel):
     direction: Literal["up", "down"] | None = Field(default=None, description="Scroll direction; required for scroll only.")
     download_id: BrowserOpaqueId | None = Field(default=None, description="Reserved; leave null. Downloads are transferred by the human browser UI.")
     upload_id: BrowserOpaqueId | None = Field(default=None, description="Opaque file staging id supplied by the human browser UI; required for upload. Never a filesystem path.")
+    observe: bool = Field(default=True, description="Return the resulting accessibility snapshot after a write action. Set false when browser reading is unavailable.")
+    snapshot_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$", min_length=64, max_length=64, description="Snapshot token returned with inspect; required when selector uses aria-ref.")
 
     @model_validator(mode="after")
     def validate_action(self) -> Self:
@@ -157,7 +160,7 @@ class BrowserActionArguments(WireModel):
         allowed = required | ({"url"} if self.action == "newtab" else {"selector"} if self.action == "press" else set())
         supplied = {
             name for name in BrowserActionArguments.model_fields
-            if name != "action" and getattr(self, name) is not None
+            if name not in {"action", "observe", "snapshot_sha256"} and getattr(self, name) is not None
         }
         if not required <= supplied or not supplied <= allowed:
             raise ValueError("fields do not match browser action")
@@ -170,6 +173,14 @@ class BrowserActionArguments(WireModel):
             ):
                 raise ValueError("browser navigation requires an HTTP(S) URL without credentials")
             _ = parsed.port
+        has_ref = self.selector is not None and "aria-ref=" in self.selector
+        uses_ref = has_ref and re.fullmatch(r"aria-ref=(?:f[0-9]+)?e[0-9]+", self.selector) is not None
+        if has_ref and not uses_ref:
+            raise ValueError("aria-ref selectors must contain exactly one inspection ref")
+        if uses_ref != (self.snapshot_sha256 is not None):
+            raise ValueError("aria-ref selectors require their inspection snapshot token")
+        if "observe" in self.model_fields_set and self.action in {"tabs", "inspect", "screenshot", "diagnostics"}:
+            raise ValueError("observe applies only to browser write actions")
         return self
 
 
@@ -238,12 +249,18 @@ class BrowserDownload(BrowserResult):
         return value
 
 
+class BrowserScreenshot(BrowserResult):
+    file_id: BrowserOpaqueId
+    size: int = Field(ge=0, le=MAX_BROWSER_FILE_BYTES)
+
+
 class BrowserActionResult(BrowserResult):
     tabs: list[BrowserTab] = Field(default_factory=list, max_length=32)
     tab_id: BrowserOpaqueId | None = None
     url: _ShortText | None = None
     text: str | None = Field(default=None, max_length=32768)
-    screenshot: str | None = Field(default=None, max_length=700000, repr=False)
+    screenshot: BrowserScreenshot | None = None
+    _screenshot_bytes: bytes | None = PrivateAttr(default=None)
     downloads: list[BrowserDownload] = Field(default_factory=list, max_length=32)
     data: dict[str, JsonValue] | None = Field(default=None, max_length=32)
 
@@ -253,13 +270,6 @@ class BrowserActionResult(BrowserResult):
             raise ValueError("browser diagnostics exceed limit")
         if len(self.model_dump_json().encode()) > 900000:
             raise ValueError("browser result exceeds limit")
-        if self.screenshot is not None:
-            try:
-                image = base64.b64decode(self.screenshot, validate=True)
-            except (binascii.Error, ValueError) as exc:
-                raise ValueError("invalid browser screenshot") from exc
-            if not image.startswith(b"\x89PNG\r\n\x1a\n"):
-                raise ValueError("browser screenshot must be PNG")
         return self
 
 

@@ -22,11 +22,13 @@ import sys
 import tempfile
 from collections import deque
 from importlib.metadata import version
+from io import BytesIO
 from pathlib import Path
 from time import monotonic
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
+from PIL import Image
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
@@ -236,6 +238,7 @@ class BrowserWorker:
                 ],
                 timeout=20_000,
             )
+            await self.disable_translation_prompt()
         except Exception as exc:
             # Classify locally; raw Playwright errors can contain profile data and secrets.
             raise fail(launch_error_code(exc)) from None
@@ -1011,7 +1014,7 @@ class BrowserWorker:
 
     def upload_payload(self, file_id: str) -> dict:
         entry = self.files.get(file_id)
-        if not entry or not entry["ready"] or entry["download"]:
+        if not entry or not entry["ready"] or entry["download"] or entry.get("screenshot"):
             raise fail("invalidTarget")
         fd = os.open(self.live / file_id, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, "rb") as handle:
@@ -1029,7 +1032,10 @@ class BrowserWorker:
             if len(self.files) >= 32 or self.total_size() + args.size > 256 * 1024 * 1024:
                 raise fail("fileTooLarge")
             file_id = str(uuid4())
-            with (self.live / file_id).open("xb"):
+            fd = os.open(
+                self.live / file_id, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+            )
+            with os.fdopen(fd, "wb"):
                 pass
             self.files[file_id] = {
                 "id": file_id,
@@ -1079,6 +1085,8 @@ class BrowserWorker:
         fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
         with os.fdopen(fd, "r+b") as handle:
             size = os.fstat(handle.fileno()).st_size
+            if size > MAX_FILE_BYTES:
+                raise fail("fileTooLarge")
             if args.action == "write":
                 data = decode_chunk(args.data)
                 if entry["ready"] or entry["download"] or args.offset != size:
@@ -1089,11 +1097,16 @@ class BrowserWorker:
                 handle.write(data)
                 size += len(data)
             elif args.action == "finish":
-                if entry["download"] or size != entry["size"]:
+                if entry["download"] or entry.get("screenshot") or size != entry["size"]:
                     raise fail("invalidTarget")
                 entry["ready"] = True
             elif args.action == "read":
-                if not entry["download"] or not entry["ready"] or args.offset > size:
+                if (
+                    not (entry["download"] or entry.get("screenshot"))
+                    or not entry["ready"]
+                    or args.offset > size
+                    or size != entry["size"]
+                ):
                     raise fail("invalidTarget")
                 handle.seek(args.offset)
                 data = handle.read(args.max_bytes)
@@ -1111,6 +1124,68 @@ class BrowserWorker:
             "size": entry["size"],
             "complete": entry["ready"],
         }
+
+    def discard_screenshots(self) -> None:
+        for file_id, entry in list(self.files.items()):
+            if entry.get("screenshot"):
+                (self.live / file_id).unlink(missing_ok=True)
+                del self.files[file_id]
+
+    async def disable_translation_prompt(self) -> None:
+        # Use Chromium's preference API after it owns the profile, not a Preferences file rewrite.
+        async with asyncio.timeout(8):
+            settings = await self.context.new_page()
+            try:
+                await settings.goto("chrome://settings/languages", wait_until="domcontentloaded")
+                disabled = await settings.evaluate("""() => new Promise(resolve => {
+                    chrome.settingsPrivate.setPref('translate.enabled', false, '', () => {
+                        chrome.settingsPrivate.getPref('translate.enabled', pref => {
+                            resolve(pref.value === false);
+                        });
+                    });
+                })""")
+                if disabled is not True:
+                    raise fail("notReady")
+            finally:
+                await settings.close()
+
+    async def screenshot(self, page, browser_id: str) -> dict:
+        self.discard_screenshots()
+        data = await page.screenshot(type="png", full_page=False, timeout=8000)
+        with Image.open(BytesIO(data)) as image:
+            width, height = image.size
+            scale = min(
+                1, 1568 / width, 1568 / height, (1.15 * 1024 * 1024 / (width * height)) ** 0.5
+            )
+            if scale < 1:
+                with (
+                    image.resize(
+                        (max(1, int(width * scale)), max(1, int(height * scale))),
+                        Image.Resampling.LANCZOS,
+                    ) as resized,
+                    BytesIO() as output,
+                ):
+                    resized.save(output, format="PNG")
+                    data = output.getvalue()
+        if len(data) > MAX_FILE_BYTES:
+            raise fail("fileTooLarge")
+        staged = await self.file(
+            BrowserFileArguments(
+                browserId=browser_id, action="begin", filename="screenshot.png", size=len(data)
+            )
+        )
+        file_id = staged["fileId"]
+        self.files[file_id]["screenshot"] = True
+        try:
+            # No awaits between allocation and publication: cancellation cannot leave a late write.
+            fd = os.open(self.live / file_id, os.O_WRONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+            self.files[file_id]["ready"] = True
+        except BaseException:
+            self.discard_screenshots()
+            raise
+        return {"fileId": file_id, "size": len(data)}
 
     async def execute(self, args: BrowserExecuteArguments) -> dict:
         if not self.context:
@@ -1142,99 +1217,9 @@ class BrowserWorker:
             await self.navigation_state()
             page = self.tabs.get(self.active_tab_id)
         elif action == "inspect":
-            # Fixed host code, never model-supplied JavaScript. Do not include input values.
-            document_id = self.document_ids[page]
-            snapshot = await page.locator("body").evaluate("""body => {
-                const query = 'a[href],button,input,select,textarea,form,' +
-                    '[role],[contenteditable=true]';
-                const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
-                let excerpt = '', visited = 0, part;
-                while ((part = walker.nextNode()) && visited++ < 10000 && excerpt.length < 8192) {
-                    const parent = part.parentElement;
-                    if (!parent.closest('input,textarea,select,script,style,[contenteditable]') &&
-                        parent.getClientRects().length)
-                        excerpt += part.textContent.slice(0, 8192 - excerpt.length) + '\\n';
-                }
-                const snapshot = {url: location.href.slice(0, 4096),
-                    text: excerpt.slice(0, 8192), elements: [], focusedElement: null};
-                const state = [];
-                while (snapshot.text.length && JSON.stringify(snapshot).length > 32768)
-                    snapshot.text = snapshot.text.slice(0, Math.floor(snapshot.text.length / 2));
-                const roles = {a: 'link', button: 'button', input: 'textbox',
-                    select: 'combobox', textarea: 'textbox'};
-                const elements = body.querySelectorAll(query);
-                for (let index = 0; index < Math.min(elements.length, 80); index++) {
-                    const node = elements[index];
-                    const tag = node.tagName.toLowerCase();
-                    const id = node.id ? '#' + CSS.escape(node.id) : '';
-                    const uniqueId = id && id.length <= 1900 &&
-                        document.querySelectorAll(id).length === 1;
-                    const selector = uniqueId
-                        ? id : 'body >> ' + query + ' >> nth=' + index;
-                    const labelNode = node.labels?.[0];
-                    const label = node.getAttribute('aria-label') || (labelNode ?
-                        Array.from(labelNode.childNodes).filter(n => n.nodeType === Node.TEXT_NODE)
-                            .map(n => n.textContent).join('') : '') ||
-                        (['a', 'button'].includes(tag) ? node.innerText : '') || '';
-                    const type = node.getAttribute('type') || '';
-                    const formAction = tag === 'form' ? node.action :
-                        (node.hasAttribute('formaction') ? node.formAction :
-                            node.form?.action) || '';
-                    const href = node.getAttribute('href') === null ? '' :
-                        String(node.href?.baseVal ?? node.href ?? '');
-                    const value = node.isContentEditable ? node.textContent : node.value;
-                    if (value?.length > 65536) return {tooLarge: true};
-                    state.push({selector, value, checked: node.checked,
-                        disabled: node.disabled, readOnly: node.readOnly, href, formAction,
-                        formMethod: node.hasAttribute('formmethod') ? node.formMethod :
-                            node.form?.method || node.method,
-                        selected: node.selectedOptions ?
-                            Array.from(node.selectedOptions, option => option.index) : null,
-                        focused: node === document.activeElement});
-                    if (JSON.stringify(state).length > 524288) return {tooLarge: true};
-                    if (node === document.activeElement) snapshot.focusedElement = selector;
-                    const role = node.getAttribute('role') ||
-                        (tag === 'input' && ['checkbox', 'radio'].includes(type)
-                            ? type : roles[tag]) || '';
-                    snapshot.elements.push({selector, tag, role: role.slice(0, 120),
-                        type: type.slice(0, 120), label: label.slice(0, 120),
-                        placeholder: (node.getAttribute('placeholder') || '').slice(0, 120),
-                        href: href.slice(0, 2048), formAction: formAction.slice(0, 2048),
-                        checked: typeof node.checked === 'boolean' ? node.checked : null});
-                    if (JSON.stringify(snapshot).length > 32768) {
-                        snapshot.elements.pop();
-                        break;
-                    }
-                }
-                state.push({focusedTag: document.activeElement?.tagName,
-                    focusedId: document.activeElement?.id});
-                state.push({width: innerWidth, height: innerHeight,
-                    screenWidth: screen.width, screenHeight: screen.height,
-                    scrollX, scrollY});
-                return {text: JSON.stringify(snapshot), state};
-            }""")
-            if snapshot.get("tooLarge"):
-                raise fail("fileTooLarge")
-            if self.document_ids.get(page) != document_id:
-                raise fail("invalidTarget")
-            text = snapshot["text"]
-            material = json.dumps(
-                {
-                    "pageId": next(k for k, v in self.tabs.items() if v is page),
-                    "documentId": document_id,
-                    "geometry": self.geometry,
-                    **snapshot,
-                }
-            ).encode()
-            # Keyed hashing prevents guessing low-entropy private field values from the digest.
-            result_data = {
-                "snapshotSha256": hmac.new(self.snapshot_key, material, hashlib.sha256).hexdigest()
-            }
+            text, result_data = await self._inspect(page)
         elif action == "screenshot":
-            image = await page.screenshot(type="png", full_page=False, timeout=8000)
-            if len(image) > 500_000:
-                raise fail("fileTooLarge")
-            screenshot = base64.b64encode(image).decode("ascii")
+            screenshot = await self.screenshot(page, args.browser_id)
         elif action in {"click", "fill", "upload"}:
             # Playwright selectors are locators, never caller-controlled JavaScript.
             locator = page.locator(args.selector)
@@ -1253,6 +1238,12 @@ class BrowserWorker:
             await page.mouse.wheel(0, -600 if args.direction == "up" else 600)
         elif action == "diagnostics":
             text = "\n".join(self.diagnostics)[:32_768]
+        if args.observe and action != "inspect" and page is not None:
+            try:
+                text, result_data = await self._inspect(page)
+            except Exception:
+                # The mutation completed; a failed optional observation must not invite replay.
+                text, result_data = None, {"observationFailed": True}
         tabs = []
         for tab_id, tab in list(self.tabs.items()):
             if not tab.is_closed():
@@ -1272,6 +1263,68 @@ class BrowserWorker:
                 if entry["download"] and entry["ready"]
             ],
         ).model_dump(by_alias=True)
+
+    async def _inspect(self, page) -> tuple[str, dict[str, str]]:
+        document_id = self.document_ids[page]
+        state = await page.locator("body").evaluate("""body => {
+                const query = 'a[href],button,input,select,textarea,form,' +
+                    '[role],[contenteditable=true]';
+                const state = [];
+                const elements = body.querySelectorAll(query);
+                for (let index = 0; index < Math.min(elements.length, 80); index++) {
+                    const node = elements[index];
+                    const id = node.id ? '#' + CSS.escape(node.id) : '';
+                    const uniqueId = id && id.length <= 1900 &&
+                        document.querySelectorAll(id).length === 1;
+                    const selector = uniqueId
+                        ? id : 'body >> ' + query + ' >> nth=' + index;
+                    const tag = node.tagName.toLowerCase();
+                    const formAction = tag === 'form' ? node.action :
+                        (node.hasAttribute('formaction') ? node.formAction :
+                            node.form?.action) || '';
+                    const href = node.getAttribute('href') === null ? '' :
+                        String(node.href?.baseVal ?? node.href ?? '');
+                    const value = node.isContentEditable ? node.textContent : node.value;
+                    if (value?.length > 65536) return {tooLarge: true};
+                    state.push({selector, value, checked: node.checked,
+                        disabled: node.disabled, readOnly: node.readOnly, href, formAction,
+                        formMethod: node.hasAttribute('formmethod') ? node.formMethod :
+                            node.form?.method || node.method,
+                        selected: node.selectedOptions ?
+                            Array.from(node.selectedOptions, option => option.index) : null,
+                        focused: node === document.activeElement});
+                    if (JSON.stringify(state).length > 524288) return {tooLarge: true};
+                }
+                state.push({focusedTag: document.activeElement?.tagName,
+                    focusedId: document.activeElement?.id});
+                state.push({width: innerWidth, height: innerHeight,
+                    screenWidth: screen.width, screenHeight: screen.height,
+                    scrollX, scrollY});
+                return {state};
+            }""")
+        if state.get("tooLarge"):
+            raise fail("fileTooLarge")
+        impl = page._impl_obj
+        result = await impl._channel.send_return_as_dict(
+            "snapshotForAI", impl._timeout_settings.timeout, {"timeout": 8000}
+        )
+        text = result.get("full")
+        if not isinstance(text, str) or len(text) > 32_768:
+            raise fail("fileTooLarge")
+        if self.document_ids.get(page) != document_id:
+            raise fail("invalidTarget")
+        material = json.dumps(
+            {
+                "pageId": next(k for k, v in self.tabs.items() if v is page),
+                "documentId": document_id,
+                "geometry": self.geometry,
+                "text": text,
+                **state,
+            }
+        ).encode()
+        return text, {
+            "snapshotSha256": hmac.new(self.snapshot_key, material, hashlib.sha256).hexdigest()
+        }
 
     async def close(self) -> None:
         closing = getattr(self, "_close_task", None)
@@ -1318,8 +1371,11 @@ class BrowserWorker:
                             )
                             if self.clipboard_owner is not None:
                                 await self.clipboard_owner.wait()
-                    if self.temporary:
-                        self.temporary.cleanup()
+                    try:
+                        self.discard_screenshots()
+                    finally:
+                        if self.temporary:
+                            self.temporary.cleanup()
 
             closing = self._close_task = asyncio.create_task(close())
         while not closing.done():

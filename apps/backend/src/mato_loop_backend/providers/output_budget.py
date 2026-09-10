@@ -11,7 +11,7 @@ from mato_loop_backend.settings.models import ModelConfig
 
 IMAGE_INPUT_RESERVE_TOKENS = 2_048
 UNKNOWN_INPUT_RESERVE_TOKENS = 8_192
-ESTIMATION_POLICY = "serialized-characters-media-reserves-v1"
+ESTIMATION_POLICY = "serialized-characters-reasoning-usage-v2"
 
 
 def _validate_tokens(value: int, *, minimum: int = 0) -> int:
@@ -84,12 +84,15 @@ def allocate_output_tokens(
 
 
 def estimate_request_input_tokens(
-    body: dict[str, Any], characters_per_token: float = 4.0
+    body: dict[str, Any], characters_per_token: float = 4.0,
+    *,
+    reasoning_token_estimates: dict[int, int] | None = None,
 ) -> int:
     """Estimate serialized input framing, instructions, tools, and continuation.
 
     Media payloads are not text. Images reserve 2048 tokens each; audio/video
-    and opaque encrypted continuation reserve 8192 each. These are heuristics,
+    and unknown opaque continuation reserve 8192 each. Responses replay can use
+    local per-input-item estimates based on source usage instead. These are heuristics,
     not upper bounds: duration, tokenization, and server templates are unknown.
     Transport metadata and generation options are deliberately excluded.
     """
@@ -104,7 +107,7 @@ def estimate_request_input_tokens(
         )
     media_reserve = 0
 
-    def without_payloads(value: Any) -> Any:
+    def without_payloads(value: Any, opaque_tokens: int | None = None) -> Any:
         nonlocal media_reserve
         if isinstance(value, list):
             return [without_payloads(item) for item in value]
@@ -122,17 +125,27 @@ def estimate_request_input_tokens(
         if kind == "reasoning.encrypted":
             opaque_keys.add("data")
         if any(value.get(key) for key in opaque_keys):
-            media_reserve += UNKNOWN_INPUT_RESERVE_TOKENS
+            media_reserve += (
+                opaque_tokens
+                if type(opaque_tokens) is int and opaque_tokens >= 0
+                else UNKNOWN_INPUT_RESERVE_TOKENS
+            )
         return {
             key: without_payloads(item)
             for key, item in value.items()
             if key not in opaque_keys
         }
 
-    inputs = {
-        key: value if key == "tools" else without_payloads(value)
-        for key, value in body.items()
-        if key in {"messages", "input", "instructions", "tools"}
-    }
+    inputs = {}
+    for key, value in body.items():
+        if key == "tools":
+            inputs[key] = value
+        elif key == "input" and isinstance(value, list):
+            inputs[key] = [
+                without_payloads(item, (reasoning_token_estimates or {}).get(index))
+                for index, item in enumerate(value)
+            ]
+        elif key in {"messages", "input", "instructions"}:
+            inputs[key] = without_payloads(value)
     text = json.dumps(inputs, ensure_ascii=False, separators=(",", ":"))
     return math.ceil(len(text) / characters_per_token) + media_reserve

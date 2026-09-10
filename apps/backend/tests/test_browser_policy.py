@@ -48,9 +48,15 @@ def browser_policy_case(request, monkeypatch):
         agent_id=instance.execution_agent_id, owner_id=instance.owner_id,
         session_id=session.id, attached=True, closed=False,
     )
+    async def execute(*args):
+        arguments = args[-1]
+        if arguments["action"] == "click" and arguments.get("observe", True):
+            return BrowserActionResult(text="- document", data={"snapshotSha256": "a" * 64})
+        return BrowserActionResult()
+
     coordinator = SimpleNamespace(
         attached_for=Mock(return_value=connection),
-        execute=AsyncMock(return_value=BrowserActionResult()),
+        execute=AsyncMock(side_effect=execute),
         snapshot=AsyncMock(return_value="a" * 64),
     )
     monkeypatch.setitem(
@@ -104,8 +110,11 @@ async def test_inherited_browser_actions_use_runtime_auto_without_approvals(brow
     case = browser_action_case
     result = await case.effective.execute(case.call, case.context)
     assert not result.is_error
-    case.context.ask_handler.assert_awaited_once()
-    assert case.context.ask_handler.await_args.args[0].capability == case.capability
+    capabilities = [call.args[0].capability for call in case.context.ask_handler.await_args_list]
+    assert capabilities == (
+        ["browser.write", "browser.read"] if case.capability == "browser.write"
+        else ["browser.read"]
+    )
     case.approval.assert_not_awaited()
     case.context.db.add.assert_not_called()
     case.context.db.scalars.assert_not_awaited()
@@ -125,7 +134,8 @@ async def test_explicit_browser_policy_survives_auto_defaults(browser_action_cas
     else:
         case.settings._agent_permissions = AgentProfilePermissions(policies={case.capability: policy})
     result = await case.effective.execute(case.call, case.context)
-    case.context.ask_handler.assert_awaited_once()
+    expected_checks = 2 if policy == "ask" and case.capability == "browser.write" else 1
+    assert case.context.ask_handler.await_count == expected_checks
     if policy == "ask":
         assert not result.is_error
         case.approval.assert_awaited_once()

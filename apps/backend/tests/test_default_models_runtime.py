@@ -1,6 +1,6 @@
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -17,7 +17,7 @@ from mato_loop_backend.agent.title_generation import (
 from mato_loop_backend.events import run_events
 from mato_loop_backend.models import ChatSession, Message, MessageAttachment, TitleGenerationStatus
 from mato_loop_backend.providers import service as service_module
-from mato_loop_backend.providers.base import ProviderResult, PublicReasoning
+from mato_loop_backend.providers.base import ProviderError, ProviderResult, PublicReasoning
 from mato_loop_backend.providers.output_budget import allocate_output_tokens, guarded_input_tokens
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
@@ -59,12 +59,26 @@ class _SessionContext:
         return None
 
 
+@pytest.fixture
+def compaction_db(monkeypatch):
+    db = AsyncMock(spec=AsyncSession)
+    db.__aenter__.return_value = db
+
+    async def close(*_args):
+        await db.close()
+
+    db.__aexit__.side_effect = close
+    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: db)
+    return db
+
+
 @pytest.mark.parametrize(
     ("manual", "discovered", "expected"),
     [(None, None, 512), (128, None, 128), (None, 64, 64), (128, 64, 64)],
 )
+@pytest.mark.parametrize("request_timeout", [10, 300])
 async def test_compaction_uses_global_model_before_session_model(
-    monkeypatch, manual, discovered, expected,
+    monkeypatch, compaction_db, manual, discovered, expected, request_timeout,
 ) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     active = ModelConfig(provider_id=provider.id, model_id="agent")
@@ -79,17 +93,24 @@ async def test_compaction_uses_global_model_before_session_model(
     )
     complete = AsyncMock(return_value=SimpleNamespace(content=_VALID_SUMMARY))
     monkeypatch.setattr(ProviderService, "complete", complete)
+    timeout = Mock(wraps=asyncio.timeout)
+    monkeypatch.setattr(runtime_module.asyncio, "timeout", timeout)
 
     result = await AgentRuntime._summarize(
-        AsyncMock(spec=AsyncSession),
         "USER: Test",
         512,
         ai_settings=settings,
         active_model=active,
-        runtime_settings=AgentRuntimeSettings(),
+        runtime_settings=AgentRuntimeSettings(request_timeout_seconds=request_timeout),
     )
 
+    assert result.content == _VALID_SUMMARY.strip()
+    assert result.is_fallback is False
     assert result.model_config_id == compaction.id
+    assert complete.await_args.args == (compaction_db,)
+    compaction_db.close.assert_awaited_once()
+    timeout.assert_called_once_with(min(20, request_timeout))
+    assert complete.await_args.kwargs["timeout"] == request_timeout
     assert complete.await_args.kwargs["model"] is compaction
     assert complete.await_args.kwargs["tools"] == []
     assert complete.await_args.kwargs["max_output_tokens"] == expected
@@ -97,7 +118,7 @@ async def test_compaction_uses_global_model_before_session_model(
     assert "estimated_input_tokens" not in complete.await_args.kwargs
 
 
-async def test_compaction_fit_includes_system_message_and_envelope(monkeypatch) -> None:
+async def test_compaction_fit_includes_system_message_and_envelope(monkeypatch, compaction_db) -> None:
     provider = LlmProviderConfig(
         name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
         config={"base_url": "https://local.test/v1"},
@@ -116,7 +137,7 @@ async def test_compaction_fit_includes_system_message_and_envelope(monkeypatch) 
     monkeypatch.setattr(ProviderService, "complete", complete)
 
     result = await AgentRuntime._summarize(
-        AsyncMock(spec=AsyncSession), source, output_tokens,
+        source, output_tokens,
         ai_settings=AiSettings(
             providers=[provider], models=[active, compaction], compaction_model_id=compaction.id,
         ),
@@ -131,7 +152,9 @@ async def test_compaction_fit_includes_system_message_and_envelope(monkeypatch) 
 
 @pytest.mark.parametrize("headroom", [-1, 0])
 @pytest.mark.parametrize("output_tokens", [7, 512])
-async def test_compaction_candidate_fit_includes_shared_slack(monkeypatch, headroom, output_tokens):
+async def test_compaction_candidate_fit_includes_shared_slack(
+    monkeypatch, compaction_db, headroom, output_tokens,
+):
     provider = LlmProviderConfig(
         name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
         config={"base_url": "https://local.test/v1"},
@@ -153,7 +176,7 @@ async def test_compaction_candidate_fit_includes_shared_slack(monkeypatch, headr
     monkeypatch.setattr(service_module, "chat_completions", transport)
     monkeypatch.setattr(ProviderService, "complete", complete)
     result = await AgentRuntime._summarize(
-        AsyncMock(spec=AsyncSession), source, output_tokens,
+        source, output_tokens,
         ai_settings=AiSettings(
             providers=[provider], models=[active, compaction], compaction_model_id=compaction.id,
         ),
@@ -173,7 +196,7 @@ async def test_compaction_candidate_fit_includes_shared_slack(monkeypatch, headr
 
 
 async def test_compaction_falls_back_to_active_model_after_specialist_failure(
-    monkeypatch,
+    monkeypatch, compaction_db,
 ) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     active = ModelConfig(provider_id=provider.id, model_id="agent")
@@ -189,7 +212,6 @@ async def test_compaction_falls_back_to_active_model_after_specialist_failure(
     monkeypatch.setattr(ProviderService, "complete", complete)
 
     result = await AgentRuntime._summarize(
-        AsyncMock(spec=AsyncSession),
         "USER: Test",
         512,
         ai_settings=settings,
@@ -198,6 +220,7 @@ async def test_compaction_falls_back_to_active_model_after_specialist_failure(
     )
 
     assert result.model_config_id == active.id
+    compaction_db.rollback.assert_awaited_once()
     assert result.is_fallback is False
     assert [call.kwargs["model"] for call in complete.await_args_list] == [
         compaction,
@@ -206,7 +229,7 @@ async def test_compaction_falls_back_to_active_model_after_specialist_failure(
 
 
 async def test_compaction_streams_visible_output_and_resets_failed_candidate(
-    monkeypatch,
+    monkeypatch, compaction_db,
 ) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     active = ModelConfig(provider_id=provider.id, model_id="agent")
@@ -235,7 +258,6 @@ async def test_compaction_streams_visible_output_and_resets_failed_candidate(
         updates.append((content, is_fallback))
 
     result = await AgentRuntime._summarize(
-        AsyncMock(spec=AsyncSession),
         "USER: Test",
         512,
         ai_settings=settings,
@@ -251,7 +273,7 @@ async def test_compaction_streams_visible_output_and_resets_failed_candidate(
     assert updates[-1] == (_VALID_SUMMARY.strip(), False)
 
 
-async def test_compaction_disables_optional_reasoning(monkeypatch) -> None:
+async def test_compaction_disables_optional_reasoning(monkeypatch, compaction_db) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="Qwen3.8-27B-GGUF-UD-Q4_K_XL")
     settings = AiSettings(providers=[provider], models=[model])
@@ -259,7 +281,6 @@ async def test_compaction_disables_optional_reasoning(monkeypatch) -> None:
     monkeypatch.setattr(ProviderService, "complete", complete)
 
     await AgentRuntime._summarize(
-        AsyncMock(spec=AsyncSession),
         "USER: Test",
         512,
         ai_settings=settings,
@@ -271,7 +292,7 @@ async def test_compaction_disables_optional_reasoning(monkeypatch) -> None:
 
 
 async def test_compaction_marks_host_fallback_after_empty_visible_output(
-    monkeypatch,
+    monkeypatch, compaction_db,
 ) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="compact")
@@ -283,7 +304,6 @@ async def test_compaction_marks_host_fallback_after_empty_visible_output(
     )
 
     result = await AgentRuntime._summarize(
-        AsyncMock(spec=AsyncSession),
         "USER: Test",
         512,
         ai_settings=settings,
@@ -294,6 +314,175 @@ async def test_compaction_marks_host_fallback_after_empty_visible_output(
     assert result.is_fallback is True
     assert result.model_config_id is None
     assert "USER: Test" in result.content
+
+
+@pytest.mark.parametrize(
+    ("stall", "expected_models"),
+    [
+        ("backoff", ["compact"]),
+        ("retry", ["compact", "compact"]),
+        ("active", ["compact", "compact", "agent"]),
+    ],
+)
+async def test_compaction_deadline_covers_retries_and_candidates(
+    monkeypatch, compaction_db, stall, expected_models,
+) -> None:
+    provider = LlmProviderConfig(
+        name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "https://local.test/v1"},
+    )
+    active = ModelConfig(provider_id=provider.id, model_id="agent")
+    compaction = ModelConfig(provider_id=provider.id, model_id="compact")
+    models = []
+    cancelled = []
+
+    async def transport(**kwargs):
+        model = kwargs["request"].model
+        models.append(model)
+        if len(models) == 1:
+            raise ProviderError(
+                "Transient failure", status_code=503,
+                retry_after=30 if stall == "backoff" else 0,
+            )
+        if model == "compact" and stall == "active":
+            return ProviderResult()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.append(model)
+            raise
+
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+    monkeypatch.setattr(runtime_module, "COMPACTION_TIMEOUT_SECONDS", 0.05)
+    timeout = Mock(wraps=asyncio.timeout)
+    monkeypatch.setattr(runtime_module.asyncio, "timeout", timeout)
+    on_update = AsyncMock()
+
+    result = await asyncio.wait_for(
+        AgentRuntime._summarize(
+            "USER: Test", 512,
+            ai_settings=AiSettings(
+                providers=[provider], models=[active, compaction], compaction_model_id=compaction.id,
+            ),
+            active_model=active, runtime_settings=AgentRuntimeSettings(), on_update=on_update,
+        ),
+        timeout=1,
+    )
+
+    timeout.assert_called_once_with(0.05)
+    compaction_db.close.assert_awaited_once()
+    assert models == expected_models
+    assert cancelled == ([] if stall == "backoff" else [expected_models[-1]])
+    assert result.is_fallback is True
+    assert result.model_config_id is None
+    assert result.content == (
+        "Goal\nContinue the conversation using the retained recent messages.\n\n"
+        "Facts and earlier context\nUSER: Test"
+    )
+    assert on_update.await_args.args == (result.content, True)
+
+
+async def test_compaction_disposes_cancelled_credential_session_before_fallback(
+    monkeypatch, compaction_db,
+) -> None:
+    provider = LlmProviderConfig(
+        name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "https://local.test/v1"}, credential_id=uuid4(),
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="compact")
+    events = []
+
+    async def credential_read(*_args, **_kwargs):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            compaction_db.is_active = False
+            events.append("invalidated")
+            raise
+
+    async def close():
+        assert compaction_db.is_active is False
+        await asyncio.sleep(0)
+        events.append("closed")
+
+    async def on_update(_content, is_fallback):
+        if is_fallback:
+            assert events == ["invalidated", "closed"]
+            events.append("fallback")
+
+    compaction_db.get.side_effect = credential_read
+    compaction_db.close.side_effect = close
+    transport = AsyncMock()
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+    monkeypatch.setattr(runtime_module, "COMPACTION_TIMEOUT_SECONDS", 0.05)
+    factory = Mock(side_effect=[AsyncSession(), compaction_db])
+    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", factory)
+
+    async with runtime_module.AsyncSessionFactory() as parent_db:
+        record = ChatSession(id=uuid4(), title="Pending parent context")
+        parent_db.add(record)
+        monkeypatch.setattr(parent_db, "rollback", AsyncMock(wraps=parent_db.rollback))
+        monkeypatch.setattr(parent_db, "commit", AsyncMock(wraps=parent_db.commit))
+        monkeypatch.setattr(parent_db, "flush", AsyncMock(wraps=parent_db.flush))
+
+        result = await asyncio.wait_for(
+            AgentRuntime._summarize(
+                "USER: Test", 512,
+                ai_settings=AiSettings(providers=[provider], models=[model]),
+                active_model=model, runtime_settings=AgentRuntimeSettings(), on_update=on_update,
+            ),
+            timeout=1,
+        )
+
+        assert result.is_fallback is True
+        assert events == ["invalidated", "closed", "fallback"]
+        assert factory.call_count == 2
+        compaction_db.get.assert_awaited_once()
+        compaction_db.close.assert_awaited_once()
+        transport.assert_not_awaited()
+        parent_db.rollback.assert_not_awaited()
+        parent_db.commit.assert_not_awaited()
+        parent_db.flush.assert_not_awaited()
+        assert parent_db.is_active and parent_db.in_transaction()
+        assert record in parent_db.new
+        assert record.title == "Pending parent context"
+
+
+async def test_compaction_propagates_external_cancellation(monkeypatch, compaction_db) -> None:
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    active = ModelConfig(provider_id=provider.id, model_id="agent")
+    compaction = ModelConfig(provider_id=provider.id, model_id="compact")
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def complete(_db, **_kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    complete_mock = AsyncMock(side_effect=complete)
+    monkeypatch.setattr(ProviderService, "complete", complete_mock)
+    on_update = AsyncMock()
+    task = asyncio.create_task(AgentRuntime._summarize(
+        "USER: Test", 512,
+        ai_settings=AiSettings(
+            providers=[provider], models=[active, compaction], compaction_model_id=compaction.id,
+        ),
+        active_model=active, runtime_settings=AgentRuntimeSettings(), on_update=on_update,
+    ))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert cancelled.is_set()
+    compaction_db.close.assert_awaited_once()
+    complete_mock.assert_awaited_once()
+    assert complete_mock.await_args.args == (compaction_db,)
+    on_update.assert_awaited_once_with("", False)
 
 
 @pytest.mark.parametrize(("context_window", "safety"), [(131_072, 4_096), (4_096, 0)])

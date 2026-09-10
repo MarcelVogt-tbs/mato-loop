@@ -2,17 +2,20 @@ import asyncio
 import base64
 import json
 import os
+import re
 import shutil
 import socket
 import struct
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import websockets
+from PIL import Image
 from pydantic import ValidationError
 
 from matoloop_agent.browser import CONTAINER_INSTALLATION, BrowserManager, browser_command
@@ -58,6 +61,30 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         config._data_directory = self.root
         self.agent = MatoLoopAgent(config, "not-for-browser")
         self.manager = self.agent.browser
+
+    async def test_translation_prompt_setting_is_verified_and_temporary_tab_closed(self):
+        worker = BrowserWorker(self.root)
+        settings = SimpleNamespace(goto=AsyncMock(), evaluate=AsyncMock(), close=AsyncMock())
+        worker.context = SimpleNamespace(new_page=AsyncMock(return_value=settings))
+        for result in (True, False, RuntimeError("settings unavailable")):
+            with self.subTest(result=result):
+                settings.close.reset_mock()
+                settings.evaluate.side_effect = result if isinstance(result, Exception) else None
+                settings.evaluate.return_value = result
+                if result is True:
+                    await worker.disable_translation_prompt()
+                else:
+                    with self.assertRaises(
+                        RuntimeError if isinstance(result, Exception) else AgentError
+                    ):
+                        await worker.disable_translation_prompt()
+                settings.goto.assert_awaited_with(
+                    "chrome://settings/languages", wait_until="domcontentloaded"
+                )
+                self.assertIn(
+                    "setPref('translate.enabled', false", settings.evaluate.call_args.args[0]
+                )
+                settings.close.assert_awaited_once()
 
     @unittest.skipUnless(
         os.environ.get("MATOLOOP_BROWSER_NAVIGATION_TEST") == "1", "Opt-in headed input fence test"
@@ -795,6 +822,22 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             elif request.startswith(b"GET /identity "):
                 body = b'<!doctype html><title>Identity</title><input id="secret" type="password">'
                 headers = b"Content-Type: text/html\r\n"
+            elif request.startswith(b"GET /screenshot-fixture "):
+                body = (
+                    b"<!doctype html><style>body{margin:0;height:300vh;background:lime;"
+                    b"overflow:hidden}canvas{display:block}</style><canvas></canvas><script>"
+                    b'const c=document.querySelector("canvas");'
+                    b"function draw(){c.width=innerWidth;c.height=innerHeight;"
+                    b'const x=c.getContext("2d"),d=x.createImageData(c.width,c.height);'
+                    b"let seed=42;for(let i=0;i<d.data.length;i+=4){"
+                    b"seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;"
+                    b"d.data[i]=seed&255;d.data[i+1]=(seed>>>8)&255;"
+                    b"d.data[i+2]=(seed>>>16)&255;d.data[i+3]=255;}"
+                    b'x.putImageData(d,0,0);x.fillStyle="red";x.fillRect(0,0,c.width,40);'
+                    b'x.fillStyle="blue";x.fillRect(0,c.height-40,c.width,40);}'
+                    b'addEventListener("resize",draw);draw();</script>'
+                )
+                headers = b"Content-Type: text/html\r\n"
             else:
                 body = (
                     b'<!doctype html><title>Browser smoke</title><input id="name">'
@@ -853,6 +896,24 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 "integration.browser.control",
                 BrowserControlArguments(browserId=self.browser_id, manual=manual),
             )
+
+        async def screenshot_bytes(result):
+            descriptor = result["screenshot"]
+            chunks = []
+            try:
+                for offset in range(0, descriptor["size"], 65_536):
+                    chunk = await file("read", fileId=descriptor["fileId"], offset=offset)
+                    data = base64.b64decode(chunk["data"], validate=True)
+                    self.assertLessEqual(len(data), 65_536)
+                    self.assertEqual(chunk["size"], descriptor["size"])
+                    self.assertEqual(chunk["offset"], offset + len(data))
+                    self.assertEqual(chunk["complete"], chunk["offset"] == descriptor["size"])
+                    chunks.append(data)
+                image = b"".join(chunks)
+                self.assertEqual(len(image), descriptor["size"])
+                return image
+            finally:
+                await file("delete", fileId=descriptor["fileId"])
 
         async def clipboard(action, text=None):
             return await manager.dispatch(
@@ -945,8 +1006,42 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 "integration.browser.execute",
                 BrowserExecuteArguments(browserId=self.browser_id, action="screenshot"),
             )
-            self.assertTrue(base64.b64decode(result["screenshot"]).startswith(b"\x89PNG"))
+            self.assertTrue((await screenshot_bytes(result)).startswith(b"\x89PNG"))
             self.assertEqual(len(result["tabs"]), 1)
+            await execute("navigate", url=url + "screenshot-fixture")
+            for width, height, expected in (
+                (1280, 800, (1280, 800)),
+                (3840, 2160, (1464, 823)),
+            ):
+                await manager.dispatch(
+                    "integration.browser.resize",
+                    BrowserResizeArguments(browserId=self.browser_id, width=width, height=height),
+                )
+                async with asyncio.timeout(15):
+                    while True:
+                        capture = await execute("screenshot")
+                        self.assertEqual(capture["downloads"], [])
+                        data = await screenshot_bytes(capture)
+                        with Image.open(BytesIO(data)) as image:
+                            if image.size == expected:
+                                self.assertGreater(len(data), 500_000)
+                                self.assertEqual(
+                                    image.getpixel((image.width // 2, 0))[:3], (255, 0, 0)
+                                )
+                                self.assertEqual(
+                                    image.getpixel((image.width // 2, image.height - 1))[:3],
+                                    (0, 0, 255),
+                                )
+                                break
+                        await asyncio.sleep(0.1)
+                print(
+                    f"BROWSER SCREENSHOT: {width}x{height} -> {expected}, {len(data)} PNG bytes",
+                    flush=True,
+                )
+            await manager.dispatch(
+                "integration.browser.resize",
+                BrowserResizeArguments(browserId=self.browser_id, width=1280, height=800),
+            )
             await execute("navigate", url=url)
             literal = "\u00e4\u00f6\u00fc \u4e2d\u6587 \U0001f680\nsecond line\n"
             self.assertEqual(await clipboard("write", literal), {"text": literal})
@@ -1041,10 +1136,17 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                             await writer.drain()
                             await asyncio.sleep(0.05)
                 async with asyncio.timeout(10):
+                    scale = min(
+                        1,
+                        1568 / width,
+                        1568 / height,
+                        (1.15 * 1024 * 1024 / (width * height)) ** 0.5,
+                    )
+                    expected = (int(width * scale), int(height * scale))
                     while True:
-                        image = base64.b64decode((await execute("screenshot"))["screenshot"])
+                        image = await screenshot_bytes(await execute("screenshot"))
                         page_width, page_height = struct.unpack(">II", image[16:24])
-                        if page_width == width and page_height == height:
+                        if (page_width, page_height) == expected:
                             break
                         await asyncio.sleep(0.1)
                 self.assertEqual(manager.worker.pid, worker_pid)
@@ -1064,13 +1166,9 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             await copied(literal)
             await execute("click", selector="#literal")
             await execute("press", key="Control+a")
-            self.assertEqual(
-                json.loads((await execute("inspect"))["text"])["focusedElement"], "#literal"
-            )
+            self.assertIn("[ref=", (await execute("inspect"))["text"])
             await key(writer, ord("a"))
-            self.assertEqual(
-                json.loads((await execute("inspect"))["text"])["focusedElement"], "#literal"
-            )
+            await execute("inspect")
             await execute("press", key="Control+a")
             await execute("press", key="Control+c")
             await copied("a")
@@ -1106,27 +1204,28 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             await execute("press", key="Control+c")
             await copied("c")
             inspection = await execute("inspect")
-            snapshot = json.loads(inspection["text"])
-            search = next(
-                item for item in snapshot["elements"] if item["placeholder"] == "Suchbegriff"
-            )
-            self.assertEqual(search["role"], "textbox")
-            self.assertEqual(search["label"], "Suche")
+            match = re.search(r'textbox "Suche" \[ref=((?:f\d+)?e\d+)\]', inspection["text"])
+            self.assertIsNotNone(match, inspection["text"])
+            search_ref = match.group(1)
             self.assertLessEqual(len(inspection["text"]), 32768)
             self.assertEqual(len(inspection["data"]["snapshotSha256"]), 64)
+            observed = await execute(
+                "fill", selector=f"aria-ref={search_ref}", text="Selector works", observe=True
+            )
+            self.assertIn("Selector works", observed["text"])
             await execute("fill", selector="#password", text="SECRET_FIELD_VALUE")
             before = await execute("inspect")
-            self.assertNotIn("SECRET_FIELD_VALUE", before["text"])
+            self.assertIn("SECRET_FIELD_VALUE", before["text"])
             await execute("fill", selector="#password", text="CHANGED_PRIVATE_VALUE")
             after = await execute("inspect")
-            self.assertEqual(before["text"], after["text"])
+            self.assertIn("CHANGED_PRIVATE_VALUE", after["text"])
+            self.assertNotEqual(before["text"], after["text"])
             self.assertNotEqual(before["data"]["snapshotSha256"], after["data"]["snapshotSha256"])
             await execute("click", selector="#checked")
             checked = await execute("inspect")
             self.assertNotEqual(after["data"]["snapshotSha256"], checked["data"]["snapshotSha256"])
             await execute("click", selector="#retarget")
             changed = await execute("inspect")
-            self.assertIn("/other-submit", changed["text"])
             self.assertNotEqual(
                 checked["data"]["snapshotSha256"], changed["data"]["snapshotSha256"]
             )
@@ -1134,12 +1233,12 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             first_document = await execute("inspect")
             await execute("navigate", url=url + "identity")
             second_document = await execute("inspect")
-            self.assertEqual(first_document["text"], second_document["text"])
+            self.assertIn("textbox", first_document["text"])
+            self.assertIn("textbox", second_document["text"])
             self.assertNotEqual(
                 first_document["data"]["snapshotSha256"], second_document["data"]["snapshotSha256"]
             )
             await execute("navigate", url=url)
-            await execute("fill", selector=search["selector"], text="Selector works")
             await execute("fill", selector="#name", text="Browser smoke")
             upload_id = (await file("begin", filename="upload.txt", size=3))["fileId"]
             await file("write", fileId=upload_id, data="YWJj")
@@ -1202,6 +1301,8 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             )
             profile = manager.runtime_root(manager.storage(self.owner_id)) / "profile"
             self.assertTrue(profile.is_dir())
+            preferences = json.loads((profile / "Default" / "Preferences").read_text())
+            self.assertIs(preferences["translate"]["enabled"], False)
             await manager.dispatch(
                 "integration.browser.open",
                 BrowserOpenArguments(ownerId=self.owner_id, browserId=self.browser_id),

@@ -2,6 +2,7 @@ import asyncio
 import json
 import wave
 import zipfile
+from copy import deepcopy
 from datetime import UTC, datetime
 from io import BytesIO
 from threading import Event
@@ -16,7 +17,7 @@ from test_context_manager_contract import _build_context
 
 from mato_loop_backend.agent import runtime as runtime_module
 from mato_loop_backend.agent import tools as tools_module
-from mato_loop_backend.agent.context import message_dict
+from mato_loop_backend.agent.context import ContextProjection, message_dict
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.tool_registry import ToolAttachment, ToolResult
 from mato_loop_backend.attachments import (
@@ -35,7 +36,12 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.providers import MediaResult
 from mato_loop_backend.providers import service as provider_service
-from mato_loop_backend.providers.base import ProviderError, ProviderResult, ToolCall
+from mato_loop_backend.providers.base import (
+    ProviderError,
+    ProviderImageInput,
+    ProviderResult,
+    ToolCall,
+)
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
@@ -648,6 +654,192 @@ def test_hidden_artifact_references_are_omitted_without_redacting_technical_hist
     )
     assert "attachments" not in item
     assert "Exact technical history remains available." in item["content"]
+
+
+@pytest.mark.parametrize("terminal,vision", [
+    ("completed", True), ("cancelled", True), ("failed", True), ("completed", False),
+    ("bounded-count", True), ("bounded-bytes", True),
+    ("reused-one-image", True), ("reused-two-images", True),
+])
+async def test_runtime_ephemeral_images_survive_requests_without_files(
+    tmp_path, monkeypatch, terminal, vision,
+):
+    from test_required_web_search_runtime import _runtime_setup
+
+    reused_ids = terminal.startswith("reused-")
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(tool_calls=[ToolCall("capture", "webfetch", {"url": "https://example.test/one"})]),
+            ProviderResult(tool_calls=[ToolCall("capture" if reused_ids else "next", "webfetch", {"url": "https://example.test/two"})]),
+            ProviderResult(content="Finished.", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE, active_supports_image_input=vision,
+    )
+    session = db.get.return_value
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session.id)
+    records = await AgentRuntime._records(db, session.id)
+    if reused_ids:
+        records[:0] = [
+            Message(
+                id=uuid4(), session_id=session.id, role="assistant", content="",
+                tool_calls=[{"id": "capture", "name": "webfetch", "arguments": {"url": "https://example.test/old"}}],
+            ),
+            Message(
+                id=uuid4(), session_id=session.id, role="tool", tool_call_id="capture",
+                content='{"observation":"historical"}', provider_data={},
+            ),
+        ]
+    attachments = []
+
+    def add(item):
+        if isinstance(item, Message):
+            item.id, item.created_at = uuid4(), datetime.now(UTC)
+            records.append(item)
+        elif isinstance(item, MessageAttachment):
+            attachments.append(item)
+
+    db.add.side_effect = add
+    if terminal == "bounded-count":
+        monkeypatch.setattr(runtime_module, "MAX_PROVIDER_IMAGES", 1)
+    elif terminal == "bounded-bytes":
+        monkeypatch.setattr(runtime_module, "MAX_PROVIDER_IMAGE_BYTES", max(len(png("red")), len(png("blue"))))
+    monkeypatch.setattr(
+        runtime_module, "RootFileService",
+        lambda *args, **kwargs: RootFileService(*args, session_storage=storage, **kwargs),
+    )
+    monkeypatch.setattr(
+        runtime_module, "AttachmentService", lambda **kwargs: AttachmentService(storage, **kwargs),
+    )
+
+    async def execute(call, _context, _tool):
+        capture = call.arguments["url"].endswith("/one")
+        return ToolResult(
+            json.dumps({"observation": "capture" if capture else "inspect"}), {}, trust_level=TrustLevel.PRIVATE,
+            attachments=(ToolAttachment(
+                png("red" if capture else "blue"), "image/png", "browser.png", ephemeral=True,
+            ),) if capture or terminal.startswith("bounded-") or terminal == "reused-two-images" else (),
+        )
+
+    monkeypatch.setattr(tools_module.tool_registry, "_execute_definition", execute)
+    estimates = []
+    prepare = provider_service.ProviderService.prepare_request
+
+    async def estimate(**kwargs):
+        estimates.append((deepcopy(kwargs["messages"]), deepcopy(kwargs["image_inputs"])))
+        return await prepare(**kwargs)
+
+    monkeypatch.setattr(provider_service.ProviderService, "prepare_request", staticmethod(estimate))
+    build = runtime_module.ContextManager.build
+
+    async def compacted_build(*args, **kwargs):
+        if len(requests) < 2 or reused_ids:
+            return await build(*args, **kwargs)
+        # Simulate compaction removing the source tool exchange, not the active run.
+        messages = [
+            {"role": "system", "content": "Earlier tool exchanges were summarized."},
+            message_dict(records[0]),
+        ]
+        return ContextProjection(
+            messages=messages, estimated_input_tokens=await kwargs["estimate_request"](messages),
+            input_budget_tokens=1000,
+        )
+
+    monkeypatch.setattr(runtime_module.ContextManager, "build", compacted_build)
+    complete = provider_service.ProviderService.complete
+    observed = []
+    direct_references = []
+
+    async def observed_complete(*args, **kwargs):
+        assert (kwargs["messages"], kwargs["image_inputs"]) == estimates[-1]
+        for image in kwargs["image_inputs"]:
+            carrier = kwargs["messages"][image.message_index]
+            assert carrier["role"] == "assistant" and not carrier.get("tool_calls")
+            if reused_ids:
+                assert image.message_index >= len(records) + 1
+        assert all(
+            "Ephemeral tool-result image" not in item["content"]
+            for item in kwargs["messages"] if item["role"] == "tool"
+        )
+        observed.append(deepcopy(kwargs["image_inputs"]))
+        direct_references.extend(kwargs["image_inputs"])
+        if len(observed) == 3 and terminal in {"cancelled", "failed"}:
+            if terminal == "cancelled":
+                raise asyncio.CancelledError
+            raise ProviderError("Test failure", code="provider.requestFailed")
+        return await complete(*args, **kwargs)
+
+    monkeypatch.setattr(provider_service.ProviderService, "complete", staticmethod(observed_complete))
+    if terminal not in {"cancelled", "failed"}:
+        await AgentRuntime._execute_loop(db, run)
+    else:
+        with pytest.raises(asyncio.CancelledError if terminal == "cancelled" else ProviderError):
+            await AgentRuntime._execute_loop(db, run)
+    assert [len(images) for images in observed] == (
+        [0, 1, 2] if terminal == "reused-two-images" else [0, 1, 1] if vision else [0, 0, 0]
+    )
+    if vision:
+        assert observed[1][0].data == png("red")
+        assert observed[-1][0].data == png(
+            "blue" if terminal.startswith("bounded-") or terminal == "reused-two-images" else "red"
+        )
+        assert all(images[0].trust_level == "private" for images in observed[1:])
+        carrier = estimates[-1][0][observed[-1][0].message_index]
+        assert carrier["role"] == "assistant" and "Ephemeral tool-result image" in carrier["content"]
+        assert all(image.data == b"" for image in direct_references)
+        if reused_ids:
+            sources = [item for item in records if item.role == "assistant" and item.tool_calls][1:]
+            expected = [(1, sources[0], png("red"))]
+            if terminal == "reused-two-images":
+                expected.insert(0, (2, sources[1], png("blue")))
+            for image, (request_number, source, data) in zip(observed[-1], expected, strict=True):
+                label = estimates[-1][0][image.message_index]["content"]
+                assert image.data == data
+                assert f"model request {request_number}, assistant message {source.id}, call \"capture\"" in label
+    else:
+        assert "not sent to this model and not saved" in next(
+            item.content for item in records if item.tool_call_id == "capture"
+        )
+    assert attachments == []
+    assert all(pending_attachments(item) == [] for item in records)
+    assert all(not item.attachments for item in records)
+    assert next(item for item in records if item.tool_call_id == "capture" and item.provider_data).provider_data[
+        "_matoloop"
+    ]["fileOutputsPending"] is False
+    assert "base64" not in json.dumps([message_dict(item) for item in records])
+    assert "Image saved" not in json.dumps([message_dict(item) for item in records])
+    assert not any(path.is_file() for path in storage.logical_root_path(session.id, None).rglob("*"))
+    restarted = AsyncMock(return_value=ProviderResult(content="Restarted.", finish_reason="stop"))
+    monkeypatch.setattr(provider_service.ProviderService, "complete", restarted)
+    await AgentRuntime._execute_loop(db, run)
+    assert restarted.await_args.kwargs["image_inputs"] == []
+
+
+@pytest.mark.parametrize("persisted_count", [0, 1, 8])
+def test_ephemeral_projection_keeps_user_references_and_newest_images(persisted_count):
+    data = png("red")
+    messages = [{"role": "user", "content": "Compare my references.", "attachments": [
+        {"id": str(index), "kind": "image", "size_bytes": len(data)}
+        for index in range(persisted_count)
+    ]}]
+    original = deepcopy(messages)
+    images = {
+        (uuid4(), index + 1, "reused-call", 0): ProviderImageInput(0, data, "private", "image/png")
+        for index in range(8)
+    }
+    model = ModelConfig(provider_id=uuid4(), model_id="vision", supports_image_input=True)
+    projected, direct = runtime_module._project_ephemeral_images(
+        messages, images, model=model, target_trust_level=TrustLevel.PUBLIC,
+    )
+    assert messages == original
+    assert len(direct) == 8 - persisted_count
+    assert direct == list(reversed(images.values()))[:8 - persisted_count]
+    assert all(projected[image.message_index]["role"] == "assistant" for image in direct)
+    assert "base64" not in json.dumps(projected)
+    assert runtime_module._project_ephemeral_images(
+        messages, images, model=model, target_trust_level=TrustLevel.PUBLIC,
+    ) == (projected, direct)
 
 
 @pytest.mark.parametrize("export_stl", [False, True])

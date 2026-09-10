@@ -22,6 +22,10 @@ from mato_loop_backend.attachments import (
     model_attachments,
 )
 from mato_loop_backend.error_contract import error_payload
+from mato_loop_backend.execution.browser_contracts import (
+    BrowserActionResult,
+    BrowserInspectionData,
+)
 from mato_loop_backend.execution.protocol import SystemInfo
 from mato_loop_backend.memory.service import memory_visible_to
 from mato_loop_backend.models import ChatSession, ContextSummary, Message
@@ -202,6 +206,47 @@ def _model_file_tool_result(content: str) -> str:
         if translated != payload
         else content
     )
+
+
+def _model_browser_inspection(content: str) -> str:
+    try:
+        payload = json.loads(content)
+        result = BrowserActionResult.model_validate(payload)
+        BrowserInspectionData.model_validate(result.data)
+        inspection = json.loads(result.text)
+    except (TypeError, ValueError, RecursionError):
+        return content
+    if (
+        not isinstance(inspection, dict)
+        or set(inspection) != {"url", "text", "elements", "focusedElement"}
+        or not isinstance(inspection["url"], str)
+        or not isinstance(inspection["text"], str)
+        or not isinstance(inspection["focusedElement"], (str, type(None)))
+        or not isinstance(inspection["elements"], list)
+        or not all(
+            isinstance(element, dict)
+            and all(isinstance(element.get(key), str) and element[key] for key in ("selector", "tag"))
+            and all(
+                isinstance(element.get(key), (str, type(None)))
+                for key in ("role", "type", "label", "placeholder", "href", "formAction")
+            )
+            and isinstance(element.get("checked"), (bool, type(None)))
+            and all(
+                value is None or isinstance(value, (str, bool, int))
+                or isinstance(value, float) and math.isfinite(value)
+                for value in element.values()
+            )
+            for element in inspection["elements"]
+        )
+    ):
+        return content
+    # Compact only the model projection, never the persisted approval snapshot material.
+    inspection["elements"] = [
+        {key: value for key, value in element.items() if value is not None and value != ""}
+        for element in inspection["elements"]
+    ]
+    payload["text"] = inspection
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _model_provider_file_roots(provider_data: dict[str, Any]) -> dict[str, Any]:
@@ -1048,6 +1093,7 @@ def _projection_messages(
     historical_tool_indices: list[int] = []
     historical_omitted_markers: dict[int, str] = {}
     current_tool_indices: list[int] = []
+    browser_inspect_calls: set[str] = set()
     for record_index, item in enumerate(records):
         if item.id == latest_user_id and memory_context is not None:
             messages.append(
@@ -1070,6 +1116,13 @@ def _projection_messages(
         )
         if live_tool_calls is not None and item.id in live_tool_calls:
             projected["tool_calls"] = _model_tool_calls(live_tool_calls[item.id])
+        if item.role == "assistant":
+            browser_inspect_calls = {
+                call["id"] for call in (projected["tool_calls"] or [])
+                if call.get("name") == "browser" and call.get("id")
+                and isinstance(call.get("arguments"), dict)
+                and call["arguments"].get("action") == "inspect"
+            }
         marker = _active_file_marker(item)
         if marker is not None:
             projected["content"] = "\n\n".join(
@@ -1102,6 +1155,11 @@ def _projection_messages(
                     item.id, original_content
                 )
             else:
+                if (
+                    latest_user_index >= 0 and tool_name == "browser"
+                    and item.tool_call_id in browser_inspect_calls
+                ):
+                    projected["content"] = _model_browser_inspection(projected["content"])
                 current_tool_indices.append(len(messages))
         messages.append(projected)
     _limit_tool_output_tokens(

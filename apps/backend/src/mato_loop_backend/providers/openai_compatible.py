@@ -283,6 +283,8 @@ def _responses_input(
     messages: list[dict[str, Any]],
     continuation_scope: dict[str, str | None] | None = None,
     media: list[ProviderMedia] | None = None,
+    *,
+    reasoning_token_estimates: dict[int, int] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     if any(item.modality != "image" for item in media or []):
         raise ProviderError(
@@ -291,6 +293,8 @@ def _responses_input(
         )
     instructions: list[str] = []
     items: list[dict[str, Any]] = []
+    if reasoning_token_estimates is not None:
+        reasoning_token_estimates.clear()
     grouped_media = _media_by_message(media or [])
     pending_tool_media: list[list[ProviderMedia]] = []
 
@@ -306,6 +310,7 @@ def _responses_input(
         items.append({"role": "user", "content": content})
 
     for index, message in enumerate(messages):
+        first_item = len(items)
         role = message["role"]
         content = message.get("content") or ""
         has_tool_calls = bool(message.get("tool_calls"))
@@ -379,6 +384,27 @@ def _responses_input(
                             "arguments": json.dumps(call.get("arguments") or {}, ensure_ascii=True),
                         }
                     )
+        if reasoning_token_estimates is not None and role == "assistant":
+            usage = provider_data.get("usage")
+            if isinstance(usage, dict):
+                tokens = usage.get("reasoning_tokens")
+                output_tokens = usage.get("output_tokens")
+                if (
+                    type(tokens) is int and type(output_tokens) is int
+                    and 0 <= tokens <= output_tokens
+                ):
+                    opaque_indices = [
+                        position for position in range(first_item, len(items))
+                        if items[position].get("type") == "reasoning"
+                        and items[position].get("encrypted_content")
+                    ]
+                    if opaque_indices:
+                        # Usage belongs to the source response, not each replay item. Allow
+                        # extra opaque framing; this remains an estimate, not a token bound.
+                        reserve = (tokens + 256 + len(opaque_indices) - 1) // len(opaque_indices)
+                        reasoning_token_estimates.update(
+                            (position, reserve) for position in opaque_indices
+                        )
         message_media = grouped_media.get(index)
         if role == "tool":
             if message_media:
@@ -431,10 +457,13 @@ def _responses_replay_items(raw_output: Any) -> list[dict[str, Any]]:
 
 
 def _responses_body(
-    request: ProviderRequest, extra_body: dict[str, Any] | None = None
+    request: ProviderRequest, extra_body: dict[str, Any] | None = None,
+    *,
+    reasoning_token_estimates: dict[int, int] | None = None,
 ) -> dict[str, Any]:
     instructions, input_items = _responses_input(
-        request.messages, request.continuation_scope, request.media
+        request.messages, request.continuation_scope, request.media,
+        reasoning_token_estimates=reasoning_token_estimates,
     )
     body: dict[str, Any] = {
         "model": request.model,
