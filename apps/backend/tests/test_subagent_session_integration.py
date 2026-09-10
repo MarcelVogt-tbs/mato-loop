@@ -194,6 +194,36 @@ async def test_child_reads_exports_and_copy_out_remain_available(tree, client):
     assert response.status_code == 404
 
 
+@pytest.mark.parametrize("in_project", [False, True])
+async def test_session_delete_with_persistent_user_after_rollback(tree, client, in_project):
+    db, storage = tree.db, tree.storage
+    parent = tree.records[0][0]
+    ids = [item[0].id for item in tree.records]
+    project_id = None
+    if in_project:
+        project = Project(user_id=tree.user.id, name="Preserved project")
+        db.add(project)
+        await db.flush()
+        project_id = parent.project_id = project.id
+        storage.remove_session(parent.id)
+        storage.provision(parent.id, project_id)
+        RootFileService(parent.id, project_id=project_id, session_storage=storage).write_file(
+            FileRoot.SESSION, "shared.txt", "preserve"
+        )
+        await db.commit()
+
+    response = await client.delete(f"/api/sessions/{ids[0]}")
+
+    assert response.status_code == 204, response.text
+    assert not (await db.scalars(select(ChatSession.id).where(ChatSession.id.in_(ids)))).all()
+    assert not storage.session_path(ids[0], project_id=project_id).exists()
+    assert all(not storage.session_path(item_id).exists() for item_id in ids[1:])
+    assert list(storage.trash_dir.iterdir()) == []
+    if in_project:
+        assert await db.get(Project, project_id) is not None
+        assert (storage.logical_root_path(ids[0], project_id) / "files" / "shared.txt").read_text() == "preserve"
+
+
 async def test_project_delete_cleans_cross_project_descendants_and_preserves_other_project(tree):
     db, storage = tree.db, tree.storage
     user_id = tree.user.id

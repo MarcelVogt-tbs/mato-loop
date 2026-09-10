@@ -1322,7 +1322,7 @@ async def session_delete_impact(
 
 async def delete_session(
     session_id: UUID,
-    user,
+    user_id: UUID,
     db: AsyncSession,
     *,
     automation_mode: Literal["unlink", "deleteAutomations"] | None,
@@ -1333,7 +1333,7 @@ async def delete_session(
     item = await db.scalar(
         select(ChatSession).where(
             ChatSession.id == session_id,
-            ChatSession.user_id == user.id,
+            ChatSession.user_id == user_id,
             ChatSession.session_type == "chat",
         )
     )
@@ -1345,7 +1345,7 @@ async def delete_session(
         (
             await db.scalars(
                 select(Automation).where(
-                    Automation.user_id == user.id,
+                    Automation.user_id == user_id,
                     Automation.output_session_id == session_id,
                 )
             )
@@ -1416,14 +1416,14 @@ async def delete_session(
             await db.scalars(
                 select(Automation)
                 .where(
-                    Automation.user_id == user.id,
+                    Automation.user_id == user_id,
                     Automation.output_session_id == session_id,
                 )
                 .with_for_update()
             )
         ).all()
     )
-    item = await owned_session_query(db, session_id, user.id, for_update=True)
+    item = await owned_session_query(db, session_id, user_id, for_update=True)
     if item is None:
         raise SessionServiceError(404, "session.notFound")
     linked_automations = list(
@@ -1431,7 +1431,7 @@ async def delete_session(
             await db.scalars(
                 select(Automation)
                 .where(
-                    Automation.user_id == user.id,
+                    Automation.user_id == user_id,
                     Automation.output_session_id == session_id,
                 )
                 .with_for_update()
@@ -1479,7 +1479,7 @@ async def delete_session(
                 await AgentRuntime.cancel_and_wait(run_id)
             return await delete_session(
                 session_id,
-                user,
+                user_id,
                 db,
                 automation_mode=automation_mode,
                 automation_impact=automation_impact,

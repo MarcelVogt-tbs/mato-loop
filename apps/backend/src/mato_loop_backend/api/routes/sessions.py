@@ -962,7 +962,7 @@ async def delete_session(
     try:
         await session_service.delete_session(
             session_id,
-            user,
+            user.id,
             db,
             automation_mode=automation_mode,
             automation_impact=automation_impact,
