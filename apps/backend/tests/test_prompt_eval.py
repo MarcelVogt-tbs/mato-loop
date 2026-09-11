@@ -291,8 +291,9 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
         )
     )
     rule = (
-        "Use web_search for discovery and webfetch for simple page or structured data retrieval; "
-        "prefer shell_run for custom HTTP, pagination, multiple requests, or local processing."
+        "Use webfetch for simple page or structured data retrieval; prefer shell_run for custom "
+        "HTTP, pagination, multiple requests, local processing, or downloading files webfetch does "
+        "not return. Verify saved downloads before claiming success."
     )
 
     assert tools == prompt_eval._general_offered_tools(case).only(*case.tools).schemas()
@@ -306,9 +307,14 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
     growth = prompt_eval.estimate_tokens(messages[0]["content"], 4.0) - prompt_eval.estimate_tokens(
         without_shell_messages[0]["content"], 4.0
     )
-    assert 40 <= growth <= 50
+    assert 45 <= growth <= 60
 
-    for missing_tool in ("web_search", "webfetch"):
+    without_search_messages, _tools = build_case(
+        replace(case, tools=("webfetch", "shell_run"))
+    )
+    assert rule in without_search_messages[0]["content"]
+
+    for missing_tool in ("webfetch", "shell_run"):
         conditional_messages, _tools = build_case(
             replace(case, tools=tuple(name for name in case.tools if name != missing_tool))
         )

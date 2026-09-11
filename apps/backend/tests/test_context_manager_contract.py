@@ -1766,6 +1766,28 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "Copy it exactly" in prompt
 
 
+def test_webfetch_browser_fallback_prompt_matches_available_control() -> None:
+    attached = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset({"webfetch", "browser_tabs", "browser_snapshot"}),
+    )
+    requestable = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset({"webfetch", "browser_request_control"}),
+    )
+    unavailable = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset({"webfetch"}),
+    )
+
+    assert "use the attached browser instead" in attached
+    assert "handle downloads that require page interaction" in attached
+    assert "request browser control with a concrete reason" in requestable
+    assert "attached browser" not in requestable
+    assert "attached browser" not in unavailable
+    assert "request browser control" not in unavailable
+
+
 def test_agent_profile_uses_one_persona_before_task_instructions() -> None:
     identity = AgentIdentitySettings(display_name="MatoLoop")
     persona = PersonaProfile(

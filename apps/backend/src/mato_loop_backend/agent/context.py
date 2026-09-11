@@ -780,10 +780,25 @@ def general_system_prompt(
                 "remote URL. Request pdf_pages for PDF layouts.",
             ]
         )
-    if {"web_search", "webfetch", "shell_run"} <= offered_tool_names:
+    if {"webfetch", "shell_run"} <= offered_tool_names:
         research_instructions.append(
-            "Use web_search for discovery and webfetch for simple page or structured data retrieval; "
-            "prefer shell_run for custom HTTP, pagination, multiple requests, or local processing."
+            "Use webfetch for simple page or structured data retrieval; prefer shell_run for custom "
+            "HTTP, pagination, multiple requests, local processing, or downloading files webfetch does "
+            "not return. Verify saved downloads before claiming success."
+        )
+    browser_tools = offered_tool_names - {"browser_request_control"}
+    if "webfetch" in offered_tool_names and any(
+        name.startswith("browser_") for name in browser_tools
+    ):
+        research_instructions.append(
+            "If webfetch fails or returns an access challenge, interstitial, or unusable JavaScript shell, "
+            "use the attached browser instead of repeating the same fetch or giving up. The browser may "
+            "also handle downloads that require page interaction."
+        )
+    elif {"webfetch", "browser_request_control"} <= offered_tool_names:
+        research_instructions.append(
+            "If webfetch fails or returns an access challenge, interstitial, or unusable JavaScript shell, "
+            "request browser control with a concrete reason instead of repeating the same fetch or giving up."
         )
     if {"web_search", "webfetch"} <= offered_tool_names:
         research_instructions.append(
