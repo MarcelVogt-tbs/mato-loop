@@ -583,6 +583,9 @@ async def list_providers(
         )
         response["availableProviders"] = available["providers"]
         response["availableModels"] = available["models"]
+        response["effectiveTitleGenerationModelId"] = available[
+            "titleGenerationModelId"
+        ]
     return response
 
 

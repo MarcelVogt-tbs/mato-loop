@@ -16,6 +16,9 @@ function assignProviderPayload(store, payload) {
   store.defaultModelId = payload.defaultModelId ?? null
   store.compactionModelId = payload.compactionModelId ?? null
   store.titleGenerationModelId = payload.titleGenerationModelId ?? null
+  store.effectiveTitleGenerationModelId = payload.effectiveTitleGenerationModelId
+    ?? payload.titleGenerationModelId
+    ?? null
   store.titleVisionFallbackEnabled = payload.titleVisionFallbackEnabled !== false
   store.dreamingModelId = payload.dreamingModelId ?? null
   store.visionModelId = payload.visionModelId ?? null
@@ -114,6 +117,7 @@ export const useProviderStore = defineStore('providers', {
     defaultModelId: null,
     compactionModelId: null,
     titleGenerationModelId: null,
+    effectiveTitleGenerationModelId: null,
     titleVisionFallbackEnabled: true,
     dreamingModelId: null,
     visionModelId: null,

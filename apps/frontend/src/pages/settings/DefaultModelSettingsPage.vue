@@ -227,7 +227,7 @@
             map-options
             options-dense
             label="Modell für Titel"
-            :display-value="form.titleGenerationModelId ? undefined : 'Sessionmodell verwenden'"
+            :display-value="form.titleGenerationModelId ? undefined : titleGenerationFallbackLabel"
             :options="providers.selectionOptions(form.titleGenerationModelId)"
             :disable="personalBlocked"
             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
@@ -384,6 +384,11 @@ const changed = computed(() => (
 const personalBlocked = computed(() => (
   providers.scope === 'personal' && !providers.personalProvidersEnabled
 ))
+const titleGenerationFallbackLabel = computed(() => {
+  if (providers.scope !== 'personal') return 'Sessionmodell verwenden'
+  if (!providers.effectiveTitleGenerationModelId) return 'Instanzvorgabe: Sessionmodell verwenden'
+  return `Instanzvorgabe: ${providers.selectedModelState(providers.effectiveTitleGenerationModelId).label}`
+})
 
 function assignForm() {
   form.defaultModelId = providers.defaultModelId

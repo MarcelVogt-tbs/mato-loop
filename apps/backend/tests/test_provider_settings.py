@@ -1070,6 +1070,7 @@ async def test_personal_provider_read_includes_effective_selection_catalog(
         providers=[instance_provider, personal_provider],
         models=[instance_model, personal_model],
         default_model_id=instance_model.id,
+        title_generation_model_id=instance_model.id,
     )
     monkeypatch.setattr(
         provider_routes, "_load_scoped_ai", AsyncMock(return_value=(personal, user.id))
@@ -1082,6 +1083,7 @@ async def test_personal_provider_read_includes_effective_selection_catalog(
     assert [item["name"] for item in result["providers"]] == ["Personal"]
     assert [item["modelId"] for item in result["models"]] == ["personal"]
     assert result["defaultModelId"] == str(instance_model.id)
+    assert result["effectiveTitleGenerationModelId"] == str(instance_model.id)
     assert [item["name"] for item in result["availableProviders"]] == [
         "Instance",
         "Personal",
