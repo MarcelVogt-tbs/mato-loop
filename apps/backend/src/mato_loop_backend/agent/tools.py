@@ -1971,6 +1971,7 @@ def resolve_tool_execution_policy(
                 "session.files.write",
                 "network.fetch",
                 "network.search",
+                "skills.load",
             }
             else default,
             "default",

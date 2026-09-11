@@ -142,7 +142,7 @@ def test_root_specific_read_and_transfer_availability(
 @pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
 @pytest.mark.parametrize(
     "capability",
-    ["session.files.read", "session.files.write", "network.fetch", "network.search"],
+    ["session.files.read", "session.files.write", "network.fetch", "network.search", "skills.load"],
 )
 def test_auto_defaults_and_saved_policies(
     trust: TrustLevel, capability: str
@@ -482,6 +482,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "session.files.write",
         "network.fetch",
         "network.search",
+        "skills.load",
     }
     assert {
         capability
