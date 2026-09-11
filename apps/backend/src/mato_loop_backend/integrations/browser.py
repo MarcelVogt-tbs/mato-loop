@@ -258,13 +258,13 @@ class BrowserEvaluateArguments(BrowserSnapshotArguments):
     internal_action = "evaluate"
     function: str = Field(max_length=32768, description="JavaScript function evaluated on the page, or on ref when supplied.")
     ref: _Ref | None = None
-    observe: bool = True
+    observe: bool = False
 
 
 class BrowserRunCodeArguments(BrowserSnapshotArguments):
     internal_action = "run_code"
     code: str = Field(max_length=32768, description="Python source defining async def run(page), using the async Playwright page. Return a JSON value; print for output.")
-    observe: bool = True
+    observe: bool = False
 
 
 async def _authorization(arguments: BrowserActionArguments | _BrowserArguments, context: Any) -> tuple[Any, ...]:
@@ -505,9 +505,9 @@ BROWSER_TOOLS = tuple(
         ("browser_diagnostics", "Browser-Diagnose", BrowserDiagnosticsArguments,
          "Read bounded diagnostics for the attached browser.", (_READ,)),
         ("browser_evaluate", "Browser-JavaScript", BrowserEvaluateArguments,
-         "Evaluate a JavaScript function on a known tab, or on a snapshot ref. Requires browser read, write, and code permissions even with observe=false. script contains the result and any controlled error; effects before errors may remain.", (_READ, _WRITE, _CODE)),
+         "Evaluate a JavaScript function on a known tab, or on a snapshot ref. Return a compact value that confirms the relevant state. Requires browser read, write, and code permissions even with observe=false. observe defaults to false; set it true only when the next step needs a fresh accessibility snapshot. script contains the result and controlled failure diagnostics; effects before errors may remain.", (_READ, _WRITE, _CODE)),
         ("browser_run_code", "Browser-Python", BrowserRunCodeArguments,
-         "Run Python defining async def run(page) with the async Playwright page in the existing agent worker. Use one call for known multi-step or conditional browser work instead of separate model turns. Python is unrestricted, not an OS sandbox. Requires browser read, write, and code permissions even with observe=false. script contains a JSON return value, bounded print output, and any controlled error. Effects before errors may remain; inspect before retrying.", (_READ, _WRITE, _CODE)),
+         "Run Python defining async def run(page) with the async Playwright page in the existing agent worker, for at most 120 seconds. Use one call for known multi-step or conditional work, wait for concrete UI postconditions after state changes, stop on failure, and return compact confirmed progress. Python is unrestricted, not an OS sandbox. Requires browser read, write, and code permissions even with observe=false. observe defaults to false; set it true only when the next step needs a fresh accessibility snapshot. script contains a JSON return value, bounded print output, and controlled failure diagnostics. Effects before errors may remain; inspect current state before retrying.", (_READ, _WRITE, _CODE)),
     )
 )
 BROWSER_TOOL_ACTIONS = {tool.name: tool.arguments_model.internal_action for tool in BROWSER_TOOLS}

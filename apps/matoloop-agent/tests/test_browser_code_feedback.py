@@ -339,9 +339,7 @@ class BrowserCodeFeedbackTests(unittest.IsolatedAsyncioTestCase):
         self.worker.document_ids[self.page] = "document"
         del self.worker._inspect
         self.locator.evaluate.return_value = {"state": ["private"]}
-        self.page._impl_obj._channel.send_return_as_dict = AsyncMock(
-            return_value={"full": "- textbox"}
-        )
+        self.page.aria_snapshot = AsyncMock(return_value="- textbox")
         before = await self.worker._inspect(self.page, guard=True)
         result = await self.execute("inspect", guard=True)
         self.assertIsNone(result["playwrightCode"])
@@ -355,7 +353,7 @@ class BrowserCodeFeedbackTests(unittest.IsolatedAsyncioTestCase):
             ("screenshot", {}),
         ):
             self.worker.screenshot = AsyncMock(return_value=None)
-            self.page.evaluate = AsyncMock(return_value=42)
+            self.page.evaluate = AsyncMock(return_value=[True, None, 42])
             result = await self.execute(action, **kwargs)
             self.assertIsNone(result["playwrightCode"])
         self.locator.is_editable.return_value = False

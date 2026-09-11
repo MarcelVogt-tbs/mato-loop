@@ -9,7 +9,7 @@ Full snapshots remain canonical. Incremental text is a request-local projection 
 standard-library unified diff, not a second accessibility implementation or a persistent MCP
 tracking baseline. Missing context always falls back to full observations.
 
-The comparison reference is Playwright MCP inside Playwright `v1.58.0`, matching the agent pin:
+The original comparison reference was Playwright MCP inside Playwright `v1.58.0`:
 [form batching](https://github.com/microsoft/playwright/blob/v1.58.0/packages/playwright/src/mcp/browser/tools/form.ts),
 [completion waiting](https://github.com/microsoft/playwright/blob/v1.58.0/packages/playwright/src/mcp/browser/tools/utils.ts),
 and [response tracking](https://github.com/microsoft/playwright/blob/v1.58.0/packages/playwright/src/mcp/browser/tab.ts).
@@ -87,6 +87,15 @@ headed fixture loads the actual installed Vue 3.5.13 / Quasar 2.18.2 bundles and
 from the frontend dependency volume mounted read-only. Dialog refs, Project/Status select
 options, selection results, closing lists and stable repeat hashes pass at 1280x800 and
 390x844 in light and dark mode, with default Quasar transitions.
+
+On 2026-09-11 the stored 50-project Quasar loop was repeated against an isolated headed
+fixture after raising the code deadline from 40 to 120 seconds. The unchanged UI sequence
+created 50/50 projects in 71.269 seconds, served exactly 50 fixture requests, made no external
+request, left the dialog closed, and returned a compact successful script result. Before the
+change the 40-second worker deadline interrupted the same class of loop after 29 confirmed
+creations; an earlier diagnostic run with only a temporary 90-second deadline completed 50/50
+in 71.341 seconds. These runs validate the selected budget for this workload, not a general
+latency guarantee.
 
 Run that optional real-Quasar check through the same development stack:
 

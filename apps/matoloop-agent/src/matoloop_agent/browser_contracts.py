@@ -33,6 +33,13 @@ BrowserErrorCode = Literal[
     "browser.profileInUse",
     "browser.outcomeUnknown",
 ]
+BrowserScriptFailureReason = Literal[
+    "scriptTimeout",
+    "playwrightTimeout",
+    "targetUnavailable",
+    "runtimeError",
+    "invalidResult",
+]
 
 
 def decode_chunk(value: str) -> bytes:
@@ -384,6 +391,16 @@ class BrowserScriptResult(StrictModel):
     output: str = Field(default="", max_length=32_768)
     output_truncated: bool = Field(default=False, alias="outputTruncated")
     error_code: BrowserErrorCode | None = Field(default=None, alias="errorCode")
+    failure_reason: BrowserScriptFailureReason | None = Field(default=None, alias="failureReason")
+    line: int | None = Field(default=None, ge=1, le=32_768)
+
+    @model_validator(mode="after")
+    def valid_failure(self):
+        if self.failure_reason is not None and self.error_code is None:
+            raise ValueError("Script failure reason requires an error outcome")
+        if self.line is not None and self.failure_reason is None:
+            raise ValueError("Script line requires a failure reason")
+        return self
 
     @field_validator("value", mode="before")
     @classmethod

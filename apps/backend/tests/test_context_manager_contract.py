@@ -1036,7 +1036,11 @@ def test_browser_deltas_require_a_complete_base_in_the_actual_request(reset, int
 def test_browser_effect_outcomes_survive_context_shortening(kind, error):
     value = {"text": "- generic: " + "x" * 20000}
     if kind == "script":
-        value["script"] = {"value": {"details": "v" * 10000}, "output": "o" * 20000, "errorCode": error}
+        value["script"] = {
+            "value": {"details": "v" * 10000}, "output": "o" * 20000,
+            "errorCode": error,
+            **({"failureReason": "runtimeError", "line": 7} if error else {}),
+        }
     elif kind == "batch":
         value["batch"] = {"completed": 1 if error else 3, "total": 3, "errorCode": error}
     else:
@@ -1053,6 +1057,8 @@ def test_browser_effect_outcomes_survive_context_shortening(kind, error):
     elif kind == "script":
         assert payload["script"]["outputTruncated"] is True
         assert payload["scriptValueOmitted"] is True
+        assert payload["script"].get("failureReason") == ("runtimeError" if error else None)
+        assert payload["script"].get("line") == (7 if error else None)
     else:
         assert payload["playwrightCode"]["completed"] == value["playwrightCode"]["completed"]
         assert payload["playwrightCode"].get("attempted") == value["playwrightCode"].get("attempted")

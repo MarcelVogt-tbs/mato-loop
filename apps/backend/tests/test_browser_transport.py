@@ -804,7 +804,9 @@ def test_slim_browser_tools_convert_to_one_unguarded_rpc(browser_tool, name, act
                 assert wire["selector"] == "aria-ref=e1"
             if action == "fill":
                 assert wire["slowly"] is True and wire["submit"] is True
-            return {"script": {"value": {"changed": True}, "output": "bounded", "errorCode": "browser.actionFailed"}} if script else {}
+            return {"script": {"value": {"changed": True}, "output": "bounded",
+                               "errorCode": "browser.actionFailed", "failureReason": "runtimeError",
+                               "line": 2}} if script else {}
 
     case.env.reply = reply
     result = case.env.client.portal.call(case.registry.execute, case.call, case.context)
@@ -1295,6 +1297,33 @@ def test_relay_backpressure_blocks_until_queue_space_is_available(env):
                     return [await relay.incoming.get() for _ in range(6)]
 
             assert env.client.portal.call(drain) == [bytes([index]) for index in range(6)]
+
+
+async def test_rfb_requests_pass_while_browser_action_lock_is_held():
+    release = asyncio.Event()
+
+    async def receive():
+        if not release.is_set():
+            release.set()
+            return {"type": "websocket.receive", "bytes": b"rfb-update-request"}
+        await asyncio.Event().wait()
+
+    connection = SimpleNamespace(action_lock=asyncio.Lock(), closed=False)
+    await connection.action_lock.acquire()
+    outgoing = asyncio.Queue(maxsize=4)
+    task = asyncio.create_task(
+        routes._pump_socket(
+            SimpleNamespace(receive=receive, send_bytes=AsyncMock()),
+            asyncio.Queue(maxsize=4), outgoing, connection=connection,
+        )
+    )
+    try:
+        assert await asyncio.wait_for(outgoing.get(), 1) == b"rfb-update-request"
+        assert connection.action_lock.locked()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        connection.action_lock.release()
 
 
 @pytest.mark.parametrize("payload", ["text-not-rfb", b"x" * (1024 * 1024 + 1)])

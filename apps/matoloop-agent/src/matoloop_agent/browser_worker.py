@@ -36,7 +36,9 @@ from uuid import uuid4
 
 from PIL import Image
 from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
+from pydantic import ValidationError
 
 from .browser_contracts import (
     MAX_CLIPBOARD_BYTES,
@@ -1449,9 +1451,10 @@ class BrowserWorker:
                 raise fail("invalidTarget") from None
         output = ScriptOutput()
         result = BrowserScriptResult()
+        script_deadline = None
         try:
             with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
-                async with asyncio.timeout(40) as deadline:
+                async with asyncio.timeout(120) as script_deadline:
                     if compiled is not None:
                         namespace = {"__name__": "__browser_script__"}
                         exec(compiled, namespace)
@@ -1461,49 +1464,77 @@ class BrowserWorker:
                     else:
                         target = page.locator(args.selector) if args.selector else page
                         # Validate before Playwright converts non-JSON JS values to null/objects.
-                        value = await target.evaluate(
-                            "async element => { const value = await ("
+                        evaluated = await target.evaluate(
+                            "async element => { let value; try { value = await ("
                             + args.function
                             + """
-                            )(element);
-                            let budget = 32768;
-                            const check = (v, depth = 0) => {
-                                if (--budget < 0 || depth > 32) throw Error('JSON limit');
-                                if (v === null || typeof v === 'boolean') return;
-                                if (typeof v === 'string') {
-                                    budget -= v.length;
-                                    if (budget < 0) throw Error('JSON limit');
-                                    return;
-                                }
-                                if (typeof v === 'number' && Number.isFinite(v)) return;
-                                if (typeof v !== 'object' ||
-                                    (!Array.isArray(v) &&
-                                        Object.getPrototypeOf(v) !== Object.prototype &&
-                                        Object.getPrototypeOf(v) !== null))
-                                    throw Error('Not JSON');
-                                if (Array.isArray(v) && v.length > budget)
-                                    throw Error('JSON limit');
-                                for (const key of Reflect.ownKeys(v)) {
-                                    if (typeof key !== 'string') throw Error('Not JSON');
-                                    budget -= key.length;
-                                    check(v[key], depth + 1);
-                                }
-                            };
-                            check(value);
-                            const json = JSON.stringify(value);
-                            if (new TextEncoder().encode(json).length > 32768)
-                                throw Error('JSON limit');
-                            return JSON.parse(json);
+                            )(element); } catch { return [false, 'runtimeError', null]; }
+                            try {
+                                let budget = 32768;
+                                const check = (v, depth = 0) => {
+                                    if (--budget < 0 || depth > 32) throw Error();
+                                    if (v === null || typeof v === 'boolean') return;
+                                    if (typeof v === 'string') {
+                                        budget -= v.length;
+                                        if (budget < 0) throw Error();
+                                        return;
+                                    }
+                                    if (typeof v === 'number' && Number.isFinite(v)) return;
+                                    if (typeof v !== 'object' ||
+                                        (!Array.isArray(v) &&
+                                            Object.getPrototypeOf(v) !== Object.prototype &&
+                                            Object.getPrototypeOf(v) !== null)) throw Error();
+                                    if (Array.isArray(v) && v.length > budget) throw Error();
+                                    for (const key of Reflect.ownKeys(v)) {
+                                        if (typeof key !== 'string') throw Error();
+                                        budget -= key.length;
+                                        check(v[key], depth + 1);
+                                    }
+                                };
+                                check(value);
+                                const json = JSON.stringify(value);
+                                if (new TextEncoder().encode(json).length > 32768) throw Error();
+                                return [true, null, JSON.parse(json)];
+                            } catch { return [false, 'invalidResult', null]; }
                         }"""
                         )
-                    if deadline.expired():
+                        if evaluated[0] is not True:
+                            result = BrowserScriptResult(
+                                errorCode="browser.outcomeUnknown",
+                                failureReason=evaluated[1],
+                            )
+                        value = evaluated[2]
+                    if script_deadline.expired():
                         raise TimeoutError
-                    result = BrowserScriptResult(value=value)
-        except BaseException:
+                    if result.error_code is None:
+                        result = BrowserScriptResult(value=value)
+        except BaseException as exc:
             if asyncio.current_task().cancelling():
                 # External RPC cancellation must still tear down the worker, not drain/retry it.
                 raise
-            result = BrowserScriptResult(errorCode="browser.outcomeUnknown")
+            if isinstance(exc, PlaywrightTimeoutError):
+                reason = "playwrightTimeout"
+            elif (
+                isinstance(exc, TimeoutError)
+                and script_deadline is not None
+                and script_deadline.expired()
+            ):
+                reason = "scriptTimeout"
+            elif isinstance(exc, ValidationError):
+                reason = "invalidResult"
+            elif isinstance(exc, PlaywrightError):
+                reason = "targetUnavailable"
+            else:
+                reason = "runtimeError"
+            line = None
+            traceback = exc.__traceback__
+            while traceback is not None:
+                if traceback.tb_frame.f_code.co_filename == "<browser-run-code>":
+                    line = traceback.tb_lineno
+                traceback = traceback.tb_next
+            result = BrowserScriptResult(
+                errorCode="browser.outcomeUnknown", failureReason=reason, line=line
+            )
         result.output, result.output_truncated = output.text, output.truncated
         return result
 
@@ -1739,11 +1770,7 @@ class BrowserWorker:
         )
         if state.get("tooLarge"):
             raise fail("fileTooLarge")
-        impl = page._impl_obj
-        result = await impl._channel.send_return_as_dict(
-            "snapshotForAI", impl._timeout_settings.timeout, {"timeout": 8000}
-        )
-        text = result.get("full")
+        text = await page.aria_snapshot(mode="ai", timeout=8000)
         if not isinstance(text, str) or len(text) > 32_768:
             raise fail("fileTooLarge")
         if self.document_ids.get(page) != document_id:

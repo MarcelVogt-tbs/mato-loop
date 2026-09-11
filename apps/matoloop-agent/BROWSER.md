@@ -47,7 +47,7 @@ following Playwright's Docker guidance. Deploy this companion file at the same r
 path when using the prepared Compose stack. No added capabilities or unconfined mode
 are used; a host AppArmor user-namespace restriction can still prevent launch.
 
-Container images include pinned Playwright 1.58.0 and its matching Chromium build at
+Container images include pinned Playwright 1.59.0 and its matching Chromium build at
 `/usr/local/lib/matoloop-agent/tools/browser`, outside the development `/opt` dependency
 volume. `MATOLOOP_AGENT_CONTAINER=1` selects this fixed installation; RPC arguments cannot
 override it. Native managed installation is `<config-parent-parent>/tools/browser`,
@@ -119,13 +119,13 @@ events surfaced by Playwright, not a complete audit of Chromium or service-worke
 
 The shared contract is implemented with these explicit additions:
 
-- `inspect.text` is Playwright 1.58's page-level AI accessibility snapshot, at most 32,768
+- `inspect.text` is Playwright 1.59's public page-level AI accessibility snapshot, at most 32,768
   characters. It includes semantic hierarchy, accessible names and states, current form
   values, iframe content and Playwright `ref` markers. Callers target a marker with
   `aria-ref=e12` or its frame-qualified form. Normal AUTO calls do not require a source
-  hash. The implementation deliberately uses the
-  version-bound `snapshotForAI` channel so its output and locator behavior match Playwright
-  rather than a local accessibility approximation. `inspect.data.snapshotSha256` is an
+  hash. The implementation uses `page.aria_snapshot(mode="ai")` so its output and locator
+  behavior match Playwright rather than a local accessibility approximation.
+  `inspect.data.snapshotSha256` is an
   opaque observation identity using a per-runtime key and page/document identity. Host-only
   `guard=true` additionally captures bounded fields, checked/selected/disabled/read-only state,
   form targets/methods, focus, desktop/viewport geometry and scroll position. That extra scan
@@ -134,7 +134,7 @@ The shared contract is implemented with these explicit additions:
   values above 65,536 characters or private state above 512 KiB are rejected, not silently
   truncated. Playwright constructs the accessibility tree before the worker applies its
   32,768-character release limit; the worker process boundary and eight-second capture timeout
-  bound this unavoidable private-API behavior. The host must compare agent-produced tokens,
+  bound this behavior. The host must compare agent-produced tokens,
   not recompute SHA256(text).
   This bounded inspection is not a complete page semantic guarantee, does not cover
   arbitrary JavaScript, and does not enforce a stale-approval
@@ -160,13 +160,19 @@ The shared contract is implemented with these explicit additions:
 - `run_code` requires a `tabId` and `code` defining `async def run(page)`; `evaluate` requires
   `tabId` and a JavaScript `function`, optionally with a selector. Source limits are 32,768
   characters. `script` returns finite JSON `value` (32,768 UTF-8 bytes, depth 32), bounded
-  combined print output, `outputTruncated`, and optional controlled `errorCode`. Python runs
+  combined print output, `outputTruncated`, and optional controlled `errorCode`, `failureReason`,
+  and Python source `line`. Failure diagnostics never include exception text, paths, stack traces,
+  source excerpts, or local values. Python runs
   once in a fresh unrestricted namespace; syntax/function-shape checks are a contract, not
-  a language sandbox. A 40-second cooperative deadline and the manager's 55-second RPC
-  termination protect normal operation; blocking or hostile code can force a browser restart.
+  a language sandbox. A 120-second cooperative deadline, 140-second manager deadline, and
+  160-second backend deadline protect normal operation without preempting transport or cleanup;
+  blocking or hostile code can force a browser restart.
   Errors after execution starts report an unknown outcome, never an automatic retry. User
   code can deliberately create background work or write outside managed staging, so ordinary
   output capture and process cleanup are not adversarial containment.
+  Scripts should wait for concrete postconditions after state changes. For example, after a
+  dialog action use `await dialog.wait_for(state="hidden")`; `dialog.count()` can remain one
+  during a leave transition and does not prove that the next iteration may reuse the locator.
 - `fill` accepts `slowly` and `submit`, both default false. `select` selects a known `tabId`.
   The backend's small public `browser_*` tools translate to this existing internal execute
   envelope. Historical `browser(action=...)` calls remain readable but are no longer offered.

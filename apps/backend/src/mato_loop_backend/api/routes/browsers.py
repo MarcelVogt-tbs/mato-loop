@@ -253,11 +253,10 @@ async def _pump_socket(websocket: WebSocket, incoming, outgoing, *, connection=N
                 async with asyncio.timeout(10):
                     await outgoing.put(data)
             else:
-                async with connection.action_lock:
-                    if connection.closed:
-                        continue
-                    async with asyncio.timeout(10):
-                        await outgoing.put(data)
+                if connection.closed:
+                    continue
+                async with asyncio.timeout(10):
+                    await outgoing.put(data)
 
     async def send():
         while True:

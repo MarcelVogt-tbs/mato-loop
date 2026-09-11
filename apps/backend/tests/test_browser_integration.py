@@ -46,6 +46,8 @@ from mato_loop_backend.integrations.browser import (
     BROWSER_TOOL,
     BROWSER_TOOL_ACTIONS,
     BROWSER_TOOLS,
+    BrowserEvaluateArguments,
+    BrowserRunCodeArguments,
 )
 from mato_loop_backend.integrations.registry import (
     effective_execution_integration_settings,
@@ -186,10 +188,18 @@ def test_public_script_source_limits_and_host_only_flags(model, source):
     {"value": float("nan")}, {"value": "x" * 32768}, {"output": "x" * 32769},
     {"value": "\u00e4" * 16384}, {"outputTruncated": 1}, {"errorCode": "private.error"},
     {"error": "raw private exception"},
+    {"failureReason": "runtimeError"}, {"line": 1},
+    {"errorCode": "browser.outcomeUnknown", "failureReason": "rawException"},
 ])
 def test_script_results_reject_unbounded_or_uncontrolled_data(script):
     with pytest.raises(ValidationError):
         BrowserActionResult(script=script)
+
+
+def test_historical_script_error_without_diagnostics_remains_readable():
+    assert BrowserActionResult(
+        script={"errorCode": "browser.outcomeUnknown"}
+    ).script.failure_reason is None
 
 
 @pytest.mark.parametrize("action", ["tabs", "inspect", "screenshot", "diagnostics"])
@@ -213,6 +223,14 @@ def test_browser_read_observe_accepts_full_payload_and_round_trip(action, observ
 def test_browser_observe_remains_a_strict_boolean(observe):
     with pytest.raises(ValidationError):
         BrowserActionArguments(action="tabs", observe=observe)
+
+
+@pytest.mark.parametrize("model,source", [
+    (BrowserRunCodeArguments, {"code": "async def run(page): return 1"}),
+    (BrowserEvaluateArguments, {"function": "() => 1"}),
+])
+def test_browser_code_observation_is_explicit(model, source):
+    assert model(tabId=str(uuid4()), **source).observe is False
 
 
 def test_browser_guidance_groups_known_actions_without_blind_mutations():
@@ -755,7 +773,11 @@ async def test_script_results_preserve_bounded_data_and_mark_partial_effect_erro
     case.call.arguments = {"tabId": str(uuid4()), "observe": observe, **source}
     case.coordinator.execute.side_effect = None
     case.coordinator.execute.return_value = BrowserActionResult(
-        script={"value": {"changed": True}, "output": "printed output", "outputTruncated": True, "errorCode": error_code},
+        script={
+            "value": {"changed": True}, "output": "printed output", "outputTruncated": True,
+            "errorCode": error_code,
+            **({"failureReason": "runtimeError", "line": 3} if error_code else {}),
+        },
         **({"text": "- changed document", "data": {"snapshotSha256": "a" * 64}} if observe else {}),
     )
     result = await case.effective.execute(case.call, case.context)
@@ -763,7 +785,7 @@ async def test_script_results_preserve_bounded_data_and_mark_partial_effect_erro
     assert result.metadata == {"privateIntegrationData": True, **({"errorCode": error_code} if error_code else {})}
     assert json.loads(result.content)["script"] == {
         "value": {"changed": True}, "output": "printed output", "outputTruncated": True,
-        **({"errorCode": error_code} if error_code else {}),
+        **({"errorCode": error_code, "failureReason": "runtimeError", "line": 3} if error_code else {}),
     }
     requests = [call.args[0] for call in case.context.ask_handler.await_args_list]
     assert [request.capability for request in requests] == ["browser.read", "browser.write", "browser.code"]

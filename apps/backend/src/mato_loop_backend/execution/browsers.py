@@ -576,7 +576,8 @@ class BrowserCoordinator:
                                 result = await self._screenshot(connection, wire_payload, check_binding)
                             else:
                                 result = await connection.client.request(
-                                    "integration.browser.execute", wire_payload, BrowserActionResult, timeout=60,
+                                    "integration.browser.execute", wire_payload, BrowserActionResult,
+                                    timeout=160 if action.action in {"run_code", "evaluate"} else 60,
                                 )
                         if not result.matches_action(action):
                             raise ExecutionClientError("executionAgent.protocolError")

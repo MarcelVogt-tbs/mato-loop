@@ -1353,7 +1353,12 @@ def _shorten_evidence_output(
                 if browser.batch is not None:
                     outcome["batch"] = browser.batch.model_dump(exclude_none=True)
                 if browser.script is not None:
-                    outcome["script"] = {"errorCode": browser.script.error_code, "outputTruncated": True}
+                    outcome["script"] = {
+                        "errorCode": browser.script.error_code,
+                        "failureReason": browser.script.failure_reason,
+                        "line": browser.script.line,
+                        "outputTruncated": True,
+                    }
                     outcome["scriptValueOmitted"] = True
                 if browser.playwright_code is not None:
                     outcome["playwrightCode"] = browser.playwright_code.model_dump(exclude_none=True)

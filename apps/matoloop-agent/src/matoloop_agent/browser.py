@@ -170,7 +170,18 @@ class BrowserManager:
         if self.worker is None or self.worker.returncode is not None:
             raise AgentError("browser.notConnected", "Browser worker is unavailable")
         try:
-            async with asyncio.timeout(55):
+            arguments = values.get("args")
+            code_execution = (
+                op == "execute"
+                and isinstance(arguments, dict)
+                and arguments.get("action")
+                in {
+                    "run_code",
+                    "evaluate",
+                }
+            )
+            rpc_timeout = 140 if code_execution else 55
+            async with asyncio.timeout(rpc_timeout):
                 started = monotonic()
                 self.worker.stdin.write(json.dumps({"op": op, **values}).encode() + b"\n")
                 await self.worker.stdin.drain()
@@ -180,7 +191,7 @@ class BrowserManager:
             if op == "execute":
                 elapsed_ms = response.get("elapsedMs")
                 # Optional private diagnostics must not affect the operation's outcome.
-                if not (type(elapsed_ms) in (int, float) and 0 <= elapsed_ms <= 55_000):
+                if not (type(elapsed_ms) in (int, float) and 0 <= elapsed_ms <= rpc_timeout * 1000):
                     elapsed_ms = None
                 with contextlib.suppress(ValueError):
                     args = BrowserExecuteArguments.model_validate(values.get("args"))

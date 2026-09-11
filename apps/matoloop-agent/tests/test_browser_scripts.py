@@ -77,6 +77,14 @@ class BrowserScriptTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(kind=type(value)), self.assertRaises(ValidationError):
                 BrowserScriptResult(value=value)
+        for invalid in (
+            {"failureReason": "runtimeError"},
+            {"line": 1},
+            {"errorCode": "browser.outcomeUnknown", "failureReason": "rawException"},
+        ):
+            with self.assertRaises(ValidationError):
+                BrowserScriptResult(**invalid)
+        self.assertIsNone(BrowserScriptResult(errorCode="browser.outcomeUnknown").failure_reason)
         output = ScriptOutput()
         self.assertEqual(output.write("a" * 1_000_000), 1_000_000)
         self.assertEqual(output.write("b" * 1_000_000), 1_000_000)
@@ -115,6 +123,7 @@ async def run(page):
         for ending in (
             "return object()",
             "raise RuntimeError('not exposed')",
+            "raise TimeoutError('not a deadline')",
             "return float('nan')",
             "return 'x' * 32769",
             "raise SystemExit('not exposed')",
@@ -134,6 +143,10 @@ async def run(page):
                     output="retained\n",
                     outputTruncated=False,
                     errorCode="browser.outcomeUnknown",
+                    failureReason=(
+                        "invalidResult" if ending.startswith("return") else "runtimeError"
+                    ),
+                    line=None if ending.startswith("return") else 4,
                 ),
             )
         result = await self.execute(
@@ -141,12 +154,14 @@ async def run(page):
         )
         self.assertEqual(result["script"]["output"], "top-level\n")
         self.assertEqual(result["script"]["errorCode"], "browser.outcomeUnknown")
+        self.assertEqual(result["script"]["failureReason"], "runtimeError")
+        self.assertEqual(result["script"]["line"], 2)
 
     async def test_timeout_cancellation_and_failed_observation(self):
         timeout = asyncio.timeout
         with patch(
             "matoloop_agent.browser_worker.asyncio.timeout",
-            lambda seconds: timeout(0.01 if seconds == 40 else seconds),
+            lambda seconds: timeout(0.01 if seconds == 120 else seconds),
         ):
             result = await self.execute(
                 code="""import asyncio
@@ -157,6 +172,8 @@ async def run(page):
 """
             )
         self.assertEqual(result["script"]["errorCode"], "browser.outcomeUnknown")
+        self.assertEqual(result["script"]["failureReason"], "scriptTimeout")
+        self.assertIsNone(result["script"]["line"])
         self.assertEqual(result["script"]["output"], "started\n")
         self.worker._settle = AsyncMock(side_effect=RuntimeError("closed page"))
         self.page.title.side_effect = TimeoutError
@@ -183,9 +200,7 @@ async def run(page):
     async def test_guard_opt_in_and_normal_observation_identity(self):
         self.worker.document_ids[self.page] = "document"
         self.page.locator.return_value.evaluate = AsyncMock(return_value={"state": ["private"]})
-        self.page._impl_obj._channel.send_return_as_dict = AsyncMock(
-            return_value={"full": "- button"}
-        )
+        self.page.aria_snapshot = AsyncMock(return_value="- button")
         normal = await self.worker._inspect(self.page, guard=False)
         self.page.locator.return_value.evaluate.assert_not_awaited()
         self.worker.geometry["width"] = 400
@@ -294,6 +309,9 @@ async def run(page):
                     before = await page.evaluate("steps")
                     result = await execute("evaluate", function=function)
                     self.assertEqual(result["script"]["errorCode"], "browser.outcomeUnknown")
+                    self.assertIn(
+                        result["script"]["failureReason"], {"runtimeError", "invalidResult"}
+                    )
                     self.assertEqual(await page.evaluate("steps"), before + 1)
                 for ending in ("return object()", "raise RuntimeError('not exposed')"):
                     result = await execute(
@@ -305,6 +323,13 @@ async def run(page):
                         ),
                     )
                     self.assertEqual(result["script"]["errorCode"], "browser.outcomeUnknown")
+                    self.assertEqual(
+                        result["script"]["failureReason"],
+                        "invalidResult" if ending.startswith("return") else "runtimeError",
+                    )
+                    self.assertEqual(
+                        result["script"]["line"], None if ending.startswith("return") else 4
+                    )
                     self.assertEqual(result["script"]["output"], "partial\n")
                     self.assertEqual(await page.locator("input").input_value(), "partial")
                 await page.set_content("""<form
@@ -349,7 +374,7 @@ async def run(page):
             finally:
                 await worker.close()
 
-    async def test_pipe_framing_async_timeout_and_hard_block_closure(self):
+    async def test_pipe_framing_script_failure_and_hard_block_closure(self):
         with tempfile.TemporaryDirectory() as root:
             manager = BrowserManager(SimpleNamespace(data_dir=Path(root)), None)
             try:
@@ -386,13 +411,26 @@ async def run(page):
                         "code": """import asyncio
 async def run(page):
     await page.set_content('<p>Partial effect</p>')
-    print('before timeout')
-    await asyncio.sleep(60)
+    print('before failure')
+    raise RuntimeError()
 """,
                     },
                 )
                 self.assertEqual(result["script"]["errorCode"], "browser.outcomeUnknown")
-                self.assertEqual(result["script"]["output"], "before timeout\n")
+                self.assertEqual(result["script"]["output"], "before failure\n")
+                self.assertEqual(result["script"]["failureReason"], "runtimeError")
+                self.assertEqual(result["script"]["line"], 5)
+                result = await manager.rpc(
+                    "execute",
+                    args={
+                        **args,
+                        "code": """async def run(page):
+    await page.locator('#missing').click(timeout=10)
+""",
+                    },
+                )
+                self.assertEqual(result["script"]["failureReason"], "playwrightTimeout")
+                self.assertEqual(result["script"]["line"], 2)
                 result = await manager.rpc(
                     "execute",
                     args={
@@ -412,10 +450,10 @@ async def run(page):
                 browser_pid = result["script"]["value"]["pid"]
                 process = manager.worker
                 timeout = asyncio.timeout
-                # Exercise the real process-group kill; shorten only the parent's 55s RPC budget.
+                # Exercise the real process-group kill; shorten only the parent's 140s RPC budget.
                 with patch(
                     "matoloop_agent.browser.asyncio.timeout",
-                    lambda seconds: timeout(0.3 if seconds == 55 else seconds),
+                    lambda seconds: timeout(0.3 if seconds == 140 else seconds),
                 ):
                     with self.assertRaises(AgentError) as error:
                         await manager.rpc(

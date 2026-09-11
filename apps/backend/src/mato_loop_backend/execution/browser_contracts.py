@@ -21,6 +21,9 @@ BrowserErrorCode = Literal[
     "browser.outcomeUnknown", "browser.profileInUse", "browser.snapshotChanged",
     "browser.observationUnstable",
 ]
+BrowserScriptFailureReason = Literal[
+    "scriptTimeout", "playwrightTimeout", "targetUnavailable", "runtimeError", "invalidResult",
+]
 BrowserAction = Literal[
     "tabs", "newtab", "closetab", "navigate", "inspect", "screenshot", "click",
     "fill", "fill_form", "press", "scroll", "diagnostics", "upload", "select", "evaluate", "run_code",
@@ -303,11 +306,17 @@ class BrowserScriptResult(BrowserResult):
     output: str = Field(default="", max_length=32768)
     output_truncated: bool = False
     error_code: BrowserErrorCode | None = None
+    failure_reason: BrowserScriptFailureReason | None = None
+    line: int | None = Field(default=None, ge=1, le=32768)
 
     @model_validator(mode="after")
     def bounded_script(self) -> Self:
         if len(json.dumps(self.value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()) > 32768:
             raise ValueError("browser script value exceeds limit")
+        if self.failure_reason is not None and self.error_code is None:
+            raise ValueError("browser script failure reason requires an error outcome")
+        if self.line is not None and self.failure_reason is None:
+            raise ValueError("browser script line requires a failure reason")
         return self
 
 

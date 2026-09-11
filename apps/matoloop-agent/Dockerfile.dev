@@ -10,7 +10,7 @@ COPY --chmod=755 docker/uv /usr/local/bin/uv
 ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/lib/matoloop-agent/tools/browser \
     MATOLOOP_AGENT_CONTAINER=1
 RUN uv venv /tmp/browser-build \
-    && uv pip install --python /tmp/browser-build/bin/python playwright==1.58.0 \
+    && uv pip install --python /tmp/browser-build/bin/python playwright==1.59.0 \
     && /tmp/browser-build/bin/playwright install --with-deps --no-shell chromium \
     && chmod -R a+rX /usr/local/lib/matoloop-agent/tools/browser \
     && useradd --system --uid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin matoloop-browser \
