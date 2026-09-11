@@ -31,6 +31,7 @@ from importlib.metadata import version
 from io import BytesIO, TextIOBase
 from pathlib import Path
 from time import monotonic
+from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -137,7 +138,13 @@ class BrowserWorker:
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
 
-    async def start(self, *, probe: bool = False, allow_network: bool = True) -> dict:
+    async def start(
+        self,
+        *,
+        probe: bool = False,
+        allow_network: bool = True,
+        color_scheme: Literal["light", "dark"] = "light",
+    ) -> dict:
         self.startup_stage = "storage"
         if not allow_network:
             raise fail("invalidTarget")
@@ -257,6 +264,7 @@ class BrowserWorker:
                 env=self.environment,
                 no_viewport=True,
                 accept_downloads=True,
+                color_scheme=color_scheme,
                 downloads_path=str(live / "downloads"),
                 args=[
                     "--disable-gpu",
@@ -1999,6 +2007,7 @@ async def serve(root: Path) -> None:
                     result = await worker.start(
                         probe=request.get("probe", False),
                         allow_network=request.get("allowNetwork", True),
+                        color_scheme=request.get("colorScheme", "light"),
                     )
                 elif op == "execute":
                     args = BrowserExecuteArguments.model_validate(request["args"])

@@ -252,7 +252,8 @@ class BrowserControlRequests:
         return None
 
     async def claim(self, request_id: UUID, owner_id: UUID, session_id: UUID,
-                    integration_id: UUID, login_id: UUID, socket: WebSocket) -> BrowserConnection:
+                    integration_id: UUID, login_id: UUID, socket: WebSocket,
+                    *, color_scheme: str = "light") -> BrowserConnection:
         request = self.requests.get(request_id)
         if (request is None or request.owner_id != owner_id or request.info.session_id != session_id
                 or request.info.integration_id != integration_id or request.socket is not None):
@@ -267,6 +268,7 @@ class BrowserControlRequests:
                 expected_browser_id=current.browser_id if current else None,
                 expected_view_id=current.view_id if current else None,
                 control_request=request,
+                color_scheme=color_scheme,
             )
         except BaseException:
             self.finish(request, "browser.bindingChanged")

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
+import { Dark } from 'quasar'
 import { api } from 'src/boot/axios'
 import { browserSocketUrl, clipboardFits } from 'src/utils/browser'
 import { notifyError } from 'src/utils/notifications'
@@ -68,7 +69,9 @@ export const useBrowserStore = defineStore('browser', {
       if (!retained) this.release({ preserveRequest: true })
       const binding = { integrationId, sessionId, agentId, controlRequestId, status: 'connecting', offer: null }
       let generation = this.generation
-      const socket = markRaw(new WebSocket(browserSocketUrl(integrationId, '', { sessionId, ...(controlRequestId ? { controlRequestId } : {}) })))
+      const socket = markRaw(new WebSocket(browserSocketUrl(integrationId, '', {
+        sessionId, ...(controlRequestId ? { controlRequestId } : {}), colorScheme: Dark.isActive ? 'dark' : 'light'
+      })))
       if (retained) this.candidate = { ...binding, socket, takeover }
       else Object.assign(this, binding, { socket, stoppedContext: null })
       const current = () => this.candidate?.socket === socket || (this.generation === generation && this.socket === socket)

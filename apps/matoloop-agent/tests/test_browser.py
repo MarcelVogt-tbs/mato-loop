@@ -509,6 +509,20 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 ],
             )
 
+    async def test_open_passes_color_scheme_to_new_browser_context(self):
+        self.manager.spawn = AsyncMock()
+        self.manager.rpc = AsyncMock(return_value={"state": "ready"})
+
+        result = await self.manager.dispatch(
+            "integration.browser.open",
+            BrowserOpenArguments(
+                ownerId=self.owner_id, browserId=self.browser_id, colorScheme="dark"
+            ),
+        )
+
+        self.assertEqual(result, {"browserId": self.browser_id})
+        self.manager.rpc.assert_awaited_once_with("start", colorScheme="dark")
+
     async def test_worker_response_failures_log_only_controlled_diagnostics(self):
         for response, reason in (
             (b'{"private-token"', "invalidJson"),

@@ -68,6 +68,7 @@ class BrowserIdArguments(StrictModel):
 
 class BrowserOpenArguments(BrowserOwnerArguments, BrowserIdArguments):
     allow_network: bool = Field(default=True, alias="allowNetwork")
+    color_scheme: Literal["light", "dark"] = Field(default="light", alias="colorScheme")
 
 
 class BrowserViewArguments(BrowserIdArguments):

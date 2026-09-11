@@ -204,6 +204,15 @@ def open_view(env, state):
                 pass
 
 
+@pytest.mark.parametrize("color_scheme", ["light", "dark"])
+def test_new_browser_uses_frontend_color_scheme(env, color_scheme):
+    with env.client.websocket_connect(
+        env.url + f"&colorScheme={color_scheme}", headers=ORIGIN
+    ) as control:
+        assert control.receive_json()["type"] == "state"
+        assert env.calls[0][1]["colorScheme"] == color_scheme
+
+
 @pytest.fixture
 def wire(env, monkeypatch):
     """Exercise real request/cancel frames while keeping agent replies and storage fake."""

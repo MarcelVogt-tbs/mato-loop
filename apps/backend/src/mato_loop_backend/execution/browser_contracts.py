@@ -77,6 +77,7 @@ class BrowserIdArguments(WireModel):
 
 class BrowserOpenArguments(BrowserOwnerArguments, BrowserIdArguments):
     allow_network: bool = True
+    color_scheme: Literal["light", "dark"] = "light"
 
 
 class BrowserOpenResult(BrowserResult):

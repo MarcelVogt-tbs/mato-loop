@@ -513,7 +513,9 @@ class BrowserManager:
                         raise AgentError("browser.busy", "Another browser is active")
                     try:
                         await self.spawn(self.runtime_root(root))
-                        self.last_status = BrowserStatus.model_validate(await self.rpc("start"))
+                        self.last_status = BrowserStatus.model_validate(
+                            await self.rpc("start", colorScheme=args.color_scheme)
+                        )
                         if self.last_status.state != "ready":
                             raise AgentError(
                                 self.last_status.error_code or "browser.notReady",

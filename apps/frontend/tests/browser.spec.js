@@ -10,9 +10,13 @@ import { browserNavigationUrl, browserSocketUrl, clipboardFits, setupInputChunks
 import { apiErrorMessage } from '../src/utils/api-errors'
 import { FakeWebSocket } from './terminal-websocket'
 
-const { api, notifyError, viewers } = vi.hoisted(() => ({
+const { api, notifyError, viewers, dark } = vi.hoisted(() => ({
   api: { get: vi.fn(), put: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
-  notifyError: vi.fn(), viewers: []
+  notifyError: vi.fn(), viewers: [], dark: { active: false }
+}))
+vi.mock('quasar', async (importOriginal) => ({
+  ...await importOriginal(),
+  Dark: { get isActive() { return dark.active } }
 }))
 vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('src/utils/notifications', () => ({ notifyError }))
@@ -41,6 +45,7 @@ const navigation = { type: 'navigation', browserId: 'runtime-1',
 let browser, socket
 beforeEach(() => {
   vi.clearAllMocks()
+  dark.active = false
   setActivePinia(createPinia())
   FakeWebSocket.instances = []
   viewers.length = 0
@@ -49,11 +54,18 @@ beforeEach(() => {
   browser.setDisplayedSession(context.sessionId)
 })
 afterEach(() => {
+  dark.active = false
   browser.release()
   useBrowserSetupStore().release()
   vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+})
+
+it.each([[false, 'light'], [true, 'dark']])('opens new browser runtimes with the MatoLoop color scheme (%s)', (enabled, expected) => {
+  dark.active = enabled
+  browser.connect(context)
+  expect(new URL(browser.socket.url).searchParams.get('colorScheme')).toBe(expected)
 })
 async function open() {
   browser.release()
@@ -123,7 +135,7 @@ it('balances the fixed DevTools chord, releases on failure, and rejects view-onl
 
 it('uses only same-origin control and binary view URLs and explicitly confirmed attachment', async () => {
   const rfb = await open()
-  expect(socket.url).toBe('ws://localhost:3000/api/browsers/browser-1?sessionId=session-1')
+  expect(socket.url).toBe('ws://localhost:3000/api/browsers/browser-1?sessionId=session-1&colorScheme=light')
   expect(rfb.url).toContain(`/api/browsers/browser-1/view?sessionId=session-1&browserId=runtime-1&viewId=${state.viewId}`)
   expect(socket.send).not.toHaveBeenCalled()
   expect(browser.manual).toBe(true)

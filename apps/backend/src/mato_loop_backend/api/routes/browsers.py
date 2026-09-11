@@ -167,15 +167,20 @@ async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
             control_request_id = UUID(websocket.query_params["controlRequestId"]) if "controlRequestId" in websocket.query_params else None
         except ValueError as exc:
             raise ExecutionClientError("browser.invalidTarget") from exc
+        color_scheme = websocket.query_params.get("colorScheme", "light")
+        if color_scheme not in {"light", "dark"}:
+            raise ExecutionClientError("browser.invalidTarget")
         instance, _ = await validate_browser_access(login.user.id, integration_id, login_id=login.login_id, session_id=session_id)
         await websocket.accept()
         if control_request_id is not None:
             candidate = await browser_control_requests.claim(
-                control_request_id, login.user.id, session_id, integration_id, login.login_id, websocket,
+                control_request_id, login.user.id, session_id, integration_id, login.login_id,
+                websocket, color_scheme=color_scheme,
             )
         else:
             candidate = await browser_coordinator.open(
                 login.user.id, integration_id, session_id, login.login_id, websocket,
+                color_scheme=color_scheme,
             )
         last_offer = None
         while candidate.websocket is not websocket:
@@ -198,6 +203,7 @@ async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
             candidate = await browser_coordinator.open(
                 login.user.id, integration_id, session_id, login.login_id, websocket,
                 expected_browser_id=message.browser_id, expected_view_id=message.view_id,
+                color_scheme=color_scheme,
             )
         connection = candidate
         await connection.state()

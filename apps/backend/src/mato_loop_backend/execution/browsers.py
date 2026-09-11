@@ -216,7 +216,8 @@ class BrowserCoordinator:
 
     async def open(self, owner_id, integration_id, session_id, login_id, websocket,
                    *, expected_browser_id: UUID | None = None, expected_view_id: UUID | None = None,
-                   control_request: ControlRequest | None = None) -> BrowserConnection:
+                   control_request: ControlRequest | None = None,
+                   color_scheme: str = "light") -> BrowserConnection:
         instance, can_attach = await validate_browser_access(
             owner_id, integration_id, login_id=login_id, session_id=session_id,
         )
@@ -271,7 +272,7 @@ class BrowserCoordinator:
             self.connections[agent_id] = connection
             if control_request is not None:
                 control_request.bind(connection)
-        opening = asyncio.create_task(self._start(connection, previous, control_request))
+        opening = asyncio.create_task(self._start(connection, previous, control_request, color_scheme))
         connection.task = opening
         try:
             return await asyncio.shield(opening)
@@ -282,14 +283,19 @@ class BrowserCoordinator:
             raise
 
     async def _start(self, connection: BrowserConnection, previous: BrowserConnection | None,
-                     control_request: ControlRequest | None = None) -> BrowserConnection:
+                     control_request: ControlRequest | None = None,
+                     color_scheme: str = "light") -> BrowserConnection:
         try:
             if control_request is not None:
                 await control_request.validate()
             if previous is None:
                 result = await connection.request(
                     "integration.browser.open",
-                    {"ownerId": str(connection.owner_id), "browserId": str(connection.browser_id)},
+                    {
+                        "ownerId": str(connection.owner_id),
+                        "browserId": str(connection.browser_id),
+                        "colorScheme": color_scheme,
+                    },
                     BrowserOpenResult, timeout=60,
                 )
                 if result.browser_id != connection.browser_id:
