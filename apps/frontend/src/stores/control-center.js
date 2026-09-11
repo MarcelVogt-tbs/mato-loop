@@ -402,6 +402,15 @@ export const useControlCenterStore = defineStore('control-center', {
         fileView: this.fileView
       })
     },
+    ensureApp(appId) {
+      if (!controlCenterIntegrationIds.has(appId) || this.tabs.some((tab) => tab.appId === appId)) return
+      return this.save({
+        tabs: [...this.tabs, appTab(appId)],
+        activeAppId: this.activeAppId,
+        open: this.open,
+        fileView: this.fileView
+      })
+    },
     setOpen(open) {
       return this.save({
         tabs: this.tabs,

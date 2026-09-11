@@ -641,8 +641,7 @@ async def test_large_snapshot_becomes_a_readable_session_file_reference(browser_
         "sha256": revision.sha256,
     }
     assert "snapshot" not in payload and "text" not in payload
-    assert result.file_actions[0].path == revision.path
-    assert result.file_actions[0].root == "session"
+    assert not result.file_actions
     dispatched = case.coordinator.execute.await_args.args[-1]
     assert dispatched["selector"] == "main" and dispatched["depth"] == 4
 

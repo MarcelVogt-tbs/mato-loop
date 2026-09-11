@@ -175,6 +175,22 @@ describe('control center store', () => {
     })
   })
 
+  it('adds a background integration without opening or activating the panel', async () => {
+    api.patch.mockResolvedValue(response([tab('files'), tab('browser')], 'files', false))
+    const store = useControlCenterStore()
+    store.syncSession({ id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } })
+
+    await store.ensureApp('browser')
+    await store.ensureApp('browser')
+
+    expect(store.open).toBe(false)
+    expect(store.activeAppId).toBe('files')
+    expect(api.patch).toHaveBeenCalledOnce()
+    expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
+      control_center: requestState(['session', 'files', 'browser'], 'files', false)
+    })
+  })
+
   it('reorders and removes integrations explicitly', async () => {
     api.patch
       .mockResolvedValueOnce(response([tab('calendar'), tab('files'), tab('test-app')], 'files'))

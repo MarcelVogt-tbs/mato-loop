@@ -299,7 +299,7 @@ it('releases native noVNC held keys before parking locks input', async () => {
   expect(browser.rfb.sendKey).toHaveBeenCalledTimes(4)
 })
 
-it('opens authorized Browser requests through serialized persisted app saves before connecting, without navigation', async () => {
+it('adds authorized Browser requests without opening the Control Center and connects in background', async () => {
   const center = useControlCenterStore()
   const session = { id: 'session-1', controlCenter: { tabs: [{ appId: 'files' }], activeAppId: 'files', open: true,
     fileViews: { session: { scope: 'session', selectedPath: 'notes.txt', selectedKind: 'file', rootIdentity: 'session-1' } } } }
@@ -313,14 +313,14 @@ it('opens authorized Browser requests through serialized persisted app saves bef
   await browser.reconcileControlRequest('session-1')
   await nextTick()
   expect(saves).toHaveLength(1)
-  expect(FakeWebSocket.instances).toHaveLength(0)
+  expect(FakeWebSocket.instances).toHaveLength(1)
   saves[0].resolve({ data: { controlCenter: { ...session.controlCenter, open: false } } })
   await vi.waitFor(() => expect(saves).toHaveLength(2))
   expect(saves[1].path).toBe('/sessions/session-1')
-  expect(saves[1].body.control_center).toMatchObject({ active_app_id: 'browser', open: true,
+  expect(saves[1].body.control_center).toMatchObject({ active_app_id: 'files', open: false,
     file_views: { session: { selected_path: 'notes.txt' } } })
-  expect(FakeWebSocket.instances).toHaveLength(0)
-  saves[1].resolve({ data: { controlCenter: { ...session.controlCenter, tabs: [{ appId: 'files' }, { appId: 'browser' }], activeAppId: 'browser', open: true } } })
+  expect(FakeWebSocket.instances).toHaveLength(1)
+  saves[1].resolve({ data: { controlCenter: { ...session.controlCenter, tabs: [{ appId: 'files' }, { appId: 'browser' }], activeAppId: 'files', open: false } } })
   await previous
   await nextTick()
   expect(FakeWebSocket.instances).toHaveLength(1)

@@ -101,7 +101,7 @@ def receive_state(socket):
 
 
 @pytest.mark.parametrize("existing", ["absent", "same-session", "other-session"])
-def test_request_opens_or_takes_over_and_waits_for_real_attachment(request_case, existing):
+def test_request_opens_or_takes_over_in_background(request_case, existing):
     case = request_case
     previous = None
     old_socket = None
@@ -118,6 +118,7 @@ def test_request_opens_or_takes_over_and_waits_for_real_attachment(request_case,
     info = case.get_request().json()["request"]
     assert set(info) == {"id", "sessionId", "integrationId", "agentId", "runId"}
     assert info["sessionId"] == str(case.session.id)
+    assert any(tab.get("app_id") == "browser" for tab in case.session.control_center["tabs"])
     assert not future.done()
     if previous:
         assert not previous.closed
@@ -129,14 +130,13 @@ def test_request_opens_or_takes_over_and_waits_for_real_attachment(request_case,
         if previous:
             assert state["browserId"] == str(previous.browser_id)
             assert state["viewId"] != str(previous.view_id)
-        with open_view(case, state):
-            assert not future.done()
-            socket.send_json({"type": "attach.requested", "requestId": info["id"]})
-            assert socket.receive_json()["attached"] is True
-            assert not future.result(timeout=3).is_error
-            assert case.get_request().json() == {"request": None}
-            assert not control.browser_control_requests.preflights
-            assert case.coordinator.connections[case.agent.id].attached
+        socket.send_json({"type": "attach.requested", "requestId": info["id"]})
+        assert socket.receive_json()["attached"] is True
+        assert not future.result(timeout=3).is_error
+        assert case.get_request().json() == {"request": None}
+        assert not control.browser_control_requests.preflights
+        assert case.coordinator.connections[case.agent.id].attached
+        assert not any(operation == "integration.browser.view" for operation, _ in case.calls)
     assert [operation for operation, _ in case.calls].count("integration.browser.open") == 1
 
 
@@ -203,7 +203,7 @@ def test_waiter_is_bounded_and_never_leaves_latent_authority(request_case, monke
     assert not case.calls
 
 
-@pytest.mark.parametrize("action", ["detach", "close", "disconnect", "early", "policy", "duplicate", "forged"])
+@pytest.mark.parametrize("action", ["detach", "close", "disconnect", "policy", "duplicate", "forged"])
 def test_claim_and_attach_fences(request_case, action):
     case = request_case
     future = case.start()
@@ -225,9 +225,6 @@ def test_claim_and_attach_fences(request_case, action):
                 socket.receive_json()
                 socket.send_json({"type": "attach.requested", "requestId": info["id"]})
                 assert socket.receive_json()["type"] == "error"
-        elif action == "early":
-            socket.send_json({"type": "attach.requested", "requestId": info["id"]})
-            assert socket.receive_json()["type"] == "error"
         else:
             with open_view(case, state):
                 if action == "policy":
@@ -284,7 +281,7 @@ def test_approval_cannot_retarget_changed_browser_binding(request_case, change):
     assert not case.published.is_set()
 
 
-@pytest.mark.parametrize("change", ["policy", "detach", "close", "run", "viewer", "generation"])
+@pytest.mark.parametrize("change", ["policy", "detach", "close", "run", "generation"])
 def test_final_attachment_rpc_revalidates_before_success(request_case, change):
     case = request_case
     started = threading.Event()
@@ -313,9 +310,6 @@ def test_final_attachment_rpc_revalidates_before_success(request_case, change):
                     case.run.status = "cancelled"
                 elif change == "generation":
                     case.generation += 1
-                else:
-                    for relay in list(case.coordinator.relays.values()):
-                        case.client.portal.call(relay.ended.set)
             finally:
                 case.client.portal.call(release.set)
             assert future.result(timeout=3).is_error
@@ -324,20 +318,17 @@ def test_final_attachment_rpc_revalidates_before_success(request_case, change):
     assert case.get_request().json() == {"request": None}
 
 
-@pytest.mark.parametrize("flag", ["accepted", "connected", "ready"])
-def test_socket_presence_without_accepted_ready_relay_never_attaches(request_case, flag):
+def test_requested_attachment_does_not_require_a_viewer(request_case):
     case = request_case
     future = case.start()
     info = case.get_request().json()["request"]
     with connect_request(case, info) as socket:
-        state = receive_state(socket)
-        with open_view(case, state):
-            for relay in case.coordinator.relays.values():
-                setattr(relay, flag, False)
-            socket.send_json({"type": "attach.requested", "requestId": info["id"]})
-            assert socket.receive_json()["type"] == "error"
-            assert future.result(timeout=3).is_error
-            assert not case.coordinator.connections[case.agent.id].attached
+        assert receive_state(socket)["type"] == "state"
+        socket.send_json({"type": "attach.requested", "requestId": info["id"]})
+        assert socket.receive_json()["attached"] is True
+        assert not future.result(timeout=3).is_error
+        assert case.coordinator.connections[case.agent.id].attached
+        assert not case.coordinator.relays
 
 
 @pytest.mark.parametrize("restriction", ["child-session", "child-run", "automation", "operations"])

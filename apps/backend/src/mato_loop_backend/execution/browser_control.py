@@ -136,10 +136,7 @@ class ControlRequest:
     def viewer_ready(self) -> None:
         self.check_binding()
         connection = self.connection
-        if (connection is None or not connection.ready or connection.view_socket is None
-                or connection.websocket is not self.socket
-                or not any(relay.connection is connection and relay.accepted and relay.ready and relay.connected and not relay.ended.is_set()
-                           for relay in browser_coordinator.relays.values())):
+        if connection is None or not connection.ready or connection.websocket is not self.socket:
             raise ExecutionClientError("browser.notConnected")
 
 
@@ -207,7 +204,18 @@ class BrowserControlRequests:
         request.proof = dict(context.approval_resolution)
         request.task = asyncio.current_task()
         request.deadline = monotonic() + CONTROL_TIMEOUT
-        # The tool's database session must not keep a transaction open while the UI connects.
+        await context.db.refresh(context.session, with_for_update=True)
+        control_center = dict(context.session.control_center or {})
+        tabs = list(control_center.get("tabs", []))
+        if not any(
+            tab.get("app_id") == "browser" and tab.get("kind", "app") == "app"
+            for tab in tabs
+        ):
+            if len(tabs) >= 21:
+                raise ExecutionClientError("browser.busy")
+            control_center["tabs"] = [*tabs, {"app_id": "browser", "pinned": False}]
+            context.session.control_center = control_center
+        # Persist the app before publishing; the request may attach without a mounted viewer.
         await context.db.commit()
         await request.validate()
         if any(item.info.agent_id == request.info.agent_id for item in self.requests.values()):

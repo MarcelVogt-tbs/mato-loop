@@ -356,7 +356,9 @@ async def browser_view(websocket: WebSocket, integration_id: UUID) -> None:
         session_id = UUID(websocket.query_params.get("sessionId", ""))
         browser_id = UUID(websocket.query_params.get("browserId", ""))
         view_id = UUID(websocket.query_params.get("viewId", ""))
-        connection = await browser_coordinator.manual(login.user.id, integration_id, session_id, browser_id, view_id, login.login_id)
+        connection = await browser_coordinator.viewer(
+            login.user.id, integration_id, session_id, browser_id, view_id, login.login_id
+        )
         if connection.login_id != login.login_id or connection.view_socket is not None:
             raise ExecutionClientError("browser.busy")
         connection.view_socket = websocket
@@ -364,7 +366,10 @@ async def browser_view(websocket: WebSocket, integration_id: UUID) -> None:
         relay = BrowserRelay(connection)
         browser_coordinator.relays[relay.relay_id] = relay
         async with connection.action_lock:
-            await connection.check_manual()
+            if connection.attached:
+                await connection.check_access()
+            else:
+                await connection.check_manual()
             result = await connection.request(
                 "integration.browser.view",
                 {"browserId": str(browser_id), "relayId": str(relay.relay_id), "relayToken": relay.token},
@@ -398,10 +403,11 @@ async def browser_view(websocket: WebSocket, integration_id: UUID) -> None:
             relay.ended.set()
             browser_coordinator.relays.pop(relay.relay_id, None)
         if connection is not None and not connection.closed and connection.view_socket is websocket:
-            if connection.websocket is not None:
+            if not connection.attached and connection.websocket is not None:
                 browser_control_requests.cancel_socket(connection.websocket)
             connection.view_socket = None
-            connection.detach()
+            if not connection.attached:
+                connection.detach()
             if not connection.resetting_view:
                 with suppress(Exception):
                     await connection.state()

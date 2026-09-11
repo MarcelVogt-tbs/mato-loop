@@ -211,7 +211,6 @@ class BrowserCoordinator:
         return connection if (
             connection is not None and connection.session_id == session_id
             and connection.attached and not connection.closed and connection.ready
-            and connection.websocket is not None and connection.view_socket is not None
             and connection.generation == execution_agent_connections.generation(agent_id)
         ) else None
 
@@ -230,6 +229,15 @@ class BrowserCoordinator:
                 if previous.integration_id != integration_id or previous.owner_id != owner_id:
                     raise ExecutionClientError("browser.busy")
                 requested = expected_view_id is not None
+                if (not requested and previous.websocket is None and previous.session_id == session_id
+                        and previous.ready and not previous.closed):
+                    previous.login_id = login_id
+                    previous.websocket = websocket
+                    previous.can_attach = can_attach
+                    if previous.idle_task is not None:
+                        previous.idle_task.cancel()
+                        previous.idle_task = None
+                    return previous
                 resume = (not requested and previous.websocket is None
                           and previous.session_id == session_id and previous.login_id == login_id)
                 if (previous.closed or not previous.ready or (not requested and not resume)
@@ -352,7 +360,7 @@ class BrowserCoordinator:
                 await asyncio.sleep(ACCESS_INTERVAL)
                 previous = connection.can_attach, connection.attached
                 await connection.check_access()
-                if (not connection.attached and not connection.manual_enabled and connection.websocket is not None
+                if (not connection.attached and not connection.manual_enabled
                         and not connection.action_lock.locked()):
                     await self.attachment(connection, False)
                 if previous != (connection.can_attach, connection.attached):
@@ -374,7 +382,6 @@ class BrowserCoordinator:
     async def release(self, connection: BrowserConnection, websocket: WebSocket) -> None:
         if connection.closed or connection.websocket is not websocket:
             return
-        connection.detach()
         connection.websocket = None
         for relay in list(self.relays.values()):
             if relay.connection is connection:
@@ -383,7 +390,8 @@ class BrowserCoordinator:
             with suppress(Exception):
                 await connection.view_socket.close()
             connection.view_socket = None
-        if not connection.closed:
+        if not connection.closed and not connection.attached:
+            connection.detach()
             async def expire():
                 await asyncio.sleep(IDLE_SECONDS)
                 await self.close(connection)
@@ -423,7 +431,9 @@ class BrowserCoordinator:
         if attached:
             if not connection.can_attach:
                 raise ExecutionClientError("tool.unavailable")
-            if connection.busy or (control_request is None and connection.action_lock.locked()) or connection.view_socket is None:
+            if connection.busy or (control_request is None and (
+                connection.action_lock.locked() or connection.view_socket is None
+            )):
                 raise ExecutionClientError("browser.busy")
             async with connection.action_lock:
                 await connection.check_access()
@@ -438,7 +448,9 @@ class BrowserCoordinator:
                     raise ExecutionClientError("browser.actionFailed")
                 connection.manual_enabled = False
                 await connection.check_access()
-                if not connection.can_attach or connection.view_socket is None:
+                if not connection.can_attach or (
+                    control_request is None and connection.view_socket is None
+                ):
                     raise ExecutionClientError("browser.bindingChanged")
                 if control_request is not None:
                     await control_request.validate()
@@ -757,6 +769,17 @@ class BrowserCoordinator:
                 or connection.view_id != view_id or connection.login_id != login_id):
             raise ExecutionClientError("browser.notConnected")
         await connection.check_manual()
+        return connection
+
+    async def viewer(self, owner_id, integration_id, session_id, browser_id,
+                     view_id: UUID, login_id: UUID) -> BrowserConnection:
+        connection = next((item for item in self.connections.values() if item.browser_id == browser_id), None)
+        if (connection is None or connection.owner_id != owner_id
+                or connection.integration_id != integration_id or connection.session_id != session_id
+                or connection.view_id != view_id or connection.login_id != login_id
+                or connection.closed or not connection.ready):
+            raise ExecutionClientError("browser.notConnected")
+        await connection.check_access()
         return connection
 
     async def shutdown(self) -> None:

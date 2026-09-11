@@ -190,6 +190,12 @@ def view_url(env, state):
 def open_view(env, state):
     with env.client.websocket_connect(view_url(env, state), headers=ORIGIN) as socket:
         try:
+            async def wait_until_ready():
+                async with asyncio.timeout(3):
+                    while not any(relay.ready for relay in env.coordinator.relays.values()):
+                        await asyncio.sleep(0)
+
+            env.client.portal.call(wait_until_ready)
             yield socket
         finally:
             # Complete the protocol close before TestClient cancels the ASGI task.
@@ -301,7 +307,7 @@ def test_unavailable_agent_never_receives_open(env, unavailable):
     assert not env.coordinator.connections
 
 
-def test_exclusive_viewer_explicit_attachment_and_detached_resume(env):
+def test_exclusive_viewer_attachment_survives_viewer_and_control_disconnect(env):
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         assert state["canAttach"] and not state["attached"]
@@ -317,15 +323,18 @@ def test_exclusive_viewer_explicit_attachment_and_detached_resume(env):
             connection = env.coordinator.connections[env.agent.id]
             assert env.coordinator.attached_for(env.session.id, env.agent.id) is connection
             viewer.close()
-            assert not control.receive_json()["attached"]
+            assert control.receive_json()["attached"]
             assert viewer.receive()["type"] == "websocket.close"
+    assert env.coordinator.attached_for(env.session.id, env.agent.id) is connection
+    assert connection.websocket is None and connection.view_socket is None
     with env.client.websocket_connect(env.url, headers=ORIGIN) as resumed:
-        assert resumed.receive_json()["status"] == "takingOver"
         restored = resumed.receive_json()
-        assert restored["browserId"] == state["browserId"] and not restored["attached"]
-        assert restored["viewId"] != state["viewId"]
-        assert env.coordinator.connections[env.agent.id] is not connection
-        assert connection.closed
+        assert restored["browserId"] == state["browserId"] and restored["attached"]
+        assert restored["viewId"] == state["viewId"]
+        assert env.coordinator.connections[env.agent.id] is connection
+        assert not connection.closed
+        with env.client.websocket_connect(view_url(env, restored), headers=ORIGIN):
+            assert env.coordinator.attached_for(env.session.id, env.agent.id) is connection
     assert sum(op == "integration.browser.open" for op, _ in env.calls) == 1
     assert not any(op == "integration.browser.setup" for op, _ in env.calls)
 

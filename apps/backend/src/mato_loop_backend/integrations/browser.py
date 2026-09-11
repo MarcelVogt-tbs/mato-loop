@@ -385,7 +385,6 @@ async def capture_browser_approval(request, call, session, run, approval_resolut
 async def execute_browser(arguments: BrowserActionArguments | _BrowserArguments, context: Any):
     from mato_loop_backend.agent.tool_registry import (
         ToolAttachment,
-        ToolFileAction,
         ToolResult,
         _model_revision,
     )
@@ -453,7 +452,6 @@ async def execute_browser(arguments: BrowserActionArguments | _BrowserArguments,
     elif result.data is not None and arguments.action != "diagnostics":
         raise ExecutionClientError("executionAgent.protocolError")
     attachments = []
-    file_actions = []
     if result.snapshot is not None:
         stream = result._snapshot_stream
         if stream is None:
@@ -480,16 +478,6 @@ async def execute_browser(arguments: BrowserActionArguments | _BrowserArguments,
                     sha256=revision.sha256,
                 ),
             })
-            file_actions.append(
-                ToolFileAction(
-                    operation="write",
-                    root="session",
-                    root_identity=context.root_files.root_identity("session"),
-                    path=revision.path,
-                    filename=revision.path.rsplit("/", 1)[-1],
-                    size_bytes=revision.size_bytes,
-                )
-            )
         finally:
             stream.close()
     if arguments.action == "screenshot":
@@ -509,7 +497,6 @@ async def execute_browser(arguments: BrowserActionArguments | _BrowserArguments,
         {"errorCode": error_code, "privateIntegrationData": True} if error_code else {},
         is_error=error_code is not None,
         attachments=tuple(attachments),
-        file_actions=tuple(file_actions),
     )
 
 

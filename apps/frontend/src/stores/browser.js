@@ -165,6 +165,11 @@ export const useBrowserStore = defineStore('browser', {
           this.viewId = message.viewId
           this.offer = null
           this.status = 'open'
+          if (this.controlRequestId && !this.requestedAttachSent && this.socket?.readyState === 1) {
+            this.requestedAttachSent = true
+            this.submitting = 'attach'
+            this.socket.send(JSON.stringify({ type: 'attach.requested', requestId: this.controlRequestId }))
+          }
           const requestedAttached = this.controlRequestId && this.requestedAttachSent && message.attached === true
           const requestedDetached = this.requestedAttachCancelled && message.attached === false && message.busy !== true
           this.attached = message.attached === true
@@ -261,7 +266,11 @@ export const useBrowserStore = defineStore('browser', {
           this.authorizedRequest = request
           this.requestOpening = true
           try {
-            await center.openApp('browser')
+            await center.ensureApp('browser')
+            if (current()) {
+              this.requestAttemptId = request.id
+              this.connect(request, { controlRequestId: request.id })
+            }
           } catch {
             if (current()) { this.requestAttemptId = request.id; this.authorizedRequest = null }
           } finally {
@@ -327,11 +336,6 @@ export const useBrowserStore = defineStore('browser', {
         rfb.addEventListener('connect', () => {
           if (!current()) return
           this.viewStatus = 'open'
-          if (this.controlRequestId && !this.requestedAttachSent && this.ownsDisplay && this.socket?.readyState === 1) {
-            this.requestedAttachSent = true
-            this.submitting = 'attach'
-            this.socket.send(JSON.stringify({ type: 'attach.requested', requestId: this.controlRequestId }))
-          }
           this.updateViewOnly()
           this.navigate('state')
           const canvas = viewHost.querySelector('canvas')

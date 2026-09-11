@@ -679,7 +679,7 @@ it.each(['accepted', 'error', 'close', 'cancel', 'replaced-first'])('keeps one o
   expect(browser.candidate).toBeNull()
 })
 
-it.each(['absent', 'same-owner', 'other-owner'])('claims authorized control once and sends only attach.requested after noVNC readiness (%s)', async (owner) => {
+it.each(['absent', 'same-owner', 'other-owner'])('claims authorized control once and attaches without a viewer (%s)', async (owner) => {
   let original, rfb
   if (owner !== 'absent') { rfb = await open(); original = socket }
   const sessionId = owner === 'other-owner' ? 'session-2' : context.sessionId
@@ -687,20 +687,15 @@ it.each(['absent', 'same-owner', 'other-owner'])('claims authorized control once
   const center = useControlCenterStore()
   center.syncSession({ id: sessionId })
   let finish
-  const openApp = vi.spyOn(center, 'openApp').mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+  const ensureApp = vi.spyOn(center, 'ensureApp').mockImplementation(() => new Promise((resolve) => { finish = resolve }))
   const request = { ...context, sessionId, id: 'request-1', runId: 'run-1' }
   api.get.mockResolvedValue({ data: { request } })
   const pending = browser.reconcileControlRequest(sessionId)
-  await vi.waitFor(() => expect(openApp).toHaveBeenCalledExactlyOnceWith('browser'))
+  await vi.waitFor(() => expect(ensureApp).toHaveBeenCalledExactlyOnceWith('browser'))
   browser.activate('request', request, true)
   expect(FakeWebSocket.instances).toHaveLength(owner === 'absent' ? 0 : 1)
   finish()
   await pending
-  center.saving = true
-  browser.activate('request', request, true)
-  expect(browser.candidate).toBeNull()
-  center.saving = false
-  browser.activate('request', request, true)
   const control = browser.candidate?.socket || browser.socket
   expect(control.url).toContain(`sessionId=${sessionId}&controlRequestId=request-1`)
   if (original) {
@@ -709,34 +704,20 @@ it.each(['absent', 'same-owner', 'other-owner'])('claims authorized control once
   }
   control.open()
   control.message({ ...state, viewId: 'requested-view' })
-  expect(control.send).not.toHaveBeenCalled()
-  vi.useFakeTimers()
-  const host = document.createElement('div')
-  host.getClientRects = () => [{ width: 900, height: 600 }]
-  await browser.mountView(host)
-  browser.resize(900, 600)
-  await vi.advanceTimersByTimeAsync(300)
-  const viewer = viewers.at(-1)
-  expect(control.send).not.toHaveBeenCalled()
-  viewer.dispatchEvent(new Event('connect'))
-  await vi.advanceTimersByTimeAsync(300)
   expect(control.send).toHaveBeenCalledExactlyOnceWith('{"type":"attach.requested","requestId":"request-1"}')
-  await browser.mountView(host)
-  viewer.dispatchEvent(new Event('connect'))
-  expect(browser.navigate('state')).toBe(false)
   control.message({ ...state, viewId: 'requested-view', busy: true })
   expect(control.send).toHaveBeenCalledTimes(1)
   control.message({ ...state, viewId: 'requested-view', attached: true })
-  expect(control.send.mock.calls.map(([raw]) => JSON.parse(raw))).toEqual([
-    { type: 'attach.requested', requestId: 'request-1' }, { type: 'navigation', action: 'state' }
+  await browser.mountView(document.createElement('div'))
+  const viewer = viewers.at(-1)
+  viewer.dispatchEvent(new Event('connect'))
+  expect(viewer.viewOnly).toBe(true)
+  expect(control.send.mock.calls.map(([raw]) => JSON.parse(raw).type)).toEqual([
+    'attach.requested', 'navigation'
   ])
-  await vi.advanceTimersByTimeAsync(300)
-  expect(control.send).toHaveBeenLastCalledWith('{"type":"resize","width":900,"height":600}')
-  control.message({ ...navigation, completed: true })
   for (let i = 0; i < 3; i++) {
     await browser.reconcileControlRequest(sessionId)
     browser.activate('request', request, true)
-    await browser.mountView(document.createElement('div'))
   }
   expect(browser.attached).toBe(true)
   expect(browser.rfb).toBe(viewer)
@@ -744,7 +725,7 @@ it.each(['absent', 'same-owner', 'other-owner'])('claims authorized control once
   expect(control.send.mock.calls.filter(([raw]) => JSON.parse(raw).type.startsWith('attach'))).toEqual([
     [JSON.stringify({ type: 'attach.requested', requestId: 'request-1' })]
   ])
-  expect(openApp).toHaveBeenCalledOnce()
+  expect(ensureApp).toHaveBeenCalledOnce()
 })
 
 it.each(['same-session-request', 'human-takeover'])('keeps the candidate when the old RFB disconnects before control replacement (%s)', async (mode) => {
@@ -830,7 +811,7 @@ it.each([false, true])('cancels requested attachment without stale attach, teard
   if (connected) viewer.dispatchEvent(new Event('connect'))
   browser.setAttachment(false)
   viewer.dispatchEvent(new Event('connect'))
-  const initial = connected ? ['attach.requested', 'detach'] : ['detach']
+  const initial = ['attach.requested', 'detach']
   expect(control.send.mock.calls.map(([raw]) => JSON.parse(raw).type)).toEqual(initial)
   control.message({ type: 'error', operation: 'control', error: { code: 'browser.notConnected' } })
   expect(browser.submitting).toBe('detach')
@@ -861,15 +842,15 @@ it.each(['denied', 'stale-get', 'stale-open', 'failed-open', 'cancelled-view', '
   const request = { ...context, id: 'request-1', runId: 'run-1' }
   let finish
   api.get.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
-  const openApp = vi.spyOn(center, 'openApp').mockResolvedValue()
+  const ensureApp = vi.spyOn(center, 'ensureApp').mockResolvedValue()
   const pending = browser.reconcileControlRequest(context.sessionId)
   if (change === 'stale-get') browser.setDisplayedSession('session-2')
-  if (change === 'failed-open') openApp.mockRejectedValueOnce(new Error('Save failed'))
+  if (change === 'failed-open') ensureApp.mockRejectedValueOnce(new Error('Save failed'))
   let finishOpen
-  if (change === 'stale-open') openApp.mockImplementationOnce(() => new Promise((resolve) => { finishOpen = resolve }))
+  if (change === 'stale-open') ensureApp.mockImplementationOnce(() => new Promise((resolve) => { finishOpen = resolve }))
   finish({ data: { request: change === 'denied' ? null : request } })
   if (change === 'stale-open') {
-    await vi.waitFor(() => expect(openApp).toHaveBeenCalled())
+    await vi.waitFor(() => expect(ensureApp).toHaveBeenCalled())
     browser.setDisplayedSession('session-2')
     finishOpen()
   }
@@ -885,14 +866,15 @@ it.each(['denied', 'stale-get', 'stale-open', 'failed-open', 'cancelled-view', '
       api.get.mockResolvedValueOnce({ data: { request: null } })
       await browser.reconcileControlRequest(context.sessionId)
     }
+    const sent = control.send.mock.calls.length
     viewers.at(-1).dispatchEvent(new Event('connect'))
-    expect(control.send.mock.calls.map(([raw]) => JSON.parse(raw).type)).not.toContain('attach.requested')
+    expect(control.send).toHaveBeenCalledTimes(sent)
     expect(control.send).not.toHaveBeenCalledWith('{"type":"attach"}')
   } else {
     browser.activate('request', request, false)
     expect(FakeWebSocket.instances).toHaveLength(0)
   }
-  if (['denied', 'stale-get'].includes(change)) expect(openApp).not.toHaveBeenCalled()
+  if (['denied', 'stale-get'].includes(change)) expect(ensureApp).not.toHaveBeenCalled()
 })
 
 it('closes the control when the view is lost, and requires an explicit new connection', async () => {
