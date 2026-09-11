@@ -1,25 +1,25 @@
 <template>
   <section class="browser-app column full-height no-wrap" aria-label="Browser" @keydown.capture="browserShortcut">
     <div class="row items-center no-wrap col-auto q-px-sm" aria-label="Webseiten">
-      <q-tabs :model-value="browser.navigation?.activeTabId" class="col" dense no-caps inline-label align="left" :breakpoint="0" mobile-arrows indicator-color="transparent"
+      <q-tabs :model-value="navigation?.activeTabId" class="col" dense no-caps inline-label align="left" :breakpoint="0" mobile-arrows indicator-color="transparent"
         @update:model-value="browser.navigate('select', { tabId: $event })">
-        <AppClosableTab v-for="tab in browser.navigation?.tabs || []" :key="tab.id" :name="tab.id"
+        <AppClosableTab v-for="tab in navigation?.tabs || []" :key="tab.id" :name="tab.id"
           :label="tab.title || tab.url || 'Neuer Tab'" :icon="tab.loading ? 'hourglass_top' : 'language'"
-          :active="browser.navigation.activeTabId === tab.id" :disable="!browser.canNavigate"
+          :active="navigation.activeTabId === tab.id" :disable="!browser.canNavigate"
           @close="browser.navigate('close', { tabId: tab.id })" />
       </q-tabs>
-      <q-btn flat round dense icon="add" aria-label="Neuer Tab" :disable="!browser.canNavigate || browser.navigation.tabs.length >= 32" @click="browser.navigate('new')"><q-tooltip>Neuer Tab</q-tooltip></q-btn>
+      <q-btn flat round dense icon="add" aria-label="Neuer Tab" :disable="!browser.canNavigate || navigation.tabs.length >= 32" @click="browser.navigate('new')"><q-tooltip>Neuer Tab</q-tooltip></q-btn>
     </div>
     <q-toolbar class="q-px-sm no-wrap" aria-label="Browsersteuerung">
-      <q-btn v-if="['closed', 'replaced'].includes(browser.status)" flat round dense icon="refresh" aria-label="Browser erneut verbinden" :disable="!available || !confirmed" @click="open">
+      <q-btn v-if="['closed', 'replaced'].includes(browser.displayStatus)" flat round dense icon="refresh" aria-label="Browser erneut verbinden" :disable="!available || !confirmed" @click="open">
         <q-tooltip>Browser erneut verbinden</q-tooltip>
       </q-btn>
-      <q-btn flat round dense icon="arrow_back" aria-label="Zurück" :disable="!browser.canNavigate || !browser.navigation.canGoBack" @click="browser.navigate('back')"><q-tooltip>Zurück</q-tooltip></q-btn>
-      <q-btn flat round dense icon="arrow_forward" aria-label="Vorwärts" :disable="!browser.canNavigate || !browser.navigation.canGoForward" @click="browser.navigate('forward')"><q-tooltip>Vorwärts</q-tooltip></q-btn>
-      <q-btn flat round dense :icon="browser.navigation?.loading ? 'close' : 'refresh'" :aria-label="browser.navigation?.loading ? 'Laden stoppen' : 'Neu laden'"
-        :disable="!browser.canNavigate || !browser.activeTab" @click="browser.navigate(browser.navigation.loading ? 'stop' : 'reload')"><q-tooltip>{{ browser.navigation?.loading ? 'Laden stoppen' : 'Neu laden' }}</q-tooltip></q-btn>
+      <q-btn flat round dense icon="arrow_back" aria-label="Zurück" :disable="!browser.canNavigate || !navigation.canGoBack" @click="browser.navigate('back')"><q-tooltip>Zurück</q-tooltip></q-btn>
+      <q-btn flat round dense icon="arrow_forward" aria-label="Vorwärts" :disable="!browser.canNavigate || !navigation.canGoForward" @click="browser.navigate('forward')"><q-tooltip>Vorwärts</q-tooltip></q-btn>
+      <q-btn flat round dense :icon="navigation?.loading ? 'close' : 'refresh'" :aria-label="navigation?.loading ? 'Laden stoppen' : 'Neu laden'"
+        :disable="!browser.canNavigate || !browser.activeTab" @click="browser.navigate(navigation.loading ? 'stop' : 'reload')"><q-tooltip>{{ navigation?.loading ? 'Laden stoppen' : 'Neu laden' }}</q-tooltip></q-btn>
       <q-input ref="addressInput" v-model="addressDraft" class="col q-mx-xs" outlined dense aria-label="Webadresse" placeholder="Webadresse" inputmode="url" autocomplete="off" autocapitalize="off" :spellcheck="false"
-        :readonly="!browser.canNavigate || !browser.activeTab" :loading="browser.navigationPending" @focus="editAddress" @blur="resetAddress" @update:model-value="editAddress"
+        :readonly="!browser.canNavigate || !browser.activeTab" :loading="browser.ownsDisplay && browser.navigationPending" @focus="editAddress" @blur="resetAddress" @update:model-value="editAddress"
         @keydown.enter.prevent="submitAddress" @keydown.esc.prevent="resetAddress" />
       <template v-if="!$q.screen.lt.sm">
         <q-btn v-for="action in fileActions" :key="action.label" flat round dense :icon="action.icon" :aria-label="action.label" :disable="!browser.manual" @click="action.run"><q-tooltip>{{ action.label }}</q-tooltip></q-btn>
@@ -32,36 +32,36 @@
               <q-item v-for="action in fileActions" :key="action.label" clickable v-close-popup :disable="!browser.manual" @click="action.run"><q-item-section avatar><q-icon :name="action.icon" /></q-item-section><q-item-section>{{ action.label }}</q-item-section></q-item>
               <q-separator />
             </template>
-            <q-item><q-item-section><q-toggle :model-value="browser.navigation?.nativeChrome === true" dense label="Browseroberfläche anzeigen" :disable="!browser.canNavigate"
+            <q-item><q-item-section><q-toggle :model-value="navigation?.nativeChrome === true" dense label="Browseroberfläche anzeigen" :disable="!browser.canNavigate"
               @update:model-value="browser.navigate('chrome', { nativeChrome: $event })" /></q-item-section></q-item>
             <q-item v-if="options.length > 1"><q-item-section>
               <q-select v-model="selectedId" outlined dense emit-value map-options label="Browser-Integration"
-                :options="options" :disable="!['closed', 'replaced'].includes(browser.status)" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" />
+                :options="options" :disable="browser.ownsDisplay && !['closed', 'replaced'].includes(browser.status)" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" />
             </q-item-section></q-item>
             <q-item><q-item-section><q-item-label>{{ options.find((item) => item.value === selectedId)?.label || 'Browser' }}</q-item-label><q-item-label caption role="status">{{ browserStatusLabel(status) }}</q-item-label></q-item-section></q-item>
             <q-item clickable v-close-popup :disable="!available || checking" @click="checkStatus"><q-item-section avatar><q-icon name="refresh" /></q-item-section><q-item-section>Status prüfen</q-item-section></q-item>
             <q-item clickable v-close-popup :disable="!browser.ready" @click="retryResize"><q-item-section avatar><q-icon name="aspect_ratio" /></q-item-section><q-item-section>Auflösung an Fenster anpassen</q-item-section></q-item>
             <q-item clickable v-close-popup :disable="!browser.ready" @click="browser.toggleViewportScale()"><q-item-section avatar><q-icon :name="browser.scaleViewport ? 'zoom_in' : 'fit_screen'" /></q-item-section><q-item-section>{{ browser.scaleViewport ? 'Skalierung ausschalten (1:1)' : 'Ansicht einpassen' }}</q-item-section></q-item>
             <q-item clickable v-close-popup :to="{ name: 'settings-integrations', query: { scope: 'personal' } }"><q-item-section avatar><q-icon name="settings" /></q-item-section><q-item-section>Einrichtung</q-item-section></q-item>
-            <q-item clickable v-close-popup :disable="browser.status !== 'open'" @click="browser.release({ close: true })"><q-item-section avatar><q-icon name="link_off" /></q-item-section><q-item-section>Browser schließen</q-item-section></q-item>
+            <q-item clickable v-close-popup :disable="!browser.ownsDisplay || browser.status !== 'open'" @click="browser.release({ close: true })"><q-item-section avatar><q-icon name="link_off" /></q-item-section><q-item-section>Browser schließen</q-item-section></q-item>
           </q-list>
         </q-menu>
       </q-btn>
     </q-toolbar>
-    <q-banner v-if="['occupied', 'waiting', 'takingOver', 'replaced'].includes(browser.status)" class="app-surface-tonal col-auto" role="status" aria-live="polite">
-      <template v-if="browser.status === 'occupied'">
-        Der Browser wird bereits in {{ browser.offer?.ownerSession?.title || 'einer anderen Ansicht' }} verwendet.
-        {{ browser.offer?.busy ? 'Eine laufende Aktion wird vor der Übernahme beendet.' : '' }}
+    <q-banner v-if="['occupied', 'waiting', 'takingOver', 'replaced'].includes(browser.displayStatus)" class="app-surface-tonal col-auto" role="status" aria-live="polite">
+      <template v-if="browser.displayStatus === 'occupied'">
+        Der Browser wird bereits in {{ browser.displayOffer?.ownerSession?.title || 'einer anderen Ansicht' }} verwendet.
+        {{ browser.displayOffer?.busy ? 'Eine laufende Aktion wird vor der Übernahme beendet.' : '' }}
       </template>
-      <template v-else-if="browser.status === 'waiting'">Der Browser wird gerade geöffnet oder geschlossen. Bitte warten.</template>
-      <template v-else-if="browser.status === 'takingOver'">Browser wird hier übernommen. Eine laufende Aktion wird zuerst beendet.</template>
+      <template v-else-if="browser.displayStatus === 'waiting'">Der Browser wird gerade geöffnet oder geschlossen. Bitte warten.</template>
+      <template v-else-if="browser.displayStatus === 'takingOver'">Browser wird hier übernommen. Eine laufende Aktion wird zuerst beendet.</template>
       <template v-else>Der Browser wurde in einer anderen Ansicht übernommen. Du kannst ihn bei Bedarf erneut verbinden.</template>
-      <template v-if="browser.status === 'occupied'" #action>
-        <q-btn color="primary" no-caps label="Browser hier übernehmen" :disable="!browser.offer?.canTakeover" @click="browser.takeover()" />
+      <template v-if="browser.displayStatus === 'occupied'" #action>
+        <q-btn color="primary" no-caps label="Browser hier übernehmen" :disable="!available || !confirmed || (Boolean(browser.displayOffer) && !browser.displayOffer.canTakeover)" @click="takeover" />
       </template>
     </q-banner>
-    <q-linear-progress v-if="browser.status === 'takingOver'" indeterminate aria-label="Browser wird hier übernommen" />
-    <q-linear-progress v-else-if="browser.status === 'connecting' || (browser.status === 'open' && !browser.ready)" indeterminate aria-label="Browser wird verbunden" />
+    <q-linear-progress v-if="browser.displayStatus === 'takingOver'" indeterminate aria-label="Browser wird hier übernommen" />
+    <q-linear-progress v-else-if="browser.displayStatus === 'connecting' || (browser.displayStatus === 'open' && !browser.ready)" indeterminate aria-label="Browser wird verbunden" />
     <div ref="host" class="browser-app__view col overflow-hidden" @pointerdown.capture="focusViewer" @keydown.capture="viewerKey" @keyup.capture="viewerKey" @paste.capture="nativePaste" @focusout="leaveViewer" />
 
     <q-dialog v-model="clipboardOpen" :maximized="$q.screen.lt.sm">
@@ -130,6 +130,7 @@ const controlCenter = useControlCenterStore()
 const route = useRoute()
 const agents = useExecutionAgentStore()
 const integrations = useIntegrationStore()
+const navigation = computed(() => browser.displayNavigation)
 const selectedId = ref(browser.integrationId)
 const host = ref(null)
 const controlsButton = ref(null)
@@ -168,15 +169,22 @@ let copying = false
 const heldControls = new Set()
 
 watch(options, (value) => { if (!value.some((item) => item.value === selectedId.value)) selectedId.value = value[0]?.value ?? null }, { immediate: true })
-watch(() => [visible.value, confirmed.value, selectedId.value, available.value, chat.current?.id, chat.current?.preferredExecutionAgentId], activate, { flush: 'post' })
-watch(() => [visible.value, browser.browserId, browser.viewId, browser.ready, host.value], refreshView, { flush: 'post' })
-watch(() => browser.generation, () => {
+watch(() => [browser.authorizedRequest, browser.ownsDisplay, browser.integrationId], () => {
+  if (browser.authorizedRequest?.sessionId === chat.current?.id) selectedId.value = browser.authorizedRequest.integrationId
+  else if (browser.ownsDisplay) selectedId.value = browser.integrationId
+})
+watch(() => route.name === 'chat' && route.query.session === chat.current?.id ? chat.current?.id : null,
+  (id) => browser.setDisplayedSession(id), { immediate: true, flush: 'sync' })
+watch(() => [visible.value, confirmed.value, selectedId.value, available.value, chat.current?.id, chat.current?.preferredExecutionAgentId,
+  browser.authorizedRequest, browser.requestOpening, browser.requestRefresh, controlCenter.saving], activate, { flush: 'post' })
+watch(() => [visible.value, browser.ownsDisplay, browser.browserId, browser.viewId, browser.ready, host.value], refreshView, { flush: 'post' })
+watch(() => [browser.generation, browser.displayGeneration], () => {
   resetAddress()
   clipboardOpen.value = false
   filesOpen.value = false
   clipboardText.value = ''
   uploadFile.value = null
-})
+}, { flush: 'sync' })
 watch(clipboardOpen, () => { clipboardDialog += 1 }, { flush: 'sync' })
 watch(() => [visible.value, browser.viewGeneration, browser.attached, browser.busy, browser.submitting, browser.navigationPending], invalidateInput, { flush: 'sync' })
 watch(() => browser.activeTab, () => { if (!addressEditing) resetAddress() }, { immediate: true })
@@ -199,7 +207,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', visibilityChanged)
   window.removeEventListener('blur', invalidateInput)
   invalidateInput()
-  if (browser.viewParent === host.value) browser.viewVisible = false
+  if (browser.viewParent === host.value) browser.parkView()
 })
 
 function measurable() {
@@ -212,14 +220,15 @@ function activate() {
 }
 async function refreshView() {
   await nextTick()
-  if (measurable() && browser.browserId) await browser.mountView(host.value)
+  if (measurable() && browser.ownsDisplay && browser.browserId) await browser.mountView(host.value)
   if (browser.viewParent === host.value) {
-    browser.viewVisible = measurable()
+    browser.viewVisible = measurable() && browser.ownsDisplay
+    browser.updateViewOnly()
     if (browser.viewVisible) browser.resize(contentSize.width, contentSize.height)
   }
 }
 function visibilityChanged() { invalidateInput(); activate(); void refreshView() }
-function retryResize() { browser.resizeLast = null; void refreshView() }
+function retryResize() { if (browser.ownsDisplay) { browser.resizeLast = null; void refreshView() } }
 
 function editAddress() {
   if (!browser.canNavigate || addressEditing) return
@@ -267,6 +276,11 @@ function browserShortcut(event) {
 function open() {
   if (available.value && confirmed.value && measurable()) browser.connect({ integrationId: selectedId.value, sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId })
 }
+function takeover() {
+  if (!available.value || !confirmed.value || !measurable()) return
+  if (browser.displayOffer) browser.takeover()
+  else browser.connect({ integrationId: selectedId.value, sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId }, { takeover: true })
+}
 function focusedViewer() {
   return measurable() && browser.manual && browser.viewParent === host.value && host.value.contains(document.activeElement)
 }
@@ -280,6 +294,7 @@ function invalidateInput() {
   inputGeneration += 1
   if (!visible.value) browser.activate(null, null, false)
   if (!visible.value || document.hidden) browser.viewVisible = false
+  browser.updateViewOnly()
   heldControls.clear()
   browser.releaseControlKeys()
   clearTimeout(pasteTimer)
@@ -455,9 +470,10 @@ async function paste() {
 async function refreshDownloads() { try { await browser.transfer('downloads') } catch { /* Central API toast. */ } }
 function showDownloads() { filesOpen.value = true; void refreshDownloads() }
 async function upload(choose = false) {
+  const generation = browser.displayGeneration
   try {
     const result = await browser.transfer(choose ? 'choose' : 'upload', uploadFile.value)
-    if (!result) return
+    if (!result || generation !== browser.displayGeneration) return
     uploadFile.value = null
     if (result.chosen || result.ok) {
       $q.notify({ type: 'positive', message: 'Datei in das Upload-Feld eingesetzt.' })

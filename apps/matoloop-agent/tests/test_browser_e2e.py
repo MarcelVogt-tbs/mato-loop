@@ -114,7 +114,7 @@ async def database(mode: str) -> None:
             print(f"CLEANUP PASS: user {user_id} and all owned test records removed")
 
 
-async def smoke(seed: dict) -> None:
+async def smoke(seed: dict, *, scenario=None) -> None:
     from playwright.async_api import async_playwright, expect
 
     from matoloop_agent.config import AgentConfig
@@ -474,6 +474,22 @@ async def smoke(seed: dict) -> None:
                     socket.on("socketerror", lambda error: record.update(error=str(error)))
 
                 page.on("websocket", websocket)
+                if scenario is not None:
+                    await scenario(
+                        page,
+                        api,
+                        agent,
+                        seed,
+                        frontend,
+                        fixture_url,
+                        artifacts,
+                        evidence,
+                        fixture_reports,
+                    )
+                    await api("DELETE", f"/integrations/browser/{integration_id}")
+                    await api("DELETE", f"/execution-agents/{agent_id}")
+                    evidence["result"] = "PASS"
+                    return
                 await page.goto(frontend + f"/?session={seed['sessionId']}&controlCenter=browser")
                 await expect(page.get_by_text("Manuelle Steuerung", exact=True)).to_be_visible()
                 await expect(

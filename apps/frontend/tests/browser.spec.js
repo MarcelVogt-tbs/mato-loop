@@ -2,6 +2,7 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useBrowserStore } from '../src/stores/browser'
+import { useControlCenterStore } from '../src/stores/control-center'
 import { useBrowserSetupStore } from '../src/stores/browser-setup'
 import { useIntegrationStore } from '../src/stores/integrations'
 import { browserControlCenterAvailable } from '../src/control-center/manifest'
@@ -43,6 +44,7 @@ beforeEach(() => {
   viewers.length = 0
   vi.stubGlobal('WebSocket', FakeWebSocket)
   browser = useBrowserStore()
+  browser.setDisplayedSession(context.sessionId)
 })
 afterEach(() => {
   browser.release()
@@ -265,10 +267,12 @@ it.each(['read', 'write', 'copy', 'upload', 'choose', 'downloads', 'download'])(
     expect(config).toEqual({ ...transferConfig(), ...(action === 'download' ? { responseType: 'blob' } : {}) })
     socket.message({ type: 'replaced' })
     expect(config.signal.aborted).toBe(true)
+    browser.setDisplayedSession('session-2')
     browser.connect({ ...context, sessionId: 'session-2' })
     browser.socket.open()
     browser.socket.message({ ...state, viewId: 'view-b' })
     browser.release()
+    browser.setDisplayedSession(context.sessionId)
     browser.connect(context)
     browser.socket.open()
     browser.socket.message({ ...state, viewId: 'view-a-new' })
@@ -435,6 +439,9 @@ it('coalesces actual resolution requests serially, consumes resize errors and ne
   box.mockReturnValue([{ width: 100, height: 5000 }])
   browser.resize(100, 5000)
   await vi.advanceTimersByTimeAsync(200)
+  expect(socket.send).toHaveBeenCalledTimes(3)
+  socket.message({ ...state, attached: true })
+  await vi.advanceTimersByTimeAsync(200)
   expect(socket.send).toHaveBeenLastCalledWith('{"type":"resize","width":320,"height":2160}')
   browser.release()
   await vi.advanceTimersByTimeAsync(2000)
@@ -540,8 +547,7 @@ it('invalidates a pending noVNC import when the context closes', async () => {
 })
 
 it.each([
-  { sessionId: 'other' }, { agentId: 'other' }, { available: false },
-  { tabPresent: false }, { onChatRoute: false }
+  { agentId: 'other' }, { available: false }, { tabPresent: false }
 ])('disconnects on context invalidation %j without automatic reconnect', async (change) => {
   const rfb = await open()
   browser.syncContext({ ...context, available: true, tabPresent: true, onChatRoute: true, ...change })
@@ -552,6 +558,338 @@ it.each([
   expect(socket.send).not.toHaveBeenCalledWith('{"type":"close"}')
   browser.syncContext({ ...context, available: true, tabPresent: true, onChatRoute: true })
   expect(FakeWebSocket.instances).toHaveLength(1)
+})
+
+it.each([false, true])('retains the owner, live viewer and model attachment across A -> load gap -> B -> A for over 30 seconds (attached=%s)', async (attached) => {
+  const rfb = await open()
+  socket.message({ ...state, attached })
+  const original = socket
+  browser.setDisplayedSession(null)
+  browser.syncContext({ sessionId: null, agentId: null, available: true, tabPresent: true })
+  browser.setDisplayedSession('session-2')
+  browser.syncContext({ sessionId: 'session-2', agentId: 'other-agent', available: true, tabPresent: false })
+  browser.activate('B', { ...context, sessionId: 'session-2' }, true)
+  expect(browser.displayStatus).toBe('occupied')
+  expect(browser.displayNavigation).toBeNull()
+  expect(browser.activeTab).toBeNull()
+  expect(browser.ready).toBe(false)
+  expect(browser.manual).toBe(false)
+  expect(rfb.viewOnly).toBe(true)
+  expect(rfb.host.parentElement).toBeNull()
+  await browser.mountView(document.createElement('div'))
+  for (const action of ['state', 'new', 'navigate', 'close', 'chrome']) expect(browser.navigate(action)).toBe(false)
+  browser.setAttachment(false)
+  browser.setAttachment(true)
+  browser.release({ close: true })
+  browser.takeover()
+  browser.controlKey('ControlLeft', true)
+  browser.clipboardChord('v')
+  browser.devToolsChord()
+  browser.toggleViewportScale()
+  browser.resize(1000, 700)
+  expect(await browser.transferClipboard()).toBeNull()
+  expect(await browser.transferClipboard('secret')).toBeNull()
+  expect(await browser.transfer('downloads')).toBeNull()
+  await browser.download({ id: 'file', filename: 'secret' })
+  vi.useFakeTimers()
+  await vi.advanceTimersByTimeAsync(65000)
+  expect(original.send).not.toHaveBeenCalled()
+  expect(original.close).not.toHaveBeenCalled()
+  expect(rfb.disconnect).not.toHaveBeenCalled()
+  expect(api.get).not.toHaveBeenCalled()
+  expect(browser.attached).toBe(attached)
+  // The original model can still publish live browser observations while parked.
+  original.message({ ...navigation, tabs: [{ ...navigation.tabs[0], title: 'Still attached' }] })
+  browser.setDisplayedSession(context.sessionId)
+  browser.activate('A', context, true)
+  const host = document.createElement('div')
+  await browser.mountView(host)
+  expect(browser.activeTab.title).toBe('Still attached')
+  expect(browser.socket).toBe(original)
+  expect(browser.rfb).toBe(rfb)
+  expect(browser.attached).toBe(attached)
+  expect(rfb.viewOnly).toBe(attached)
+  expect(host.firstChild).toBe(rfb.host)
+  expect(FakeWebSocket.instances).toHaveLength(1)
+})
+
+it.each(['clipboard', 'upload', 'downloads', 'download'])('aborts parked %s transfers without letting late A responses unlock a fresh A transfer', async (action) => {
+  await open()
+  let finish, signal
+  const method = action === 'upload' ? 'post' : 'get'
+  api[method].mockImplementationOnce((...args) => {
+    signal = args.at(-1).signal
+    return new Promise((resolve) => { finish = resolve })
+  })
+  const pending = action === 'clipboard' ? browser.transferClipboard()
+    : action === 'download' ? browser.download({ id: 'file', filename: 'old' })
+      : browser.transfer(action, new File(['data'], 'file'))
+  browser.setDisplayedSession('session-2')
+  expect(signal.aborted).toBe(true)
+  browser.setDisplayedSession(context.sessionId)
+  await browser.mountView(document.createElement('div'))
+  browser.transferring = true
+  finish({ data: { text: 'old', downloads: ['old'], uploadId: 'old' } })
+  await pending
+  expect(browser.transferring).toBe(true)
+  expect(browser.downloads).toEqual([])
+  expect(browser.uploadId).toBeNull()
+  expect(notifyError).not.toHaveBeenCalled()
+})
+
+it.each(['accepted', 'error', 'close', 'cancel', 'replaced-first'])('keeps one owner until the explicit candidate handoff is accepted (%s)', async (outcome) => {
+  const rfb = await open()
+  const original = socket
+  original.message({ ...state, attached: true })
+  browser.setDisplayedSession('session-2')
+  browser.connect({ ...context, sessionId: 'session-2' }, { takeover: true })
+  const candidate = browser.candidate.socket
+  candidate.open()
+  candidate.message({ type: 'availability', status: 'occupied', browserId: state.browserId, viewId: state.viewId, canTakeover: true })
+  expect(candidate.send).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ type: 'takeover', browserId: state.browserId, viewId: state.viewId }))
+  expect(browser.socket).toBe(original)
+  expect(browser.attached).toBe(true)
+  expect(original.close).not.toHaveBeenCalled()
+  expect(rfb.disconnect).not.toHaveBeenCalled()
+  if (outcome === 'error') candidate.message({ type: 'error', error: { code: 'browser.bindingChanged' } })
+  if (outcome === 'close') candidate.onclose()
+  if (outcome === 'cancel') browser.setDisplayedSession(context.sessionId)
+  if (['accepted', 'replaced-first'].includes(outcome)) {
+    if (outcome === 'replaced-first') original.message({ type: 'replaced' })
+    candidate.message({ ...state, viewId: 'accepted-view' })
+    expect(browser.socket).toBe(candidate)
+    expect(browser.sessionId).toBe('session-2')
+    expect(browser.attached).toBe(false)
+    expect(browser.navigation).toBeNull()
+    expect(original.send).not.toHaveBeenCalled()
+    expect(original.close).toHaveBeenCalledOnce()
+    expect(rfb.disconnect).toHaveBeenCalledOnce()
+  } else {
+    candidate.message({ ...state, viewId: 'late-view' })
+    expect(browser.socket).toBe(original)
+    expect(browser.rfb).toBe(rfb)
+    expect(browser.attached).toBe(true)
+    expect(original.close).not.toHaveBeenCalled()
+    expect(rfb.disconnect).not.toHaveBeenCalled()
+  }
+  expect(candidate.send).not.toHaveBeenCalledWith('{"type":"attach"}')
+  expect(browser.candidate).toBeNull()
+})
+
+it.each(['absent', 'same-owner', 'other-owner'])('claims authorized control once and sends only attach.requested after noVNC readiness (%s)', async (owner) => {
+  let original, rfb
+  if (owner !== 'absent') { rfb = await open(); original = socket }
+  const sessionId = owner === 'other-owner' ? 'session-2' : context.sessionId
+  browser.setDisplayedSession(sessionId)
+  const center = useControlCenterStore()
+  center.syncSession({ id: sessionId })
+  let finish
+  const openApp = vi.spyOn(center, 'openApp').mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+  const request = { ...context, sessionId, id: 'request-1', runId: 'run-1' }
+  api.get.mockResolvedValue({ data: { request } })
+  const pending = browser.reconcileControlRequest(sessionId)
+  await vi.waitFor(() => expect(openApp).toHaveBeenCalledExactlyOnceWith('browser'))
+  browser.activate('request', request, true)
+  expect(FakeWebSocket.instances).toHaveLength(owner === 'absent' ? 0 : 1)
+  finish()
+  await pending
+  center.saving = true
+  browser.activate('request', request, true)
+  expect(browser.candidate).toBeNull()
+  center.saving = false
+  browser.activate('request', request, true)
+  const control = browser.candidate?.socket || browser.socket
+  expect(control.url).toContain(`sessionId=${sessionId}&controlRequestId=request-1`)
+  if (original) {
+    expect(original.close).not.toHaveBeenCalled()
+    expect(rfb.disconnect).not.toHaveBeenCalled()
+  }
+  control.open()
+  control.message({ ...state, viewId: 'requested-view' })
+  expect(control.send).not.toHaveBeenCalled()
+  vi.useFakeTimers()
+  const host = document.createElement('div')
+  host.getClientRects = () => [{ width: 900, height: 600 }]
+  await browser.mountView(host)
+  browser.resize(900, 600)
+  await vi.advanceTimersByTimeAsync(300)
+  const viewer = viewers.at(-1)
+  expect(control.send).not.toHaveBeenCalled()
+  viewer.dispatchEvent(new Event('connect'))
+  await vi.advanceTimersByTimeAsync(300)
+  expect(control.send).toHaveBeenCalledExactlyOnceWith('{"type":"attach.requested","requestId":"request-1"}')
+  await browser.mountView(host)
+  viewer.dispatchEvent(new Event('connect'))
+  expect(browser.navigate('state')).toBe(false)
+  control.message({ ...state, viewId: 'requested-view', busy: true })
+  expect(control.send).toHaveBeenCalledTimes(1)
+  control.message({ ...state, viewId: 'requested-view', attached: true })
+  expect(control.send.mock.calls.map(([raw]) => JSON.parse(raw))).toEqual([
+    { type: 'attach.requested', requestId: 'request-1' }, { type: 'navigation', action: 'state' }
+  ])
+  await vi.advanceTimersByTimeAsync(300)
+  expect(control.send).toHaveBeenLastCalledWith('{"type":"resize","width":900,"height":600}')
+  control.message({ ...navigation, completed: true })
+  for (let i = 0; i < 3; i++) {
+    await browser.reconcileControlRequest(sessionId)
+    browser.activate('request', request, true)
+    await browser.mountView(document.createElement('div'))
+  }
+  expect(browser.attached).toBe(true)
+  expect(browser.rfb).toBe(viewer)
+  expect(FakeWebSocket.instances).toHaveLength(owner === 'absent' ? 1 : 2)
+  expect(control.send.mock.calls.filter(([raw]) => JSON.parse(raw).type.startsWith('attach'))).toEqual([
+    [JSON.stringify({ type: 'attach.requested', requestId: 'request-1' })]
+  ])
+  expect(openApp).toHaveBeenCalledOnce()
+})
+
+it.each(['same-session-request', 'human-takeover'])('keeps the candidate when the old RFB disconnects before control replacement (%s)', async (mode) => {
+  const oldViewer = await open()
+  const oldControl = socket
+  const request = { ...context, id: 'request-1', runId: 'run-1' }
+  if (mode === 'same-session-request') {
+    browser.authorizedRequest = request
+    browser.activate('request', context, true)
+  } else {
+    browser.setDisplayedSession('session-2')
+    browser.connect({ ...context, sessionId: 'session-2' }, { takeover: true })
+  }
+  const candidate = browser.candidate.socket
+  candidate.open()
+  if (mode === 'human-takeover') {
+    candidate.message({ type: 'availability', status: 'occupied', browserId: state.browserId, viewId: state.viewId, canTakeover: true })
+    expect(candidate.send).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ type: 'takeover', browserId: state.browserId, viewId: state.viewId }))
+  }
+  oldViewer.dispatchEvent(new Event('disconnect'))
+  expect(browser.candidate.socket).toBe(candidate)
+  expect(candidate.close).not.toHaveBeenCalled()
+  expect(oldControl.close).not.toHaveBeenCalled()
+  expect(oldControl.send).not.toHaveBeenCalled()
+  if (mode === 'same-session-request') expect(browser.authorizedRequest.id).toBe(request.id)
+  oldControl.message({ type: 'replaced' })
+  candidate.message({ ...state, viewId: 'new-view' })
+  await browser.mountView(document.createElement('div'))
+  const viewer = viewers.at(-1)
+  viewer.dispatchEvent(new Event('connect'))
+  for (const event of ['disconnect', 'connect', 'securityfailure', 'credentialsrequired']) oldViewer.dispatchEvent(new Event(event))
+  oldControl.message({ type: 'error', operation: 'control', error: { code: 'browser.bindingChanged' } })
+  oldControl.onclose()
+  expect(browser.socket).toBe(candidate)
+  expect(browser.rfb).toBe(viewer)
+  expect(candidate.close).not.toHaveBeenCalled()
+  expect(viewer.disconnect).not.toHaveBeenCalled()
+  expect(notifyError).not.toHaveBeenCalled()
+  if (mode === 'same-session-request') {
+    expect(candidate.send).toHaveBeenCalledExactlyOnceWith('{"type":"attach.requested","requestId":"request-1"}')
+    candidate.message({ ...state, viewId: 'new-view', attached: true })
+    expect(candidate.send.mock.calls.map(([raw]) => JSON.parse(raw).type)).toEqual(['attach.requested', 'navigation'])
+  } else {
+    expect(candidate.send.mock.calls.map(([raw]) => JSON.parse(raw).type)).toEqual(['takeover', 'navigation'])
+    expect(browser.attached).toBe(false)
+  }
+})
+
+it.each(['browser.bindingChanged', 'browser.notConnected', 'browser.controlTimeout'])('keeps live control after scoped requested attachment failure %s', async (code) => {
+  const request = { ...context, id: 'request-1', runId: 'run-1' }
+  browser.authorizedRequest = request
+  browser.activate('request', context, true)
+  const control = browser.socket
+  control.open()
+  control.message(state)
+  await browser.mountView(document.createElement('div'))
+  const viewer = viewers.at(-1)
+  viewer.dispatchEvent(new Event('connect'))
+  expect(control.send).toHaveBeenCalledExactlyOnceWith('{"type":"attach.requested","requestId":"request-1"}')
+  control.message({ type: 'error', operation: 'control', error: { code } })
+  expect(browser.controlRequestId).toBeNull()
+  expect(browser.authorizedRequest).toBeNull()
+  expect(browser.submitting).toBeNull()
+  expect(browser.socket).toBe(control)
+  expect(browser.rfb).toBe(viewer)
+  expect(control.close).not.toHaveBeenCalled()
+  expect(viewer.disconnect).not.toHaveBeenCalled()
+  expect(notifyError).toHaveBeenCalledExactlyOnceWith({ error: { code } })
+  expect(control.send.mock.calls.map(([raw]) => JSON.parse(raw).type)).toEqual(['attach.requested', 'navigation'])
+  control.message({ ...navigation, completed: true })
+  expect(browser.manual).toBe(true)
+})
+
+it.each([false, true])('cancels requested attachment without stale attach, teardown or error toast (viewerConnected=%s)', async (connected) => {
+  const request = { ...context, id: 'request-1', runId: 'run-1' }
+  browser.authorizedRequest = request
+  browser.activate('request', context, true)
+  const control = browser.socket
+  control.open()
+  control.message(state)
+  await browser.mountView(document.createElement('div'))
+  const viewer = viewers.at(-1)
+  if (connected) viewer.dispatchEvent(new Event('connect'))
+  browser.setAttachment(false)
+  viewer.dispatchEvent(new Event('connect'))
+  const initial = connected ? ['attach.requested', 'detach'] : ['detach']
+  expect(control.send.mock.calls.map(([raw]) => JSON.parse(raw).type)).toEqual(initial)
+  control.message({ type: 'error', operation: 'control', error: { code: 'browser.notConnected' } })
+  expect(browser.submitting).toBe('detach')
+  expect(control.send.mock.calls.map(([raw]) => JSON.parse(raw).type)).toEqual(initial)
+  control.message({ ...state, busy: true })
+  expect(control.send.mock.calls.map(([raw]) => JSON.parse(raw).type)).toEqual(initial)
+  control.message(state)
+  expect(control.send.mock.calls.map(([raw]) => JSON.parse(raw).type)).toEqual([...initial, 'navigation'])
+  control.message({ ...navigation, completed: true })
+  useControlCenterStore().syncSession({ id: context.sessionId })
+  api.get.mockResolvedValueOnce({ data: { request } })
+  await browser.reconcileControlRequest(context.sessionId)
+  browser.activate('request', context, true)
+  await browser.mountView(document.createElement('div'))
+  expect(control.send.mock.calls.map(([raw]) => JSON.parse(raw).type)).toEqual([...initial, 'navigation'])
+  expect(browser.controlRequestId).toBeNull()
+  expect(browser.submitting).toBeNull()
+  expect(browser.manual).toBe(true)
+  expect(control.close).not.toHaveBeenCalled()
+  expect(viewer.disconnect).not.toHaveBeenCalled()
+  expect(notifyError).not.toHaveBeenCalled()
+  expect(FakeWebSocket.instances).toHaveLength(1)
+})
+
+it.each(['denied', 'stale-get', 'stale-open', 'failed-open', 'cancelled-view', 'manual-detach'])('does not leave latent requested attachment or open denied requests (%s)', async (change) => {
+  const center = useControlCenterStore()
+  center.syncSession({ id: context.sessionId })
+  const request = { ...context, id: 'request-1', runId: 'run-1' }
+  let finish
+  api.get.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+  const openApp = vi.spyOn(center, 'openApp').mockResolvedValue()
+  const pending = browser.reconcileControlRequest(context.sessionId)
+  if (change === 'stale-get') browser.setDisplayedSession('session-2')
+  if (change === 'failed-open') openApp.mockRejectedValueOnce(new Error('Save failed'))
+  let finishOpen
+  if (change === 'stale-open') openApp.mockImplementationOnce(() => new Promise((resolve) => { finishOpen = resolve }))
+  finish({ data: { request: change === 'denied' ? null : request } })
+  if (change === 'stale-open') {
+    await vi.waitFor(() => expect(openApp).toHaveBeenCalled())
+    browser.setDisplayedSession('session-2')
+    finishOpen()
+  }
+  await pending
+  if (['cancelled-view', 'manual-detach'].includes(change)) {
+    browser.activate('request', request, true)
+    const control = browser.socket
+    control.open()
+    control.message(state)
+    await browser.mountView(document.createElement('div'))
+    if (change === 'manual-detach') browser.setAttachment(false)
+    else {
+      api.get.mockResolvedValueOnce({ data: { request: null } })
+      await browser.reconcileControlRequest(context.sessionId)
+    }
+    viewers.at(-1).dispatchEvent(new Event('connect'))
+    expect(control.send.mock.calls.map(([raw]) => JSON.parse(raw).type)).not.toContain('attach.requested')
+    expect(control.send).not.toHaveBeenCalledWith('{"type":"attach"}')
+  } else {
+    browser.activate('request', request, false)
+    expect(FakeWebSocket.instances).toHaveLength(0)
+  }
+  if (['denied', 'stale-get'].includes(change)) expect(openApp).not.toHaveBeenCalled()
 })
 
 it('closes the control when the view is lost, and requires an explicit new connection', async () => {
@@ -867,6 +1205,41 @@ it('skips unavailable browser adapters and suppresses only expected catalog-race
   expect(notifyError).toHaveBeenCalledExactlyOnceWith(error)
 })
 
+it('distinguishes an unloaded settings-scope browser cache from authoritative browser responses', async () => {
+  const integrations = useIntegrationStore()
+  integrations.catalogLoaded = true
+  integrations.catalog = [{ adapterType: 'browser', availability: 'full', personalOnly: true }]
+  api.get.mockResolvedValueOnce({ data: { configured: true, instances: [instance] } })
+  await integrations.fetchBrowser()
+  expect(integrations.browserLoaded).toBe(true)
+  let finish
+  api.get.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+  const stale = integrations.fetchBrowser()
+  integrations.selectScope('personal')
+  expect(integrations.browserLoaded).toBe(false)
+  expect(integrations.browser.instances).toEqual([])
+  finish({ data: { configured: true, instances: [instance] } })
+  await stale
+  expect(integrations.browserLoaded).toBe(false)
+  api.get.mockRejectedValueOnce(new Error('Temporary fetch failure'))
+  await expect(integrations.fetchBrowser()).rejects.toThrow('Temporary fetch failure')
+  expect(integrations.browserLoaded).toBe(false)
+  integrations.catalogLoadFailed = true
+  api.get.mockResolvedValueOnce({ data: { configured: true, instances: [instance] } })
+  await integrations.fetchBrowser()
+  expect(integrations.browserLoaded).toBe(true)
+  expect(integrations.browser.instances).toEqual([instance])
+  integrations.catalogLoadFailed = false
+  api.get.mockResolvedValueOnce({ data: { configured: true, instances: [{ ...instance, enabled: false }] } })
+  await integrations.fetchBrowser()
+  expect(integrations.browserLoaded).toBe(true)
+  expect(integrations.browser.instances[0].enabled).toBe(false)
+  api.get.mockResolvedValueOnce({ data: { configured: false, instances: [] } })
+  await integrations.fetchBrowser()
+  expect(integrations.browserLoaded).toBe(true)
+  expect(integrations.browser.instances).toEqual([])
+})
+
 it('opens setup independently of any session without starting and guards old output/input callbacks', () => {
   const setup = useBrowserSetupStore()
   setup.connect('browser-1')
@@ -947,7 +1320,7 @@ it('gates the launcher on the existing global catalog, configured enabled instan
 it('translates all browser error codes safely and never equates configuration with readiness', () => {
   const codes = ['unavailable', 'notReady', 'busy', 'notConnected', 'bindingChanged', 'setupFailed',
     'dependenciesMissing', 'unsupported', 'sandboxUnavailable', 'actionFailed', 'invalidTarget',
-    'fileTooLarge', 'profileOwnerMismatch', 'outcomeUnknown']
+    'fileTooLarge', 'profileOwnerMismatch', 'outcomeUnknown', 'controlTimeout']
   for (const code of codes) {
     const message = apiErrorMessage({ error: { code: `browser.${code}`, message: 'secret provider error' } })
     expect(message).not.toBe('Die Aktion ist fehlgeschlagen.')

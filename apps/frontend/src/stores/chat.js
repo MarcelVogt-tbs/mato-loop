@@ -3,6 +3,7 @@ import { markRaw, toRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useApprovalStore } from 'src/stores/approvals'
+import { useBrowserStore } from 'src/stores/browser'
 import { controlCenterRequestState, useControlCenterStore } from 'src/stores/control-center'
 import { useInstanceLimitsStore } from 'src/stores/instance-limits'
 import { useQuestionStore } from 'src/stores/questions'
@@ -1122,6 +1123,7 @@ export const useChatStore = defineStore('chat', {
               session.nextMessageCursor = this.current.nextMessageCursor
             }
             this.applySessionResult(session)
+            void useBrowserStore().reconcileControlRequest(id)
             void this.markSessionRead(session).catch(() => {})
             this.loadError = null
             if (session.activeRun && this.runId !== session.activeRun.id) {
@@ -2151,6 +2153,7 @@ export const useChatStore = defineStore('chat', {
       this.streamModelName = run.modelName || this.streamModelName
       source.onopen = () => {
         if (this.eventSource !== source) return
+        void useBrowserStore().reconcileControlRequest(sessionId)
         if (useSubagentStore().parentId === sessionId) void useSubagentStore().loadChildren()
         this.reconnectAttempts = 0
         if (this.activity.phase === 'reconnecting') {
@@ -2174,6 +2177,10 @@ export const useChatStore = defineStore('chat', {
         this.streamModelName = payload.modelName || this.streamModelName
         this.setSessionRunStatus(sessionId, 'running')
         this.setActivity('preparing_context', { ...payload, startedAt: payload.createdAt })
+      })
+      source.addEventListener('browser.control.requested', () => {
+        if (this.eventSource !== source || this.current?.id !== sessionId) return
+        void useBrowserStore().reconcileControlRequest(sessionId)
       })
       source.addEventListener('run.timing', (event) => {
         if (this.eventSource !== source) return

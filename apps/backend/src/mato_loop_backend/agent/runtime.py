@@ -2090,6 +2090,9 @@ class AgentRuntime:
                 or skill_state.edit_completed
             )
             if effective_toolset is not None:
+                if (chat_session.session_type != "chat" or chat_session.parent_session_id is not None
+                        or run.parent_run_id is not None):
+                    effective_toolset = effective_toolset.without("browser_request_control")
                 if ceiling is not None:
                     effective_toolset = effective_toolset.only(*ceiling["toolNames"]).without("task")
                 elif agent_profile_id not in DELEGATING_PROFILES:
@@ -4862,7 +4865,7 @@ class AgentRuntime:
         )
         browser_approval_key = None
         if (
-            request.action_kind == "browser_action" and approval_resolution is not None
+            request.action_kind in {"browser_action", "browser_control"} and approval_resolution is not None
             and (check_only or decision == PermissionDecision.ASK)
         ):
             browser_approval_key = "browser_approved:" + json.dumps([

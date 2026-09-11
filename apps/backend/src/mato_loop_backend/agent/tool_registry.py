@@ -244,6 +244,9 @@ class ToolContext:
             for item in settings.instances:
                 if item.adapter_type == "browser":
                     item._browser_attached = item.id == integration_id
+                    item._execution_operations = self.execution_client.operations if self.execution_client else frozenset()
+                    if self.execution_client is None or item.execution_agent_id != self.execution_client.agent_id:
+                        item.enabled = False
         return settings
 
     async def ask(self, request: PermissionRequest) -> PermissionDecision:
@@ -1260,7 +1263,7 @@ class ToolRegistry:
                         for request in requests
                     )
                 browser_requests = tuple(
-                    request for request in requests if request.action_kind == "browser_action"
+                    request for request in requests if request.action_kind in {"browser_action", "browser_control"}
                 )
                 if browser_requests:
                     for key in tuple(context.approval_resolution):

@@ -43,6 +43,7 @@ from mato_loop_backend.execution.protocol import SUPPORTED_OPERATIONS, ResponseM
 from mato_loop_backend.integrations import browser as browser_module
 from mato_loop_backend.integrations.browser import (
     BROWSER_ADAPTER,
+    BROWSER_REQUEST_CONTROL,
     BROWSER_TOOL,
     BROWSER_TOOL_ACTIONS,
     BROWSER_TOOLS,
@@ -145,7 +146,8 @@ def test_public_browser_tools_have_narrow_static_schemas_and_no_legacy_tool():
         "browser_evaluate": {"tabId", "function", "ref", "observe"},
         "browser_run_code": {"tabId", "code", "observe"},
     }
-    assert BROWSER_ADAPTER.execution_tools == BROWSER_TOOLS
+    assert BROWSER_ADAPTER.execution_tools == (*BROWSER_TOOLS, BROWSER_REQUEST_CONTROL)
+    assert set(BROWSER_REQUEST_CONTROL.arguments_model.model_json_schema()["properties"]) == {"reason"}
     assert set(BROWSER_TOOL_ACTIONS) == set(expected)
     for tool in BROWSER_TOOLS:
         schema = tool.arguments_model.model_json_schema()
@@ -351,13 +353,13 @@ def test_browser_schema_requires_live_binding_and_preserves_profile_exclusion():
     instance = _instance()
     settings = IntegrationSettings(instances=[instance])
     assert not effective_integration_contributions(settings).tools
-    assert not effective_integration_contributions(effective_execution_integration_settings(
+    assert [tool.name for tool in effective_integration_contributions(effective_execution_integration_settings(
         settings, instance.execution_agent_id, {"integration.browser.execute"},
-    )).tools
+    )).tools] == ["browser_request_control"]
     active = effective_execution_integration_settings(
         settings, instance.execution_agent_id, {"integration.browser.execute"}, browser_integration_id=instance.id,
     )
-    assert [tool.name for tool in effective_integration_contributions(active).tools] == list(BROWSER_TOOL_ACTIONS)
+    assert [tool.name for tool in effective_integration_contributions(active).tools] == [*BROWSER_TOOL_ACTIONS, "browser_request_control"]
     excluded = filter_agent_profile_integrations(active, None, allowed_ids=[])
     assert not effective_integration_contributions(excluded).tools
     for agent, operations in [(uuid4(), {"integration.browser.execute"}), (instance.execution_agent_id, set())]:
@@ -966,7 +968,7 @@ async def test_profile_disabled_browser_actions_are_not_offered():
         permissions.policies.update({"browser.read": "disabled", "browser.write": "disabled"})
     effective = tools_module.tool_registry.effective(settings, tool_settings=tools)
     assert not set(BROWSER_TOOL_ACTIONS) & effective.tools.keys()
-    assert {action.capability for action in tools_module.tool_registry.integration_resource_actions(instance)} == {"browser.read", "browser.write", "browser.code"}
+    assert {action.capability for action in tools_module.tool_registry.integration_resource_actions(instance)} == {"browser.read", "browser.write", "browser.code", "browser.control"}
 
 
 @pytest.mark.parametrize("personal", [None, UserToolSettings()])
@@ -987,4 +989,4 @@ def test_narrow_write_and_code_tools_are_not_offered_with_write_disabled():
     settings = ToolSettings()
     settings.permissions.policies["browser.write"] = "disabled"
     effective = tools_module.ToolRegistry([]).effective(IntegrationSettings(instances=[instance]), tool_settings=settings)
-    assert set(effective.tools) == {"browser_tabs", "browser_snapshot", "browser_take_screenshot", "browser_diagnostics"}
+    assert set(effective.tools) == {"browser_tabs", "browser_snapshot", "browser_take_screenshot", "browser_diagnostics", "browser_request_control"}

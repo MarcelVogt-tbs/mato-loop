@@ -84,6 +84,7 @@ function clearIntegrations(store) {
   store.openscad = emptyOpenScad()
   store.coding = emptyCoding()
   store.browser = { configured: false, instances: [] }
+  store.browserLoaded = false
   store.browserLoadVersion += 1
   store.browserStatuses = {}
 }
@@ -104,6 +105,7 @@ export const useIntegrationStore = defineStore('integrations', {
     openscad: emptyOpenScad(),
     coding: emptyCoding(),
     browser: { configured: false, instances: [] },
+    browserLoaded: false,
     browserStatuses: {},
     browserLoadVersion: 0,
     scope: 'instance',
@@ -457,7 +459,7 @@ export const useIntegrationStore = defineStore('integrations', {
     async fetchBrowser() {
       const version = ++this.browserLoadVersion
       let data = { configured: false, instances: [] }
-      if (!this.catalogLoaded || this.adapterAvailable('browser', 'personal')) {
+      if (!this.catalogLoaded || this.catalogLoadFailed || this.adapterAvailable('browser', 'personal')) {
         try {
           data = (await api.get('/integrations/browser', scopeConfig('personal', { suppressErrorToast: true }))).data
         } catch (error) {
@@ -467,7 +469,10 @@ export const useIntegrationStore = defineStore('integrations', {
           }
         }
       }
-      if (version === this.browserLoadVersion) this.browser = data
+      if (version === this.browserLoadVersion) {
+        this.browser = data
+        this.browserLoaded = true
+      }
       return data
     },
     async saveBrowser(id, payload) {
@@ -477,6 +482,7 @@ export const useIntegrationStore = defineStore('integrations', {
         : await api.post('/integrations/browser', payload, scopeConfig('personal'))
       if (version === this.browserLoadVersion) {
         this.browser = data
+        this.browserLoaded = true
         if (id) delete this.browserStatuses[id]
       }
       return data
@@ -486,6 +492,7 @@ export const useIntegrationStore = defineStore('integrations', {
       const { data } = await api.delete(`/integrations/browser/${id}`, scopeConfig('personal'))
       if (version === this.browserLoadVersion) {
         this.browser = data
+        this.browserLoaded = true
         delete this.browserStatuses[id]
         clearAccess(this, id)
       }

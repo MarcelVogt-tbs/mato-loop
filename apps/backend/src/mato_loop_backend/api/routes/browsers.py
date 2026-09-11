@@ -33,6 +33,10 @@ from mato_loop_backend.execution.browser_contracts import (
     BrowserSetupWriteArguments,
     BrowserStatusResult,
 )
+from mato_loop_backend.execution.browser_control import (
+    ControlRequestResponse,
+    browser_control_requests,
+)
 from mato_loop_backend.execution.browsers import (
     ACCESS_INTERVAL,
     BrowserConnection,
@@ -63,6 +67,11 @@ class BrowserTakeover(WireModel):
     view_id: UUID = Field(strict=False)
 
 
+class BrowserRequestedAttachment(WireModel):
+    type: Literal["attach.requested"]
+    request_id: UUID = Field(strict=False)
+
+
 class BrowserResize(BrowserResizeResult):
     type: Literal["resize"]
 
@@ -71,7 +80,7 @@ class BrowserNavigation(BrowserNavigationArguments):
     type: Literal["navigation"]
 
 
-_BROWSER_CONTROL = TypeAdapter(Annotated[BrowserControl | BrowserResize | BrowserNavigation | BrowserTakeover, Field(discriminator="type")])
+_BROWSER_CONTROL = TypeAdapter(Annotated[BrowserControl | BrowserResize | BrowserNavigation | BrowserTakeover | BrowserRequestedAttachment, Field(discriminator="type")])
 
 
 class SetupControl(WireModel):
@@ -102,13 +111,14 @@ async def _login(websocket: WebSocket):
     return login
 
 
-async def _error(websocket: WebSocket, exc: Exception) -> None:
+async def _error(websocket: WebSocket, exc: Exception, *, operation: str | None = None) -> None:
     code = exc.code if isinstance(exc, ExecutionClientError) else "browser.unavailable"
     if not isinstance(exc, (ExecutionClientError, WebSocketDisconnect, ValidationError)):
         logger.error("Browser transport failed: %s", type(exc).__name__)
     with suppress(Exception):
         async with asyncio.timeout(2):
-            await websocket.send_json({"type": "error", "error": describe_error(code).payload()})
+            await websocket.send_json({"type": "error", "error": describe_error(code).payload(),
+                                       **({"operation": operation} if operation else {})})
 
 
 async def _receive_control(websocket: WebSocket, adapter):
@@ -127,10 +137,22 @@ async def _close_socket(websocket: WebSocket, code: int = 1000) -> None:
             await websocket.close(code=code)
 
 
+@router.get("/browsers/control-requests", response_model=ControlRequestResponse)
+async def browser_pending_control(request: Request, session_id: SessionId):
+    login = await _browser_login(request)
+    if login is None:
+        raise ApiError(401, "auth.notAuthenticated")
+    try:
+        return ControlRequestResponse(request=await browser_control_requests.active(login.user.id, session_id))
+    except ExecutionClientError as exc:
+        raise browser_api_error(exc) from exc
+
+
 @router.websocket("/browsers/{integration_id}")
 async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
     connection = None
     tasks = []
+    attachment_task = None
     resize_pending = None
     resize_changed = asyncio.Event()
     try:
@@ -141,11 +163,20 @@ async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
             session_id = UUID(websocket.query_params.get("sessionId", ""))
         except ValueError as exc:
             raise ExecutionClientError("session.notFound") from exc
+        try:
+            control_request_id = UUID(websocket.query_params["controlRequestId"]) if "controlRequestId" in websocket.query_params else None
+        except ValueError as exc:
+            raise ExecutionClientError("browser.invalidTarget") from exc
         instance, _ = await validate_browser_access(login.user.id, integration_id, login_id=login.login_id, session_id=session_id)
         await websocket.accept()
-        candidate = await browser_coordinator.open(
-            login.user.id, integration_id, session_id, login.login_id, websocket,
-        )
+        if control_request_id is not None:
+            candidate = await browser_control_requests.claim(
+                control_request_id, login.user.id, session_id, integration_id, login.login_id, websocket,
+            )
+        else:
+            candidate = await browser_coordinator.open(
+                login.user.id, integration_id, session_id, login.login_id, websocket,
+            )
         last_offer = None
         while candidate.websocket is not websocket:
             offer = await browser_coordinator.availability(candidate)
@@ -171,12 +202,28 @@ async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
         connection = candidate
         await connection.state()
 
+        def control_pending():
+            return control_request_id in browser_control_requests.requests or (
+                attachment_task is not None and not attachment_task.done()
+            )
+
+        async def requested_attachment(request_id):
+            try:
+                await browser_control_requests.attach(request_id, connection, websocket)
+            except Exception as exc:
+                if not connection.closed:
+                    await _error(websocket, exc, operation="control")
+
         async def controls():
-            nonlocal resize_pending
+            nonlocal resize_pending, attachment_task
             while not connection.closed and connection.websocket is websocket:
                 message = await _receive_control(websocket, _BROWSER_CONTROL)
                 if connection.closed:
                     return False
+                if isinstance(message, (BrowserResize, BrowserNavigation)) and control_pending():
+                    await _error(websocket, ExecutionClientError("browser.busy"),
+                                 operation="resize" if isinstance(message, BrowserResize) else "navigation")
+                    continue
                 if isinstance(message, BrowserResize):
                     resize_pending = message
                     resize_changed.set()
@@ -190,17 +237,33 @@ async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
                         await connection.send({"type": "error", "operation": "navigation",
                                                "error": describe_error(exc.code).payload()})
                 elif message.type == "close":
+                    browser_control_requests.cancel_socket(websocket)
                     return True
                 elif message.type == "release":
+                    browser_control_requests.cancel_socket(websocket)
                     return False
                 elif isinstance(message, BrowserTakeover):
                     raise ExecutionClientError("browser.invalidTarget")
                 else:
                     try:
-                        await browser_coordinator.attachment(connection, message.type == "attach")
+                        if isinstance(message, BrowserRequestedAttachment):
+                            if message.request_id != control_request_id:
+                                raise ExecutionClientError("browser.bindingChanged")
+                            if attachment_task is not None and not attachment_task.done():
+                                raise ExecutionClientError("browser.busy")
+                            # Keep reading close/detach while the attachment RPC is in flight.
+                            attachment_task = asyncio.create_task(requested_attachment(message.request_id))
+                        else:
+                            pending = control_request_id in browser_control_requests.requests
+                            browser_control_requests.cancel_socket(websocket)
+                            if pending and message.type == "attach":
+                                raise ExecutionClientError("browser.bindingChanged")
+                            await browser_coordinator.attachment(connection, message.type == "attach")
                     except ExecutionClientError as exc:
                         if not connection.closed:
-                            await _error(websocket, exc)
+                            await _error(websocket, exc, operation=(
+                                "control" if isinstance(message, BrowserRequestedAttachment) else None
+                            ))
 
         async def resizes():
             nonlocal resize_pending
@@ -210,6 +273,8 @@ async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
                 resize_changed.clear()
                 message, resize_pending = resize_pending, None
                 try:
+                    if control_pending():
+                        raise ExecutionClientError("browser.busy")
                     result = await browser_coordinator.resize(connection, message.width, message.height)
                     await connection.send({"type": "resized", "browserId": str(connection.browser_id), **result.model_dump()})
                 except ExecutionClientError as exc:
@@ -228,6 +293,9 @@ async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
             await _error(websocket, exc)
     finally:
         with CancelScope(shield=True):
+            browser_control_requests.cancel_socket(websocket)
+            if attachment_task is not None:
+                tasks.append(attachment_task)
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -305,6 +373,7 @@ async def browser_view(websocket: WebSocket, integration_id: UUID) -> None:
             await connection.check_access()
         if not result.ok or not relay.accepted:
             raise ExecutionClientError("browser.notConnected")
+        relay.ready = True
         tasks = [
             asyncio.create_task(_pump_socket(websocket, relay.incoming, relay.outgoing, connection=connection)),
             asyncio.create_task(relay.ended.wait()),
@@ -329,6 +398,8 @@ async def browser_view(websocket: WebSocket, integration_id: UUID) -> None:
             relay.ended.set()
             browser_coordinator.relays.pop(relay.relay_id, None)
         if connection is not None and not connection.closed and connection.view_socket is websocket:
+            if connection.websocket is not None:
+                browser_control_requests.cancel_socket(connection.websocket)
             connection.view_socket = None
             connection.detach()
             if not connection.resetting_view:
@@ -352,6 +423,7 @@ async def browser_relay(websocket: WebSocket, relay_id: UUID) -> None:
         if relay.ended.is_set():
             raise ExecutionClientError("browser.notConnected")
         await websocket.accept()
+        relay.connected = True
         tasks = [asyncio.create_task(_pump_socket(websocket, relay.outgoing, relay.incoming, relay=relay)),
                  asyncio.create_task(relay.ended.wait())]
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)

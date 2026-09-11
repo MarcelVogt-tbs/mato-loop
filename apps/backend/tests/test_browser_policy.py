@@ -154,16 +154,17 @@ def browser_script_case(browser_policy_case, request):
 def test_browser_catalog_defaults_survive_central_trust_resolution(browser_policy_case):
     case = browser_policy_case
     actions = tools_module.tool_registry.integration_resource_actions(case.instance)
-    assert {action.capability for action in actions} == {"browser.read", "browser.write", "browser.code"}
+    assert {action.capability for action in actions} == {"browser.read", "browser.write", "browser.code", "browser.control"}
     for action in actions:
-        assert action.default_policy == ToolExecutionPolicy.AUTO
+        default = ToolExecutionPolicy.ASK if action.capability == "browser.control" else ToolExecutionPolicy.AUTO
+        assert action.default_policy == default
         for integration_id in (None, case.instance.id):
             resolution = tools_module.resolve_tool_execution_policy(
                 case.settings, action.capability, action.default_policy,
                 integration_id=integration_id,
             )
             assert (resolution.policy, resolution.source, resolution.reason) == (
-                ToolExecutionPolicy.AUTO, "default", "trust_default",
+                default, "default", "trust_default",
             )
 
 

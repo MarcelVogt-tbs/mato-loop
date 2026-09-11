@@ -54,7 +54,7 @@ class BrowserIntegrationPatch(WireModel):
 
 def browser_api_error(exc: ExecutionClientError) -> ApiError:
     code = exc.code
-    status = 404 if code in {"integration.notFound", "executionAgent.notFound"} else (
+    status = 404 if code in {"integration.notFound", "executionAgent.notFound", "session.notFound"} else (
         409 if code in {"browser.busy", "browser.bindingChanged", "browser.snapshotChanged", "browser.observationUnstable", "browser.profileOwnerMismatch", "browser.profileInUse"}
         else 503 if code in {"browser.unavailable", "browser.notReady", "browser.notConnected"}
         or code.startswith("executionAgent.") else 502

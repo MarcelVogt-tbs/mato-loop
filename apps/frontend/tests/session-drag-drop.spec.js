@@ -2,6 +2,11 @@
 import { createApp, h, nextTick } from 'vue'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import MainLayout from '../src/layouts/MainLayout.vue'
+import { useChatStore } from 'stores/chat'
+import { useBrowserStore } from 'stores/browser'
+import { useControlCenterStore } from 'stores/control-center'
+import { useIntegrationStore } from 'stores/integrations'
+import { useRoute } from 'vue-router'
 
 const { chat, projects, pending, quasar, terminal, workspace } = vi.hoisted(() => {
   const sessions = [
@@ -27,11 +32,16 @@ const { chat, projects, pending, quasar, terminal, workspace } = vi.hoisted(() =
   }
 })
 vi.mock('quasar', () => ({ useQuasar: () => quasar }))
-vi.mock('vue-router', () => ({
-  useRoute: () => ({ name: 'chat', query: {} }), useRouter: () => ({ push: vi.fn() }),
-  onBeforeRouteLeave: vi.fn(), onBeforeRouteUpdate: vi.fn()
-}))
-vi.mock('stores/chat', () => ({ useChatStore: () => chat }))
+vi.mock('vue-router', async () => {
+  const { reactive } = await import('vue')
+  const route = reactive({ name: 'chat', query: {} })
+  return { useRoute: () => route, useRouter: () => ({ push: vi.fn() }), onBeforeRouteLeave: vi.fn(), onBeforeRouteUpdate: vi.fn() }
+})
+vi.mock('stores/chat', async () => {
+  const { reactive } = await import('vue')
+  const store = reactive(chat)
+  return { useChatStore: () => store }
+})
 vi.mock('stores/projects', () => ({ useProjectStore: () => projects }))
 vi.mock('stores/approvals', () => ({ useApprovalStore: () => pending }))
 vi.mock('stores/questions', () => ({ useQuestionStore: () => pending }))
@@ -39,15 +49,27 @@ vi.mock('stores/agent-identity', () => ({ useAgentIdentityStore: () => ({ fetchI
 vi.mock('stores/in-app-notifications', () => ({ useInAppNotificationStore: () => ({
   unreadCount: 0, fetchLatest: vi.fn().mockResolvedValue(), reconcilePush: vi.fn().mockResolvedValue()
 }) }))
-vi.mock('stores/control-center', () => ({ useControlCenterStore: () => ({ sessionId: null, open: false, tabs: [], confirmedState: { tabs: [] } }) }))
+vi.mock('stores/control-center', async () => {
+  const { reactive } = await import('vue')
+  const store = reactive({ sessionId: null, ready: true, open: false, tabs: [], confirmedState: { tabs: [] } })
+  return { useControlCenterStore: () => store }
+})
 vi.mock('stores/terminal', () => ({ useTerminalStore: () => terminal }))
-vi.mock('stores/browser', () => ({ useBrowserStore: () => ({ syncContext: vi.fn(), release: vi.fn() }) }))
-vi.mock('stores/integrations', () => ({ useIntegrationStore: () => ({
-  fetchCatalog: vi.fn().mockResolvedValue(), fetchBrowser: vi.fn().mockResolvedValue()
-}) }))
+vi.mock('stores/browser', async () => {
+  const { reactive } = await import('vue')
+  const store = reactive({ sessionId: null, agentId: null, integrationId: null,
+    syncContext: vi.fn(), release: vi.fn(), setDisplayedSession: vi.fn(), reconcileControlRequest: vi.fn() })
+  return { useBrowserStore: () => store }
+})
+vi.mock('stores/integrations', async () => {
+  const { reactive } = await import('vue')
+  const store = reactive({ fetchCatalog: vi.fn().mockResolvedValue(), fetchBrowser: vi.fn().mockResolvedValue(),
+    adapterAvailable: vi.fn(() => true), browser: { instances: [] }, browserLoaded: true, catalogLoaded: true, catalogLoadFailed: false })
+  return { useIntegrationStore: () => store }
+})
 vi.mock('stores/auth', () => ({ useAuthStore: () => ({ username: 'Tester' }) }))
 vi.mock('stores/automations', () => ({ useAutomationStore: () => ({}) }))
-vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({}) }))
+vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({ byId: (id) => id === 'agent-1' ? { connected: true, operations: [] } : null }) }))
 vi.mock('stores/workspace', () => ({ useWorkspaceStore: () => workspace }))
 vi.mock('stores/search', () => ({ useSearchStore: () => ({ openDialog: vi.fn() }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: vi.fn() }) }))
@@ -59,6 +81,14 @@ vi.mock('components/ControlCenterPanel.vue', () => ({ default: { render: () => n
 let app, root
 beforeEach(async () => {
   vi.clearAllMocks()
+  useChatStore().current = null
+  useRoute().name = 'chat'
+  useRoute().query = {}
+  Object.assign(useBrowserStore(), { sessionId: null, agentId: null, integrationId: null })
+  Object.assign(useControlCenterStore(), { sessionId: null, ready: true, tabs: [], confirmedState: { tabs: [] } })
+  useIntegrationStore().browser.instances = []
+  Object.assign(useIntegrationStore(), { browserLoaded: true, catalogLoaded: true, catalogLoadFailed: false })
+  useIntegrationStore().adapterAvailable.mockReturnValue(true)
   workspace.hasDirtyEditors = false
   vi.useFakeTimers()
   root = document.createElement('div')
@@ -104,6 +134,70 @@ it.each([false, true])('beforeunload only warns about dirty editors (%s), leavin
   expect(event.defaultPrevented).toBe(dirty)
   expect(terminal.release).not.toHaveBeenCalled()
   expect(terminal.close).not.toHaveBeenCalled()
+})
+
+it('evaluates the retained browser agent and tab, not the destination or the current=null load gap', async () => {
+  const browser = useBrowserStore()
+  const center = useControlCenterStore()
+  useIntegrationStore().browser.instances = [{ id: 'browser-1', executionAgentId: 'agent-1', enabled: true }]
+  Object.assign(browser, { sessionId: 'session-1', agentId: 'agent-1', integrationId: 'browser-1' })
+  useChatStore().current = { id: 'session-2', preferredExecutionAgentId: 'offline-agent' }
+  useRoute().query = { session: 'session-2' }
+  center.sessionId = 'session-2'
+  await nextTick()
+  expect(browser.syncContext).toHaveBeenLastCalledWith({ sessionId: 'session-2', agentId: 'offline-agent', available: true, tabPresent: true })
+  useChatStore().current = null
+  await nextTick()
+  expect(browser.syncContext).toHaveBeenLastCalledWith({ sessionId: undefined, agentId: undefined, available: true, tabPresent: true })
+  useChatStore().current = { id: 'session-1', preferredExecutionAgentId: 'agent-1' }
+  useRoute().query = { session: 'session-1' }
+  center.sessionId = 'session-1'
+  center.ready = false
+  await nextTick()
+  expect(browser.syncContext).toHaveBeenLastCalledWith({ sessionId: 'session-1', agentId: 'agent-1', available: true, tabPresent: true })
+  center.ready = true
+  await nextTick()
+  expect(browser.syncContext).toHaveBeenLastCalledWith({ sessionId: 'session-1', agentId: 'agent-1', available: true, tabPresent: false })
+  useIntegrationStore().browser.instances[0].enabled = false
+  await nextTick()
+  expect(browser.syncContext).toHaveBeenLastCalledWith({ sessionId: 'session-1', agentId: 'agent-1', available: false, tabPresent: false })
+})
+
+it('retains browser ownership through settings cache invalidation and failed catalog refresh, but accepts authoritative revocation', async () => {
+  const browser = useBrowserStore()
+  const integrations = useIntegrationStore()
+  const instance = { id: 'browser-1', executionAgentId: 'agent-1', enabled: true }
+  Object.assign(browser, { sessionId: 'session-1', agentId: 'agent-1', integrationId: 'browser-1' })
+  integrations.browser.instances = [instance]
+  useChatStore().current = { id: 'session-1', preferredExecutionAgentId: 'agent-1' }
+  useRoute().query = { session: 'session-1' }
+  useRoute().name = 'settings-integrations'
+  // selectScope clears cached data before the independent personal browser fetch completes.
+  integrations.browser.instances = []
+  integrations.browserLoaded = false
+  await nextTick()
+  expect(browser.syncContext).toHaveBeenLastCalledWith({ sessionId: 'session-1', agentId: 'agent-1', available: true, tabPresent: true })
+  integrations.browser.instances = [instance]
+  integrations.browserLoaded = true
+  integrations.catalogLoadFailed = true
+  integrations.adapterAvailable.mockReturnValue(false)
+  await nextTick()
+  expect(browser.syncContext).toHaveBeenLastCalledWith({ sessionId: 'session-1', agentId: 'agent-1', available: true, tabPresent: true })
+  integrations.catalogLoadFailed = false
+  integrations.adapterAvailable.mockReturnValue(true)
+  useRoute().name = 'chat'
+  await nextTick()
+  expect(browser.syncContext).toHaveBeenLastCalledWith({ sessionId: 'session-1', agentId: 'agent-1', available: true, tabPresent: true })
+  integrations.browser.instances = [{ ...instance, enabled: false }]
+  await nextTick()
+  expect(browser.syncContext).toHaveBeenLastCalledWith({ sessionId: 'session-1', agentId: 'agent-1', available: false, tabPresent: true })
+  integrations.browser.instances = []
+  await nextTick()
+  expect(browser.syncContext).toHaveBeenLastCalledWith({ sessionId: 'session-1', agentId: 'agent-1', available: false, tabPresent: true })
+  integrations.browser.instances = [instance]
+  integrations.adapterAvailable.mockReturnValue(false)
+  await nextTick()
+  expect(browser.syncContext).toHaveBeenLastCalledWith({ sessionId: 'session-1', agentId: 'agent-1', available: false, tabPresent: true })
 })
 
 function source(id) {

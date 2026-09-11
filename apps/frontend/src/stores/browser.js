@@ -3,10 +3,14 @@ import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { browserSocketUrl, clipboardFits } from 'src/utils/browser'
 import { notifyError } from 'src/utils/notifications'
+import { useControlCenterStore } from 'stores/control-center'
 
 export const useBrowserStore = defineStore('browser', {
   state: () => ({
     sessionId: null, agentId: null, integrationId: null, browserId: null, viewId: null,
+    displayedSessionId: null, displayGeneration: 0, candidate: null,
+    authorizedRequest: null, requestRefresh: null, requestAttemptId: null, requestOpening: false,
+    controlRequestId: null, requestedAttachSent: false, requestedAttachCancelled: false,
     offer: null, requestController: null, stoppedContext: null,
     socket: null, generation: 0, status: 'closed', attached: false, busy: false,
     canAttach: false, attachReason: null, submitting: null,
@@ -17,14 +21,32 @@ export const useBrowserStore = defineStore('browser', {
     desktopSize: null, controlKeys: [], navigation: null, navigationPending: false
   }),
   getters: {
-    ready: (state) => state.status === 'open' && state.viewStatus === 'open',
-    manual: (state) => state.status === 'open' && state.viewStatus === 'open'
+    ownsDisplay: (state) => Boolean(state.sessionId && state.sessionId === state.displayedSessionId),
+    displayStatus: (state) => state.candidate && state.candidate.sessionId === state.displayedSessionId ? state.candidate.status
+      : state.ownsDisplay ? state.status : state.socket ? 'occupied' : 'closed',
+    displayOffer: (state) => state.candidate && state.candidate.sessionId === state.displayedSessionId ? state.candidate.offer
+      : state.ownsDisplay ? state.offer : null,
+    displayNavigation: (state) => state.ownsDisplay && !state.candidate ? state.navigation : null,
+    ready: (state) => state.ownsDisplay && !state.candidate && state.status === 'open' && state.viewStatus === 'open',
+    manual: (state) => state.ready && state.viewVisible && !state.controlRequestId
       && !state.attached && !state.busy && !state.submitting && !state.transferring && !state.navigationPending,
     canNavigate: (state) => state.manual && state.navigation !== null && state.socket?.readyState === 1,
-    activeTab: (state) => state.navigation?.tabs.find((tab) => tab.id === state.navigation.activeTabId) ?? null
+    activeTab: (state) => state.displayNavigation?.tabs.find((tab) => tab.id === state.navigation.activeTabId) ?? null
   },
   actions: {
     activate(key, context, eligible) {
+      const request = this.authorizedRequest
+      if (request && request.sessionId === context?.sessionId) {
+        if (eligible && context.agentId === request.agentId && context.integrationId === request.integrationId
+          && !this.requestOpening && !useControlCenterStore().saving && this.requestAttemptId !== request.id) {
+          this.activationKey = key
+          this.activationAttempted = true
+          this.requestAttemptId = request.id
+          this.connect(request, { controlRequestId: request.id })
+        }
+        return
+      }
+      if (this.requestRefresh) return
       if (context && this.stoppedContext === JSON.stringify([context.integrationId, context.sessionId, context.agentId])) return
       if (key !== this.activationKey) {
         this.activationKey = key
@@ -32,29 +54,67 @@ export const useBrowserStore = defineStore('browser', {
       }
       if (!key || !eligible || this.activationAttempted) return
       this.activationAttempted = true
+      if (this.socket) return
       this.connect(context)
     },
-    connect({ integrationId, sessionId, agentId }) {
-      if (!integrationId || !sessionId || !agentId) return
+    connect({ integrationId, sessionId, agentId }, { controlRequestId = null, takeover = false } = {}) {
+      if (!integrationId || !sessionId || !agentId || sessionId !== this.displayedSessionId) return
+      if (this.candidate?.sessionId === sessionId && this.candidate.controlRequestId === controlRequestId) return
       if (!['closed', 'replaced'].includes(this.status) && this.integrationId === integrationId
-        && this.sessionId === sessionId && this.agentId === agentId) return
-      this.release()
-      Object.assign(this, { integrationId, sessionId, agentId, status: 'connecting', stoppedContext: null })
+        && this.sessionId === sessionId && this.agentId === agentId && !controlRequestId) return
+      this.cancelCandidate()
+      const retained = Boolean(this.socket)
+      if (retained) this.parkView()
+      if (!retained) this.release({ preserveRequest: true })
+      const binding = { integrationId, sessionId, agentId, controlRequestId, status: 'connecting', offer: null }
       let generation = this.generation
-      const socket = markRaw(new WebSocket(browserSocketUrl(integrationId, '', { sessionId })))
-      this.socket = socket
-      const current = () => this.generation === generation && this.socket === socket
+      const socket = markRaw(new WebSocket(browserSocketUrl(integrationId, '', { sessionId, ...(controlRequestId ? { controlRequestId } : {}) })))
+      if (retained) this.candidate = { ...binding, socket, takeover }
+      else Object.assign(this, binding, { socket, stoppedContext: null })
+      const current = () => this.candidate?.socket === socket || (this.generation === generation && this.socket === socket)
       socket.onmessage = (event) => {
         if (!current() || typeof event.data !== 'string') return
         let message
         try { message = JSON.parse(event.data) } catch { return }
+        if (this.candidate?.socket === socket) {
+          if (message.type === 'availability') {
+            this.candidate.status = message.status
+            this.candidate.offer = message.status === 'occupied' ? message : null
+            if (this.candidate.takeover && message.status === 'occupied') {
+              this.candidate.takeover = false
+              this.takeover()
+            }
+            return
+          }
+          if (message.type === 'error' || message.type === 'replaced') {
+            this.cancelCandidate()
+            if (message.type === 'error') notifyError({ error: message.error })
+            return
+          }
+          if (message.type !== 'state' || !message.browserId || !message.viewId) return
+          // Only an accepted binding can retire the retained owner and its live viewer.
+          this.candidate = null
+          this.release({ replaced: true, preserveRequest: true })
+          generation = this.generation
+          Object.assign(this, binding, { socket, browserId: null, stoppedContext: null })
+        }
         if (message.type === 'availability' && ['occupied', 'waiting', 'takingOver'].includes(message.status)) {
           this.status = message.status
           this.offer = message.status === 'occupied' ? message : null
           this.updateViewOnly()
         } else if (message.type === 'replaced') {
-          this.release({ replaced: true })
+          this.release({ replaced: true, preserveRequest: true, preserveCandidate: true })
         } else if (message.type === 'error') {
+          if (message.operation === 'control') {
+            this.controlRequestId = null
+            if (this.authorizedRequest?.id === controlRequestId) this.authorizedRequest = null
+            if (this.submitting === 'attach') this.submitting = null
+            this.updateViewOnly()
+            this.scheduleResize()
+            if (!this.requestedAttachCancelled) notifyError({ error: message.error })
+            if (this.viewStatus === 'open' && !this.navigation) this.navigate('state')
+            return
+          }
           if (message.operation === 'navigation') {
             this.navigationPending = false
             this.updateViewOnly()
@@ -68,6 +128,7 @@ export const useBrowserStore = defineStore('browser', {
             return
           }
           this.submitting = null
+          this.controlRequestId = null
           this.updateViewOnly()
           if (!this.browserId || ['browser.bindingChanged', 'browser.notConnected'].includes(message.error?.code)) this.release()
           notifyError({ error: message.error })
@@ -93,6 +154,7 @@ export const useBrowserStore = defineStore('browser', {
           }
           if (this.viewId && this.viewId !== message.viewId) {
             this.controlKeys = []
+            if (this.rfb) this.rfb.viewOnly = true
             generation = ++this.generation
             this.clearView()
             clearTimeout(this.resizeTimer)
@@ -103,12 +165,17 @@ export const useBrowserStore = defineStore('browser', {
           this.viewId = message.viewId
           this.offer = null
           this.status = 'open'
+          const requestedAttached = this.controlRequestId && this.requestedAttachSent && message.attached === true
+          const requestedDetached = this.requestedAttachCancelled && message.attached === false && message.busy !== true
           this.attached = message.attached === true
+          if (this.attached && this.requestedAttachSent) this.controlRequestId = null
           this.busy = message.busy === true
           this.canAttach = message.canAttach === true
           this.attachReason = message.attachReason ?? null
           if ((this.submitting === 'attach' && this.attached) || (this.submitting === 'detach' && !this.attached)) this.submitting = null
           this.updateViewOnly()
+          if ((requestedAttached || requestedDetached) && this.viewStatus === 'open' && !this.navigation) this.navigate('state')
+          this.scheduleResize()
           if (this.viewStatus === 'reset' && message.attached === false && message.busy === false) {
             this.viewStatus = 'closed'
             void this.mountView(this.viewParent)
@@ -116,16 +183,96 @@ export const useBrowserStore = defineStore('browser', {
         }
       }
       socket.onerror = () => {
-        if (current()) notifyError({ error: { code: 'browser.unavailable' } })
+        if (!current()) return
+        if (this.candidate?.socket === socket) this.cancelCandidate()
+        notifyError({ error: { code: 'browser.unavailable' } })
       }
-      socket.onclose = (event) => { if (current()) this.release({ replaced: event?.code === 4001 }) }
+      socket.onclose = (event) => {
+        if (!current()) return
+        if (this.candidate?.socket === socket) this.cancelCandidate()
+        else this.release({ replaced: event?.code === 4001, preserveRequest: true, preserveCandidate: true })
+      }
     },
     takeover() {
-      if (this.status !== 'occupied' || !this.offer?.canTakeover || !this.offer.browserId
-        || !this.offer.viewId || this.socket?.readyState !== 1) return
-      const { browserId, viewId } = this.offer
-      this.status = 'takingOver'
-      this.socket.send(JSON.stringify({ type: 'takeover', browserId, viewId }))
+      const target = this.candidate || (this.ownsDisplay ? this : null)
+      if (!target || target.sessionId !== this.displayedSessionId || target.status !== 'occupied'
+        || !target.offer?.canTakeover || !target.offer.browserId || !target.offer.viewId || target.socket?.readyState !== 1) return
+      const { browserId, viewId } = target.offer
+      target.status = 'takingOver'
+      target.socket.send(JSON.stringify({ type: 'takeover', browserId, viewId }))
+    },
+    cancelCandidate() {
+      const candidate = this.candidate
+      this.candidate = null
+      candidate?.socket.close()
+    },
+    setDisplayedSession(sessionId) {
+      sessionId ||= null
+      if (sessionId === this.displayedSessionId) return
+      this.parkView()
+      this.displayedSessionId = sessionId
+      this.requestRefresh?.controller.abort()
+      this.requestRefresh = null
+      this.authorizedRequest = null
+      this.requestOpening = false
+      this.cancelCandidate()
+      // A claimed request must never attach later merely because the chat was reopened.
+      if (this.controlRequestId && !this.requestedAttachSent) {
+        this.requestedAttachCancelled = true
+        if (this.socket?.readyState === 1) this.socket.send(JSON.stringify({ type: 'detach' }))
+        this.controlRequestId = null
+      }
+    },
+    parkView() {
+      this.displayGeneration += 1
+      this.viewVisible = false
+      this.releaseControlKeys()
+      this.updateViewOnly()
+      this.rfb?.blur?.()
+      this.viewHost?.remove()
+      this.requestController?.abort()
+      this.requestController = null
+      this.transferring = false
+    },
+    async reconcileControlRequest(sessionId) {
+      const center = useControlCenterStore()
+      if (!sessionId || this.displayedSessionId !== sessionId || center.sessionId !== sessionId || !center.ready) return
+      if (this.requestRefresh) { this.requestRefresh.dirty = true; return }
+      const refresh = markRaw({ controller: new AbortController(), dirty: false })
+      this.requestRefresh = refresh
+      const current = () => !refresh.controller.signal.aborted && this.displayedSessionId === sessionId
+        && center.sessionId === sessionId && center.ready
+      try {
+        do {
+          refresh.dirty = false
+          const { data } = await api.get('/browsers/control-requests', {
+            params: { sessionId }, signal: refresh.controller.signal, suppressErrorToast: true
+          })
+          if (!current()) return
+          const request = data.request
+          if (!request) {
+            this.authorizedRequest = null
+            if (this.candidate?.controlRequestId) this.cancelCandidate()
+            if (!this.requestedAttachSent) this.controlRequestId = null
+            continue
+          }
+          if (request.sessionId !== sessionId || !request.id || !request.integrationId || !request.agentId || !request.runId) return
+          if (this.authorizedRequest?.id === request.id || this.requestAttemptId === request.id) continue
+          this.authorizedRequest = request
+          this.requestOpening = true
+          try {
+            await center.openApp('browser')
+          } catch {
+            if (current()) { this.requestAttemptId = request.id; this.authorizedRequest = null }
+          } finally {
+            if (current()) this.requestOpening = false
+          }
+        } while (refresh.dirty && current())
+      } catch (error) {
+        if (current()) notifyError(error)
+      } finally {
+        if (this.requestRefresh === refresh) this.requestRefresh = null
+      }
     },
     clearView(status = 'closed') {
       // Invalidate callbacks and requests before disconnecting the old stream.
@@ -135,6 +282,7 @@ export const useBrowserStore = defineStore('browser', {
       this.transferring = false
       this.releaseControlKeys()
       this.viewStatus = status
+      this.updateViewOnly()
       const rfb = this.rfb
       this.rfb = null
       if (rfb) rfb.viewOnly = true
@@ -143,12 +291,15 @@ export const useBrowserStore = defineStore('browser', {
       this.viewHost = null
     },
     async mountView(host) {
-      if (!host || this.status !== 'open' || !this.viewId) return
+      if (!host || !this.ownsDisplay || this.candidate || this.status !== 'open' || !this.viewId) return
+      this.viewVisible = true
+      this.updateViewOnly()
       this.viewParent = markRaw(host)
       if (this.viewStatus === 'reset') return
       if (this.viewHost) {
         // Keep the same viewer when the collapsed/mobile panel remounts.
         if (this.viewHost.parentElement !== host) host.replaceChildren(this.viewHost)
+        if (this.viewStatus === 'open' && !this.navigation) this.navigate('state')
         return
       }
       if (this.viewStatus === 'connecting' && this.rfb === null) return
@@ -160,7 +311,7 @@ export const useBrowserStore = defineStore('browser', {
         if (generation !== this.generation || viewGeneration !== this.viewGeneration) return
         const viewHost = markRaw(document.createElement('div'))
         viewHost.className = 'fit'
-        this.viewParent.replaceChildren(viewHost)
+        if (this.viewVisible && this.ownsDisplay) this.viewParent.replaceChildren(viewHost)
         this.viewHost = viewHost
         const rfb = markRaw(new RFB(viewHost, browserSocketUrl(this.integrationId, '/view', {
           sessionId: this.sessionId, browserId: this.browserId, viewId: this.viewId
@@ -174,6 +325,11 @@ export const useBrowserStore = defineStore('browser', {
         rfb.addEventListener('connect', () => {
           if (!current()) return
           this.viewStatus = 'open'
+          if (this.controlRequestId && !this.requestedAttachSent && this.ownsDisplay && this.socket?.readyState === 1) {
+            this.requestedAttachSent = true
+            this.submitting = 'attach'
+            this.socket.send(JSON.stringify({ type: 'attach.requested', requestId: this.controlRequestId }))
+          }
           this.updateViewOnly()
           this.navigate('state')
           const canvas = viewHost.querySelector('canvas')
@@ -182,30 +338,33 @@ export const useBrowserStore = defineStore('browser', {
             canvas.setAttribute('aria-label', 'Entfernter Browser. Mit Strg+Alt+Escape zur lokalen Steuerung.')
           }
         })
-        rfb.addEventListener('disconnect', () => {
-          if (!current()) return
-          this.release()
-          notifyError({ error: { code: 'browser.notConnected' } })
-        })
-        for (const event of ['securityfailure', 'credentialsrequired']) {
+        for (const event of ['disconnect', 'securityfailure', 'credentialsrequired']) {
           rfb.addEventListener(event, () => {
             if (!current()) return
+            // The old relay can end before the control socket announces the handoff.
+            if (this.candidate) { this.clearView(); return }
             this.release()
-            notifyError({ error: { code: 'browser.unavailable' } })
+            notifyError({ error: { code: event === 'disconnect' ? 'browser.notConnected' : 'browser.unavailable' } })
           })
         }
       } catch {
         if (generation !== this.generation || viewGeneration !== this.viewGeneration) return
+        if (this.candidate) { this.clearView(); return }
         this.release()
         notifyError({ error: { code: 'browser.unavailable' } })
       }
     },
     toggleViewportScale() {
+      if (!this.ownsDisplay) return
       this.scaleViewport = !this.scaleViewport
       if (this.rfb) this.rfb.scaleViewport = this.scaleViewport
     },
     updateViewOnly() {
-      if (!this.manual) this.releaseControlKeys()
+      if (!this.manual) {
+        this.releaseControlKeys()
+        // noVNC 1.5 sets viewOnly before ungrab, which suppresses its own key-up events.
+        if (this.rfb && !this.rfb.viewOnly) this.rfb._keyboard?.ungrab()
+      }
       if (this.rfb) this.rfb.viewOnly = !this.manual
     },
     controlKey(code, down) {
@@ -247,7 +406,7 @@ export const useBrowserStore = defineStore('browser', {
       }
     },
     resize(width, height) {
-      if (!this.viewVisible || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return
+      if (!this.ownsDisplay || !this.viewVisible || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return
       this.resizeTarget = {
         width: Math.min(3840, Math.max(320, Math.floor(width))),
         height: Math.min(2160, Math.max(240, Math.floor(height)))
@@ -257,12 +416,13 @@ export const useBrowserStore = defineStore('browser', {
     scheduleResize() {
       clearTimeout(this.resizeTimer)
       this.resizeTimer = null
-      if (!this.resizeTarget || this.resizeInFlight) return
+      if (!this.resizeTarget || this.resizeInFlight || this.controlRequestId || this.submitting) return
       this.resizeTimer = setTimeout(() => {
         this.resizeTimer = null
         const box = this.viewParent?.getClientRects()[0]
-        if (!this.viewVisible || document.hidden || !(box?.width > 0 && box?.height > 0)
-          || this.status !== 'open' || this.socket?.readyState !== 1 || this.resizeInFlight) return
+        if (!this.ownsDisplay || !this.viewVisible || document.hidden || !(box?.width > 0 && box?.height > 0)
+          || this.status !== 'open' || this.socket?.readyState !== 1 || this.resizeInFlight
+          || this.controlRequestId || this.submitting) return
         const target = this.resizeTarget
         if (!target || (target.width === this.resizeLast?.width && target.height === this.resizeLast?.height)) return
         // Remember failed targets too: only a new size or explicit retry may resend them.
@@ -272,7 +432,8 @@ export const useBrowserStore = defineStore('browser', {
       }, 200)
     },
     navigate(action, { tabId, url, nativeChrome } = {}) {
-      if (this.status !== 'open' || this.socket?.readyState !== 1 || this.navigationPending) return false
+      if (!this.ownsDisplay || this.status !== 'open' || this.socket?.readyState !== 1 || this.navigationPending
+        || this.controlRequestId || this.submitting === 'detach') return false
       if (action !== 'state') {
         if (!this.canNavigate) return false
         if (['select', 'close', 'navigate', 'back', 'forward', 'reload', 'stop'].includes(action)) {
@@ -287,6 +448,16 @@ export const useBrowserStore = defineStore('browser', {
       return true
     },
     setAttachment(attached) {
+      if (!this.ownsDisplay) return
+      if (!attached && this.controlRequestId && this.socket?.readyState === 1) {
+        this.requestedAttachCancelled = true
+        this.controlRequestId = null
+        this.authorizedRequest = null
+        this.submitting = 'detach'
+        this.socket.send(JSON.stringify({ type: 'detach' }))
+        return
+      }
+      if (this.controlRequestId) return
       if (!this.ready || this.submitting || this.transferring || this.navigationPending
         || (attached && (this.busy || !this.canAttach || this.attached)) || (!attached && !this.attached)
         || this.socket?.readyState !== 1) return
@@ -298,11 +469,14 @@ export const useBrowserStore = defineStore('browser', {
       return this.transferClipboard(undefined, { copy: true })
     },
     async request(callback) {
+      if (!this.ownsDisplay) return null
       this.requestController ??= markRaw(new AbortController())
       const { signal } = this.requestController
       const generation = this.generation
       const viewGeneration = this.viewGeneration
+      const displayGeneration = this.displayGeneration
       const current = () => !signal.aborted && generation === this.generation && viewGeneration === this.viewGeneration
+        && displayGeneration === this.displayGeneration
       try {
         const { data } = await callback({
           params: { browserId: this.browserId, sessionId: this.sessionId, viewId: this.viewId },
@@ -319,6 +493,7 @@ export const useBrowserStore = defineStore('browser', {
       if (!this.manual || (copy && text !== undefined) || (text !== undefined && !clipboardFits(text))) return null
       const generation = this.generation
       const viewGeneration = this.viewGeneration
+      const displayGeneration = this.displayGeneration
       const path = `/browsers/${this.integrationId}/clipboard`
       this.transferring = true
       this.updateViewOnly()
@@ -326,7 +501,7 @@ export const useBrowserStore = defineStore('browser', {
         const data = await this.request((config) => copy
           ? api.post(`${path}/copy`, null, config)
           : text === undefined ? api.get(path, config) : api.put(path, { text }, config))
-        if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration
+        if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration || displayGeneration !== this.displayGeneration
           || !this.ready || this.attached || this.busy || this.submitting) return null
         if (!clipboardFits(data.text)) {
           notifyError({}, 'Der Browsertext muss kleiner als 16 KiB sein. Bitte eine kleinere Auswahl kopieren.')
@@ -334,7 +509,7 @@ export const useBrowserStore = defineStore('browser', {
         }
         return data
       } finally {
-        if (generation === this.generation && viewGeneration === this.viewGeneration) {
+        if (generation === this.generation && viewGeneration === this.viewGeneration && displayGeneration === this.displayGeneration) {
           this.transferring = false
           this.updateViewOnly()
         }
@@ -344,6 +519,7 @@ export const useBrowserStore = defineStore('browser', {
       if (!this.manual || (action === 'choose' && !this.uploadId)) return null
       const generation = this.generation
       const viewGeneration = this.viewGeneration
+      const displayGeneration = this.displayGeneration
       const path = `/browsers/${this.integrationId}`
       this.transferring = true
       this.updateViewOnly()
@@ -352,22 +528,22 @@ export const useBrowserStore = defineStore('browser', {
           const form = new FormData()
           form.append('file', file)
           const data = await this.request((config) => api.post(`${path}/upload`, form, config))
-          if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration) return null
+          if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration || displayGeneration !== this.displayGeneration) return null
           this.uploadId = data.chosen ? null : data.uploadId
           return data
         }
         if (action === 'choose') {
           const data = await this.request((config) => api.post(`${path}/upload/${encodeURIComponent(this.uploadId)}/choose`, null, config))
-          if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration) return null
+          if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration || displayGeneration !== this.displayGeneration) return null
           if (data.ok) this.uploadId = null
           return data
         }
         const data = await this.request((config) => api.get(`${path}/downloads`, config))
-        if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration) return null
+        if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration || displayGeneration !== this.displayGeneration) return null
         this.downloads = data.downloads
         return data
       } finally {
-        if (generation === this.generation && viewGeneration === this.viewGeneration) {
+        if (generation === this.generation && viewGeneration === this.viewGeneration && displayGeneration === this.displayGeneration) {
           this.transferring = false
           this.updateViewOnly()
         }
@@ -377,13 +553,14 @@ export const useBrowserStore = defineStore('browser', {
       if (!this.manual) return
       const generation = this.generation
       const viewGeneration = this.viewGeneration
+      const displayGeneration = this.displayGeneration
       this.transferring = true
       this.updateViewOnly()
       try {
         const data = await this.request((config) => api.get(`/browsers/${this.integrationId}/download/${encodeURIComponent(file.id)}`, {
           ...config, responseType: 'blob'
         }))
-        if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration) return
+        if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration || displayGeneration !== this.displayGeneration) return
         const url = URL.createObjectURL(data)
         const link = document.createElement('a')
         link.href = url
@@ -391,30 +568,39 @@ export const useBrowserStore = defineStore('browser', {
         link.click()
         setTimeout(() => URL.revokeObjectURL(url), 1000)
       } finally {
-        if (generation === this.generation && viewGeneration === this.viewGeneration) {
+        if (generation === this.generation && viewGeneration === this.viewGeneration && displayGeneration === this.displayGeneration) {
           this.transferring = false
           this.updateViewOnly()
         }
       }
     },
-    syncContext({ sessionId, agentId, available, tabPresent, onChatRoute }) {
-      if (this.sessionId && (this.sessionId !== sessionId || this.agentId !== agentId
-        || !available || !tabPresent || !onChatRoute)) this.release()
+    syncContext({ sessionId, agentId, available, tabPresent }) {
+      if (this.sessionId && (!available || (sessionId === this.sessionId && (this.agentId !== agentId || !tabPresent)))) this.release()
     },
-    release({ close = false, replaced = false } = {}) {
+    release({ close = false, replaced = false, preserveRequest = false, preserveCandidate = false } = {}) {
+      if (close && !this.ownsDisplay) return
+      if (!preserveCandidate) this.cancelCandidate()
+      if (!preserveRequest) this.requestRefresh?.controller.abort()
+      const retained = { displayedSessionId: this.displayedSessionId, displayGeneration: this.displayGeneration + 1,
+        requestAttemptId: this.requestAttemptId,
+        ...(preserveCandidate ? { candidate: this.candidate } : {}),
+        ...(preserveRequest ? { authorizedRequest: this.authorizedRequest, requestOpening: this.requestOpening, requestRefresh: this.requestRefresh } : {}) }
       const socket = this.socket
       const generation = this.generation + 1
       const { activationKey, activationAttempted } = this
       const context = { integrationId: this.integrationId, sessionId: this.sessionId, agentId: this.agentId }
       const stoppedContext = close || replaced ? JSON.stringify([this.integrationId, this.sessionId, this.agentId]) : this.stoppedContext
       // Replaced views must never send input or runtime-control messages.
-      if (replaced) this.controlKeys = []
+      if (replaced) {
+        this.controlKeys = []
+        if (this.rfb) this.rfb.viewOnly = true
+      }
       this.generation = generation
       this.clearView()
       const viewGeneration = this.viewGeneration
       clearTimeout(this.resizeTimer)
       this.$reset()
-      Object.assign(this, { activationKey, activationAttempted: close || replaced || activationAttempted, stoppedContext })
+      Object.assign(this, retained, { activationKey, activationAttempted: close || replaced || activationAttempted, stoppedContext })
       if (replaced) Object.assign(this, context, { status: 'replaced' })
       this.generation = generation
       this.viewGeneration = viewGeneration

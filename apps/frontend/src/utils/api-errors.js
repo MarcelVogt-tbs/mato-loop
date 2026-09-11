@@ -100,6 +100,7 @@ const messages = {
   'browser.profileOwnerMismatch': () => 'Das Browserprofil gehört zu einer anderen Benutzerzuordnung und kann nicht verwendet werden.',
   'browser.profileInUse': () => 'Das Browserprofil ist durch einen anderen oder früheren Browserprozess gesperrt. Vor einer Freigabe muss geprüft werden, dass es nicht mehr verwendet wird. Die Browserdaten müssen nicht zurückgesetzt werden.',
   'browser.outcomeUnknown': () => 'Der Ausgang der Browseraktion ist unklar. Prüfe den Browser, bevor du die Aktion wiederholst.',
+  'browser.controlTimeout': () => 'Die Browsersteuerung konnte nicht rechtzeitig verbunden werden. Öffne den Browser in diesem Chat und versuche es erneut.',
   'agent.backendRestarted': () => 'Der Agent-Run wurde durch einen Neustart unterbrochen.',
   'agent.failed': () => 'Die Agent-Anfrage ist fehlgeschlagen.',
   'agent.contextWindowExceeded': () => 'Der Gesprächskontext ist für das ausgewählte Modell zu groß.',

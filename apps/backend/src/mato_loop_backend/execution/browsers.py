@@ -9,7 +9,7 @@ from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import monotonic
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from anyio import CancelScope
@@ -36,6 +36,9 @@ from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.integrations.browser import browser_client, load_browser_integration
 from mato_loop_backend.models import ChatSession, LoginSession, UserAccount
 from mato_loop_backend.settings.effective import AgentProfileUnavailable, load_agent_profile
+
+if TYPE_CHECKING:
+    from mato_loop_backend.execution.browser_control import ControlRequest
 
 ACCESS_INTERVAL = 2
 IDLE_SECONDS = 30
@@ -191,6 +194,8 @@ class BrowserRelay:
     outgoing: asyncio.Queue[bytes] = field(default_factory=lambda: asyncio.Queue(maxsize=4))
     ended: asyncio.Event = field(default_factory=asyncio.Event)
     accepted: bool = False
+    ready: bool = False
+    connected: bool = False
 
 
 class BrowserCoordinator:
@@ -209,12 +214,15 @@ class BrowserCoordinator:
         ) else None
 
     async def open(self, owner_id, integration_id, session_id, login_id, websocket,
-                   *, expected_browser_id: UUID | None = None, expected_view_id: UUID | None = None) -> BrowserConnection:
+                   *, expected_browser_id: UUID | None = None, expected_view_id: UUID | None = None,
+                   control_request: ControlRequest | None = None) -> BrowserConnection:
         instance, can_attach = await validate_browser_access(
             owner_id, integration_id, login_id=login_id, session_id=session_id,
         )
         agent_id = instance.execution_agent_id
         async with self.lock:
+            if control_request is not None:
+                await control_request.validate()
             previous = self.connections.get(agent_id)
             if previous is not None:
                 if previous.integration_id != integration_id or previous.owner_id != owner_id:
@@ -247,8 +255,13 @@ class BrowserCoordinator:
                 connection.action_lock = previous.action_lock
                 connection.attachment_revision = previous.attachment_revision
                 connection.manual_enabled = False
+            from mato_loop_backend.execution.browser_control import browser_control_requests
+
+            browser_control_requests.invalidate_agent(agent_id, control_request)
             self.connections[agent_id] = connection
-        opening = asyncio.create_task(self._start(connection, previous))
+            if control_request is not None:
+                control_request.bind(connection)
+        opening = asyncio.create_task(self._start(connection, previous, control_request))
         connection.task = opening
         try:
             return await asyncio.shield(opening)
@@ -258,8 +271,11 @@ class BrowserCoordinator:
                 await self.release(connection, websocket)
             raise
 
-    async def _start(self, connection: BrowserConnection, previous: BrowserConnection | None) -> BrowserConnection:
+    async def _start(self, connection: BrowserConnection, previous: BrowserConnection | None,
+                     control_request: ControlRequest | None = None) -> BrowserConnection:
         try:
+            if control_request is not None:
+                await control_request.validate()
             if previous is None:
                 result = await connection.request(
                     "integration.browser.open",
@@ -275,10 +291,14 @@ class BrowserCoordinator:
                     await connection.check_access()
                     # Always fence manual-to-manual handoffs too, releasing held keys/buttons.
                     for manual in (False, True):
+                        if control_request is not None:
+                            await control_request.validate()
                         if manual and previous.websocket is not None:
                             with suppress(Exception):
                                 async with previous.send_lock, asyncio.timeout(2):
                                     await previous.websocket.send_json({"type": "replaced"})
+                            if control_request is not None:
+                                await control_request.validate()
                         result = await connection.request(
                             "integration.browser.control", {"browserId": str(connection.browser_id), "manual": manual},
                             BrowserControlResult,
@@ -288,6 +308,8 @@ class BrowserCoordinator:
                     await connection.check_access()
                     connection.manual_enabled = True
             await connection.check_access()
+            if control_request is not None:
+                await control_request.validate()
             connection.ready = True
             connection.task = asyncio.create_task(self.watch(connection))
             return connection
@@ -327,7 +349,8 @@ class BrowserCoordinator:
                 await asyncio.sleep(ACCESS_INTERVAL)
                 previous = connection.can_attach, connection.attached
                 await connection.check_access()
-                if not connection.attached and not connection.manual_enabled and connection.websocket is not None:
+                if (not connection.attached and not connection.manual_enabled and connection.websocket is not None
+                        and not connection.action_lock.locked()):
                     await self.attachment(connection, False)
                 if previous != (connection.can_attach, connection.attached):
                     await connection.state()
@@ -391,15 +414,19 @@ class BrowserCoordinator:
             if self.connections.get(connection.agent_id) is connection:
                 self.connections.pop(connection.agent_id)
 
-    async def attachment(self, connection: BrowserConnection, attached: bool) -> None:
+    async def attachment(self, connection: BrowserConnection, attached: bool,
+                         *, control_request: ControlRequest | None = None) -> None:
         await connection.check_access()
         if attached:
             if not connection.can_attach:
                 raise ExecutionClientError("tool.unavailable")
-            if connection.busy or connection.action_lock.locked() or connection.view_socket is None:
+            if connection.busy or (control_request is None and connection.action_lock.locked()) or connection.view_socket is None:
                 raise ExecutionClientError("browser.busy")
             async with connection.action_lock:
                 await connection.check_access()
+                if control_request is not None:
+                    await control_request.validate()
+                    control_request.viewer_ready()
                 result = await connection.request(
                     "integration.browser.control", {"browserId": str(connection.browser_id), "manual": False},
                     BrowserControlResult,
@@ -410,8 +437,15 @@ class BrowserCoordinator:
                 await connection.check_access()
                 if not connection.can_attach or connection.view_socket is None:
                     raise ExecutionClientError("browser.bindingChanged")
+                if control_request is not None:
+                    await control_request.validate()
+                    control_request.viewer_ready()
                 connection.detach()
                 connection.attached = True
+                if control_request is not None:
+                    from mato_loop_backend.execution.browser_control import browser_control_requests
+
+                    browser_control_requests.finish(control_request)
                 await connection.state()
         else:
             connection.detach()

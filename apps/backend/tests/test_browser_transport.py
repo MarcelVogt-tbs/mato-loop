@@ -98,6 +98,7 @@ def env(monkeypatch):
                 result = {"browserId": arguments["browserId"]}
             elif operation == "integration.browser.view":
                 coordinator.relays[UUID(arguments["relayId"])].accepted = True
+                coordinator.relays[UUID(arguments["relayId"])].connected = True
                 result = {"ok": True}
             elif operation == "integration.browser.control":
                 assert arguments["browserId"] == str(coordinator.connections[agent_id].browser_id)

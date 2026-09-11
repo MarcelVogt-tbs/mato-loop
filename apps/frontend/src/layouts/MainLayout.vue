@@ -550,7 +550,7 @@ import { useTerminalStore } from 'stores/terminal'
 import { useBrowserStore } from 'stores/browser'
 import { useIntegrationStore } from 'stores/integrations'
 import { useConfirm } from 'src/composables/confirm'
-import { browserControlCenterAvailable, terminalControlCenterState } from 'src/control-center/manifest'
+import { terminalControlCenterState } from 'src/control-center/manifest'
 import { notifyError } from 'src/utils/notifications'
 import { sessionSidebarStatus } from 'src/utils/session-groups'
 import { searchShortcutAction } from 'src/utils/search-shortcut'
@@ -1062,6 +1062,7 @@ async function refreshActiveSessions() {
     if (chat.current?.id && !chat.running) {
       requests.push(chat.refreshSession(chat.current.id, { suppressErrorToast: true }))
     }
+    if (chat.current?.id && chat.running) void browser.reconcileControlRequest(chat.current.id)
     for (const [scope, list] of Object.entries(chat.sessionLists)) {
       if (list.items.some((session) => ACTIVE_RUN_STATUSES.has(session.activeRunStatus))) {
         requests.push(chat.refreshSessions(
@@ -1204,13 +1205,23 @@ watch(() => route.name, (name) => {
   if (name === 'chat') void Promise.allSettled([integrations.fetchCatalog(), integrations.fetchBrowser()])
 }, { immediate: true })
 
+watch(() => route.name === 'chat' && routeSessionId.value === chat.current?.id ? chat.current?.id : null,
+  (id) => browser.setDisplayedSession(id), { immediate: true, flush: 'sync' })
+
 watch(() => [
-  chat.current?.id, chat.current?.preferredExecutionAgentId,
-  browserControlCenterAvailable(chat.current, executionAgents, integrations, browser.integrationId),
-  controlCenter.sessionId === chat.current?.id && controlCenter.confirmedState.tabs.some((tab) => tab.appId === 'browser'),
-  route.name === 'chat' && routeSessionId.value === chat.current?.id
-], ([sessionId, agentId, available, tabPresent, onChatRoute]) => {
-  browser.syncContext({ sessionId, agentId, available, tabPresent, onChatRoute })
+  chat.current?.id, chat.current?.preferredExecutionAgentId, browser.sessionId,
+  executionAgents.byId(browser.agentId)?.connected === true
+    && (!integrations.catalogLoaded || integrations.catalogLoadFailed || integrations.adapterAvailable('browser', 'personal'))
+    && (!integrations.browserLoaded || integrations.browser.instances.some((item) => item.id === browser.integrationId
+      && item.executionAgentId === browser.agentId && item.enabled)),
+  controlCenter.sessionId === browser.sessionId && controlCenter.ready
+    ? controlCenter.confirmedState.tabs.some((tab) => tab.appId === 'browser') : true
+], ([sessionId, agentId, , available, tabPresent]) => {
+  browser.syncContext({ sessionId, agentId, available, tabPresent })
+}, { immediate: true, flush: 'post' })
+
+watch(() => [chat.current?.id, routeSessionId.value, route.name, controlCenter.ready], ([sessionId, routeId, name]) => {
+  if (name === 'chat' && sessionId === routeId) void browser.reconcileControlRequest(sessionId)
 }, { immediate: true, flush: 'sync' })
 
 watch(

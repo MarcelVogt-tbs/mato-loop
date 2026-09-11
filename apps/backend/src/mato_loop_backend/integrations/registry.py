@@ -153,8 +153,6 @@ def effective_execution_integration_settings(
             instance.enabled = False
         if instance.adapter_type == "browser":
             instance._browser_attached = instance.id == browser_integration_id
-            if not instance._browser_attached:
-                instance.enabled = False
         instance._execution_operations = frozenset(execution_operations)
     return effective
 
@@ -169,7 +167,6 @@ def effective_integration_contributions(
     for instance in settings.instances:
         if (
             not instance.enabled
-            or (instance.adapter_type == "browser" and not instance._browser_attached)
             or settings.availability_for(instance.adapter_type)
             == IntegrationAdapterAvailability.DISABLED
         ):
@@ -194,6 +191,8 @@ def effective_integration_contributions(
                 ),
             )
             for tool in contribution.tools
+            if instance.adapter_type != "browser" or instance._browser_attached
+            or (tool.name == "browser_request_control" and instance._execution_operations is not None)
         )
         options.extend(contribution.tool_options)
         prompt_fragments.extend(contribution.prompt_fragments)

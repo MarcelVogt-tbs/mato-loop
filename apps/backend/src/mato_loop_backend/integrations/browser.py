@@ -17,6 +17,7 @@ from mato_loop_backend.execution.browser_contracts import (
     BrowserActionArguments,
     BrowserActionResult,
     BrowserConfig,
+    BrowserControlResult,
     BrowserFormField,
     BrowserInspectionData,
     BrowserOpaqueId,
@@ -267,6 +268,24 @@ class BrowserRunCodeArguments(BrowserSnapshotArguments):
     observe: bool = False
 
 
+class BrowserRequestControlArguments(WireModel):
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+async def _control_authorization(arguments: BrowserRequestControlArguments, context: Any):
+    from mato_loop_backend.execution.browser_control import capture_control_request
+
+    request = await capture_control_request(arguments.reason, context)
+    context.bound_options["control_request"] = request
+    return (request.permission,)
+
+
+async def _request_control(arguments: BrowserRequestControlArguments, context: Any):
+    from mato_loop_backend.execution.browser_control import browser_control_requests
+
+    return await browser_control_requests.wait(context.bound_options["control_request"], context)
+
+
 async def _authorization(arguments: BrowserActionArguments | _BrowserArguments, context: Any) -> tuple[Any, ...]:
     from mato_loop_backend.agent.permissions import integration_operation_permission
 
@@ -512,8 +531,21 @@ BROWSER_TOOLS = tuple(
 )
 BROWSER_TOOL_ACTIONS = {tool.name: tool.arguments_model.internal_action for tool in BROWSER_TOOLS}
 
+_CONTROL = ToolAction("browser.control", "Browser-Steuerung anfordern", ToolExecutionPolicy.ASK, mutates=True)
+BROWSER_REQUEST_CONTROL = ToolContribution(
+    name="browser_request_control", label="Browser-Steuerung anfordern", icon="language",
+    description=(
+        "Request permission to open the graphical browser in this chat and attach it for model control. "
+        "This may take over the browser from another chat. Supply a short reason. "
+        "Success means attachment is complete; page read, write, and code permissions remain separate."
+    ),
+    arguments_model=BrowserRequestControlArguments, handler=_request_control,
+    actions=(_CONTROL,), authorization_factory=_control_authorization,
+    execution_operation="integration.browser.execute", result_model=BrowserControlResult,
+)
+
 BROWSER_ADAPTER = IntegrationAdapterDefinition(
     integration_type="browser", adapter_type="browser", config_model=BrowserConfig,
     execution_location="agent", execution_kind="browser", personal_only=True,
-    execution_tools=BROWSER_TOOLS, resource_actions=(_READ, _WRITE, _CODE),
+    execution_tools=(*BROWSER_TOOLS, BROWSER_REQUEST_CONTROL), resource_actions=(_READ, _WRITE, _CODE, _CONTROL),
 )

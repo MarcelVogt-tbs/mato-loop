@@ -13,18 +13,23 @@ import AgentCodingApp from '../src/components/AgentCodingApp.vue'
 import { useBrowserStore } from '../src/stores/browser'
 import { useIntegrationStore } from '../src/stores/integrations'
 import { useControlCenterStore } from '../src/stores/control-center'
+import { useChatStore } from 'stores/chat'
 import { FakeWebSocket } from './terminal-websocket'
 import KeyboardModule from '@novnc/novnc/lib/input/keyboard.js'
 import { notifyError } from 'src/utils/notifications'
 
 const { api, confirm, readText, writeText } = vi.hoisted(() => ({
-  api: { get: vi.fn(), put: vi.fn(), post: vi.fn() }, confirm: vi.fn(), readText: vi.fn(), writeText: vi.fn()
+  api: { get: vi.fn(), put: vi.fn(), post: vi.fn(), patch: vi.fn() }, confirm: vi.fn(), readText: vi.fn(), writeText: vi.fn()
 }))
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
-vi.mock('stores/chat', () => ({ useChatStore: () => ({ current: { id: 'session-1', preferredExecutionAgentId: 'agent-1' } }) }))
+vi.mock('stores/chat', async () => {
+  const { reactive } = await import('vue')
+  const chat = reactive({ current: null })
+  return { useChatStore: () => chat }
+})
 vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({ byId: () => ({ connected: true }) }) }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   static strings = {}
@@ -39,7 +44,7 @@ const components = { QAvatar, QBtnToggle, QForm, QSkeleton, QBanner, QBtn, QCard
 const viewId = '00000000-0000-4000-8000-000000000001'
 const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
 const transferConfig = () => ({ params: { browserId: 'runtime-1', sessionId: 'session-1', viewId }, signal: expect.any(AbortSignal), suppressErrorToast: true })
-let app, root, pinia, browser, keyboard
+let app, root, pinia, browser, keyboard, router
 let observers
 beforeEach(() => {
   vi.clearAllMocks()
@@ -47,8 +52,13 @@ beforeEach(() => {
   pinia = createPinia()
   setActivePinia(pinia)
   browser = useBrowserStore()
+  useChatStore().current = { id: 'session-1', preferredExecutionAgentId: 'agent-1' }
   browser.agentId = 'agent-1'
-  vi.spyOn(browser, 'mountView').mockImplementation(async (host) => { browser.viewParent = host })
+  vi.spyOn(browser, 'mountView').mockImplementation(async (host) => {
+    browser.viewParent = host
+    browser.viewVisible = true
+    if (browser.viewHost) host.replaceChildren(browser.viewHost)
+  })
   useControlCenterStore().syncSession({ id: 'session-1', controlCenter: {
     tabs: [{ appId: 'browser' }], activeAppId: 'browser', open: true
   } })
@@ -90,7 +100,7 @@ async function fileAction(label) {
   menuItem(label).click()
 }
 async function mount(component, { width = 1440, dark = false, path = '/?session=session-1' } = {}) {
-  const router = createRouter({ history: createMemoryHistory(), routes: [
+  router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/', name: 'chat', component: { render: () => null } },
     { path: '/settings/integrations', name: 'settings-integrations', component: { render: () => null } },
     { path: '/settings/integrations/:integrationId/access', name: 'settings-integration-access', component: IntegrationAccessPage }
@@ -104,6 +114,7 @@ async function mount(component, { width = 1440, dark = false, path = '/?session=
   // DOM behavior only: jsdom does not measure responsive layout or render pixels.
   app.config.globalProperties.$q.screen.lt.sm = width < 600
   app.mount(root)
+  await nextTick()
   await nextTick()
 }
 
@@ -206,6 +217,126 @@ it('closes Chromium only from the explicit Browser menu action', async () => {
   useControlCenterStore().open = true
   await nextTick()
   expect(FakeWebSocket.instances).toHaveLength(1)
+})
+
+it.each([{ width: 390, dark: false }, { width: 390, dark: true }, { width: 1440, dark: false }, { width: 1440, dark: true }])(
+  'parks an unmounted A viewer, shows no A page or attachment in B, and reuses it on return (%j)', async (viewport) => {
+    const shown = ref(true)
+    await mount({ render: () => shown.value ? h('div', [h(BrowserApp), h(BrowserFooter)]) : null }, viewport)
+    const original = browser.socket
+    original.open()
+    original.message({ type: 'state', browserId: 'runtime-1', viewId, attached: true, busy: false, canAttach: true })
+    original.message(navigation)
+    const viewHost = document.createElement('div')
+    viewHost.append(document.createElement('canvas'))
+    browser.viewHost = markRaw(viewHost)
+    const rfb = markRaw({ disconnect: vi.fn(), sendKey: vi.fn(), viewOnly: true })
+    browser.rfb = rfb
+    browser.viewStatus = 'open'
+    await nextTick()
+    await nextTick()
+    expect(root.querySelector('canvas')).not.toBeNull()
+    shown.value = false
+    await nextTick()
+    expect(browser.viewVisible).toBe(false)
+    expect(viewHost.parentElement).toBeNull()
+    expect(rfb.disconnect).not.toHaveBeenCalled()
+    useChatStore().current = { id: 'session-2', preferredExecutionAgentId: 'agent-1' }
+    const center = useControlCenterStore()
+    center.syncSession({ id: 'session-2', controlCenter: { tabs: [{ appId: 'browser' }], activeAppId: 'browser', open: true } })
+    await router.push('/?session=session-2')
+    shown.value = true
+    await nextTick()
+    await nextTick()
+    expect(root.querySelector('canvas')).toBeNull()
+    expect(root.querySelectorAll('[role="tab"]')).toHaveLength(0)
+    expect(root.querySelector('input[aria-label="Webadresse"]').value).toBe('')
+    expect(root.querySelector('[role="switch"]').getAttribute('aria-checked')).toBe('false')
+    expect(root.querySelector('[role="switch"]').getAttribute('aria-disabled')).toBe('true')
+    expect(button('Manuell übernehmen')).toBeUndefined()
+    expect(button('Browser hier übernehmen')).toBeDefined()
+    expect(root.textContent).not.toContain('Erste Seite')
+    expect(browser.mountView.mock.calls.at(-1)[0]).not.toBe(root.querySelector('.browser-app__view'))
+    vi.useFakeTimers()
+    await vi.advanceTimersByTimeAsync(65000)
+    expect(original.close).not.toHaveBeenCalled()
+    expect(rfb.disconnect).not.toHaveBeenCalled()
+    expect(browser.attached).toBe(true)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    useChatStore().current = { id: 'session-1', preferredExecutionAgentId: 'agent-1' }
+    center.syncSession({ id: 'session-1', controlCenter: { tabs: [{ appId: 'browser' }], activeAppId: 'browser', open: true } })
+    await router.push('/?session=session-1')
+    await nextTick()
+    await nextTick()
+    expect(root.querySelector('canvas')).not.toBeNull()
+    expect(root.querySelector('input[aria-label="Webadresse"]').value).toBe('https://example.com/')
+    expect(root.querySelector('[role="switch"]').getAttribute('aria-checked')).toBe('true')
+    expect(browser.socket).toBe(original)
+    expect(browser.rfb).toBe(rfb)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+  }
+)
+
+it('releases native noVNC held keys before parking locks input', async () => {
+  const canvas = await liveViewer()
+  browser.rfb._keyboard = keyboard
+  key(canvas, 'keydown', 'Shift', 'ShiftLeft', false)
+  key(canvas, 'keydown', 'x', 'KeyX', false)
+  browser.setDisplayedSession('session-2')
+  expect(browser.rfb.sendKey.mock.calls.map((args) => args.slice(0, 3))).toEqual([
+    [0xffe1, 'ShiftLeft', true], [120, 'KeyX', true], [0xffe1, 'ShiftLeft', false], [120, 'KeyX', false]
+  ])
+  expect(browser.rfb.viewOnly).toBe(true)
+  key(canvas, 'keydown', 'z', 'KeyZ', false)
+  expect(browser.rfb.sendKey).toHaveBeenCalledTimes(4)
+})
+
+it('opens authorized Browser requests through serialized persisted app saves before connecting, without navigation', async () => {
+  const center = useControlCenterStore()
+  const session = { id: 'session-1', controlCenter: { tabs: [{ appId: 'files' }], activeAppId: 'files', open: true,
+    fileViews: { session: { scope: 'session', selectedPath: 'notes.txt', selectedKind: 'file', rootIdentity: 'session-1' } } } }
+  center.syncSession(session)
+  await mount(BrowserApp)
+  const saves = []
+  api.patch.mockImplementation((path, body) => new Promise((resolve) => { saves.push({ path, body, resolve }) }))
+  const previous = center.setOpen(false)
+  const request = { id: 'request-1', sessionId: 'session-1', agentId: 'agent-1', integrationId: 'browser-1', runId: 'run-1' }
+  api.get.mockResolvedValue({ data: { request } })
+  await browser.reconcileControlRequest('session-1')
+  await nextTick()
+  expect(saves).toHaveLength(1)
+  expect(FakeWebSocket.instances).toHaveLength(0)
+  saves[0].resolve({ data: { controlCenter: { ...session.controlCenter, open: false } } })
+  await vi.waitFor(() => expect(saves).toHaveLength(2))
+  expect(saves[1].path).toBe('/sessions/session-1')
+  expect(saves[1].body.control_center).toMatchObject({ active_app_id: 'browser', open: true,
+    file_views: { session: { selected_path: 'notes.txt' } } })
+  expect(FakeWebSocket.instances).toHaveLength(0)
+  saves[1].resolve({ data: { controlCenter: { ...session.controlCenter, tabs: [{ appId: 'files' }, { appId: 'browser' }], activeAppId: 'browser', open: true } } })
+  await previous
+  await nextTick()
+  expect(FakeWebSocket.instances).toHaveLength(1)
+  expect(browser.socket.url).toContain('controlRequestId=request-1')
+  expect(router.currentRoute.value.query.session).toBe('session-1')
+  expect(center.confirmedState.fileViews.session.selectedPath).toBe('notes.txt')
+  await browser.reconcileControlRequest('session-1')
+  await nextTick()
+  expect(FakeWebSocket.instances).toHaveLength(1)
+  expect(api.patch).toHaveBeenCalledTimes(2)
+})
+
+it('offers manual cancellation while requested attachment is still in flight', async () => {
+  await mount({ render: () => h('div', [h(BrowserApp), h(BrowserFooter)]) })
+  const socket = browser.socket
+  socket.open()
+  socket.message({ type: 'state', browserId: 'runtime-1', viewId, attached: false, canAttach: true })
+  Object.assign(browser, { viewStatus: 'open', controlRequestId: 'request-1', requestedAttachSent: true, submitting: 'attach' })
+  await nextTick()
+  expect(button('Manuell übernehmen').disabled).toBe(false)
+  button('Manuell übernehmen').click()
+  expect(socket.send).toHaveBeenCalledExactlyOnceWith('{"type":"detach"}')
+  expect(browser.controlRequestId).toBeNull()
+  expect(browser.submitting).toBe('detach')
 })
 
 it.each(['private', 'public'])('resolves browser.instances on the generic access page and loads inherited and explicit policies (%s)', async (trust) => {
