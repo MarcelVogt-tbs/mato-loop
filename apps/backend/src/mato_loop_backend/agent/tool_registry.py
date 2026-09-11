@@ -23,6 +23,10 @@ from mato_loop_backend.agent.permissions import (
 )
 from mato_loop_backend.agent.tool_arguments import QuestionArguments, TaskArguments
 from mato_loop_backend.agent.tool_contracts import ToolAction
+from mato_loop_backend.agent.tool_references import (
+    InvalidToolReference,
+    resolve_tool_references,
+)
 from mato_loop_backend.agent.video_analysis import (
     ResolvedVideoModel,
     video_analysis_available,
@@ -1127,6 +1131,16 @@ class ToolRegistry:
         raw_arguments = call.arguments
         if tool.default_arguments and tool.default_arguments.keys().isdisjoint(raw_arguments):
             raw_arguments = {**tool.default_arguments, **raw_arguments}
+        try:
+            raw_arguments = await resolve_tool_references(
+                call.name,
+                raw_arguments,
+                context.db,
+                context.session.id,
+                context.model_trust_level,
+            )
+        except InvalidToolReference as exc:
+            return ToolResult.error("integration.staleReference", field=exc.field)
         try:
             arguments = definition.validate_arguments(raw_arguments)
         except ValidationError as exc:

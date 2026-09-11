@@ -123,6 +123,7 @@ from mato_loop_backend.agent.tool_contracts import (
     ToolAction,
     ToolPolicyResolution,
 )
+from mato_loop_backend.agent.tool_references import model_tool_references
 from mato_loop_backend.agent.tool_registry import TOOL_GROUPS as TOOL_GROUPS
 from mato_loop_backend.agent.tool_registry import AskHandler as AskHandler
 from mato_loop_backend.agent.tool_registry import BoundTool as BoundTool
@@ -3141,6 +3142,7 @@ def _message_item(
         content = _model_file_tool_result(content)
     if message.role == "tool":
         content = _sanitize_tool_result_reference_fields(content)
+        content = model_tool_references(tool_names.get(message.id), content, message.id)
     full_content = content
     if len(full_content) > content_limit and message.role == "tool":
         content = (_shorten_evidence_output(full_content, content_limit) or full_content)[:content_limit]
@@ -3200,6 +3202,7 @@ async def _session_tool_result_read(
     content = _target_tool_result(tool_name, message.content, context.memory_trust_level)
     content = _model_file_tool_result(content)
     content = _sanitize_tool_result_reference_fields(content)
+    content = model_tool_references(tool_name, content, message.id)
     end = min(len(content), arguments.offset + SESSION_TOOL_RESULT_CHUNK_CHARACTERS)
     has_more = end < len(content)
     payload = {

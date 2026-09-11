@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.file_roots import model_file_roots
 from mato_loop_backend.agent.model_prompt_profiles import build_model_instructions
+from mato_loop_backend.agent.tool_references import model_tool_references
 from mato_loop_backend.attachments import (
     AttachmentError,
     AttachmentService,
@@ -1229,6 +1230,9 @@ def _projection_messages(
                 target_trust_level,
             )
             projected["content"] = _model_file_tool_result(projected["content"])
+            projected["content"] = model_tool_references(
+                tool_name, projected["content"], item.id
+            )
         if item.role == "tool":
             tool_name = tool_names.get(item.id)
             projected["content"] = _sanitize_tool_result_reference_fields(
