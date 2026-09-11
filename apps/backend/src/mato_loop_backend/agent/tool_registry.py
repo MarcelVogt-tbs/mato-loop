@@ -951,7 +951,10 @@ class ToolRegistry:
         self, capability: str, integration_settings: IntegrationSettings | None = None
     ) -> ToolExecutionPolicy:
         definitions = (
-            self._combined_definitions(integration_settings)[0]
+            {
+                **self._combined_definitions(integration_settings)[0],
+                **self._operation_definitions,
+            }
             if integration_settings is not None
             else {**self._definitions, **self._operation_definitions}
         )

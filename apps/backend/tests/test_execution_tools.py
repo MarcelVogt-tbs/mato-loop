@@ -123,6 +123,9 @@ def test_shell_tool_cannot_select_execution_targets() -> None:
         "shell.read": ("Shell ohne erkannte Schreibaktionen", ToolExecutionPolicy.AUTO),
         "shell.write": ("Als schreibend eingestufte Shell", ToolExecutionPolicy.ASK),
     }
+    assert tool_registry.action_default(
+        "shell.read", IntegrationSettings()
+    ) == ToolExecutionPolicy.AUTO
 
 
 async def test_execution_client_forwards_exact_arguments_without_context(monkeypatch) -> None:
