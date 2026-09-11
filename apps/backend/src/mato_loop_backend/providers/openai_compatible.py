@@ -477,7 +477,9 @@ def _responses_body(
     if request.temperature is not None:
         body["temperature"] = request.temperature
     if request.tools:
-        body["tools"] = [{"type": "function", **tool} for tool in request.tools]
+        body["tools"] = [
+            {"type": "function", **tool, "strict": False} for tool in request.tools
+        ]
         body["tool_choice"] = request.tool_choice
         if request.supports_parallel_tool_calls:
             body["parallel_tool_calls"] = True

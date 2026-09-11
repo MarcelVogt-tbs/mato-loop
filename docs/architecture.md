@@ -80,7 +80,7 @@ Dreaming has only update and remove policies, defaulting to `auto` and `ask`. A 
 
 ## Provider Boundary
 
-Provider adapters transport model messages, tool schemas, tool choice, text deltas, and tool calls. They never execute tools or manage sessions and file permissions.
+Provider adapters transport model messages, tool schemas, tool choice, text deltas, and tool calls. They never execute tools or manage sessions and file permissions. Responses API function tools explicitly disable strict mode so provider-side schema normalization cannot turn optional host arguments into required model arguments; MatoLoop validates every returned call itself.
 
 - `openai-codex` uses the ChatGPT device-code flow suitable for self-hosted interfaces and isolated Codex Responses and image-generation transports. Login requires neither a public callback URL nor a local callback port.
 - `openai-compatible` supports Chat Completions and Responses API.

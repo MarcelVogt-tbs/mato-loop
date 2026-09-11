@@ -370,6 +370,8 @@ def test_payloads_convert_model_options_for_each_protocol() -> None:
     assert chat_body["parallel_tool_calls"] is True
     assert responses_body["parallel_tool_calls"] is True
     assert chat_body["tool_choice"] == responses_body["tool_choice"] == "auto"
+    assert "strict" not in chat_body["tools"][0]["function"]
+    assert responses_body["tools"][0]["strict"] is False
     assert chat_body["temperature"] == responses_body["temperature"] == 0.25
     assert chat_body["stream"] is responses_body["stream"] is False
 
