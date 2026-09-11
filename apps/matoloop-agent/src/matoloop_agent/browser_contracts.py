@@ -77,6 +77,7 @@ class BrowserViewArguments(BrowserIdArguments):
 
 class BrowserControlArguments(BrowserIdArguments):
     manual: bool
+    rotate_view: bool = Field(default=False, alias="rotateView")
 
 
 class BrowserResizeResult(StrictModel):

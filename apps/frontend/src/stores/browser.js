@@ -292,6 +292,7 @@ export const useBrowserStore = defineStore('browser', {
     },
     async mountView(host) {
       if (!host || !this.ownsDisplay || this.candidate || this.status !== 'open' || !this.viewId) return
+      const restoring = !this.viewVisible || this.viewHost?.parentElement !== host
       this.viewVisible = true
       this.updateViewOnly()
       this.viewParent = markRaw(host)
@@ -299,6 +300,7 @@ export const useBrowserStore = defineStore('browser', {
       if (this.viewHost) {
         // Keep the same viewer when the collapsed/mobile panel remounts.
         if (this.viewHost.parentElement !== host) host.replaceChildren(this.viewHost)
+        if (restoring && this.rfb) this.rfb.scaleViewport = this.scaleViewport
         if (this.viewStatus === 'open' && !this.navigation) this.navigate('state')
         return
       }

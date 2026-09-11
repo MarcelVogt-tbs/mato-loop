@@ -13,7 +13,8 @@ vi.mock('src/control-center/apps', async () => {
   const { controlCenterIntegrationManifest, controlCenterGlobalSectionManifest } = await import('src/control-center/manifest')
   const withViews = (items) => items.map((item) => ({
     ...item,
-    component: { render: () => h('div', { 'data-app': item.id }, item.label) }
+    component: { render: () => h('div', { 'data-app': item.id }, item.label) },
+    footerComponent: item.id === 'browser' ? { render: () => h('div', { 'data-footer': 'browser' }) } : null
   }))
   const controlCenterIntegrations = withViews(controlCenterIntegrationManifest)
   const controlCenterGlobalSections = withViews(controlCenterGlobalSectionManifest)
@@ -30,6 +31,7 @@ import { useApprovalStore } from '../src/stores/approvals'
 import { useQuestionStore } from '../src/stores/questions'
 import { useInAppNotificationStore } from '../src/stores/in-app-notifications'
 import { useTerminalStore } from '../src/stores/terminal'
+import { useBrowserStore } from '../src/stores/browser'
 import { FakeWebSocket } from './terminal-websocket'
 import { api } from 'src/boot/axios'
 
@@ -74,6 +76,18 @@ function notificationButton() {
 }
 
 describe('control center panel', () => {
+  it('shows the Browser footer only while its viewer is connected', async () => {
+    controlCenter.syncSession({ id: 'session-1', controlCenter: { tabs: [{ appId: 'browser' }], activeAppId: 'browser', open: true } })
+    const browser = useBrowserStore()
+    await mountPanel()
+    expect(root.querySelector('[aria-label="App-Informationen und Steuerelemente"]')).toBeNull()
+    Object.assign(browser, {
+      sessionId: 'session-1', displayedSessionId: 'session-1', status: 'open', viewStatus: 'open'
+    })
+    await nextTick()
+    expect(root.querySelector('[data-footer="browser"]')).not.toBeNull()
+  })
+
   it('does not remove a different session tab after a delayed confirmation', async () => {
     controlCenter.syncSession({ id: 'session-1', controlCenter: { tabs: [{ appId: 'terminal' }] } })
     let accept

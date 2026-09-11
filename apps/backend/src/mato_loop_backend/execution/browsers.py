@@ -300,7 +300,8 @@ class BrowserCoordinator:
                             if control_request is not None:
                                 await control_request.validate()
                         result = await connection.request(
-                            "integration.browser.control", {"browserId": str(connection.browser_id), "manual": manual},
+                            "integration.browser.control",
+                            {"browserId": str(connection.browser_id), "manual": manual, "rotateView": not manual},
                             BrowserControlResult,
                         )
                         if not result.ok:

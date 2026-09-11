@@ -162,13 +162,20 @@ it.each([{ width: 390, dark: false }, { width: 390, dark: true }, { width: 1440,
     socket.message({ type: 'availability', status: 'occupied', browserId: 'runtime-1', viewId: 'offered-view',
       ownerSession: { id: 'session-2', title: '<b>Andere Sitzung</b>' }, busy: true, canTakeover: true })
     await nextTick()
+    expect(root.querySelector('.app-state-message')).not.toBeNull()
+    expect(root.querySelector('.q-banner')).toBeNull()
+    expect(root.querySelector('.browser-app__view').style.display).toBe('none')
+    expect(root.querySelector('[aria-label="Webseiten"]')).toBeNull()
+    expect(root.querySelector('[aria-label="Browsersteuerung"]')).toBeNull()
+    expect(root.textContent).toContain('In einer anderen Ansicht geöffnet')
     expect(root.textContent).toContain('<b>Andere Sitzung</b>')
     expect(root.querySelector('b')).toBeNull()
     expect([...root.querySelectorAll('button')].filter((item) => item.textContent === 'Browser hier übernehmen')).toHaveLength(1)
     expect(root.querySelector('[aria-label="Browser wird verbunden"]')).toBeNull()
-    expect(button('Neuer Tab').disabled).toBe(true)
-    expect(root.querySelector('input[aria-label="Webadresse"]').readOnly).toBe(true)
+    expect(button('Neuer Tab')).toBeUndefined()
+    expect(root.querySelector('input[aria-label="Webadresse"]')).toBeNull()
     expect(browser.mountView).not.toHaveBeenCalled()
+    Element.prototype.getClientRects.mockReturnValue([])
     button('Browser hier übernehmen').click()
     await nextTick()
     expect(socket.send).toHaveBeenCalledExactlyOnceWith('{"type":"takeover","browserId":"runtime-1","viewId":"offered-view"}')
@@ -185,6 +192,7 @@ it.each([{ width: 390, dark: false }, { width: 390, dark: true }, { width: 1440,
     await nextTick()
     expect(root.textContent).toContain('in einer anderen Ansicht übernommen')
     expect(root.querySelector('[role="progressbar"]')).toBeNull()
+    expect(button('Neu verbinden')).toBeDefined()
     shown.value = false
     await nextTick()
     shown.value = true
@@ -198,7 +206,7 @@ it.each([{ width: 390, dark: false }, { width: 390, dark: true }, { width: 1440,
     expect(browser.status).toBe('replaced')
     expect(FakeWebSocket.instances).toHaveLength(1)
     expect(notifyError).not.toHaveBeenCalled()
-    button('Browser erneut verbinden').click()
+    button('Neu verbinden').click()
     await nextTick()
     expect(FakeWebSocket.instances).toHaveLength(2)
   }
@@ -250,9 +258,9 @@ it.each([{ width: 390, dark: false }, { width: 390, dark: true }, { width: 1440,
     await nextTick()
     expect(root.querySelector('canvas')).toBeNull()
     expect(root.querySelectorAll('[role="tab"]')).toHaveLength(0)
-    expect(root.querySelector('input[aria-label="Webadresse"]').value).toBe('')
-    expect(root.querySelector('[role="switch"]').getAttribute('aria-checked')).toBe('false')
-    expect(root.querySelector('[role="switch"]').getAttribute('aria-disabled')).toBe('true')
+    expect(root.querySelector('input[aria-label="Webadresse"]')).toBeNull()
+    expect(root.querySelector('[role="switch"][aria-label="Agent verbinden"]').getAttribute('aria-checked')).toBe('false')
+    expect(root.querySelector('[role="switch"][aria-label="Agent verbinden"]').getAttribute('aria-disabled')).toBe('true')
     expect(button('Manuell übernehmen')).toBeUndefined()
     expect(button('Browser hier übernehmen')).toBeDefined()
     expect(root.textContent).not.toContain('Erste Seite')
@@ -663,6 +671,23 @@ it('ignores zero-size mounts and hidden resize observations, then reuses the liv
   expect(browser.socket).toBe(socket)
   expect(FakeWebSocket.instances).toHaveLength(1)
   expect(socket.close).not.toHaveBeenCalled()
+})
+
+it('remounts a retained viewer when its returning host becomes measurable', async () => {
+  const rects = vi.spyOn(Element.prototype, 'getClientRects').mockReturnValue([])
+  const viewHost = document.createElement('div')
+  Object.assign(browser, {
+    sessionId: 'session-1', integrationId: 'browser-1', browserId: 'runtime-1', viewId,
+    socket: markRaw({ readyState: 1, send: vi.fn(), close: vi.fn() }), status: 'open', viewStatus: 'open',
+    viewHost: markRaw(viewHost), viewVisible: false
+  })
+  await mount(BrowserApp)
+  browser.mountView.mockClear()
+  rects.mockReturnValue([{ width: 1024, height: 768 }])
+  observers[0].callback([{ contentRect: { width: 1024, height: 768 } }])
+  await vi.waitFor(() => expect(browser.mountView).toHaveBeenCalledWith(root.querySelector('.browser-app__view')))
+  expect(browser.socket.readyState).toBe(1)
+  expect(root.querySelector('.browser-app__view').firstChild).toBe(viewHost)
 })
 
 it.each(['closed', 'unconfirmed', 'draft'])('does not broaden activation gating for %s context', async (context) => {

@@ -1,6 +1,6 @@
 <template>
   <section class="browser-app column full-height no-wrap" aria-label="Browser" @keydown.capture="browserShortcut">
-    <div class="row items-center no-wrap col-auto q-px-sm" aria-label="Webseiten">
+    <div v-if="!browserStateMessage" class="row items-center no-wrap col-auto q-px-sm" aria-label="Webseiten">
       <q-tabs :model-value="navigation?.activeTabId" class="col" dense no-caps inline-label align="left" :breakpoint="0" mobile-arrows indicator-color="transparent"
         @update:model-value="browser.navigate('select', { tabId: $event })">
         <AppClosableTab v-for="tab in navigation?.tabs || []" :key="tab.id" :name="tab.id"
@@ -10,7 +10,7 @@
       </q-tabs>
       <q-btn flat round dense icon="add" aria-label="Neuer Tab" :disable="!browser.canNavigate || navigation.tabs.length >= 32" @click="browser.navigate('new')"><q-tooltip>Neuer Tab</q-tooltip></q-btn>
     </div>
-    <q-toolbar class="q-px-sm no-wrap" aria-label="Browsersteuerung">
+    <q-toolbar v-if="!browserStateMessage" class="q-px-sm no-wrap" aria-label="Browsersteuerung">
       <q-btn v-if="['closed', 'replaced'].includes(browser.displayStatus)" flat round dense icon="refresh" aria-label="Browser erneut verbinden" :disable="!available || !confirmed" @click="open">
         <q-tooltip>Browser erneut verbinden</q-tooltip>
       </q-btn>
@@ -48,21 +48,22 @@
         </q-menu>
       </q-btn>
     </q-toolbar>
-    <q-banner v-if="['occupied', 'waiting', 'takingOver', 'replaced'].includes(browser.displayStatus)" class="app-surface-tonal col-auto" role="status" aria-live="polite">
-      <template v-if="browser.displayStatus === 'occupied'">
-        Der Browser wird bereits in {{ browser.displayOffer?.ownerSession?.title || 'einer anderen Ansicht' }} verwendet.
-        {{ browser.displayOffer?.busy ? 'Eine laufende Aktion wird vor der Übernahme beendet.' : '' }}
+    <AppStateMessage
+      v-if="browserStateMessage"
+      class="col q-pa-xl"
+      role="status"
+      icon="language"
+      :title="browserStateMessage.title"
+      :description="browserStateMessage.description"
+    >
+      <template v-if="['occupied', 'replaced'].includes(browser.displayStatus)" #actions>
+        <q-btn v-if="browser.displayStatus === 'occupied'" color="primary" no-caps label="Browser hier übernehmen" :disable="!available || !confirmed || (Boolean(browser.displayOffer) && !browser.displayOffer.canTakeover)" @click="takeover" />
+        <q-btn v-else unelevated no-caps color="primary" icon="refresh" label="Neu verbinden" :disable="!available || !confirmed" @click="open" />
       </template>
-      <template v-else-if="browser.displayStatus === 'waiting'">Der Browser wird gerade geöffnet oder geschlossen. Bitte warten.</template>
-      <template v-else-if="browser.displayStatus === 'takingOver'">Browser wird hier übernommen. Eine laufende Aktion wird zuerst beendet.</template>
-      <template v-else>Der Browser wurde in einer anderen Ansicht übernommen. Du kannst ihn bei Bedarf erneut verbinden.</template>
-      <template v-if="browser.displayStatus === 'occupied'" #action>
-        <q-btn color="primary" no-caps label="Browser hier übernehmen" :disable="!available || !confirmed || (Boolean(browser.displayOffer) && !browser.displayOffer.canTakeover)" @click="takeover" />
-      </template>
-    </q-banner>
+    </AppStateMessage>
     <q-linear-progress v-if="browser.displayStatus === 'takingOver'" indeterminate aria-label="Browser wird hier übernommen" />
     <q-linear-progress v-else-if="browser.displayStatus === 'connecting' || (browser.displayStatus === 'open' && !browser.ready)" indeterminate aria-label="Browser wird verbunden" />
-    <div ref="host" class="browser-app__view col overflow-hidden" @pointerdown.capture="focusViewer" @keydown.capture="viewerKey" @keyup.capture="viewerKey" @paste.capture="nativePaste" @focusout="leaveViewer" />
+    <div v-show="!browserStateMessage" ref="host" class="browser-app__view col overflow-hidden" @pointerdown.capture="focusViewer" @keydown.capture="viewerKey" @keyup.capture="viewerKey" @paste.capture="nativePaste" @focusout="leaveViewer" />
 
     <q-dialog v-model="clipboardOpen" :maximized="$q.screen.lt.sm">
       <q-card class="integration-dialog app-surface column no-wrap">
@@ -115,6 +116,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'
 import AppClosableTab from 'components/AppClosableTab.vue'
+import AppStateMessage from 'components/AppStateMessage.vue'
 import { useBrowserStore } from 'stores/browser'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
@@ -131,6 +133,15 @@ const route = useRoute()
 const agents = useExecutionAgentStore()
 const integrations = useIntegrationStore()
 const navigation = computed(() => browser.displayNavigation)
+const browserStateMessage = computed(() => ({
+  occupied: {
+    title: 'In einer anderen Ansicht geöffnet',
+    description: `Der Browser wird bereits in ${browser.displayOffer?.ownerSession?.title || 'einer anderen Ansicht'} verwendet.${browser.displayOffer?.busy ? ' Eine laufende Aktion wird vor der Übernahme beendet.' : ''}`
+  },
+  waiting: { title: 'Browser wird vorbereitet', description: 'Der Browser wird gerade geöffnet oder geschlossen. Bitte warten.' },
+  takingOver: { title: 'Browser wird hier übernommen', description: 'Eine laufende Aktion wird zuerst beendet.' },
+  replaced: { title: 'In einer anderen Ansicht geöffnet', description: 'Der Browser wurde in einer anderen Ansicht übernommen. Du kannst ihn bei Bedarf erneut verbinden.' }
+})[browser.displayStatus] || null)
 const selectedId = ref(browser.integrationId)
 const host = ref(null)
 const controlsButton = ref(null)
@@ -194,7 +205,7 @@ onMounted(() => {
   observer = new ResizeObserver(([entry]) => {
     contentSize = entry.contentRect
     activate()
-    if (visible.value && browser.viewParent === host.value) browser.resize(contentSize.width, contentSize.height)
+    void refreshView()
   })
   observer.observe(host.value, { box: 'content-box' })
   document.addEventListener('visibilitychange', visibilityChanged)
@@ -274,10 +285,10 @@ function browserShortcut(event) {
 }
 
 function open() {
-  if (available.value && confirmed.value && measurable()) browser.connect({ integrationId: selectedId.value, sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId })
+  if (available.value && confirmed.value && visible.value) browser.connect({ integrationId: selectedId.value, sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId })
 }
 function takeover() {
-  if (!available.value || !confirmed.value || !measurable()) return
+  if (!available.value || !confirmed.value || !visible.value) return
   if (browser.displayOffer) browser.takeover()
   else browser.connect({ integrationId: selectedId.value, sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId }, { takeover: true })
 }

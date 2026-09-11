@@ -284,6 +284,17 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                     await worker.control(False)
             self.assertEqual(direct.await_count, 2)  # Failed fences cannot become no-op successes.
 
+        task = asyncio.create_task(asyncio.sleep(10))
+        worker.vnc_sessions[task] = (SimpleNamespace(returncode=None), worker.environment)
+        with (
+            patch("asyncio.create_subprocess_exec", AsyncMock()) as remote,
+            patch.object(worker, "x_command", AsyncMock(return_value="")) as direct,
+        ):
+            self.assertEqual(await worker.control(False, rotate_view=True), {"ok": True})
+            remote.assert_not_awaited()
+            direct.assert_awaited_once()
+        self.assertTrue(task.cancelled())
+
     def test_bounded_contract_and_operations(self):
         self.assertEqual(len(ARGUMENT_MODELS) + len(BROWSER_ARGUMENT_MODELS), 55)
         self.assertLessEqual(len(self.agent.hello().operations), 64)

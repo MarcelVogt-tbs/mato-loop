@@ -231,6 +231,7 @@ import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useQuestionStore } from 'stores/questions'
 import { useMailStore } from 'stores/mail'
 import { useChatStore } from 'stores/chat'
+import { useBrowserStore } from 'stores/browser'
 import { useProjectStore } from 'stores/projects'
 import { useTerminalStore } from 'stores/terminal'
 import { useIntegrationStore } from 'stores/integrations'
@@ -258,6 +259,7 @@ const approvals = useApprovalStore()
 const questions = useQuestionStore()
 const notifications = useInAppNotificationStore()
 const mail = useMailStore()
+const browser = useBrowserStore()
 const chat = useChatStore()
 const projects = useProjectStore()
 const executionAgents = useExecutionAgentStore()
@@ -272,11 +274,10 @@ const activeFlexibleTabId = computed(() => (
     ? null
     : controlCenter.activeAppId
 ))
-const activeFooter = computed(() => (
-  controlCenter.activeGlobalSectionId
-    ? content(controlCenter.activeGlobalSectionId)?.footerComponent
-    : content(controlCenter.activeTab?.appId)?.footerComponent
-))
+const activeFooter = computed(() => {
+  const contentId = controlCenter.activeGlobalSectionId || controlCenter.activeTab?.appId
+  return contentId === 'browser' && !browser.ready ? null : content(contentId)?.footerComponent
+})
 const closedIntegrations = computed(() => controlCenterIntegrations.filter(
   (item) => !item.fixed && !item.resource && !controlCenter.tabs.some((tab) => tab.appId === item.id)
 ))

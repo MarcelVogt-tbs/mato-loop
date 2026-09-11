@@ -446,16 +446,18 @@ class BrowserWorker:
                 await process.wait()
             if vnc_writer is not None:
                 vnc_writer.close()
-                with contextlib.suppress(ConnectionError):
-                    await vnc_writer.wait_closed()
+                with contextlib.suppress(ConnectionError, TimeoutError):
+                    async with asyncio.timeout(1):
+                        await vnc_writer.wait_closed()
             else:
                 parent.close()
             writer.close()
-            with contextlib.suppress(ConnectionError):
-                await writer.wait_closed()
+            with contextlib.suppress(ConnectionError, TimeoutError):
+                async with asyncio.timeout(1):
+                    await writer.wait_closed()
             self.tasks.discard(task)
 
-    async def control(self, manual: bool) -> dict:
+    async def control(self, manual: bool, *, rotate_view: bool = False) -> dict:
         async with self.vnc_lock:
             if manual and self.manual:
                 return {"ok": True}
@@ -463,12 +465,14 @@ class BrowserWorker:
             self.manual = False
             self.pending_choosers.clear()
             sessions = list(self.vnc_sessions.items())
-            if manual:
+            if manual or rotate_view:
                 # Rotation drops partial RFB messages and every queued byte before unlocking.
                 # Keeping the same stream would require a second, complete RFB input parser.
                 for task, _ in sessions:
                     task.cancel()
                 await asyncio.gather(*(task for task, _ in sessions), return_exceptions=True)
+                sessions = []
+            if manual:
                 self.manual = True
                 return {"ok": True}
             release = "clear_keys;" + ";".join(
@@ -1941,7 +1945,7 @@ async def serve(root: Path) -> None:
                     result = await worker.file(BrowserFileArguments.model_validate(request["args"]))
                 elif op == "control":
                     args = BrowserControlArguments.model_validate(request["args"])
-                    result = await worker.control(args.manual)
+                    result = await worker.control(args.manual, rotate_view=args.rotate_view)
                 elif op == "clipboard":
                     result = await worker.clipboard(
                         BrowserClipboardArguments.model_validate(request["args"])

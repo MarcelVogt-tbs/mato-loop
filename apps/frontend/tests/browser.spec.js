@@ -27,6 +27,8 @@ vi.mock('@novnc/novnc/lib/rfb.js', () => ({ default: class extends EventTarget {
     host.appendChild(document.createElement('canvas'))
     viewers.push(this)
   }
+  get scaleViewport() { return this._scaleViewport }
+  set scaleViewport(value) { this._scaleViewport = value; this.scaleViewportSets = (this.scaleViewportSets || 0) + 1 }
 } }))
 
 const context = { sessionId: 'session-1', agentId: 'agent-1', integrationId: 'browser-1' }
@@ -609,6 +611,7 @@ it.each([false, true])('retains the owner, live viewer and model attachment acro
   expect(browser.rfb).toBe(rfb)
   expect(browser.attached).toBe(attached)
   expect(rfb.viewOnly).toBe(attached)
+  expect(rfb.scaleViewportSets).toBe(2)
   expect(host.firstChild).toBe(rfb.host)
   expect(FakeWebSocket.instances).toHaveLength(1)
 })
