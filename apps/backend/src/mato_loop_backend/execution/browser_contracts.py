@@ -4,7 +4,7 @@ import base64
 import binascii
 import json
 import re
-from typing import Annotated, Literal, Self
+from typing import Annotated, BinaryIO, Literal, Self
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -53,6 +53,9 @@ class BrowserInspectionData(BrowserResult):
 
     snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$", min_length=64, max_length=64)
     settled: bool = True
+    snapshot_characters: int = Field(default=0, ge=0, le=MAX_BROWSER_FILE_BYTES)
+    snapshot_scope: Literal["page", "element"] = "page"
+    snapshot_depth: int | None = Field(default=None, ge=1, le=100)
 
 
 class BrowserStatusResult(BrowserResult):
@@ -163,7 +166,8 @@ class BrowserActionArguments(WireModel):
     action: BrowserAction = Field(description="Browser action. Inspect to discover targets; inspect again when page changes may affect them.")
     tab_id: BrowserOpaqueId | None = Field(default=None, description="Tab id returned by tabs or newtab; required for page actions.")
     url: str | None = Field(default=None, min_length=1, max_length=4096, description="HTTP(S) URL for navigate or newtab only. No credentials or local files.")
-    selector: str | None = Field(default=None, min_length=1, max_length=2000, description="Playwright selector from page inspection; required for click, fill, and upload. Optional for press and evaluate. Unsupported for inspect and fill_form.")
+    selector: str | None = Field(default=None, min_length=1, max_length=2000, description="Playwright selector from page inspection; required for click, fill, and upload. Optional for inspect, press, and evaluate.")
+    depth: int | None = Field(default=None, ge=1, le=100, description="Maximum accessibility tree depth for inspect only.")
     text: str | None = Field(default=None, max_length=32768, description="Literal text for fill only; may be empty to clear the input.")
     code: str | None = Field(default=None, max_length=32768)
     function: str | None = Field(default=None, max_length=32768)
@@ -189,7 +193,12 @@ class BrowserActionArguments(WireModel):
             "select": {"tab_id"}, "evaluate": {"tab_id", "function"},
             "run_code": {"tab_id", "code"},
         }.get(self.action, set())
-        allowed = required | ({"url"} if self.action == "newtab" else {"selector"} if self.action in {"press", "evaluate"} else set())
+        allowed = required | (
+            {"url"} if self.action == "newtab"
+            else {"selector", "depth"} if self.action == "inspect"
+            else {"selector"} if self.action in {"press", "evaluate"}
+            else set()
+        )
         supplied = {
             name for name in BrowserActionArguments.model_fields
             if name not in {"action", "observe", "snapshot_sha256", "slowly", "submit"} and getattr(self, name) is not None
@@ -293,6 +302,17 @@ class BrowserScreenshot(BrowserResult):
     size: int = Field(ge=0, le=MAX_BROWSER_FILE_BYTES)
 
 
+class BrowserSnapshot(BrowserScreenshot):
+    pass
+
+
+class BrowserSnapshotFile(BrowserResult):
+    root: Literal["files"] = "files"
+    path: str = Field(min_length=1, max_length=255)
+    size_bytes: int = Field(ge=1, le=MAX_BROWSER_FILE_BYTES)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class BrowserBatchResult(BrowserResult):
     completed: int = Field(ge=0, le=20, description="Number of successfully completed fields at the start of the ordered list. Never replay this prefix.")
     total: int = Field(ge=1, le=20)
@@ -349,6 +369,9 @@ class BrowserActionResult(BrowserResult):
     text: str | None = Field(default=None, max_length=32768)
     screenshot: BrowserScreenshot | None = None
     _screenshot_bytes: bytes | None = PrivateAttr(default=None)
+    snapshot: BrowserSnapshot | None = None
+    snapshot_file: BrowserSnapshotFile | None = None
+    _snapshot_stream: BinaryIO | None = PrivateAttr(default=None)
     downloads: list[BrowserDownload] = Field(default_factory=list, max_length=32)
     data: dict[str, JsonValue] | None = Field(default=None, max_length=32)
     batch: BrowserBatchResult | None = None

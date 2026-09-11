@@ -68,6 +68,7 @@ from mato_loop_backend.settings import (
     load_effective_integrations,
 )
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
+from mato_loop_backend.workspace import RootFileError
 
 
 def _instance():
@@ -136,7 +137,8 @@ def test_public_browser_tools_have_narrow_static_schemas_and_no_legacy_tool():
     expected = {
         "browser_tabs": {"action", "tabId", "url", "observe"},
         "browser_navigate": {"tabId", "url", "observe"},
-        "browser_snapshot": {"tabId"}, "browser_take_screenshot": {"tabId"},
+        "browser_snapshot": {"tabId", "selector", "depth"},
+        "browser_take_screenshot": {"tabId"},
         "browser_click": {"tabId", "ref", "element", "observe"},
         "browser_type": {"tabId", "ref", "text", "slowly", "submit", "observe"},
         "browser_fill_form": {"tabId", "fields", "observe"},
@@ -251,7 +253,8 @@ def test_browser_guidance_groups_known_actions_without_blind_mutations():
         "Do not target newly discovered elements or tabs until their result is available",
         "tabs and diagnostics are browser-level actions: use tabId=null",
         "key=Escape and selector=null",
-        "inspect does not support selector: use selector=null",
+        "Use inspect selector/depth for a focused native Playwright snapshot",
+        "read or grep that path",
         "After observationFailed, inspect",
         "inspect the same known tabId",
         "do not use tabs or reattach",
@@ -595,6 +598,88 @@ async def test_screenshot_is_a_model_image_not_base64_text(browser_case):
     assert "screenshot" not in result.content
     assert case.context.ask_handler.await_args.args[0].capability == "browser.read"
     assert "observe" not in case.coordinator.execute.await_args.args[-1]
+
+
+async def test_large_snapshot_becomes_a_readable_session_file_reference(browser_case):
+    case = browser_case
+    case.call.name = "browser_snapshot"
+    case.call.arguments = {"tabId": str(uuid4()), "selector": "main", "depth": 4}
+    snapshot = ("- main\n  - button \"Target\"\n" * 2000).encode()
+    wire = BrowserActionResult(
+        snapshot={"fileId": str(uuid4()), "size": len(snapshot)},
+        data={
+            "snapshotSha256": "a" * 64,
+            "snapshotCharacters": len(snapshot.decode()),
+            "snapshotScope": "element",
+            "snapshotDepth": 4,
+        },
+    )
+    wire._snapshot_stream = BytesIO(snapshot)
+    case.coordinator.execute.side_effect = None
+    case.coordinator.execute.return_value = wire
+    revision = SimpleNamespace(
+        file_id=uuid4(), revision=None, path="browser-snapshot-abcd1234.yml",
+        size_bytes=len(snapshot), sha256=hashlib.sha256(snapshot).hexdigest(),
+    )
+
+    def create_output(filename, source, *, max_bytes):
+        assert filename == "browser-snapshot.yml"
+        assert source.read() == snapshot
+        assert max_bytes >= len(snapshot)
+        return revision
+
+    case.context.root_files.create_output_stream = Mock(side_effect=create_output)
+    case.context.root_files.root_identity.return_value = str(uuid4())
+    result = await case.effective.execute(case.call, case.context)
+
+    assert not result.is_error
+    payload = json.loads(result.content)
+    assert payload["snapshotFile"] == {
+        "root": "files",
+        "path": revision.path,
+        "sizeBytes": len(snapshot),
+        "sha256": revision.sha256,
+    }
+    assert "snapshot" not in payload and "text" not in payload
+    assert result.file_actions[0].path == revision.path
+    assert result.file_actions[0].root == "session"
+    dispatched = case.coordinator.execute.await_args.args[-1]
+    assert dispatched["selector"] == "main" and dispatched["depth"] == 4
+
+
+@pytest.mark.parametrize("action", ["inspect", "navigate"])
+async def test_snapshot_storage_failure_preserves_completed_actions(browser_case, action):
+    case = browser_case
+    case.call.name = "browser_snapshot" if action == "inspect" else "browser_navigate"
+    case.call.arguments = {"tabId": str(uuid4())}
+    if action == "navigate":
+        case.call.arguments["url"] = "https://example.org"
+    wire = BrowserActionResult(
+        snapshot={"fileId": str(uuid4()), "size": 3},
+        data={"snapshotSha256": "a" * 64, "snapshotCharacters": 3},
+        **(
+            {"playwrightCode": {"completed": "await page.goto('https://example.org')"}}
+            if action == "navigate"
+            else {}
+        ),
+    )
+    wire._snapshot_stream = BytesIO(b"abc")
+    case.coordinator.execute.side_effect = None
+    case.coordinator.execute.return_value = wire
+    case.context.root_files.create_output_stream.side_effect = RootFileError(
+        "file.sessionQuotaExceeded", "quota"
+    )
+
+    result = await case.effective.execute(case.call, case.context)
+
+    if action == "inspect":
+        assert result.is_error
+        assert result.metadata["errorCode"] == "file.sessionQuotaExceeded"
+    else:
+        assert not result.is_error
+        payload = json.loads(result.content)
+        assert payload["data"] == {"observationFailed": True}
+        assert payload["playwrightCode"]["completed"].startswith("await page.goto")
 
 
 async def test_flexible_result_data_is_only_diagnostics(browser_case):

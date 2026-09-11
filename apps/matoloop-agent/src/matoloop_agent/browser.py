@@ -19,6 +19,7 @@ import websockets
 
 from .browser_contracts import (
     BROWSER_FILE_RESULT,
+    MAX_FILE_BYTES,
     BrowserActionResult,
     BrowserClipboardResult,
     BrowserExecuteArguments,
@@ -206,7 +207,7 @@ class BrowserManager:
                         for key in {"settleMs", "snapshotMs"} & metrics.keys()
                     )
                     and type(metrics.get("snapshotCharacters", 0)) is int
-                    and 0 <= metrics.get("snapshotCharacters", 0) <= 10_000_000
+                    and 0 <= metrics.get("snapshotCharacters", 0) <= MAX_FILE_BYTES
                 ):
                     metrics = {}
                 with contextlib.suppress(ValueError):
@@ -258,7 +259,24 @@ class BrowserManager:
             if op == "control":
                 return BrowserFileOkResult.model_validate(response["result"]).model_dump()
             return response["result"]
-        except (TimeoutError, ValueError, OSError) as exc:
+        except (
+            TimeoutError,
+            json.JSONDecodeError,
+            ValueError,
+            OSError,
+            KeyError,
+            TypeError,
+        ) as exc:
+            reason = (
+                "timeout"
+                if isinstance(exc, TimeoutError)
+                else "invalidJson"
+                if isinstance(exc, json.JSONDecodeError)
+                else "transport"
+                if isinstance(exc, OSError)
+                else "invalidResponse"
+            )
+            logger.warning("Browser worker RPC failed: operation=%s reason=%s", op, reason)
             await self.close()
             raise AgentError("browser.outcomeUnknown", "Browser worker outcome is unknown") from exc
         except asyncio.CancelledError:

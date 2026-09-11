@@ -181,6 +181,7 @@ class BrowserExecuteArguments(BrowserIdArguments):
     tab_id: Id | None = Field(default=None, alias="tabId")
     url: str | None = Field(default=None, max_length=4096)
     selector: str | None = Field(default=None, max_length=2000)
+    depth: int | None = Field(default=None, ge=1, le=100)
     text: str | None = Field(default=None, max_length=32_768)
     key: str | None = Field(default=None, max_length=100)
     direction: Literal["up", "down"] | None = None
@@ -233,6 +234,17 @@ class BrowserExecuteArguments(BrowserIdArguments):
             raise ValueError("Only run_code accepts code")
         if self.function is not None and self.action != "evaluate":
             raise ValueError("Only evaluate accepts function")
+        if self.depth is not None and self.action != "inspect":
+            raise ValueError("Only inspect accepts depth")
+        if self.selector is not None and self.action not in {
+            "inspect",
+            "click",
+            "fill",
+            "press",
+            "upload",
+            "evaluate",
+        }:
+            raise ValueError("Action does not accept selector")
         if self.fields is not None:
             if self.action != "fill_form":
                 raise ValueError("Only fill_form accepts fields")
@@ -474,6 +486,7 @@ class BrowserActionResult(StrictModel):
     url: str | None = Field(default=None, max_length=4096)
     text: str | None = Field(default=None, max_length=32_768)
     screenshot: BrowserScreenshot | None = None
+    snapshot: BrowserScreenshot | None = None
     downloads: list[BrowserDownload] = Field(default_factory=list, max_length=32)
     data: dict[str, str | bool | int] | None = None
     batch: BrowserBatchResult | None = None

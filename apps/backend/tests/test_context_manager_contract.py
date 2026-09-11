@@ -972,7 +972,10 @@ def test_browser_inspection_projection_is_lossless_and_append_stable() -> None:
     ]
 
 
-@pytest.mark.parametrize("reset", [None, "shortened", "missing", "new_turn", "error", "navigation"])
+@pytest.mark.parametrize(
+    "reset",
+    [None, "shortened", "file", "element", "depth", "missing", "new_turn", "error", "navigation"],
+)
 @pytest.mark.parametrize("interface", ["legacy", "narrow", "mixed"])
 def test_browser_deltas_require_a_complete_base_in_the_actual_request(reset, interface):
     tab_id = str(uuid4())
@@ -998,6 +1001,21 @@ def test_browser_deltas_require_a_complete_base_in_the_actual_request(reset, int
     messages = [{"role": "user", "content": "Fill the form"}, *exchange("inspect", original, "a")]
     if reset == "shortened":
         messages[-1]["content"] = messages[-1]["content"][:200] + "[shortened]"
+    elif reset == "file":
+        payload = json.loads(messages[-1]["content"])
+        payload["snapshotFile"] = {
+            "root": "files", "path": "browser-snapshot.yml", "sizeBytes": 40000,
+            "sha256": "f" * 64,
+        }
+        messages[-1]["content"] = json.dumps(payload)
+    elif reset == "element":
+        payload = json.loads(messages[-1]["content"])
+        payload["data"]["snapshotScope"] = "element"
+        messages[-1]["content"] = json.dumps(payload)
+    elif reset == "depth":
+        payload = json.loads(messages[-1]["content"])
+        payload["data"]["snapshotDepth"] = 4
+        messages[-1]["content"] = json.dumps(payload)
     elif reset == "missing":
         messages = messages[:1]
     elif reset == "new_turn":

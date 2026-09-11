@@ -1069,7 +1069,13 @@ class BrowserWorker:
 
     def upload_payload(self, file_id: str) -> dict:
         entry = self.files.get(file_id)
-        if not entry or not entry["ready"] or entry["download"] or entry.get("screenshot"):
+        if (
+            not entry
+            or not entry["ready"]
+            or entry["download"]
+            or entry.get("screenshot")
+            or entry.get("snapshot")
+        ):
             raise fail("invalidTarget")
         fd = os.open(self.live / file_id, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, "rb") as handle:
@@ -1152,12 +1158,17 @@ class BrowserWorker:
                 handle.write(data)
                 size += len(data)
             elif args.action == "finish":
-                if entry["download"] or entry.get("screenshot") or size != entry["size"]:
+                if (
+                    entry["download"]
+                    or entry.get("screenshot")
+                    or entry.get("snapshot")
+                    or size != entry["size"]
+                ):
                     raise fail("invalidTarget")
                 entry["ready"] = True
             elif args.action == "read":
                 if (
-                    not (entry["download"] or entry.get("screenshot"))
+                    not (entry["download"] or entry.get("screenshot") or entry.get("snapshot"))
                     or not entry["ready"]
                     or args.offset > size
                     or size != entry["size"]
@@ -1180,11 +1191,34 @@ class BrowserWorker:
             "complete": entry["ready"],
         }
 
-    def discard_screenshots(self) -> None:
+    def discard_generated_files(self, kind: str) -> None:
         for file_id, entry in list(self.files.items()):
-            if entry.get("screenshot"):
+            if entry.get(kind):
                 (self.live / file_id).unlink(missing_ok=True)
                 del self.files[file_id]
+
+    async def stage_generated_file(
+        self, data: bytes, browser_id: str, filename: str, kind: str
+    ) -> dict:
+        if not data or len(data) > MAX_FILE_BYTES:
+            raise fail("fileTooLarge")
+        self.discard_generated_files(kind)
+        staged = await self.file(
+            BrowserFileArguments(
+                browserId=browser_id, action="begin", filename=filename, size=len(data)
+            )
+        )
+        file_id = staged["fileId"]
+        self.files[file_id][kind] = True
+        try:
+            fd = os.open(self.live / file_id, os.O_WRONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+            self.files[file_id]["ready"] = True
+        except BaseException:
+            self.discard_generated_files(kind)
+            raise
+        return {"fileId": file_id, "size": len(data)}
 
     async def disable_translation_prompt(self) -> None:
         # Use Chromium's preference API after it owns the profile, not a Preferences file rewrite.
@@ -1205,7 +1239,7 @@ class BrowserWorker:
                 await settings.close()
 
     async def screenshot(self, page, browser_id: str) -> dict:
-        self.discard_screenshots()
+        self.discard_generated_files("screenshot")
         data = await page.screenshot(type="png", full_page=False, timeout=8000)
         with Image.open(BytesIO(data)) as image:
             width, height = image.size
@@ -1222,25 +1256,7 @@ class BrowserWorker:
                 ):
                     resized.save(output, format="PNG")
                     data = output.getvalue()
-        if len(data) > MAX_FILE_BYTES:
-            raise fail("fileTooLarge")
-        staged = await self.file(
-            BrowserFileArguments(
-                browserId=browser_id, action="begin", filename="screenshot.png", size=len(data)
-            )
-        )
-        file_id = staged["fileId"]
-        self.files[file_id]["screenshot"] = True
-        try:
-            # No awaits between allocation and publication: cancellation cannot leave a late write.
-            fd = os.open(self.live / file_id, os.O_WRONLY | os.O_NOFOLLOW)
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(data)
-            self.files[file_id]["ready"] = True
-        except BaseException:
-            self.discard_screenshots()
-            raise
-        return {"fileId": file_id, "size": len(data)}
+        return await self.stage_generated_file(data, browser_id, "screenshot.png", "screenshot")
 
     async def execute(self, args: BrowserExecuteArguments) -> dict:
         self.execution_metrics = {}
@@ -1255,7 +1271,7 @@ class BrowserWorker:
         page = self.tabs.get(args.tab_id or self.active_tab_id)
         if args.tab_id and page is None:
             raise fail("invalidTarget")
-        text = screenshot = result_data = batch = script = None
+        text = screenshot = snapshot = result_data = batch = script = None
         completed, attempted, code_error = [], None, None
 
         async def step(line, operation, *values, **options):
@@ -1297,7 +1313,13 @@ class BrowserWorker:
             elif action == "inspect":
                 if args.settle:
                     settle_outcome = await self._settle(page, strict=args.guard)
-                text, result_data = await self._inspect(page, guard=args.guard)
+                text, result_data, snapshot = await self._inspect(
+                    page,
+                    browser_id=None if args.guard else args.browser_id,
+                    guard=args.guard,
+                    selector=args.selector,
+                    depth=args.depth,
+                )
                 if args.settle and settle_outcome is not None:
                     result_data["settled"] = False
             elif action == "screenshot":
@@ -1397,7 +1419,9 @@ class BrowserWorker:
             try:
                 async with asyncio.timeout_at(observation_deadline):
                     settle_outcome = await self._settle(page, strict=False)
-                    text, result_data = await self._inspect(page, guard=False)
+                    text, result_data, snapshot = await self._inspect(
+                        page, browser_id=args.browser_id, guard=False, force_file=True
+                    )
                     if settle_outcome is not None:
                         result_data["settled"] = False
             except Exception:
@@ -1420,6 +1444,7 @@ class BrowserWorker:
             url=page.url[:4096] if page else None,
             text=text,
             screenshot=screenshot,
+            snapshot=snapshot,
             data=result_data,
             batch=batch,
             script=script,
@@ -1573,12 +1598,13 @@ class BrowserWorker:
         # Observe in an isolated world: page scripts cannot replace the native APIs.
         # Each observer self-destructs even if the pipe, task, or document disappears.
         started = monotonic()
-        deadline = started + 1.8
+        settle_seconds = 1.8 if strict else 0.6
+        deadline = started + settle_seconds
         session = None
         group = "matoloop-settle-" + uuid4().hex
         observers = []
         try:
-            async with asyncio.timeout_at(asyncio.get_running_loop().time() + 1.8):
+            async with asyncio.timeout_at(asyncio.get_running_loop().time() + settle_seconds):
                 session = await asyncio.shield(self.page_sessions[page])
                 while self.pending_requests.get(page) or self.loading_frames.get(page):
                     await asyncio.sleep(0.025)
@@ -1777,7 +1803,23 @@ class BrowserWorker:
                     async with asyncio.timeout(0.1):
                         await handle.dispose()
 
-    async def _inspect(self, page, *, guard: bool = True) -> tuple[str, dict[str, str]]:
+    @staticmethod
+    def _snapshot_preview(text: str) -> str:
+        if len(text) <= 32_768:
+            return text
+        prefix = text[:32_768]
+        return prefix.rsplit("\n", 1)[0] if "\n" in prefix else prefix
+
+    async def _inspect(
+        self,
+        page,
+        *,
+        browser_id: str | None = None,
+        guard: bool = True,
+        selector: str | None = None,
+        depth: int | None = None,
+        force_file: bool = False,
+    ) -> tuple[str | None, dict[str, str | int], dict | None]:
         document_id = self.document_ids[page]
         state = (
             await page.locator("body").evaluate("""body => {
@@ -1822,12 +1864,24 @@ class BrowserWorker:
         if state.get("tooLarge"):
             raise fail("fileTooLarge")
         started = monotonic()
-        text = await page.aria_snapshot(mode="ai", timeout=8000)
+        target = page.locator(selector) if selector else page
+        options = {"mode": "ai", "timeout": 8000}
+        if depth is not None:
+            options["depth"] = depth
+        try:
+            text = await target.aria_snapshot(**options)
+        except PlaywrightError:
+            if selector is not None:
+                raise fail("invalidTarget") from None
+            raise
         self.execution_metrics.update(
             snapshotMs=round((monotonic() - started) * 1000, 3),
             snapshotCharacters=len(text) if isinstance(text, str) else 0,
         )
-        if not isinstance(text, str) or len(text) > 32_768:
+        if not isinstance(text, str):
+            raise fail("fileTooLarge")
+        encoded = text.encode("utf-8")
+        if len(encoded) > MAX_FILE_BYTES:
             raise fail("fileTooLarge")
         if self.document_ids.get(page) != document_id:
             raise fail("invalidTarget")
@@ -1841,9 +1895,24 @@ class BrowserWorker:
                 **state,
             }
         ).encode()
-        return text, {
-            "snapshotSha256": hmac.new(self.snapshot_key, material, hashlib.sha256).hexdigest()
-        }
+        snapshot = (
+            await self.stage_generated_file(encoded, browser_id, "browser-snapshot.yml", "snapshot")
+            if encoded and browser_id is not None and (force_file or len(text) > 32_768)
+            else None
+        )
+        released = (
+            None if snapshot is not None and len(text) > 32_768 else self._snapshot_preview(text)
+        )
+        return (
+            released,
+            {
+                "snapshotSha256": hmac.new(self.snapshot_key, material, hashlib.sha256).hexdigest(),
+                "snapshotCharacters": len(text),
+                **({"snapshotScope": "element"} if selector else {}),
+                **({"snapshotDepth": depth} if depth is not None else {}),
+            },
+            snapshot,
+        )
 
     async def close(self) -> None:
         closing = getattr(self, "_close_task", None)
@@ -1891,7 +1960,8 @@ class BrowserWorker:
                             if self.clipboard_owner is not None:
                                 await self.clipboard_owner.wait()
                     try:
-                        self.discard_screenshots()
+                        self.discard_generated_files("screenshot")
+                        self.discard_generated_files("snapshot")
                     finally:
                         if self.temporary:
                             self.temporary.cleanup()

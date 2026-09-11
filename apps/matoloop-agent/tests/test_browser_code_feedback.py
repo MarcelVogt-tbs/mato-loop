@@ -45,7 +45,9 @@ class BrowserCodeFeedbackTests(unittest.IsolatedAsyncioTestCase):
         self.worker.active_tab_id = self.tab_id
         self.worker.navigation_state = AsyncMock()
         self.worker._settle = AsyncMock()
-        self.worker._inspect = AsyncMock(return_value=("- textbox", {"snapshotSha256": "digest"}))
+        self.worker._inspect = AsyncMock(
+            return_value=("- textbox", {"snapshotSha256": "digest"}, None)
+        )
 
     async def execute(self, action, **kwargs):
         result = await self.worker.execute(
@@ -343,7 +345,7 @@ class BrowserCodeFeedbackTests(unittest.IsolatedAsyncioTestCase):
         before = await self.worker._inspect(self.page, guard=True)
         result = await self.execute("inspect", guard=True)
         self.assertIsNone(result["playwrightCode"])
-        self.assertEqual((result["text"], result["data"]), before)
+        self.assertEqual((result["text"], result["data"]), before[:2])
         self.assertEqual(await self.worker._inspect(self.page, guard=True), before)
         for action, kwargs in (
             ("tabs", {}),

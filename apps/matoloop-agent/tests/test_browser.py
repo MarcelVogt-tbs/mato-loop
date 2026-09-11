@@ -509,6 +509,37 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 ],
             )
 
+    async def test_worker_response_failures_log_only_controlled_diagnostics(self):
+        for response, reason in (
+            (b'{"private-token"', "invalidJson"),
+            (b'{"ok":true,"result":{"private-token":true}}', "invalidResponse"),
+            (OSError("private-token"), "transport"),
+            (TimeoutError("private-token"), "timeout"),
+        ):
+            with self.subTest(reason=reason):
+                readline = AsyncMock(
+                    side_effect=response if isinstance(response, Exception) else None,
+                    return_value=response if isinstance(response, bytes) else b"",
+                )
+                self.manager.worker = SimpleNamespace(
+                    returncode=None,
+                    stdin=SimpleNamespace(write=Mock(), drain=AsyncMock()),
+                    stdout=SimpleNamespace(readline=readline),
+                )
+                with (
+                    patch.object(self.manager, "close", new=AsyncMock()) as close,
+                    self.assertLogs("matoloop_agent.browser", level="WARNING") as logs,
+                ):
+                    with self.assertRaises(AgentError) as error:
+                        await self.manager.rpc("execute", args={"action": "tabs"})
+                self.assertEqual(error.exception.code, "browser.outcomeUnknown")
+                close.assert_awaited_once()
+                self.assertEqual(
+                    logs.records[0].getMessage(),
+                    f"Browser worker RPC failed: operation=execute reason={reason}",
+                )
+                self.assertNotIn("private-token", "\n".join(logs.output))
+
     async def test_execute_latency_is_private_and_logs_only_safe_metadata(self):
         args = BrowserExecuteArguments(
             browserId=str(uuid4()),

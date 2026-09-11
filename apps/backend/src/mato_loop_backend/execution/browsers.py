@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import hashlib
 import logging
 import secrets
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from tempfile import SpooledTemporaryFile
 from time import monotonic
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
@@ -577,6 +579,7 @@ class BrowserCoordinator:
                             raise ExecutionClientError("browser.bindingChanged")
                     check_binding()
                     connection.busy = True
+                    result = None
                     try:
                         await connection.state()
                         if expected_snapshot is not None:
@@ -589,7 +592,15 @@ class BrowserCoordinator:
                             check_binding()
                             if expected_snapshot != digest:
                                 raise ExecutionClientError("browser.snapshotChanged")
-                            if action.action == "inspect":
+                            if (
+                                action.action == "inspect"
+                                and action.selector is None
+                                and action.depth is None
+                                and BrowserInspectionData.model_validate(
+                                    inspection.data
+                                ).snapshot_characters
+                                <= 32_768
+                            ):
                                 return inspection
                         check_binding()
                         read_action = action.action in {"tabs", "inspect", "screenshot", "diagnostics"}
@@ -618,6 +629,8 @@ class BrowserCoordinator:
                                 )
                         if not result.matches_action(action):
                             raise ExecutionClientError("executionAgent.protocolError")
+                        if result.snapshot_file is not None:
+                            raise ExecutionClientError("executionAgent.protocolError")
                         if action.action == "inspect" and result.tab_id != action.tab_id:
                             raise ExecutionClientError("browser.bindingChanged")
                         if result.data is not None and "snapshotSha256" in result.data:
@@ -631,10 +644,19 @@ class BrowserCoordinator:
                             result = result.model_copy(update={
                                 "data": {**result.data, "snapshotSha256": digest},
                             })
+                        if result.snapshot is not None:
+                            result._snapshot_stream = await self._read_browser_file(
+                                connection, result.snapshot, check_binding
+                            )
                     finally:
                         connection.busy = False
-                        with suppress(Exception):
-                            await connection.state()
+                        try:
+                            with suppress(Exception):
+                                await connection.state()
+                        except BaseException:
+                            if result is not None and result._snapshot_stream is not None:
+                                result._snapshot_stream.close()
+                            raise
                     if action.action == "screenshot":
                         await connection.check_access()
                         check_binding()
@@ -655,30 +677,10 @@ class BrowserCoordinator:
                 raise
             if result.screenshot is None:
                 raise ExecutionClientError("executionAgent.protocolError")
-            image = bytearray()
-            async with asyncio.timeout(60):
-                while len(image) < result.screenshot.size:
-                    await connection.check_access()
-                    check_binding()
-                    wire = BrowserFileArguments(
-                        browser_id=connection.browser_id, action="read",
-                        file_id=result.screenshot.file_id, offset=len(image),
-                    )
-                    chunk = await connection.request(
-                        "integration.browser.file", wire.model_dump(mode="json"), BrowserFileResult,
-                    )
-                    data = base64.b64decode(chunk.data or "", validate=True)
-                    if (
-                        chunk.file_id != result.screenshot.file_id
-                        or chunk.size != result.screenshot.size
-                        or chunk.offset != len(image) + len(data) or not data
-                        or chunk.complete != (chunk.offset == chunk.size)
-                    ):
-                        raise ExecutionClientError("executionAgent.protocolError")
-                    image.extend(data)
-                await connection.check_access()
-                check_binding()
-            result._screenshot_bytes = bytes(image)
+            with await self._read_browser_file(
+                connection, result.screenshot, check_binding, delete=False
+            ) as image:
+                result._screenshot_bytes = image.read()
             return result
         finally:
             if result is not None and result.screenshot is not None:
@@ -688,6 +690,63 @@ class BrowserCoordinator:
                     )
                     await connection.request(
                         "integration.browser.file", wire.model_dump(mode="json"), BrowserControlResult, timeout=10,
+                    )
+
+    async def _read_browser_file(
+        self, connection: BrowserConnection, descriptor, check_binding, *, delete: bool = True
+    ):
+        output = SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b")
+        try:
+            async with asyncio.timeout(60 + descriptor.size / (256 * 1024)):
+                offset = 0
+                while offset < descriptor.size:
+                    await connection.check_access()
+                    check_binding()
+                    wire = BrowserFileArguments(
+                        browser_id=connection.browser_id,
+                        action="read",
+                        file_id=descriptor.file_id,
+                        offset=offset,
+                    )
+                    chunk = await connection.request(
+                        "integration.browser.file",
+                        wire.model_dump(mode="json"),
+                        BrowserFileResult,
+                    )
+                    try:
+                        data = base64.b64decode(chunk.data or "", validate=True)
+                    except (binascii.Error, ValueError) as exc:
+                        raise ExecutionClientError("executionAgent.protocolError") from exc
+                    if (
+                        chunk.file_id != descriptor.file_id
+                        or chunk.size != descriptor.size
+                        or chunk.offset != offset + len(data)
+                        or not data
+                        or chunk.complete != (chunk.offset == chunk.size)
+                    ):
+                        raise ExecutionClientError("executionAgent.protocolError")
+                    output.write(data)
+                    offset = chunk.offset
+                await connection.check_access()
+                check_binding()
+            output.seek(0)
+            return output
+        except BaseException:
+            output.close()
+            raise
+        finally:
+            if delete:
+                with CancelScope(shield=True), suppress(Exception):
+                    wire = BrowserFileArguments(
+                        browser_id=connection.browser_id,
+                        action="delete",
+                        file_id=descriptor.file_id,
+                    )
+                    await connection.request(
+                        "integration.browser.file",
+                        wire.model_dump(mode="json"),
+                        BrowserControlResult,
+                        timeout=10,
                     )
 
     async def manual(self, owner_id, integration_id, session_id, browser_id,

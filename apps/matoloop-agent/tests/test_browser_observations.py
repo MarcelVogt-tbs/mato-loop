@@ -46,6 +46,7 @@ class BrowserObservationTests(unittest.IsolatedAsyncioTestCase):
             {**args, "action": "inspect"},
             {**args, "snapshotSha256": "a" * 64},
             {**args, "settle": "true"},
+            {**args, "depth": 2},
             {
                 **args,
                 "fields": [
@@ -81,6 +82,14 @@ class BrowserObservationTests(unittest.IsolatedAsyncioTestCase):
                 BrowserBatchResult(**invalid)
         BrowserBatchResult(completed=0, total=1, errorCode="browser.outcomeUnknown")
         BrowserBatchResult(completed=1, total=1)
+        BrowserExecuteArguments(
+            browserId=str(uuid4()), tabId=str(uuid4()), action="inspect", selector="main", depth=2
+        )
+        for depth in (0, 101, True):
+            with self.assertRaises(ValidationError):
+                BrowserExecuteArguments(
+                    browserId=str(uuid4()), tabId=str(uuid4()), action="inspect", depth=depth
+                )
 
     async def test_observation_failure_does_not_discard_success(self):
         worker = BrowserWorker(Path("/tmp"))
@@ -108,7 +117,7 @@ class BrowserObservationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["data"], {"observationFailed": True})
         worker._inspect.assert_not_awaited()
         worker._settle = AsyncMock(return_value="network")
-        worker._inspect.return_value = ("- button", {"snapshotSha256": "a" * 64})
+        worker._inspect.return_value = ("- button", {"snapshotSha256": "a" * 64}, None)
         result = await worker.execute(
             BrowserExecuteArguments(**args, action="inspect", settle=True)
         )
@@ -121,7 +130,7 @@ class BrowserObservationTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(error.exception.code, "browser.observationUnstable")
         worker._settle.reset_mock()
-        worker._inspect.return_value = ("", {})
+        worker._inspect.return_value = ("", {}, None)
         await worker.execute(BrowserExecuteArguments(**args, action="inspect"))
         worker._settle.assert_not_awaited()
 
@@ -203,6 +212,50 @@ class BrowserHeadedObservations(unittest.IsolatedAsyncioTestCase):
             dict(name=name, ref=ref, type="textbox", value=name + " value")
             for name, ref in re.findall(r'textbox "([ABC])" \[ref=([^\]]+)\]', result["text"])
         ]
+
+    async def test_scroll_uses_the_same_full_snapshot_as_other_actions(self):
+        await self.page.set_content("""<style>
+            body { margin: 0 } article { height: 700px }
+            </style><main>
+            <article><button>First region</button></article>
+            <article><button>Second region</button></article>
+            <article><button>Third region</button></article>
+            </main>""")
+        result = await self.execute("scroll", direction="down", observe=True)
+        self.assertEqual(result["data"].get("snapshotScope", "page"), "page")
+        self.assertIn("snapshot", result)
+        self.assertIn('button "Second region"', result["text"])
+        self.assertIn('button "First region"', result["text"])
+
+        scoped = await self.execute("inspect", selector="main", depth=1)
+        self.assertEqual(scoped["data"]["snapshotScope"], "element")
+        self.assertEqual(scoped["data"]["snapshotDepth"], 1)
+        self.assertIn("main", scoped["text"])
+        self.assertNotIn('button "First region"', scoped["text"])
+        with self.assertRaises(AgentError) as error:
+            await self.execute("inspect", selector="#missing")
+        self.assertEqual(error.exception.code, "browser.invalidTarget")
+
+    async def test_open_shadow_and_iframe_refs_remain_actionable(self):
+        await self.page.set_content("""<div id=host></div>
+            <iframe srcdoc='<button>Frame target</button>'></iframe>
+            <script>
+              host.attachShadow({mode:'open'}).innerHTML =
+                '<button onclick="this.textContent=&quot;Shadow done&quot;">Shadow target</button>';
+            </script>""")
+        frame_button = self.page.locator("iframe").content_frame.locator("button")
+        await frame_button.wait_for()
+        await frame_button.evaluate(
+            "button => button.addEventListener('click', () => button.textContent = 'Frame done')"
+        )
+        result = await self.execute("inspect", settle=True)
+        shadow_ref = re.search(r'button "Shadow target" \[ref=([^\]]+)\]', result["text"])[1]
+        frame_ref = re.search(r'button "Frame target" \[ref=([^\]]+)\]', result["text"])[1]
+
+        result = await self.execute("click", selector="aria-ref=" + shadow_ref, observe=True)
+        self.assertIn('button "Shadow done"', result["text"])
+        result = await self.execute("click", selector="aria-ref=" + frame_ref, observe=True)
+        self.assertIn('button "Frame done"', result["text"])
 
     @unittest.skipUnless(
         all(path.is_file() for path in QUASAR_ASSETS),

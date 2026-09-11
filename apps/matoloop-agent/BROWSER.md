@@ -119,13 +119,15 @@ events surfaced by Playwright, not a complete audit of Chromium or service-worke
 
 The shared contract is implemented with these explicit additions:
 
-- `inspect.text` is Playwright 1.59's public page-level AI accessibility snapshot, at most 32,768
-  characters. It includes semantic hierarchy, accessible names and states, current form
-  values, iframe content and Playwright `ref` markers. Callers target a marker with
-  `aria-ref=e12` or its frame-qualified form. Normal AUTO calls do not require a source
-  hash. The implementation uses `page.aria_snapshot(mode="ai")` so its output and locator
-  behavior match Playwright rather than a local accessibility approximation.
-  `inspect.data.snapshotSha256` is an
+- `inspect.text` is Playwright 1.59's public AI accessibility snapshot when the result fits
+  32,768 characters. It includes semantic hierarchy, accessible names and states, current
+  form values, iframe content and Playwright `ref` markers. Callers target a marker with
+  `aria-ref=e12` or its frame-qualified form. Explicit inspection optionally accepts a native
+  Playwright root `selector` and tree `depth` from 1 through 100. The result reports
+  `data.snapshotScope=element` and `data.snapshotDepth` when applicable. Normal AUTO calls do
+  not require a source hash. The implementation uses `page.aria_snapshot(mode="ai")` or the
+  corresponding locator API, including Playwright's native `depth` option, rather than a local
+  accessibility approximation or viewport heuristic. `inspect.data.snapshotSha256` is an
   opaque observation identity using a per-runtime key and page/document identity. Host-only
   `guard=true` additionally captures bounded fields, checked/selected/disabled/read-only state,
   form targets/methods, focus, desktop/viewport geometry and scroll position. That extra scan
@@ -133,19 +135,26 @@ The shared contract is implemented with these explicit additions:
   The key prevents guessing private low-entropy field values from guard digests. Individual
   values above 65,536 characters or private state above 512 KiB are rejected, not silently
   truncated. Playwright constructs the accessibility tree before the worker applies its
-  32,768-character release limit; the worker process boundary and eight-second capture timeout
-  bound this behavior. The host must compare agent-produced tokens,
+  transport limit; the worker process boundary, 64 MiB file limit and eight-second capture
+  timeout bound this behavior. The host must compare agent-produced tokens,
   not recompute SHA256(text).
   This bounded inspection is not a complete page semantic guarantee, does not cover
   arbitrary JavaScript, and does not enforce a stale-approval
   precondition itself; the host must re-inspect and compare before execution.
 - Host-authorized write actions may set `observe=true` to return the resulting accessibility
-  snapshot in the same RPC. A post-write capture failure returns `observationFailed=true`
-  without changing the completed action into a retryable failure.
+  snapshot in the same RPC. These observations and oversized explicit inspections stage the
+  complete UTF-8 snapshot as `snapshot: {fileId, size}`. The backend reads and deletes the
+  staging file through bounded `integration.browser.file` chunks, then creates a run-bound
+  session file exposed as `snapshotFile` with `root=files`, path, size and SHA-256. Small
+  explicit inspections remain inline. Generated snapshot staging is hidden from downloads and
+  uploads and is removed after transfer, on the next capture, or at runtime close. Snapshot
+  files are read or searched with the ordinary file tools and are never loaded into model
+  context automatically. A post-write capture or persistence failure returns
+  `observationFailed=true` without changing the completed action into a retryable failure.
 - Host-only `settle=true` requests bounded settling before `inspect`; it defaults to false
   for immediate final guards. Post-write observations always settle. Isolated-world observers
   require 150 ms DOM/request quiet, document readiness and completed finite animations, within
-  1.8 seconds plus bounded cleanup. Infinite animations and WebSockets are ignored. Normal reads
+  600 ms for normal observations or 1.8 seconds for approval guards, plus bounded cleanup. Infinite animations and WebSockets are ignored. Normal reads
   and post-write observations continue with the current snapshot and `settled=false` when bounded
   settling expires. Host approval guards remain strict and raise `browser.observationUnstable`.
   Private worker metrics record the controlled settling outcome and settling/snapshot durations

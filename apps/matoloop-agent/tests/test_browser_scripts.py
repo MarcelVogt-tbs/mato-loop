@@ -15,14 +15,21 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from matoloop_agent.browser import BrowserManager
-from matoloop_agent.browser_contracts import BrowserExecuteArguments, BrowserScriptResult
+from matoloop_agent.browser_contracts import (
+    BrowserExecuteArguments,
+    BrowserFileArguments,
+    BrowserScriptResult,
+)
 from matoloop_agent.browser_worker import BrowserWorker, ScriptOutput
 from matoloop_agent.filesystem import AgentError
 
 
 class BrowserScriptTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.worker = BrowserWorker(Path("/tmp"))
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.worker = BrowserWorker(Path(temporary.name))
+        self.worker.live = self.worker.root
         self.tab_id = str(uuid4())
         self.args = dict(browserId=str(uuid4()), tabId=self.tab_id)
         self.page = Mock(
@@ -225,14 +232,60 @@ async def run(page):
         self.page.locator.return_value.evaluate.assert_awaited_once()
         self.page.url = "about:blank#new"
         self.assertNotEqual(normal[1], (await self.worker._inspect(self.page, guard=False))[1])
-        self.worker._inspect = AsyncMock(return_value=("", {}))
+
+        full = "- button first\n" + "- button second " + "x" * 32_768
+        self.page.aria_snapshot.return_value = full
+        truncated = await self.worker._inspect(
+            self.page, browser_id=self.args["browserId"], guard=False
+        )
+        self.assertIsNone(truncated[0])
+        self.assertEqual(
+            truncated[1],
+            {
+                "snapshotSha256": truncated[1]["snapshotSha256"],
+                "snapshotCharacters": len(full),
+            },
+        )
+        self.assertEqual(truncated[2]["size"], len(full.encode()))
+        file_id = truncated[2]["fileId"]
+        chunk = await self.worker.file(
+            BrowserFileArguments(browserId=self.args["browserId"], action="read", fileId=file_id)
+        )
+        self.assertTrue(chunk["data"])
+        for action in ("choose", "write", "finish"):
+            with self.assertRaises(AgentError):
+                await self.worker.file(
+                    BrowserFileArguments(
+                        browserId=self.args["browserId"], action=action, fileId=file_id
+                    )
+                )
+        self.page.aria_snapshot.return_value = full + "changed outside released text"
+        changed = await self.worker._inspect(
+            self.page, browser_id=self.args["browserId"], guard=False
+        )
+        self.assertEqual(changed[0], truncated[0])
+        self.assertNotEqual(changed[1]["snapshotSha256"], truncated[1]["snapshotSha256"])
+        self.worker._inspect = AsyncMock(return_value=("", {}, None))
         await self.execute(action="inspect")
-        self.worker._inspect.assert_awaited_with(self.page, guard=False)
+        self.worker._inspect.assert_awaited_with(
+            self.page,
+            browser_id=self.args["browserId"],
+            guard=False,
+            selector=None,
+            depth=None,
+        )
         await self.execute(action="inspect", guard=True)
-        self.worker._inspect.assert_awaited_with(self.page, guard=True)
+        self.worker._inspect.assert_awaited_with(
+            self.page, browser_id=None, guard=True, selector=None, depth=None
+        )
         self.worker._settle = AsyncMock()
         await self.execute(code="async def run(page): return 1", observe=True, guard=True)
-        self.worker._inspect.assert_awaited_with(self.page, guard=False)
+        self.worker._inspect.assert_awaited_with(
+            self.page,
+            browser_id=self.args["browserId"],
+            guard=False,
+            force_file=True,
+        )
 
     @unittest.skipUnless(
         os.getuid() == 0 and os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1",

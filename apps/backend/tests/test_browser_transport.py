@@ -982,6 +982,62 @@ def test_screenshot_chunks_are_private_bounded_and_deleted(env, failure, monkeyp
             assert not connection.busy
 
 
+def test_snapshot_file_is_streamed_and_deleted(env):
+    content = ("- document\n  - button \"Target\"\n" * 20000).encode()
+    file_id = str(uuid4())
+    with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
+        state = control.receive_json()
+        with open_view(env, state):
+            control.send_json({"type": "attach"})
+            control.receive_json()
+            connection = env.coordinator.connections[env.agent.id]
+            tab_id = str(uuid4())
+
+            async def reply(operation, arguments):
+                if operation == "integration.browser.execute":
+                    return {
+                        "tabId": tab_id,
+                        "url": "https://example.test/",
+                        "snapshot": {"fileId": file_id, "size": len(content)},
+                        "data": {
+                            "snapshotSha256": "a" * 64,
+                            "snapshotCharacters": len(content.decode()),
+                        },
+                    }
+                if operation == "integration.browser.file" and arguments["action"] == "read":
+                    offset = arguments["offset"]
+                    data = content[offset:offset + arguments["maxBytes"]]
+                    return {
+                        "fileId": file_id,
+                        "size": len(content),
+                        "offset": offset + len(data),
+                        "complete": offset + len(data) == len(content),
+                        "data": base64.b64encode(data).decode(),
+                    }
+
+            env.reply = reply
+            result = env.client.portal.call(
+                env.coordinator.execute,
+                env.session.id,
+                env.agent.id,
+                env.instance.id,
+                {
+                    "action": "inspect",
+                    "tabId": tab_id,
+                    "expectedBrowserId": state["browserId"],
+                    "expectedAttachmentRevision": connection.attachment_revision,
+                },
+            )
+            with result._snapshot_stream as stream:
+                assert stream.read() == content
+            assert result.text is None
+            assert [
+                args["fileId"]
+                for op, args in env.calls
+                if op == "integration.browser.file" and args["action"] == "delete"
+            ] == [file_id]
+
+
 @pytest.mark.parametrize("phase", ["capture", "read"])
 def test_cancelled_screenshot_drains_capture_and_deletes_staging(env, phase):
     started, finish = asyncio.Event(), asyncio.Event()

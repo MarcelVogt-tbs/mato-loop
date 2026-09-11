@@ -295,6 +295,8 @@ def model_browser_observations(messages: list[dict[str, Any]]) -> list[dict[str,
             inspection = BrowserInspectionData.model_validate(result.data)
             if (
                 result.tab_id is None or result.url is None or result.text is None
+                or result.snapshot_file is not None
+                or inspection.snapshot_scope != "page" or inspection.snapshot_depth is not None
                 or result.text and not result.text.startswith("- ")
             ):
                 baselines.clear()
