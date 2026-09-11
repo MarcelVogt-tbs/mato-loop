@@ -5258,7 +5258,7 @@ _V2_TOOL_DESCRIPTIONS = {
         "root=files includes hidden; include overrides ignores. "
         "truncated=true: more/clipped text/size limit."
     ),
-    "provide_file": "Provide path (file unchanged or folder ZIP) or paths (files ZIP). ZIPs are snapshots.",
+    "provide_file": "On explicit download request, provide path (file/folder) or paths (files). Folders/lists become ZIPs.",
     "write_file": "Write complete UTF-8 content to one file, creating or replacing it.",
     "create_directory": "Create one directory; its parent must exist.",
     "delete_path": "Delete one path; non-empty directories require recursive=true.",
@@ -5605,9 +5605,8 @@ def _rewrite_system_prompt_v2(prompt: str) -> str:
             paragraph = "Read attachment-derived text or PCM audio from its session/derived path."
         elif paragraph.startswith("Successful file writes, copies, and moves already expose"):
             paragraph = (
-                "Writes, copies, and moves already expose file destinations. Use provide_file only for "
-                "another file or a ZIP of a folder or file list; paths and reads are not downloads. Use the "
-                "download card and never repeat its internal URL."
+                "Writes, copies, and moves already expose file destinations. Call provide_file only for an "
+                "explicit download or ZIP request. Pass source paths directly; do not create an archive first."
             )
         elif paragraph.startswith("For calendar_update_event and calendar_delete_event"):
             paragraph = (

@@ -3984,6 +3984,7 @@ class AgentRuntime:
                                 filename=attachment.filename,
                                 position=position,
                                 category=attachment.category,
+                                mime_type=attachment.mime_type,
                                 metadata=attachment.metadata,
                             )
                         else:

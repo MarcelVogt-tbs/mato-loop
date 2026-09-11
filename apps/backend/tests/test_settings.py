@@ -45,7 +45,7 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert ToolSettings().resource_labels == {}
     assert InstanceLimits.settings_key == "instance-limits"
     assert InstanceLimits().max_upload_mib == 64
-    assert InstanceLimits().session_quota_mib == 500
+    assert InstanceLimits().session_quota_mib == 5_120
     assert InstanceLimits().max_extracted_characters == 5_000_000
     assert ChannelSettings.settings_key == "channels"
     assert ChannelSettings().allowed_providers == {"telegram"}

@@ -132,8 +132,9 @@ def test_root_specific_read_and_transfer_availability(
         IntegrationSettings(), tool_settings=settings
     ).tools
 
-    for name in ("read", "glob", "grep", "provide_file"):
+    for name in ("read", "glob", "grep"):
         assert (name in tools) is read_available
+    assert "provide_file" in tools
     assert ("copy_path" in tools) is copy_available
     assert ("move_path" in tools) is move_available
     assert ("delete_path" in tools) is ("filesystem.delete" not in disabled)
@@ -480,6 +481,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
     auto_capabilities = {
         "session.files.read",
         "session.files.write",
+        "file.provide",
         "network.fetch",
         "network.search",
         "skills.load",

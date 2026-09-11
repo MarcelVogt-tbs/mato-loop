@@ -543,6 +543,12 @@ export const useWorkspaceStore = defineStore('workspace', {
       const params = new URLSearchParams(this.readRequestParams({ path }))
       return `/api/workspace/files/${action}?${params}`
     },
+    archiveUrl(path) {
+      if (this.toolContext) return ''
+      if (!['filesystem.stat', 'filesystem.list', 'filesystem.export'].every(this.operationAvailable)) return ''
+      const params = new URLSearchParams(this.readRequestParams({ path, archive: 'zip' }))
+      return `/api/workspace/files/download?${params}`
+    },
     async load(path = this.directoryPath, append = false, force = false) {
       if (!this.operationAvailable('filesystem.list')) return false
       if (this.loading[path] && !force) return

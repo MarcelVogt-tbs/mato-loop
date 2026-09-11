@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
+from zipfile import ZipFile
 
 import pytest
 from PIL import Image
@@ -177,6 +178,65 @@ async def test_download_streams_the_bound_session_file(tmp_path: Path, monkeypat
     assert body == b"streamed report"
     assert response.media_type == "application/octet-stream"
     assert "filename*=UTF-8''report.bin" in response.headers["content-disposition"]
+
+
+@pytest.mark.parametrize("source", ["session", "computer"])
+async def test_download_archives_folders_from_both_roots(
+    tmp_path: Path, monkeypatch, source: str
+) -> None:
+    context, _ = _session_context(tmp_path)
+    request = MagicMock()
+    if source == "session":
+        context.root_files.create_directory("session", "reports")
+        context.root_files.write_file("session", "reports/a.txt", "alpha")
+        path = "reports"
+    else:
+        context = workspace_route._FileContext(
+            current_directory="/work", agent_id=uuid4(),
+            agent_operations=frozenset(
+                {"filesystem.stat", "filesystem.list", "filesystem.export"}
+            ),
+        )
+        path = "/work/reports"
+        monkeypatch.setattr(
+            workspace_route,
+            "_agent_stat",
+            AsyncMock(return_value={
+                "path": path, "name": "reports", "kind": "directory", "size": None,
+            }),
+        )
+        monkeypatch.setattr(
+            workspace_route,
+            "_agent_request",
+            AsyncMock(return_value={
+                "entries": [{
+                    "path": f"{path}/a.txt", "name": "a.txt", "kind": "file",
+                    "size": 5, "modifiedAt": 0.0,
+                }],
+                "hasMore": False,
+                "nextOffset": None,
+            }),
+        )
+        monkeypatch.setattr(
+            workspace_route,
+            "_agent_export",
+            AsyncMock(return_value=(BytesIO(b"alpha"), 5, hashlib.sha256(b"alpha").hexdigest())),
+        )
+
+    monkeypatch.setattr(workspace_route, "_file_context", AsyncMock(return_value=context))
+    response = await workspace_route.download_file(
+        _user(), AsyncMock(spec=AsyncSession), path, request=request,
+        scope=FileScope.SESSION if source == "session" else FileScope.FILESYSTEM,
+        session_id=context.root_files.session_id if context.root_files else None,
+        archive="zip",
+    )
+    body = b"".join([chunk async for chunk in response.body_iterator])
+
+    with ZipFile(BytesIO(body)) as archive:
+        assert archive.read("reports/a.txt") == b"alpha"
+    assert response.media_type == "application/zip"
+    assert response.headers["content-length"] == str(len(body))
+    assert "filename*=UTF-8''reports.zip" in response.headers["content-disposition"]
 
 
 async def test_session_preview_edit_and_image_validation(tmp_path: Path, monkeypatch) -> None:

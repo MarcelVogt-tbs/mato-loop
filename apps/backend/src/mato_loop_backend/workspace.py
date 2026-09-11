@@ -419,7 +419,7 @@ class RootFileService:
     """Access the backend-local root of one persisted session."""
 
     MAX_LIST_LIMIT = 1_000
-    SESSION_QUOTA_BYTES = 500 * 1024 * 1024
+    SESSION_QUOTA_BYTES = 5 * 1024 * 1024 * 1024
     MAX_OPERATION_ENTRIES = 10_000
     MAX_OPERATION_BYTES = 256 * 1024 * 1024
 
@@ -825,35 +825,39 @@ class RootFileService:
                             shutil.rmtree(directory)
                             self._fsync_directory(directory.parent)
                             continue
-                        data = self._read_private_file(target)
-                        item = owner.get("publication")
-                        if item is None:
-                            current = next((item for item in index["revisions"] if item["revision"] == index["currentRevision"]), None)
-                            digest = hashlib.sha256(data).hexdigest()
-                            unchanged = digest == (current["sha256"] if current else owner["initialSha256"])
-                            if not unchanged:
-                                item = {**self._revision_item(index["maxRevision"] + 1, data),
-                                        "runId": str(run_id), "sessionId": str(self.session_id)}
-                                self._assert_session_quota(
-                                    len(data) + 1024, replaced_bytes=owner["reserveBytes"],
-                                )
-                                owner = {**owner, "state": "publishing", "publication": item}
-                                index = {**index, "run": owner}
-                                self._replace_private_file(directory / "index.json", self._index_bytes(index))
-                                self._fsync_directory(directory)
-                        if item is not None:
-                            blob = directory / str(item["revision"])
-                            if blob.exists() or blob.is_symlink():
-                                snapshot = self._read_private_file(blob)
-                                if hashlib.sha256(snapshot).hexdigest() != item["sha256"]:
-                                    raise RootFileError("file.revisionInvalid", "Invalid publication snapshot")
-                            else:
-                                if hashlib.sha256(data).hexdigest() != item["sha256"]:
-                                    raise RootFileError("file.changed", "File changed during publication")
-                                self._replace_private_file(blob, data)
-                                self._fsync_directory(directory)
-                            index = {**index, "currentRevision": item["revision"], "maxRevision": item["revision"],
-                                     "revisions": [*index["revisions"], item]}
+                        with self.open_file(FileRoot.SESSION, index["path"]) as source:
+                            metadata = os.fstat(source.fileno())
+                            digest = hashlib.file_digest(source, "sha256").hexdigest()
+                            source.seek(0)
+                            item = owner.get("publication")
+                            if item is None:
+                                current = next((item for item in index["revisions"] if item["revision"] == index["currentRevision"]), None)
+                                unchanged = digest == (current["sha256"] if current else owner["initialSha256"])
+                                if not unchanged:
+                                    item = {**self._revision_metadata(index["maxRevision"] + 1, metadata.st_size, digest),
+                                            "runId": str(run_id), "sessionId": str(self.session_id)}
+                                    self._assert_session_quota(
+                                        metadata.st_size + 1024, replaced_bytes=owner["reserveBytes"],
+                                    )
+                                    owner = {**owner, "state": "publishing", "publication": item}
+                                    index = {**index, "run": owner}
+                                    self._replace_private_file(directory / "index.json", self._index_bytes(index))
+                                    self._fsync_directory(directory)
+                            if item is not None:
+                                blob = directory / str(item["revision"])
+                                if blob.exists() or blob.is_symlink():
+                                    with _open_regular_file(directory, (str(item["revision"]),), RootFileError) as snapshot:
+                                        snapshot_metadata = os.fstat(snapshot.fileno())
+                                        snapshot_digest = hashlib.file_digest(snapshot, "sha256").hexdigest()
+                                    if snapshot_metadata.st_size != item["sizeBytes"] or snapshot_digest != item["sha256"]:
+                                        raise RootFileError("file.revisionInvalid", "Invalid publication snapshot")
+                                else:
+                                    if digest != item["sha256"] or metadata.st_size != item["sizeBytes"]:
+                                        raise RootFileError("file.changed", "File changed during publication")
+                                    self._copy_private_file(source, blob, item["sizeBytes"], item["sha256"])
+                                    self._fsync_directory(directory)
+                                index = {**index, "currentRevision": item["revision"], "maxRevision": item["revision"],
+                                         "revisions": [*index["revisions"], item]}
                         owner = {"runId": str(run_id), "sessionId": str(self.session_id),
                                  "state": "final", "revision": index["currentRevision"]}
                         index = {**index, "run": owner, "runReceipts": {
@@ -1512,12 +1516,44 @@ class RootFileService:
 
     @staticmethod
     def _revision_item(revision: int, data: bytes) -> dict[str, str | int]:
+        return RootFileService._revision_metadata(
+            revision, len(data), hashlib.sha256(data).hexdigest()
+        )
+
+    @staticmethod
+    def _revision_metadata(
+        revision: int, size_bytes: int, sha256: str
+    ) -> dict[str, str | int]:
         return {
             "revision": revision,
             "createdAt": datetime.now(UTC).isoformat(),
-            "sizeBytes": len(data),
-            "sha256": hashlib.sha256(data).hexdigest(),
+            "sizeBytes": size_bytes,
+            "sha256": sha256,
         }
+
+    @staticmethod
+    def _copy_private_file(
+        source: BinaryIO, target: Path, expected_size: int, expected_sha256: str
+    ) -> None:
+        temporary = target.parent / f".{target.name}.{uuid4().hex}.tmp"
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            source.seek(0)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(temporary, flags, 0o600)
+            with os.fdopen(descriptor, "wb") as output:
+                while chunk := source.read(1024 * 1024):
+                    size += len(chunk)
+                    digest.update(chunk)
+                    output.write(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            if size != expected_size or digest.hexdigest() != expected_sha256:
+                raise RootFileError("file.changed", "File changed during publication")
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     @staticmethod
     def _index_bytes(index: dict) -> bytes:
@@ -1707,6 +1743,96 @@ class RootFileService:
         )
         revision = self.working_revision(path)
         return revision
+
+    def create_output_stream(
+        self, filename: str, source: BinaryIO, *, max_bytes: int
+    ) -> FileRevision | WorkingFileRevision:
+        name = validate_upload_filename(filename)
+        stem = PurePosixPath(name).stem or "output"
+        suffix = PurePosixPath(name).suffix
+        path = f"{stem}-{uuid4().hex[:8]}{suffix}"
+        if self.run_id is None:
+            raise RootFileError("file.changed", "A run-bound output is required")
+        self._create_run_file_stream(path, source, max_bytes=max_bytes)
+        return self.working_revision(path)
+
+    def discard_run_output(self, file_id: UUID) -> None:
+        if self.run_id is None:
+            raise RootFileError("file.changed", "A run-bound output is required")
+        with self._session_operation_lock(FileRoot.SESSION):
+            history = self._history_for_id(file_id)
+            if history is None:
+                return
+            owner = history[1].get("run", {})
+            if (
+                owner.get("runId") != str(self.run_id)
+                or owner.get("sessionId") != str(self.session_id)
+                or owner.get("state") == "final"
+            ):
+                raise RootFileError("file.changed", "Output is not owned by this run")
+            self._purge_owned_files({str(file_id)})
+
+    def _create_run_file_stream(
+        self, path: str, source: BinaryIO, *, max_bytes: int
+    ) -> RootFileEntry:
+        parts = self._parts(path)
+        with self._session_operation_lock(FileRoot.SESSION):
+            self._assert_available(path)
+            target = self._resolve_destination(FileRoot.SESSION, path)
+            with _directory_descriptor(
+                self._files_path(FileRoot.SESSION), parts[:-1], RootFileError
+            ) as descriptor:
+                try:
+                    temporary, size = _stage_upload(
+                        descriptor, parts[-1], source, max_bytes=max_bytes
+                    )
+                except _UploadTooLarge as exc:
+                    raise RootFileError("file.tooLarge", "File is too large") from exc
+                try:
+                    staged_handle = os.open(
+                        temporary,
+                        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=descriptor,
+                    )
+                    with os.fdopen(staged_handle, "rb") as handle:
+                        digest = hashlib.file_digest(handle, "sha256").hexdigest()
+                    revisions = self._revisions_path()
+                    file_id = uuid4()
+                    history = revisions / str(file_id)
+                    staged_history = revisions / f".{file_id}.{uuid4().hex}.tmp"
+                    staged_history.mkdir(mode=0o700)
+                    index = {
+                        "fileId": str(file_id),
+                        "path": path,
+                        "currentRevision": None,
+                        "maxRevision": 0,
+                        "revisions": [],
+                        "run": {
+                            "sessionId": str(self.session_id),
+                            "runId": str(self.run_id),
+                            "state": "pending",
+                            "initialSha256": None,
+                            "reserveBytes": size + 1024,
+                        },
+                    }
+                    self._write_private_file(
+                        staged_history / "index.json", self._index_bytes(index)
+                    )
+                    self._assert_session_quota(size + 1024)
+                    staged_history.rename(history)
+                    self._fsync_directory(revisions)
+                    metadata = _publish_upload(descriptor, temporary, target.name)
+                except BaseException:
+                    if "history" in locals() and history.exists():
+                        shutil.rmtree(history, ignore_errors=True)
+                    if "staged_history" in locals():
+                        shutil.rmtree(staged_history, ignore_errors=True)
+                    try:
+                        os.unlink(temporary, dir_fd=descriptor)
+                    except FileNotFoundError:
+                        pass
+                    raise
+        return RootFileEntry(parts[-1], path, "file", size, metadata.st_mtime)
 
     def append_output_revision(self, file_id: UUID, data: bytes) -> FileRevision | WorkingFileRevision:
         if not data or len(data) > self.MAX_OPERATION_BYTES:

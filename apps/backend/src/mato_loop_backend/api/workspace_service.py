@@ -359,7 +359,7 @@ def _execution_error(code: str, *, manager: bool = False) -> ApiError:
 
 
 async def _agent_request(
-    context: _FileContext, operation: str, arguments: dict
+    context: _FileContext, operation: str, arguments: dict, *, timeout: float | None = None
 ) -> dict:
     if (
         context.agent_id is None
@@ -376,8 +376,9 @@ async def _agent_request(
     }:
         raise ApiError(403, "http.forbidden")
     try:
+        request_kwargs = {"timeout": timeout} if timeout is not None else {}
         response = await execution_agent_connections.request(
-            context.agent_id, operation, arguments
+            context.agent_id, operation, arguments, **request_kwargs
         )
     except ExecutionAgentError as exc:
         raise _execution_error(exc.code, manager=True) from exc

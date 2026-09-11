@@ -253,6 +253,7 @@ def project_session_path_permission(
     relative_path: str,
     action_kind: str,
     action_label: str,
+    capability: str = "session.files.read",
 ) -> PermissionRequest:
     scope = json.dumps(
         {
@@ -265,7 +266,7 @@ def project_session_path_permission(
         sort_keys=True,
     )
     return PermissionRequest(
-        capability="session.files.read",
+        capability=capability,
         resource_type="project_session_path",
         resource_scope=scope,
         action_kind=action_kind,
@@ -350,7 +351,7 @@ def execution_directory_permission(
         use_integration_policy=False,
         available_decisions=(
             ("allow_once", "deny")
-            if confidential_execution_path(path)
+            if capability != "file.provide" and confidential_execution_path(path)
             else ("allow_once", "allow_session", "deny")
         ),
     )
@@ -1048,7 +1049,7 @@ class PermissionPolicy:
         if request.resource_type == "project_session_path":
             scope = _project_session_path_scope(request.resource_scope)
             if scope is None or request.capability not in {
-                "filesystem.read", "session.files.read"
+                "file.provide", "filesystem.read", "session.files.read"
             }:
                 return PermissionDecision.DENY
             project_id, target_id, _path = scope
@@ -1096,7 +1097,7 @@ class PermissionPolicy:
                 else None
             )
             inside_workspace = workspace is not None and _path_is_within(path, workspace)
-            if confidential_execution_path(str(path)):
+            if request.capability != "file.provide" and confidential_execution_path(str(path)):
                 return PermissionDecision.ASK
             if policy == ToolExecutionPolicy.AUTO and inside_workspace:
                 return PermissionDecision.ALLOW
@@ -1209,6 +1210,7 @@ class PermissionPolicy:
                 "filesystem.read",
                 "filesystem.write",
                 "filesystem.delete",
+                "file.provide",
                 "session.files.read",
                 "session.files.write",
             }:

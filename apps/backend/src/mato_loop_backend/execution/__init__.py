@@ -36,6 +36,7 @@ from mato_loop_backend.execution.protocol import (
     WelcomeMessage,
 )
 from mato_loop_backend.execution.transfers import (
+    EXPORT_TIMEOUT_SECONDS,
     MAX_TRANSFER_BYTES,
     TransferError,
     TransferGrant,
@@ -54,6 +55,7 @@ __all__ = [
     "ExecutionClientError",
     "ExecutionAgentConnectionManager",
     "ExecutionAgentError",
+    "EXPORT_TIMEOUT_SECONDS",
     "HelloMessage",
     "MAX_TRANSFER_BYTES",
     "ProcessResult",

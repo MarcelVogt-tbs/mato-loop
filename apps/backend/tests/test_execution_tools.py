@@ -35,8 +35,19 @@ from mato_loop_backend.execution import (
     WorkspaceWriteResult,
     transfer_tickets,
 )
+from mato_loop_backend.execution import (
+    transfers as transfers_module,
+)
+from mato_loop_backend.execution.client import WorkspaceExportResult, WorkspaceStatResult
 from mato_loop_backend.execution.protocol import ResponseMessage
 from mato_loop_backend.execution.terminals import terminal_coordinator
+from mato_loop_backend.execution.transfers import (
+    EXPORT_TIMEOUT_SECONDS,
+    MAX_TRANSFER_TTL_SECONDS,
+    TRANSFER_TTL_SECONDS,
+    TransferError,
+    TransferTicketStore,
+)
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
@@ -216,6 +227,60 @@ async def test_execution_client_imports_absolute_path_with_transfer_ticket(monke
         "/tmp/snapshot.bin", BytesIO(data), limit=len(data)
     )
     assert result.path == "/tmp/snapshot.bin"
+
+
+def test_upload_ticket_ttl_override_is_bounded_and_keeps_default(monkeypatch) -> None:
+    monkeypatch.setattr(transfers_module.time, "monotonic", lambda: 100.0)
+    store = TransferTicketStore()
+
+    _, default_ticket = store.create_upload(uuid4(), size=1)
+    _, export_ticket = store.create_upload(
+        uuid4(), size=1, ttl_seconds=EXPORT_TIMEOUT_SECONDS + 30
+    )
+
+    assert default_ticket.expires_at == 100.0 + TRANSFER_TTL_SECONDS
+    assert export_ticket.expires_at == 100.0 + EXPORT_TIMEOUT_SECONDS + 30
+    with pytest.raises(TransferError):
+        store.create_upload(uuid4(), size=1, ttl_seconds=MAX_TRANSFER_TTL_SECONDS + 1)
+
+
+async def test_execution_export_uses_long_lived_upload_ticket(monkeypatch) -> None:
+    data = b"export"
+    digest = hashlib.sha256(data).hexdigest()
+    captured = []
+    create_upload = transfer_tickets.create_upload
+
+    def capture_upload(*args, **kwargs):
+        grant, ticket = create_upload(*args, **kwargs)
+        ticket.content = BytesIO(data)
+        ticket.actual_size = len(data)
+        ticket.actual_sha256 = digest
+        captured.append(ticket)
+        return grant, ticket
+
+    async def request(_self, operation, _arguments, _result_model, **kwargs):
+        if operation == "filesystem.stat":
+            return WorkspaceStatResult(
+                path="/tmp/export.bin", kind="file", size=len(data), modified_at=0.0
+            )
+        assert operation == "filesystem.export"
+        assert kwargs["timeout"] == EXPORT_TIMEOUT_SECONDS
+        return WorkspaceExportResult(size=len(data), sha256=digest)
+
+    monkeypatch.setattr(transfer_tickets, "create_upload", capture_upload)
+    monkeypatch.setattr(ExecutionClient, "request", request)
+    monkeypatch.setattr(
+        "mato_loop_backend.execution.client.execution_agent_connections.transfer_url",
+        lambda _agent_id, ticket_id: f"https://backend.test/transfers/{ticket_id}",
+    )
+    before = transfers_module.time.monotonic()
+
+    with await ExecutionClient(uuid4(), frozenset()).open_export(
+        "/tmp/export.bin", limit=len(data)
+    ) as content:
+        assert content.read() == data
+
+    assert captured[0].expires_at >= before + EXPORT_TIMEOUT_SECONDS + 29
 
 
 def test_model_paths_resolve_against_current_directory(tmp_path) -> None:

@@ -464,7 +464,7 @@ async def test_provided_working_file_and_actions_publish_only_final_output(tmp_p
     monkeypatch.setattr(tools_module, "_allow", AsyncMock(return_value=True))
     provided = await tools_module._provide_file(
         tools_module.ProvideFileArguments(root="session", path="model.scad"),
-        SimpleNamespace(run_id=run_id),
+        SimpleNamespace(run_id=run_id, root_files=files),
     )
     assert provided.attachments[0].file_revision is None
     assert provided.attachments[0].file_id == working.file_id
@@ -528,19 +528,22 @@ async def test_provided_zip_persists_fixed_snapshot_after_source_edit(tmp_path, 
     monkeypatch.setattr(tools_module, "_allow", AsyncMock(return_value=True))
     provided = await tools_module._provide_file(
         tools_module.ProvideFileArguments(root="session", path="reports"),
-        SimpleNamespace(run_id=run_id),
+        SimpleNamespace(run_id=run_id, root_files=files),
     )
     assert not provided.is_error
     output, = provided.attachments
     assert output.mime_type == "application/zip"
-    assert output.file_id is None
+    assert output.file_id is not None
+    assert output.file_revision is None
     message = tool_message(session, run_id)
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = session
     service = AttachmentService(storage, run_id=run_id)
-    pending = await service.create_attachment(
-        db, message, output.data, output.mime_type, kind=output.kind,
-        filename=output.filename, position=0, category=output.category, purpose="artifact",
+    pending = await service.create_reference(
+        db, message, file_root_id=output.file_root_id, file_id=output.file_id,
+        file_revision=output.file_revision, file_path=output.file_path,
+        filename=output.filename, position=0, category=output.category,
+        mime_type=output.mime_type,
     )
     assert pending.file_revision is None
     assert pending.file_id != source.file_id
@@ -557,7 +560,6 @@ async def test_provided_zip_persists_fixed_snapshot_after_source_edit(tmp_path, 
     assert message.provider_data["_matoloop"]["fileOutputsPending"] is False
     path = await AttachmentService(storage).verified_path(attachment, session.id)
     stored = path.read_bytes()
-    assert stored == output.data
     with zipfile.ZipFile(BytesIO(stored)) as archive:
         assert archive.read("reports/notes.txt") == b"original"
     assert files.read_bytes("session", "reports/notes.txt", limit=100) == b"edited"

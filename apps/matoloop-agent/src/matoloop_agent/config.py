@@ -57,7 +57,7 @@ class AgentConfig(BaseModel):
         default=1024 * 1024, alias="maxMessageBytes", ge=1024, le=1024 * 1024
     )
     max_file_bytes: int = Field(default=16 * 1024 * 1024, alias="maxFileBytes", ge=1)
-    max_transfer_bytes: int = Field(default=256 * 1024 * 1024, alias="maxTransferBytes", ge=1)
+    max_transfer_bytes: int = Field(default=1024 * 1024 * 1024, alias="maxTransferBytes", ge=1)
     max_operation_entries: int = Field(default=10_000, alias="maxOperationEntries", ge=1)
     max_output_bytes: int = Field(
         default=1024 * 1024, alias="maxOutputBytes", ge=1024, le=1024 * 1024

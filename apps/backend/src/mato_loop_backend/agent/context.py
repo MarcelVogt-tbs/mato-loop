@@ -859,8 +859,8 @@ def general_system_prompt(
         )
     if "provide_file" in offered_tool_names:
         parts.append(
-            "provide_file supplies another file or a ZIP of a folder or file list; paths and reads are "
-            "not downloads. Use its card."
+            "Call provide_file only for an explicit download or ZIP request. Pass source paths "
+            "directly; do not create an archive first."
         )
     if "transcribe_audio" in offered_tool_names:
         parts.append(

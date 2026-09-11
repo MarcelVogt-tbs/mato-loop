@@ -23,7 +23,12 @@ from mato_loop_backend.execution.manager import (
     execution_agent_connections,
 )
 from mato_loop_backend.execution.protocol import EventMessage
-from mato_loop_backend.execution.transfers import TransferError, stage_file, transfer_tickets
+from mato_loop_backend.execution.transfers import (
+    EXPORT_TIMEOUT_SECONDS,
+    TransferError,
+    stage_file,
+    transfer_tickets,
+)
 
 
 class ExecutionResult(BaseModel):
@@ -413,6 +418,10 @@ class ExecutionClient:
         return operation in self.operations
 
     async def read_bytes(self, path: str, *, limit: int) -> bytes:
+        with await self.open_export(path, limit=limit) as content:
+            return content.read(limit + 1)
+
+    async def open_export(self, path: str, *, limit: int) -> BinaryIO:
         stat_result = await self.request(
             "filesystem.stat", {"path": path}, WorkspaceStatResult
         )
@@ -422,7 +431,9 @@ class ExecutionClient:
         if stat_result.size is None or stat_result.size > limit:
             raise ExecutionClientError("file.tooLarge")
         grant, ticket = transfer_tickets.create_upload(
-            self.agent_id, size=stat_result.size
+            self.agent_id,
+            size=stat_result.size,
+            ttl_seconds=EXPORT_TIMEOUT_SECONDS + 30,
         )
         try:
             result = await self.request(
@@ -437,6 +448,7 @@ class ExecutionClient:
                     },
                 },
                 WorkspaceExportResult,
+                timeout=EXPORT_TIMEOUT_SECONDS,
             )
             assert isinstance(result, WorkspaceExportResult)
             if (
@@ -445,7 +457,9 @@ class ExecutionClient:
                 or ticket.content is None
             ):
                 raise ExecutionClientError("executionAgent.protocolError")
-            return ticket.content.read(limit + 1)
+            content = ticket.content
+            ticket.content = None
+            return content
         finally:
             transfer_tickets.revoke(grant.ticket_id)
 

@@ -303,6 +303,39 @@ describe('workspace store', () => {
     expect(workspace.operationAvailable('filesystem.write')).toBe(false)
   })
 
+  it('builds directory archive URLs from the current workspace identity', () => {
+    const workspace = useWorkspaceStore()
+    workspace.configure({
+      sessionId: 'session-a',
+      rootIdentity: 'project-a',
+      currentDirectory: '/project',
+      workspaceContext: liveContext(['filesystem.stat', 'filesystem.list', 'filesystem.export']),
+      scope: 'filesystem'
+    })
+
+    const params = new URL(workspace.archiveUrl('/project/current'), 'https://example.test').searchParams
+
+    expect(Object.fromEntries(params)).toEqual({
+      scope: 'filesystem',
+      session_id: 'session-a',
+      execution_agent_id: 'agent-1',
+      current_directory: '/project',
+      path: '/project/current',
+      archive: 'zip'
+    })
+    workspace.workspaceContext.operations = ['filesystem.list', 'filesystem.export']
+    expect(workspace.archiveUrl('/project/current')).toBe('')
+  })
+
+  it('builds managed session archive URLs with their root identity', () => {
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a', rootIdentity: 'project-a', scope: 'session' })
+
+    expect(workspace.archiveUrl('reports')).toBe(
+      '/api/workspace/files/download?scope=session&session_id=session-a&root_identity=project-a&path=reports&archive=zip'
+    )
+  })
+
   it('opens a tool file through the existing read-only explorer context', async () => {
     api.get
       .mockResolvedValueOnce({ data: { entries: [] } })
@@ -343,6 +376,7 @@ describe('workspace store', () => {
       }
     ])
     expect(workspace.fileUrl('download', '/original-project/reports/result.txt')).not.toContain('root_identity')
+    expect(workspace.archiveUrl(workspace.directoryPath)).toBe('')
     await expect(workspace.createDirectory('.', 'blocked')).rejects.toThrow('Historical workspace snapshots are read-only')
     workspace.returnToCurrentContext()
     expect(workspace.rootIdentity).toBe('project-a')

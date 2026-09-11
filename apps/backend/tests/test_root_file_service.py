@@ -560,14 +560,21 @@ def test_run_publication_recovers_each_durable_boundary(tmp_path: Path, monkeypa
     working.upsert_text_file(FileRoot.SESSION, "file.txt", "final")
     draft = working.working_revision("file.txt")
     replace = published._replace_private_file
+    copy = published._copy_private_file
 
     def replace_file(path, content):
         replace(path, content)
         state = json.loads(content)["run"]["state"] if path.name == "index.json" else None
-        if (failure == "intent" and state == "publishing") or (failure == "index" and state == "final") or (failure == "blob" and path.name.isdigit()):
+        if (failure == "intent" and state == "publishing") or (failure == "index" and state == "final"):
+            raise RuntimeError("interrupted")
+
+    def copy_file(source, path, expected_size, expected_sha256):
+        copy(source, path, expected_size, expected_sha256)
+        if failure == "blob":
             raise RuntimeError("interrupted")
 
     monkeypatch.setattr(published, "_replace_private_file", replace_file)
+    monkeypatch.setattr(published, "_copy_private_file", copy_file)
     with pytest.raises(RuntimeError, match="interrupted"):
         published.finalize_run(run_id)
     restarted = RootFileService(published.session_id, session_storage=published.session_storage)

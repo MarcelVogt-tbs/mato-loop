@@ -44,6 +44,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             path.write_text(json.dumps({"homeDirectory": os.fspath(base)}))
             config = AgentConfig.load(path)
             self.assertEqual(config.data_dir, base)
+            self.assertEqual(config.max_transfer_bytes, 1024 * 1024 * 1024)
 
             path.write_text(
                 json.dumps(

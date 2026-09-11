@@ -98,6 +98,7 @@ from mato_loop_backend.attachments import (
 )
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.execution import (
+    EXPORT_TIMEOUT_SECONDS,
     MAX_TRANSFER_BYTES,
     ExecutionAgentError,
     ExecutionClient,
@@ -107,6 +108,12 @@ from mato_loop_backend.execution import (
     stage_file,
     stream_ticket,
     transfer_tickets,
+)
+from mato_loop_backend.file_archives import (
+    ArchiveEntry,
+    ArchivePage,
+    FileArchiveError,
+    create_zip_archive,
 )
 from mato_loop_backend.integrations.openscad import (
     OpenScadConfig,
@@ -356,13 +363,14 @@ async def _agent_export(
     try:
         result = await _agent_request(
             context,
-        "filesystem.export",
+            "filesystem.export",
             {
                 "path": normalized,
                 "transfer": _transfer_spec(
                     request, context.agent_id, grant.ticket_id, grant.token
                 ),
             },
+            timeout=EXPORT_TIMEOUT_SECONDS,
         )
         result_size = result.get("size")
         result_sha256 = result.get("sha256")
@@ -1288,6 +1296,7 @@ async def download_file(
     current_directory: str | None = None,
     root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
     execution_agent_id: UUID | None = None,
+    archive: Literal["zip"] | None = None,
 ) -> StreamingResponse:
     context = await _file_context(
         scope,
@@ -1299,18 +1308,121 @@ async def download_file(
         execution_agent_id=execution_agent_id,
     )
     try:
-        if context.agent_id is not None:
+        if archive == "zip":
+            if context.agent_id is not None:
+                if request is None:
+                    raise ApiError(500, "internal.unexpected")
+                _require_agent_operations(
+                    context, "filesystem.stat", "filesystem.list", "filesystem.export"
+                )
+
+                async def stat_source(source: str) -> ArchiveEntry:
+                    item = await _agent_stat(context, source)
+                    return ArchiveEntry(
+                        item["path"], item["name"], item["kind"], item["size"]
+                    )
+
+                async def list_source(source: str, offset: int) -> ArchivePage:
+                    result = await _agent_request(
+                        context,
+                        "filesystem.list",
+                        {"path": source, "offset": offset, "limit": 1_000},
+                    )
+                    values = result.get("entries")
+                    if not isinstance(values, list):
+                        raise ApiError(502, "executionAgent.protocolError")
+                    entries = tuple(
+                        ArchiveEntry(
+                            item["path"], item["name"], item["kind"], item["size"]
+                        )
+                        for value in values
+                        for item in (_agent_entry(value),)
+                    )
+                    has_more = result.get("hasMore")
+                    next_offset = result.get("nextOffset")
+                    if not isinstance(has_more, bool) or (
+                        next_offset is not None
+                        and (isinstance(next_offset, bool) or not isinstance(next_offset, int))
+                    ):
+                        raise ApiError(502, "executionAgent.protocolError")
+                    return ArchivePage(entries, has_more, next_offset)
+
+                async def open_source(source: str, limit: int) -> BinaryIO:
+                    handle, _, _ = await _agent_export(
+                        context, source, request, max_bytes=limit
+                    )
+                    return handle
+            else:
+                assert context.root_files is not None and context.root is not None
+
+                async def stat_source(source: str) -> ArchiveEntry:
+                    kind = await asyncio.to_thread(
+                        context.root_files.path_kind, context.root, source
+                    )
+                    size = None
+                    if kind == "file":
+                        resolved = await asyncio.to_thread(
+                            context.root_files.resolve, context.root, source
+                        )
+                        size = resolved.stat(follow_symlinks=False).st_size
+                    return ArchiveEntry(source, PurePosixPath(source).name, kind, size)
+
+                async def list_source(source: str, offset: int) -> ArchivePage:
+                    page = await asyncio.to_thread(
+                        context.root_files.list_directory,
+                        context.root,
+                        source,
+                        offset=offset,
+                        limit=1_000,
+                    )
+                    return ArchivePage(
+                        tuple(
+                            ArchiveEntry(item.path, item.name, item.kind, item.size)
+                            for item in page.entries
+                        ),
+                        page.has_more,
+                        page.next_offset,
+                    )
+
+                async def open_source(source: str, _limit: int) -> BinaryIO:
+                    return await asyncio.to_thread(
+                        context.root_files.open_file, context.root, source
+                    )
+
+            archived = await create_zip_archive(
+                [
+                    _normalize_agent_path(path)
+                    if context.agent_id is not None
+                    else context.root_files.normalize_relative_path(path)
+                ],
+                stat_path=stat_source,
+                list_directory=list_source,
+                open_file=open_source,
+            )
+            handle, size, filename, media_type = (
+                archived.content,
+                archived.size,
+                archived.filename,
+                "application/zip",
+            )
+        elif context.agent_id is not None:
             if request is None:
                 raise ApiError(500, "internal.unexpected")
             handle, size, _ = await _agent_export(
                 context, path, request, max_bytes=MAX_TRANSFER_BYTES
             )
+            filename = PurePosixPath(path).name or "download"
+            media_type = "application/octet-stream"
         else:
             handle = await asyncio.to_thread(_open_context, context, path)
             size = None
+            filename = PurePosixPath(path).name or "download"
+            media_type = "application/octet-stream"
+    except FileArchiveError as exc:
+        status_code = 413 if exc.code == "file.operationTooLarge" else 400
+        raise ApiError(status_code, exc.code, field=exc.field) from exc
     except RootFileError as exc:
         raise _context_error(exc) from exc
-    filename = PurePosixPath(path).name or "download"
     headers = {
         **_FILE_RESPONSE_HEADERS,
         "Content-Disposition": (
@@ -1322,7 +1434,7 @@ async def download_file(
         headers["Content-Length"] = str(size)
     return StreamingResponse(
         _stream_file(handle),
-        media_type="application/octet-stream",
+        media_type=media_type,
         headers=headers,
     )
 

@@ -131,6 +131,18 @@
           <q-menu anchor="bottom right" self="top right" class="app-action-menu">
             <q-list padding>
               <q-item
+                v-if="directoryArchiveUrl"
+                tag="a"
+                :href="directoryArchiveUrl"
+                download
+                clickable
+                v-ripple
+                v-close-popup
+              >
+                <q-item-section avatar><q-icon name="folder_zip" /></q-item-section>
+                <q-item-section>Ordner als ZIP herunterladen</q-item-section>
+              </q-item>
+              <q-item
                 v-if="!workspace.toolContext && workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('filesystem.list')"
                 clickable
                 v-ripple
@@ -378,8 +390,9 @@ const selectedIsDirectory = computed(() => workspace.selectedKind === 'directory
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
 ))
+const directoryArchiveUrl = computed(() => workspace.archiveUrl(workspace.directoryPath))
 const hasOverflowActions = computed(() => Boolean(
-  workspace.scope === 'filesystem' && explorerAvailable.value
+  directoryArchiveUrl.value || (workspace.scope === 'filesystem' && explorerAvailable.value)
 ))
 const targetDirectory = computed(() => {
   if (selectedIsDirectory.value) return workspace.selectedPath

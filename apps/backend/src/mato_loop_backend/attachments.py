@@ -54,7 +54,7 @@ ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES = 256 * 1024 * 1024
 MAX_IMAGE_ATTACHMENT_BYTES = MAX_FILE_ATTACHMENT_BYTES
 MAX_AUDIO_ATTACHMENT_BYTES = MAX_FILE_ATTACHMENT_BYTES
 MAX_ATTACHMENTS_PER_MESSAGE = 8
-SESSION_ATTACHMENT_QUOTA_BYTES = 500 * 1024 * 1024
+SESSION_ATTACHMENT_QUOTA_BYTES = 5 * 1024 * 1024 * 1024
 
 _FORMAT_MIME_TYPES = {
     "PNG": "image/png",
@@ -577,6 +577,7 @@ class AttachmentService:
         filename: str,
         position: int,
         category: str,
+        mime_type: str = "application/octet-stream",
         metadata: dict | None = None,
     ) -> MessageAttachment | SimpleNamespace:
         if file_revision is None and self.run_id is None:
@@ -616,7 +617,7 @@ class AttachmentService:
             category=category,
             purpose="artifact",
             processing_status="ready",
-            mime_type="application/octet-stream",
+            mime_type=mime_type,
             size_bytes=revision.size_bytes,
             sha256=revision.sha256,
             file_root_id=file_root_id,

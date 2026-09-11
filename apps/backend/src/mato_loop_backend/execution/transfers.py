@@ -11,8 +11,10 @@ from tempfile import SpooledTemporaryFile
 from typing import BinaryIO
 from uuid import UUID, uuid4
 
-MAX_TRANSFER_BYTES = 256 * 1024 * 1024
+MAX_TRANSFER_BYTES = 1024 * 1024 * 1024
+EXPORT_TIMEOUT_SECONDS = 600
 TRANSFER_TTL_SECONDS = 60
+MAX_TRANSFER_TTL_SECONDS = 15 * 60
 _SPOOL_BYTES = 1024 * 1024
 
 
@@ -96,15 +98,20 @@ class TransferTicketStore:
         size: int,
         sha256: str | None,
         content: BinaryIO | None = None,
+        ttl_seconds: float | None = None,
     ) -> tuple[TransferGrant, TransferTicket]:
         self._validate_expectations(size, sha256)
+        if ttl_seconds is not None and not 0 < ttl_seconds <= MAX_TRANSFER_TTL_SECONDS:
+            raise TransferError("transfer.invalidTicket")
         token = secrets.token_urlsafe(48)
         ticket = TransferTicket(
             id=uuid4(),
             owner_id=owner_id,
             direction=direction,
             token_hash=self._token_hash(token),
-            expires_at=time.monotonic() + self.ttl_seconds,
+            expires_at=time.monotonic() + (
+                self.ttl_seconds if ttl_seconds is None else ttl_seconds
+            ),
             expected_size=size,
             expected_sha256=sha256,
             content=content,
@@ -122,9 +129,16 @@ class TransferTicketStore:
         )
 
     def create_upload(
-        self, owner_id: UUID, *, size: int, sha256: str | None = None
+        self,
+        owner_id: UUID,
+        *,
+        size: int,
+        sha256: str | None = None,
+        ttl_seconds: float | None = None,
     ) -> tuple[TransferGrant, TransferTicket]:
-        return self._create(owner_id, "upload", size=size, sha256=sha256)
+        return self._create(
+            owner_id, "upload", size=size, sha256=sha256, ttl_seconds=ttl_seconds
+        )
 
     def claim(
         self,

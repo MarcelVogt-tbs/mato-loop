@@ -1895,9 +1895,8 @@ def test_system_prompt_describes_managed_file_roots() -> None:
     assert "root=files is managed" in prompt
     assert "revisioned" not in prompt
     assert "No computer directory selected. Use root=files." in prompt
-    assert "paths and reads are not downloads" in prompt
-    assert "provide_file supplies another file or a ZIP of a folder or file list" in prompt
-    assert "Use its card" in prompt
+    assert "Call provide_file only for an explicit download or ZIP request" in prompt
+    assert "Pass source paths directly; do not create an archive first" in prompt
 
 
 def test_system_prompt_enforces_managed_writing_contract() -> None:

@@ -367,6 +367,52 @@ async def test_confidential_workspace_paths_always_require_one_time_approval(
     ) == PermissionDecision.ASK
 
 
+@pytest.mark.parametrize("trust_level", list(TrustLevel))
+async def test_file_provide_is_separate_auto_capability_for_confidential_workspace(
+    tmp_path, trust_level
+) -> None:
+    session = _session(user_id=uuid4(), current_directory="/home/user/project")
+    root_files = _root_files(tmp_path, session)
+    agent = ExecutionAgent(
+        id=uuid4(), user_id=session.user_id, alias="Desktop",
+        home_directory="/home/user", home_filesystem_policy="auto",
+        external_filesystem_policy="deny",
+    )
+    db = _db_with_grants()
+    db.scalar.return_value = agent
+    request = execution_directory_permission(
+        agent.id, "/home/user/project/.env", capability="file.provide"
+    )
+
+    assert request.available_decisions == ("allow_once", "allow_session", "deny")
+    assert await PermissionPolicy.evaluate(
+        db, session, request, root_files, ToolExecutionPolicy.AUTO,
+        trust_level=trust_level,
+    ) == PermissionDecision.ALLOW
+    agent.home_filesystem_policy = "deny"
+    assert await PermissionPolicy.evaluate(
+        db, session, request, root_files, ToolExecutionPolicy.AUTO,
+        trust_level=trust_level,
+    ) == PermissionDecision.DENY
+
+
+def test_file_provide_defaults_and_saved_overrides_ignore_read_policy() -> None:
+    settings = ToolSettings(trust_level=TrustLevel.PUBLIC)
+    settings.permissions.policies["filesystem.read"] = ToolExecutionPolicy.DISABLED
+
+    assert resolve_tool_execution_policy(
+        settings, "file.provide", ToolExecutionPolicy.AUTO
+    ).policy == ToolExecutionPolicy.AUTO
+    settings.permissions.policies["file.provide"] = ToolExecutionPolicy.ASK
+    assert resolve_tool_execution_policy(
+        settings, "file.provide", ToolExecutionPolicy.AUTO
+    ).policy == ToolExecutionPolicy.ASK
+    settings.permissions.policies["file.provide"] = ToolExecutionPolicy.DISABLED
+    assert resolve_tool_execution_policy(
+        settings, "file.provide", ToolExecutionPolicy.AUTO
+    ).policy == ToolExecutionPolicy.DISABLED
+
+
 async def test_automation_scopes_are_canonical_current_session_and_revision_exact(
     tmp_path,
 ) -> None:

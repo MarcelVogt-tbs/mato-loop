@@ -831,7 +831,7 @@ class InstanceLimits(SettingsDocument):
     max_upload_mib: int = Field(default=64, ge=1, le=256)
     max_attachments_per_message: int = Field(default=8, ge=1, le=16)
     max_message_upload_mib: int = Field(default=512, ge=1, le=512)
-    session_quota_mib: int = Field(default=500, ge=1, le=102_400)
+    session_quota_mib: int = Field(default=5_120, ge=1, le=102_400)
     max_image_preview_mib: int = Field(default=5, ge=1, le=64)
     max_editable_text_mib: int = Field(default=10, ge=1, le=16)
     max_audio_duration_seconds: int = Field(default=3_600, ge=1, le=3_600)
