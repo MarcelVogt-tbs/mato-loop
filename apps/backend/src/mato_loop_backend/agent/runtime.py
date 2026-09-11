@@ -607,6 +607,19 @@ def _tool_call_signature(call: ToolCall) -> str:
     return f"{call.name}:{arguments}"
 
 
+def _retryable_transient_read(
+    call: ToolCall,
+    signature: str,
+    failures: dict[str, str],
+    retried: set[str],
+) -> bool:
+    return (
+        call.name == "browser_snapshot"
+        and failures.get(signature) == "browser.observationUnstable"
+        and signature not in retried
+    )
+
+
 def _snapshot_tool_call_limit(message: Message, run_id: UUID, limit: int | None) -> None:
     metadata = (message.provider_data or {}).get("_matoloop", {})
     message.provider_data = {
@@ -1650,7 +1663,8 @@ class AgentRuntime:
         research_tool_calls_used = 0
         successful_research_calls: dict[str, dict[str, Any]] = {}
         tool_calls_used = 0
-        failed_tool_call_signatures: set[str] = set()
+        failed_tool_call_signatures: dict[str, str] = {}
+        retried_transient_reads: set[str] = set()
         repeated_tool_call_repair_available = True
         budget_finalization = False
         truncated_tool_batches = 0
@@ -2954,7 +2968,12 @@ class AgentRuntime:
                         "alreadyCompleted": True,
                         "sources": previous_metadata.get("sources", []),
                     }
-                elif call_signature in failed_tool_call_signatures:
+                elif call_signature in failed_tool_call_signatures and not _retryable_transient_read(
+                    call,
+                    call_signature,
+                    failed_tool_call_signatures,
+                    retried_transient_reads,
+                ):
                     if repeated_tool_call_repair_available:
                         repeated_tool_call_repair_available = False
                     else:
@@ -2976,6 +2995,8 @@ class AgentRuntime:
                     )
                     metadata = {"errorCode": "tool.unavailable"}
                 else:
+                    if call_signature in failed_tool_call_signatures:
+                        retried_transient_reads.add(call_signature)
                     approval_resolution: dict[str, str] = {}
                     ask = partial(
                         cls._authorize,
@@ -4117,15 +4138,18 @@ class AgentRuntime:
                     "question.exclusiveCallRequired",
                     "skill.loadMustBeExclusive",
                 }:
-                    failed_tool_call_signatures.discard(call_signature)
+                    failed_tool_call_signatures.pop(call_signature, None)
+                    retried_transient_reads.discard(call_signature)
                 elif isinstance(error_code, str):
-                    failed_tool_call_signatures.add(call_signature)
+                    failed_tool_call_signatures[call_signature] = error_code
                 else:
                     if bound_tool is not None and any(action.mutates for action in bound_tool.definition.actions):
                         # A successful mutation changes preconditions, not the recorded outcome of earlier calls.
                         failed_tool_call_signatures.clear()
+                        retried_transient_reads.clear()
                     else:
-                        failed_tool_call_signatures.discard(call_signature)
+                        failed_tool_call_signatures.pop(call_signature, None)
+                        retried_transient_reads.discard(call_signature)
                     if call.name in _RESEARCH_TOOL_NAMES:
                         research_used = True
                         _add_research_sources(

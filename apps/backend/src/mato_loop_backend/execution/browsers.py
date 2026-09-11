@@ -493,7 +493,9 @@ class BrowserCoordinator:
         except ValidationError as exc:
             raise ExecutionClientError("executionAgent.protocolError") from exc
         digest = hashlib.sha256(f"{result.url}\n{inspection.snapshot_sha256}".encode()).hexdigest()
-        return digest, result.model_copy(update={"data": {"snapshotSha256": digest}})
+        return digest, result.model_copy(update={
+            "data": {**result.data, "snapshotSha256": digest},
+        })
 
     async def resize(self, connection: BrowserConnection, width: int, height: int) -> BrowserResizeResult:
         dimensions = BrowserResizeResult(width=width, height=height)
@@ -625,7 +627,9 @@ class BrowserCoordinator:
                             digest = hashlib.sha256(
                                 f"{result.url}\n{observation.snapshot_sha256}".encode()
                             ).hexdigest()
-                            result = result.model_copy(update={"data": {"snapshotSha256": digest}})
+                            result = result.model_copy(update={
+                                "data": {**result.data, "snapshotSha256": digest},
+                            })
                     finally:
                         connection.busy = False
                         with suppress(Exception):

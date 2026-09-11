@@ -40,6 +40,11 @@ BrowserScriptFailureReason = Literal[
     "runtimeError",
     "invalidResult",
 ]
+BrowserScriptFailureDetail = Literal[
+    "resultTooLarge",
+    "resultTooDeep",
+    "resultTypeUnsupported",
+]
 
 
 def decode_chunk(value: str) -> bytes:
@@ -392,6 +397,7 @@ class BrowserScriptResult(StrictModel):
     output_truncated: bool = Field(default=False, alias="outputTruncated")
     error_code: BrowserErrorCode | None = Field(default=None, alias="errorCode")
     failure_reason: BrowserScriptFailureReason | None = Field(default=None, alias="failureReason")
+    failure_detail: BrowserScriptFailureDetail | None = Field(default=None, alias="failureDetail")
     line: int | None = Field(default=None, ge=1, le=32_768)
 
     @model_validator(mode="after")
@@ -400,6 +406,8 @@ class BrowserScriptResult(StrictModel):
             raise ValueError("Script failure reason requires an error outcome")
         if self.line is not None and self.failure_reason is None:
             raise ValueError("Script line requires a failure reason")
+        if self.failure_detail is not None and self.failure_reason != "invalidResult":
+            raise ValueError("Script failure detail requires an invalid result")
         return self
 
     @field_validator("value", mode="before")
@@ -410,7 +418,9 @@ class BrowserScriptResult(StrictModel):
 
         def visit(item, depth):
             nonlocal remaining
-            if depth > 32 or remaining < 0:
+            if depth > 32:
+                raise ValueError("Script result exceeds depth limit")
+            if remaining < 0:
                 raise ValueError("Script result exceeds JSON limits")
             kind = type(item)
             if kind in (list, dict):

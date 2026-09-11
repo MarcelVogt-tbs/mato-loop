@@ -108,8 +108,9 @@ assets are not mounted; its isolated non-root browser subprocess executes the he
 
 ## Limitations
 
-- Settling cannot predict a timer that changes the page after the quiet window. Long polling
-  or continuously changing pages can return an explicit unstable-observation result.
+- Settling cannot predict a timer that changes the page after the quiet window. Normal reads on
+  long-polling or continuously changing pages can return `settled=false`; approval guards remain
+  strict and can return an explicit unstable-observation result.
 - Custom comboboxes are not native selects and still require observed click/keyboard targets.
 - Whole-page guards are reserved for actual approval waits. Native form batches still use
   per-target checks between their own edits and are not transactional. Free Python workflows

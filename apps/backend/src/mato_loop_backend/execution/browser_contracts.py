@@ -24,6 +24,9 @@ BrowserErrorCode = Literal[
 BrowserScriptFailureReason = Literal[
     "scriptTimeout", "playwrightTimeout", "targetUnavailable", "runtimeError", "invalidResult",
 ]
+BrowserScriptFailureDetail = Literal[
+    "resultTooLarge", "resultTooDeep", "resultTypeUnsupported",
+]
 BrowserAction = Literal[
     "tabs", "newtab", "closetab", "navigate", "inspect", "screenshot", "click",
     "fill", "fill_form", "press", "scroll", "diagnostics", "upload", "select", "evaluate", "run_code",
@@ -49,6 +52,7 @@ class BrowserInspectionData(BrowserResult):
     model_config = ConfigDict(populate_by_name=False, validate_by_name=False)
 
     snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$", min_length=64, max_length=64)
+    settled: bool = True
 
 
 class BrowserStatusResult(BrowserResult):
@@ -307,6 +311,7 @@ class BrowserScriptResult(BrowserResult):
     output_truncated: bool = False
     error_code: BrowserErrorCode | None = None
     failure_reason: BrowserScriptFailureReason | None = None
+    failure_detail: BrowserScriptFailureDetail | None = None
     line: int | None = Field(default=None, ge=1, le=32768)
 
     @model_validator(mode="after")
@@ -317,6 +322,8 @@ class BrowserScriptResult(BrowserResult):
             raise ValueError("browser script failure reason requires an error outcome")
         if self.line is not None and self.failure_reason is None:
             raise ValueError("browser script line requires a failure reason")
+        if self.failure_detail is not None and self.failure_reason != "invalidResult":
+            raise ValueError("browser script failure detail requires an invalid result")
         return self
 
 

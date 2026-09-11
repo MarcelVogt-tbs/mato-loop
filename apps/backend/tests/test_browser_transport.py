@@ -667,6 +667,8 @@ def test_fill_form_permission_wire_and_partial_prefix(browser_tool, observe, err
             if observe and observation_failed:
                 result.pop("text")
                 result["data"] = {"observationFailed": True}
+            elif observe:
+                result["data"]["settled"] = False
         return result
 
     case.env.reply = result_reply
@@ -682,6 +684,7 @@ def test_fill_form_permission_wire_and_partial_prefix(browser_tool, observe, err
     if observe:
         assert payload["data"] == ({"observationFailed": True} if observation_failed else {
             "snapshotSha256": hashlib.sha256(f"https://page.test/\n{'b' * 64}".encode()).hexdigest(),
+            "settled": False,
         })
     else:
         assert "data" not in payload and "text" not in payload
@@ -1853,6 +1856,7 @@ def test_takeover_requires_explicit_offer_and_preserves_machine_but_never_old_vi
                 assert control_a.receive_json() == {"type": "replaced"}
                 assert control_a.receive()["code"] == 4001
                 assert [args["manual"] for op, args in env.calls[len(before):] if op == "integration.browser.control"] == [False, True]
+                assert [args["rotateView"] for op, args in env.calls[len(before):] if op == "integration.browser.control"] == [True, False]
                 env.client.portal.call(env.coordinator.close, old)
                 env.client.portal.call(env.coordinator.release, old, old.websocket)
                 assert env.coordinator.connections[env.agent.id] is current and not current.closed

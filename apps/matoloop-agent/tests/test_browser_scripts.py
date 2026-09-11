@@ -81,6 +81,11 @@ class BrowserScriptTests(unittest.IsolatedAsyncioTestCase):
             {"failureReason": "runtimeError"},
             {"line": 1},
             {"errorCode": "browser.outcomeUnknown", "failureReason": "rawException"},
+            {
+                "errorCode": "browser.outcomeUnknown",
+                "failureReason": "runtimeError",
+                "failureDetail": "resultTooLarge",
+            },
         ):
             with self.assertRaises(ValidationError):
                 BrowserScriptResult(**invalid)
@@ -126,6 +131,7 @@ async def run(page):
             "raise TimeoutError('not a deadline')",
             "return float('nan')",
             "return 'x' * 32769",
+            "return " + "[" * 34 + "None" + "]" * 34,
             "raise SystemExit('not exposed')",
             "raise __import__('asyncio').CancelledError()",
             "return type('NotJSON', (), {'__repr__': lambda self: print('REPR')})()",
@@ -145,6 +151,15 @@ async def run(page):
                     errorCode="browser.outcomeUnknown",
                     failureReason=(
                         "invalidResult" if ending.startswith("return") else "runtimeError"
+                    ),
+                    failureDetail=(
+                        "resultTooDeep"
+                        if "[[[" in ending
+                        else "resultTooLarge"
+                        if "32769" in ending
+                        else "resultTypeUnsupported"
+                        if ending.startswith("return")
+                        else None
                     ),
                     line=None if ending.startswith("return") else 4,
                 ),
@@ -305,6 +320,7 @@ async def run(page):
                     "() => { steps++; return {bad: () => 1}; }",
                     "() => { steps++; return 'x'.repeat(32769); }",
                     "() => { steps++; return new Array(40000); }",
+                    "() => { steps++; return " + "[" * 34 + "null" + "]" * 34 + "; }",
                 ):
                     before = await page.evaluate("steps")
                     result = await execute("evaluate", function=function)
@@ -312,6 +328,15 @@ async def run(page):
                     self.assertIn(
                         result["script"]["failureReason"], {"runtimeError", "invalidResult"}
                     )
+                    if result["script"]["failureReason"] == "invalidResult":
+                        self.assertEqual(
+                            result["script"]["failureDetail"],
+                            "resultTooDeep"
+                            if "[[[" in function
+                            else "resultTooLarge"
+                            if "32769" in function or "40000" in function
+                            else "resultTypeUnsupported",
+                        )
                     self.assertEqual(await page.evaluate("steps"), before + 1)
                 for ending in ("return object()", "raise RuntimeError('not exposed')"):
                     result = await execute(
@@ -327,6 +352,13 @@ async def run(page):
                         result["script"]["failureReason"],
                         "invalidResult" if ending.startswith("return") else "runtimeError",
                     )
+                    if ending.startswith("return"):
+                        self.assertEqual(
+                            result["script"]["failureDetail"],
+                            "resultTypeUnsupported"
+                            if ending == "return object()"
+                            else "resultTooLarge",
+                        )
                     self.assertEqual(
                         result["script"]["line"], None if ending.startswith("return") else 4
                     )

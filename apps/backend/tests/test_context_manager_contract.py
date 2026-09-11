@@ -885,7 +885,7 @@ def test_browser_inspection_projection_is_lossless_and_append_stable() -> None:
     payload = {
         "tabs": [{"id": tab_id, "url": inspection["url"], "title": "Form"}],
         "tabId": tab_id, "url": inspection["url"], "text": json.dumps(inspection),
-        "downloads": [], "data": {"snapshotSha256": "a" * 64},
+        "downloads": [], "data": {"snapshotSha256": "a" * 64, "settled": False},
     }
     original = json.dumps(payload)
     records = [_message(session.id, "user", "Previous request")]
@@ -1039,7 +1039,7 @@ def test_browser_effect_outcomes_survive_context_shortening(kind, error):
         value["script"] = {
             "value": {"details": "v" * 10000}, "output": "o" * 20000,
             "errorCode": error,
-            **({"failureReason": "runtimeError", "line": 7} if error else {}),
+            **({"failureReason": "invalidResult", "failureDetail": "resultTooLarge"} if error else {}),
         }
     elif kind == "batch":
         value["batch"] = {"completed": 1 if error else 3, "total": 3, "errorCode": error}
@@ -1057,8 +1057,9 @@ def test_browser_effect_outcomes_survive_context_shortening(kind, error):
     elif kind == "script":
         assert payload["script"]["outputTruncated"] is True
         assert payload["scriptValueOmitted"] is True
-        assert payload["script"].get("failureReason") == ("runtimeError" if error else None)
-        assert payload["script"].get("line") == (7 if error else None)
+        assert payload["script"].get("failureReason") == ("invalidResult" if error else None)
+        assert payload["script"].get("failureDetail") == ("resultTooLarge" if error else None)
+        assert payload["script"].get("line") is None
     else:
         assert payload["playwrightCode"]["completed"] == value["playwrightCode"]["completed"]
         assert payload["playwrightCode"].get("attempted") == value["playwrightCode"].get("attempted")

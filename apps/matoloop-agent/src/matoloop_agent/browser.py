@@ -190,9 +190,25 @@ class BrowserManager:
                 response = json.loads(raw)
             if op == "execute":
                 elapsed_ms = response.get("elapsedMs")
+                metrics = response.get("metrics")
                 # Optional private diagnostics must not affect the operation's outcome.
                 if not (type(elapsed_ms) in (int, float) and 0 <= elapsed_ms <= rpc_timeout * 1000):
                     elapsed_ms = None
+                if not (
+                    isinstance(metrics, dict)
+                    and set(metrics)
+                    <= {"settleMs", "settleOutcome", "snapshotMs", "snapshotCharacters"}
+                    and metrics.get("settleOutcome", "settled")
+                    in {"settled", "network", "loading", "pageActivity", "renderer"}
+                    and all(
+                        type(metrics[key]) in (int, float)
+                        and 0 <= metrics[key] <= rpc_timeout * 1000
+                        for key in {"settleMs", "snapshotMs"} & metrics.keys()
+                    )
+                    and type(metrics.get("snapshotCharacters", 0)) is int
+                    and 0 <= metrics.get("snapshotCharacters", 0) <= 10_000_000
+                ):
+                    metrics = {}
                 with contextlib.suppress(ValueError):
                     args = BrowserExecuteArguments.model_validate(values.get("args"))
                     browser_id = (
@@ -202,11 +218,13 @@ class BrowserManager:
                     )
                     logger.info(
                         "Browser execution latency: method=integration.browser.execute "
-                        "action=%s browser_id=%s pipe_roundtrip_ms=%.3f worker_elapsed_ms=%s",
+                        "action=%s browser_id=%s pipe_roundtrip_ms=%.3f worker_elapsed_ms=%s "
+                        "worker_phases=%s",
                         args.action,
                         browser_id,
                         roundtrip_ms,
                         elapsed_ms,
+                        metrics,
                     )
             if not response["ok"]:
                 code = BrowserStatus(state="error", errorCode=response["error"]).error_code

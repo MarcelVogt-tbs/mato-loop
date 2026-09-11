@@ -130,6 +130,7 @@ class BrowserWorker:
         self.native_chrome = False
         self.windows: set[int] = set()
         self.startup_stage = "storage"
+        self.execution_metrics = {}
 
     def task(self, coroutine) -> None:
         task = asyncio.create_task(coroutine)
@@ -1238,6 +1239,7 @@ class BrowserWorker:
         return {"fileId": file_id, "size": len(data)}
 
     async def execute(self, args: BrowserExecuteArguments) -> dict:
+        self.execution_metrics = {}
         if not self.context:
             raise fail("notConnected")
         if not args.allow_network:
@@ -1290,8 +1292,10 @@ class BrowserWorker:
                 page = self.tabs.get(self.active_tab_id)
             elif action == "inspect":
                 if args.settle:
-                    await self._settle(page)
+                    settle_outcome = await self._settle(page, strict=args.guard)
                 text, result_data = await self._inspect(page, guard=args.guard)
+                if args.settle and settle_outcome is not None:
+                    result_data["settled"] = False
             elif action == "screenshot":
                 screenshot = await self.screenshot(page, args.browser_id)
             elif action in {"click", "fill", "upload"}:
@@ -1388,8 +1392,10 @@ class BrowserWorker:
         if args.observe and action != "inspect" and page is not None:
             try:
                 async with asyncio.timeout_at(observation_deadline):
-                    await self._settle(page)
+                    settle_outcome = await self._settle(page, strict=False)
                     text, result_data = await self._inspect(page, guard=False)
+                    if settle_outcome is not None:
+                        result_data["settled"] = False
             except Exception:
                 # The mutation completed; a failed optional observation must not invite replay.
                 text, result_data = None, {"observationFailed": True}
@@ -1468,42 +1474,51 @@ class BrowserWorker:
                             "async element => { let value; try { value = await ("
                             + args.function
                             + """
-                            )(element); } catch { return [false, 'runtimeError', null]; }
+                            )(element); } catch { return [false, 'runtimeError', null, null]; }
                             try {
                                 let budget = 32768;
                                 const check = (v, depth = 0) => {
-                                    if (--budget < 0 || depth > 32) throw Error();
+                                    if (depth > 32) throw 'resultTooDeep';
+                                    if (--budget < 0) throw 'resultTooLarge';
                                     if (v === null || typeof v === 'boolean') return;
                                     if (typeof v === 'string') {
                                         budget -= v.length;
-                                        if (budget < 0) throw Error();
+                                        if (budget < 0) throw 'resultTooLarge';
                                         return;
                                     }
                                     if (typeof v === 'number' && Number.isFinite(v)) return;
                                     if (typeof v !== 'object' ||
                                         (!Array.isArray(v) &&
                                             Object.getPrototypeOf(v) !== Object.prototype &&
-                                            Object.getPrototypeOf(v) !== null)) throw Error();
-                                    if (Array.isArray(v) && v.length > budget) throw Error();
+                                            Object.getPrototypeOf(v) !== null))
+                                        throw 'resultTypeUnsupported';
+                                    if (Array.isArray(v) && v.length > budget)
+                                        throw 'resultTooLarge';
                                     for (const key of Reflect.ownKeys(v)) {
-                                        if (typeof key !== 'string') throw Error();
+                                        if (typeof key !== 'string') throw 'resultTypeUnsupported';
                                         budget -= key.length;
                                         check(v[key], depth + 1);
                                     }
                                 };
                                 check(value);
                                 const json = JSON.stringify(value);
-                                if (new TextEncoder().encode(json).length > 32768) throw Error();
-                                return [true, null, JSON.parse(json)];
-                            } catch { return [false, 'invalidResult', null]; }
+                                if (new TextEncoder().encode(json).length > 32768)
+                                    throw 'resultTooLarge';
+                                return [true, null, null, JSON.parse(json)];
+                            } catch (detail) {
+                                return [false, 'invalidResult',
+                                    ['resultTooLarge','resultTooDeep','resultTypeUnsupported']
+                                        .includes(detail) ? detail : 'resultTypeUnsupported', null];
+                            }
                         }"""
                         )
                         if evaluated[0] is not True:
                             result = BrowserScriptResult(
                                 errorCode="browser.outcomeUnknown",
                                 failureReason=evaluated[1],
+                                failureDetail=evaluated[2],
                             )
-                        value = evaluated[2]
+                        value = evaluated[3]
                     if script_deadline.expired():
                         raise TimeoutError
                     if result.error_code is None:
@@ -1512,6 +1527,7 @@ class BrowserWorker:
             if asyncio.current_task().cancelling():
                 # External RPC cancellation must still tear down the worker, not drain/retry it.
                 raise
+            detail = None
             if isinstance(exc, PlaywrightTimeoutError):
                 reason = "playwrightTimeout"
             elif (
@@ -1522,6 +1538,14 @@ class BrowserWorker:
                 reason = "scriptTimeout"
             elif isinstance(exc, ValidationError):
                 reason = "invalidResult"
+                messages = " ".join(error["msg"] for error in exc.errors())
+                detail = (
+                    "resultTooDeep"
+                    if "depth" in messages
+                    else "resultTypeUnsupported"
+                    if "finite JSON" in messages or "string keys" in messages
+                    else "resultTooLarge"
+                )
             elif isinstance(exc, PlaywrightError):
                 reason = "targetUnavailable"
             else:
@@ -1533,15 +1557,19 @@ class BrowserWorker:
                     line = traceback.tb_lineno
                 traceback = traceback.tb_next
             result = BrowserScriptResult(
-                errorCode="browser.outcomeUnknown", failureReason=reason, line=line
+                errorCode="browser.outcomeUnknown",
+                failureReason=reason,
+                failureDetail=detail,
+                line=line,
             )
         result.output, result.output_truncated = output.text, output.truncated
         return result
 
-    async def _settle(self, page) -> None:
+    async def _settle(self, page, *, strict: bool = True) -> str | None:
         # Observe in an isolated world: page scripts cannot replace the native APIs.
         # Each observer self-destructs even if the pipe, task, or document disappears.
-        deadline = monotonic() + 1.8
+        started = monotonic()
+        deadline = started + 1.8
         session = None
         group = "matoloop-settle-" + uuid4().hex
         observers = []
@@ -1610,7 +1638,11 @@ class BrowserWorker:
                         and not self.pending_requests.get(page)
                         and not self.loading_frames.get(page)
                     ):
-                        return
+                        self.execution_metrics.update(
+                            settleMs=round((monotonic() - started) * 1000, 3),
+                            settleOutcome="settled",
+                        )
+                        return None
                     await asyncio.sleep(0.025)
         except (TimeoutError, PlaywrightError, KeyError):
             pass
@@ -1631,7 +1663,22 @@ class BrowserWorker:
                 with contextlib.suppress(Exception):
                     async with asyncio.timeout(0.1):
                         await session.send("Runtime.releaseObjectGroup", {"objectGroup": group})
-        raise fail("observationUnstable")
+        outcome = (
+            "network"
+            if self.pending_requests.get(page)
+            else "loading"
+            if self.loading_frames.get(page)
+            else "pageActivity"
+            if observers
+            else "renderer"
+        )
+        self.execution_metrics.update(
+            settleMs=round((monotonic() - started) * 1000, 3),
+            settleOutcome=outcome,
+        )
+        if strict:
+            raise fail("observationUnstable")
+        return outcome
 
     async def _fill_form(self, page, fields: list[BrowserFormField]) -> dict:
         handles, guards = [], []
@@ -1770,7 +1817,12 @@ class BrowserWorker:
         )
         if state.get("tooLarge"):
             raise fail("fileTooLarge")
+        started = monotonic()
         text = await page.aria_snapshot(mode="ai", timeout=8000)
+        self.execution_metrics.update(
+            snapshotMs=round((monotonic() - started) * 1000, 3),
+            snapshotCharacters=len(text) if isinstance(text, str) else 0,
+        )
         if not isinstance(text, str) or len(text) > 32_768:
             raise fail("fileTooLarge")
         if self.document_ids.get(page) != document_id:
@@ -1920,6 +1972,8 @@ async def serve(root: Path) -> None:
                 response["stage"] = worker.startup_stage
             if elapsed_ms is not None:
                 response["elapsedMs"] = elapsed_ms
+                if metrics := getattr(worker, "execution_metrics", {}):
+                    response["metrics"] = metrics
             payload = json.dumps(response, ensure_ascii=True)
             if len(payload) > 950_000:
                 payload = '{"ok":false,"error":"browser.fileTooLarge"}'

@@ -1371,6 +1371,7 @@ def _shorten_evidence_output(
                     outcome["script"] = {
                         "errorCode": browser.script.error_code,
                         "failureReason": browser.script.failure_reason,
+                        "failureDetail": browser.script.failure_detail,
                         "line": browser.script.line,
                         "outputTruncated": True,
                     }

@@ -515,7 +515,17 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         )
         for ok in (True, False):
             with self.subTest(ok=ok):
-                response = {"ok": ok, "elapsedMs": 12.5, "action": "private-worker-action"}
+                response = {
+                    "ok": ok,
+                    "elapsedMs": 12.5,
+                    "metrics": {
+                        "settleMs": 1800.0,
+                        "settleOutcome": "network",
+                        "snapshotMs": 102.0,
+                        "snapshotCharacters": 32000,
+                    },
+                    "action": "private-worker-action",
+                }
                 response.update({"result": result} if ok else {"error": "browser.actionFailed"})
                 self.manager.worker.stdout.readline.return_value = json.dumps(response).encode()
                 with (
@@ -535,7 +545,9 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                     logs.records[0].getMessage(),
                     "Browser execution latency: method=integration.browser.execute "
                     f"action=fill browser_id={self.browser_id} "
-                    "pipe_roundtrip_ms=250.000 worker_elapsed_ms=12.5",
+                    "pipe_roundtrip_ms=250.000 worker_elapsed_ms=12.5 "
+                    "worker_phases={'settleMs': 1800.0, 'settleOutcome': 'network', "
+                    "'snapshotMs': 102.0, 'snapshotCharacters': 32000}",
                 )
                 self.assertNotIn("private", "\n".join(logs.output))
                 self.assertNotIn(args.browser_id, "\n".join(logs.output))
@@ -581,6 +593,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(logs.records[0].args[:2], ("tabs", None))
                 self.assertGreaterEqual(logs.records[0].args[2], 0)
                 self.assertEqual(logs.records[0].args[3], expected)
+                self.assertEqual(logs.records[0].args[4], {})
                 self.assertNotIn("private", "\n".join(logs.output))
         for op, arguments in (
             ("private-method", args),

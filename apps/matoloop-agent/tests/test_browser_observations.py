@@ -107,8 +107,18 @@ class BrowserObservationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["batch"], {"completed": 1, "total": 1, "errorCode": None})
         self.assertEqual(result["data"], {"observationFailed": True})
         worker._inspect.assert_not_awaited()
+        worker._settle = AsyncMock(return_value="network")
+        worker._inspect.return_value = ("- button", {"snapshotSha256": "a" * 64})
+        result = await worker.execute(
+            BrowserExecuteArguments(**args, action="inspect", settle=True)
+        )
+        self.assertFalse(result["data"]["settled"])
+        worker._settle.assert_awaited_once_with(page, strict=False)
+        worker._settle = AsyncMock(side_effect=AgentError("browser.observationUnstable", "Test"))
         with self.assertRaises(AgentError) as error:
-            await worker.execute(BrowserExecuteArguments(**args, action="inspect", settle=True))
+            await worker.execute(
+                BrowserExecuteArguments(**args, action="inspect", settle=True, guard=True)
+            )
         self.assertEqual(error.exception.code, "browser.observationUnstable")
         worker._settle.reset_mock()
         worker._inspect.return_value = ("", {})
@@ -334,13 +344,23 @@ class BrowserHeadedObservations(unittest.IsolatedAsyncioTestCase):
             window.churn=setInterval(()=>document.body.dataset.tick=Date.now(), 40);
         }""")
         started = monotonic()
-        with self.assertRaises(AgentError) as error:
-            await self.execute("inspect", settle=True)
-        self.assertEqual(error.exception.code, "browser.observationUnstable")
+        result = await self.execute("inspect", settle=True)
+        self.assertFalse(result["data"]["settled"])
         self.assertLess(monotonic() - started, 2.3)
         result = await self.execute("fill", selector="input", text="known success", observe=True)
-        self.assertEqual(result["data"], {"observationFailed": True})
+        self.assertFalse(result["data"]["settled"])
         self.assertEqual(await self.page.locator("input").input_value(), "known success")
+        with self.assertRaises(AgentError) as error:
+            await self.worker.execute(
+                BrowserExecuteArguments(
+                    browserId=self.browser_id,
+                    tabId=self.tab_id,
+                    action="inspect",
+                    settle=True,
+                    guard=True,
+                )
+            )
+        self.assertEqual(error.exception.code, "browser.observationUnstable")
         await self.page.evaluate("clearInterval(churn)")
         self.assertIn("known success", (await self.execute("inspect", settle=True))["text"])
 

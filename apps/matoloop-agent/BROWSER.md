@@ -145,8 +145,11 @@ The shared contract is implemented with these explicit additions:
 - Host-only `settle=true` requests bounded settling before `inspect`; it defaults to false
   for immediate final guards. Post-write observations always settle. Isolated-world observers
   require 150 ms DOM/request quiet, document readiness and completed finite animations, within
-  1.8 seconds plus bounded cleanup. Infinite animations and WebSockets are ignored. Unsettled
-  inspection raises `browser.observationUnstable`, while post-write failure preserves the result.
+  1.8 seconds plus bounded cleanup. Infinite animations and WebSockets are ignored. Normal reads
+  and post-write observations continue with the current snapshot and `settled=false` when bounded
+  settling expires. Host approval guards remain strict and raise `browser.observationUnstable`.
+  Private worker metrics record the controlled settling outcome and settling/snapshot durations
+  and sizes without page text or exception data.
 - `fill_form` accepts `tabId` and 1-20 `fields` with `name`, bare `ref`, `type` and string
   `value`; refs must be unique and combined values at most 32,768 characters. Supported types
   are textbox, checkbox (`true`/`false`), radio (`true`) and native single-select combobox
@@ -161,8 +164,9 @@ The shared contract is implemented with these explicit additions:
   `tabId` and a JavaScript `function`, optionally with a selector. Source limits are 32,768
   characters. `script` returns finite JSON `value` (32,768 UTF-8 bytes, depth 32), bounded
   combined print output, `outputTruncated`, and optional controlled `errorCode`, `failureReason`,
-  and Python source `line`. Failure diagnostics never include exception text, paths, stack traces,
-  source excerpts, or local values. Python runs
+  `failureDetail`, and Python source `line`. Invalid results distinguish `resultTooLarge`,
+  `resultTooDeep`, and `resultTypeUnsupported`. Failure diagnostics never include exception text,
+  paths, stack traces, source excerpts, or local values. Python runs
   once in a fresh unrestricted namespace; syntax/function-shape checks are a contract, not
   a language sandbox. A 120-second cooperative deadline, 140-second manager deadline, and
   160-second backend deadline protect normal operation without preempting transport or cleanup;

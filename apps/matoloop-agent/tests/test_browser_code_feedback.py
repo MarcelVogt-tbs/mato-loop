@@ -353,7 +353,7 @@ class BrowserCodeFeedbackTests(unittest.IsolatedAsyncioTestCase):
             ("screenshot", {}),
         ):
             self.worker.screenshot = AsyncMock(return_value=None)
-            self.page.evaluate = AsyncMock(return_value=[True, None, 42])
+            self.page.evaluate = AsyncMock(return_value=[True, None, None, 42])
             result = await self.execute(action, **kwargs)
             self.assertIsNone(result["playwrightCode"])
         self.locator.is_editable.return_value = False

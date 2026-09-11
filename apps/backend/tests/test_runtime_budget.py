@@ -10,7 +10,12 @@ from test_required_web_search_runtime import (
 )
 
 import mato_loop_backend.agent.runtime as runtime_module
-from mato_loop_backend.agent.runtime import AgentRunError, AgentRuntime
+from mato_loop_backend.agent.runtime import (
+    AgentRunError,
+    AgentRuntime,
+    _retryable_transient_read,
+    _tool_call_signature,
+)
 from mato_loop_backend.agent.subagents import integration_ceiling_ids, permission_snapshot
 from mato_loop_backend.agent.tools import ToolResult, tool_registry
 from mato_loop_backend.models import Message, WebSearchPolicy
@@ -163,6 +168,18 @@ async def test_unrelated_success_does_not_reset_failed_call_protection(monkeypat
     assert len(requests) == 5
     assert tool_registry._execute_definition.await_count == 3
     assert _tool_messages(db)[-1].provider_data["_matoloop"]["errorCode"] == "agent.repeatedToolCall"
+
+
+def test_only_one_identical_snapshot_retry_is_allowed_after_unstable_observation():
+    snapshot = ToolCall("snapshot", "browser_snapshot", {"tabId": str(uuid4())})
+    signature = _tool_call_signature(snapshot)
+    failures = {signature: "browser.observationUnstable"}
+    assert _retryable_transient_read(snapshot, signature, failures, set())
+    assert not _retryable_transient_read(snapshot, signature, failures, {signature})
+    failures[signature] = "browser.actionFailed"
+    assert not _retryable_transient_read(snapshot, signature, failures, set())
+    mutation = ToolCall("click", "browser_click", snapshot.arguments)
+    assert not _retryable_transient_read(mutation, signature, failures, set())
 
 
 @pytest.mark.parametrize(("old_limit", "new_limit"), [(None, 25), (25, None)])

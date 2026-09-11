@@ -192,6 +192,8 @@ def test_public_script_source_limits_and_host_only_flags(model, source):
     {"error": "raw private exception"},
     {"failureReason": "runtimeError"}, {"line": 1},
     {"errorCode": "browser.outcomeUnknown", "failureReason": "rawException"},
+    {"errorCode": "browser.outcomeUnknown", "failureReason": "runtimeError",
+     "failureDetail": "resultTooLarge"},
 ])
 def test_script_results_reject_unbounded_or_uncontrolled_data(script):
     with pytest.raises(ValidationError):
