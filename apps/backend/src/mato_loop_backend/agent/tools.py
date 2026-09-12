@@ -4710,7 +4710,8 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "provide_file",
-            "On explicit download request, provide path (file/folder) or paths (files). Folders/lists become ZIPs.",
+            "On explicit file, image result, download, or ZIP request, provide path (file/folder) or paths "
+            "(files). Folders/lists become ZIPs.",
             ProvideFileArguments,
             _provide_file,
             tool_type="shared",

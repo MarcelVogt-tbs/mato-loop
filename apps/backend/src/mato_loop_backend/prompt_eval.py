@@ -5258,7 +5258,8 @@ _V2_TOOL_DESCRIPTIONS = {
         "root=files includes hidden; include overrides ignores. "
         "truncated=true: more/clipped text/size limit."
     ),
-    "provide_file": "On explicit download request, provide path (file/folder) or paths (files). Folders/lists become ZIPs.",
+    "provide_file": "On explicit file, image result, download, or ZIP request, provide path (file/folder) or paths "
+    "(files). Folders/lists become ZIPs.",
     "write_file": "Write complete UTF-8 content to one file, creating or replacing it.",
     "create_directory": "Create one directory; its parent must exist.",
     "delete_path": "Delete one path; non-empty directories require recursive=true.",

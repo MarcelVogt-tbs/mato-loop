@@ -1913,7 +1913,7 @@ def test_system_prompt_describes_managed_file_roots() -> None:
     assert "root=files is managed" in prompt
     assert "revisioned" not in prompt
     assert "No computer directory selected. Use root=files." in prompt
-    assert "Call provide_file only for an explicit download or ZIP request" in prompt
+    assert "user explicitly requests a file, image result, download, or ZIP" in prompt
     assert "Pass source paths directly; do not create an archive first" in prompt
 
 

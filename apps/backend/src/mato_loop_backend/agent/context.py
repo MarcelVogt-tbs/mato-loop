@@ -779,8 +779,8 @@ def general_system_prompt(
                 "Once a relevant URL is known, fetch it instead of re-searching that candidate. Fetch exact "
                 "pages for prices, availability, compatibility, variants, and specifications; never merge "
                 "model codes, and qualify or omit absent claims.",
-                "Never invent image URLs. Fetch the exact URL, prefer its attachment, and do not repeat the "
-                "remote URL. Request pdf_pages for PDF layouts.",
+                "Never invent image URLs. Fetch the exact URL, prefer its attachment as research input, and "
+                "do not repeat the remote URL. Request pdf_pages for PDF layouts.",
             ]
         )
     if {"webfetch", "shell_run"} <= offered_tool_names:
@@ -862,8 +862,8 @@ def general_system_prompt(
         )
     if "provide_file" in offered_tool_names:
         parts.append(
-            "Call provide_file only for an explicit download or ZIP request. Pass source paths "
-            "directly; do not create an archive first."
+            "Call provide_file only when the user explicitly requests a file, image result, download, or ZIP. "
+            "Pass source paths directly; do not create an archive first."
         )
     if "transcribe_audio" in offered_tool_names:
         parts.append(

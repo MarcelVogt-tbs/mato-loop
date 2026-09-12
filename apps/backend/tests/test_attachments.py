@@ -215,6 +215,33 @@ async def test_service_references_existing_revision_without_copy(tmp_path: Path)
     assert len(root_files.list_revisions("report.pdf")) == 1
 
 
+async def test_service_recognizes_referenced_image_without_copy(tmp_path: Path) -> None:
+    session_id = uuid4()
+    sessions = provisioned_storage(tmp_path, session_id)
+    root_files = RootFileService(session_id, session_storage=sessions)
+    data = image_bytes("WEBP")
+    revision = root_files.create_output_file("result.webp", data)
+    message = Message(id=uuid4(), session_id=session_id, role="tool", content="Image")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = chat_session(session_id)
+
+    attachment = await AttachmentService(sessions).create_reference(
+        db,
+        message,
+        file_root_id=session_id,
+        file_id=revision.file_id,
+        file_revision=revision.revision,
+        file_path=revision.path,
+        filename="result.webp",
+        position=0,
+        category="downloaded",
+    )
+
+    assert (attachment.kind, attachment.mime_type) == ("image", "image/webp")
+    assert (attachment.width, attachment.height) == (3, 2)
+    assert len(root_files.list_revisions(revision.path)) == 1
+
+
 async def test_image_read_revalidates_persisted_content(tmp_path: Path) -> None:
     session_id = uuid4()
     sessions = provisioned_storage(tmp_path, session_id)

@@ -609,11 +609,31 @@ class AttachmentService:
             raise AttachmentError("attachment.notFound") from exc
         if revision.path != file_path or revision.file_id != file_id:
             raise AttachmentError("attachment.notFound")
+        kind = "file"
+        width = height = None
+        image_limit = self.settings.max_upload_bytes if self.settings else MAX_IMAGE_ATTACHMENT_BYTES
+        if revision.size_bytes <= image_limit:
+            try:
+                handle = (
+                    root_files.open_working_file(file_id, expected_sha256=revision.sha256)
+                    if file_revision is None
+                    else root_files.open_revision_by_id(file_id, file_revision)
+                )
+                with handle:
+                    detected_mime = image_mime_type(handle.read(12))
+                    handle.seek(0)
+                    data = handle.read(image_limit + 1) if detected_mime else b""
+                if detected_mime:
+                    image = validate_image(data, detected_mime, max_bytes=image_limit)
+                    kind, mime_type = "image", image.mime_type
+                    width, height = image.width, image.height
+            except (AttachmentError, RootFileError):
+                pass
         values = dict(
             id=uuid4(),
             message_id=message.id,
             position=position,
-            kind="file",
+            kind=kind,
             category=category,
             purpose="artifact",
             processing_status="ready",
@@ -626,7 +646,7 @@ class AttachmentService:
             file_path=file_path,
             filename=filename,
             metadata_json=_safe_metadata(metadata),
-            width=None, height=None, duration_ms=None,
+            width=width, height=height, duration_ms=None,
         )
         if self.run_id is not None:
             return self._persist_pending(message, values)

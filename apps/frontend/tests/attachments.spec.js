@@ -348,7 +348,7 @@ describe('persisted attachments', () => {
     expect(attachments).toHaveLength(3)
   })
 
-  it('hides PDF pages fetched for agent inspection from visible tool output', () => {
+  it('hides images fetched for agent inspection from visible tool output', () => {
     const attachments = [
       { id: 'image', kind: 'image', category: 'downloaded', mimeType: 'image/jpeg', url },
       {
@@ -358,12 +358,13 @@ describe('persisted attachments', () => {
         mimeType: 'image/jpeg',
         metadata: { pageNumber: 1 },
         url
-      }
+      },
+      { id: 'file', kind: 'file', category: 'downloaded', mimeType: 'application/pdf', url }
     ]
 
     expect(toolOutputAttachments({ name: 'webfetch' }, attachments))
-      .toEqual([expect.objectContaining({ id: 'image' })])
-    expect(toolOutputAttachments({ name: 'other_tool' }, attachments)).toHaveLength(2)
+      .toEqual([expect.objectContaining({ id: 'file' })])
+    expect(toolOutputAttachments({ name: 'other_tool' }, attachments)).toHaveLength(3)
   })
 
   it('only enables the audio player when the browser accepts the MIME type', () => {

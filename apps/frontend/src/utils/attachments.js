@@ -290,11 +290,7 @@ export function toolOutputAttachments(tool, attachments) {
       && attachment.mimeType !== 'model/vnd.off' && !/\.off$/i.test(attachment.filename || ''))
   }
   if (tool?.name === 'webfetch') {
-    return supported.filter((attachment) => !(
-      attachment.category === 'downloaded'
-      && Number.isInteger(attachment.metadata.pageNumber)
-      && attachment.metadata.pageNumber > 0
-    ))
+    return supported.filter((attachment) => attachment.kind !== 'image')
   }
   return supported
 }
