@@ -283,6 +283,7 @@ class BrowserWorker:
                 downloads_path=str(live / "downloads"),
                 args=[
                     "--disable-gpu",
+                    "--hide-crash-restore-bubble",
                     "--start-maximized",
                     # Chromium app mode suppresses fullscreen exit overlays but retains
                     # native DevTools via Ctrl+Shift+I; --kiosk disables DevTools entirely.

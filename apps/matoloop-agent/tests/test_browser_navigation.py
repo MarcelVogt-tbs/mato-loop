@@ -734,6 +734,7 @@ class HeadedNavigationTests(unittest.IsolatedAsyncioTestCase):
                     "arguments"
                 ]
                 self.assertIn("--force-app-mode", launch_args)
+                self.assertIn("--hide-crash-restore-bubble", launch_args)
                 self.assertNotIn("--kiosk", launch_args)
                 processes = (await browser_session.send("SystemInfo.getProcessInfo"))["processInfo"]
                 pid = next(p["id"] for p in processes if p["type"] == "browser")
