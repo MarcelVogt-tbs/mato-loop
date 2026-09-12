@@ -803,6 +803,12 @@ def general_system_prompt(
             "If webfetch fails or returns an access challenge, interstitial, or unusable JavaScript shell, "
             "request browser control with a concrete reason instead of repeating the same fetch or giving up."
         )
+    if "browser_release_control" in offered_tool_names:
+        parts.append(
+            "Browser handoff contract: Before asking the human to interact with the browser, release "
+            "browser control and wait for success. Then ask the human to complete the interaction and wait "
+            "for their reply; do not poll with browser tools."
+        )
     if {"web_search", "webfetch"} <= offered_tool_names:
         research_instructions.append(
             "Use image search only without an adequate reference and for requested research, exact or "

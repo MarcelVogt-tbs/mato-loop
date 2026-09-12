@@ -2021,6 +2021,7 @@ def resolve_tool_execution_policy(
             and capability not in {
                 "browser.code",
                 "browser.read",
+                "browser.release",
                 "browser.write",
                 "session.files.read",
                 "session.files.write",

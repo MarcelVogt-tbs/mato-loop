@@ -68,6 +68,7 @@ def browser_policy_case(request, monkeypatch):
         attached_for=Mock(return_value=connection),
         execute=AsyncMock(side_effect=execute),
         snapshot=AsyncMock(return_value="a" * 64),
+        attachment=AsyncMock(),
     )
     monkeypatch.setitem(
         sys.modules, "mato_loop_backend.execution.browsers",
@@ -154,7 +155,9 @@ def browser_script_case(browser_policy_case, request):
 def test_browser_catalog_defaults_survive_central_trust_resolution(browser_policy_case):
     case = browser_policy_case
     actions = tools_module.tool_registry.integration_resource_actions(case.instance)
-    assert {action.capability for action in actions} == {"browser.read", "browser.write", "browser.code", "browser.control"}
+    assert {action.capability for action in actions} == {
+        "browser.read", "browser.write", "browser.code", "browser.control", "browser.release",
+    }
     for action in actions:
         default = ToolExecutionPolicy.ASK if action.capability == "browser.control" else ToolExecutionPolicy.AUTO
         assert action.default_policy == default
@@ -166,6 +169,21 @@ def test_browser_catalog_defaults_survive_central_trust_resolution(browser_polic
             assert (resolution.policy, resolution.source, resolution.reason) == (
                 default, "default", "trust_default",
             )
+
+
+async def test_browser_release_is_auto_for_public_and_private(browser_policy_case):
+    case = browser_policy_case
+    case.call.name = "browser_release_control"
+    case.call.arguments = {}
+
+    result = await case.effective.execute(case.call, case.context)
+
+    assert not result.is_error
+    assert case.context.ask_handler.await_args.args[0].capability == "browser.release"
+    case.approval.assert_not_awaited()
+    case.coordinator.attachment.assert_awaited_once_with(
+        case.coordinator.attached_for.return_value, False,
+    )
 
 
 async def test_inherited_browser_actions_use_runtime_auto_without_approvals(browser_action_case):

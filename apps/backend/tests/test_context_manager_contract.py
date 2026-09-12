@@ -1788,7 +1788,9 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
 def test_webfetch_browser_fallback_prompt_matches_available_control() -> None:
     attached = general_system_prompt(
         _session(),
-        offered_tool_names=frozenset({"webfetch", "browser_tabs", "browser_snapshot"}),
+        offered_tool_names=frozenset({
+            "webfetch", "browser_tabs", "browser_snapshot", "browser_release_control",
+        }),
     )
     requestable = general_system_prompt(
         _session(),
@@ -1801,6 +1803,9 @@ def test_webfetch_browser_fallback_prompt_matches_available_control() -> None:
 
     assert "use the attached browser instead" in attached
     assert "handle downloads that require page interaction" in attached
+    assert "Browser handoff contract:" in attached
+    assert "release browser control and wait for success" in attached
+    assert "wait for their reply; do not poll with browser tools" in attached
     assert "request browser control with a concrete reason" in requestable
     assert "attached browser" not in requestable
     assert "attached browser" not in unavailable

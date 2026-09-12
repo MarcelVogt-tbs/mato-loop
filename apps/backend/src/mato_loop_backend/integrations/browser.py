@@ -278,6 +278,10 @@ class BrowserRequestControlArguments(WireModel):
     reason: str = Field(min_length=1, max_length=1000)
 
 
+class BrowserReleaseControlArguments(WireModel):
+    pass
+
+
 async def _control_authorization(arguments: BrowserRequestControlArguments, context: Any):
     from mato_loop_backend.execution.browser_control import capture_control_request
 
@@ -290,6 +294,39 @@ async def _request_control(arguments: BrowserRequestControlArguments, context: A
     from mato_loop_backend.execution.browser_control import browser_control_requests
 
     return await browser_control_requests.wait(context.bound_options["control_request"], context)
+
+
+async def _release_authorization(_arguments: BrowserReleaseControlArguments, context: Any):
+    from mato_loop_backend.agent.permissions import integration_operation_permission
+
+    connection = _bound_browser(context)
+    context.bound_options["browser_id"] = connection.browser_id
+    context.bound_options["attachment_revision"] = connection.attachment_revision
+    return (integration_operation_permission(
+        capability="browser.release",
+        integration_id=connection.integration_id,
+        binding_revision=context.bound_options["binding_revision"],
+        operation_key=f"release:{connection.browser_id}:{connection.attachment_revision}",
+        title="Browser-Steuerung freigeben?",
+        summary="Der Agent möchte die Browser-Steuerung an dich zurückgeben.",
+        resource_display="Browser",
+        action_kind="browser_control",
+        risk_level="low",
+    ),)
+
+
+async def _release_control(_arguments: BrowserReleaseControlArguments, context: Any):
+    from mato_loop_backend.agent.tool_registry import ToolResult
+    from mato_loop_backend.execution.browsers import browser_coordinator
+
+    connection = _bound_browser(context)
+    if (
+        connection.browser_id != context.bound_options.get("browser_id")
+        or connection.attachment_revision != context.bound_options.get("attachment_revision")
+    ):
+        raise ExecutionClientError("browser.bindingChanged")
+    await browser_coordinator.attachment(connection, False)
+    return ToolResult.json({"ok": True})
 
 
 async def _authorization(arguments: BrowserActionArguments | _BrowserArguments, context: Any) -> tuple[Any, ...]:
@@ -579,6 +616,7 @@ BROWSER_TOOLS = tuple(
 BROWSER_TOOL_ACTIONS = {tool.name: tool.arguments_model.internal_action for tool in BROWSER_TOOLS}
 
 _CONTROL = ToolAction("browser.control", "Browser-Steuerung anfordern", ToolExecutionPolicy.ASK, mutates=True)
+_RELEASE = ToolAction("browser.release", "Browser-Steuerung freigeben", ToolExecutionPolicy.AUTO, mutates=True)
 BROWSER_REQUEST_CONTROL = ToolContribution(
     name="browser_request_control", label="Browser-Steuerung anfordern", icon="language",
     description=(
@@ -590,9 +628,22 @@ BROWSER_REQUEST_CONTROL = ToolContribution(
     actions=(_CONTROL,), authorization_factory=_control_authorization,
     execution_operation="integration.browser.execute", result_model=BrowserControlResult,
 )
+BROWSER_RELEASE_CONTROL = ToolContribution(
+    name="browser_release_control", label="Browser-Steuerung freigeben", icon="pan_tool",
+    description=(
+        "Release model control of the attached browser and return it to the human for manual input. "
+        "Use this before asking the human to sign in, solve a challenge, enter secrets, or otherwise "
+        "interact with the browser. After success, ask the human to complete the interaction and wait "
+        "for their reply; do not poll the browser. The browser and its tabs remain open."
+    ),
+    arguments_model=BrowserReleaseControlArguments, handler=_release_control,
+    actions=(_RELEASE,), authorization_factory=_release_authorization,
+    execution_operation="integration.browser.execute", result_model=BrowserControlResult,
+)
 
 BROWSER_ADAPTER = IntegrationAdapterDefinition(
     integration_type="browser", adapter_type="browser", config_model=BrowserConfig,
     execution_location="agent", execution_kind="browser", personal_only=True,
-    execution_tools=(*BROWSER_TOOLS, BROWSER_REQUEST_CONTROL), resource_actions=(_READ, _WRITE, _CODE, _CONTROL),
+    execution_tools=(*BROWSER_TOOLS, BROWSER_REQUEST_CONTROL, BROWSER_RELEASE_CONTROL),
+    resource_actions=(_READ, _WRITE, _CODE, _CONTROL, _RELEASE),
 )
