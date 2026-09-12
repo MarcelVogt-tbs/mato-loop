@@ -9,7 +9,6 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.permissions import PermissionDecision
-from mato_loop_backend.agent.runtime import _bounded_memory_trust
 from mato_loop_backend.agent.tools import MemoryWriteArguments, ToolContext, tool_registry
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.memories import (
@@ -117,21 +116,6 @@ def test_trust_defaults_and_inheritance() -> None:
     assert effective_model_pseudonymization(provider, model) is True
     model.trust_level = TrustLevel.PRIVATE
     assert effective_model_pseudonymization(provider, model) is False
-
-
-def test_running_tool_call_cannot_gain_memory_trust_after_model_change() -> None:
-    assert (
-        _bounded_memory_trust(TrustLevel.PUBLIC, TrustLevel.PRIVATE)
-        == TrustLevel.PUBLIC
-    )
-    assert (
-        _bounded_memory_trust(TrustLevel.PRIVATE, TrustLevel.PUBLIC)
-        == TrustLevel.PUBLIC
-    )
-    assert (
-        _bounded_memory_trust(TrustLevel.PRIVATE, TrustLevel.PRIVATE)
-        == TrustLevel.PRIVATE
-    )
 
 
 @pytest.mark.parametrize(

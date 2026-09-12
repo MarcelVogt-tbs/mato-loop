@@ -20,7 +20,7 @@ def execution_tool_handler(
     async def execute(arguments: Any, context: Any):
         from mato_loop_backend.agent.tools import ToolResult
         from mato_loop_backend.execution.client import ExecutionClientError
-        from mato_loop_backend.models.runtime import AgentRun
+        from mato_loop_backend.models import AgentRun
 
         run = await context.db.get(AgentRun, context.run_id)
         if (

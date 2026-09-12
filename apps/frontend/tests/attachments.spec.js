@@ -4,9 +4,7 @@ import {
   attachmentIcon,
   attachmentMetadata,
   audioMimeTypeSupported,
-  audioAttachments,
   formatAttachmentDuration,
-  imageAttachments,
   managedSessionFileTarget,
   safeAttachmentUrl,
   safeFileDownloadUrl,
@@ -15,7 +13,6 @@ import {
   toolFileAttachment,
   toolOutputAttachments,
   deduplicateFileOutputAttachments,
-  videoAttachments,
   videoMimeTypeSupported
 } from '../src/utils/attachments'
 
@@ -105,7 +102,7 @@ describe('persisted attachments', () => {
       fileRootId: null,
       filePath: `/home/user/images/${filename}`
     })
-    expect(imageAttachments([attachment])[0].safeUrl).toBe(contentUrl)
+    expect(supportedAttachments([attachment])[0].safeUrl).toBe(contentUrl)
   })
 
   it('shows a provided image from session attachments', () => {
@@ -127,7 +124,7 @@ describe('persisted attachments', () => {
       mimeType: 'image/png',
       url: sessionDownloadUrl.replace('/files/download', '/files/content')
     })
-    expect(imageAttachments([attachment])[0].safeUrl).toBe(attachment.url)
+    expect(supportedAttachments([attachment])[0].safeUrl).toBe(attachment.url)
   })
 
   it('keeps oversized provided images as downloads', () => {
@@ -264,10 +261,10 @@ describe('persisted attachments', () => {
   })
 
   it('keeps supported image metadata and marks unsafe URLs', () => {
-    const attachments = imageAttachments([
+    const attachments = supportedAttachments([
       { id: 'one', kind: 'image', mimeType: 'image/png', url, width: 10, height: 20, sizeBytes: 2048 },
       { id: 'two', kind: 'file', mimeType: 'text/html', url: 'https://example.com' }
-    ])
+    ]).filter((attachment) => attachment.kind === 'image')
     expect(attachments).toHaveLength(1)
     expect(attachments[0].safeUrl).toBe(url)
     expect(attachmentMetadata(attachments[0])).toBe('10 × 20 px · 2 KB · image/png')
@@ -279,7 +276,7 @@ describe('persisted attachments', () => {
   })
 
   it('keeps arbitrary audio formats with robust duration and metadata handling', () => {
-    const attachments = audioAttachments([
+    const attachments = supportedAttachments([
       {
         id: 'audio-one',
         kind: 'audio',
@@ -290,7 +287,7 @@ describe('persisted attachments', () => {
         metadata: null
       },
       { id: 'audio-two', kind: 'audio', mimeType: 'audio/mpeg', url }
-    ])
+    ]).filter((attachment) => attachment.kind === 'audio')
 
     expect(attachments).toHaveLength(2)
     expect(attachments[0]).toMatchObject({ mimeType: 'audio/x-wav', metadata: {}, safeUrl: url })
@@ -392,7 +389,7 @@ describe('persisted attachments', () => {
       })
     }
     try {
-      const attachments = videoAttachments([{
+      const attachments = supportedAttachments([{
         kind: 'video',
         mimeType: 'video/mp4; codecs=avc1',
         url,
@@ -400,7 +397,7 @@ describe('persisted attachments', () => {
         width: 1920,
         height: 1080,
         sizeBytes: 4096
-      }])
+      }]).filter((attachment) => attachment.kind === 'video')
       expect(attachments[0].safeUrl).toBe(url)
       expect(attachmentMetadata(attachments[0])).toBe('1920 × 1080 px · 1:05 · 4 KB · video/mp4')
       expect(videoMimeTypeSupported('video/mp4; codecs=avc1')).toBe(true)

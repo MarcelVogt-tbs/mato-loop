@@ -52,9 +52,7 @@ export const useApprovalStore = defineStore('approvals', {
       this.loading = true
       this.loadFailed = false
       try {
-        const { data } = Object.keys(config).length
-          ? await api.get('/approvals/pending', config)
-          : await api.get('/approvals/pending')
+        const { data } = await api.get('/approvals/pending', config)
         if (revision !== this.revision || !Array.isArray(data)) return
         this.pending = data
         this.loaded = true
@@ -108,17 +106,12 @@ export const useApprovalStore = defineStore('approvals', {
         this.submittingId = null
       }
     },
-    async permissions(sessionId, config = {}) {
-      return (await api.get(`/approvals/sessions/${sessionId}/permissions`, config)).data
-    },
     async fetchGrants(config = {}) {
       const revision = ++this.grantRevision
       this.grantsLoading = true
       this.grantsLoadFailed = false
       try {
-        const { data } = Object.keys(config).length
-          ? await api.get('/approvals/permissions', config)
-          : await api.get('/approvals/permissions')
+        const { data } = await api.get('/approvals/permissions', config)
         if (revision !== this.grantRevision || !Array.isArray(data)) return
         this.grants = data
         this.grantsLoaded = true

@@ -27,9 +27,7 @@ export const useQuestionStore = defineStore('questions', {
       this.loading = true
       this.loadFailed = false
       try {
-        const { data } = Object.keys(config).length
-          ? await api.get('/questions/pending', config)
-          : await api.get('/questions/pending')
+        const { data } = await api.get('/questions/pending', config)
         if (revision !== this.revision || !Array.isArray(data)) return
         this.pending = data
         this.loaded = true

@@ -418,18 +418,10 @@ def _bounded_automatic_payload(
             payload.get("projectSessionIndex"),
         )
 
-    seen_session_ids = {item.session_id for item in recent_episodes}
-    unique_relevant = []
-    for item in relevant_episodes:
-        if item.session_id not in seen_session_ids:
-            seen_session_ids.add(item.session_id)
-            unique_relevant.append(item)
-    unique_recent = list({item.session_id: item for item in recent_episodes}.values())
-
     groups = [
         ("durableMemories", unique_memories, _automatic_memory_item),
-        ("priorSessionEpisodes", unique_recent, _recent_episode_item),
-        ("priorSessionEpisodes", unique_relevant, _relevant_episode_item),
+        ("priorSessionEpisodes", unique_preferred, _recent_episode_item),
+        ("priorSessionEpisodes", unique_secondary, _relevant_episode_item),
     ]
     for index in range(max((len(items) for _, items, _ in groups), default=0)):
         for key, items, build in groups:

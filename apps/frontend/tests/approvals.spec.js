@@ -160,21 +160,8 @@ describe('inline approvals', () => {
 
     await expect(approvals.decide('approval-1', 'deny')).rejects.toBeTruthy()
 
-    expect(api.get).toHaveBeenCalledWith('/approvals/pending')
+    expect(api.get).toHaveBeenCalledWith('/approvals/pending', {})
     expect(approvals.pending).toEqual([])
-  })
-
-  it('forwards request options when loading session permissions', async () => {
-    api.get.mockResolvedValue({ data: [{ id: 'grant-1' }] })
-    const approvals = useApprovalStore()
-
-    const result = await approvals.permissions('session-1', { suppressErrorToast: true })
-
-    expect(result).toEqual([{ id: 'grant-1' }])
-    expect(api.get).toHaveBeenCalledWith(
-      '/approvals/sessions/session-1/permissions',
-      { suppressErrorToast: true }
-    )
   })
 
   it('loads grants from all sessions', async () => {

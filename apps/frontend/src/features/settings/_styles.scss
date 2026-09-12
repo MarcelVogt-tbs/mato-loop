@@ -43,7 +43,6 @@
   margin-bottom: 16px;
 }
 
-.provider-list-card,
 .integration-list-card,
 .execution-agent-list-card,
 .user-list-card,
@@ -121,16 +120,6 @@
 
 .model-technical-id {
   overflow-wrap: anywhere;
-}
-
-.provider-list-item {
-  padding-block: 16px;
-}
-
-.provider-list-actions {
-  align-items: center;
-  flex-direction: row;
-  gap: 4px;
 }
 
 .provider-dialog {

@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 
 import {
   approvalPresentationKind,
-  formatToolArguments,
   memoryWriteContent,
   parseToolResult,
   shellCommand,
@@ -276,7 +275,7 @@ describe('tool display', () => {
       name: 'read_qr_code',
       arguments: { attachment_id: '550e8400-e29b-41d4-a716-446655440000' }
     })).toBe('Bildanhang 550e8400-e29b-41d4-a716-446655440000')
-    expect(formatToolArguments({ content: 'vertraulich' }, 'generate_qr_code'))
+    expect(toolArgumentsDisplay({ content: 'vertraulich' }, 'generate_qr_code').text)
       .not.toContain('vertraulich')
     expect(toolSummary({ name: 'edit_image', arguments: { prompt: 'Farben restaurieren' } }))
       .toBe('Farben restaurieren')
@@ -373,8 +372,8 @@ describe('tool display', () => {
 
     expect(memoryWriteContent(tool)).toBe(content)
     expect(toolSummary(tool)).toContain('Dauerhafter Kontext')
-    expect(formatToolArguments(tool.arguments, tool.name)).not.toContain(content)
-    expect(formatToolArguments(tool.arguments, tool.name)).toContain('context')
+    expect(toolArgumentsDisplay(tool.arguments, tool.name).text).not.toContain(content)
+    expect(toolArgumentsDisplay(tool.arguments, tool.name).text).toContain('context')
   })
 
   it('shows persisted legacy memory previews', () => {
@@ -386,7 +385,7 @@ describe('tool display', () => {
   })
 
   it('redacts sensitive arguments and bounds their output', () => {
-    const formatted = formatToolArguments({ path: 'plan.md', content: 'vertraulich', token: 'secret' })
+    const formatted = toolArgumentsDisplay({ path: 'plan.md', content: 'vertraulich', token: 'secret' }).text
     expect(formatted).toContain('plan.md')
     expect(formatted).not.toContain('vertraulich')
     expect(formatted).not.toContain('secret')

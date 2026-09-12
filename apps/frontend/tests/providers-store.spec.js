@@ -350,7 +350,7 @@ describe('provider store', () => {
     expect(store.skillCreationModelId).toBe('compact')
   })
 
-  it('creates and updates Lemonade providers through the configured endpoints', async () => {
+  it.each(['openai-compatible', 'lemonade'])('creates and updates %s providers through the configured endpoints', async (type) => {
     const store = useProviderStore()
     const payload = {
       name: 'Lemonade lokal',
@@ -378,11 +378,11 @@ describe('provider store', () => {
       data: url.endsWith('/codex/status') ? { authenticated: false } : providerPayload
     }))
 
-    await expect(store.createLemonade(payload)).resolves.toBe('lemonade')
-    await store.updateLemonade('lemonade', payload)
+    await expect(store.createProvider(type, payload)).resolves.toBe('lemonade')
+    await store.updateProvider('lemonade', payload)
 
     expect(api.post).toHaveBeenCalledWith(
-      '/providers/lemonade', payload, { params: { scope: 'instance' } }
+      `/providers/${type}`, payload, { params: { scope: 'instance' } }
     )
     expect(api.put).toHaveBeenCalledWith(
       '/providers/configuration/lemonade', payload, { params: { scope: 'instance' } }

@@ -19,7 +19,6 @@ dependencies = [
     "icalendar>=6.3.0,<7.0.0",
     "markdown-it-py>=4.0,<5.0",
     "markdownify>=1.2.0",
-    "openai>=2.8.0",
     "openpyxl>=3.1.5",
     "pillow>=11.3.0",
     "pypdf>=5.8.0",

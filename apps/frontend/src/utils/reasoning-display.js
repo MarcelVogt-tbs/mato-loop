@@ -1,10 +1,3 @@
-export function reasoningTitle(reasoning, running = false, activityLabel = '') {
-  if (running && activityLabel) return activityLabel
-  return reasoning?.kind === 'summary'
-    ? 'Zusammenfassung'
-    : 'Überlegung'
-}
-
 export function formatReasoningDuration(milliseconds) {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return null
   if (milliseconds < 1000) return `${milliseconds} ms`

@@ -143,7 +143,6 @@ describe('workspace store', () => {
     api.get.mockResolvedValue({ data: { entries: [] } })
     const workspace = useWorkspaceStore()
     workspace.configure({ sessionId: 'session-a', currentDirectory: null })
-    await workspace.setScope('session')
     vi.clearAllMocks()
     api.post.mockResolvedValue({ data: {} })
     api.get.mockResolvedValue({ data: { entries: [] } })
@@ -231,7 +230,12 @@ describe('workspace store', () => {
     workspace.updateEditorDraft('changed', 'original')
 
     expect(workspace.scope).toBe('session')
-    await workspace.setScope('filesystem')
+    workspace.configure({
+      sessionId: 'session-a',
+      workspaceContext: liveContext(['filesystem.list']),
+      scope: 'filesystem'
+    })
+    await workspace.load(workspace.directoryPath)
 
     expect(workspace.scope).toBe('filesystem')
     expect(workspace.viewedEntry).toBeNull()
@@ -345,19 +349,20 @@ describe('workspace store', () => {
       sessionId: 'session-a', rootIdentity: 'project-a', currentDirectory: '/current'
     })
 
-    await workspace.openToolFile({
+    const target = workspace.fileTargetFromAction({
       root: 'workspace',
-      sessionId: 'session-a',
       executionAgentId: 'original-agent',
       currentDirectory: '/original-project',
       path: '/original-project/reports/result.txt',
       filename: 'result.txt',
       sizeBytes: 7
     })
+    workspace.activateFileTab({ tabId: 'file-1', kind: 'file', fileTarget: target })
+    await workspace.load(workspace.directoryPath)
     await workspace.preview('/original-project/reports/result.txt')
 
     expect(workspace.viewedEntry).toEqual({
-      kind: 'file', name: 'result.txt', path: '/original-project/reports/result.txt', size: 7
+      kind: 'file', name: 'result.txt', path: '/original-project/reports/result.txt'
     })
     expect(api.get.mock.calls.map(([, config]) => config.params)).toEqual([
       {
@@ -380,74 +385,6 @@ describe('workspace store', () => {
     await expect(workspace.createDirectory('.', 'blocked')).rejects.toThrow('Historical workspace snapshots are read-only')
     workspace.returnToCurrentContext()
     expect(workspace.rootIdentity).toBe('project-a')
-  })
-
-  it('tracks viewer changes independently from directory refreshes', async () => {
-    api.get.mockResolvedValue({ data: { entries: [] } })
-    const workspace = useWorkspaceStore()
-    const initialVersion = workspace.viewVersion
-
-    workspace.openEntry({ kind: 'file', name: 'one.txt', path: 'one.txt' })
-    const openedVersion = workspace.viewVersion
-    await workspace.refresh()
-    workspace.closeViewer()
-
-    expect(openedVersion).toBe(initialVersion + 1)
-    expect(workspace.viewVersion).toBe(openedVersion + 1)
-  })
-
-  it('restores a persisted session draft and records closing only the viewer', async () => {
-    const path = 'drafts/draft-1/plan.md'
-    const fileView = {
-      scope: 'session',
-      selectedPath: path,
-      selectedKind: 'file',
-      viewedFilePath: path,
-      rootIdentity: null,
-      executionAgentId: null,
-      currentDirectory: null
-    }
-    const controlCenter = useControlCenterStore()
-    controlCenter.syncSession({
-      id: 'session-a',
-      controlCenter: {
-        tabs: [{ appId: 'files', pinned: false }],
-        activeAppId: 'files',
-        open: true,
-        fileView
-      }
-    })
-    const workspace = useWorkspaceStore()
-    workspace.configure({ sessionId: 'session-a' })
-
-    workspace.restoreView(controlCenter.fileView)
-
-    expect(workspace.scope).toBe('session')
-    expect(workspace.selectedPath).toBe(path)
-    expect(workspace.selectedKind).toBe('file')
-    expect(workspace.viewedEntry).toEqual({ kind: 'file', name: 'plan.md', path })
-
-    api.patch.mockResolvedValue({
-      data: {
-        controlCenter: {
-          tabs: [{ appId: 'files', pinned: false }],
-          activeAppId: 'files',
-          open: true,
-          fileView: { ...fileView, viewedFilePath: null }
-        }
-      }
-    })
-    workspace.closeViewer()
-
-    await vi.waitFor(() => expect(api.patch).toHaveBeenCalledWith('/sessions/session-a', {
-      control_center: expect.objectContaining({
-        open: true,
-        file_view: expect.objectContaining({
-          selected_path: path,
-          viewed_file_path: null
-        })
-      })
-    }))
   })
 
   it('restores a historical workspace file with its snapshot context', () => {
@@ -510,18 +447,18 @@ describe('workspace store', () => {
     const workspace = useWorkspaceStore()
     workspace.configure({ sessionId: 'session-a' })
 
-    await workspace.openToolFile({
+    const target = workspace.fileTargetFromAction({
       root: 'session',
-      sessionId: 'session-a',
       rootIdentity: 'session-a',
       path: 'plan.md',
       filename: 'plan.md',
       sizeBytes: 7
     })
+    workspace.activateFileTab({ tabId: 'file-1', kind: 'file', fileTarget: target })
 
     expect(workspace.rootIdentity).toBe('session-a')
     expect(workspace.viewedEntry).toEqual({
-      kind: 'file', name: 'plan.md', path: 'plan.md', size: 7
+      kind: 'file', name: 'plan.md', path: 'plan.md'
     })
     expect(workspace.toolContext).toBeNull()
     expect(workspace.operationAvailable('filesystem.write')).toBe(true)
@@ -536,15 +473,16 @@ describe('workspace store', () => {
       workspaceContext: { executionAgentId: 'current-agent' }
     })
 
-    await workspace.openToolFile({
+    const target = workspace.fileTargetFromAction({
       root: 'workspace',
-      sessionId: 'session-a',
       executionAgentId: 'historical-agent',
       currentDirectory: '/original-project',
       path: '/original-project/model.stl',
       filename: 'model.stl',
       sizeBytes: 84
     })
+    workspace.activateFileTab({ tabId: 'file-1', kind: 'file', fileTarget: target })
+    await workspace.load(workspace.directoryPath)
 
     expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
       params: {
@@ -557,45 +495,31 @@ describe('workspace store', () => {
       suppressErrorToast: true
     })
     expect(workspace.fileUrl('content', '/original-project/model.stl')).toContain('execution_agent_id=historical-agent')
-    workspace.returnToCurrentContext()
-    expect(workspace.currentDirectory).toBe('/current')
-    expect(workspace.workspaceContext).toEqual({
-      executionAgentId: 'current-agent'
-    })
   })
 
-  it('opens an approval draft in the editable session file editor', async () => {
-    api.get.mockResolvedValue({ data: { entries: [] } })
+  it('opens a structured approval draft target in the editable session file editor', () => {
     const workspace = useWorkspaceStore()
     workspace.configure({
       sessionId: 'session-a', rootIdentity: 'project-a', currentDirectory: '/current'
     })
-
-    workspace.openApprovalDraft({
-      root: 'session', sessionId: 'session-a', path: '../skill-draft.json', filename: 'skill-draft.json'
-    })
-    expect(workspace.viewedEntry).toBeNull()
-
-    await workspace.openApprovalDraft({
-      root: 'session',
-      sessionId: 'session-a',
-      path: 'skill-draft.json',
-      filename: 'skill-draft.json',
-      sizeBytes: 128,
-      initialRevision: 'revision-1'
-    })
+    const tab = {
+      tabId: 'draft-1',
+      kind: 'file',
+      fileTarget: {
+        scope: 'session', path: 'skill-draft.json', name: 'skill-draft.json',
+        rootIdentity: 'project-a', readOnly: false
+      }
+    }
+    const controlCenter = useControlCenterStore()
+    controlCenter.tabs = [tab]
+    workspace.activateFileTab(tab)
+    workspace.startFileTabEdit(tab.tabId)
 
     expect(workspace.scope).toBe('session')
     expect(workspace.rootIdentity).toBe('project-a')
     expect(workspace.editorActive).toBe(true)
     expect(workspace.viewedEntry).toEqual({
-      kind: 'file', name: 'skill-draft.json', path: 'skill-draft.json', size: 128
-    })
-    expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
-      params: {
-        path: '.', scope: 'session', session_id: 'session-a', root_identity: 'project-a'
-      },
-      suppressErrorToast: true
+      kind: 'file', name: 'skill-draft.json', path: 'skill-draft.json'
     })
   })
 
@@ -847,7 +771,7 @@ describe('workspace store', () => {
     }
   })
 
-  it.each(['reset', 'openEntry', 'discardEdit', 'closeViewer', 'discardFileTab', 'configure'])(
+  it.each(['reset', 'openEntry', 'discardEdit', 'discardFileTab', 'configure'])(
     'clears the editor session on %s',
     (action) => {
       const workspace = useWorkspaceStore()
@@ -1030,7 +954,6 @@ describe('workspace store', () => {
     api.get.mockResolvedValue({ data: { entries: [entry], hasMore: false } })
     const workspace = useWorkspaceStore()
     workspace.configure({ sessionId: 'session-a' })
-    await workspace.setScope('session')
     vi.clearAllMocks()
     api.post.mockResolvedValue({ data: { entry } })
     api.get.mockResolvedValue({ data: { entries: [entry], hasMore: false } })
@@ -1135,7 +1058,7 @@ describe('workspace store', () => {
       })
       if (change === 'stash') workspace.stashActiveFileTab()
       if (change === 'context') workspace.configure({ sessionId: 'session-b' })
-      if (change === 'close') workspace.closeViewer()
+      if (change === 'close') workspace.discardFileTab('file-a')
       if (change === 'direct path') workspace.viewedEntry.path = 'b.md'
       workspace.editorDraft = 'current draft'
       workspace.editorDirty = true

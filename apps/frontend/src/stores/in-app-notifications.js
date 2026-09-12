@@ -36,10 +36,6 @@ async function serviceWorkerRegistration(wait = false) {
     : window.navigator.serviceWorker.getRegistration('/')
 }
 
-function withConfig(config) {
-  return Object.keys(config).length ? config : undefined
-}
-
 export const useInAppNotificationStore = defineStore('in-app-notifications', {
   state: () => ({
     items: [],
@@ -143,7 +139,7 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
       this.pushLoading = true
       this.pushLoadFailed = false
       try {
-        const { data } = await api.get('/notifications/push/config', withConfig(config))
+        const { data } = await api.get('/notifications/push/config', config)
         this.pushServerEnabled = Boolean(data.enabled)
         this.pushPublicKey = typeof data.publicKey === 'string' ? data.publicKey : null
         this.pushPermission = window.Notification.permission
@@ -159,7 +155,7 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
         await api.put(
           `/notifications/push/subscriptions/${deviceId(true)}`,
           subscription.toJSON(),
-          withConfig(config)
+          config
         )
       } catch (error) {
         this.pushLoadFailed = true

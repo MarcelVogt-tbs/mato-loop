@@ -115,16 +115,6 @@ def _pseudonymization_provider_error(exc: PseudonymizationError) -> ProviderErro
     return ProviderError("Local pseudonymization failed", code=str(exc))
 
 
-def _boolean_option(config: dict[str, Any], name: str, default: bool) -> bool:
-    value = config.get(name)
-    return value if isinstance(value, bool) else default
-
-
-def _positive_int_option(config: dict[str, Any], name: str) -> int | None:
-    value = config.get(name)
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
-
-
 def _temperature_option(config: dict[str, Any]) -> float | None:
     value = config.get("temperature")
     if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):

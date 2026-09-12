@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 
 import {
   approvalResource,
-  formatTechnicalDetails,
   memoryApprovalDisplay,
   permissionGrantDisplay,
   shellClassificationDisplay,
@@ -187,7 +186,7 @@ describe('approval display', () => {
   })
 
   it('redacts URL query values from technical details', () => {
-    const formatted = formatTechnicalDetails({ url: 'https://example.com/page?token=secret' })
+    const formatted = technicalDetailsDisplay({ url: 'https://example.com/page?token=secret' }).text
     expect(formatted).toContain('https://example.com/page?…')
     expect(formatted).not.toContain('secret')
   })
@@ -313,11 +312,11 @@ describe('approval display', () => {
   })
 
   it('redacts sensitive and bounds large technical details', () => {
-    const formatted = formatTechnicalDetails({
+    const formatted = technicalDetailsDisplay({
       path: 'Notizen/plan.md',
       content: 'vertraulicher Inhalt',
       nested: { token: 'secret', values: Array.from({ length: 40 }, (_, index) => index) }
-    })
+    }).text
 
     expect(formatted).toContain('Notizen/plan.md')
     expect(formatted).not.toContain('vertraulicher Inhalt')

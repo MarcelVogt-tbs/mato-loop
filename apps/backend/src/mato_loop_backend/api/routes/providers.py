@@ -141,12 +141,6 @@ async def _load_scoped_ai(
     )
 
 
-async def _save_scoped_ai(
-    db: AsyncSession, settings: AiSettingsDocument, owner_id: UUID | None
-) -> None:
-    await ProviderSettingsService.save(db, settings, owner_id)
-
-
 def _to_camel(value: str) -> str:
     first, *rest = value.split("_")
     return first + "".join(part.capitalize() for part in rest)
@@ -325,14 +319,6 @@ def _provider_config_payload(config: dict[str, Any]) -> dict[str, Any]:
     if "api_type" in config:
         payload["apiType"] = config["api_type"]
     return payload
-
-
-async def _provider_sync_fingerprint(
-    db: AsyncSession, provider: LlmProviderConfig
-) -> tuple[str, UUID | None, dict[str, Any], bytes | str | None]:
-    return await ProviderSettingsService.provider_sync_fingerprint(
-        db, provider, load_credential=load_credential
-    )
 
 
 def _settings_payload(

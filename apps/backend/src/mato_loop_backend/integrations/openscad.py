@@ -17,7 +17,7 @@ from typing import Any, BinaryIO, Literal
 from uuid import UUID
 
 from PIL import Image, ImageDraw, ImageFont
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from mato_loop_backend.agent.tool_contracts import ToolAction
 from mato_loop_backend.attachments import (
@@ -35,6 +35,7 @@ from mato_loop_backend.execution.manager import (
     ExecutionAgentError,
     execution_agent_connections,
 )
+from mato_loop_backend.execution.protocol import WireModel
 from mato_loop_backend.execution.transfers import MAX_TRANSFER_BYTES, transfer_tickets
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
@@ -98,28 +99,13 @@ _FILE_FLAGS = (
 )
 
 
-def _camel(value: str) -> str:
-    first, *rest = value.split("_")
-    return first + "".join(part.capitalize() for part in rest)
-
-
-class _OpenScadModel(BaseModel):
-    model_config = ConfigDict(
-        alias_generator=_camel,
-        populate_by_name=True,
-        serialize_by_alias=True,
-        extra="forbid",
-        strict=True,
-    )
-
-
-class OpenScadConfig(_OpenScadModel):
+class OpenScadConfig(WireModel):
     binary_path: str = Field(min_length=1, max_length=4_096)
 
     _validate_binary_path = field_validator("binary_path")(_absolute_path)
 
 
-class OpenScadRenderArguments(_OpenScadModel):
+class OpenScadRenderArguments(WireModel):
     root: Literal["session", "workspace"] = Field(
         description="Storage root containing the OpenSCAD project."
     )
@@ -167,7 +153,7 @@ class OpenScadRenderArguments(_OpenScadModel):
         return self
 
 
-class ArtifactDescriptor(_OpenScadModel):
+class ArtifactDescriptor(WireModel):
     artifact_id: str = Field(min_length=1, max_length=128)
     backend_id: str = Field(min_length=1, max_length=128)
     session_id: str = Field(min_length=1, max_length=128)
@@ -187,13 +173,13 @@ class ArtifactDescriptor(_OpenScadModel):
         return value
 
 
-class OpenScadPreview(_OpenScadModel):
+class OpenScadPreview(WireModel):
     view: Literal["isometric", "front", "back", "left", "right", "top", "bottom"]
     artifact: ArtifactDescriptor
 
 
 class OpenScadRenderResult(ExecutionResult):
-    model_config = _OpenScadModel.model_config
+    model_config = WireModel.model_config
 
     output: Literal["preview", "stl"]
     artifact: ArtifactDescriptor

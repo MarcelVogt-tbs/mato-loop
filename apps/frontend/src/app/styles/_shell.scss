@@ -329,19 +329,3 @@ body.body--dark .app-floating-control--flat {
   border-radius: 16px;
   background: var(--app-surface);
 }
-
-.app-interactive-surface {
-  transition: border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
-}
-
-.app-interactive-surface:hover {
-  border-color: color-mix(in srgb, var(--q-primary) 38%, transparent);
-  background: var(--app-hover);
-  transform: translateY(-1px);
-}
-
-.app-status-chip {
-  border: 1px solid var(--app-surface-border);
-  background: var(--app-surface-tonal);
-  color: var(--app-muted);
-}

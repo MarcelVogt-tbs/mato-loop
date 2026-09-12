@@ -6,7 +6,8 @@ import { useControlCenterStore } from '../src/stores/control-center'
 import { useBrowserSetupStore } from '../src/stores/browser-setup'
 import { useIntegrationStore } from '../src/stores/integrations'
 import { browserControlCenterAvailable } from '../src/control-center/manifest'
-import { browserNavigationUrl, browserSocketUrl, clipboardFits, setupInputChunks, browserStatusLabel } from '../src/utils/browser'
+import { browserNavigationUrl, browserSocketUrl, clipboardFits, browserStatusLabel } from '../src/utils/browser'
+import { encodedInputChunks } from '../src/utils/input-encoding'
 import { apiErrorMessage } from '../src/utils/api-errors'
 import { FakeWebSocket } from './terminal-websocket'
 
@@ -1264,7 +1265,8 @@ it('opens setup independently of any session without starting and guards old out
   expect(setup.buffer).toBe('')
   expect(setup.status).toBeNull()
   expect(old.send.mock.calls.filter(([raw]) => JSON.parse(raw).type === 'close')).toHaveLength(0)
-  const chunks = setupInputChunks('世'.repeat(30000))
+  expect(encodedInputChunks('')).toEqual([])
+  const chunks = encodedInputChunks('世'.repeat(30000))
   expect(chunks.every((chunk) => atob(chunk).length <= 65536)).toBe(true)
   expect(new TextDecoder().decode(Uint8Array.from(chunks.map(atob).join(''), (char) => char.charCodeAt(0)))).toBe('世'.repeat(30000))
 })

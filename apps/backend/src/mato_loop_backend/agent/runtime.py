@@ -471,14 +471,6 @@ def _hidden_tool_round_provider_data(provider_data: dict[str, Any]) -> dict[str,
     return safe
 
 
-def _bounded_memory_trust(
-    request_trust: TrustLevel, current_trust: TrustLevel
-) -> TrustLevel:
-    if request_trust == TrustLevel.PRIVATE and current_trust == TrustLevel.PRIVATE:
-        return TrustLevel.PRIVATE
-    return TrustLevel.PUBLIC
-
-
 class AgentRunError(RuntimeError):
     def __init__(self, code: str, *, params: dict[str, Any] | None = None) -> None:
         super().__init__(code)

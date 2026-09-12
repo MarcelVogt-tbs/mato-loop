@@ -4,17 +4,10 @@ import {
   formatReasoningDuration,
   reasoningBlocks,
   reasoningHistoryPresentation,
-  reasoningStatusLabel,
-  reasoningTitle
+  reasoningStatusLabel
 } from '../src/utils/reasoning-display'
 
 describe('reasoning display', () => {
-  it('distinguishes provider summaries from public reasoning content', () => {
-    expect(reasoningTitle({ kind: 'summary' })).toBe('Zusammenfassung')
-    expect(reasoningTitle({ kind: 'content' })).toBe('Überlegung')
-    expect(reasoningTitle({}, true, 'Überlegt')).toBe('Überlegt')
-  })
-
   it('formats observed durations without inventing missing values', () => {
     expect(formatReasoningDuration(640)).toBe('640 ms')
     expect(formatReasoningDuration(1600)).toBe('1.6 s')

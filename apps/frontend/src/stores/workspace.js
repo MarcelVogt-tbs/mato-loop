@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { useControlCenterStore } from 'src/stores/control-center'
-import { validRelativePath } from 'src/utils/attachments'
 import {
   clearCachedSubtree,
   parentPath,
@@ -147,13 +146,6 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.currentRootIdentity = rootIdentity
       if (!this.toolContext) this.rootIdentity = rootIdentity
     },
-    setScope(scope) {
-      if (scope === this.scope) return
-      this.scope = scope
-      this.reset(false)
-      this.persistView()
-      return this.load(this.directoryPath)
-    },
     reset(fallbackToSession = true) {
       this.contextVersion += 1
       this.viewVersion += 1
@@ -186,51 +178,6 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.rootIdentity = null
       this.toolContext = null
     },
-    openToolFile(action) {
-      if (
-        !['session', 'workspace'].includes(action?.root)
-        || action.sessionId !== this.sessionId
-        || (action.root === 'session' && !action.rootIdentity)
-        || !action.path
-        || !action.filename
-        || (action.root === 'workspace' && (
-          !action.executionAgentId
-          || !action.currentDirectory
-          || !action.path.startsWith('/')
-        ))
-      ) return
-      if (action.root === 'session') {
-        if (this.rootIdentity && this.rootIdentity !== action.rootIdentity) return
-        this.scope = 'session'
-        this.rootIdentity = action.rootIdentity
-        this.toolContext = null
-        this.openEntry({
-          kind: 'file',
-          name: action.filename,
-          path: action.path,
-          size: action.sizeBytes
-        })
-        return this.refresh()
-      }
-      this.reset(false)
-      this.scope = 'filesystem'
-      this.rootIdentity = null
-      this.toolContext = {
-        executionAgentId: action.executionAgentId,
-        currentDirectory: action.currentDirectory
-      }
-      this.directoryPath = parentPath(action.path)
-      this.selectedPath = action.path
-      this.selectedKind = 'file'
-      this.viewedEntry = {
-        kind: 'file',
-        name: action.filename,
-        path: action.path,
-        size: action.sizeBytes
-      }
-      this.persistView()
-      return this.load(this.directoryPath)
-    },
     fileTargetFromAction(action) {
       if (
         !['session', 'workspace'].includes(action?.root)
@@ -256,25 +203,6 @@ export const useWorkspaceStore = defineStore('workspace', {
         currentDirectory: action.currentDirectory,
         readOnly: true
       }
-    },
-    openApprovalDraft(action) {
-      if (
-        action?.root !== 'session'
-        || action.sessionId !== this.sessionId
-        || !validRelativePath(action.path)
-        || !action.filename
-      ) return
-      const rootIdentity = this.rootIdentity
-      this.reset(false)
-      this.scope = 'session'
-      this.rootIdentity = action.rootIdentity || rootIdentity
-      this.openEntry({
-        kind: 'file',
-        name: action.filename,
-        path: action.path,
-        size: action.sizeBytes
-      }, true)
-      return this.load('.')
     },
     openEntry(entry, edit = false) {
       if (entry?.kind !== 'file') return
@@ -428,16 +356,6 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.directoryPath = path
       this.selectPath(path)
       return this.load(path)
-    },
-    closeViewer() {
-      this.viewVersion += 1
-      this.viewedEntry = null
-      this.editorActive = false
-      this.editorDirty = false
-      this.editorDraft = null
-      this.editorSession = null
-      this.editorExternalChange = false
-      this.persistView()
     },
     startEdit(content) {
       requireWritableContext(this)

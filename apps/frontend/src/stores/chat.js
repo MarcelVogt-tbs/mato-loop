@@ -201,18 +201,6 @@ export const useChatStore = defineStore('chat', {
     sessions() {
       return this.activeSessionList.items
     },
-    sessionsLoaded() {
-      return this.activeSessionList.loaded
-    },
-    sessionsNextCursor() {
-      return this.activeSessionList.nextCursor
-    },
-    sessionsLoadingMore() {
-      return this.activeSessionList.loadingMore
-    },
-    sessionsLoadMoreFailed() {
-      return this.activeSessionList.loadMoreFailed
-    },
     cachedSessions: (state) => {
       const sessions = new Map(state.sessionCatalog.map((session) => [session.id, session]))
       for (const list of Object.values(state.sessionLists)) {
@@ -983,11 +971,6 @@ export const useChatStore = defineStore('chat', {
         list.loadingMore = false
       }
     },
-    async fetchAllSessions(config = null, projectId = this.sessionsProjectId) {
-      const list = this.ensureSessionList(projectId)
-      if (!list.loaded) await this.fetchSessions(config, projectId)
-      while (list.nextCursor) await this.fetchMoreSessions(config, projectId)
-    },
     async fetchSessionCatalog(config = null) {
       const version = ++this.sessionCatalogVersion
       const sessions = []
@@ -1344,8 +1327,7 @@ export const useChatStore = defineStore('chat', {
         }
       }
       try {
-        if (Object.keys(config).length) await api.delete(`/sessions/${id}`, config)
-        else await api.delete(`/sessions/${id}`)
+        await api.delete(`/sessions/${id}`, config)
       } catch (error) {
         if (
           queued.length

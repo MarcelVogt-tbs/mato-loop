@@ -77,7 +77,7 @@ describe('agent identity store', () => {
     })
     expect(identity.configuredDisplayName).toBe('Ada')
     expect(identity.displayName).toBe('Ada')
-    expect(identity.scopedPersonas.map((persona) => persona.id)).toEqual(['personal-one'])
+    expect(identity.personas.map((persona) => persona.id)).toContain('personal-one')
   })
 
   it('persists scoped names and persona CRUD with exact payloads', async () => {
@@ -120,7 +120,7 @@ describe('agent identity store', () => {
     expect(api.delete).toHaveBeenCalledWith('/agent-identity/personas/personal-one', {
       params: { scope: 'personal' }
     })
-    expect(identity.personaById('personal-one')).toBeNull()
+    expect(identity.personas.some((persona) => persona.id === 'personal-one')).toBe(false)
   })
 
   it('does not let an older fetch overwrite an SSE update', async () => {

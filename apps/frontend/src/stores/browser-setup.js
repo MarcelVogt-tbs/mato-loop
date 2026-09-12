@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 import { useIntegrationStore } from 'stores/integrations'
-import { browserSocketUrl, setupInputChunks } from 'src/utils/browser'
+import { browserSocketUrl } from 'src/utils/browser'
+import { encodedInputChunks } from 'src/utils/input-encoding'
 import { notifyError } from 'src/utils/notifications'
 
 export const useBrowserSetupStore = defineStore('browser-setup', {
@@ -64,7 +65,7 @@ export const useBrowserSetupStore = defineStore('browser-setup', {
     },
     input(text) {
       if (this.status?.state !== 'installing') return
-      for (const data of setupInputChunks(text)) this.send({ type: 'input', data })
+      for (const data of encodedInputChunks(text)) this.send({ type: 'input', data })
     },
     resize(columns, rows) {
       if (![columns, rows].every((value) => Number.isInteger(value) && value >= 1 && value <= 1000)) return

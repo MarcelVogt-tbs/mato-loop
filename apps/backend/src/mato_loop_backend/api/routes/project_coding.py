@@ -83,12 +83,6 @@ class CodingProjectOptionsResponse(ApiModel):
 
 
 class CodingBindingRequest(ApiModel):
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        extra="forbid",
-        populate_by_name=True,
-    )
-
     integration_id: UUID
     project_key: str = Field(min_length=1, max_length=300)
     workspace_key: str = Field(min_length=1, max_length=1000)
@@ -126,12 +120,7 @@ class CodingModelsResponse(CodingModelSelectionResponse):
 
 
 class CodingModelsRequest(ApiModel):
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        extra="forbid",
-        populate_by_name=True,
-        strict=True,
-    )
+    model_config = ConfigDict(strict=True)
 
     analysis_model_key: str = Field(min_length=3, max_length=600)
     analysis_model_variant: str | None = Field(default=None, min_length=1, max_length=300)
@@ -174,12 +163,7 @@ class CodingFileStatusesResponse(ApiModel):
 
 
 class CodingAnalyzeRequest(ApiModel):
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        extra="forbid",
-        populate_by_name=True,
-        strict=True,
-    )
+    model_config = ConfigDict(strict=True)
 
     title: str = Field(min_length=1, max_length=MAX_TITLE_CHARS)
     brief: str = Field(min_length=1, max_length=MAX_BRIEF_CHARS)
@@ -195,12 +179,7 @@ class CodingAnalysisResponse(ApiModel):
 
 
 class CodingPlanRequest(ApiModel):
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        extra="forbid",
-        populate_by_name=True,
-        strict=True,
-    )
+    model_config = ConfigDict(strict=True)
 
     title: str = Field(min_length=1, max_length=MAX_TITLE_CHARS)
     markdown: str = Field(min_length=1, max_length=MAX_PLAN_CHARS)
@@ -228,12 +207,7 @@ class CodingPlansResponse(ApiModel):
 
 
 class CodingEnqueueRequest(ApiModel):
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        extra="forbid",
-        populate_by_name=True,
-        strict=True,
-    )
+    model_config = ConfigDict(strict=True)
 
     plan_ids: list[UUID] = Field(min_length=1, max_length=500)
 
@@ -284,12 +258,7 @@ class CodingQueueResponse(ApiModel):
 
 
 class CodingPermissionRequest(ApiModel):
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        extra="forbid",
-        populate_by_name=True,
-        strict=True,
-    )
+    model_config = ConfigDict(strict=True)
 
     response: Literal["once", "always", "reject"]
 

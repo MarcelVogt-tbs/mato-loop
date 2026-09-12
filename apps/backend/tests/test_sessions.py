@@ -55,6 +55,7 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.sessions.serialization import rebind_session_file_metadata
 from mato_loop_backend.sessions.service import (
     SessionServiceError,
     _latest_model_context,
@@ -426,8 +427,6 @@ async def test_standalone_project_move_rebinds_managed_file_references(monkeypat
 
 
 def test_standalone_project_move_rebinds_file_action_and_control_center_metadata() -> None:
-    from mato_loop_backend.api.routes import sessions as sessions_route
-
     session_id = uuid4()
     project_id = uuid4()
     file_tab_id = f"file-{uuid4()}"
@@ -494,9 +493,7 @@ def test_standalone_project_move_rebinds_file_action_and_control_center_metadata
         },
     )
 
-    sessions_route._rebind_session_file_metadata(
-        session, [message], session_id, project_id
-    )
+    rebind_session_file_metadata(session, [message], session_id, project_id)
 
     assert session.control_center["file_view"]["root_identity"] == str(project_id)
     assert session.control_center["file_views"]["session"]["root_identity"] == str(
@@ -513,9 +510,7 @@ def test_standalone_project_move_rebinds_file_action_and_control_center_metadata
         project_id
     )
 
-    sessions_route._rebind_session_file_metadata(
-        session, [message], project_id, None
-    )
+    rebind_session_file_metadata(session, [message], project_id, None)
 
     assert session.control_center["file_view"] is None
     assert session.control_center["file_views"]["session"] is None
@@ -526,8 +521,6 @@ def test_standalone_project_move_rebinds_file_action_and_control_center_metadata
 
 
 def test_removing_an_active_file_tab_falls_back_to_the_fixed_session_tab() -> None:
-    from mato_loop_backend.api.routes import sessions as sessions_route
-
     root_id = uuid4()
     tab_id = f"file-{uuid4()}"
     session = ChatSession(
@@ -554,7 +547,7 @@ def test_removing_an_active_file_tab_falls_back_to_the_fixed_session_tab() -> No
         },
     )
 
-    sessions_route._rebind_session_file_metadata(session, [], root_id, None)
+    rebind_session_file_metadata(session, [], root_id, None)
 
     assert session.control_center["tabs"] == [
         {"app_id": "session", "pinned": False}

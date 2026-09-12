@@ -238,18 +238,6 @@ export function toolFileActions(result) {
   })
 }
 
-export function imageAttachments(attachments) {
-  return supportedAttachments(attachments).filter((attachment) => attachment.kind === 'image')
-}
-
-export function audioAttachments(attachments) {
-  return supportedAttachments(attachments).filter((attachment) => attachment.kind === 'audio')
-}
-
-export function videoAttachments(attachments) {
-  return supportedAttachments(attachments).filter((attachment) => attachment.kind === 'video')
-}
-
 export function supportedAttachments(attachments) {
   if (!Array.isArray(attachments)) return []
   return attachments.flatMap((attachment) => {

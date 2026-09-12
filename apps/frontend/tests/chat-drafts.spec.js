@@ -1959,7 +1959,7 @@ describe('chat drafts', () => {
       'session-1', 'session-2', 'session-3'
     ])
     expect(chat.sessions[1].title).toBe('Aktualisiert')
-    expect(chat.sessionsNextCursor).toBeNull()
+    expect(chat.activeSessionList.nextCursor).toBeNull()
     expect(api.get).toHaveBeenNthCalledWith(2, '/sessions', {
       params: { standalone: true, pageSize: 20, cursor: 'cursor-1' }
     })
@@ -1983,7 +1983,7 @@ describe('chat drafts', () => {
     await Promise.all([loading, creating])
 
     expect(chat.sessions.map((session) => session.id)).toEqual(['new-session', 'old-session'])
-    expect(chat.sessionsNextCursor).toBe('next-page')
+    expect(chat.activeSessionList.nextCursor).toBe('next-page')
   })
 
   it('scopes session lists and new-session drafts by project', async () => {
@@ -2006,20 +2006,20 @@ describe('chat drafts', () => {
     })
   })
 
-  it('shares an in-flight page request with consumers loading the complete list', async () => {
+  it('shares an in-flight page request across callers', async () => {
     let resolvePage
     api.get.mockReturnValue(new Promise((resolve) => { resolvePage = resolve }))
     const chat = useChatStore()
     setSessions(chat, [{ id: 'session-1' }], { nextCursor: 'cursor-1' })
 
     const loadingPage = chat.fetchMoreSessions()
-    const loadingAll = chat.fetchAllSessions()
+    const duplicateRequest = chat.fetchMoreSessions()
     resolvePage(sessionPage([{ id: 'session-2' }]))
-    await Promise.all([loadingPage, loadingAll])
+    await Promise.all([loadingPage, duplicateRequest])
 
     expect(api.get).toHaveBeenCalledOnce()
-    expect(chat.sessionsLoadingMore).toBe(false)
-    expect(chat.sessionsNextCursor).toBeNull()
+    expect(chat.activeSessionList.loadingMore).toBe(false)
+    expect(chat.activeSessionList.nextCursor).toBeNull()
   })
 
   it('replaces stale loaded summaries when refreshing the visible depth', async () => {

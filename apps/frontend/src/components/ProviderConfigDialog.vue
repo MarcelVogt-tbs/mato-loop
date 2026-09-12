@@ -319,12 +319,9 @@ async function saveConfiguredProvider() {
     if (providerType.value === 'openai-compatible') payload.api_type = form.api_type
     let providerId = props.provider?.id
     if (props.provider) {
-      if (providerType.value === 'lemonade') await providers.updateLemonade(props.provider.id, payload)
-      else await providers.updateOpenAI(props.provider.id, payload)
-    } else if (providerType.value === 'lemonade') {
-      providerId = await providers.createLemonade(payload)
+      await providers.updateProvider(props.provider.id, payload)
     } else {
-      providerId = await providers.createOpenAI(payload)
+      providerId = await providers.createProvider(providerType.value, payload)
     }
     $q.notify({ type: 'positive', message: 'Provider gespeichert' })
     close()

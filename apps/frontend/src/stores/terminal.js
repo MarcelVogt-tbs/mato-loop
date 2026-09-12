@@ -1,9 +1,9 @@
 import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
+import { encodedInputChunks } from 'src/utils/input-encoding'
 import { notifyError } from 'src/utils/notifications'
 
 const MAX_BUFFER_LENGTH = 512 * 1024
-const MAX_INPUT_BYTES = 65_536
 
 function websocketUrl(agentId, sessionId, location = globalThis.location) {
   const protocol = location?.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -16,21 +16,6 @@ function decodedBytes(data, truncated = false) {
   let start = 0
   if (truncated) while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start += 1
   return bytes.subarray(start)
-}
-
-function encodedInputs(value) {
-  const bytes = new TextEncoder().encode(value)
-  const chunks = []
-  let binary = ''
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte)
-    if (binary.length === MAX_INPUT_BYTES) {
-      chunks.push(btoa(binary))
-      binary = ''
-    }
-  }
-  if (binary) chunks.push(btoa(binary))
-  return chunks
 }
 
 export const useTerminalStore = defineStore('terminal', {
@@ -189,7 +174,7 @@ export const useTerminalStore = defineStore('terminal', {
     },
     input(data) {
       if (!this.inputEnabled) return
-      for (const encoded of encodedInputs(data)) this.send({ type: 'input', data: encoded })
+      for (const encoded of encodedInputChunks(data)) this.send({ type: 'input', data: encoded })
     },
     resize(columns, rows, force = false) {
       if (!Number.isInteger(columns) || !Number.isInteger(rows) || columns < 1 || rows < 1

@@ -71,9 +71,6 @@ from mato_loop_backend.sessions.serialization import (
     run_payload,
 )
 from mato_loop_backend.sessions.serialization import (
-    rebind_session_file_metadata as _rebind_session_file_metadata,
-)
-from mato_loop_backend.sessions.serialization import (
     session_payload as _serialize_session_payload,
 )
 from mato_loop_backend.settings import (
@@ -86,9 +83,6 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.settings.models import ReasoningEffort
 from mato_loop_backend.workspace import RootFileError, RootFileService
-
-__all__ = ["_rebind_session_file_metadata"]
-
 
 router = APIRouter(prefix="/sessions", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
@@ -408,20 +402,6 @@ class SendMessageRequest(BaseModel):
 
 class SessionReadRequest(BaseModel):
     through_message_id: UUID = Field(alias="throughMessageId")
-
-
-async def _validate_execution_preferences(
-    db: AsyncSession,
-    user_id: UUID,
-    agent_id: UUID | None,
-    current_directory: str | None,
-) -> tuple[str | None, str | None]:
-    try:
-        return await session_service.validate_execution_preferences(
-            db, user_id, agent_id, current_directory
-        )
-    except session_service.SessionServiceError as exc:
-        _raise_api_error(exc)
 
 
 def _multipart_payload(value: str, model: type[BaseModel]) -> BaseModel:

@@ -37,12 +37,3 @@ export function browserNavigationUrl(input) {
     return url.href.length <= 4096 ? url.href : null
   } catch { return null }
 }
-
-export function setupInputChunks(text) {
-  const bytes = new TextEncoder().encode(text)
-  const chunks = []
-  for (let offset = 0; offset < bytes.length; offset += 65536) {
-    chunks.push(btoa(Array.from(bytes.subarray(offset, offset + 65536), (byte) => String.fromCharCode(byte)).join('')))
-  }
-  return chunks
-}

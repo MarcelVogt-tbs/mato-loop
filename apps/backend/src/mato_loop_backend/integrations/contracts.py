@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -85,14 +85,6 @@ class IntegrationContributions:
     tools: tuple[ToolContribution, ...] = ()
     tool_options: tuple[ToolOptionContribution, ...] = ()
     prompt_fragments: tuple[str, ...] = ()
-
-
-class IntegrationAdapter(Protocol):
-    integration_type: str
-    adapter_type: str
-    config_model: type[BaseModel]
-
-    def contributions(self, instance: IntegrationInstance) -> IntegrationContributions: ...
 
 
 @dataclass(frozen=True, slots=True)

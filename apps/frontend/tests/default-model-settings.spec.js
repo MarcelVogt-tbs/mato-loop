@@ -48,4 +48,14 @@ it('shows the inherited effective title model in personal settings', async () =>
   await vi.waitFor(() => {
     expect(root.textContent).toContain('Instanzvorgabe: Gemma · AI-PC')
   })
+  expect([...root.querySelectorAll('.default-model-setting__description .text-subtitle1')]
+    .map((element) => element.textContent)).toEqual([
+    'Agent', 'Skill-Erstellung', 'Videoanalyse', 'Bildanalyse', 'Kontextkomprimierung',
+    'Titelgenerierung', 'Dreaming', 'Bildgenerierung', 'Sprachausgabe', 'Audio und Musik', 'Transkription'
+  ])
+  expect([...root.querySelectorAll('.default-model-setting .q-field__label')]
+    .map((element) => element.textContent)).toEqual([
+    'Agentmodell', 'Modell für Skill-Erstellung', 'Videomodell', 'Visionmodell', 'Komprimierungsmodell',
+    'Modell für Titel', 'Dreaming-Modell', 'Bildmodell', 'Sprachmodell', 'Audiomodell', 'Transkriptionsmodell'
+  ])
 })

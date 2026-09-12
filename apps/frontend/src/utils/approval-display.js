@@ -282,7 +282,3 @@ export function technicalDetailsDisplay(details) {
   const fullText = JSON.stringify(sanitize(details, 0, new WeakSet(), '', false), null, 2)
   return { text, fullText, truncated: text !== fullText }
 }
-
-export function formatTechnicalDetails(details) {
-  return technicalDetailsDisplay(details).text
-}

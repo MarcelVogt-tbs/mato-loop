@@ -27,12 +27,6 @@ export const useAgentIdentityStore = defineStore('agent-identity', {
     settingsSaving: false,
     settingsRevision: 0
   }),
-  getters: {
-    scopedPersonas: (state) => state.personas.filter((persona) => (
-      persona.scope === state.scope
-    )),
-    personaById: (state) => (id) => state.personas.find((persona) => persona.id === id) || null
-  },
   actions: {
     resetIdentity() {
       this.requestRevision += 1

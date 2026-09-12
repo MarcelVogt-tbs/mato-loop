@@ -71,207 +71,8 @@
       :class="{ disabled: personalBlocked }"
       :inert="personalBlocked"
     >
-      <q-card-section class="default-model-setting">
-        <q-avatar rounded color="primary" text-color="white" icon="smart_toy" />
-        <div class="default-model-setting__description">
-          <div class="text-subtitle1 text-weight-bold">Agent</div>
-          <div class="text-body2 app-muted">
-            Standard für neue Sessions, solange dort kein eigenes Modell gewählt wurde.
-          </div>
-        </div>
-        <div>
-          <q-select
-            v-model="form.defaultModelId"
-            outlined
-            clearable
-            emit-value
-            map-options
-            options-dense
-            label="Agentmodell"
-            :display-value="form.defaultModelId ? undefined : 'Kein Standardmodell'"
-            :options="providers.selectionOptions(form.defaultModelId, true)"
-            :disable="personalBlocked"
-            hint="Agent-Läufe benötigen ein Modell mit Tool-Unterstützung."
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-          />
-        </div>
-      </q-card-section>
-
-      <q-separator />
-
-      <q-card-section class="default-model-setting">
-        <q-avatar rounded color="indigo" text-color="white" icon="auto_awesome" />
-        <div class="default-model-setting__description">
-          <div class="text-subtitle1 text-weight-bold">Skill-Erstellung</div>
-          <div class="text-body2 app-muted">
-            Erstellt aus einer Session einen prüfbaren Skill-Entwurf.
-          </div>
-        </div>
-        <div>
-          <q-select
-            v-model="form.skillCreationModelId"
-            outlined
-            clearable
-            emit-value
-            map-options
-            options-dense
-            label="Modell für Skill-Erstellung"
-            :display-value="form.skillCreationModelId ? undefined : 'Sessionmodell verwenden'"
-            :options="providers.skillCreationModelOptions"
-            :disable="personalBlocked"
-            hint="Nur verfügbare Chatmodelle mit Tool-Unterstützung."
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-          />
-        </div>
-      </q-card-section>
-
-      <q-separator />
-
-      <q-card-section class="default-model-setting">
-        <q-avatar rounded color="purple" text-color="white" icon="video_file" />
-        <div class="default-model-setting__description">
-          <div class="text-subtitle1 text-weight-bold">Videoanalyse</div>
-          <div class="text-body2 app-muted">
-            Wird verwendet, wenn es gegenüber dem aktiven Modell zusätzliche Video- oder Bildfähigkeiten bietet.
-          </div>
-        </div>
-        <div>
-          <q-select
-            v-model="form.videoModelId"
-            outlined
-            clearable
-            emit-value
-            map-options
-            options-dense
-            label="Videomodell"
-            :display-value="form.videoModelId ? undefined : 'Kein Standardmodell'"
-            :options="providers.videoModelOptions"
-            :disable="personalBlocked"
-            hint="Das aktive Modell bleibt bevorzugt, wenn es dieselbe oder eine bessere Eingabefähigkeit besitzt."
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-          />
-        </div>
-      </q-card-section>
-
-      <q-separator />
-
-      <q-card-section class="default-model-setting">
-        <q-avatar rounded color="blue-grey" text-color="white" icon="document_scanner" />
-        <div class="default-model-setting__description">
-          <div class="text-subtitle1 text-weight-bold">Bildanalyse</div>
-          <div class="text-body2 app-muted">
-            Liest bildbasierte PDF-Seiten, wenn das aktive Agentmodell keine Bilder verarbeiten kann.
-          </div>
-        </div>
-        <div>
-          <q-select
-            v-model="form.visionModelId"
-            outlined
-            clearable
-            emit-value
-            map-options
-            options-dense
-            label="Visionmodell"
-            :display-value="form.visionModelId ? undefined : 'Kein Standardmodell'"
-            :options="providers.visionModelOptions"
-            :disable="personalBlocked"
-            hint="Nur verfügbare Chatmodelle mit Bildeingabe."
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-          />
-        </div>
-      </q-card-section>
-
-      <q-separator />
-
-      <q-card-section class="default-model-setting">
-        <q-avatar rounded color="secondary" text-color="white" icon="compress" />
-        <div class="default-model-setting__description">
-          <div class="text-subtitle1 text-weight-bold">Kontextkomprimierung</div>
-          <div class="text-body2 app-muted">
-            Verdichtet ältere Gesprächsinhalte, wenn das Kontextfenster knapp wird.
-          </div>
-        </div>
-        <div>
-          <q-select
-            v-model="form.compactionModelId"
-            outlined
-            clearable
-            emit-value
-            map-options
-            options-dense
-            label="Komprimierungsmodell"
-            :display-value="form.compactionModelId ? undefined : 'Sessionmodell verwenden'"
-            :options="providers.selectionOptions(form.compactionModelId)"
-            :disable="personalBlocked"
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-          />
-        </div>
-      </q-card-section>
-
-      <q-separator />
-
-      <q-card-section class="default-model-setting">
-        <q-avatar rounded color="accent" text-color="white" icon="title" />
-        <div class="default-model-setting__description">
-          <div class="text-subtitle1 text-weight-bold">Titelgenerierung</div>
-          <div class="text-body2 app-muted">
-            Erstellt parallel zum ersten Agent-Run einen kurzen Titel aus der ersten Nachricht und ihren Anhängen.
-          </div>
-        </div>
-        <div>
-          <q-select
-            v-model="form.titleGenerationModelId"
-            outlined
-            clearable
-            emit-value
-            map-options
-            options-dense
-            label="Modell für Titel"
-            :display-value="form.titleGenerationModelId ? undefined : titleGenerationFallbackLabel"
-            :options="providers.selectionOptions(form.titleGenerationModelId)"
-            :disable="personalBlocked"
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-          />
-          <q-checkbox
-            v-model="form.titleVisionFallbackEnabled"
-            class="q-mt-sm"
-            color="primary"
-            label="Fallback auf Vision-Modell bei Bildinhalten"
-            :disable="personalBlocked"
-          />
-        </div>
-      </q-card-section>
-
-      <q-separator />
-
-      <q-card-section class="default-model-setting">
-        <q-avatar rounded color="deep-purple" text-color="white" icon="bedtime" />
-        <div class="default-model-setting__description">
-          <div class="text-subtitle1 text-weight-bold">Dreaming</div>
-          <div class="text-body2 app-muted">
-            Verarbeitet abgeschlossene Gespräche im Hintergrund zu langfristigen Erinnerungen.
-          </div>
-        </div>
-        <div>
-          <q-select
-            v-model="form.dreamingModelId"
-            outlined
-            clearable
-            emit-value
-            map-options
-            options-dense
-            label="Dreaming-Modell"
-            :display-value="form.dreamingModelId ? undefined : 'Agentmodell verwenden'"
-            :options="providers.selectionOptions(form.dreamingModelId, true)"
-            :disable="personalBlocked"
-            hint="Das optionale Dreaming benötigt ein Modell mit Tool-Unterstützung."
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
-          />
-        </div>
-      </q-card-section>
-
-      <template v-for="setting in mediaSettings" :key="setting.field">
-        <q-separator />
+      <template v-for="(setting, index) in modelSettings" :key="setting.field">
+        <q-separator v-if="index" />
 
         <q-card-section class="default-model-setting">
           <q-avatar rounded :color="setting.color" text-color="white" :icon="setting.icon" />
@@ -288,10 +89,19 @@
               map-options
               options-dense
               :label="setting.label"
-              :display-value="form[setting.field] ? undefined : 'Kein Standardmodell'"
-              :options="providers.capabilityOptions(setting.capability)"
+              :display-value="form[setting.field] ? undefined : fallbackLabel(setting)"
+              :options="settingOptions(setting)"
               :disable="personalBlocked"
+              :hint="setting.hint"
               :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+            />
+            <q-checkbox
+              v-if="setting.titleVisionFallback"
+              v-model="form.titleVisionFallbackEnabled"
+              class="q-mt-sm"
+              color="primary"
+              label="Fallback auf Vision-Modell bei Bildinhalten"
+              :disable="personalBlocked"
             />
           </div>
         </q-card-section>
@@ -318,13 +128,87 @@ const loaded = ref(false)
 const loadFailed = ref(false)
 const saving = ref(false)
 const gateLoading = ref(false)
-const mediaSettings = [
+const modelSettings = [
+  {
+    field: 'defaultModelId',
+    requiresTools: true,
+    title: 'Agent',
+    description: 'Standard für neue Sessions, solange dort kein eigenes Modell gewählt wurde.',
+    label: 'Agentmodell',
+    fallback: 'Kein Standardmodell',
+    hint: 'Agent-Läufe benötigen ein Modell mit Tool-Unterstützung.',
+    icon: 'smart_toy',
+    color: 'primary'
+  },
+  {
+    field: 'skillCreationModelId',
+    options: 'skillCreationModelOptions',
+    title: 'Skill-Erstellung',
+    description: 'Erstellt aus einer Session einen prüfbaren Skill-Entwurf.',
+    label: 'Modell für Skill-Erstellung',
+    fallback: 'Sessionmodell verwenden',
+    hint: 'Nur verfügbare Chatmodelle mit Tool-Unterstützung.',
+    icon: 'auto_awesome',
+    color: 'indigo'
+  },
+  {
+    field: 'videoModelId',
+    options: 'videoModelOptions',
+    title: 'Videoanalyse',
+    description: 'Wird verwendet, wenn es gegenüber dem aktiven Modell zusätzliche Video- oder Bildfähigkeiten bietet.',
+    label: 'Videomodell',
+    fallback: 'Kein Standardmodell',
+    hint: 'Das aktive Modell bleibt bevorzugt, wenn es dieselbe oder eine bessere Eingabefähigkeit besitzt.',
+    icon: 'video_file',
+    color: 'purple'
+  },
+  {
+    field: 'visionModelId',
+    options: 'visionModelOptions',
+    title: 'Bildanalyse',
+    description: 'Liest bildbasierte PDF-Seiten, wenn das aktive Agentmodell keine Bilder verarbeiten kann.',
+    label: 'Visionmodell',
+    fallback: 'Kein Standardmodell',
+    hint: 'Nur verfügbare Chatmodelle mit Bildeingabe.',
+    icon: 'document_scanner',
+    color: 'blue-grey'
+  },
+  {
+    field: 'compactionModelId',
+    title: 'Kontextkomprimierung',
+    description: 'Verdichtet ältere Gesprächsinhalte, wenn das Kontextfenster knapp wird.',
+    label: 'Komprimierungsmodell',
+    fallback: 'Sessionmodell verwenden',
+    icon: 'compress',
+    color: 'secondary'
+  },
+  {
+    field: 'titleGenerationModelId',
+    titleVisionFallback: true,
+    title: 'Titelgenerierung',
+    description: 'Erstellt parallel zum ersten Agent-Run einen kurzen Titel aus der ersten Nachricht und ihren Anhängen.',
+    label: 'Modell für Titel',
+    icon: 'title',
+    color: 'accent'
+  },
+  {
+    field: 'dreamingModelId',
+    requiresTools: true,
+    title: 'Dreaming',
+    description: 'Verarbeitet abgeschlossene Gespräche im Hintergrund zu langfristigen Erinnerungen.',
+    label: 'Dreaming-Modell',
+    fallback: 'Agentmodell verwenden',
+    hint: 'Das optionale Dreaming benötigt ein Modell mit Tool-Unterstützung.',
+    icon: 'bedtime',
+    color: 'deep-purple'
+  },
   {
     field: 'imageGenerationModelId',
     capability: 'image_generation',
     title: 'Bildgenerierung',
     description: 'Erzeugt Bilder aus einer textlichen Beschreibung.',
     label: 'Bildmodell',
+    fallback: 'Kein Standardmodell',
     icon: 'image',
     color: 'teal'
   },
@@ -334,6 +218,7 @@ const mediaSettings = [
     title: 'Sprachausgabe',
     description: 'Wandelt Text in gesprochene Sprache um.',
     label: 'Sprachmodell',
+    fallback: 'Kein Standardmodell',
     icon: 'record_voice_over',
     color: 'deep-orange'
   },
@@ -343,6 +228,7 @@ const mediaSettings = [
     title: 'Audio und Musik',
     description: 'Erzeugt Klänge, Audio oder Musik aus einer Beschreibung.',
     label: 'Audiomodell',
+    fallback: 'Kein Standardmodell',
     icon: 'music_note',
     color: 'indigo'
   },
@@ -352,6 +238,7 @@ const mediaSettings = [
     title: 'Transkription',
     description: 'Wandelt Sprache und andere Audioaufnahmen in Text um.',
     label: 'Transkriptionsmodell',
+    fallback: 'Kein Standardmodell',
     icon: 'graphic_eq',
     color: 'cyan-8'
   }
@@ -370,17 +257,8 @@ const form = reactive({
   audioTranscriptionModelId: null,
   skillCreationModelId: null
 })
-const changed = computed(() => (
-  form.defaultModelId !== providers.defaultModelId
-  || form.compactionModelId !== providers.compactionModelId
-  || form.titleGenerationModelId !== providers.titleGenerationModelId
-  || form.titleVisionFallbackEnabled !== providers.titleVisionFallbackEnabled
-  || form.dreamingModelId !== providers.dreamingModelId
-  || form.visionModelId !== providers.visionModelId
-  || form.videoModelId !== providers.videoModelId
-  || form.skillCreationModelId !== providers.skillCreationModelId
-  || mediaSettings.some((setting) => form[setting.field] !== providers[setting.field])
-))
+const formKeys = [...modelSettings.map((setting) => setting.field), 'titleVisionFallbackEnabled']
+const changed = computed(() => formKeys.some((key) => form[key] !== providers[key]))
 const personalBlocked = computed(() => (
   providers.scope === 'personal' && !providers.personalProvidersEnabled
 ))
@@ -391,15 +269,17 @@ const titleGenerationFallbackLabel = computed(() => {
 })
 
 function assignForm() {
-  form.defaultModelId = providers.defaultModelId
-  form.compactionModelId = providers.compactionModelId
-  form.titleGenerationModelId = providers.titleGenerationModelId
-  form.titleVisionFallbackEnabled = providers.titleVisionFallbackEnabled
-  form.dreamingModelId = providers.dreamingModelId
-  form.visionModelId = providers.visionModelId
-  form.videoModelId = providers.videoModelId
-  form.skillCreationModelId = providers.skillCreationModelId
-  for (const setting of mediaSettings) form[setting.field] = providers[setting.field]
+  for (const key of formKeys) form[key] = providers[key]
+}
+
+function settingOptions(setting) {
+  if (setting.options) return providers[setting.options]
+  if (setting.capability) return providers.capabilityOptions(setting.capability)
+  return providers.selectionOptions(form[setting.field], setting.requiresTools)
+}
+
+function fallbackLabel(setting) {
+  return setting.titleVisionFallback ? titleGenerationFallbackLabel.value : setting.fallback
 }
 
 async function load() {

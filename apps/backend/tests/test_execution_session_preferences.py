@@ -16,7 +16,6 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.sessions import (
     SessionUpdateRequest,
     _session_payload,
-    _validate_execution_preferences,
     update_session,
 )
 from mato_loop_backend.execution import (
@@ -26,7 +25,11 @@ from mato_loop_backend.execution import (
 )
 from mato_loop_backend.memory.episode_indexing import EpisodeIndexService
 from mato_loop_backend.models import AgentRun, ChatSession, ExecutionAgent, PermissionGrant
-from mato_loop_backend.sessions.service import add_directory_grant
+from mato_loop_backend.sessions.service import (
+    SessionServiceError,
+    add_directory_grant,
+    validate_execution_preferences,
+)
 from mato_loop_backend.settings import AiSettings, SettingsStore, ToolExecutionPolicy, TrustLevel
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 from mato_loop_backend.workspace import RootFileService
@@ -62,8 +65,8 @@ def test_execution_session_models_define_agent_foreign_keys_and_jsonb_operations
 
 async def test_preferences_require_an_executor_for_current_directory() -> None:
     db = AsyncMock(spec=AsyncSession)
-    with pytest.raises(ApiError) as error:
-        await _validate_execution_preferences(db, uuid4(), None, "/project")
+    with pytest.raises(SessionServiceError) as error:
+        await validate_execution_preferences(db, uuid4(), None, "/project")
     assert error.value.field == "currentDirectory"
     db.scalar.assert_not_awaited()
 
@@ -81,7 +84,7 @@ async def test_preferences_resolve_absolute_directory_and_return_policy(monkeypa
         lambda _agent_id: frozenset({"filesystem.resolve"}),
     )
 
-    assert await _validate_execution_preferences(
+    assert await validate_execution_preferences(
         db, user_id, agent.id, "/home/user/project"
     ) == ("/home/user/project", "auto")
     request.assert_awaited_once_with(
@@ -100,8 +103,8 @@ async def test_preferences_reject_denied_external_directory(monkeypatch) -> None
         "snapshot",
         lambda _agent_id: frozenset({"filesystem.resolve"}),
     )
-    with pytest.raises(ApiError) as error:
-        await _validate_execution_preferences(db, user_id, agent.id, "/srv")
+    with pytest.raises(SessionServiceError) as error:
+        await validate_execution_preferences(db, user_id, agent.id, "/srv")
     assert error.value.code == "permission.denied"
 
 

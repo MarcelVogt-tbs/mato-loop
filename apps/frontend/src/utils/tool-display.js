@@ -412,10 +412,6 @@ export function toolArgumentsDisplay(argumentsValue, toolName = null) {
   return technicalDetailsDisplay(argumentsValue)
 }
 
-export function formatToolArguments(argumentsValue, toolName = null) {
-  return toolArgumentsDisplay(argumentsValue, toolName).text
-}
-
 function localizePlainToolResult(content, toolName) {
   const mediaResults = {
     generate_qr_code: ['QR code generated.', 'QR-Code erzeugt.'],

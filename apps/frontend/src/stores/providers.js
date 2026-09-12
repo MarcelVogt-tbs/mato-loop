@@ -226,9 +226,9 @@ export const useProviderStore = defineStore('providers', {
         if (this.loadVersion === loadVersion) this.loading = false
       }
     },
-    async createOpenAI(payload) {
+    async createProvider(type, payload) {
       const previousIds = new Set(this.providers.map((provider) => provider.id))
-      const { data } = await api.post('/providers/openai-compatible', payload, scopeConfig(this.scope))
+      const { data } = await api.post(`/providers/${type}`, payload, scopeConfig(this.scope))
       assignProviderPayload(this, data)
       await this.fetchAll()
       return data?.providerId
@@ -241,26 +241,7 @@ export const useProviderStore = defineStore('providers', {
         ))?.id
         || null
     },
-    async updateOpenAI(id, payload) {
-      await api.put(`/providers/configuration/${id}`, payload, scopeConfig(this.scope))
-      await this.fetchAll()
-    },
-    async createLemonade(payload) {
-      const previousIds = new Set(this.providers.map((provider) => provider.id))
-      const { data } = await api.post('/providers/lemonade', payload, scopeConfig(this.scope))
-      assignProviderPayload(this, data)
-      await this.fetchAll()
-      return data?.providerId
-        || data?.provider?.id
-        || (data?.id && !Array.isArray(data.providers) ? data.id : null)
-        || this.providers.find((provider) => !previousIds.has(provider.id))?.id
-        || this.providers.find((provider) => (
-          provider.name === payload.name
-          && (provider.config?.baseUrl || provider.config?.base_url) === payload.base_url.replace(/\/$/, '')
-        ))?.id
-        || null
-    },
-    async updateLemonade(id, payload) {
+    async updateProvider(id, payload) {
       await api.put(`/providers/configuration/${id}`, payload, scopeConfig(this.scope))
       await this.fetchAll()
     },

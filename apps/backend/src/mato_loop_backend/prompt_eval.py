@@ -11,7 +11,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -130,37 +130,7 @@ SlimmingVariant = Literal[
     "combined-lean",
     "combined-selective-lean",
 ]
-SLIMMING_VARIANTS: tuple[SlimmingVariant, ...] = (
-    "current",
-    "schema-structural",
-    "schema-compact",
-    "prompt-dedupe",
-    "prompt-compact",
-    "combined-compact",
-    "schema-safe",
-    "prompt-safe",
-    "combined-safe",
-    "schema-structural-safe",
-    "schema-expanded-baseline",
-    "schema-prose-v2",
-    "prompt-prose-v2",
-    "combined-v2",
-    "schema-no-field-descriptions",
-    "schema-no-descriptions",
-    "schema-no-constraints",
-    "schema-no-defaults",
-    "schema-no-integration-enums",
-    "schema-lean",
-    "schema-selective-lean",
-    "prompt-no-inactive",
-    "prompt-no-default-identity",
-    "prompt-no-mermaid",
-    "prompt-no-budgets",
-    "prompt-no-transcript-duplicate",
-    "prompt-atoms",
-    "combined-lean",
-    "combined-selective-lean",
-)
+SLIMMING_VARIANTS: tuple[SlimmingVariant, ...] = get_args(SlimmingVariant)
 MessageLayout = Literal[
     "current",
     "memory-assistant-envelope",
@@ -173,18 +143,7 @@ MessageLayout = Literal[
     "time-tail",
     "runtime-tail",
 ]
-MESSAGE_LAYOUTS: tuple[MessageLayout, ...] = (
-    "current",
-    "memory-assistant-envelope",
-    "memory-system-message",
-    "memory-tool-driven",
-    "memory-tool-result",
-    "time-user-prefix",
-    "time-before-user",
-    "runtime-before-user",
-    "time-tail",
-    "runtime-tail",
-)
+MESSAGE_LAYOUTS: tuple[MessageLayout, ...] = get_args(MessageLayout)
 _RUNTIME_PARAGRAPH_PREFIXES = (
     "Tool budget exhausted.",
     "Tool budget limit for this run:",
