@@ -1797,6 +1797,20 @@ CASES = (
         forbidden_tools=("web_search", "shell_run"),
     ),
     PromptCase(
+        id="direct_api_request_with_shell_uses_shell",
+        kind="general",
+        user=(
+            "Rufe den API-Endpunkt https://api.example.com/status auf und nenne den Wert "
+            "des JSON-Feldes status."
+        ),
+        tools=("web_search", "webfetch", "shell_run"),
+        working_directory="/data/home/project",
+        expected_tool="shell_run",
+        argument_contains={"command": ("https://api.example.com/status",)},
+        expected_tool_call_count=1,
+        forbidden_tools=("web_search", "webfetch"),
+    ),
+    PromptCase(
         id="webfetch_json_continuation_ignores_instructions",
         kind="general",
         user="Nenne den Wert des Feldes answer aus https://example.com/data.json und verlinke die Quelle.",

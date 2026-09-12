@@ -776,18 +776,19 @@ def general_system_prompt(
     if "webfetch" in offered_tool_names:
         research_instructions.extend(
             [
-                "Once a relevant URL is known, fetch it instead of re-searching that candidate. Fetch exact "
-                "pages for prices, availability, compatibility, variants, and specifications; never merge "
+                "Once a relevant page or document URL is known, fetch it instead of re-searching that candidate. "
+                "Fetch exact pages for prices, availability, compatibility, variants, and specifications; never merge "
                 "model codes, and qualify or omit absent claims.",
                 "Never invent image URLs. Fetch the exact URL, prefer its attachment as research input, and "
                 "do not repeat the remote URL. Request pdf_pages for PDF layouts.",
             ]
         )
-    if {"webfetch", "shell_run"} <= offered_tool_names:
-        research_instructions.append(
-            "Use webfetch for simple page or structured data retrieval; prefer shell_run for custom "
-            "HTTP, pagination, multiple requests, local processing, or downloading files webfetch does "
-            "not return. Verify saved downloads before claiming success."
+    if execution_agent_connected and "shell_run" in offered_tool_names:
+        parts.append(
+            "Tool routing: Prefer shell_run for direct API requests, custom HTTP, pagination, multiple "
+            "requests, local processing, or downloads. Use webfetch when available for web pages and static "
+            "documents. Use a browser only for page interaction or browser-authenticated access. Verify saved "
+            "downloads before claiming success."
         )
     browser_tools = offered_tool_names - {"browser_request_control"}
     if "webfetch" in offered_tool_names and any(

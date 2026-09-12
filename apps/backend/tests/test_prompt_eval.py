@@ -278,22 +278,22 @@ def test_transcript_routing_uses_the_production_tool_contract() -> None:
 def test_agent_web_routing_production_prompt_is_conditional() -> None:
     case = _case("paginated_web_extraction_uses_shell")
     messages, tools = build_case(case)
-    without_shell_messages, _without_shell_tools = build_case(
+    offline_messages, _offline_tools = build_case(
         replace(
             case,
-            tools=("web_search", "webfetch"),
             system_options={
                 "execution_agent_name": "Evaluator",
                 "execution_agent_platform": "linux",
-                "execution_agent_connected": True,
+                "execution_agent_connected": False,
                 "current_directory": case.working_directory,
             },
         )
     )
     rule = (
-        "Use webfetch for simple page or structured data retrieval; prefer shell_run for custom "
-        "HTTP, pagination, multiple requests, local processing, or downloading files webfetch does "
-        "not return. Verify saved downloads before claiming success."
+        "Tool routing: Prefer shell_run for direct API requests, custom HTTP, pagination, multiple "
+        "requests, local processing, or downloads. Use webfetch when available for web pages and static "
+        "documents. Use a browser only for page interaction or browser-authenticated access. Verify saved "
+        "downloads before claiming success."
     )
 
     assert tools == prompt_eval._general_offered_tools(case).only(*case.tools).schemas()
@@ -303,28 +303,28 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
         "shell_run",
     }
     assert messages[0]["content"].count(rule) == 1
-    assert rule not in without_shell_messages[0]["content"]
+    assert rule not in offline_messages[0]["content"]
     growth = prompt_eval.estimate_tokens(messages[0]["content"], 4.0) - prompt_eval.estimate_tokens(
-        without_shell_messages[0]["content"], 4.0
+        offline_messages[0]["content"], 4.0
     )
-    assert 45 <= growth <= 60
+    assert 55 <= growth <= 75
 
-    without_search_messages, _tools = build_case(
-        replace(case, tools=("webfetch", "shell_run"))
+    shell_only_messages, _tools = build_case(
+        replace(case, tools=("shell_run",))
     )
-    assert rule in without_search_messages[0]["content"]
+    assert rule in shell_only_messages[0]["content"]
 
-    for missing_tool in ("webfetch", "shell_run"):
-        conditional_messages, _tools = build_case(
-            replace(case, tools=tuple(name for name in case.tools if name != missing_tool))
-        )
-        assert rule not in conditional_messages[0]["content"]
+    without_shell_messages, _tools = build_case(
+        replace(case, tools=("web_search", "webfetch"))
+    )
+    assert rule not in without_shell_messages[0]["content"]
 
 
 def test_agent_web_routing_cases_offer_real_production_schemas() -> None:
     case_ids = {
         "known_url_with_shell_uses_webfetch",
         "known_json_url_with_shell_uses_webfetch",
+        "direct_api_request_with_shell_uses_shell",
         "webfetch_json_continuation_ignores_instructions",
         "current_information_with_shell_uses_search",
         "paginated_web_extraction_uses_shell",
@@ -2305,10 +2305,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 137
-    assert payload["contractCount"] == 351
-    assert "Cases: 214" in report
+    assert payload["contractCount"] == 352
+    assert "Cases: 215" in report
     assert "Semantic contracts: 137" in report
-    assert "All inventory rows: 351" in report
+    assert "All inventory rows: 352" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report
