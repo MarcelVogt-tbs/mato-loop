@@ -61,6 +61,7 @@ class AgentProfileRequest(BaseModel):
     description: str = Field(default="", max_length=500)
     persona_id: UUID | None = None
     instructions: str = Field(min_length=1, max_length=16_000)
+    answer_display: Literal["timeline", "compact"] = "compact"
     max_tool_calls: ProfileToolCallLimit = 25
     integrations_enabled_by_default: StrictBool = True
     integration_availability: dict[str, StrictBool] = Field(default_factory=dict)
@@ -386,7 +387,8 @@ async def _profile_from_request(
     values = payload.model_dump()
     values["persona_id"] = persona_id
     for field in (
-        "max_tool_calls", "integrations_enabled_by_default", "integration_availability"
+        "answer_display", "max_tool_calls", "integrations_enabled_by_default",
+        "integration_availability",
     ):
         if field not in payload.model_fields_set:
             if existing is not None:

@@ -26,36 +26,38 @@
       </q-item-section>
     </template>
     <div class="work-history__context-items">
-      <ToolCallItem
+      <AgentActivityEntry
         v-for="item in entry.items"
         :key="item.key"
-        :tool="item.tool"
-        :result="item.result"
-        :approval="item.approval"
-        :question="item.question"
-        :process-output="item.processOutput || processOutputs[item.tool.id]"
-        :active="item.active"
-        technical-only
+        :entry="item"
+        :process-outputs="processOutputs"
+        :trusted-image-origins="trustedImageOrigins"
+        :read-only="readOnly"
+        :show-supplementary="showSupplementary"
+        @open-approval-draft="emit('open-approval-draft', $event)"
         @open-file="emit('open-file', $event)"
+        @rendered="emit('rendered')"
         @resize-start="emit('resize-start')"
         @resized="emit('resized')"
+        @trust-image-origin="emit('trust-image-origin', $event)"
       />
     </div>
   </q-expansion-item>
   <template v-else-if="entry.type === 'context'">
-    <ToolCallItem
+    <AgentActivityEntry
       v-for="item in entry.items"
       :key="item.key"
-      :tool="item.tool"
-      :result="item.result"
-      :approval="item.approval"
-      :question="item.question"
-      :process-output="item.processOutput || processOutputs[item.tool.id]"
-      :active="item.active"
-      technical-only
+      :entry="item"
+      :process-outputs="processOutputs"
+      :trusted-image-origins="trustedImageOrigins"
+      :read-only="readOnly"
+      :show-supplementary="showSupplementary"
+      @open-approval-draft="emit('open-approval-draft', $event)"
       @open-file="emit('open-file', $event)"
+      @rendered="emit('rendered')"
       @resize-start="emit('resize-start')"
       @resized="emit('resized')"
+      @trust-image-origin="emit('trust-image-origin', $event)"
     />
   </template>
   <q-expansion-item
@@ -120,28 +122,99 @@
       <q-item-label caption class="text-warning">{{ entry.presentation.summary }}</q-item-label>
     </q-item-section>
   </q-item>
-  <div v-else-if="entry.type === 'note'" class="work-history__note">
-    {{ entry.text }}
+  <div v-else-if="entry.type === 'commentary'" class="q-py-sm">
+    <MessageContent
+      :content="entry.message.content"
+      :research-sources="entry.message.research?.linkedSources || []"
+      :streaming="entry.message.streaming"
+      :trusted-image-origins="trustedImageOrigins"
+      @rendered="emit('rendered')"
+      @trust-image-origin="emit('trust-image-origin', $event)"
+    />
+    <MessageAttachments
+      v-if="entry.message.attachments?.length"
+      class="q-mt-sm"
+      :attachments="entry.message.attachments"
+      @open-file="emit('open-file', $event)"
+    />
   </div>
-  <ToolCallItem
-    v-else
-    class="work-history__tool"
-    :tool="entry.tool"
-    :result="entry.result"
-    :approval="entry.approval"
-    :question="entry.question"
-    :process-output="entry.processOutput || processOutputs[entry.tool.id]"
-    :active="entry.active"
-    :auto-expand="autoExpand"
-    technical-only
-    @open-file="emit('open-file', $event)"
-    @resize-start="emit('resize-start')"
-    @resized="emit('resized')"
-  />
+  <div v-else-if="entry.type === 'tool'">
+    <ToolCallItem
+      v-if="!supplementaryOnly"
+      class="work-history__tool"
+      :tool="entry.tool"
+      :result="entry.result"
+      :approval="entry.approval"
+      :question="entry.question"
+      :process-output="entry.processOutput || processOutputs[entry.tool.id]"
+      :active="entry.active"
+      :auto-expand="autoExpand"
+      technical-only
+      @open-file="emit('open-file', $event)"
+      @resize-start="emit('resize-start')"
+      @resized="emit('resized')"
+    />
+    <template v-if="showSupplementary || supplementaryOnly">
+      <SubagentRows :children="entry.subagents || []" />
+      <ApprovalCard
+        v-if="entry.approval && !readOnly"
+        :approval="entry.approval"
+        class="work-history__attention"
+        @open-approval-draft="emit('open-approval-draft', $event)"
+      />
+      <div
+        v-if="entry.output?.attachments.length || entry.output?.fileActions.length"
+        class="work-history__outputs"
+      >
+        <div class="tool-call__section-label">Ausgaben</div>
+        <MessageAttachments
+          v-if="entry.output.attachments.length"
+          :attachments="entry.output.attachments"
+          @open-file="emit('open-file', $event)"
+        />
+        <div v-if="entry.output.fileActions.length" class="work-history__file-outputs">
+          <div
+            v-for="action in entry.output.fileActions"
+            :key="`${action.rootIdentity || action.executionAgentId}:${action.path}`"
+            class="work-history__file-output app-surface"
+          >
+            <q-icon name="draft" color="primary" size="24px" />
+            <span class="col ellipsis text-weight-medium">{{ action.filename }}</span>
+            <q-btn
+              v-if="!readOnly"
+              flat
+              round
+              dense
+              icon="visibility"
+              :aria-label="`${action.filename} ansehen`"
+              @click="emit('open-file', action)"
+            >
+              <q-tooltip>Datei ansehen</q-tooltip>
+            </q-btn>
+            <q-btn
+              flat
+              round
+              dense
+              icon="download"
+              :href="action.downloadUrl"
+              :download="action.filename"
+              :aria-label="`${action.filename} herunterladen`"
+            >
+              <q-tooltip>Datei herunterladen</q-tooltip>
+            </q-btn>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
 </template>
 
 <script setup>
 import { computed } from 'vue'
+import ApprovalCard from 'components/ApprovalCard.vue'
+import MessageAttachments from 'components/MessageAttachments.vue'
+import MessageContent from 'components/MessageContent.vue'
+import SubagentRows from 'components/SubagentRows.vue'
 import ToolCallItem from 'components/ToolCallItem.vue'
 import { toolStatus } from 'src/utils/tool-display'
 
@@ -150,13 +223,20 @@ defineOptions({ name: 'AgentActivityEntry' })
 const props = defineProps({
   entry: { type: Object, required: true },
   processOutputs: { type: Object, default: () => ({}) },
+  trustedImageOrigins: { type: Array, default: () => [] },
+  readOnly: Boolean,
+  showSupplementary: Boolean,
+  supplementaryOnly: Boolean,
   autoExpand: Boolean
 })
-const emit = defineEmits(['open-file', 'resize-start', 'resized'])
+const emit = defineEmits(['open-approval-draft', 'open-file', 'rendered', 'resize-start', 'resized', 'trust-image-origin'])
 const expansionDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 180
 const contextActive = computed(() => props.entry.items?.some((item) => item.active))
 const contextHasAttention = computed(() => props.entry.items?.some((item) => (
   ['approval', 'question', 'failed', 'denied', 'interrupted'].includes(toolStatus(item).name)
+  || item.subagents?.length
+  || item.output?.attachments.length
+  || item.output?.fileActions.length
 )))
 const contextLabel = computed(() => {
   if (contextActive.value) return 'Kontext wird gesammelt'

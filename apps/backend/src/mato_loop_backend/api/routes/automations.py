@@ -353,6 +353,11 @@ async def _run_payload(db: AsyncSession, run: AutomationRun) -> dict[str, Any]:
         "scheduleSnapshots": run.schedule_snapshots,
         "definition": run.definition_snapshot,
         "agentRunId": str(run.agent_run_id) if run.agent_run_id else None,
+        "agentProfileId": (
+            str(agent_run.agent_profile_id)
+            if agent_run is not None and agent_run.agent_profile_id
+            else None
+        ),
         "result": (
             {
                 "messageId": str(result_message.id),

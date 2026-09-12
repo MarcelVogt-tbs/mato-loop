@@ -93,3 +93,4 @@ async def test_canonical_error_retains_only_current_safe_generation_diagnostics(
     assert "private" not in str(events)
     assert sum(event["type"] == "message.completed" and event["message"].get("kind") == "runtime_error" for event in events) == 1
     assert sum(event["type"] == "run.failed" for event in events) == 1
+    assert next(event for event in events if event["type"] == "run.failed")["runId"] == str(run.id)

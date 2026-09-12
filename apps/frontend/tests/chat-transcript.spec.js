@@ -49,7 +49,7 @@ describe('chat transcript', () => {
   it('groups consecutive filesystem context tools without crossing other activity', () => {
     const read = { key: 'read', type: 'tool', tool: { name: 'read_file' } }
     const search = { key: 'search', type: 'tool', tool: { name: 'grep' } }
-    const note = { key: 'note', type: 'note', text: 'Bearbeitung beginnt' }
+    const note = { key: 'note', type: 'commentary', message: { content: 'Bearbeitung beginnt' } }
     const list = { key: 'list', type: 'tool', tool: { name: 'list_directory' } }
 
     expect(groupWorkHistoryEntries([read, search, note, list])).toEqual([
@@ -92,6 +92,12 @@ describe('chat transcript', () => {
     const warning = { key: 'warning', type: 'warning', live: true }
     expect(splitLiveWorkHistory([completed, warning], { phase: 'streaming' }))
       .toEqual({ current: warning, previous: [completed] })
+    expect(splitLiveWorkHistory([completed, reasoning, warning], { phase: 'waiting_model' }))
+      .toEqual({ current: warning, previous: [completed, reasoning] })
+
+    const commentary = { key: 'commentary', type: 'commentary', message: { content: 'Zwischenstand' } }
+    expect(splitLiveWorkHistory([commentary, active], { phase: 'processing_tool', toolCallId: 'call-2' }))
+      .toEqual({ current: active, previous: [commentary] })
   })
 
   it('keeps privacy warnings in persisted assistant work history', () => {
@@ -293,7 +299,7 @@ describe('chat transcript', () => {
       completedAt: '2026-08-06T12:00:03Z'
     })
     expect(transcript.messages[1].workHistory.entries.map((entry) => (
-      entry.reasoning?.text || entry.text || entry.tool.name
+      entry.reasoning?.text || entry.message?.content || entry.tool.name
     ))).toEqual([
       'Suche planen',
       'Ich starte mit einer Suche.',
@@ -315,6 +321,35 @@ describe('chat transcript', () => {
       modelName: 'Antwortmodell',
       trustLevel: 'private'
     })
+  })
+
+  it('moves all intermediate commentary into chronological history and keeps the final once', () => {
+    const source = { title: 'Quelle', url: 'https://example.test' }
+    const attachment = { id: 'attachment-1', filename: 'plan.md' }
+    const transcript = buildChatTranscript([
+      { id: 'user', role: 'user', content: 'Arbeite' },
+      {
+        id: 'commentary-1', role: 'assistant', content: '**Plan**',
+        research: { linkedSources: [source] }, attachments: [attachment], toolCalls: []
+      },
+      {
+        id: 'tool-round', role: 'assistant', content: '',
+        toolCalls: [{ id: 'call', name: 'web_search', arguments: {} }]
+      },
+      { id: 'tool-result', role: 'tool', toolCallId: 'call', content: 'Treffer' },
+      { id: 'commentary-2', role: 'assistant', content: 'Prüfe den Treffer.', toolCalls: [] },
+      { id: 'final', role: 'assistant', content: 'Fertige Antwort', toolCalls: [] }
+    ])
+
+    expect(transcript.messages.map((message) => message.id)).toEqual(['user', 'commentary-1', 'final'])
+    expect(transcript.messages[1].workHistory.entries.map((entry) => (
+      entry.message?.content || entry.tool.name
+    ))).toEqual(['**Plan**', 'web_search', 'Prüfe den Treffer.'])
+    expect(transcript.messages[1].workHistory.entries[0].message).toMatchObject({
+      research: { linkedSources: [source] }, attachments: [attachment]
+    })
+    expect(transcript.messages.filter((message) => message.content === 'Fertige Antwort')).toHaveLength(1)
+    expect(transcript.messages[1].attachments).toEqual([])
   })
 
   it('creates duration metadata for a plain completed answer', () => {
@@ -379,10 +414,10 @@ describe('chat transcript', () => {
     expect(transcript.messages.map((message) => message.id)).toEqual([
       '11111111-1111-4111-8111-111111111111',
       '22222222-2222-4222-8222-222222222222',
-      'context-summary-33333333-3333-4333-8333-333333333333',
       '44444444-4444-4444-8444-444444444444'
     ])
-    expect(transcript.messages[2].contextSummaryEntry).toMatchObject({
+    const summaryEntry = transcript.messages[1].workHistory.entries.find((entry) => entry.type === 'context-summary')
+    expect(summaryEntry).toMatchObject({
       warning: true,
       text: 'Goal\nWeiterarbeiten',
       presentation: {
@@ -390,9 +425,55 @@ describe('chat transcript', () => {
         summary: 'Vereinfachte Ersatzfassung'
       }
     })
-    expect(transcript.messages[2].workHistory.entries).toEqual([
-      transcript.messages[2].contextSummaryEntry
-    ])
+    expect(transcript.messages[1].workHistory.entries.map((entry) => entry.type))
+      .toEqual(['commentary', 'context-summary'])
+  })
+
+  it('uses an attributed assistant as carrier when a context summary comes first', () => {
+    const transcript = buildChatTranscript([
+      { id: 'user', role: 'user', content: 'Weiter', createdAt: '2026-09-01T10:00:00Z' },
+      {
+        id: 'answer', role: 'assistant', content: 'Fertig', agentProfileId: 'profile-1',
+        createdAt: '2026-09-01T10:00:02Z'
+      }
+    ], [], {
+      contextSummaries: [{
+        id: 'summary', content: 'Goal\nWeiter', isFallback: false,
+        createdAt: '2026-09-01T10:00:01Z'
+      }]
+    })
+
+    expect(transcript.messages.map((message) => message.id)).toEqual(['user', 'answer'])
+    expect(transcript.messages[1]).toMatchObject({
+      agentProfileId: 'profile-1',
+      workHistory: { entries: [expect.objectContaining({ type: 'context-summary' })] }
+    })
+  })
+
+  it('attributes a live-only context summary from the active run message', () => {
+    const transcript = buildChatTranscript([
+      { id: 'user', role: 'user', content: 'Weiter', createdAt: '2026-09-01T10:00:00Z' }
+    ], [], {
+      running: true,
+      contextSummaries: [{
+        id: 'summary', content: 'Goal\nWeiter', isFallback: false,
+        createdAt: '2026-09-01T10:00:01Z'
+      }]
+    })
+    const messages = withLiveTranscriptMessage(transcript.messages, {
+      id: 'live-session', role: 'assistant', content: '', agentProfileId: 'profile-live'
+    })
+
+    expect(messages[1]).toMatchObject({
+      agentProfileId: 'profile-live',
+      workHistory: { entries: [expect.objectContaining({ type: 'context-summary' })] }
+    })
+
+    const streaming = withLiveTranscriptMessage(transcript.messages, {
+      id: 'live-session', role: 'assistant', content: 'Antwort', agentProfileId: 'profile-live'
+    })
+    expect(streaming[1].agentProfileId).toBe('profile-live')
+    expect(streaming[2].content).toBe('Antwort')
   })
 
   it('does not mix reused tool call ids across user requests', () => {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Any, ClassVar, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 from unicodedata import category as unicode_category
 from uuid import UUID, uuid4
 
@@ -173,6 +173,7 @@ class AgentProfile(BaseModel):
     description: str = Field(default="", max_length=500)
     persona_id: UUID | None = None
     instructions: str = Field(min_length=1, max_length=16_000)
+    answer_display: Literal["timeline", "compact"] = "compact"
     max_tool_calls: ProfileToolCallLimit = 25
     integrations_enabled_by_default: StrictBool = True
     integration_availability: dict[str, StrictBool] = Field(default_factory=dict)
@@ -194,6 +195,7 @@ class AgentProfile(BaseModel):
             str(PLAN_AGENT_PROFILE_ID), str(BUILD_AGENT_PROFILE_ID)
         }
         for snake, camel, default in (
+            ("answer_display", "answerDisplay", "timeline" if coding else "compact"),
             ("max_tool_calls", "maxToolCalls", None if coding else 25),
             ("integrations_enabled_by_default", "integrationsEnabledByDefault", not coding),
         ):

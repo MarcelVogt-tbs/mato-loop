@@ -1073,6 +1073,12 @@ class AutomationService:
             trust_level=source.trust_level,
             provider_data={
                 "_matoloop": {
+                    "runId": str(agent_run.id),
+                    "agentProfileId": (
+                        str(agent_run.agent_profile_id)
+                        if agent_run.agent_profile_id
+                        else None
+                    ),
                     "source": {
                         "type": "automationRun",
                         "automationId": str(automation.id),

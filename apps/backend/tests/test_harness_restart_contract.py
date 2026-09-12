@@ -8,6 +8,7 @@ import mato_loop_backend.app as app_module
 from mato_loop_backend.agent import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.approvals import ApprovalDecisionRequest, decide_approval
+from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
@@ -104,6 +105,7 @@ async def test_startup_recovery_persists_one_error_message_per_active_run(monkey
         status="running",
         model_name="Test model",
         trust_level="private",
+        agent_profile_id=uuid4(),
     )
     rows = Mock()
     rows.all.return_value = [run]
@@ -124,7 +126,12 @@ async def test_startup_recovery_persists_one_error_message_per_active_run(monkey
     assert message.error_code == "agent.backendRestarted"
     assert message.error_params is None
     assert message.content == ""
-    assert not message.provider_data
+    assert message.provider_data == {
+        "_matoloop": {
+            "runId": str(run.id),
+            "agentProfileId": str(run.agent_profile_id),
+        }
+    }
     terminalize.assert_awaited_once_with(db, run.session_id, run_id=run.id)
     db.flush.assert_awaited()
     db.commit.assert_not_awaited()
@@ -168,6 +175,7 @@ async def test_startup_recovery_keeps_duration_completed_before_user_wait(monkey
         model_name="Test model",
         trust_level="private",
         active_duration_ms=2_500,
+        agent_profile_id=uuid4(),
     )
     rows = Mock()
     rows.all.return_value = [run]
@@ -187,8 +195,46 @@ async def test_startup_recovery_keeps_duration_completed_before_user_wait(monkey
     await AgentRuntime.recover(db)
 
     assert messages[0].provider_data == {
-        "_matoloop": {"performance": {"activeDurationMs": 2_500}}
+        "_matoloop": {
+            "runId": str(run.id),
+            "agentProfileId": str(run.agent_profile_id),
+            "performance": {"activeDurationMs": 2_500},
+        }
     }
+
+
+async def test_existing_recovery_error_is_restamped_without_losing_diagnostics() -> None:
+    run = AgentRun(id=uuid4(), session_id=uuid4(), agent_profile_id=uuid4())
+    existing = Message(
+        id=uuid4(), session_id=run.session_id, role="assistant", content="",
+        error_code="agent.backendRestarted", error_run_id=run.id,
+        provider_data={
+            "usage": {"input_tokens": 10},
+            "_matoloop": {
+                "runId": str(uuid4()),
+                "agentProfileId": str(uuid4()),
+                "performance": {"providerDurationMs": 20},
+            },
+        },
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = existing
+
+    result = await AgentRuntime._persist_error_message(
+        db, run, describe_error("agent.backendRestarted")
+    )
+
+    assert result is existing
+    assert run.result_message_id == existing.id
+    assert existing.provider_data == {
+        "usage": {"input_tokens": 10},
+        "_matoloop": {
+            "runId": str(run.id),
+            "agentProfileId": str(run.agent_profile_id),
+            "performance": {"providerDurationMs": 20},
+        },
+    }
+    db.flush.assert_awaited_once()
 
 
 async def test_persisted_approval_without_live_waiter_cannot_resume_run(monkeypatch) -> None:

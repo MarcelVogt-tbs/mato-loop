@@ -2032,7 +2032,7 @@ describe('chat drafts', () => {
     expect(chat.sessions).toEqual([{ id: 'session-1', title: 'Aktuell' }])
   })
 
-  it('promotes streamed content before refreshing the persisted message', async () => {
+  it('promotes canonical completed content before refreshing the persisted message', async () => {
     global.EventSource = EventSourceMock
     let resolveRefresh
     api.get.mockImplementation(() => new Promise((resolve) => {
@@ -2064,7 +2064,7 @@ describe('chat drafts', () => {
     expect(chat.streamContent).toBe('')
     expect(chat.current.messages[0]).toMatchObject({
       id: 'message-1',
-      content: 'Vollständige Antwort',
+      content: 'Abgeschnitten',
       createdAt: '2026-07-25T14:32:00Z',
       modelName: 'Antwortmodell',
       research: {
@@ -2072,6 +2072,12 @@ describe('chat drafts', () => {
       }
     })
     expect(chat.streamModelName).toBe('Antwortmodell')
+    source.emit('message.delta', { delta: 'Vorläufig' })
+    source.emit('reasoning.updated', { reasoning: { text: 'Vorläufige Begründung' } })
+    source.emit('message.completed', {
+      message: { id: 'message-2', role: 'assistant', content: '', reasoning: null, toolCalls: [] }
+    })
+    expect(chat.current.messages[1]).toMatchObject({ content: '', reasoning: null })
     await vi.waitFor(() => expect(resolveRefresh).toBeTypeOf('function'))
     resolveRefresh({
       data: {

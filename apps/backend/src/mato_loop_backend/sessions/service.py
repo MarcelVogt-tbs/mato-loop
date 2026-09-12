@@ -368,6 +368,7 @@ async def session_detail_payload(
         page_size=20,
         cursor=None,
     )
+    attributions = await message_attributions(db, messages)
     active_run = await db.scalar(
         select(AgentRun)
         .where(
@@ -427,7 +428,12 @@ async def session_detail_payload(
             )
         ),
         "messages": [
-            message_serializer(message, retry_available=message.id == retry_message_id)
+            message_serializer(
+                message,
+                retry_available=message.id == retry_message_id,
+                attribution=attributions.get(message.id),
+                attribution_resolved=True,
+            )
             for message in messages
         ],
         "contextSummaries": [
@@ -441,6 +447,11 @@ async def session_detail_payload(
                 "id": str(active_run.id),
                 "status": active_run.status,
                 "modelName": active_run.model_name,
+                "agentProfileId": (
+                    str(active_run.agent_profile_id)
+                    if active_run.agent_profile_id
+                    else None
+                ),
                 "createdAt": active_run.created_at.isoformat() if active_run.created_at else None,
                 **run_timing_payload(active_run),
             }
@@ -530,6 +541,163 @@ async def session_message_page(
     return messages, context_summaries, next_cursor
 
 
+async def message_attributions(
+    db: AsyncSession, messages: list[Message]
+) -> dict[UUID, tuple[UUID, UUID | None]]:
+    assistants = [message for message in messages if message.role == "assistant"]
+    if not assistants:
+        return {}
+    stamped_messages: set[UUID] = set()
+    stamped_run_ids: dict[UUID, UUID] = {}
+    stamped_profile_ids: dict[UUID, UUID | None] = {}
+    invalid_stamps: set[UUID] = set()
+    for message in assistants:
+        metadata = (message.provider_data or {}).get("_matoloop", {})
+        if not isinstance(metadata, dict) or not (
+            "runId" in metadata or "agentProfileId" in metadata
+        ):
+            continue
+        stamped_messages.add(message.id)
+        if "runId" not in metadata or "agentProfileId" not in metadata:
+            invalid_stamps.add(message.id)
+            continue
+        try:
+            stamped_run_id = UUID(metadata["runId"])
+            stamped_profile_id = (
+                UUID(metadata["agentProfileId"])
+                if metadata.get("agentProfileId") is not None
+                else None
+            )
+        except (AttributeError, KeyError, TypeError, ValueError):
+            invalid_stamps.add(message.id)
+            continue
+        stamped_run_ids[message.id] = stamped_run_id
+        stamped_profile_ids[message.id] = stamped_profile_id
+    message_ids = {message.id for message in assistants}
+    sessions_by_message = {message.id: message.session_id for message in assistants}
+    session_ids = set(sessions_by_message.values())
+    candidates: dict[UUID, set[UUID]] = {message.id: set() for message in assistants}
+    error_run_ids = {
+        message.error_run_id for message in assistants if message.error_run_id is not None
+    }
+    runs = list((await db.execute(select(
+        AgentRun.id,
+        AgentRun.agent_profile_id,
+        AgentRun.result_message_id,
+        AgentRun.session_id,
+    ).where(
+        or_(
+            AgentRun.result_message_id.in_(message_ids),
+            AgentRun.id.in_(error_run_ids | set(stamped_run_ids.values())),
+        ),
+        AgentRun.session_id.in_(session_ids),
+    ))).all())
+    run_sessions = {row.id: row.session_id for row in runs}
+    profiles = {row.id: row.agent_profile_id for row in runs}
+    for message in assistants:
+        if (
+            message.id not in stamped_messages
+            and message.error_run_id is not None
+            and run_sessions.get(message.error_run_id) == message.session_id
+        ):
+            candidates[message.id].add(message.error_run_id)
+    for row in runs:
+        if (
+            row.result_message_id in candidates
+            and row.result_message_id not in stamped_messages
+            and row.session_id == sessions_by_message[row.result_message_id]
+        ):
+            candidates[row.result_message_id].add(row.id)
+
+    automation_rows = list((await db.execute(
+        select(
+            AutomationRun.output_message_id,
+            AgentRun.id,
+            AgentRun.agent_profile_id,
+            AgentRun.session_id,
+        )
+        .join(AgentRun, AgentRun.id == AutomationRun.agent_run_id)
+        .where(
+            AutomationRun.output_message_id.in_(message_ids),
+        )
+    )).all())
+    automation_links: dict[UUID, set[UUID]] = {}
+    for row in automation_rows:
+        automation_links.setdefault(row.output_message_id, set()).add(row.id)
+        if row.output_message_id not in stamped_messages:
+            candidates[row.output_message_id].add(row.id)
+        profiles[row.id] = row.agent_profile_id
+        run_sessions[row.id] = row.session_id
+
+    resolved = {}
+    for message_id, run_id in stamped_run_ids.items():
+        automation_run_ids = automation_links.get(message_id)
+        valid_run = (
+            automation_run_ids == {run_id}
+            if automation_run_ids
+            else run_sessions.get(run_id) == sessions_by_message[message_id]
+        )
+        if valid_run and profiles.get(run_id) == stamped_profile_ids[message_id]:
+            resolved[message_id] = (run_id, profiles.get(run_id))
+        else:
+            invalid_stamps.add(message_id)
+
+    calls_by_message = {
+        message.id: {
+            str(call["id"])
+            for call in message.tool_calls or []
+            if isinstance(call, dict) and call.get("id")
+        }
+        for message in assistants
+        if message.id not in stamped_messages
+    }
+    tool_call_ids = set().union(*calls_by_message.values())
+    if tool_call_ids:
+        tool_rows = list((await db.execute(
+            select(Message.session_id, Message.tool_call_id, Message.provider_data).where(
+                Message.role == "tool",
+                Message.session_id.in_({message.session_id for message in assistants}),
+                Message.tool_call_id.in_(tool_call_ids),
+            )
+        )).all())
+        tool_runs: dict[tuple[UUID, str], set[UUID]] = {}
+        for row in tool_rows:
+            raw_run_id = (row.provider_data or {}).get("_matoloop", {}).get("runId")
+            try:
+                linked_run_id = UUID(raw_run_id) if isinstance(raw_run_id, str) else None
+            except ValueError:
+                linked_run_id = None
+            if linked_run_id is not None and row.tool_call_id is not None:
+                tool_runs.setdefault((row.session_id, row.tool_call_id), set()).add(linked_run_id)
+        linked_run_ids = set().union(*tool_runs.values()) if tool_runs else set()
+        if linked_run_ids:
+            profile_rows = list((await db.execute(
+                select(AgentRun.id, AgentRun.agent_profile_id, AgentRun.session_id).where(
+                    AgentRun.id.in_(linked_run_ids),
+                    AgentRun.session_id.in_(session_ids),
+                )
+            )).all())
+            profiles.update({row.id: row.agent_profile_id for row in profile_rows})
+            run_sessions.update({row.id: row.session_id for row in profile_rows})
+        for message in assistants:
+            if message.id in stamped_messages:
+                continue
+            for call_id in calls_by_message[message.id]:
+                candidates[message.id].update(
+                    run_id
+                    for run_id in tool_runs.get((message.session_id, call_id), ())
+                    if run_sessions.get(run_id) == message.session_id
+                )
+
+    resolved.update({
+        message_id: (run_id, profiles.get(run_id))
+        for message_id, run_ids in candidates.items()
+        if message_id not in invalid_stamps and len(run_ids) == 1
+        for run_id in run_ids
+    })
+    return resolved
+
+
 async def latest_user_message(db: AsyncSession, session_id: UUID) -> Message:
     message = await db.scalar(
         select(Message)
@@ -584,6 +752,7 @@ async def duplicate_submission_response(
         AgentRuntime._schedule_run(run)
     response = {
         "runId": str(run.id),
+        "agentProfileId": str(run.agent_profile_id) if run.agent_profile_id else None,
         "modelName": run.model_name,
         **run_timing_payload(run),
         "message": message_serializer(message),
@@ -872,6 +1041,7 @@ async def create_session(
         ),
         "message": message_serializer(user_message),
         "runId": str(run.id),
+        "agentProfileId": str(run.agent_profile_id) if run.agent_profile_id else None,
         "modelName": run.model_name,
         **run_timing_payload(run),
     }
@@ -974,6 +1144,7 @@ async def send_message(
     user_message = await latest_user_message(db, item.id)
     return {
         "runId": str(run.id),
+        "agentProfileId": str(run.agent_profile_id) if run.agent_profile_id else None,
         "modelName": run.model_name,
         **run_timing_payload(run),
         "message": message_serializer(user_message),

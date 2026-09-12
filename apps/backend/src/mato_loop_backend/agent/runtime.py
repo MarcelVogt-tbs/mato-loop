@@ -667,6 +667,14 @@ def _safe_provider_data(
     return safe
 
 
+def _run_metadata(run: AgentRun, **values: Any) -> dict[str, Any]:
+    return {
+        **values,
+        "runId": str(run.id),
+        "agentProfileId": str(run.agent_profile_id) if run.agent_profile_id else None,
+    }
+
+
 async def _ensure_plan_directory(root_files: RootFileService, session_id: UUID) -> None:
     for path in ("plans", f"plans/{session_id}"):
         try:
@@ -1149,6 +1157,10 @@ class AgentRuntime:
                 run = await db.get(AgentRun, run_id)
                 if run is None or run.status not in {"queued", "running", "waiting_approval", "waiting_input"}:
                     continue
+                if run.agent_profile_id is None:
+                    session = await db.get(ChatSession, run.session_id)
+                    if isinstance(session, ChatSession):
+                        run.agent_profile_id = session.agent_profile_id
                 # An orphaned persisted run is terminalized, never scheduled or replayed.
                 await cls._terminalize_incomplete_tool_calls(db, run.session_id, run_id=run.id)
                 await cls._finalize_run_files(db, run, tolerate_conflict=True)
@@ -1158,6 +1170,7 @@ class AgentRuntime:
                     session_id=run.session_id, role="assistant", content="",
                     model_name=run.model_name, trust_level=run.trust_level or "public",
                     generation_status="interrupted",
+                    provider_data={"_matoloop": _run_metadata(run)},
                 )
                 db.add(message)
                 await db.flush()
@@ -1170,7 +1183,14 @@ class AgentRuntime:
                     QuestionRequest.run_id == run.id, QuestionRequest.status == "pending"
                 ).values(status="expired"))
                 await db.commit()
-                await run_events.publish(run.id, {"type": "run.cancelled", "runId": str(run.id), **run_timing_payload(run)})
+                await run_events.publish(run.id, {
+                    "type": "run.cancelled",
+                    "runId": str(run.id),
+                    "agentProfileId": (
+                        str(run.agent_profile_id) if run.agent_profile_id else None
+                    ),
+                    **run_timing_payload(run),
+                })
 
     @classmethod
     async def cancel_and_wait_user_title_tasks(cls, user_id: UUID) -> bool:
@@ -1279,6 +1299,11 @@ class AgentRuntime:
                 ):
                     return
                 session_id = run.session_id
+                if run.agent_profile_id is None:
+                    session = await db.get(ChatSession, session_id)
+                    if isinstance(session, ChatSession) and session.agent_profile_id is not None:
+                        run.agent_profile_id = session.agent_profile_id
+                        await db.commit()
                 visible_response = _VisibleResponse()
                 run_completed = False
                 cls._cancellable_runs.add(run_id)
@@ -1295,6 +1320,9 @@ class AgentRuntime:
                             "type": "run.started",
                             "runId": str(run_id),
                             "modelName": run.model_name,
+                            "agentProfileId": (
+                                str(run.agent_profile_id) if run.agent_profile_id else None
+                            ),
                             "createdAt": run.created_at.isoformat() if run.created_at else None,
                             "activityLabel": run_activity_label("preparing_context"),
                             **run_timing_payload(run),
@@ -1314,6 +1342,9 @@ class AgentRuntime:
                         {
                             "type": "run.completed",
                             "runId": str(run_id),
+                            "agentProfileId": (
+                                str(run.agent_profile_id) if run.agent_profile_id else None
+                            ),
                             **run_timing_payload(run),
                         },
                     )
@@ -1346,12 +1377,13 @@ class AgentRuntime:
                                 public_reasoning=reasoning,
                                 provider_data=(
                                     {
-                                        "_matoloop": {
-                                            "warnings": list(visible_response.warnings)
-                                        }
+                                        "_matoloop": _run_metadata(
+                                            cancelled_run,
+                                            warnings=list(visible_response.warnings),
+                                        )
                                     }
                                     if visible_response.warnings
-                                    else None
+                                    else {"_matoloop": _run_metadata(cancelled_run)}
                                 ),
                                 created_at=datetime.now(UTC),
                             )
@@ -1391,6 +1423,12 @@ class AgentRuntime:
                                     "reasoning": interrupted_message.public_reasoning,
                                     "warnings": list(visible_response.warnings),
                                     "activeDurationMs": cancelled_run.active_duration_ms,
+                                    "runId": str(cancelled_run.id),
+                                    "agentProfileId": (
+                                        str(cancelled_run.agent_profile_id)
+                                        if cancelled_run.agent_profile_id
+                                        else None
+                                    ),
                                 },
                             },
                         )
@@ -1400,6 +1438,12 @@ class AgentRuntime:
                             {
                                 "type": "run.cancelled",
                                 "runId": str(run_id),
+                                "agentProfileId": (
+                                    str(cancelled_run.agent_profile_id)
+                                    if cancelled_run is not None
+                                    and cancelled_run.agent_profile_id
+                                    else None
+                                ),
                                 **(
                                     run_timing_payload(cancelled_run)
                                     if cancelled_run is not None
@@ -1415,7 +1459,14 @@ class AgentRuntime:
                             run_id,
                             {
                                 "type": "run.failed",
+                                "runId": str(run_id),
                                 "error": restart_error.payload(),
+                                "agentProfileId": (
+                                    str(cancelled_run.agent_profile_id)
+                                    if cancelled_run is not None
+                                    and cancelled_run.agent_profile_id
+                                    else None
+                                ),
                                 **(
                                     run_timing_payload(cancelled_run)
                                     if cancelled_run is not None
@@ -1446,7 +1497,12 @@ class AgentRuntime:
                                 db, failed_run, public_error
                             )
                             if visible_response.generation_diagnostics is not None:
-                                error_message.provider_data = visible_response.generation_diagnostics
+                                diagnostics = visible_response.generation_diagnostics
+                                runtime_data = diagnostics.get("_matoloop", {})
+                                error_message.provider_data = {
+                                    **diagnostics,
+                                    "_matoloop": _run_metadata(failed_run, **runtime_data),
+                                }
                             await cls._persist_run_duration(db, failed_run)
                             await db.commit()
                             failure_committed = True
@@ -1464,7 +1520,13 @@ class AgentRuntime:
                         run_id,
                         {
                             "type": "run.failed",
+                            "runId": str(run_id),
                             "error": public_error.payload(),
+                            "agentProfileId": (
+                                str(failed_run.agent_profile_id)
+                                if failed_run is not None and failed_run.agent_profile_id
+                                else None
+                            ),
                             **(
                                 run_timing_payload(failed_run)
                                 if failed_run is not None
@@ -2731,6 +2793,7 @@ class AgentRuntime:
                 runtime_state = {}
             provider_data["_matoloop"] = {
                 **runtime_state,
+                **_run_metadata(run),
                 **({"completionCause": "agent.toolCallLimitReached"} if tool_budget_exhausted else {}),
                 "performance": performance,
                 **({"warnings": message_warnings} if message_warnings else {}),
@@ -2827,15 +2890,19 @@ class AgentRuntime:
                     "message": {
                         "id": str(assistant.id),
                         "role": "assistant",
-                        "content": assistant.content[:1000],
+                        "content": assistant.content,
                         "createdAt": assistant.created_at.isoformat(),
                         "modelName": assistant.model_name,
-                        "truncated": len(assistant.content) > 1000,
+                        "truncated": False,
                         "generationStatus": assistant.generation_status,
                         "toolCalls": serialized_calls,
                         "reasoning": public_reasoning,
                         "research": public_research,
                         "warnings": message_warnings,
+                        "runId": str(run.id),
+                        "agentProfileId": (
+                            str(run.agent_profile_id) if run.agent_profile_id else None
+                        ),
                     },
                 },
             )
@@ -4324,7 +4391,17 @@ class AgentRuntime:
             select(Message).where(Message.error_run_id == run.id).limit(1)
         )
         if existing is not None:
+            provider_data = dict(existing.provider_data or {})
+            runtime_data = provider_data.get("_matoloop")
+            existing.provider_data = {
+                **provider_data,
+                "_matoloop": _run_metadata(
+                    run,
+                    **(runtime_data if isinstance(runtime_data, dict) else {}),
+                ),
+            }
             run.result_message_id = existing.id
+            await db.flush()
             return existing
         message = Message(
             session_id=run.session_id,
@@ -4335,6 +4412,7 @@ class AgentRuntime:
             error_code=error.code,
             error_params=error.params,
             error_run_id=run.id,
+            provider_data={"_matoloop": _run_metadata(run)},
             created_at=datetime.now(UTC),
         )
         db.add(message)
@@ -4373,6 +4451,10 @@ class AgentRuntime:
             "toolCalls": None,
             "reasoning": None,
             "error": error.payload(),
+            "runId": str(message.error_run_id) if message.error_run_id else None,
+            "agentProfileId": (
+                (message.provider_data or {}).get("_matoloop", {}).get("agentProfileId")
+            ),
         }
 
     @classmethod

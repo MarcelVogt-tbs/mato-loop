@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { computed, createApp, defineComponent, h, nextTick } from 'vue'
+import { computed, createApp, defineComponent, h, nextTick, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { Quasar, QAvatar, QBanner, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QDialog, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QRadio, QScrollArea, QSelect, QSeparator, QSpace, QSpinner, QToggle, QTooltip } from 'quasar'
@@ -20,6 +20,7 @@ import { useSubagentStore } from '../src/stores/subagents'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useQuestionStore } from '../src/stores/questions'
 import { useChatStore } from '../src/stores/chat'
+import { useAgentProfileStore } from '../src/stores/agent-profiles'
 import { buildChatTranscript } from '../src/utils/chat-transcript'
 import { agentRunPresentation } from '../src/utils/agent-activity'
 import { api } from 'src/boot/axios'
@@ -68,6 +69,7 @@ describe('subagent inspector navigation and presentation', () => {
     vi.stubGlobal('EventSource', class { addEventListener() {} close() {} })
     const pinia = createPinia()
     setActivePinia(pinia)
+    useAgentProfileStore().agents = [{ id: 'agent', answerDisplay: 'timeline' }]
     store = useSubagentStore()
     const child = { id: 'child', parentSessionId: 'parent', title: 'Dateien untersuchen', run: { id: 'run', status: 'waiting_approval' } }
     api.get.mockImplementation(async (url) => ({ data: url.endsWith('/children') ? [child]
@@ -75,8 +77,9 @@ describe('subagent inspector navigation and presentation', () => {
         : url.endsWith('/messages') ? { items: [{ id: 'old', role: 'user', content: 'Alter Auftrag' }], nextCursor: null }
           : { ...child, readOnly: true, nextMessageCursor: 'older', messages: [
             { id: 'task', role: 'user', content: 'Auftrag lesen' },
-            { id: 'tool', role: 'assistant', toolCalls: [{ id: 'read', name: 'read', arguments: {} }] },
-            { id: 'answer', role: 'assistant', content: 'Ergebnis lesen' }
+            { id: 'note', role: 'assistant', agentProfileId: 'agent', content: 'Ich prüfe die Datei.', toolCalls: [] },
+            { id: 'tool', role: 'assistant', agentProfileId: 'agent', toolCalls: [{ id: 'read', name: 'read', arguments: {} }] },
+            { id: 'answer', role: 'assistant', agentProfileId: 'agent', content: 'Ergebnis lesen' }
           ] } }))
     await store.loadChildren('parent')
     const request = { id: 'request', sessionId: 'parent', runId: 'run', title: 'Datei freigeben', details: { toolCallId: 'read' }, availableDecisions: ['allow_once', 'deny'], payload: { subagentSessionId: 'child', subagentTitle: child.title } }
@@ -118,9 +121,11 @@ describe('subagent inspector navigation and presentation', () => {
     expect(dialog).not.toBeNull()
     expect(dialog.textContent).toContain('Nur Lesezugriff')
     expect(dialog.textContent).toContain('Ergebnis lesen')
+    expect(dialog.textContent).toContain('Ich prüfe die Datei.')
     expect(dialog.textContent).toContain('Datei freigeben')
     expect(dialog.textContent).toContain('Welche Datei?')
     expect(dialog.querySelector('.work-history')).not.toBeNull()
+    expect(dialog.querySelector('.work-history__panel')).toBeNull()
     expect(dialog.querySelector('.approval-card, .question-dock')).toBeNull()
     expect(dialog.querySelector('textarea, input, [contenteditable="true"]')).toBeNull()
     expect(dialog.textContent).not.toMatch(/Einmal erlauben|Antworten senden|Ablehnen|Erneut versuchen|Einstellungen/)
@@ -139,6 +144,103 @@ describe('subagent inspector navigation and presentation', () => {
     expect(document.activeElement).toBe(row)
     expect(store.current).toBeNull()
     expect(api.get.mock.calls.filter(([url]) => url.endsWith('/children'))).toHaveLength(1)
+  })
+
+  it('keeps compact history open when a run completes', async () => {
+    const pinia = createPinia()
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { render: () => null } }] })
+    await router.push('/')
+    const running = ref(true)
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      setup: () => () => h(AgentActivityPanel, {
+        history: {
+          entries: [{
+            key: 'commentary', type: 'commentary',
+            message: { content: 'Bisheriger Kommentar' }
+          }]
+        },
+        running: running.value,
+        activity: { phase: 'streaming' },
+        presentation: { label: 'Antwort wird erstellt' },
+        warnings: [{ code: 'privacy.placeholderRestorationIncomplete', modelRequest: 1 }]
+      })
+    })
+    app.use(pinia).use(router).use(Quasar, { components })
+    app.mount(root)
+
+    const historyHeader = root.querySelector('.work-history__panel .q-item')
+    expect(root.textContent).not.toContain('Bisheriger Kommentar')
+    historyHeader.click()
+    await nextTick()
+    expect(root.textContent).toContain('Bisheriger Kommentar')
+    running.value = false
+    await nextTick()
+    expect(root.textContent).toContain('Bisheriger Kommentar')
+  })
+
+  it('keeps timeline tool supplements beside their tool without aggregate duplicates', async () => {
+    const pinia = createPinia()
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', name: 'chat', component: { render: () => null } }] })
+    await router.push('/?session=parent')
+    const readOnly = ref(false)
+    const approval = {
+      id: 'approval', sessionId: 'parent', runId: 'run', requestType: 'agent_action',
+      title: 'Datei schreiben?', riskLevel: 'medium', resourceType: 'path', resourceScope: '/result.txt',
+      availableDecisions: ['allow_once', 'deny'], details: { toolCallId: 'call' }
+    }
+    const child = {
+      id: 'child', parentSessionId: 'parent', title: 'Ergebnis prüfen',
+      spawnedByRunId: 'run', spawnedByToolCallId: 'call', run: { status: 'running' }
+    }
+    const fileAction = {
+      operation: 'write', root: 'session', rootIdentity: '550e8400-e29b-41d4-a716-446655440009', path: 'result.txt',
+      filename: 'result.txt', sizeBytes: 7,
+      downloadUrl: '/api/workspace/files/download?path=result.txt&scope=session&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=550e8400-e29b-41d4-a716-446655440009'
+    }
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      setup: () => () => h(AgentActivityPanel, {
+        displayMode: 'timeline',
+        readOnly: readOnly.value,
+        subagents: [child],
+        history: { entries: [
+          { key: 'before', type: 'commentary', message: { content: 'Vor dem Tool' } },
+          {
+            key: 'tool', type: 'tool', runId: 'run', approval,
+            tool: { id: 'call', name: 'read_file', arguments: { path: 'result.txt' } },
+            result: { fileActions: [fileAction] }
+          },
+          { key: 'after', type: 'commentary', message: { content: 'Nach dem Tool' } }
+        ] }
+      })
+    })
+    app.use(pinia).use(router).use(Quasar, { components })
+    app.mount(root)
+
+    const after = [...root.querySelectorAll('div')].find((element) => element.textContent === 'Nach dem Tool')
+    const approvalCard = root.querySelector('.approval-card')
+    const subagentList = root.querySelector('[aria-label="Subagenten"]')
+    const output = root.querySelector('.work-history__outputs')
+    expect({
+      approval: Boolean(approvalCard),
+      subagent: Boolean(subagentList),
+      output: Boolean(output),
+      after: Boolean(after)
+    }).toEqual({ approval: true, subagent: true, output: true, after: true })
+    for (const supplement of [approvalCard, subagentList, output]) {
+      expect(supplement.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
+    expect(root.querySelectorAll('.approval-card')).toHaveLength(1)
+    expect(root.querySelectorAll('.work-history__outputs')).toHaveLength(1)
+
+    readOnly.value = true
+    await nextTick()
+    expect(root.querySelector('.approval-card')).toBeNull()
+    expect(root.querySelector('[aria-label="result.txt ansehen"]')).toBeNull()
+    expect(root.querySelector('[aria-label="result.txt herunterladen"]')).not.toBeNull()
   })
 
   it('shows simultaneous child approval cards and questions in the main session without changing parent activity', async () => {

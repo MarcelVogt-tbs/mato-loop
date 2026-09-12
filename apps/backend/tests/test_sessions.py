@@ -28,9 +28,11 @@ from mato_loop_backend.api.routes.sessions import (
     download_attachment,
     get_run,
     get_session,
+    get_session_messages,
     list_sessions,
     mark_session_read,
     message_payload,
+    run_payload,
     send_message,
     session_defaults,
     session_payload,
@@ -57,6 +59,7 @@ from mato_loop_backend.sessions.service import (
     SessionServiceError,
     _latest_model_context,
     active_file_payload,
+    message_attributions,
     session_message_page,
 )
 from mato_loop_backend.settings import (
@@ -180,6 +183,7 @@ def test_send_message_http_response_accepts_nested_message(monkeypatch) -> None:
     assert response.status_code == 202
     assert response.json() == {
         "runId": str(run.id),
+        "agentProfileId": None,
         "modelName": None,
         "activeDurationMs": 0,
         "activeDurationRunning": False,
@@ -930,6 +934,7 @@ async def test_session_detail_contains_active_run_and_aggregate_metrics() -> Non
         "id": str(run.id),
         "status": "waiting_approval",
         "modelName": "Aktives Modell",
+        "agentProfileId": None,
         "createdAt": created_at.isoformat(),
         "activeDurationMs": 1_500,
         "activeDurationRunning": False,
@@ -1038,11 +1043,22 @@ async def test_session_payload_marks_latest_restart_error_retryable() -> None:
     anchors.all.return_value = [SimpleNamespace(created_at=created_at, id=user_message.id)]
     aggregate = MagicMock()
     aggregate.one.return_value = (created_at, created_at, 1, None)
+    direct_links = MagicMock()
+    direct_links.all.return_value = [
+        SimpleNamespace(
+                id=failed_run.id,
+                agent_profile_id=None,
+                result_message_id=error_message.id,
+                session_id=session.id,
+            )
+    ]
+    no_automation_links = MagicMock()
+    no_automation_links.all.return_value = []
     db = AsyncMock(spec=AsyncSession)
     db.get.side_effect = [session, failed_run]
     db.scalars.side_effect = [messages, summaries]
     db.scalar.return_value = None
-    db.execute.side_effect = [anchors, aggregate]
+    db.execute.side_effect = [anchors, direct_links, no_automation_links, aggregate]
 
     result = await get_session(session.id, user, db)
 
@@ -1200,6 +1216,347 @@ def test_message_payload_exposes_only_public_reasoning() -> None:
     assert payload["generationStatus"] == "completed"
     assert "private-state" not in str(payload)
     assert payload["attachments"] == []
+
+
+def test_assistant_message_and_run_payload_expose_attribution() -> None:
+    run_id, profile_id = uuid4(), uuid4()
+    message = Message(
+        id=uuid4(), session_id=uuid4(), role="assistant", content="Antwort",
+        provider_data={"_matoloop": {
+            "runId": str(run_id), "agentProfileId": str(profile_id),
+        }},
+    )
+
+    payload = message_payload(message)
+    assert payload["runId"] == str(run_id)
+    assert payload["agentProfileId"] == str(profile_id)
+    assert run_payload(AgentRun(
+        id=run_id, session_id=message.session_id, agent_profile_id=profile_id,
+    ))["agentProfileId"] == str(profile_id)
+    legacy = Message(
+        id=uuid4(), session_id=message.session_id, role="assistant", content="Alt"
+    )
+    assert message_payload(legacy)["runId"] is None
+    assert message_payload(legacy)["agentProfileId"] is None
+
+
+async def test_legacy_attribution_requires_one_exact_run() -> None:
+    profile_id = uuid4()
+    direct_run_id, result_run_id, conflicting_run_id, stamped_run_id = (
+        uuid4(), uuid4(), uuid4(), uuid4()
+    )
+    direct = Message(
+        id=uuid4(), session_id=uuid4(), role="assistant", content="Direct"
+    )
+    conflict = Message(
+        id=uuid4(), session_id=direct.session_id, role="assistant", content="Conflict",
+        error_run_id=conflicting_run_id,
+    )
+    stamped_conflict = Message(
+        id=uuid4(), session_id=direct.session_id, role="assistant", content="Stamped",
+        provider_data={"_matoloop": {
+            "runId": str(stamped_run_id), "agentProfileId": str(uuid4()),
+        }},
+    )
+    direct_rows = MagicMock()
+    direct_rows.all.return_value = [
+        SimpleNamespace(
+            id=direct_run_id, agent_profile_id=profile_id,
+            result_message_id=direct.id, session_id=direct.session_id,
+        ),
+        SimpleNamespace(
+            id=result_run_id, agent_profile_id=uuid4(),
+            result_message_id=conflict.id, session_id=conflict.session_id,
+        ),
+        SimpleNamespace(
+            id=conflicting_run_id, agent_profile_id=uuid4(),
+            result_message_id=None, session_id=conflict.session_id,
+        ),
+        SimpleNamespace(
+            id=stamped_run_id, agent_profile_id=uuid4(),
+            result_message_id=None, session_id=stamped_conflict.session_id,
+        ),
+    ]
+    empty_rows = MagicMock()
+    empty_rows.all.return_value = []
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.side_effect = [direct_rows, empty_rows]
+
+    resolved = await message_attributions(db, [direct, conflict, stamped_conflict])
+
+    assert resolved == {direct.id: (direct_run_id, profile_id)}
+
+
+async def test_legacy_attribution_resolves_stamped_tool_and_automation_links() -> None:
+    session_id, source_session_id = uuid4(), uuid4()
+    stamped_run_id, tool_run_id, automation_run_id = uuid4(), uuid4(), uuid4()
+    stamped_profile_id, tool_profile_id, automation_profile_id = uuid4(), uuid4(), uuid4()
+    stamped = Message(
+        id=uuid4(), session_id=session_id, role="assistant", content="Stamped",
+        provider_data={"_matoloop": {
+            "runId": str(stamped_run_id),
+            "agentProfileId": str(stamped_profile_id),
+        }},
+    )
+    tool_linked = Message(
+        id=uuid4(), session_id=session_id, role="assistant", content="Tool",
+        tool_calls=[{"id": "call-1", "name": "read", "arguments": {}}],
+    )
+    automated = Message(
+        id=uuid4(), session_id=session_id, role="assistant", content="Automation"
+    )
+    direct_rows = MagicMock()
+    direct_rows.all.return_value = [SimpleNamespace(
+        id=stamped_run_id, agent_profile_id=stamped_profile_id,
+        result_message_id=None, session_id=session_id,
+    )]
+    automation_rows = MagicMock()
+    automation_rows.all.return_value = [SimpleNamespace(
+        output_message_id=automated.id, id=automation_run_id,
+        agent_profile_id=automation_profile_id, session_id=source_session_id,
+    )]
+    tool_rows = MagicMock()
+    tool_rows.all.return_value = [SimpleNamespace(
+        session_id=session_id, tool_call_id="call-1",
+        provider_data={"_matoloop": {"runId": str(tool_run_id)}},
+    )]
+    profile_rows = MagicMock()
+    profile_rows.all.return_value = [SimpleNamespace(
+        id=tool_run_id, agent_profile_id=tool_profile_id, session_id=session_id,
+    )]
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.side_effect = [direct_rows, automation_rows, tool_rows, profile_rows]
+
+    resolved = await message_attributions(db, [stamped, tool_linked, automated])
+
+    assert resolved == {
+        stamped.id: (stamped_run_id, stamped_profile_id),
+        tool_linked.id: (tool_run_id, tool_profile_id),
+        automated.id: (automation_run_id, automation_profile_id),
+    }
+
+
+async def test_automation_attribution_survives_normal_target_session_retrieval(
+    monkeypatch,
+) -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    user = _user()
+    target = ChatSession(id=uuid4(), user_id=user.id, title="Target")
+    source_session_id = uuid4()
+    historical_run_id, stamped_run_id, actual_run_id = uuid4(), uuid4(), uuid4()
+    historical_profile_id, stamped_profile_id, actual_profile_id = uuid4(), uuid4(), uuid4()
+    historical = Message(
+        id=uuid4(), session_id=target.id, role="assistant", content="Historical"
+    )
+    stamped = Message(
+        id=uuid4(), session_id=target.id, role="assistant", content="Stamped",
+        provider_data={"_matoloop": {
+            "runId": str(stamped_run_id),
+            "agentProfileId": str(stamped_profile_id),
+        }},
+    )
+    mismatched = Message(
+        id=uuid4(), session_id=target.id, role="assistant", content="Mismatched",
+        provider_data={"_matoloop": {
+            "runId": str(uuid4()),
+            "agentProfileId": str(uuid4()),
+        }},
+    )
+    direct_rows = MagicMock()
+    direct_rows.all.return_value = []
+    automation_rows = MagicMock()
+    automation_rows.all.return_value = [
+        SimpleNamespace(
+            output_message_id=historical.id, id=historical_run_id,
+            agent_profile_id=historical_profile_id, session_id=source_session_id,
+        ),
+        SimpleNamespace(
+            output_message_id=stamped.id, id=stamped_run_id,
+            agent_profile_id=stamped_profile_id, session_id=source_session_id,
+        ),
+        SimpleNamespace(
+            output_message_id=mismatched.id, id=actual_run_id,
+            agent_profile_id=actual_profile_id, session_id=source_session_id,
+        ),
+    ]
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = target
+    db.execute.side_effect = [direct_rows, automation_rows]
+    monkeypatch.setattr(
+        sessions_route.session_service,
+        "session_message_page",
+        AsyncMock(return_value=([historical, stamped, mismatched], [], None)),
+    )
+
+    result = await get_session_messages(target.id, user, db)
+
+    assert [(item["runId"], item["agentProfileId"]) for item in result["items"]] == [
+        (str(historical_run_id), str(historical_profile_id)),
+        (str(stamped_run_id), str(stamped_profile_id)),
+        (None, None),
+    ]
+
+
+async def test_valid_stamp_is_authoritative_over_reused_fallback_links() -> None:
+    session_id = uuid4()
+    stamped_run_id, fallback_run_id = uuid4(), uuid4()
+    stamped_profile_id = uuid4()
+    message = Message(
+        id=uuid4(), session_id=session_id, role="assistant", content="Stamped",
+        error_run_id=fallback_run_id,
+        tool_calls=[{"id": "reused-call"}],
+        provider_data={"_matoloop": {
+            "runId": str(stamped_run_id),
+            "agentProfileId": str(stamped_profile_id),
+        }},
+    )
+    direct_rows = MagicMock()
+    direct_rows.all.return_value = [
+        SimpleNamespace(
+            id=stamped_run_id, agent_profile_id=stamped_profile_id,
+            result_message_id=None, session_id=session_id,
+        ),
+        SimpleNamespace(
+            id=fallback_run_id, agent_profile_id=uuid4(),
+            result_message_id=message.id, session_id=session_id,
+        ),
+    ]
+    automation_rows = MagicMock()
+    automation_rows.all.return_value = []
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.side_effect = [direct_rows, automation_rows]
+
+    assert await message_attributions(db, [message]) == {
+        message.id: (stamped_run_id, stamped_profile_id)
+    }
+    assert db.execute.await_count == 2
+
+
+async def test_legacy_tool_attribution_requires_one_unique_run() -> None:
+    session_id = uuid4()
+    duplicate_run_id, first_run_id, second_run_id = uuid4(), uuid4(), uuid4()
+    duplicate = Message(
+        id=uuid4(), session_id=session_id, role="assistant", content="Duplicate",
+        tool_calls=[{"id": "duplicate-call"}],
+    )
+    ambiguous = Message(
+        id=uuid4(), session_id=session_id, role="assistant", content="Ambiguous",
+        tool_calls=[{"id": "ambiguous-call"}],
+    )
+    direct_rows = MagicMock()
+    direct_rows.all.return_value = []
+    automation_rows = MagicMock()
+    automation_rows.all.return_value = []
+    tool_rows = MagicMock()
+    tool_rows.all.return_value = [
+        SimpleNamespace(
+            session_id=session_id, tool_call_id="duplicate-call",
+            provider_data={"_matoloop": {"runId": str(duplicate_run_id)}},
+        ),
+        SimpleNamespace(
+            session_id=session_id, tool_call_id="duplicate-call",
+            provider_data={"_matoloop": {"runId": str(duplicate_run_id)}},
+        ),
+        SimpleNamespace(
+            session_id=session_id, tool_call_id="ambiguous-call",
+            provider_data={"_matoloop": {"runId": str(first_run_id)}},
+        ),
+        SimpleNamespace(
+            session_id=session_id, tool_call_id="ambiguous-call",
+            provider_data={"_matoloop": {"runId": str(second_run_id)}},
+        ),
+    ]
+    profile_rows = MagicMock()
+    profile_rows.all.return_value = [
+        SimpleNamespace(id=run_id, agent_profile_id=uuid4(), session_id=session_id)
+        for run_id in (duplicate_run_id, first_run_id, second_run_id)
+    ]
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.side_effect = [direct_rows, automation_rows, tool_rows, profile_rows]
+
+    resolved = await message_attributions(db, [duplicate, ambiguous])
+
+    assert resolved == {
+        duplicate.id: (duplicate_run_id, profile_rows.all.return_value[0].agent_profile_id)
+    }
+
+
+async def test_legacy_attribution_rejects_cross_session_and_malformed_links() -> None:
+    session_id, foreign_session_id = uuid4(), uuid4()
+    foreign_run_id, malformed_run_id, partial_run_id = uuid4(), uuid4(), uuid4()
+    stamped = Message(
+        id=uuid4(), session_id=session_id, role="assistant", content="Stamped",
+        provider_data={"_matoloop": {
+            "runId": str(foreign_run_id), "agentProfileId": str(uuid4()),
+        }},
+    )
+    malformed = Message(
+        id=uuid4(), session_id=session_id, role="assistant", content="Malformed",
+        provider_data={"_matoloop": {
+            "runId": "not-a-uuid", "agentProfileId": "also-invalid",
+        }},
+    )
+    partial = Message(
+        id=uuid4(), session_id=session_id, role="assistant", content="Partial",
+        error_run_id=partial_run_id,
+        provider_data={"_matoloop": {"runId": str(partial_run_id)}},
+    )
+    error = Message(
+        id=uuid4(), session_id=session_id, role="assistant", content="Error",
+        error_run_id=foreign_run_id,
+    )
+    tool = Message(
+        id=uuid4(), session_id=session_id, role="assistant", content="Tool",
+        tool_calls=[{"id": "call-foreign"}],
+    )
+    automated = Message(
+        id=uuid4(), session_id=session_id, role="assistant", content="Automation"
+    )
+    direct_rows = MagicMock()
+    direct_rows.all.return_value = [
+        SimpleNamespace(
+            id=foreign_run_id, agent_profile_id=uuid4(),
+            result_message_id=error.id, session_id=foreign_session_id,
+        ),
+        SimpleNamespace(
+            id=malformed_run_id, agent_profile_id=uuid4(),
+            result_message_id=malformed.id, session_id=session_id,
+        ),
+        SimpleNamespace(
+            id=partial_run_id, agent_profile_id=uuid4(),
+            result_message_id=partial.id, session_id=session_id,
+        ),
+    ]
+    automation_profile_id = uuid4()
+    automation_rows = MagicMock()
+    automation_rows.all.return_value = [SimpleNamespace(
+        output_message_id=automated.id, id=foreign_run_id,
+        agent_profile_id=automation_profile_id, session_id=foreign_session_id,
+    )]
+    tool_rows = MagicMock()
+    tool_rows.all.return_value = [SimpleNamespace(
+        session_id=session_id, tool_call_id="call-foreign",
+        provider_data={"_matoloop": {"runId": str(foreign_run_id)}},
+    )]
+    profile_rows = MagicMock()
+    profile_rows.all.return_value = []
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.side_effect = [direct_rows, automation_rows, tool_rows, profile_rows]
+
+    resolved = await message_attributions(
+        db, [stamped, malformed, partial, error, tool, automated]
+    )
+
+    assert resolved == {
+        automated.id: (foreign_run_id, automation_profile_id)
+    }
+    for message in (stamped, malformed, partial, error, tool):
+        payload = message_payload(
+            message, attribution=resolved.get(message.id), attribution_resolved=True
+        )
+        assert payload["runId"] is None
+        assert payload["agentProfileId"] is None
 
 
 @pytest.mark.parametrize("duration", [False, -1, 1.5, "1000"])
@@ -1543,6 +1900,7 @@ async def test_terminal_failure_is_serialized_before_sse_transaction_ends(
         session_id=session.id,
         status="failed",
         error="provider.requestFailed",
+        agent_profile_id=uuid4(),
     )
     error_message = Message(
         id=uuid4(),
@@ -1559,9 +1917,9 @@ async def test_terminal_failure_is_serialized_before_sse_transaction_ends(
     db.scalar.return_value = error_message
     original_message_payload = message_payload
 
-    def serialize_before_rollback(message):
+    def serialize_before_rollback(message, **kwargs):
         assert db.rollback.await_count == 0
-        return original_message_payload(message)
+        return original_message_payload(message, **kwargs)
 
     monkeypatch.setattr(sessions_route, "message_payload", serialize_before_rollback)
 
@@ -1574,6 +1932,8 @@ async def test_terminal_failure_is_serialized_before_sse_transaction_ends(
     assert db.rollback.await_count == 1
     assert body.index("event: message.completed") < body.index("event: run.failed")
     assert '"retryable": true' in body
+    assert f'"runId": "{run.id}"' in body
+    assert f'"agentProfileId": "{run.agent_profile_id}"' in body
     assert "secret upstream response" not in body
 
 

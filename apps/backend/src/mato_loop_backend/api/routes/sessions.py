@@ -807,8 +807,16 @@ async def get_session_messages(
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)
+    attributions = await session_service.message_attributions(db, messages)
     return {
-        "items": [message_payload(message) for message in messages],
+        "items": [
+            message_payload(
+                message,
+                attribution=attributions.get(message.id),
+                attribution_resolved=True,
+            )
+            for message in messages
+        ],
         "contextSummaries": [
             context_summary_payload(summary) for summary in context_summaries
         ],
@@ -873,7 +881,12 @@ async def get_session_message(
     )
     if message is None:
         raise ApiError(404, "session.messageNotFound")
-    return message_payload(message)
+    attributions = await session_service.message_attributions(db, [message])
+    return message_payload(
+        message,
+        attribution=attributions.get(message.id),
+        attribution_resolved=True,
+    )
 
 
 @router.post("/{session_id}/read")
@@ -1022,6 +1035,9 @@ async def retry_failed_message(
         raise ApiError(409, exc.code, params=exc.params) from exc
     return {
         "runId": str(result.run.id),
+        "agentProfileId": (
+            str(result.run.agent_profile_id) if result.run.agent_profile_id else None
+        ),
         "modelName": result.run.model_name,
         "createdAt": result.run.created_at.isoformat() if result.run.created_at else None,
         **run_timing_payload(result.run),
@@ -1205,6 +1221,9 @@ async def stream_run_events(
         raise ApiError(404, "session.runNotFound")
     run_status = run.status
     run_error = run.error
+    run_agent_profile_id = (
+        str(run.agent_profile_id) if run.agent_profile_id else None
+    )
     run_timing = run_timing_payload(run)
     error_message = (
         await db.scalar(
@@ -1218,7 +1237,13 @@ async def stream_run_events(
     )
     error_params = error_message.error_params if error_message is not None else None
     error_message_payload = (
-        message_payload(error_message) if error_message is not None else None
+        message_payload(
+            error_message,
+            attribution=(run.id, run.agent_profile_id),
+            attribution_resolved=True,
+        )
+        if error_message is not None
+        else None
     )
     await db.rollback()
 
@@ -1237,6 +1262,8 @@ async def stream_run_events(
                     yield f"event: message.completed\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
                 event = {
                     "type": "run.failed",
+                    "runId": str(run_id),
+                    "agentProfileId": run_agent_profile_id,
                     "error": error.payload(),
                     **run_timing,
                 }
@@ -1244,6 +1271,7 @@ async def stream_run_events(
                 event = {
                     "type": f"run.{run_status}",
                     "runId": str(run_id),
+                    "agentProfileId": run_agent_profile_id,
                     **run_timing,
                 }
             yield f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"

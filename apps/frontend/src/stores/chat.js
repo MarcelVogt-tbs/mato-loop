@@ -157,6 +157,7 @@ export const useChatStore = defineStore('chat', {
     selectedSessionId: null,
     runSessionId: null,
     runId: null,
+    runAgentProfileId: null,
     reconnectTimer: null,
     reconnectAttempts: 0,
     activity: emptyActivity(),
@@ -1073,6 +1074,7 @@ export const useChatStore = defineStore('chat', {
         this.eventSource = null
         this.runSessionId = null
         this.runId = null
+        this.runAgentProfileId = null
         this.running = false
         this.stopping = false
         this.cancelRequested = false
@@ -1384,6 +1386,7 @@ export const useChatStore = defineStore('chat', {
       this.eventSource = null
       this.runSessionId = null
       this.runId = null
+      this.runAgentProfileId = null
       this.running = false
       this.stopping = false
       this.cancelRequested = false
@@ -1572,6 +1575,7 @@ export const useChatStore = defineStore('chat', {
           id: data.runId,
           status: 'queued',
           modelName: data.modelName,
+          agentProfileId: data.agentProfileId,
           createdAt: data.createdAt,
           activeDurationMs: data.activeDurationMs,
           activeDurationRunning: data.activeDurationRunning,
@@ -1998,6 +2002,7 @@ export const useChatStore = defineStore('chat', {
           this.watchRun(session.id, data.runId, {
             status: 'queued',
             modelName: data.modelName,
+            agentProfileId: data.agentProfileId,
             activeDurationMs: data.activeDurationMs,
             activeDurationRunning: data.activeDurationRunning,
             activeTimingRevision: data.activeTimingRevision
@@ -2079,6 +2084,7 @@ export const useChatStore = defineStore('chat', {
           this.watchRun(session.id, data.runId, {
             status: 'queued',
             modelName: data.modelName,
+            agentProfileId: data.agentProfileId,
             activeDurationMs: data.activeDurationMs,
             activeDurationRunning: data.activeDurationRunning,
             activeTimingRevision: data.activeTimingRevision
@@ -2157,6 +2163,7 @@ export const useChatStore = defineStore('chat', {
       this.eventSource = markRaw(source)
       this.runSessionId = sessionId
       this.runId = runId
+      this.runAgentProfileId = run.agentProfileId || null
       this.running = !this.cancelRequested
       if (!run.reconnecting) this.runWarnings = []
       if (run.status) this.setSessionRunStatus(sessionId, run.status)
@@ -2184,6 +2191,7 @@ export const useChatStore = defineStore('chat', {
       source.addEventListener('run.started', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
+        this.runAgentProfileId = payload.agentProfileId || this.runAgentProfileId
         this.streamModelName = payload.modelName || this.streamModelName
         this.setSessionRunStatus(sessionId, 'running')
         this.setActivity('preparing_context', { ...payload, startedAt: payload.createdAt })
@@ -2291,12 +2299,11 @@ export const useChatStore = defineStore('chat', {
         if (message && this.current?.id === sessionId) {
           if (!this.current.messages) this.current.messages = []
           const messages = this.current.messages
-          const interrupted = message.generationStatus === 'interrupted'
           this.streamModelName = message.modelName || this.streamModelName
           const promoted = {
             ...message,
-            content: interrupted ? message.content : this.streamContent || message.content,
-            reasoning: interrupted ? message.reasoning : this.streamReasoning || message.reasoning,
+            content: message.content,
+            reasoning: message.reasoning,
             modelName: this.streamModelName
           }
           const index = messages.findIndex((item) => item.id === message.id)
@@ -2488,6 +2495,7 @@ export const useChatStore = defineStore('chat', {
         this.eventSource = null
         this.runSessionId = null
         this.runId = null
+        this.runAgentProfileId = null
         this.running = false
         this.stopping = false
         this.cancelRequested = false
@@ -2546,6 +2554,7 @@ export const useChatStore = defineStore('chat', {
           this.reconnectTimer = null
           this.runSessionId = null
           this.runId = null
+          this.runAgentProfileId = null
           this.running = false
           this.stopping = false
           this.cancelRequested = false

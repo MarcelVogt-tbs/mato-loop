@@ -10,18 +10,27 @@ export function retryAvailableForMessage(message, messages = [], running = false
 }
 
 export function withLiveTranscriptMessage(messages, liveMessage) {
-  if (liveMessage.content) return [...messages, liveMessage]
   const lastUserIndex = messages.reduce((found, message, index) => (
     message.role === 'user' ? index : found
   ), -1)
   const currentIndex = messages.reduce((found, message, index) => (
     message.role === 'assistant' && index > lastUserIndex ? index : found
   ), -1)
+  if (liveMessage.content) {
+    const displayed = [...messages]
+    if (currentIndex >= 0 && !displayed[currentIndex].agentProfileId && liveMessage.agentProfileId) {
+      displayed[currentIndex] = { ...displayed[currentIndex], agentProfileId: liveMessage.agentProfileId }
+    }
+    return [...displayed, liveMessage]
+  }
   if (currentIndex >= 0) {
     const displayed = [...messages]
     displayed[currentIndex] = {
       ...displayed[currentIndex],
       ...(liveMessage.workHistory ? { workHistory: liveMessage.workHistory } : {}),
+      ...(!displayed[currentIndex].agentProfileId && liveMessage.agentProfileId
+        ? { agentProfileId: liveMessage.agentProfileId }
+        : {}),
       liveMessageId: liveMessage.id
     }
     return displayed
@@ -65,7 +74,6 @@ export function splitLiveWorkHistory(entries = [], activity = null) {
   const current = attention || liveWarning || liveReasoning || currentContextSummary || activeTool || null
   const previous = entries.filter((entry) => (
     entry !== current
-    && !entry.live
     && (entry.type !== 'tool' || entry.result || entry.approval || entry.question)
   ))
   return { current, previous }
@@ -197,25 +205,35 @@ export function buildChatTranscript(
 
   function flushAssistantSection() {
     if (!assistantSection.length) return
+    const reversedSection = [...assistantSection].reverse()
+    const finalAnswer = reversedSection.find((message) => (
+      message.content && !message.toolCalls.length
+    )) || null
     const workEntries = assistantSection.flatMap((message) => [
       ...(message.contextSummaryEntry ? [message.contextSummaryEntry] : []),
       ...(message.reasoning
         ? [{ key: `reasoning-${message.id || message._sourceIndex}`, type: 'reasoning', reasoning: message.reasoning }]
         : []),
       ...runWarningEntries(message.warnings, message.id || message._sourceIndex),
-      ...(message.content && message.toolCalls.length
-        ? [{ key: `note-${message.id || message._sourceIndex}`, type: 'note', text: message.content }]
+      ...(message.content && message !== finalAnswer
+        ? [{
+            key: `commentary-${message.id || message._sourceIndex}`,
+            type: 'commentary',
+            message: {
+              id: message.id,
+              content: message.content,
+              research: message.research,
+              streaming: message.streaming,
+              attachments: message.attachments
+            }
+          }]
         : []),
       ...message.toolCalls.map((item) => ({ ...item, type: 'tool' }))
     ])
     const reasoningItems = workEntries
       .filter((entry) => entry.type === 'reasoning')
       .map((entry) => entry.reasoning)
-    const carrier = assistantSection.find((message) => (
-      message.toolCalls.length || message.reasoning || message.contextSummaryEntry
-    ))
-      || assistantSection[0]
-    const reversedSection = [...assistantSection].reverse()
+    const carrier = assistantSection.find((message) => message.agentProfileId) || assistantSection[0]
     const finalCreatedAt = reversedSection.find((message) => message.createdAt)?.createdAt || null
     const activeDurationMs = reversedSection.find((message) => (
       Number.isInteger(message.activeDurationMs) && message.activeDurationMs >= 0
@@ -243,7 +261,10 @@ export function buildChatTranscript(
     const hasContent = assistantSection.some((message) => Boolean(message.content))
 
     for (const message of assistantSection) {
-      if (message.toolCalls.length) message.content = ''
+      if (message !== finalAnswer) {
+        message.content = ''
+        message.attachments = []
+      }
       message.toolCalls = []
       message.reasoning = null
       message.createdAt = null

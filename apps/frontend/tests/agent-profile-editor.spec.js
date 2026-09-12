@@ -19,6 +19,7 @@ const second = '00000000-0000-4000-8000-000000000011'
 async function mountEditor() {
   let agent = {
     id: 'agent', scope: 'personal', name: 'Recherche', instructions: 'Check sources.',
+    answerDisplay: 'timeline',
     maxToolCalls: null, integrationsEnabledByDefault: false,
     integrationAvailability: { [first]: true, [second]: false },
     privatePermissions: { policies: {}, integrationPolicies: { [first]: { 'calendar.read': 'ask' } }, resourcePolicies: {} },
@@ -61,6 +62,8 @@ afterEach(() => {
 it('round-trips unlimited and sparse false overrides without conflating selection and policies', async () => {
   const page = await mountEditor()
   expect(page.form.maxToolCalls).toBeNull()
+  expect(page.form.answerDisplay).toBe('timeline')
+  expect(root.textContent).toContain('Zeigt alle Arbeitsschritte direkt')
   expect(page.form.integrationsEnabledByDefault).toBe(false)
   expect(root.textContent).toContain('Modell- und Dienstkosten')
   const policies = JSON.stringify(page.form.privatePermissions)
@@ -69,6 +72,7 @@ it('round-trips unlimited and sparse false overrides without conflating selectio
   expect(root.textContent).toContain('SearXNG')
   expect(root.textContent).toContain('Kalender')
   page.form.integrationsEnabledByDefault = true
+  page.form.answerDisplay = 'compact'
   expect(page.form.integrationAvailability).toEqual({ [first]: true, [second]: false })
   page.setIntegrationAvailability(first, false)
   expect(page.integrationAvailable({ id: first, enabled: true })).toBe(false)
@@ -78,6 +82,7 @@ it('round-trips unlimited and sparse false overrides without conflating selectio
   await page.saveAgent()
   expect(api.put).toHaveBeenCalledWith('/agent-profiles/agent', expect.objectContaining({
     maxToolCalls: null, integrationsEnabledByDefault: true,
+    answerDisplay: 'compact',
     integrationAvailability: { [first]: false },
     privatePermissions: JSON.parse(policies)
   }), { params: { scope: 'personal' } })

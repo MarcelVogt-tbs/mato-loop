@@ -114,6 +114,17 @@
                 type="textarea"
                 label="Beschreibung"
               />
+              <q-select
+                v-model="form.answerDisplay"
+                class="q-mt-md"
+                outlined
+                emit-value
+                map-options
+                label="Antwortdarstellung"
+                :options="answerDisplayOptions"
+                :hint="answerDisplayOptions.find((option) => option.value === form.answerDisplay)?.hint"
+                persistent-hint
+              />
             </q-card-section>
           </q-card>
 
@@ -447,6 +458,7 @@ const form = reactive({
   description: '',
   personaId: null,
   instructions: '',
+  answerDisplay: 'compact',
   maxToolCalls: 25,
   integrationsEnabledByDefault: true,
   integrationAvailability: {},
@@ -456,6 +468,10 @@ const form = reactive({
 const audiences = [
   { label: 'Private Modelle', value: 'private' },
   { label: 'Öffentliche Modelle', value: 'public' }
+]
+const answerDisplayOptions = [
+  { label: 'Ablauf', value: 'timeline', hint: 'Zeigt alle Arbeitsschritte direkt in zeitlicher Reihenfolge.' },
+  { label: 'Kompakt', value: 'compact', hint: 'Zeigt die aktuelle Aktivität sofort und den bisherigen Verlauf auf Wunsch.' }
 ]
 const scope = computed(() => resolveSettingsScope(route.query.scope, auth.isAdmin))
 const personaOptions = computed(() => [
@@ -560,6 +576,7 @@ function requestPayload() {
     description: form.description.trim(),
     personaId: form.personaId,
     instructions: form.instructions.trim(),
+    answerDisplay: form.answerDisplay,
     maxToolCalls: form.maxToolCalls,
     integrationsEnabledByDefault: form.integrationsEnabledByDefault,
     integrationAvailability: clone(form.integrationAvailability),
@@ -574,6 +591,7 @@ function assignForm(agent = null) {
     description: agent?.description || '',
     personaId: agent?.personaId || null,
     instructions: agent?.instructions || '',
+    answerDisplay: agent?.answerDisplay === 'timeline' ? 'timeline' : 'compact',
     maxToolCalls: agent?.maxToolCalls === null ? null : (agent?.maxToolCalls ?? 25),
     integrationsEnabledByDefault: agent?.integrationsEnabledByDefault ?? true,
     integrationAvailability: clone(agent?.integrationAvailability || {}),

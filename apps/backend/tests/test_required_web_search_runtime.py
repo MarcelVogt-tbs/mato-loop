@@ -46,7 +46,9 @@ from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
+    DEFAULT_AGENT_PROFILE_ID,
     AgentIdentitySettings,
+    AgentProfilesSettings,
     AgentRuntimeSettings,
     AiSettings,
     InstanceLimits,
@@ -233,6 +235,7 @@ async def _runtime_setup(
         return {
             AiSettings: ai_settings,
             AgentIdentitySettings: AgentIdentitySettings(),
+            AgentProfilesSettings: AgentProfilesSettings(),
             AgentRuntimeSettings: runtime_settings,
             InstanceLimits: InstanceLimits(),
             MemorySettings: MemorySettings(enabled=False),
@@ -2049,7 +2052,7 @@ async def test_available_can_answer_without_research(monkeypatch) -> None:
 
 
 async def test_required_search_transitions_to_the_shared_streaming_loop(monkeypatch) -> None:
-    answer = f"Belegte Antwort {SOURCE_CITATION}"
+    answer = f"{'A' * 1_100} {SOURCE_CITATION}"
     db, run, requests, projections, events = await _runtime_setup(
         monkeypatch,
         [
@@ -2059,9 +2062,14 @@ async def test_required_search_transitions_to_the_shared_streaming_loop(monkeypa
                 provider_data={"chat_reasoning_details": [{"text": "Intern"}]},
                 finish_reason="tool_calls",
             ),
-            ProviderResult(content=answer, finish_reason="stop"),
+            ProviderResult(
+                content=answer,
+                finish_reason="stop",
+                provider_data={"_matoloop": {"providerSupplied": True}},
+            ),
         ],
     )
+    run.agent_profile_id = DEFAULT_AGENT_PROFILE_ID
 
     await AgentRuntime._execute_loop(db, run)
 
@@ -2081,6 +2089,11 @@ async def test_required_search_transitions_to_the_shared_streaming_loop(monkeypa
     assert all(event.get("delta") != "Ich recherchiere." for event in events)
     assert any(event.get("delta") == answer for event in events)
     final = next(message for message in _assistant_messages(db) if not message.tool_calls)
+    assert final.provider_data["_matoloop"]["runId"] == str(run.id)
+    assert final.provider_data["_matoloop"]["agentProfileId"] == str(
+        run.agent_profile_id
+    )
+    assert "providerSupplied" not in final.provider_data["_matoloop"]
     assert final.provider_data["_matoloop"]["research"] == {
         "policy": "required",
         "used": True,
@@ -2094,6 +2107,8 @@ async def test_required_search_transitions_to_the_shared_streaming_loop(monkeypa
     assert completed["message"]["research"] == final.provider_data["_matoloop"][
         "research"
     ]
+    assert completed["message"]["content"] == answer
+    assert completed["message"]["truncated"] is False
 
 
 async def test_empty_response_after_search_is_repaired(monkeypatch) -> None:

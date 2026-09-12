@@ -60,6 +60,8 @@
             :presentation="runPresentation"
             :context-summary="chat.streamContextSummary"
             :warnings="chat.runWarnings"
+            :display-mode="answerDisplay(chat.runAgentProfileId || chat.current?.activeRun?.agentProfileId)"
+            :trusted-image-origins="trustedImageOrigins"
             running
             class="chat-welcome__activity text-left q-mx-auto"
             @resize-start="beginActivityResize"
@@ -96,7 +98,7 @@
           </template>
           <template #default="{ item: message }">
             <div
-              :key="message.id"
+              :key="message.liveMessageId || message.id"
               :class="[
                 'chat-message',
                 `chat-message--${message.role}`,
@@ -126,9 +128,7 @@
                 || message.generationStatus === 'interrupted'"
             >
               <AgentActivityPanel
-                v-if="message.workHistory && (
-                  !message.currentTurn || !chat.running || runPresentation.showActivity || childrenByMessage.has(message.id)
-                )"
+                v-if="message.workHistory"
                 :history="message.workHistory"
                 :subagents="childrenByMessage.get(message.id) || []"
                 :activity="message.currentTurn ? chat.activity : null"
@@ -137,6 +137,8 @@
                 :context-summary="message.currentTurn ? chat.streamContextSummary : null"
                 :process-outputs="message.currentTurn ? chat.processOutputs : emptyProcessOutputs"
                 :warnings="message.currentTurn ? chat.runWarnings : []"
+                :display-mode="answerDisplay(message.agentProfileId)"
+                :trusted-image-origins="trustedImageOrigins"
                 :running="chat.running && message.currentTurn"
                 :class="{
                   'q-mb-sm': message.content
@@ -145,8 +147,10 @@
                 }"
                 @open-file="openToolFile"
                 @open-approval-draft="openApprovalDraft"
+                @rendered="handleMessageRendered"
                 @resize-start="beginActivityResize"
                 @resized="finishActivityResize"
+                @trust-image-origin="trustImageOrigin"
               />
               <MessageContent
                 v-if="message.content && message.role === 'assistant'"
@@ -589,6 +593,7 @@ const displayMessages = computed(() => {
     content: chat.streamContent,
     currentTurn: true,
     modelName: chat.streamModelName,
+    agentProfileId: chat.runAgentProfileId || chat.current?.activeRun?.agentProfileId || null,
     showAgentLabel: !hasCurrentAssistantTurn.value,
     streaming: Boolean(chat.streamContent),
     workHistory: liveHistory
@@ -607,6 +612,9 @@ const runPresentation = computed(() => agentRunPresentation({
 const trustedImageOrigins = computed(() => (
   trustedImageOriginsBySession.value.get(chat.current?.id) || []
 ))
+const answerDisplay = (agentProfileId) => (
+  agentProfiles.byId(agentProfileId)?.answerDisplay === 'timeline' ? 'timeline' : 'compact'
+)
 const sessionLoadErrorMessage = computed(() => (
   apiErrorMessage(chat.loadError, 'Die Session konnte nicht geladen werden.')
 ))

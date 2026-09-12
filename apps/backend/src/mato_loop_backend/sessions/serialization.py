@@ -434,13 +434,40 @@ def _control_center_file_view_payload(
     }
 
 
-def message_payload(item: Message, *, retry_available: bool = False) -> dict[str, Any]:
+def message_payload(
+    item: Message,
+    *,
+    retry_available: bool = False,
+    attribution: tuple[UUID, UUID | None] | None = None,
+    attribution_resolved: bool = False,
+) -> dict[str, Any]:
     runtime_data = (item.provider_data or {}).get("_matoloop", {})
     run_id = runtime_data.get("runId") if isinstance(runtime_data, dict) else None
+    agent_profile_id = (
+        runtime_data.get("agentProfileId") if isinstance(runtime_data, dict) else None
+    )
     try:
         run_id = str(UUID(run_id)) if isinstance(run_id, str) else None
     except ValueError:
         run_id = None
+    try:
+        agent_profile_id = (
+            str(UUID(agent_profile_id)) if isinstance(agent_profile_id, str) else None
+        )
+    except ValueError:
+        agent_profile_id = None
+    if attribution_resolved:
+        run_id = str(attribution[0]) if attribution is not None else None
+        agent_profile_id = (
+            str(attribution[1])
+            if attribution is not None and attribution[1] is not None
+            else None
+        )
+    elif item.role == "assistant" and not (run_id and agent_profile_id):
+        run_id = agent_profile_id = None
+    if attribution is not None and not attribution_resolved:
+        run_id = str(attribution[0])
+        agent_profile_id = str(attribution[1]) if attribution[1] is not None else None
     outputs_hidden = item.role == "tool" and isinstance(runtime_data, dict) and (
         runtime_data.get("fileOutputsPending") or runtime_data.get("fileOutputsHidden")
     )
@@ -471,6 +498,11 @@ def message_payload(item: Message, *, retry_available: bool = False) -> dict[str
         "warnings": _public_warnings(item),
         "research": _public_research_payload(item),
         "fileActions": _public_file_actions(item),
+        **(
+            {"runId": run_id, "agentProfileId": agent_profile_id}
+            if item.role == "assistant"
+            else {}
+        ),
         **({"runId": run_id} if item.role == "tool" and run_id is not None else {}),
         "sourceType": (
             "automationRun"
@@ -552,6 +584,7 @@ def run_payload(run: AgentRun) -> dict[str, Any]:
         "sessionId": str(run.session_id),
         "status": run.status,
         "modelName": run.model_name,
+        "agentProfileId": str(run.agent_profile_id) if run.agent_profile_id else None,
         "error": describe_error(run.error).payload() if run.error else None,
         "createdAt": run.created_at.isoformat() if run.created_at else None,
         **run_timing_payload(run),

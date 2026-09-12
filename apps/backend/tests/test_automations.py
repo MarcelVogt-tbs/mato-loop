@@ -309,12 +309,15 @@ def test_run_summary_skips_snapshots_and_result_lookups_but_full_reads_keep_them
     assert "schedule_snapshots" not in str(query)
     assert query.params["param_1"] == 2 and query.params["param_2"] == 1
     message = Message(id=uuid4(), content="Result", role="assistant")
-    agent_run = AgentRun(id=run.agent_run_id, result_message_id=message.id)
+    agent_run = AgentRun(
+        id=run.agent_run_id, result_message_id=message.id, agent_profile_id=uuid4()
+    )
     db.get.side_effect = [agent_run, message, agent_run, message]
     full = client.get(f"/automations/{automation_id}/runs?pageSize=1")
     assert full.status_code == 200
     item = full.json()["items"][0]
     assert item["result"] == {"messageId": str(message.id), "content": "Result"}
+    assert item["agentProfileId"] == str(agent_run.agent_profile_id)
     assert item["definition"] == {"task": "Secret"}
     db.scalar.return_value = run
     single = client.get(f"/automations/{automation_id}/runs/{run.id}")

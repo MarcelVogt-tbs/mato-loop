@@ -70,8 +70,12 @@
                   :context-summary="message.currentTurn ? inspector.streamContextSummary : null"
                   :warnings="message.currentTurn ? inspector.warnings : []"
                   :process-outputs="inspector.running && message.currentTurn ? inspector.processOutputs : {}"
+                  :display-mode="answerDisplay(message.agentProfileId)"
+                  :trusted-image-origins="trustedImageOrigins"
                   read-only
                   class="q-mb-sm"
+                  @rendered="followBottom"
+                  @trust-image-origin="trustImageOrigin"
                 />
                 <MessageContent
                   v-if="message.content && message.role === 'assistant'"
@@ -114,6 +118,7 @@ import AgentActivityPanel from 'components/AgentActivityPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import { useSubagentStore, subagentStatus } from 'stores/subagents'
+import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useApprovalStore } from 'stores/approvals'
 import { useQuestionStore } from 'stores/questions'
 import { buildChatTranscript, withLiveTranscriptMessage } from 'src/utils/chat-transcript'
@@ -125,6 +130,7 @@ const props = defineProps({ parentId: { type: String, required: true }, childId:
 const router = useRouter()
 const route = useRoute()
 const inspector = useSubagentStore()
+const agentProfiles = useAgentProfileStore()
 const approvals = useApprovalStore()
 const questions = useQuestionStore()
 const scrollArea = ref(null)
@@ -156,11 +162,15 @@ const presentation = computed(() => agentRunPresentation({
 }))
 const messages = computed(() => withLiveTranscriptMessage(transcript.value.messages, {
   id: `live-${props.childId}`, role: 'assistant', content: inspector.streamContent,
+  agentProfileId: inspector.run?.agentProfileId || null,
   streaming: Boolean(inspector.streamContent), currentTurn: true,
   showAgentLabel: !transcript.value.messages.some((message) => message.currentTurn),
   workHistory: inspector.running && !transcript.value.messages.some((message) => message.currentTurn && message.workHistory)
     ? { entries: [] } : null
 }))
+const answerDisplay = (agentProfileId) => (
+  agentProfiles.byId(agentProfileId)?.answerDisplay === 'timeline' ? 'timeline' : 'compact'
+)
 
 function returnToParent() { void router.push(parentRoute.value) }
 function trustImageOrigin(origin) {

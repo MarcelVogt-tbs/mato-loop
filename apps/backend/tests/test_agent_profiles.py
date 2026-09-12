@@ -471,7 +471,10 @@ async def test_legacy_agent_profile_update_preserves_persona_id(monkeypatch) -> 
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
     persona_id = uuid4()
-    existing = AgentProfile(name="Agent", persona_id=persona_id, instructions="Old task")
+    existing = AgentProfile(
+        name="Agent", persona_id=persona_id, instructions="Old task",
+        answer_display="timeline",
+    )
     user = UserAccount(
         id=uuid4(), username="admin", password_hash="hash", is_admin=True
     )
@@ -488,6 +491,7 @@ async def test_legacy_agent_profile_update_preserves_persona_id(monkeypatch) -> 
 
     assert updated.persona_id == persona_id
     assert updated.instructions == "New task"
+    assert updated.answer_display == "timeline"
 
     cleared = await _profile_from_request(
         AsyncMock(),
@@ -498,6 +502,14 @@ async def test_legacy_agent_profile_update_preserves_persona_id(monkeypatch) -> 
         existing=existing,
     )
     assert cleared.persona_id is None
+
+    compact = await _profile_from_request(
+        AsyncMock(), user, None,
+        AgentProfileRequest(name="Agent", instructions="New task", answerDisplay="compact"),
+        profile_id=existing.id, existing=existing,
+    )
+    assert compact.answer_display == "compact"
+    assert compact.model_dump(by_alias=True)["answerDisplay"] == "compact"
 
 
 async def test_agent_profile_integration_metadata_lists_actions_and_resources(

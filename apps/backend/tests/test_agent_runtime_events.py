@@ -471,12 +471,21 @@ async def test_cancel_before_scheduled_run_starts_persists_terminal_state(monkey
 async def test_cancel_descendants_uses_recursive_sessions_and_never_replays_orphans(monkeypatch):
     root_id = uuid4()
     runs = [AgentRun(id=uuid4(), session_id=uuid4(), status="queued", trust_level="public") for _ in range(2)]
+    profile_id = uuid4()
+    sessions = {
+        run.session_id: ChatSession(id=run.session_id, agent_profile_id=profile_id)
+        for run in runs
+    }
     read_db, write_db = AsyncMock(spec=AsyncSession), AsyncMock(spec=AsyncSession)
     for db in (read_db, write_db):
         db.__aenter__.return_value = db
     read_db.execute.return_value = Mock(all=lambda: [(run.session_id, None) for run in runs])
     read_db.scalars.return_value = Mock(all=lambda: [run.id for run in runs])
-    write_db.get.side_effect = lambda _model, key: next(run for run in runs if run.id == key)
+    write_db.get.side_effect = lambda model, key: (
+        next(run for run in runs if run.id == key)
+        if model is AgentRun
+        else sessions[key]
+    )
     write_db.add.side_effect = lambda message: setattr(message, "id", uuid4())
     factory = Mock(side_effect=[read_db, write_db])
     monkeypatch.setattr(runtime_module, "AsyncSessionFactory", factory)
@@ -495,6 +504,13 @@ async def test_cancel_descendants_uses_recursive_sessions_and_never_replays_orph
     assert "WITH RECURSIVE" in str(read_db.execute.await_args.args[0])
     assert "agent_runs.parent_run_id IS NULL" in str(read_db.scalars.await_args.args[0])
     assert all(run.status == "cancelled" and run.result_message_id is not None for run in runs)
+    assert all(run.agent_profile_id == profile_id for run in runs)
+    assert all(
+        call.args[0].provider_data["_matoloop"] == {
+            "runId": str(run.id), "agentProfileId": str(profile_id),
+        }
+        for call, run in zip(write_db.add.call_args_list, runs, strict=True)
+    )
     assert AgentRuntime.cancel_and_wait.await_count == 2
     schedule.assert_not_called()
 
@@ -984,6 +1000,7 @@ async def test_run_failure_persists_structured_message_before_terminal_event(mon
         "message.completed",
         "run.failed",
     ]
+    assert events[-1]["runId"] == str(run.id)
     assert events[1]["message"]["content"] == "The model provider request failed."
     assert events[1]["message"]["createdAt"] == message.created_at.isoformat()
     assert "secret" not in str(events)
@@ -1160,6 +1177,7 @@ async def test_shutdown_cancel_is_persisted_as_backend_restart(monkeypatch) -> N
         "message.completed",
         "run.failed",
     ]
+    assert events[-1]["runId"] == str(run.id)
 
 
 async def test_cancel_after_completed_response_does_not_add_interruption(monkeypatch) -> None:
