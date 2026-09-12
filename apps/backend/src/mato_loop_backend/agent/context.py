@@ -2256,15 +2256,13 @@ class ContextManager:
                 reserved_output_tokens=reserved_output_tokens,
             )
 
-        current_tool_indices = _current_tool_output_indices(messages)
-
-        async def estimate_minimum_request() -> int:
-            if not current_tool_indices:
+        async def estimate_minimum_request(indices: list[int]) -> int:
+            if not indices:
                 return estimated
             minimum = [dict(message) for message in messages]
             _limit_tool_output_tokens(
                 minimum,
-                current_tool_indices,
+                indices,
                 0,
                 characters_per_token,
                 omitted_marker=_SHORTENED_TOOL_OUTPUT.lstrip(),
@@ -2273,8 +2271,6 @@ class ContextManager:
             # Retain privacy overhead for short bodies the real shortener cannot remove.
             return estimated if minimum == messages else await estimate_request(minimum)
 
-        minimum_request_tokens = await estimate_minimum_request()
-
         protected_start = _compaction_boundary(
             active_records,
             _protected_start(active_records, settings.protected_recent_turns),
@@ -2282,12 +2278,26 @@ class ContextManager:
         )
         prefix = active_records[:protected_start]
         suffix = active_records[protected_start:]
+        current_tool_indices = _current_tool_output_indices(messages)
+        minimum_request_tokens = await estimate_minimum_request(current_tool_indices)
+        protected_tool_call_ids = {
+            item.tool_call_id
+            for item in suffix
+            if item.role == "tool" and item.tool_call_id
+        }
+        protected_tool_indices = [
+            index
+            for index in current_tool_indices
+            if messages[index].get("tool_call_id") in protected_tool_call_ids
+        ]
+        compaction_request_tokens = (
+            minimum_request_tokens
+            if protected_tool_indices == current_tool_indices
+            else await estimate_minimum_request(protected_tool_indices)
+        )
         compacted = False
         pending_summary: ContextSummary | None = None
-        if (prefix or latest is not None) and (
-            minimum_request_tokens > trigger_tokens
-            or any(item.role == "tool" for item in prefix)
-        ):
+        if (prefix or latest is not None) and compaction_request_tokens > trigger_tokens:
             target_tokens = max(256, int(input_budget * settings.compaction_target_ratio))
             summary_limit = max(256, min(2_048, target_tokens // 3))
             result = await summarize(
@@ -2320,7 +2330,7 @@ class ContextManager:
             messages, estimated = await project(latest, suffix)
             compacted = True
             current_tool_indices = _current_tool_output_indices(messages)
-            minimum_request_tokens = await estimate_minimum_request()
+            minimum_request_tokens = await estimate_minimum_request(current_tool_indices)
 
         current_tool_budget = max(
             0, trigger_tokens - minimum_request_tokens

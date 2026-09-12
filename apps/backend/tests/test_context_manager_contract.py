@@ -2398,6 +2398,65 @@ async def test_auto_context_trigger_applies_slack_once_without_recompacting_fitt
     assert summarize.await_count == int(compacted)
 
 
+@pytest.mark.parametrize(
+    ("sizes", "compacted"),
+    [
+        pytest.param((500, 500, 6_000), False, id="protected-output"),
+        pytest.param((6_000, 500, 500), True, id="compactable-output"),
+    ],
+)
+async def test_first_turn_compacts_only_for_large_compactable_tool_output(
+    sizes, compacted,
+) -> None:
+    session = _session()
+    records = [_message(session.id, "user", "Analysiere die Seite")]
+    for index, size in enumerate(sizes):
+        call_id = f"fetch-{index}"
+        assistant = _message(session.id, "assistant", "")
+        assistant.tool_calls = [
+            {"id": call_id, "name": "webfetch", "arguments": {"url": "https://example.test"}}
+        ]
+        tool_result = _message(
+            session.id,
+            "tool",
+            json.dumps(
+                {
+                    "sourceId": f"src-{call_id}",
+                    "url": "https://example.test",
+                    "outputFormat": "html" if size == 6_000 else "markdown",
+                    "content": "x" * size,
+                }
+            ),
+        )
+        tool_result.tool_call_id = call_id
+        records.extend((assistant, tool_result))
+    original_contents = [item.content for item in records]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    summarize = AsyncMock(return_value=SummaryResult("First fetch was too large.", None))
+
+    projection = await _build_context(
+        db,
+        chat_session=session,
+        records=records,
+        system_prompt="System",
+        tool_schemas=[],
+        model=_model(context_window_tokens=5_000),
+        settings=_settings(),
+        summarize=summarize,
+    )
+
+    assert projection.compacted is compacted
+    assert summarize.await_count == int(compacted)
+    assert projection.estimated_input_tokens <= raw_input_budget(3_900)
+    assert [item.content for item in records] == original_contents
+    if compacted:
+        assert projection.context_summary.covered_through_message_id == records[2].id
+    else:
+        assert len(projection.messages[-1]["content"]) < len(records[-1].content)
+        db.add.assert_not_called()
+
+
 async def test_large_current_tool_output_does_not_compact_older_history() -> None:
     session = _session()
     old_user = _message(session.id, "user", "Alte Frage")
