@@ -157,7 +157,7 @@ services:
       [
         "sh",
         "-c",
-        "uv sync --frozen && exec uv run --no-sync matoloop-agent run",
+        "uv sync --frozen && exec uv run --no-sync watchfiles --filter python 'matoloop-agent run' src",
       ]
     networks:
       - mato-loop

@@ -35,6 +35,10 @@ The development stack is the standard environment for all local work:
 ./scripts/dev.sh up --build -d
 ```
 
+The development Agent reloads automatically when its Python sources change. Active in-memory Agent
+state, including a running browser, ends during that reload, while persistent Agent data and browser
+profiles remain.
+
 The following endpoints are then available:
 
 - Web UI: `http://localhost:10020`
