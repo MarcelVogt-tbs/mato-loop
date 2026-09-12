@@ -1048,7 +1048,7 @@ class AgentRuntime:
         run = AgentRun(
             id=uuid4(),
             session_id=chat_session.id,
-            agent_profile_id=failed_run.agent_profile_id or chat_session.agent_profile_id,
+            agent_profile_id=chat_session.agent_profile_id,
             input_message_id=failed_run.input_message_id,
             status="queued",
             model_config_id=failed_run.model_config_id,

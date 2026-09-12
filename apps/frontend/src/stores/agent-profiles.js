@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
+import { useChatStore } from 'stores/chat'
 
 const scopeConfig = (scope) => ({ params: { scope } })
 
@@ -126,6 +127,7 @@ export const useAgentProfileStore = defineStore('agent-profiles', {
       try {
         await api.delete(`/agent-profiles/${id}`, scopeConfig(scope))
         this.agents = this.agents.filter((agent) => agent.id !== id)
+        useChatStore().replaceAgentProfile(id, this.defaultAgentProfileId)
       } finally {
         this.saving = false
       }

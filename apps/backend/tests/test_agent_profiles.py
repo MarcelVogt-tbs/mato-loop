@@ -21,7 +21,7 @@ from mato_loop_backend.api.routes.agent_profiles import (
     update_agent_profile,
 )
 from mato_loop_backend.integrations.contracts import IntegrationResource
-from mato_loop_backend.models import UserAccount
+from mato_loop_backend.models import ChatSession, UserAccount
 from mato_loop_backend.settings import (
     BUILD_AGENT_PROFILE_ID,
     DEFAULT_AGENT_PROFILE_ID,
@@ -144,6 +144,39 @@ async def test_plan_and_build_cannot_be_renamed_or_deleted(
             AsyncMock(),
             scope="instance",
         )
+
+
+async def test_delete_agent_profile_moves_sessions_to_default_and_clears_grants(
+    monkeypatch,
+) -> None:
+    profile = AgentProfile(name="Custom", instructions="Task")
+    settings = AgentProfilesSettings(
+        profiles=[*default_agent_profiles(), profile]
+    )
+    user = UserAccount(
+        id=uuid4(), username="admin", password_hash="hash", is_admin=True
+    )
+    sessions = [
+        ChatSession(id=uuid4(), user_id=user.id, agent_profile_id=profile.id),
+        ChatSession(id=uuid4(), user_id=uuid4(), agent_profile_id=profile.id),
+    ]
+    rows = Mock()
+    rows.all.return_value = sessions
+    db = AsyncMock()
+    db.scalars.return_value = rows
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+
+    await delete_agent_profile(profile.id, user, db, scope="instance")
+
+    assert all(
+        session.agent_profile_id == DEFAULT_AGENT_PROFILE_ID for session in sessions
+    )
+    assert profile not in settings.profiles
+    db.execute.assert_awaited_once()
+    assert "DELETE FROM permission_grants" in str(db.execute.await_args.args[0])
+    SettingsStore.save.assert_awaited_once_with(db, settings, user_id=None)
+    db.commit.assert_awaited_once()
 
 
 @pytest.mark.parametrize("profile_id", [PLAN_AGENT_PROFILE_ID, BUILD_AGENT_PROFILE_ID])

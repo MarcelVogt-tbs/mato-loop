@@ -282,6 +282,16 @@ export const useChatStore = defineStore('chat', {
         this.sessionCatalog = sortSessions(this.sessionCatalog)
       }
     },
+    replaceAgentProfile(profileId, replacementId) {
+      for (const session of this.cachedSessions) {
+        if (session.agentProfileId === profileId) {
+          this.updateCachedSession(session.id, (item) => ({ ...item, agentProfileId: replacementId }))
+        }
+      }
+      if (this.current?.agentProfileId === profileId) {
+        this.current.agentProfileId = replacementId
+      }
+    },
     removeCachedSession(id) {
       for (const list of Object.values(this.sessionLists)) {
         if (!list.items.some((session) => session.id === id)) continue

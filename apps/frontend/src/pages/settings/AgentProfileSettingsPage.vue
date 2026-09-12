@@ -135,7 +135,7 @@ async function changeScope(scope) {
 
 async function removeAgent(agent) {
   const accepted = await confirm(
-    `Soll der Agent „${agent.name}“ dauerhaft gelöscht werden?`,
+    `Soll der Agent „${agent.name}“ dauerhaft gelöscht werden? Verwendete Sessions wechseln zu „Allgemein“.`,
     'Agent löschen',
     { okLabel: 'Löschen', okColor: 'negative' }
   )

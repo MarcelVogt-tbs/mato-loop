@@ -167,12 +167,19 @@ async def test_retry_rejects_a_non_latest_error(monkeypatch) -> None:
 
 
 async def test_runtime_retry_reuses_failed_run_model(monkeypatch) -> None:
+    from mato_loop_backend.agent import runtime as runtime_module
     from mato_loop_backend.settings import AiSettings, SettingsStore
-    from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+    from mato_loop_backend.settings.models import AgentProfile, LlmProviderConfig, ModelConfig
 
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="original")
-    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
+    current_profile = AgentProfile(name="Current", instructions="Task")
+    session = ChatSession(
+        id=uuid4(),
+        user_id=uuid4(),
+        title="Test",
+        agent_profile_id=current_profile.id,
+    )
     failed_run = AgentRun(
         id=uuid4(),
         session_id=session.id,
@@ -181,6 +188,7 @@ async def test_runtime_retry_reuses_failed_run_model(monkeypatch) -> None:
         model_name="Originalmodell",
         trust_level="private",
         pseudonymization_enabled=True,
+        agent_profile_id=uuid4(),
     )
     db = AsyncMock(spec=AsyncSession)
     message = Message(id=uuid4(), session_id=session.id, role="user", content="Retry")
@@ -191,6 +199,11 @@ async def test_runtime_retry_reuses_failed_run_model(monkeypatch) -> None:
         "load",
         AsyncMock(return_value=AiSettings(providers=[provider], models=[model])),
     )
+    monkeypatch.setattr(
+        runtime_module,
+        "load_agent_profile",
+        AsyncMock(return_value=current_profile),
+    )
     schedule = Mock()
     monkeypatch.setattr(AgentRuntime, "_schedule_run", schedule)
 
@@ -200,6 +213,7 @@ async def test_runtime_retry_reuses_failed_run_model(monkeypatch) -> None:
     assert run.model_name == "Originalmodell"
     assert run.trust_level == "private"
     assert run.pseudonymization_enabled is True
+    assert run.agent_profile_id == current_profile.id
     db.commit.assert_awaited_once()
     schedule.assert_called_once_with(run)
 

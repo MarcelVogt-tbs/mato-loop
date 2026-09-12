@@ -8,6 +8,7 @@ const { api } = vi.hoisted(() => ({
 vi.mock('src/boot/axios', () => ({ api }))
 
 import { useAgentProfileStore } from '../src/stores/agent-profiles'
+import { useChatStore } from '../src/stores/chat'
 
 describe('agent profiles store', () => {
   beforeEach(() => {
@@ -65,6 +66,7 @@ describe('agent profiles store', () => {
       .mockResolvedValueOnce({ data: { effectiveAgents: [{ id: 'global-1', ...payload, scope: 'instance' }] } })
       .mockResolvedValueOnce({ data: { effectiveAgents: [{ id: 'global-1', ...payload, name: 'Analyse', scope: 'instance' }] } })
     const store = useAgentProfileStore()
+    const chat = useChatStore()
     store.selectScope('instance')
 
     await store.createAgent(payload)
@@ -74,12 +76,23 @@ describe('agent profiles store', () => {
       integrationsEnabledByDefault: false,
       integrationAvailability: payload.integrationAvailability
     })
+    store.defaultAgentProfileId = 'default-1'
+    chat.current = { id: 'session-1', agentProfileId: 'global-1' }
+    chat.sessionLists.standalone.items = [
+      { id: 'session-1', agentProfileId: 'global-1' },
+      { id: 'session-2', agentProfileId: 'other-1' }
+    ]
     await store.deleteAgent('global-1')
 
     expect(api.post).toHaveBeenCalledWith('/agent-profiles', payload, { params: { scope: 'instance' } })
     expect(api.put).toHaveBeenCalledWith('/agent-profiles/global-1', { ...payload, name: 'Analyse' }, { params: { scope: 'instance' } })
     expect(api.delete).toHaveBeenCalledWith('/agent-profiles/global-1', { params: { scope: 'instance' } })
     expect(store.agents).toEqual([])
+    expect(chat.current.agentProfileId).toBe('default-1')
+    expect(chat.sessionLists.standalone.items).toEqual([
+      { id: 'session-1', agentProfileId: 'default-1' },
+      { id: 'session-2', agentProfileId: 'other-1' }
+    ])
 
     store.selectScope('personal')
     api.post.mockResolvedValue({ data: { agentProfileId: 'personal-1' } })

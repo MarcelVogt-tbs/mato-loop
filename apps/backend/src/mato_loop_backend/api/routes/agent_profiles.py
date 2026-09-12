@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.tools import tool_registry
@@ -15,7 +15,7 @@ from mato_loop_backend.api.routes.integrations import (
 )
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.integrations.registry import integration_adapter
-from mato_loop_backend.models import ChatSession, UserAccount
+from mato_loop_backend.models import ChatSession, PermissionGrant, UserAccount
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
     BUILTIN_AGENT_PROFILE_IDS,
@@ -543,14 +543,25 @@ async def delete_agent_profile(
         raise ApiError(404, "agentProfile.notFound")
     if profile_id in BUILTIN_AGENT_PROFILE_IDS:
         raise ApiError(409, "agentProfile.defaultProtected")
-    referenced = await db.scalar(
-        select(ChatSession.id).where(
-            ChatSession.agent_profile_id == profile_id,
-            *([ChatSession.user_id == user.id] if owner_id is not None else []),
-        )
+    sessions = list(
+        (
+            await db.scalars(
+                select(ChatSession)
+                .where(
+                    ChatSession.agent_profile_id == profile_id,
+                    *([ChatSession.user_id == user.id] if owner_id is not None else []),
+                )
+                .with_for_update()
+            )
+        ).all()
     )
-    if referenced is not None:
-        raise ApiError(409, "agentProfile.inUse")
+    if sessions:
+        session_ids = [session.id for session in sessions]
+        await db.execute(
+            delete(PermissionGrant).where(PermissionGrant.session_id.in_(session_ids))
+        )
+        for session in sessions:
+            session.agent_profile_id = DEFAULT_AGENT_PROFILE_ID
     settings.profiles.remove(profile)
     await SettingsStore.save(db, settings, user_id=owner_id)
     await db.commit()
