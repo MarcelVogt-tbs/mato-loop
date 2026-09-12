@@ -8,6 +8,7 @@ import socket
 import struct
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,7 +37,7 @@ from matoloop_agent.browser_contracts import (
     BrowserSetupReadArguments,
     BrowserStatusArguments,
 )
-from matoloop_agent.browser_worker import BrowserWorker, launch_error_code, serve
+from matoloop_agent.browser_worker import OPENBOX_CONFIG, BrowserWorker, launch_error_code, serve
 from matoloop_agent.config import AgentConfig
 from matoloop_agent.connection import MatoLoopAgent
 from matoloop_agent.filesystem import AgentError
@@ -61,6 +62,12 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         config._data_directory = self.root
         self.agent = MatoLoopAgent(config, "not-for-browser")
         self.manager = self.agent.browser
+
+    def test_openbox_config_disables_desktop_switching(self):
+        root = ET.fromstring(OPENBOX_CONFIG)
+        namespace = {"ob": "http://openbox.org/3.4/rc"}
+        self.assertEqual(root.findtext("ob:desktops/ob:number", namespaces=namespace), "1")
+        self.assertEqual(root.findall("ob:mouse/ob:context[@name='Root']/*", namespace), [])
 
     async def test_translation_prompt_setting_is_verified_and_temporary_tab_closed(self):
         worker = BrowserWorker(self.root)

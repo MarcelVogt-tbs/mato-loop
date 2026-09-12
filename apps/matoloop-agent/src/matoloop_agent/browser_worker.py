@@ -62,6 +62,18 @@ from .browser_contracts import (
 )
 from .filesystem import AgentError
 
+OPENBOX_CONFIG = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <desktops>
+    <number>1</number>
+  </desktops>
+  <mouse>
+    <context name="Root" />
+  </mouse>
+</openbox_config>
+"""
+
 
 def fail(code: str) -> AgentError:
     return AgentError(f"browser.{code}", "Browser operation failed")
@@ -226,10 +238,13 @@ class BrowserWorker:
             "XDG_CACHE_HOME": str(live / "cache"),
             "XDG_RUNTIME_DIR": str(live),
         }
+        openbox_config = live / "config" / "openbox" / "rc.xml"
+        openbox_config.parent.mkdir(parents=True)
+        openbox_config.write_text(OPENBOX_CONFIG)
         await self.resize(1280, 800)
         self.processes.append(
             subprocess.Popen(
-                ["openbox", "--sm-disable"],
+                ["openbox", "--sm-disable", "--config-file", str(openbox_config)],
                 env=self.environment,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
