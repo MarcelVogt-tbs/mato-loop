@@ -1155,6 +1155,8 @@ def _openscad_render_api_error(exc: ExecutionClientError) -> ApiError:
         status_code = 409
     elif exc.code in {"file.directoryNotFound", "file.pathNotFound"}:
         status_code = 404
+    elif exc.code == "file.accessDenied":
+        status_code = 403
     elif exc.code in {
         "file.invalidPath",
         "file.notAFile",
@@ -1178,6 +1180,8 @@ def _openscad_render_api_error(exc: ExecutionClientError) -> ApiError:
         status_code = 422
     elif exc.code == "executionAgent.timeout":
         status_code = 504
+    elif exc.code == "file.unavailable":
+        status_code = 500
     elif exc.code in {
         "executionAgent.protocolError",
         "executionAgent.responseTooLarge",

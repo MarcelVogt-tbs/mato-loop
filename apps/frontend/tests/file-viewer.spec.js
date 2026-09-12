@@ -139,7 +139,7 @@ it('activates a historical revision only after confirmation', async () => {
   expect(activate).toHaveBeenCalledWith('note.txt', 1, state)
 })
 
-async function mountLiveViewer({ kind = 'text', path = 'note.txt', toolContext = null, toolbar, viaApp = false, fullscreenToggle = false } = {}) {
+async function mountLiveViewer({ kind = 'text', path = 'note.txt', toolContext = null, toolbar, viaApp = false, fullscreenToggle = false, previewError = null } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const workspace = useWorkspaceStore()
@@ -148,7 +148,8 @@ async function mountLiveViewer({ kind = 'text', path = 'note.txt', toolContext =
   workspace.toolContext = toolContext
   if (toolContext) workspace.scope = 'filesystem'
   workspace.openEntry({ kind: 'file', path, name: path.split('/').at(-1) })
-  mocks.api.get.mockResolvedValue({ data: { kind, content: 'original', revision: 'a'.repeat(64) } })
+  if (previewError) mocks.api.get.mockRejectedValue(previewError)
+  else mocks.api.get.mockResolvedValue({ data: { kind, content: 'original', revision: 'a'.repeat(64) } })
   const preview = vi.spyOn(workspace, 'preview')
   const saveFile = vi.spyOn(workspace, 'saveFile')
   const render = vi.spyOn(workspace, 'renderOpenScad').mockResolvedValue(null)
@@ -193,7 +194,7 @@ async function mountLiveViewer({ kind = 'text', path = 'note.txt', toolContext =
   app.directive('close-popup', {})
   app.directive('ripple', {})
   app.mount(root)
-  await vi.waitFor(() => expect(root.querySelector('textarea, pre, article, img, [data-model-src], [aria-label="OpenSCAD-Ansicht wählen"]')).not.toBeNull())
+  await vi.waitFor(() => expect(root.querySelector('textarea, pre, article, img, [data-model-src], [aria-label="OpenSCAD-Ansicht wählen"], [role="alert"]')).not.toBeNull())
   return { root, workspace, preview, saveFile, render, toggleFullscreen }
 }
 
@@ -204,6 +205,20 @@ function button(root, label) {
   expect(element, label).toBeTruthy()
   return element
 }
+
+it('explains that a historical workspace output can have been moved or deleted', async () => {
+  const error = { response: { status: 404, data: { error: { code: 'file.pathNotFound' } } } }
+  const { root } = await mountLiveViewer({
+    path: '/project/_probe2.py',
+    toolContext: { executionAgentId: 'historical-agent', currentDirectory: '/project' },
+    previewError: error
+  })
+
+  expect(root.textContent).toContain('Datei nicht gefunden')
+  expect(root.textContent).toContain('Unter „/project/_probe2.py“ ist keine Datei mehr verfügbar.')
+  expect(root.textContent).toContain('Sie wurde möglicherweise verschoben oder gelöscht.')
+  expect(button(root, 'Erneut versuchen')).toBeTruthy()
+})
 
 async function type(root, content) {
   const editor = root.querySelector('textarea')

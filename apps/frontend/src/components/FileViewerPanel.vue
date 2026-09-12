@@ -222,7 +222,7 @@
         class="fit q-pa-xl"
         role="alert"
         icon="cloud_off"
-        title="Vorschau konnte nicht geladen werden"
+        :title="loadErrorTitle"
         :description="loadErrorMessage"
       >
         <template #actions>
@@ -471,7 +471,13 @@ const printUrl = computed(() => {
     })
   }).href
 })
-const loadErrorMessage = computed(() => apiErrorMessage(loadError.value, 'Die Vorschau konnte nicht geladen werden.'))
+const loadErrorCode = computed(() => errorDescriptor(loadError.value)?.code)
+const loadErrorTitle = computed(() => loadErrorCode.value === 'file.pathNotFound'
+  ? 'Datei nicht gefunden'
+  : 'Vorschau konnte nicht geladen werden')
+const loadErrorMessage = computed(() => loadErrorCode.value === 'file.pathNotFound'
+  ? `Unter „${props.entry?.path}“ ist keine Datei mehr verfügbar. Sie wurde möglicherweise verschoben oder gelöscht.`
+  : apiErrorMessage(loadError.value, 'Die Vorschau konnte nicht geladen werden.'))
 const saveErrorMessage = computed(() => apiErrorMessage(saveError.value, 'Die Datei konnte nicht gespeichert werden.'))
 const conflictLoadErrorMessage = computed(() => apiErrorMessage(conflictLoadError.value, 'Die aktuelle Revision konnte nicht geladen werden.'))
 const openScadErrorMessage = computed(() => apiErrorMessage(openScadError.value, 'Das OpenSCAD-Modell konnte nicht gerendert werden.'))

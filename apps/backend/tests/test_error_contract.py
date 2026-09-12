@@ -63,6 +63,11 @@ def test_changed_file_error_has_controlled_fallback() -> None:
     assert describe_error("file.changed").message == "The file changed since it was opened."
 
 
+def test_file_access_errors_have_controlled_fallbacks() -> None:
+    assert describe_error("file.accessDenied").message == "Access to the file was denied."
+    assert describe_error("file.unavailable").message == "The file is unavailable."
+
+
 def test_execution_and_output_limits_have_controlled_fallbacks() -> None:
     assert describe_error("process.commandFailed").message == "The command exited with a nonzero status."
     assert describe_error("agent.outputLimitReached").message == "The model response was interrupted at its output limit."

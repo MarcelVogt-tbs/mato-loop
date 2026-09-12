@@ -51,6 +51,15 @@ describe('API error messages', () => {
     )
   })
 
+  it('distinguishes denied and unavailable file access', () => {
+    expect(apiErrorMessage({ error: { code: 'file.accessDenied', message: 'private detail' } })).toBe(
+      'Der Zugriff auf die Datei wurde verweigert.'
+    )
+    expect(apiErrorMessage({ error: { code: 'file.unavailable', message: 'private detail' } })).toBe(
+      'Die Datei ist derzeit nicht verfügbar.'
+    )
+  })
+
   it('translates stable domain error codes', () => {
     expect(apiErrorMessage({ response: { data: { error: { code: 'auth.invalidCredentials' } } } })).toBe(
       'Benutzername oder Passwort ist ungültig.'

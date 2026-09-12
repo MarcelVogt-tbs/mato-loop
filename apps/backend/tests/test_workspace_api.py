@@ -55,7 +55,9 @@ def test_openscad_render_request_accepts_frontend_revision_alias() -> None:
     ("code", "status_code"),
     [
         ("file.changed", 409),
+        ("file.accessDenied", 403),
         ("file.pathNotFound", 404),
+        ("file.unavailable", 500),
         ("file.operationTooLarge", 413),
         ("openscad.renderFailed", 422),
         ("executionAgent.timeout", 504),
@@ -90,6 +92,23 @@ async def test_file_context_hides_foreign_sessions() -> None:
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.code == "session.notFound"
+
+
+@pytest.mark.parametrize(
+    ("agent_code", "status_code", "api_code"),
+    [
+        ("path.notFound", 404, "file.pathNotFound"),
+        ("path.accessDenied", 403, "file.accessDenied"),
+        ("path.notFile", 400, "file.notAFile"),
+        ("path.unavailable", 500, "file.unavailable"),
+    ],
+)
+def test_workspace_maps_file_access_errors(
+    agent_code: str, status_code: int, api_code: str
+) -> None:
+    error = workspace_route._execution_error(agent_code)
+    assert error.status_code == status_code
+    assert error.code == api_code
 
 
 async def test_usage_reports_project_shared_root_and_effective_quota(

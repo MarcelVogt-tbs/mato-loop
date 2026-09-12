@@ -136,6 +136,34 @@ class FilesystemTests(unittest.TestCase):
         self.assertEqual(target.read_text(), "original\n")
         self.assertTrue(link.is_symlink())
 
+    def test_read_distinguishes_unavailable_files(self) -> None:
+        original_open = os.open
+        cases = (
+            (FileNotFoundError(errno.ENOENT, "private detail"), "path.notFound"),
+            (PermissionError(errno.EACCES, "private detail"), "path.accessDenied"),
+            (OSError(errno.EIO, "private detail"), "path.unavailable"),
+        )
+        for error, code in cases:
+
+            def fail_file_open(path, flags, *args, _error=error, **kwargs):
+                if path == "file":
+                    raise _error
+                return original_open(path, flags, *args, **kwargs)
+
+            with (
+                self.subTest(code=code),
+                patch.object(filesystem_module.os, "open", side_effect=fail_file_open),
+                self.assertRaises(AgentError) as raised,
+            ):
+                self.filesystem.read(self.path("file"), 1, 1, 100)
+            self.assertEqual(raised.exception.code, code)
+            self.assertNotIn("private detail", str(raised.exception))
+
+    def test_read_missing_parent_reports_missing_path(self) -> None:
+        with self.assertRaises(AgentError) as raised:
+            self.filesystem.read(self.path("missing/file"), 1, 1, 100)
+        self.assertEqual(raised.exception.code, "path.notFound")
+
     def test_export_rejects_fifo_replacement_without_blocking(self) -> None:
         source = self.root / "source"
         source.write_text("public")

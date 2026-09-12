@@ -365,16 +365,31 @@ class Filesystem:
                 os.close(fd)
                 fd = child
             return fd
-        except OSError as exc:
+        except FileNotFoundError as exc:
+            os.close(fd)
+            raise AgentError("path.notFound", "Directory was not found") from exc
+        except PermissionError as exc:
+            os.close(fd)
+            raise AgentError("path.accessDenied", "Directory access was denied") from exc
+        except NotADirectoryError as exc:
             os.close(fd)
             raise AgentError("path.notDirectory", "Directory is unavailable") from exc
+        except OSError as exc:
+            os.close(fd)
+            if exc.errno == errno.ELOOP:
+                raise AgentError("path.notDirectory", "Directory is unavailable") from exc
+            raise AgentError("path.unavailable", "Directory is unavailable") from exc
 
     @staticmethod
     def _metadata(fd: int, name: str) -> os.stat_result:
         try:
             return os.stat(name, dir_fd=fd, follow_symlinks=False)
-        except OSError as exc:
+        except FileNotFoundError as exc:
             raise AgentError("path.notFound", "Path not found") from exc
+        except PermissionError as exc:
+            raise AgentError("path.accessDenied", "Path access was denied") from exc
+        except OSError as exc:
+            raise AgentError("path.unavailable", "Path is unavailable") from exc
 
     @contextmanager
     def _parent(self, path: str) -> Iterator[tuple[int, str, tuple[str, ...]]]:
@@ -458,12 +473,21 @@ class Filesystem:
             )
             metadata = os.fstat(fd)
             if not stat.S_ISREG(metadata.st_mode):
-                raise OSError
+                os.close(fd)
+                raise AgentError("path.notFile", "Target is not a regular file")
             return fd, metadata
+        except FileNotFoundError as exc:
+            raise AgentError("path.notFound", "File was not found") from exc
+        except PermissionError as exc:
+            raise AgentError("path.accessDenied", "File access was denied") from exc
+        except AgentError:
+            raise
         except OSError as exc:
             if "fd" in locals():
                 os.close(fd)
-            raise AgentError("path.notFile", "File is unavailable") from exc
+            if exc.errno == errno.ELOOP:
+                raise AgentError("path.notFile", "Target is not a regular file") from exc
+            raise AgentError("path.unavailable", "File is unavailable") from exc
 
     def read(
         self,
