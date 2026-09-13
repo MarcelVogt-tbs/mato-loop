@@ -295,12 +295,14 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.querySelector('[role="timer"]')).toBeNull()
   })
 
-  it('shows initial activity beside live duration with a persistent history toggle', () => {
+  it('shows initial activity beside live duration with a persistent history toggle', async () => {
+    let historyExpanded = null
     root = document.createElement('div')
     document.body.append(root)
     app = createApp({ render: () => h(AgentActivityPanel, {
       history: { entries: [] }, running: true,
-      activity: { phase: 'waiting_model', activeDurationMs: 38_000 }
+      activity: { phase: 'waiting_model', activeDurationMs: 38_000 },
+      onHistoryExpanded: (value) => { historyExpanded = value }
     }) })
     app.use(createPinia()).use(Quasar, { components })
     app.mount(root)
@@ -310,6 +312,9 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.querySelector('.work-history__meta-section [role="timer"]').textContent).toBe('38 s')
     expect(root.querySelector('.work-history__header')).toBeNull()
     expect(root.querySelector('.work-history__toggle').getAttribute('aria-expanded')).toBe('false')
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    expect(historyExpanded).toBe(true)
   })
 
   it('keeps live status visible while tool messages are being persisted', async () => {

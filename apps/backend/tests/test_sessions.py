@@ -912,9 +912,18 @@ async def test_session_detail_contains_active_run_and_aggregate_metrics() -> Non
     )
     db.execute.side_effect = [anchors, aggregate]
     db.scalar.return_value = run
+    todo_messages = MagicMock()
+    todo_messages.all.return_value = [Message(
+        session_id=session_id,
+        role="tool",
+        content='{"todos":[{"content":"Prüfen","status":"in_progress"}]}',
+        provider_data={"_matoloop": {"toolName": "todo_write"}},
+    )]
+    db.scalars.return_value = todo_messages
 
     result = await get_session(session_id, user, db)
 
+    assert result["todos"] == [{"content": "Prüfen", "status": "in_progress"}]
     assert result["pinned"] is True
     assert result["controlCenter"] == {
         "tabs": [_api_app_tab("session"), _api_app_tab("files")],
@@ -1049,7 +1058,9 @@ async def test_session_payload_marks_latest_restart_error_retryable() -> None:
     no_automation_links.all.return_value = []
     db = AsyncMock(spec=AsyncSession)
     db.get.side_effect = [session, failed_run]
-    db.scalars.side_effect = [messages, summaries]
+    todo_messages = MagicMock()
+    todo_messages.all.return_value = []
+    db.scalars.side_effect = [messages, summaries, todo_messages]
     db.scalar.return_value = None
     db.execute.side_effect = [anchors, direct_links, no_automation_links, aggregate]
 

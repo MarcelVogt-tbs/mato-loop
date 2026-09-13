@@ -125,6 +125,14 @@
                 :hint="answerDisplayOptions.find((option) => option.value === form.answerDisplay)?.hint"
                 persistent-hint
               />
+              <q-toggle
+                v-model="form.todoEnabled"
+                class="q-mt-md"
+                label="Session-Aufgaben verwenden"
+              />
+              <div class="text-caption app-muted">
+                Erlaubt dem Agenten, eine Aufgabenliste für längere Arbeiten zu führen.
+              </div>
             </q-card-section>
           </q-card>
 
@@ -460,6 +468,7 @@ const form = reactive({
   instructions: '',
   answerDisplay: 'compact',
   maxToolCalls: 25,
+  todoEnabled: false,
   integrationsEnabledByDefault: true,
   integrationAvailability: {},
   publicPermissions: emptyPermissions(),
@@ -578,6 +587,7 @@ function requestPayload() {
     instructions: form.instructions.trim(),
     answerDisplay: form.answerDisplay,
     maxToolCalls: form.maxToolCalls,
+    todoEnabled: form.todoEnabled,
     integrationsEnabledByDefault: form.integrationsEnabledByDefault,
     integrationAvailability: clone(form.integrationAvailability),
     publicPermissions: clone(form.publicPermissions),
@@ -593,6 +603,7 @@ function assignForm(agent = null) {
     instructions: agent?.instructions || '',
     answerDisplay: agent?.answerDisplay === 'timeline' ? 'timeline' : 'compact',
     maxToolCalls: agent?.maxToolCalls === null ? null : (agent?.maxToolCalls ?? 25),
+    todoEnabled: agent?.todoEnabled ?? false,
     integrationsEnabledByDefault: agent?.integrationsEnabledByDefault ?? true,
     integrationAvailability: clone(agent?.integrationAvailability || {}),
     publicPermissions: clone(agent?.publicPermissions || emptyPermissions()),

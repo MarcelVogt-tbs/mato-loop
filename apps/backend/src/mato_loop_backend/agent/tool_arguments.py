@@ -41,6 +41,28 @@ class TaskArguments(ToolArguments):
     tasks: list[DelegatedTask] = Field(min_length=1, max_length=4)
 
 
+class TodoItem(ToolArguments):
+    content: str = Field(min_length=1, max_length=160)
+    status: Literal["pending", "in_progress", "completed", "cancelled"]
+
+    @field_validator("content")
+    @classmethod
+    def content_must_not_be_blank(cls, value: str) -> str:
+        if not (cleaned := value.strip()):
+            raise ValueError("todo content must not be blank")
+        return cleaned
+
+
+class TodoWriteArguments(ToolArguments):
+    todos: list[TodoItem] = Field(max_length=12)
+
+    @model_validator(mode="after")
+    def only_one_item_may_be_in_progress(self) -> TodoWriteArguments:
+        if sum(item.status == "in_progress" for item in self.todos) > 1:
+            raise ValueError("only one todo may be in progress")
+        return self
+
+
 class QuestionOption(ToolArguments):
     label: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=500)

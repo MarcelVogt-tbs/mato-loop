@@ -111,7 +111,7 @@ const props = defineProps({
   readOnly: Boolean,
   running: Boolean
 })
-const emit = defineEmits(['open-file', 'open-approval-draft', 'rendered', 'resize-start', 'resized', 'trust-image-origin'])
+const emit = defineEmits(['history-expanded', 'open-file', 'open-approval-draft', 'rendered', 'resize-start', 'resized', 'trust-image-origin'])
 const instanceLimits = useInstanceLimitsStore()
 const historyExpanded = ref(false)
 const expandedDetails = ref(new Set())
@@ -122,6 +122,7 @@ function toggleDetails(key) {
 function toggleHistory() {
   emit('resize-start')
   historyExpanded.value = !historyExpanded.value
+  emit('history-expanded', historyExpanded.value)
   nextTick(() => emit('resized'))
 }
 const presentation = computed(() => props.presentation || agentRunPresentation({

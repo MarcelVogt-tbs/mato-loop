@@ -2333,6 +2333,10 @@ export const useChatStore = defineStore('chat', {
           if (workspace.sessionId === sessionId) void workspace.refresh()
         }
       })
+      source.addEventListener('todo.updated', (event) => {
+        if (this.eventSource !== source || this.current?.id !== sessionId) return
+        this.current.todos = JSON.parse(event.data).todos
+      })
       source.addEventListener('approval.created', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)

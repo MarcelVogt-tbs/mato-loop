@@ -20,7 +20,7 @@ async function mountEditor() {
   let agent = {
     id: 'agent', scope: 'personal', name: 'Recherche', instructions: 'Check sources.',
     answerDisplay: 'timeline',
-    maxToolCalls: null, integrationsEnabledByDefault: false,
+    maxToolCalls: null, todoEnabled: true, integrationsEnabledByDefault: false,
     integrationAvailability: { [first]: true, [second]: false },
     privatePermissions: { policies: {}, integrationPolicies: { [first]: { 'calendar.read': 'ask' } }, resourcePolicies: {} },
     publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} }
@@ -62,6 +62,7 @@ afterEach(() => {
 it('round-trips unlimited and sparse false overrides without conflating selection and policies', async () => {
   const page = await mountEditor()
   expect(page.form.maxToolCalls).toBeNull()
+  expect(page.form.todoEnabled).toBe(true)
   expect(page.form.answerDisplay).toBe('timeline')
   expect(root.textContent).toContain('Zeigt alle Arbeitsschritte direkt')
   expect(page.form.integrationsEnabledByDefault).toBe(false)
@@ -81,7 +82,7 @@ it('round-trips unlimited and sparse false overrides without conflating selectio
   page.setIntegrationAvailability(second, 'inherit')
   await page.saveAgent()
   expect(api.put).toHaveBeenCalledWith('/agent-profiles/agent', expect.objectContaining({
-    maxToolCalls: null, integrationsEnabledByDefault: true,
+    maxToolCalls: null, todoEnabled: true, integrationsEnabledByDefault: true,
     answerDisplay: 'compact',
     integrationAvailability: { [first]: false },
     privatePermissions: JSON.parse(policies)

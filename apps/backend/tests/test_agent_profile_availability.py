@@ -39,37 +39,53 @@ from mato_loop_backend.settings.store import SettingsStore
 
 @pytest.mark.parametrize("by_alias", [False, True])
 @pytest.mark.parametrize(
-    "profile_id,limit,enabled,answer_display",
+    "profile_id,limit,enabled,answer_display,todo_enabled",
     [
-        (DEFAULT_AGENT_PROFILE_ID, 25, True, "compact"),
-        (PLAN_AGENT_PROFILE_ID, None, False, "timeline"),
-        (BUILD_AGENT_PROFILE_ID, None, False, "timeline"),
-        (uuid4(), 25, True, "compact"),
+        (DEFAULT_AGENT_PROFILE_ID, 25, True, "compact", False),
+        (PLAN_AGENT_PROFILE_ID, None, False, "timeline", True),
+        (BUILD_AGENT_PROFILE_ID, None, False, "timeline", True),
+        (uuid4(), 25, True, "compact", False),
     ],
 )
 def test_profile_defaults_backfill_only_missing_fields(
-    by_alias, profile_id, limit, enabled, answer_display
+    by_alias, profile_id, limit, enabled, answer_display, todo_enabled
 ):
     old = AgentProfile(id=profile_id, name="Renamed", instructions="Custom task").model_dump(
         mode="json", by_alias=by_alias
     )
     keys = (
-        ("answerDisplay", "maxToolCalls", "integrationsEnabledByDefault")
+        ("answerDisplay", "maxToolCalls", "todoEnabled", "integrationsEnabledByDefault")
         if by_alias
-        else ("answer_display", "max_tool_calls", "integrations_enabled_by_default")
+        else ("answer_display", "max_tool_calls", "todo_enabled", "integrations_enabled_by_default")
     )
     for key in keys:
         old.pop(key)
     loaded = AgentProfile.model_validate(old)
     assert loaded.answer_display == answer_display
     assert loaded.max_tool_calls == limit
+    assert loaded.todo_enabled is todo_enabled
     assert loaded.integrations_enabled_by_default is enabled
     dumped = loaded.model_dump(mode="json", by_alias=by_alias)
     assert {key: value for key, value in dumped.items() if key not in keys} == old
-    old.update(dict(zip(keys, ["compact", None, False], strict=True)))
+    old.update(dict(zip(keys, ["compact", None, False, False], strict=True)))
     assert AgentProfile.model_validate(old).model_dump(mode="json", by_alias=by_alias) == old
-    old.update(dict(zip(keys, ["timeline", 9, True], strict=True)))
+    old.update(dict(zip(keys, ["timeline", 9, True, True], strict=True)))
     assert AgentProfile.model_validate(old).model_dump(mode="json", by_alias=by_alias) == old
+
+
+@pytest.mark.parametrize("profile,enabled", [
+    (AgentProfile(id=DEFAULT_AGENT_PROFILE_ID, name="Allgemein", instructions="Task"), False),
+    (AgentProfile(id=PLAN_AGENT_PROFILE_ID, name="Plan", instructions="Task"), True),
+    (AgentProfile(id=BUILD_AGENT_PROFILE_ID, name="Build", instructions="Task"), True),
+    (AgentProfile(name="Custom", instructions="Task"), False),
+])
+def test_todo_tool_follows_profile_availability(profile, enabled):
+    tools = ToolSettings()
+    tools._agent_profile = profile
+
+    effective = tool_registry.effective(IntegrationSettings(), tool_settings=tools)
+
+    assert ("todo_write" in effective.tools) is enabled
 
 
 @pytest.mark.parametrize("model", [AgentProfile, AgentProfileRequest])

@@ -315,6 +315,10 @@ class ToolDefinition:
 
 
 def _tool_available(name: str, settings: ToolSettings) -> bool:
+    if name == "todo_write" and not (
+        settings._agent_profile and settings._agent_profile.todo_enabled
+    ):
+        return False
     if name.startswith("browser_"):
         if not settings.tool_availability.get("browser", True):
             return False
@@ -607,6 +611,8 @@ class ToolRegistry:
         }
         for name, definition in installed_definitions.items():
             if name in offered_names:
+                continue
+            if name == "todo_write" and not _tool_available(name, tool_settings):
                 continue
             if definition.group == "integrations" and name not in active_definitions:
                 reason = "integrations"

@@ -31,6 +31,7 @@ from mato_loop_backend.agent import AgentRuntime
 from mato_loop_backend.agent.permissions import execution_directory_scope
 from mato_loop_backend.agent.run_timing import run_timing_payload
 from mato_loop_backend.agent.runtime import AgentRunError
+from mato_loop_backend.agent.todos import session_todos
 from mato_loop_backend.attachments import AttachmentInput
 from mato_loop_backend.automations import automation_impact_token
 from mato_loop_backend.chat_history import ChatHistoryService
@@ -436,6 +437,20 @@ async def session_detail_payload(
             )
             for message in messages
         ],
+        "todos": session_todos(
+            (
+                await db.scalars(
+                    select(Message)
+                    .where(
+                        Message.session_id == item.id,
+                        Message.role == "tool",
+                        Message.provider_data["_matoloop"]["toolName"].as_string()
+                        == "todo_write",
+                    )
+                    .order_by(Message.created_at, Message.id)
+                )
+            ).all()
+        ),
         "contextSummaries": [
             context_summary_serializer(summary) for summary in context_summaries
         ],

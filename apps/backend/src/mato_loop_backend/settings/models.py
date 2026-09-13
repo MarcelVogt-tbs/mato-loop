@@ -175,6 +175,7 @@ class AgentProfile(BaseModel):
     instructions: str = Field(min_length=1, max_length=16_000)
     answer_display: Literal["timeline", "compact"] = "compact"
     max_tool_calls: ProfileToolCallLimit = 25
+    todo_enabled: StrictBool = False
     integrations_enabled_by_default: StrictBool = True
     integration_availability: dict[str, StrictBool] = Field(default_factory=dict)
     private_permissions: AgentProfilePermissions = Field(
@@ -197,6 +198,7 @@ class AgentProfile(BaseModel):
         for snake, camel, default in (
             ("answer_display", "answerDisplay", "timeline" if coding else "compact"),
             ("max_tool_calls", "maxToolCalls", None if coding else 25),
+            ("todo_enabled", "todoEnabled", coding),
             ("integrations_enabled_by_default", "integrationsEnabledByDefault", not coding),
         ):
             if snake not in values and camel not in values:

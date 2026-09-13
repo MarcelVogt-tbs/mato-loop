@@ -101,6 +101,7 @@ from mato_loop_backend.agent.tool_arguments import (
     ShellRunArguments,
     SystemInfoArguments,
     TaskArguments,
+    TodoWriteArguments,
     TranscribeAudioArguments,
     UpdateAgentIdentityArguments,
     UpdateUserProfileArguments,
@@ -4279,6 +4280,10 @@ async def _task(arguments: TaskArguments, context: ToolContext) -> ToolResult:
     return await context.task_handler(arguments)
 
 
+async def _todo_write(arguments: TodoWriteArguments, _context: ToolContext) -> ToolResult:
+    return ToolResult.json(arguments.model_dump(mode="json"))
+
+
 async def _coding_project(context: ToolContext) -> Project | None:
     if context.session.project_id is None:
         return None
@@ -4654,6 +4659,18 @@ tool_registry = ToolRegistry(
             group="agent",
             label="Aufgaben delegieren",
             icon="account_tree",
+        ),
+        ToolDefinition(
+            "todo_write",
+            "Replace the current session checklist with the complete updated list. Each item has content "
+            "and status: pending, in_progress, completed, or cancelled. Omitted items are removed. An "
+            "empty list clears the checklist. Use at most one in_progress item. This updates tracking "
+            "only; it does not perform or verify the listed work.",
+            TodoWriteArguments,
+            _todo_write,
+            group="agent",
+            label="Aufgaben aktualisieren",
+            icon="checklist",
         ),
         ToolDefinition(
             "read",

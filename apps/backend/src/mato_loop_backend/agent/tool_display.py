@@ -25,7 +25,7 @@ _GROUPS = {item["id"]: item for item in TOOL_GROUPS}
 TOOL_ACTIVITY_LABELS = {
     "coding_analyze": "Projekt analysieren", "coding_create_plan": "Plan speichern",
     "coding_list_plans": "Pläne anzeigen", "coding_enqueue": "Pläne ausführen",
-    "question": "Rückfrage stellen", "read": "Pfad lesen", "glob": "Dateien suchen",
+    "question": "Rückfrage stellen", "todo_write": "Aufgaben aktualisieren", "read": "Pfad lesen", "glob": "Dateien suchen",
     "grep": "Dateiinhalte durchsuchen", "list_directory": "Ordner auflisten",
     "read_file": "Datei lesen", "task": "Aufgaben delegieren", "provide_file": "Datei bereitstellen",
     "write_file": "Datei schreiben", "edit_file": "Datei bearbeiten", "apply_patch": "Patch anwenden",
@@ -113,7 +113,7 @@ _TOOL_GROUPS = {
     **{
         name: "agent"
         for name in (
-            "question", "task", "load_skill", "build_skill", "edit_skill",
+            "question", "task", "todo_write", "load_skill", "build_skill", "edit_skill",
             "update_agent_identity", "update_user_profile",
         )
     },

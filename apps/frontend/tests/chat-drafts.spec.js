@@ -1578,6 +1578,20 @@ describe('chat drafts', () => {
     })
   })
 
+  it('replaces session todos from SSE', () => {
+    global.EventSource = EventSourceMock
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [], todos: [] }
+    chat.selectedSessionId = 'session-1'
+    chat.watchRun('session-1', 'run-1', { status: 'running' })
+
+    EventSourceMock.instances[0].emit('todo.updated', {
+      todos: [{ content: 'Prüfen', status: 'in_progress' }]
+    })
+
+    expect(chat.current.todos).toEqual([{ content: 'Prüfen', status: 'in_progress' }])
+  })
+
   it('refreshes session files after a successful filesystem tool completes', () => {
     global.EventSource = EventSourceMock
     api.get.mockResolvedValue({ data: { id: 'session-1', messages: [] } })

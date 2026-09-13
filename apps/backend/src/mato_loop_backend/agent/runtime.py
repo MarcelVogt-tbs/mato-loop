@@ -90,6 +90,7 @@ from mato_loop_backend.agent.title_generation import (
 from mato_loop_backend.agent.title_generation import (
     initial_session_title as _initial_session_title,
 )
+from mato_loop_backend.agent.todos import session_todos, todo_context
 from mato_loop_backend.agent.tool_display import tool_display
 from mato_loop_backend.agent.tools import (
     PROJECT_CODING_TOOL_NAMES,
@@ -2411,6 +2412,11 @@ class AgentRuntime:
                         records=records,
                         system_prompt=system_prompt,
                         memory_context=memory_context,
+                        todo_context=(
+                            todo_context(session_todos(records))
+                            if "todo_write" in offered_tool_names
+                            else None
+                        ),
                         tool_schemas=schemas,
                         model=model,
                         target_trust_level=model_trust_level,
@@ -4257,6 +4263,14 @@ class AgentRuntime:
                         "metadata": metadata,
                     },
                 )
+                if call.name == "todo_write" and not isinstance(error_code, str):
+                    await run_events.publish(
+                        run.id,
+                        {
+                            "type": "todo.updated",
+                            "todos": json.loads(tool_result_content)["todos"],
+                        },
+                    )
                 if error_code == "executionAgent.unavailable":
                     raise AgentRunError(error_code)
                 updated_identity = metadata.get("agentIdentity")

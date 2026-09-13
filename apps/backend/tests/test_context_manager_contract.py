@@ -1551,6 +1551,20 @@ def test_general_system_prompt_requires_supported_factual_claims() -> None:
     assert "otherwise omit the claim" in prompt
 
 
+def test_general_system_prompt_adds_todo_workflow_only_when_offered() -> None:
+    plan = AgentProfile(id=PLAN_AGENT_PROFILE_ID, name="Plan", instructions="Plan work.")
+    offered = general_system_prompt(
+        _session(), agent_profile=plan, offered_tool_names=frozenset({"todo_write"})
+    )
+    unavailable = general_system_prompt(_session(), agent_profile=plan)
+
+    assert "three or more tool-executed steps" in offered
+    assert "update it only when scope changes" in offered
+    assert "For Plan work, keep implementation steps pending" in offered
+    assert "three or more tool-executed steps" not in unavailable
+    assert "For Plan work, keep implementation steps pending" not in unavailable
+
+
 def test_general_system_prompt_keeps_permission_denials_host_scoped() -> None:
     prompt = general_system_prompt(
         _session(), offered_tool_names=frozenset({"calendar_query_events"})

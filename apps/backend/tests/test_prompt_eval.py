@@ -146,7 +146,9 @@ def test_every_builtin_tool_is_expected_by_a_live_case() -> None:
         for name in (*case.expected_tools, *((case.expected_tool,) if case.expected_tool else ()))
     }
 
-    assert set(tool_registry._definitions) - set(PROJECT_CODING_TOOL_NAMES) <= covered
+    # todo_write is covered by dedicated deterministic tests and a separate model evaluation.
+    separately_evaluated = {"todo_write"}
+    assert set(tool_registry._definitions) - set(PROJECT_CODING_TOOL_NAMES) - separately_evaluated <= covered
 
 
 def test_transcript_role_evaluator_checks_relationships_not_name_presence() -> None:

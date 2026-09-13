@@ -144,6 +144,7 @@
                 }"
                 @open-file="openToolFile"
                 @open-approval-draft="openApprovalDraft"
+                @history-expanded="message.id === todoHistoryMessageId && (todosExpanded = $event)"
                 @rendered="handleMessageRendered"
                 @resize-start="beginActivityResize"
                 @resized="finishActivityResize"
@@ -333,6 +334,7 @@
         @resume="chat.resumeQueuedSend"
         @undo="undoQueuedMessage"
       />
+      <SessionTodoStrip :todos="chat.current?.todos" :expanded="todosExpanded" />
       <QuestionDock
         v-if="activeQuestion"
         :key="activeQuestion.id"
@@ -447,6 +449,7 @@ import ControlCenterPanel from 'components/ControlCenterPanel.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import QuestionDock from 'components/QuestionDock.vue'
+import SessionTodoStrip from 'components/SessionTodoStrip.vue'
 import SubagentInspector from 'components/SubagentInspector.vue'
 import SubagentRows from 'components/SubagentRows.vue'
 import { useSubagentStore } from 'stores/subagents'
@@ -515,6 +518,7 @@ const followingBottom = ref(true)
 const messageTimestampNow = ref(Date.now())
 const messageActionId = ref(null)
 const approvalDraftPreview = ref(null)
+const todosExpanded = ref(false)
 const announcedRunStatus = ref('')
 const bottomThreshold = 64
 const liveWorkHistory = computed(() => ({
@@ -612,6 +616,11 @@ const displayMessages = computed(() => {
   }
   return withLiveTranscriptMessage(messages, liveMessage)
 })
+const todoHistoryMessageId = computed(() => {
+  const messages = displayMessages.value.filter((message) => message.workHistory)
+  return messages.find((message) => message.currentTurn)?.id || messages.at(-1)?.id || null
+})
+watch(todoHistoryMessageId, () => { todosExpanded.value = false })
 const runPresentation = computed(() => agentRunPresentation({
   runId: chat.runId || chat.current?.activeRun?.id,
   running: chat.running,
