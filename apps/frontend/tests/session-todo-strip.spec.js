@@ -15,11 +15,13 @@ afterEach(() => {
 
 it('uses the external history state for compact and complete todo views', async () => {
   const expanded = ref(false)
+  const running = ref(true)
   root = document.createElement('div')
   document.body.append(root)
   app = createApp({
     setup: () => () => h(SessionTodoStrip, {
       expanded: expanded.value,
+      running: running.value,
       todos: [
         { content: 'Prüfen', status: 'completed' },
         { content: 'Umsetzen', status: 'in_progress' }
@@ -31,7 +33,12 @@ it('uses the external history state for compact and complete todo views', async 
 
   expect(root.textContent).not.toContain('Prüfen')
   expect(root.textContent).toContain('Umsetzen')
+  expect(root.textContent).toContain('2/2')
   expect(root.querySelector('button')).toBeNull()
+
+  running.value = false
+  await nextTick()
+  expect(root.textContent).toBe('')
 
   expanded.value = true
   await nextTick()

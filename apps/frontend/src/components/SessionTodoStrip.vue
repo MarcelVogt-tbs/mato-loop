@@ -8,7 +8,8 @@
           size="18px"
           aria-hidden="true"
         />
-        <span :class="{ 'text-strike app-muted': todo.status === 'cancelled' }">{{ todo.content }}</span>
+        <span class="session-todos__content" :class="{ 'text-strike app-muted': todo.status === 'cancelled' }">{{ todo.content }}</span>
+        <span v-if="!expanded" class="session-todos__position app-muted">· {{ currentPosition }}/{{ todos.length }}</span>
       </div>
     </div>
   </div>
@@ -22,7 +23,8 @@ defineOptions({ name: 'SessionTodoStrip' })
 
 const props = defineProps({
   todos: { type: Array, default: () => [] },
-  expanded: Boolean
+  expanded: Boolean,
+  running: Boolean
 })
 const statusIcon = {
   pending: 'radio_button_unchecked',
@@ -32,11 +34,12 @@ const statusIcon = {
 }
 const visibleTodos = computed(() => {
   if (props.expanded) return props.todos
+  if (!props.running) return []
   const current = props.todos.find((todo) => todo.status === 'in_progress')
     || props.todos.find((todo) => todo.status === 'pending')
-    || props.todos.at(-1)
   return current ? [current] : []
 })
+const currentPosition = computed(() => props.todos.indexOf(visibleTodos.value[0]) + 1)
 </script>
 
 <style scoped>
@@ -61,8 +64,12 @@ const visibleTodos = computed(() => {
   line-height: 20px;
 }
 
-.session-todos__item > span {
+.session-todos__content {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.session-todos__position {
+  flex: none;
 }
 </style>
