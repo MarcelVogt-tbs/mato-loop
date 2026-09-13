@@ -5555,9 +5555,10 @@ def _rewrite_system_prompt_v2(prompt: str) -> str:
             paragraph = (
                 "Missing-information contract: For missing required stable user context, call memory_retrieve "
                 "first when available; call question only if retrieval is unavailable or insufficient; never "
-                "ask in assistant text. Ask all missing required details in one call. Never ask optional "
-                "details such as location or description unless mentioned or required to disambiguate. "
-                "Do not call question for informational or complete requests."
+                "ask in assistant text. Group all currently known required details in one call; later calls are "
+                "allowed when answers reveal new required decisions. Never ask optional details such as location "
+                "or description unless mentioned or required to disambiguate. Do not call question for "
+                "informational or complete requests."
             )
         elif paragraph.startswith("Use session_read for compacted details"):
             paragraph = (

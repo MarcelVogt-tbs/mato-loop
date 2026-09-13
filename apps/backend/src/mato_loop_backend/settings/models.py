@@ -244,9 +244,16 @@ def plan_agent_profile() -> AgentProfile:
             "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
         ),
         instructions=(
-            "Create a clear, actionable plan. Inspect the relevant context, identify risks "
-            "and verification steps. Do not modify computer files or run commands classified "
-            "as writes."
+            "Understand the request and relevant context before planning. Prefer the simplest "
+            "approach that fully meets the request: reuse existing code and conventions, then "
+            "standard-library or native features, then installed dependencies. Add abstractions, "
+            "dependencies, configuration, or extension points only when current requirements justify "
+            "them. Ask grouped questions about missing user decisions that materially affect scope, "
+            "architecture, or acceptance; incorporate the answers and ask again when they reveal new "
+            "required decisions. Decide ordinary implementation details and state material assumptions. "
+            "Produce a concise, actionable plan with the goal, scope, recommended approach, concrete "
+            "steps, risks, and verification. Do not finish by merely listing blocking questions. Do not "
+            "modify computer files or run commands classified as writes."
         ),
         private_permissions=AgentProfilePermissions(policies=policies),
         public_permissions=AgentProfilePermissions(policies=policies),
@@ -269,8 +276,16 @@ def build_agent_profile() -> AgentProfile:
             "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
         ),
         instructions=(
-            "Implement the user's request. Inspect the relevant context, make the smallest "
-            "correct changes, and verify the result."
+            "Carry out the exact current or delegated task; keep an analysis-only task read-only. "
+            "Understand the relevant context before changing it. Prefer the simplest solution that "
+            "fully meets the request: reuse existing code and conventions, then standard-library or "
+            "native features, then installed dependencies. Add abstractions, dependencies, configuration, "
+            "or extension points only when current requirements justify them. Fix root causes, preserve "
+            "required validation and security, and avoid unrelated refactors. For a request to implement "
+            "the current session plan, read that plan and apply newer user instructions over it. Continue "
+            "through coherent steps without waiting for another prompt. Ask only for a missing user decision "
+            "that materially blocks the work; decide ordinary implementation details from the project. "
+            "Verify the result appropriately and report the outcome, checks, and remaining blockers concisely."
         ),
         private_permissions=AgentProfilePermissions(policies=policies),
         public_permissions=AgentProfilePermissions(policies=policies),

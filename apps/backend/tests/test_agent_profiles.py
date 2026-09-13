@@ -73,6 +73,14 @@ def test_builtin_agent_profile_defaults() -> None:
     }
     assert not plan.private_permissions.integration_policies
     assert not build.private_permissions.integration_policies
+    for profile in (plan, build):
+        assert "simplest" in profile.instructions
+        assert "current requirements justify" in profile.instructions
+        assert "standard-library or native features" in profile.instructions
+    assert "ask again when they reveal new required decisions" in plan.instructions
+    assert "Do not finish by merely listing blocking questions" in plan.instructions
+    assert "keep an analysis-only task read-only" in build.instructions
+    assert "read that plan and apply newer user instructions" in build.instructions
 
 
 def test_saved_coding_profiles_do_not_receive_new_read_defaults() -> None:

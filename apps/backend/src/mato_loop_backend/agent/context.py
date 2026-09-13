@@ -735,7 +735,8 @@ def general_system_prompt(
         parts.append(
             "Missing-information contract: For missing required stable user context, call memory_retrieve "
             "first when available; call question only if retrieval is unavailable or insufficient; never ask "
-            "in assistant text. Ask all missing required details in one call. "
+            "in assistant text. Group all currently known required details in one call; later calls are allowed "
+            "when answers reveal new required decisions. "
             "Never ask optional details such as location or description unless mentioned or required "
             "to disambiguate. Do not call question for informational or complete requests."
         )
@@ -1025,19 +1026,19 @@ def general_system_prompt(
         )
         if not delegated and agent_profile.id == PLAN_AGENT_PROFILE_ID:
             parts.append(
-                f"Plan workflow: analyze the request, inspect relevant evidence, and plan without executing "
-                f"the requested changes. Persist the canonical plan with write_file at "
-                f"root=files path=plans/{chat_session.id}/plan.md. Read an existing plan first and "
-                "replace it with its expectedSha256. Do not intentionally change computer files, "
+                f"Plan workflow: plan without executing the requested changes. Persist the canonical plan "
+                f"at root=files path=plans/{chat_session.id}/plan.md. This path may not exist: check it with "
+                "glob before reading it. Create a missing plan with write_file; read an existing plan and "
+                "update it with its expectedSha256. Do not intentionally change computer files, "
                 "system state, or external services. Do not bypass disabled write tools through "
                 "shell commands or request permission for those writes."
             )
         elif not delegated and agent_profile.id == BUILD_AGENT_PROFILE_ID:
             parts.append(
-                "Build workflow: carry out the requested work, not only a proposal. Use task-appropriate "
-                "tools and verification when needed; answer inline when that fulfills the request. "
-                "Continue until complete or blocked by missing information, permission, or a failed operation. "
-                "Report the result and any remaining work without claiming unverified success."
+                "Build workflow: carry out requested work rather than only proposing it; answer inline when "
+                "that fulfills the request. If the user asks to implement the current session plan, first read "
+                f"root=files path=plans/{chat_session.id}/plan.md. Continue until complete or blocked, and do "
+                "not claim unverified success."
             )
             if model_instructions := build_model_instructions(model_id):
                 parts.append(model_instructions)

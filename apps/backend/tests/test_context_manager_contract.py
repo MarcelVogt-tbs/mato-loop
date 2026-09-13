@@ -2899,7 +2899,7 @@ async def test_failed_projection_does_not_commit_new_summary() -> None:
 
 def test_task_general_profiles_keep_main_plan_artifact_and_child_permissions() -> None:
     session = _session()
-    tools = frozenset({"write_file", "read", "task"})
+    tools = frozenset({"write_file", "read", "glob", "task"})
     plan = AgentProfile(id=PLAN_AGENT_PROFILE_ID, name="Plan", instructions="Analyze and plan.")
     build = AgentProfile(id=BUILD_AGENT_PROFILE_ID, name="Build", instructions="Complete the task.")
     main = general_system_prompt(session, agent_profile=plan, offered_tool_names=tools)
@@ -2908,18 +2908,30 @@ def test_task_general_profiles_keep_main_plan_artifact_and_child_permissions() -
 
     assert f"root=files path=plans/{session.id}/plan.md" in main
     assert "expectedSha256" in main
-    assert "analyze the request" in main
+    assert "check it with glob before reading it" in main
+    assert "Create a missing plan with write_file" in main
     assert "Plan workflow:" not in child
     assert f"root=files path=plans/{session.id}/plan.md" in child
     assert "not a requirement to create" in child
     assert "do not inherit the parent transcript" in child
     assert "paths/IDs and active skill instructions" in work
-    assert "carry out the requested work, not only a proposal" in work
+    assert f"root=files path=plans/{session.id}/plan.md" in work
+    assert "asks to implement the current session plan" in work
     assert "answer inline when that fulfills the request" in work
     assert "For repository work" in work
     assert "not required for unrelated tasks" in work
     for evidence in ("tests for code", "data checks", "source verification", "reconciliation"):
         assert evidence in work
+
+
+def test_question_contract_allows_follow_up_for_new_required_decisions() -> None:
+    prompt = general_system_prompt(
+        _session(), offered_tool_names=frozenset({"memory_retrieve", "question"})
+    )
+
+    assert "Group all currently known required details in one call" in prompt
+    assert "later calls are allowed when answers reveal new required decisions" in prompt
+    assert "Ask all missing required details in one call" not in prompt
 
 
 def test_unlimited_tool_prompt_has_no_budget_or_remaining_count() -> None:
