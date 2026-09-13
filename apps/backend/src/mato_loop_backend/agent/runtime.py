@@ -25,6 +25,7 @@ from mato_loop_backend.agent.context import (
     ContextError,
     ContextManager,
     SummaryResult,
+    _tool_result_reference,
     compaction_messages,
     estimate_tokens,
     general_system_prompt,
@@ -132,7 +133,9 @@ from mato_loop_backend.execution import (
 )
 from mato_loop_backend.integrations import (
     SearchIntegrationError,
+    TranscriptError,
     WebFetchError,
+    canonicalize_youtube_video_url,
     effective_execution_integration_settings,
     sanitize_url_for_display,
     search_available,
@@ -301,7 +304,6 @@ REQUIRED_OPENSCAD_SOURCE_REVIEW_RETRIES = 2
 VIDEO_FRAME_BATCH_IMAGES = 4
 EMPTY_RESPONSE_RETRIES = 1
 TRUNCATED_TOOL_BATCH_RETRIES = 2
-COMPACTION_TIMEOUT_SECONDS = 20
 _OUTPUT_LIMIT_REASONS = frozenset({"length", "max_tokens", "max_output_tokens", "MAX_TOKENS"})
 _RESEARCH_TOOL_NAMES = frozenset({"web_search", "webfetch", "fetch_transcript"})
 MEMORY_WRITE_OUTCOME_PRIORITY = {
@@ -590,8 +592,14 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
 
 
 def _tool_call_signature(call: ToolCall) -> str:
+    normalized = dict(call.arguments)
+    if call.name == "fetch_transcript" and isinstance(normalized.get("url"), str):
+        try:
+            normalized["url"] = canonicalize_youtube_video_url(normalized["url"])
+        except TranscriptError:
+            pass
     arguments = json.dumps(
-        internal_file_roots(call.arguments),
+        internal_file_roots(normalized),
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -3041,6 +3049,7 @@ class AgentRuntime:
                                 "This exact research call already succeeded. Use the existing "
                                 "evidence and finalize the answer."
                             ),
+                            "toolResultReference": previous_metadata["toolResultReference"],
                         },
                         ensure_ascii=False,
                     )
@@ -4252,7 +4261,12 @@ class AgentRuntime:
                         _add_research_sources(
                             research_sources, metadata, research_source_titles
                         )
-                        successful_research_calls[call_signature] = dict(metadata)
+                        successful_research_calls[call_signature] = {
+                            **metadata,
+                            "toolResultReference": _tool_result_reference(
+                                tool_message.id, tool_message.content
+                            ),
+                        }
                 await run_events.publish(
                     run.id,
                     {
@@ -4616,9 +4630,7 @@ class AgentRuntime:
             # Isolate credential transactions; close outside the deadline before fallback.
             async with (
                 AsyncSessionFactory() as db,
-                asyncio.timeout(
-                    min(COMPACTION_TIMEOUT_SECONDS, runtime_settings.request_timeout_seconds)
-                ),
+                asyncio.timeout(runtime_settings.request_timeout_seconds),
             ):
                 for candidate in unique_candidates:
                     if attempts >= runtime_settings.max_compaction_requests:

@@ -182,6 +182,17 @@ def test_only_one_identical_snapshot_retry_is_allowed_after_unstable_observation
     assert not _retryable_transient_read(mutation, signature, failures, set())
 
 
+def test_transcript_signature_canonicalizes_youtube_url():
+    shared = ToolCall(
+        "shared", "fetch_transcript", {"url": "https://youtu.be/6RDAAZBYEzs?si=token"}
+    )
+    canonical = ToolCall(
+        "canonical", "fetch_transcript", {"url": "https://www.youtube.com/watch?v=6RDAAZBYEzs"}
+    )
+
+    assert _tool_call_signature(shared) == _tool_call_signature(canonical)
+
+
 @pytest.mark.parametrize(("old_limit", "new_limit"), [(None, 25), (25, None)])
 @pytest.mark.parametrize("legacy", [False, True])
 async def test_retry_snapshots_current_budget_without_overwriting_failed_run(monkeypatch, old_limit, new_limit, legacy):

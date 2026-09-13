@@ -109,7 +109,7 @@ async def test_compaction_uses_global_model_before_session_model(
     assert result.model_config_id == compaction.id
     assert complete.await_args.args == (compaction_db,)
     compaction_db.close.assert_awaited_once()
-    timeout.assert_called_once_with(min(20, request_timeout))
+    timeout.assert_called_once_with(request_timeout)
     assert complete.await_args.kwargs["timeout"] == request_timeout
     assert complete.await_args.kwargs["model"] is compaction
     assert complete.await_args.kwargs["tools"] == []
@@ -353,7 +353,9 @@ async def test_compaction_deadline_covers_retries_and_candidates(
             raise
 
     monkeypatch.setattr(service_module, "chat_completions", transport)
-    monkeypatch.setattr(runtime_module, "COMPACTION_TIMEOUT_SECONDS", 0.05)
+    runtime_settings = AgentRuntimeSettings().model_copy(
+        update={"request_timeout_seconds": 0.05}
+    )
     timeout = Mock(wraps=asyncio.timeout)
     monkeypatch.setattr(runtime_module.asyncio, "timeout", timeout)
     on_update = AsyncMock()
@@ -364,7 +366,7 @@ async def test_compaction_deadline_covers_retries_and_candidates(
             ai_settings=AiSettings(
                 providers=[provider], models=[active, compaction], compaction_model_id=compaction.id,
             ),
-            active_model=active, runtime_settings=AgentRuntimeSettings(), on_update=on_update,
+            active_model=active, runtime_settings=runtime_settings, on_update=on_update,
         ),
         timeout=1,
     )
@@ -414,7 +416,9 @@ async def test_compaction_disposes_cancelled_credential_session_before_fallback(
     compaction_db.close.side_effect = close
     transport = AsyncMock()
     monkeypatch.setattr(service_module, "chat_completions", transport)
-    monkeypatch.setattr(runtime_module, "COMPACTION_TIMEOUT_SECONDS", 0.05)
+    runtime_settings = AgentRuntimeSettings().model_copy(
+        update={"request_timeout_seconds": 0.05}
+    )
     factory = Mock(side_effect=[AsyncSession(), compaction_db])
     monkeypatch.setattr(runtime_module, "AsyncSessionFactory", factory)
 
@@ -429,7 +433,7 @@ async def test_compaction_disposes_cancelled_credential_session_before_fallback(
             AgentRuntime._summarize(
                 "USER: Test", 512,
                 ai_settings=AiSettings(providers=[provider], models=[model]),
-                active_model=model, runtime_settings=AgentRuntimeSettings(), on_update=on_update,
+                active_model=model, runtime_settings=runtime_settings, on_update=on_update,
             ),
             timeout=1,
         )

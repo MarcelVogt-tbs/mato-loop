@@ -2696,6 +2696,23 @@ async def test_repeated_successful_research_call_does_not_hit_the_network(monkey
         if isinstance(call.args[0], Message) and call.args[0].role == "tool"
     ]
     assert any('"alreadyCompleted": true' in content for content in tool_contents)
+    repeated = next(
+        json.loads(content)
+        for content in tool_contents
+        if '"alreadyCompleted": true' in content
+    )
+    original = next(
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], Message)
+        and call.args[0].role == "tool"
+        and '"alreadyCompleted": true' not in call.args[0].content
+    )
+    assert repeated["toolResultReference"] == {
+        "tool": "session_tool_result_read",
+        "arguments": {"message_id": str(original.id), "offset": 0},
+        "totalCharacters": len(original.content),
+    }
     assert requests[0]["tools"] == requests[1]["tools"] == requests[2]["tools"]
     assert projections[0]["system_prompt"] == projections[1]["system_prompt"]
     assert projections[1]["system_prompt"] == projections[2]["system_prompt"]
