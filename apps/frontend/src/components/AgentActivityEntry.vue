@@ -94,6 +94,7 @@
     <div v-if="hasDetails && detailsOpen" :id="detailsId" class="work-history__reasoning-detail">
       <p v-if="errorDetails" class="tool-call__message" :class="`tool-call__status--${status.name}`" role="status">{{ errorDetails }}</p>
       <template v-if="isTool">
+        <pre v-if="shellCommandText" class="activity-row__shell-command q-ma-none">{{ shellCommandText }}</pre>
         <div v-for="(item, index) in toolDetails" :key="index" class="q-mb-sm">
           <div class="text-weight-medium">{{ item.label }}</div>
           <ul v-if="item.format === 'list'" class="q-my-none q-pl-md"><li v-for="(value, i) in item.value" :key="i">{{ value }}</li></ul>
@@ -198,7 +199,7 @@ import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import MessageContent from 'components/MessageContent.vue'
 import SubagentRows from 'components/SubagentRows.vue'
-import { parseToolResult, toolIdentity, toolPresentation, toolStatus } from 'src/utils/tool-display'
+import { parseToolResult, shellCommand, toolIdentity, toolPresentation, toolStatus } from 'src/utils/tool-display'
 
 defineOptions({ name: 'AgentActivityEntry' })
 
@@ -218,11 +219,12 @@ const identity = computed(() => isTool.value
 const result = computed(() => isTool.value ? parseToolResult(props.entry.result?.content, props.entry.tool.name) : {})
 const toolInfo = computed(() => isTool.value ? toolPresentation(props.entry.tool, props.entry.approval?.details?.displayItems) : null)
 const summary = computed(() => isTool.value ? result.value.summary || toolInfo.value.summary : props.entry.presentation?.summary)
+const shellCommandText = computed(() => isTool.value ? shellCommand(props.entry.tool) : '')
 const status = computed(() => isTool.value ? toolStatus(props.entry) : { name: props.entry.warning ? 'interrupted' : '', label: 'Warnung' })
 const statusIcon = computed(() => ({ failed: 'error', denied: 'error', interrupted: 'warning', approval: 'pending_actions', question: 'help_outline' })[status.value.name])
 const errorDetails = computed(() => result.value.errorMessage || '')
-const toolDetails = computed(() => (toolInfo.value?.items || []).filter((item) => item.value.length && item.value !== summary.value))
-const hasDetails = computed(() => Boolean(errorDetails.value || toolDetails.value.length || props.entry.text?.trim() || props.entry.blocks?.length))
+const toolDetails = computed(() => (toolInfo.value?.items || []).filter((item) => item.value.length && item.value !== summary.value && item.value !== shellCommandText.value))
+const hasDetails = computed(() => Boolean(errorDetails.value || shellCommandText.value || toolDetails.value.length || props.entry.text?.trim() || props.entry.blocks?.length))
 const detailKey = computed(() => isTool.value ? `${props.entry.runId || ''}:${props.entry.tool.id || props.entry.key}` : props.entry.key)
 const detailsOpen = computed(() => props.expandedDetails.has(detailKey.value))
 const detailsLabel = computed(() => `${identity.value.label}: Details ${detailsOpen.value ? 'ausblenden' : 'anzeigen'}`)

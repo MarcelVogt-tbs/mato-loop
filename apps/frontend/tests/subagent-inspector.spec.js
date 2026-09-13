@@ -89,6 +89,29 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.textContent).not.toContain('Technische Argumente')
   })
 
+  it('shows expanded shell commands without a repeated field label', async () => {
+    const command = 'sudo -n true\nprintf "done\\n"'
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => h(AgentActivityPanel, {
+      running: true,
+      activity: { phase: 'processing_tool', toolCallId: 'shell' },
+      history: { entries: [{
+        key: 'shell', type: 'tool',
+        tool: { id: 'shell', name: 'shell.run', arguments: { command }, toolDisplay: { group: 'process', icon: 'terminal', label: 'Shell-Befehl ausführen' } }
+      }] }
+    }) })
+    app.use(createPinia()).use(Quasar, { components })
+    app.mount(root)
+
+    root.querySelector('.activity-row').click()
+    await nextTick()
+
+    const shell = root.querySelector('.activity-row__shell-command')
+    expect(shell.textContent).toBe(command)
+    expect(root.querySelector('.work-history__reasoning-detail').textContent).not.toContain('Shell-Befehl\n')
+  })
+
   it.each([false, true])('shows status indicators without removing readable labels (reduced motion=%s)', async (reducedMotion) => {
     vi.stubGlobal('matchMedia', () => ({ matches: reducedMotion }))
     const states = [
