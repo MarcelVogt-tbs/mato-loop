@@ -108,6 +108,7 @@ BUILTIN_AGENT_PROFILE_NAMES = {
     BUILD_AGENT_PROFILE_ID: "Build",
 }
 BUILTIN_AGENT_PROFILE_IDS = frozenset(BUILTIN_AGENT_PROFILE_NAMES)
+WEATHER_SKILL_ID = UUID("00000000-0000-4000-8000-000000000101")
 
 ProfileToolCallLimit = Annotated[int, Field(strict=True, gt=0)] | None
 
@@ -1166,8 +1167,52 @@ class SkillDefinition(BaseModel):
         return normalize_skill_text(value, info.field_name) if isinstance(value, str) else value
 
 
-# Concrete shipped defaults are added in the next catalog step.
-DEFAULT_SKILLS: dict[UUID, SkillDefinition] = {}
+DEFAULT_SKILLS: dict[UUID, SkillDefinition] = {
+    WEATHER_SKILL_ID: SkillDefinition(
+        id=WEATHER_SKILL_ID,
+        name="Weather",
+        description=(
+            "Retrieve current weather conditions and forecasts for a location and time range. "
+            "Use for requests about temperature, rain, snow, wind, or weather-dependent "
+            "activities. Do not use for translation or general explanations of weather."
+        ),
+        instructions="""
+Answer in the language of the user's request. Use the available web fetch tool to retrieve live
+data from Open-Meteo. Do not use remembered weather data and do not invent unavailable values.
+
+Resolve the requested place with
+https://geocoding-api.open-meteo.com/v1/search?name=<place>&count=5&language=en&format=json.
+Percent-encode the complete place value before inserting it into the URL. Use country or region
+details from the request to select a result. If no location is available, or multiple results remain
+plausible, ask one focused question instead of guessing.
+
+Fetch weather from https://api.open-meteo.com/v1/forecast with the selected latitude and longitude,
+timezone=auto, and only the fields needed from:
+- current=temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,wind_direction_10m
+- hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_direction_10m
+- daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,wind_speed_10m_max
+Request enough forecast_days for the requested period. Without a time period, return current
+conditions. Resolve relative dates in the location's timezone. Use Celsius, km/h, and mm unless the
+user requests other units. Never present data beyond the returned forecast range.
+
+Translate WMO weather codes accurately: 0 clear; 1 mainly clear; 2 partly cloudy; 3 overcast; 45 or
+48 fog; 51, 53, or 55 drizzle; 56 or 57 freezing drizzle; 61, 63, or 65 rain; 66 or 67 freezing
+rain; 71, 73, or 75 snow; 77 snow grains; 80, 81, or 82 rain showers; 85 or 86 snow showers; 95
+thunderstorm; 96 or 99 thunderstorm with hail.
+
+Start with the resolved place and requested local period. Format weather values as a compact
+Markdown table. For current conditions, use rows for condition, temperature / feels like,
+precipitation, and wind. For several days, use columns for day, condition, minimum / maximum, and
+rain probability. For a part of a day, show only relevant hourly rows. Add wind or precipitation
+amount only when relevant to the request. If daily precipitation_probability_max is used, label it
+as the maximum hourly probability. Mark missing returned values as unavailable; do not create an
+empty table when the request fails. After the table, give at most one short practical conclusion.
+Cite the fetched Open-Meteo source and state the local timestamp or period represented by the data.
+Do not describe the data timestamp as the retrieval time.
+""",
+        enabled=False,
+    )
+}
 
 
 def default_skills() -> list[SkillDefinition]:

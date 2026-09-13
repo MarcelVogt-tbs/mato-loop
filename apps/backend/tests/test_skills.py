@@ -13,6 +13,7 @@ from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
     DEFAULT_SKILLS,
+    WEATHER_SKILL_ID,
     InstanceSkillsSettings,
     SettingsScope,
     SettingsStore,
@@ -71,15 +72,35 @@ def test_skill_settings_validate_and_normalize_definitions() -> None:
 
 
 def test_instance_settings_add_new_shipped_defaults(monkeypatch) -> None:
+    existing = SkillDefinition(
+        name="Existing", description="Already stored", instructions="Keep this skill."
+    )
     shipped = SkillDefinition(
         name="Standard", description="Ausgeliefert", instructions="Arbeite so.", enabled=False
     )
     monkeypatch.setitem(DEFAULT_SKILLS, shipped.id, shipped)
 
-    settings = InstanceSkillsSettings(skills=[])
+    settings = InstanceSkillsSettings(skills=[existing])
 
-    assert settings.skills == [shipped]
-    assert settings.skills[0] is not shipped
+    assert [skill.id for skill in settings.skills] == [existing.id, *DEFAULT_SKILLS]
+    assert all(
+        skill is not DEFAULT_SKILLS[skill.id]
+        for skill in settings.skills
+        if skill.id in DEFAULT_SKILLS
+    )
+
+
+def test_shipped_weather_skill_is_disabled_and_model_facing() -> None:
+    weather = DEFAULT_SKILLS[WEATHER_SKILL_ID]
+
+    assert weather.name == "Weather"
+    assert weather.enabled is False
+    assert "Do not use for translation" in weather.description
+    assert "geocoding-api.open-meteo.com" in weather.instructions
+    assert "Percent-encode the complete place value" in weather.instructions
+    assert "api.open-meteo.com/v1/forecast" in weather.instructions
+    assert "Markdown table" in weather.instructions
+    assert "maximum hourly probability" in weather.instructions
 
 
 def test_skill_draft_json_is_strict_stable_and_controlled() -> None:
@@ -271,7 +292,7 @@ async def test_personal_default_activation_creates_an_override(monkeypatch) -> N
 
     assert skill.enabled is True
     assert personal.skills == [skill]
-    assert instance.skills[0].enabled is False
+    assert next(skill for skill in instance.skills if skill.id == shipped.id).enabled is False
     save.assert_awaited_once_with(db, personal, user_id=user_id)
 
 

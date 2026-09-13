@@ -57,23 +57,23 @@
           </q-item-section>
           <q-item-section>
             <q-item-label class="text-subtitle1 text-weight-medium">
-              {{ skill.name }}
+              {{ skillDisplayName(skill) }}
               <q-badge v-if="skill.isDefault" outline color="primary" label="Standard" class="q-ml-xs" />
             </q-item-label>
-            <q-item-label caption class="text-body2 q-mt-xs">{{ skill.description }}</q-item-label>
+            <q-item-label caption class="text-body2 q-mt-xs">{{ skillDisplayDescription(skill) }}</q-item-label>
           </q-item-section>
           <q-item-section side top>
             <div class="row no-wrap q-gutter-xs">
               <q-toggle
                 :model-value="skill.enabled"
-                :aria-label="`${skill.name} ${skill.enabled ? 'deaktivieren' : 'aktivieren'}`"
+                :aria-label="`${skillDisplayName(skill)} ${skill.enabled ? 'deaktivieren' : 'aktivieren'}`"
                 :disable="skills.saving"
                 @update:model-value="setEnabled(skill, $event)"
               />
-              <q-btn flat round dense icon="edit" :aria-label="`${skill.name} bearbeiten`" @click="openEditDialog(skill)">
+              <q-btn flat round dense icon="edit" :aria-label="`${skillDisplayName(skill)} bearbeiten`" @click="openEditDialog(skill)">
                 <q-tooltip>Bearbeiten</q-tooltip>
               </q-btn>
-              <q-btn v-if="skill.isDefault && skill.modified" flat round dense icon="restart_alt" :aria-label="`${skill.name} auf Standard zurücksetzen`" @click="resetSkill(skill)">
+              <q-btn v-if="skill.isDefault && skill.modified" flat round dense icon="restart_alt" :aria-label="`${skillDisplayName(skill)} auf Standard zurücksetzen`" @click="resetSkill(skill)">
                 <q-tooltip>Auf Standard zurücksetzen</q-tooltip>
               </q-btn>
               <q-btn v-if="!skill.isDefault" flat round dense color="negative" icon="delete_outline" :aria-label="`${skill.name} löschen`" @click="removeSkill(skill)">
@@ -154,6 +154,7 @@ import AppStateMessage from 'components/AppStateMessage.vue'
 import SettingsScopeToggle from 'components/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { resolveSettingsScope } from 'src/features/settings/scope'
+import { skillDisplayDescription, skillDisplayName } from 'src/features/settings/skill-display'
 import { useSkillStore } from 'stores/skills'
 import { useAuthStore } from 'stores/auth'
 
@@ -259,7 +260,7 @@ async function setEnabled(skill, enabled) {
 
 async function resetSkill(skill) {
   const accepted = await confirm(
-    `Soll der Skill „${skill.name}“ auf den ausgelieferten Standard zurückgesetzt werden?`,
+    `Soll der Skill „${skillDisplayName(skill)}“ auf den ausgelieferten Standard zurückgesetzt werden?`,
     'Skill zurücksetzen',
     { okLabel: 'Zurücksetzen' }
   )
