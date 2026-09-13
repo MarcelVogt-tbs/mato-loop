@@ -1,6 +1,6 @@
 <template>
   <div
-    v-if="entries.length || running || unmatchedSubagents.length"
+    v-if="entries.length || running || todos.length || unmatchedSubagents.length"
     class="work-history"
     :class="{
       'work-history--preview': showPreview,
@@ -63,6 +63,12 @@
         />
       </div>
     </div>
+    <SessionTodoStrip
+      v-if="todos.length"
+      class="work-history__todos"
+      :todos="todos"
+      :expanded="historyExpanded"
+    />
     <SubagentRows class="work-history__children" :children="unmatchedSubagents" />
   </div>
 </template>
@@ -70,6 +76,7 @@
 <script setup>
 import { computed, nextTick, ref } from 'vue'
 import AgentActivityEntry from 'components/AgentActivityEntry.vue'
+import SessionTodoStrip from 'components/SessionTodoStrip.vue'
 import SubagentRows from 'components/SubagentRows.vue'
 import TurnDuration from 'components/TurnDuration.vue'
 import {
@@ -92,6 +99,7 @@ const props = defineProps({
   contextSummary: { type: Object, default: null },
   warnings: { type: Array, default: () => [] },
   subagents: { type: Array, default: () => [] },
+  todos: { type: Array, default: () => [] },
   trustedImageOrigins: { type: Array, default: () => [] },
   readOnly: Boolean,
   running: Boolean

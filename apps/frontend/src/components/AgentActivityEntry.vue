@@ -121,7 +121,7 @@
       <q-icon name="warning" color="warning" size="17px" aria-label="Warnung" />
     </q-item-section>
   </q-item>
-  <div v-else-if="entry.type === 'commentary'" class="q-py-sm" :class="{ 'activity-shimmer': entry.active }">
+  <div v-else-if="entry.type === 'commentary'" class="q-pt-sm" :class="{ 'activity-shimmer': entry.active }">
     <MessageContent
       :content="entry.message.content"
       :research-sources="entry.message.research?.linkedSources || []"

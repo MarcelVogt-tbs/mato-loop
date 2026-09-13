@@ -500,7 +500,7 @@
 }
 
 .chat-message--turn-continues {
-  margin-bottom: 4px;
+  margin-bottom: 0;
 }
 
 .chat-message--user {
@@ -1120,7 +1120,7 @@
 .work-history__timeline {
   grid-column: 1 / -1;
   grid-row: 2;
-  margin: 0 2px 10px;
+  margin: 0 2px;
 }
 
 .work-history:not(.work-history--with-agent-header).work-history--preview .work-history__timeline {
@@ -1130,6 +1130,10 @@
 }
 
 .work-history__children {
+  grid-column: 1 / -1;
+}
+
+.work-history__todos {
   grid-column: 1 / -1;
 }
 

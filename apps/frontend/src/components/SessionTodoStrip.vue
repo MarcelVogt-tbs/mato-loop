@@ -1,40 +1,21 @@
 <template>
-  <q-card
-    v-if="todos.length"
-    flat
-    bordered
-    class="session-todos app-surface"
-    aria-live="polite"
-  >
-    <q-item dense>
-      <q-item-section avatar>
-        <q-icon name="checklist" color="primary" />
-      </q-item-section>
-      <q-item-section>
-        <q-item-label class="text-weight-medium">{{ completedCount }} von {{ todos.length }} Aufgaben erledigt</q-item-label>
-      </q-item-section>
-    </q-item>
-    <template v-if="expanded">
-      <q-separator />
-      <q-list dense class="session-todos__list" aria-label="Aufgaben dieser Session">
-        <q-item v-for="(todo, index) in todos" :key="index">
-          <q-item-section avatar>
-            <q-icon
-              :name="statusIcon[todo.status]"
-              :color="todo.status === 'completed' ? 'positive' : todo.status === 'in_progress' ? 'primary' : undefined"
-            />
-          </q-item-section>
-          <q-item-section :class="{ 'text-strike app-muted': todo.status === 'cancelled' }">
-            {{ todo.content }}
-          </q-item-section>
-        </q-item>
-      </q-list>
-    </template>
-  </q-card>
+  <div v-if="visibleTodos.length" class="session-todos" aria-live="polite">
+    <div class="session-todos__list" role="list" aria-label="Aufgaben dieser Session">
+      <div v-for="(todo, index) in visibleTodos" :key="index" class="session-todos__item" role="listitem">
+        <q-icon
+          :name="statusIcon[todo.status]"
+          :color="todo.status === 'completed' ? 'positive' : todo.status === 'in_progress' ? 'primary' : undefined"
+          size="18px"
+          aria-hidden="true"
+        />
+        <span :class="{ 'text-strike app-muted': todo.status === 'cancelled' }">{{ todo.content }}</span>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup>
-import { QCard, QIcon, QItem, QItemLabel, QItemSection, QList, QSeparator } from 'quasar'
+import { QIcon } from 'quasar'
 import { computed } from 'vue'
 
 defineOptions({ name: 'SessionTodoStrip' })
@@ -49,23 +30,39 @@ const statusIcon = {
   completed: 'check_circle',
   cancelled: 'remove_circle_outline'
 }
-const completedCount = computed(() => props.todos.filter((todo) => todo.status === 'completed').length)
+const visibleTodos = computed(() => {
+  if (props.expanded) return props.todos
+  const current = props.todos.find((todo) => todo.status === 'in_progress')
+    || props.todos.find((todo) => todo.status === 'pending')
+    || props.todos.at(-1)
+  return current ? [current] : []
+})
 </script>
 
 <style scoped>
 .session-todos {
-  width: min(900px, calc(100% - 32px));
-  margin: 8px auto 0;
+  min-width: 0;
 }
 
 .session-todos__list {
-  max-height: 30dvh;
-  overflow-y: auto;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
 }
 
-@media (max-width: 600px) {
-  .session-todos {
-    width: calc(100% - 16px);
-  }
+.session-todos__item {
+  display: flex;
+  min-width: 0;
+  min-height: 24px;
+  padding: 0 4px;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  line-height: 20px;
+}
+
+.session-todos__item > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 </style>
