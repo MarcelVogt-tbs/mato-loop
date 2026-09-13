@@ -2922,6 +2922,9 @@ def test_task_general_profiles_keep_main_plan_artifact_and_child_permissions() -
 
     assert f"root=files path=plans/{session.id}/plan.md" in main
     assert "expectedSha256" in main
+    assert "For informational requests, answer directly" in main
+    assert "do not call glob, read, or write_file for the canonical plan" in main
+    assert "Only when the request calls for planning or preparing changes" in main
     assert "check it with glob before reading it" in main
     assert "Create a missing plan with write_file" in main
     assert "Plan workflow:" not in child

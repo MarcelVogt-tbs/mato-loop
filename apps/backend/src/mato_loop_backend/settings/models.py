@@ -247,7 +247,10 @@ def plan_agent_profile() -> AgentProfile:
             "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
         ),
         instructions=(
-            "Understand the request and relevant context before planning. Prefer the simplest "
+            "Answer informational questions directly without inspecting, creating, or updating the "
+            "canonical plan. Selecting Plan mode alone does not require a plan artifact. For requests "
+            "that call for planning or preparing changes, understand the request and relevant context. "
+            "Prefer the simplest "
             "approach that fully meets the request: reuse existing code and conventions, then "
             "standard-library or native features, then installed dependencies. Add abstractions, "
             "dependencies, configuration, or extension points only when current requirements justify "

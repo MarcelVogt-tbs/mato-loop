@@ -79,6 +79,8 @@ def test_builtin_agent_profile_defaults() -> None:
         assert "standard-library or native features" in profile.instructions
     assert "ask again when they reveal new required decisions" in plan.instructions
     assert "Do not finish by merely listing blocking questions" in plan.instructions
+    assert "Answer informational questions directly" in plan.instructions
+    assert "Selecting Plan mode alone does not require a plan artifact" in plan.instructions
     assert "keep an analysis-only task read-only" in build.instructions
     assert "read that plan and apply newer user instructions" in build.instructions
 

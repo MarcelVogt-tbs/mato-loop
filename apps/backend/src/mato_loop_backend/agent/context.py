@@ -1042,10 +1042,12 @@ def general_system_prompt(
         )
         if not delegated and agent_profile.id == PLAN_AGENT_PROFILE_ID:
             parts.append(
-                f"Plan workflow: plan without executing the requested changes. Persist the canonical plan "
-                f"at root=files path=plans/{chat_session.id}/plan.md. This path may not exist: check it with "
-                "glob before reading it. Create a missing plan with write_file; read an existing plan and "
-                "update it with its expectedSha256. Do not intentionally change computer files, "
+                "Plan workflow: do not execute requested changes. For informational requests, answer directly "
+                "and do not call glob, read, or write_file for the canonical plan. Selecting Plan alone does "
+                "not require a plan artifact. Only when the request calls for planning or preparing changes, "
+                f"persist the canonical plan at root=files path=plans/{chat_session.id}/plan.md. This path may "
+                "not exist: check it with glob before reading it. Create a missing plan with write_file; read "
+                "an existing plan and update it with its expectedSha256. Do not intentionally change computer files, "
                 "system state, or external services. Do not bypass disabled write tools through "
                 "shell commands or request permission for those writes."
             )
