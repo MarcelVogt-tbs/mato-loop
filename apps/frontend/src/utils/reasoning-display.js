@@ -47,11 +47,12 @@ export function reasoningStatusLabel(reasoning, maxLength = 160) {
   return null
 }
 
-export function reasoningHistoryPresentation(reasoning, live = false) {
+export function reasoningHistoryPresentation(reasoning) {
   return {
+    icon: 'psychology',
     title: reasoning?.status === 'interrupted'
-      ? 'Überlegung unterbrochen'
-      : live ? 'Modell überlegt' : 'Überlegt',
+      ? 'Nachdenken unterbrochen'
+      : 'Nachdenken',
     summary: reasoningStatusLabel(reasoning),
     duration: formatReasoningDuration(reasoning?.observedDurationMs)
   }

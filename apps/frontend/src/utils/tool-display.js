@@ -79,6 +79,59 @@ const TOOL_DISPLAY = {
   delete_automation: { label: 'Automation löschen', icon: 'delete_forever' }
 }
 
+const BROWSER_LABELS = {
+  browser: 'Browser verwenden',
+  browser_tabs: 'Browser-Tabs',
+  browser_navigate: 'Browser-Navigation',
+  browser_snapshot: 'Browser-Snapshot',
+  browser_take_screenshot: 'Browser-Screenshot',
+  browser_click: 'Browser-Klick',
+  browser_type: 'Browser-Texteingabe',
+  browser_fill_form: 'Browser-Formular',
+  browser_press_key: 'Browser-Tastendruck',
+  browser_scroll: 'Browser-Scrollen',
+  browser_diagnostics: 'Browser-Diagnose',
+  browser_evaluate: 'Browser-JavaScript',
+  browser_run_code: 'Browser-Python',
+  browser_request_control: 'Browser-Steuerung anfordern',
+  browser_release_control: 'Browser-Steuerung freigeben'
+}
+
+const GROUP_ICONS = {
+  filesystem: 'folder',
+  process: 'terminal',
+  web: 'language',
+  calendar: 'calendar_month',
+  tasks: 'checklist',
+  mail: 'mail',
+  media: 'perm_media',
+  sessions: 'forum',
+  automations: 'schedule',
+  memory: 'psychology',
+  agent: 'smart_toy',
+  coding: 'code',
+  integrations: 'extension'
+}
+const GROUP_LABELS = {
+  filesystem: 'Dateisystem', process: 'Prozesse', web: 'Web', calendar: 'Kalender',
+  tasks: 'Aufgaben', mail: 'E-Mail', media: 'Medien', sessions: 'Sessions',
+  automations: 'Automationen', memory: 'Memory', agent: 'Agent', coding: 'Coding',
+  integrations: 'Integrationen'
+}
+const FILESYSTEM_TOOLS = new Set([
+  'read', 'glob', 'grep', 'list_directory', 'read_file', 'provide_file', 'write_file',
+  'edit_file', 'apply_patch', 'create_directory', 'delete_path', 'copy_path', 'move_path'
+])
+const WEB_TOOLS = new Set(['web_search', 'webfetch', 'fetch_transcript'])
+const MEDIA_TOOLS = new Set([
+  'generate_qr_code', 'read_qr_code', 'generate_image', 'edit_image', 'generate_speech',
+  'generate_audio', 'transcribe_audio', 'analyze_video'
+])
+const AGENT_TOOLS = new Set([
+  'question', 'task', 'load_skill', 'build_skill', 'edit_skill',
+  'update_agent_identity', 'update_user_profile'
+])
+
 const APPROVAL_PRESENTATIONS = {
   shell_run: 'shell',
   'shell.run': 'shell'
@@ -89,13 +142,50 @@ function truncate(value, maxLength = 140) {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
 }
 
-export function toolIdentity(name) {
-  const display = TOOL_DISPLAY[name]
-  return display ? { label: display.label, icon: display.icon } : { label: 'Tool ausführen', icon: 'build' }
+function displayText(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : ''
 }
 
-export function toolActivityLabel(name) {
-  return TOOL_DISPLAY[name]?.label || 'Tool ausführen'
+function validToolDisplay(value) {
+  const group = displayText(value?.group)
+  const label = displayText(value?.label)
+  return Boolean(
+    group
+    && GROUP_ICONS[group] === value?.icon
+    && label.length <= 160
+    && (value.summary === undefined || (typeof value.summary === 'string' && value.summary.length <= 140))
+  )
+}
+
+export function toolIdentity(tool) {
+  const name = typeof tool === 'string' ? tool : tool?.name
+  const supplied = validToolDisplay(tool?.toolDisplay) ? tool.toolDisplay : null
+  const group = supplied?.group || (name === 'browser' || name?.startsWith('browser_') ? 'web' : '')
+  const fallback = TOOL_DISPLAY[name]
+  return {
+    label: displayText(supplied?.label) || fallback?.label || BROWSER_LABELS[name] || 'Tool ausführen',
+    icon: GROUP_ICONS[group] || fallback?.icon || 'build'
+  }
+}
+
+export function toolActivityLabel(tool) {
+  return toolIdentity(tool).label
+}
+
+function toolGroup(tool) {
+  if (validToolDisplay(tool?.toolDisplay)) return tool.toolDisplay.group
+  const name = tool?.name || ''
+  if (FILESYSTEM_TOOLS.has(name)) return 'filesystem'
+  if (WEB_TOOLS.has(name) || name === 'browser' || name.startsWith('browser_')) return 'web'
+  if (MEDIA_TOOLS.has(name)) return 'media'
+  if (AGENT_TOOLS.has(name)) return 'agent'
+  if (['get_system_info', 'change_directory'].includes(name)) return 'process'
+  if (['list_automations', 'get_automation', 'create_automation', 'edit_automation', 'run_automation', 'delete_automation'].includes(name)) return 'automations'
+  return ({
+    calendar: 'calendar', tasks: 'tasks', mail: 'mail', memory: 'memory', session: 'sessions',
+    coding: 'coding', process: 'process', shell: 'process', recipe: 'integrations',
+    recipes: 'integrations', meal: 'integrations', mealie: 'integrations', knowledge: 'integrations'
+  })[name.split(/[_.]/)[0]] || 'integrations'
 }
 
 export function toolUsageSummary(items = []) {
@@ -103,12 +193,20 @@ export function toolUsageSummary(items = []) {
   for (const item of items) {
     const name = item?.tool?.name
     if (!name) continue
-    const existing = tools.get(name)
+    const identity = toolIdentity(item.tool)
+    const group = toolGroup(item.tool)
+    const existing = tools.get(group)
     if (existing) {
       existing.count += 1
       existing.active ||= Boolean(item.active)
     } else {
-      tools.set(name, { name, ...toolIdentity(name), count: 1, active: Boolean(item.active) })
+      tools.set(group, {
+        group,
+        label: displayText(item.tool.toolDisplay?.groupLabel) || GROUP_LABELS[group],
+        icon: GROUP_ICONS[group] || identity.icon,
+        count: 1,
+        active: Boolean(item.active)
+      })
     }
   }
   return [...tools.values()]
@@ -274,12 +372,22 @@ export function toolPresentation(tool, displayItems = []) {
       items: [{ label: 'Memory-Inhalt', value: memory, format: 'code' }]
     }
   }
-  return { summary: toolSummary(tool), items: taskDisplayItems(tool) }
+  const taskItems = taskDisplayItems(tool)
+  const args = tool?.arguments || {}
+  return {
+    summary: toolSummary(tool),
+    items: taskItems.length ? taskItems : [
+      ['query', 'Suchbegriff'], ['path', 'Pfad'], ['url', 'Adresse']
+    ].flatMap(([key, label]) => typeof args[key] === 'string' && args[key].trim()
+      ? [{ label, value: key === 'url' ? cleanUrlForDisplay(args[key]) : args[key], format: 'text' }]
+      : [])
+  }
 }
 
 export function toolSummary(tool) {
+  if (validToolDisplay(tool?.toolDisplay)) return displayText(tool.toolDisplay.summary)
   const argumentsValue = tool?.arguments
-  const fallback = TOOL_DISPLAY[tool?.name] ? '' : tool?.name || ''
+  const fallback = TOOL_DISPLAY[tool?.name] || BROWSER_LABELS[tool?.name] ? '' : tool?.name || ''
   if (!argumentsValue || typeof argumentsValue !== 'object') return fallback
   if (tool?.name === 'update_user_profile') {
     const count = Object.keys(PROFILE_FIELD_LABELS)
@@ -478,12 +586,14 @@ export function parseToolResult(content, toolName = null) {
       : processMetadata
         ? processMetadataDisplay || { text: '', fullText: '', truncated: false }
         : technicalDetailsDisplay(value)
+    const summary = toolName === 'session_read' ? displayText(value?.session?.title) : ''
     return {
       text: display.text,
       fullText: display.fullText,
       textTruncated: display.truncated,
       error,
       errorMessage: error ? apiErrorMessage(error, 'Die Tool-Aktion ist fehlgeschlagen.') : null,
+      ...(summary ? { summary: truncate(summary) } : {}),
       ...(hasProcessOutput
         ? {
             stdout: processValue.stdout || '',

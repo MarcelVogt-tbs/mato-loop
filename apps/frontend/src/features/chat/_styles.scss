@@ -1058,21 +1058,47 @@
 
 .work-history {
   min-width: 0;
-}
-
-.work-history__panel {
-  border-radius: 8px;
-  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
 }
 
 .work-history__header {
-  min-height: 44px;
+  grid-column: 1;
+  grid-row: 1;
   padding: 3px 2px;
   color: var(--app-muted);
 }
 
-.work-history__header:hover {
-  background: var(--app-hover);
+.work-history__agent-header {
+  min-width: 0;
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.work-history--with-agent-header > .work-history__header-actions {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  color: var(--app-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.work-history--with-agent-header .work-history__header,
+.work-history--with-agent-header .work-history__meta-section {
+  grid-row: 2;
+}
+
+.work-history--with-agent-header .work-history__timeline {
+  grid-row: 3;
+}
+
+.work-history--with-agent-header.work-history--preview .work-history__timeline,
+.work-history--with-agent-header:not(.work-history--with-summary-header) .work-history__timeline {
+  grid-column: 1 / -1;
+  grid-row: 2;
 }
 
 .work-history__identity {
@@ -1086,17 +1112,6 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 4px 8px;
-}
-
-.work-history__summary {
-  min-width: 0;
-  margin-top: 2px;
-  color: var(--app-muted);
-  font-size: 0.75rem;
-  font-weight: 400;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .work-history__tool-icons {
@@ -1120,11 +1135,6 @@
   color: var(--app-muted);
 }
 
-.work-history__tool-icon--active {
-  background: var(--app-active);
-  color: var(--q-primary);
-}
-
 .work-history__tool-count {
   color: var(--app-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -1134,6 +1144,8 @@
 }
 
 .work-history__meta-section {
+  grid-column: 2;
+  grid-row: 1;
   padding-left: 8px;
 }
 
@@ -1150,36 +1162,45 @@
   content: '·';
 }
 
-.work-history__message-count {
-  flex: 0 0 auto;
-  gap: 3px;
-  font-weight: 600;
-}
-
-.work-history__message-count--error {
+.tool-call__status--failed,
+.tool-call__status--denied {
   color: var(--q-negative);
 }
 
-.work-history__message-count--warning {
+.tool-call__status--approval,
+.tool-call__status--interrupted {
   color: var(--q-warning);
 }
 
 .work-history__timeline {
+  grid-column: 1 / -1;
+  grid-row: 2;
   margin: 2px 2px 10px;
+}
+
+.work-history--preview .work-history__timeline {
+  grid-column: 1;
+  grid-row: 1;
+  margin-top: 0;
+}
+
+.work-history__children {
+  grid-column: 1 / -1;
 }
 
 .work-history__entries {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 4px;
-  padding: 2px 0 4px;
+  gap: 2px;
+  padding: 0 0 4px;
 }
 
-.work-history__context-header,
+.work-history__tool-group-header,
 .work-history__reasoning-header,
+.work-history__reasoning-static,
 .tool-call__header {
-  min-height: 32px;
+  min-height: 24px;
   padding: 0 4px;
   border-radius: 6px;
 }
@@ -1188,23 +1209,33 @@
 .tool-call__line {
   display: flex;
   min-width: 0;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   line-height: 20px;
 }
 
 .work-history__activity-title,
 .tool-call__title {
-  flex: 0 0 auto;
+  min-width: 0;
+  flex: 0 1 auto;
   color: var(--app-text);
   font-weight: 500;
+}
+
+.work-history__activity-title--past,
+.work-history__entry--past .tool-call__title {
+  color: var(--app-muted);
+}
+
+.tool-call__icon {
+  flex: none;
 }
 
 .work-history__activity-summary,
 .tool-call__summary {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   color: var(--app-muted);
   font-weight: 400;
   overflow: hidden;
@@ -1212,36 +1243,55 @@
   white-space: nowrap;
 }
 
-.work-history__context-toggle,
-.work-history__reasoning-toggle,
-.tool-call__toggle {
+.work-history__detail-indicator {
+  flex: none;
+  color: var(--app-muted);
   opacity: 0;
   transition: opacity 150ms ease;
 }
 
-.work-history__context:hover .work-history__context-toggle,
-.work-history__context:focus-within .work-history__context-toggle,
-.work-history__reasoning:hover .work-history__reasoning-toggle,
-.work-history__reasoning:focus-within .work-history__reasoning-toggle,
-.tool-call:hover .tool-call__toggle,
-.tool-call:focus-within .tool-call__toggle {
+.activity-row:hover .work-history__detail-indicator,
+.activity-row:focus-visible .work-history__detail-indicator,
+.activity-row[aria-expanded='true'] .work-history__detail-indicator {
   opacity: 1;
 }
 
 @media (hover: none) {
-  .work-history__context-toggle,
-  .work-history__reasoning-toggle,
-  .tool-call__toggle {
-    opacity: 1;
+  .work-history__detail-indicator {
+    opacity: 0.7;
   }
 }
 
-.work-history__context-items {
+.work-history__toggle {
+  opacity: 0.55;
+  transition: opacity 150ms ease;
+}
+
+.work-history__toggle:hover,
+.work-history__toggle:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .work-history__toggle {
+    opacity: 0.7;
+  }
+}
+
+.activity-row__code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.work-history__tool-group-items {
   display: flex;
   min-width: 0;
-  padding-left: 12px;
+  padding-left: 26px;
   flex-direction: column;
-  gap: 4px;
+}
+
+.tool-call--detail {
+  min-height: 20px;
 }
 
 .work-history__reasoning-detail {
@@ -1323,19 +1373,10 @@
   white-space: nowrap;
 }
 
-.tool-call__status--approval,
-.tool-call__status--interrupted { color: #8a6100; }
-.tool-call__status--failed,
-.tool-call__status--denied { color: #b42318; }
-
-body.body--dark .tool-call__status--approval,
-body.body--dark .tool-call__status--interrupted { color: #ffd166; }
-body.body--dark .tool-call__status--failed,
-body.body--dark .tool-call__status--denied { color: #ff9b91; }
-
-.tool-call__body {
-  margin: 0 4px 8px;
-  padding: 4px 0 8px 12px;
+.tool-call__message {
+  padding: 2px 28px 6px 4px;
+  font-size: 0.75rem;
+  line-height: 1.45;
 }
 
 .tool-call__section-label {
@@ -1360,11 +1401,6 @@ body.body--dark .tool-call__status--denied { color: #ff9b91; }
   overflow-wrap: anywhere;
 }
 
-.tool-call__error,
-.tool-call__approval {
-  margin-top: 12px;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .activity-shimmer {
     background: none;
@@ -1373,9 +1409,7 @@ body.body--dark .tool-call__status--denied { color: #ff9b91; }
     -webkit-text-fill-color: var(--app-text);
   }
 
-  .work-history__context-toggle,
-  .work-history__reasoning-toggle,
-  .tool-call__toggle {
+  .work-history__toggle {
     transition: none;
   }
 

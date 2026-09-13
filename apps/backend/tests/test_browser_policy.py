@@ -280,7 +280,7 @@ async def test_explicit_browser_ask_still_denies_or_revalidates(browser_action_c
     case = browser_action_case
     case.settings.permissions.policies[case.capability] = "ask"
 
-    async def approve(*_args):
+    async def approve(*_args, **_kwargs):
         if change == "user_denied":
             return "deny"
         case.settings.permissions.policies[case.capability] = "disabled"
@@ -328,7 +328,7 @@ async def test_multiple_asks_share_one_independent_guard_and_exact_source(browse
     case.settings.permissions.policies.update(dict.fromkeys(("browser.read", "browser.write", "browser.code"), "ask"))
     case.coordinator.snapshot.return_value = "b" * 64
 
-    async def approve(*args):
+    async def approve(*args, **_kwargs):
         case.coordinator.snapshot.assert_awaited_once()
         details = args[-1].approval_details["browser"]
         assert details["code"] == code
@@ -387,7 +387,7 @@ async def test_browser_final_fence_rejects_revoked_earlier_permission_during_cod
         policies = ceiling["integrationDefaults"][str(case.instance.id)]
     pending, release = asyncio.Event(), asyncio.Event()
 
-    async def approve(*args):
+    async def approve(*args, **_kwargs):
         assert args[-1].capability == "browser.code"
         pending.set()
         await release.wait()
@@ -418,7 +418,7 @@ async def test_browser_final_fence_retains_exact_once_approval_but_never_overrid
     case = browser_script_case
     case.settings.permissions.policies[capability] = "ask"
 
-    async def approve(*args):
+    async def approve(*args, **_kwargs):
         if args[-1].capability == "browser.code":
             case.settings.permissions.policies[capability] = policy
         return "allow_once"
@@ -471,7 +471,7 @@ async def test_browser_once_proofs_are_cleared_before_the_next_execution(browser
     assert not result.is_error
     assert any(key.startswith("browser_approved:") for key in case.context.approval_resolution)
 
-    async def approve(*_args):
+    async def approve(*_args, **_kwargs):
         assert not any(key.startswith("browser_approved:") for key in case.context.approval_resolution)
         return "allow_once"
 

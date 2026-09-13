@@ -60,7 +60,6 @@
             :presentation="runPresentation"
             :context-summary="chat.streamContextSummary"
             :warnings="chat.runWarnings"
-            :display-mode="answerDisplay(chat.runAgentProfileId || chat.current?.activeRun?.agentProfileId)"
             :trusted-image-origins="trustedImageOrigins"
             running
             class="chat-welcome__activity text-left q-mx-auto"
@@ -111,7 +110,7 @@
               :data-live-message-id="message.liveMessageId || undefined"
               tabindex="-1"
             >
-            <div v-if="message.role === 'user' || message.showAgentLabel" class="chat-message__label">
+            <div v-if="message.role === 'user' || (message.showAgentLabel && !message.workHistory)" class="chat-message__label row items-center wrap q-gutter-x-sm">
               <span>{{ message.role === 'user' ? userMessageLabel(message) : identity.displayName }}</span>
             </div>
             <template v-if="message.kind === 'runtime_error' && message.error">
@@ -135,9 +134,7 @@
                 :presentation="message.currentTurn ? runPresentation : null"
                 :reasoning="message.currentTurn ? chat.streamReasoning : null"
                 :context-summary="message.currentTurn ? chat.streamContextSummary : null"
-                :process-outputs="message.currentTurn ? chat.processOutputs : emptyProcessOutputs"
                 :warnings="message.currentTurn ? chat.runWarnings : []"
-                :display-mode="answerDisplay(message.agentProfileId)"
                 :trusted-image-origins="trustedImageOrigins"
                 :running="chat.running && message.currentTurn"
                 :class="{
@@ -151,7 +148,15 @@
                 @resize-start="beginActivityResize"
                 @resized="finishActivityResize"
                 @trust-image-origin="trustImageOrigin"
-              />
+              >
+                <template v-if="message.showAgentLabel" #header>
+                  <div class="chat-message__label row items-center wrap q-gutter-x-sm">
+                    <span>{{ identity.displayName }}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{{ agentProfileName(message) }}</span>
+                  </div>
+                </template>
+              </AgentActivityPanel>
               <MessageContent
                 v-if="message.content && message.role === 'assistant'"
                 class="chat-message__content"
@@ -179,6 +184,7 @@
             </div>
             <div
               v-if="message.createdAt
+                || (Number.isInteger(message.activeDurationMs) && !message.workHistory?.entries?.length)
                 || showMessageModel(message)
                 || isMessageTrustLevel(message.trustLevel)"
               class="chat-message__meta items-center"
@@ -235,6 +241,10 @@
               >
                 {{ formatRelativeDateTime(message.createdAt, messageTimestampNow) }}
               </time>
+              <template v-if="Number.isInteger(message.activeDurationMs) && !message.workHistory?.entries?.length">
+                <span v-if="message.createdAt || showMessageModel(message) || isMessageTrustLevel(message.trustLevel)" aria-hidden="true">·</span>
+                <TurnDuration :history="message" />
+              </template>
               <q-btn
                 v-if="canRetryMessage(message)"
                 flat
@@ -429,6 +439,7 @@ import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import AgentActivityPanel from 'components/AgentActivityPanel.vue'
+import TurnDuration from 'components/TurnDuration.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ChatComposer from 'components/ChatComposer.vue'
 import ChatQueuedMessages from 'components/ChatQueuedMessages.vue'
@@ -512,12 +523,12 @@ const liveWorkHistory = computed(() => ({
   activeDurationMs: chat.activity.activeDurationMs,
   activeDurationUpdatedAt: chat.activity.activeDurationUpdatedAt
 }))
-const emptyProcessOutputs = {}
 const userMessageLabel = (message) => (
   message.source?.type === 'endpoint' && message.source.provider === 'telegram'
     ? 'Du · Telegram'
     : 'Du'
 )
+const agentProfileName = (message) => agentProfiles.byId(message.agentProfileId)?.name || 'Allgemein'
 const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
 ))
@@ -558,6 +569,7 @@ const transcript = computed(() => buildChatTranscript(
     runId: chat.runId || chat.current?.activeRun?.id,
     toolExecutionActive: chat.activity.phase === 'processing_tool',
     activeToolCallId: chat.activity.toolCallId,
+    completedToolCallId: chat.completedToolCallId,
     questions: sessionQuestions.value,
     contextSummaries: chat.current?.contextSummaries
   }
@@ -606,15 +618,13 @@ const runPresentation = computed(() => agentRunPresentation({
   stopping: chat.stopping,
   activity: chat.activity,
   streamReasoning: chat.streamReasoning,
+  streamContextSummary: chat.streamContextSummary,
   streamContent: chat.streamContent,
   transcript: transcript.value
 }))
 const trustedImageOrigins = computed(() => (
   trustedImageOriginsBySession.value.get(chat.current?.id) || []
 ))
-const answerDisplay = (agentProfileId) => (
-  agentProfiles.byId(agentProfileId)?.answerDisplay === 'timeline' ? 'timeline' : 'compact'
-)
 const sessionLoadErrorMessage = computed(() => (
   apiErrorMessage(chat.loadError, 'Die Session konnte nicht geladen werden.')
 ))

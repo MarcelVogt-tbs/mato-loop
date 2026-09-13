@@ -958,11 +958,19 @@ async def test_telegram_relays_typing_and_native_drafts(monkeypatch) -> None:
             "phase": "processing_tool",
             "tool": "read_file",
             "toolLabel": "Datei lesen",
+            "toolDisplay": {
+                "group": "filesystem", "groupLabel": "Dateisystem", "icon": "folder",
+                "emoji": "📁", "label": "Pfad lesen", "summary": "note.md",
+            },
         }
         yield {
             "type": "tool.completed",
             "tool": "read_file",
             "toolLabel": "Datei lesen",
+            "toolDisplay": {
+                "group": "filesystem", "groupLabel": "Dateisystem", "icon": "folder",
+                "emoji": "📁", "label": "Pfad lesen", "summary": "note.md",
+            },
             "output": "secret output",
             "metadata": {"private": "secret metadata"},
         }
@@ -1006,7 +1014,8 @@ async def test_telegram_relays_typing_and_native_drafts(monkeypatch) -> None:
         "Vorgehen prüfen",
         "Zwischenstand",
         "Vorgehen prüfen",
-        "Datei lesen",
+        "📁 Pfad lesen · note.md",
+        telegram.DRAFT_CLEAR_TEXT,
         "Antwort",
     ]
     assert "secret" not in "".join(drafts)
@@ -1022,14 +1031,7 @@ async def test_telegram_relays_typing_and_native_drafts(monkeypatch) -> None:
     )
 
 
-def test_telegram_omits_preparation_and_finalizing_activity() -> None:
-    assert telegram._progress_activity(
-        {
-            "type": "run.phase",
-            "phase": "preparing_tools",
-            "activityLabel": "Tools vorbereiten",
-        }
-    ) is None
+def test_telegram_omits_finalizing_activity() -> None:
     assert telegram._progress_activity(
         {
             "type": "run.phase",
@@ -1131,7 +1133,13 @@ async def test_telegram_resumes_progress_after_approval(monkeypatch) -> None:
             "type": "approval.created",
             "approval": {
                 "summary": "secret",
-                "details": {"tool": "web_search"},
+                "details": {
+                    "tool": "web_search",
+                    "toolDisplay": {
+                        "group": "web", "groupLabel": "Web", "icon": "language",
+                        "emoji": "🌐", "label": "Im Web suchen", "summary": "MatoLoop",
+                    },
+                },
             },
         }
         status = "running"
@@ -1165,7 +1173,7 @@ async def test_telegram_resumes_progress_after_approval(monkeypatch) -> None:
 
     await telegram._relay_run_progress(uuid4())
 
-    assert drafts == ["Freigabe erforderlich", "Websuche"]
+    assert drafts == ["Freigabe erforderlich", "🌐 Im Web suchen · MatoLoop"]
     assert typing_statuses == []
 
 
@@ -1176,6 +1184,14 @@ async def test_telegram_resumes_progress_after_question(monkeypatch) -> None:
 
     async def events():
         nonlocal status
+        yield {
+            "type": "run.phase",
+            "phase": "processing_tool",
+            "toolDisplay": {
+                "group": "web", "groupLabel": "Web", "icon": "language",
+                "emoji": "🌐", "label": "Im Web suchen", "summary": "MatoLoop",
+            },
+        }
         yield {"type": "question.created"}
         status = "running"
         yield {"type": "run.timing", "activeDurationRunning": True}
@@ -1202,12 +1218,13 @@ async def test_telegram_resumes_progress_after_question(monkeypatch) -> None:
         "_progress_target",
         progress_target,
     )
+    monkeypatch.setattr(telegram, "DRAFT_UPDATE_SECONDS", 0)
     monkeypatch.setattr(telegram.run_events, "subscribe", lambda _run_id: events())
     monkeypatch.setattr(telegram, "Bot", lambda **_kwargs: FakeBot())
 
     await telegram._relay_run_progress(uuid4())
 
-    assert drafts == []
+    assert drafts == ["🌐 Im Web suchen · MatoLoop", telegram.DRAFT_CLEAR_TEXT]
     assert typing_statuses == ["running"]
 
 

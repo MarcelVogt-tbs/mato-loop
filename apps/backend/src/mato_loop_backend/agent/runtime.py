@@ -90,6 +90,7 @@ from mato_loop_backend.agent.title_generation import (
 from mato_loop_backend.agent.title_generation import (
     initial_session_title as _initial_session_title,
 )
+from mato_loop_backend.agent.tool_display import tool_display
 from mato_loop_backend.agent.tools import (
     PROJECT_CODING_TOOL_NAMES,
     QuestionArguments,
@@ -686,12 +687,17 @@ async def _publish_run_phase(run_id: UUID, phase: str, **details: Any) -> None:
             "type": "run.phase",
             "phase": phase,
             "startedAt": datetime.now(UTC).isoformat(),
-            "activityLabel": run_activity_label(
-                phase,
-                model_request=details.get("modelRequest"),
-                provider_attempt=details.get("providerAttempt"),
-                provider_attempt_total=details.get("providerAttemptTotal"),
-                tool=details.get("tool"),
+            "activityLabel": (
+                details["toolDisplay"]["label"]
+                if phase == "processing_tool"
+                and isinstance(details.get("toolDisplay"), dict)
+                else run_activity_label(
+                    phase,
+                    model_request=details.get("modelRequest"),
+                    provider_attempt=details.get("providerAttempt"),
+                    provider_attempt_total=details.get("providerAttemptTotal"),
+                    tool=details.get("tool"),
+                )
             ),
             **details,
         },
@@ -2723,6 +2729,14 @@ class AgentRuntime:
                     "id": call.id,
                     "name": call.name,
                     "arguments": _safe_tool_arguments(call.name, call.arguments),
+                    "toolDisplay": tool_display(
+                        call.name,
+                        _safe_tool_arguments(call.name, call.arguments),
+                        effective_toolset.tools[call.name].definition
+                        if effective_toolset is not None
+                        and call.name in effective_toolset.tools
+                        else None,
+                    ),
                 }
                 for call in normalized_calls
             ] or None
@@ -2932,11 +2946,13 @@ class AgentRuntime:
                     else None
                 )
                 tool_label = bound_tool.definition.label if bound_tool else None
+                display = serialized_calls[index]["toolDisplay"]
                 await _publish_run_phase(
                     run.id,
                     "processing_tool",
                     tool=call.name,
                     toolLabel=tool_label,
+                    toolDisplay=display,
                     toolCallId=call.id,
                     index=index,
                     total=len(normalized_calls),
@@ -3072,6 +3088,14 @@ class AgentRuntime:
                         chat_session,
                         call,
                     )
+                    current_tool_phase = {
+                        "tool": call.name,
+                        "toolLabel": tool_label,
+                        "toolDisplay": display,
+                        "toolCallId": call.id,
+                        "index": index,
+                        "total": len(normalized_calls),
+                    }
 
                     async def generate_skill_draft(
                         brief: str,
@@ -3084,6 +3108,7 @@ class AgentRuntime:
                         session_model: ModelConfig = model,
                         session_provider: LlmProviderConfig = provider,
                         active_question=question,
+                        tool_phase: dict[str, Any] = current_tool_phase,
                     ) -> SkillDraft:
                         nonlocal model_requests
                         repair_available = True
@@ -3123,7 +3148,8 @@ class AgentRuntime:
                             while True:
                                 await _publish_run_phase(
                                     run.id,
-                                    "waiting_model",
+                                    "processing_tool",
+                                    **tool_phase,
                                     modelRequest=model_requests + 1,
                                 )
                                 model_requests += 1
@@ -3333,6 +3359,7 @@ class AgentRuntime:
                             tuple[ModelConfig, LlmProviderConfig, TrustLevel], ...
                         ] = tuple(vision_candidates),
                         active_runtime_settings: AgentRuntimeSettings = runtime_settings,
+                        tool_phase: dict[str, Any] = current_tool_phase,
                     ) -> str:
                         nonlocal model_requests
                         selected = next(iter(candidates or active_vision_candidates), None)
@@ -3351,7 +3378,8 @@ class AgentRuntime:
                         ]
                         await _publish_run_phase(
                             run.id,
-                            "waiting_model",
+                            "processing_tool",
+                            **tool_phase,
                             modelRequest=model_requests + 1,
                         )
                         model_requests += 1
@@ -3477,6 +3505,7 @@ class AgentRuntime:
                         active_tool_settings: ToolSettings = tool_settings,
                         active_runtime_settings: AgentRuntimeSettings = runtime_settings,
                         active_model: ModelConfig = model,
+                        tool_phase: dict[str, Any] = current_tool_phase,
                     ) -> dict[str, Any]:
                         nonlocal model_requests
                         selected_native = (
@@ -3518,7 +3547,8 @@ class AgentRuntime:
                                 )
                             await _publish_run_phase(
                                 run.id,
-                                "waiting_model",
+                                "processing_tool",
+                                **tool_phase,
                                 modelRequest=model_requests + 1,
                             )
                             focus_prompt = (
@@ -4221,6 +4251,7 @@ class AgentRuntime:
                         "type": "tool.completed",
                         "tool": call.name,
                         "toolLabel": tool_label,
+                        "toolDisplay": display,
                         "toolCallId": call.id,
                         "output": tool_result_content[:500],
                         "metadata": metadata,
@@ -5004,6 +5035,12 @@ class AgentRuntime:
             chat_session,
             call,
             request,
+            display=tool_display(
+                call.name,
+                _safe_tool_arguments(call.name, call.arguments),
+                tool_registry._combined_definitions(integration_settings)[0].get(call.name)
+                or tool_registry._operation_definitions.get(call.name),
+            ),
         )
         approval_decision = (
             resolution.decision if isinstance(resolution, ApprovalResolution) else resolution
@@ -5075,6 +5112,8 @@ class AgentRuntime:
         chat_session: ChatSession,
         call: ToolCall,
         permission: PermissionRequest,
+        *,
+        display: dict[str, str] | None = None,
     ) -> str | ApprovalResolution:
         origin = await permission_origin(db, chat_session)
         resource_display = permission.resource_display
@@ -5107,6 +5146,8 @@ class AgentRuntime:
                 "toolCallId": call.id,
                 "tool": call.name,
                 "arguments": _safe_tool_arguments(call.name, call.arguments),
+                "toolDisplay": display
+                or tool_display(call.name, _safe_tool_arguments(call.name, call.arguments)),
                 "resourceDisplay": resource_display,
                 "policyIntegrationId": (
                     str(permission.policy_integration_id)

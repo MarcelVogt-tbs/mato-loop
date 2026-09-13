@@ -22,7 +22,7 @@ import { useQuestionStore } from '../src/stores/questions'
 import { useChatStore } from '../src/stores/chat'
 import { useAgentProfileStore } from '../src/stores/agent-profiles'
 import { buildChatTranscript } from '../src/utils/chat-transcript'
-import { agentRunPresentation } from '../src/utils/agent-activity'
+import { agentRunPresentation, mergeAgentActivity } from '../src/utils/agent-activity'
 import { api } from 'src/boot/axios'
 
 const components = { QAvatar, QBanner, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QDialog, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QRadio, QScrollArea, QSelect, QSeparator, QSpace, QSpinner, QToggle, QTooltip }
@@ -36,6 +36,59 @@ afterEach(() => {
 })
 
 describe('subagent inspector navigation and presentation', () => {
+  it.each(['tool', 'reasoning', 'context-summary'])('opens %s details independently of history and preserves them during regrouping', async (type) => {
+    const detail = 'Vollständiger verständlicher Detailinhalt. '.repeat(5)
+    const entry = ref(type === 'tool'
+      ? { key: 'current', type, tool: { id: 'current', name: 'web_search', arguments: { query: detail, internal_flag: 'NEVER_RENDER' } } }
+      : type === 'reasoning'
+        ? { key: 'current', type, live: true, reasoning: { kind: 'content', text: detail } }
+        : { key: 'current', type, current: true, text: detail, presentation: { title: 'Kontext verdichten' } })
+    const activity = ref({ phase: type === 'tool' ? 'processing_tool' : type === 'reasoning' ? 'waiting_model' : 'compacting_context', toolCallId: 'current', modelRequest: 1 })
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { render: () => null } }] })
+    await router.push('/')
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => h(AgentActivityPanel, {
+      running: true, activity: activity.value,
+      history: { entries: [{ key: 'old', type: 'tool', result: {}, tool: { id: 'old', name: 'web_search', arguments: { query: 'Älterer Aufruf' } } }, entry.value] }
+    }) })
+    app.use(createPinia()).use(router).use(Quasar, { components })
+    app.mount(root)
+    const row = root.querySelector('.activity-row')
+    expect(row.getAttribute('aria-expanded')).toBe('false')
+    expect(row.getAttribute('tabindex')).toBe('0')
+    expect(row.querySelector('.work-history__detail-indicator').textContent).toBe('chevron_right')
+    expect(root.querySelector('.work-history__toggle .q-icon').textContent).toBe('history')
+    row.click()
+    await nextTick()
+    expect(row.querySelector('.work-history__detail-indicator').textContent).toBe('expand_more')
+    expect(root.querySelector('.work-history__toggle').getAttribute('aria-expanded')).toBe('false')
+    expect(root.textContent).not.toContain('Älterer Aufruf')
+    expect(document.getElementById(row.getAttribute('aria-controls')).textContent).toContain(detail.trim())
+    for (let i = 0; i < 2; i++) {
+      root.querySelector('.work-history__toggle').click()
+      await nextTick()
+      expect(root.querySelector('.activity-row[aria-expanded="true"]')).not.toBeNull()
+      expect(root.querySelector('.work-history__reasoning-detail').textContent).toContain(detail.trim())
+    }
+    if (type === 'tool') {
+      entry.value = { ...entry.value, completed: true }
+      activity.value = { phase: 'waiting_model', modelRequest: 2 }
+      await nextTick()
+      expect(root.querySelector('.activity-row').getAttribute('aria-expanded')).toBe('true')
+      expect(root.querySelector('.activity-shimmer')).not.toBeNull()
+      entry.value = { ...entry.value, key: 'next', completed: false, tool: { ...entry.value.tool, id: 'next' } }
+      activity.value = { phase: 'processing_tool', toolCallId: 'next' }
+    } else {
+      entry.value = { ...entry.value, key: 'next' }
+      activity.value = { ...activity.value, modelRequest: 2 }
+    }
+    await nextTick()
+    expect(root.querySelector('.activity-row').getAttribute('aria-expanded')).toBe('false')
+    expect(root.textContent).not.toContain('NEVER_RENDER')
+    expect(root.textContent).not.toContain('Technische Argumente')
+  })
+
   it.each([false, true])('shows status indicators without removing readable labels (reduced motion=%s)', async (reducedMotion) => {
     vi.stubGlobal('matchMedia', () => ({ matches: reducedMotion }))
     const states = [
@@ -69,7 +122,7 @@ describe('subagent inspector navigation and presentation', () => {
     vi.stubGlobal('EventSource', class { addEventListener() {} close() {} })
     const pinia = createPinia()
     setActivePinia(pinia)
-    useAgentProfileStore().agents = [{ id: 'agent', answerDisplay: 'timeline' }]
+    useAgentProfileStore().agents = [{ id: 'agent', name: 'Allgemein', answerDisplay: 'timeline' }]
     store = useSubagentStore()
     const child = { id: 'child', parentSessionId: 'parent', title: 'Dateien untersuchen', run: { id: 'run', status: 'waiting_approval' } }
     api.get.mockImplementation(async (url) => ({ data: url.endsWith('/children') ? [child]
@@ -79,7 +132,7 @@ describe('subagent inspector navigation and presentation', () => {
             { id: 'task', role: 'user', content: 'Auftrag lesen' },
             { id: 'note', role: 'assistant', agentProfileId: 'agent', content: 'Ich prüfe die Datei.', toolCalls: [] },
             { id: 'tool', role: 'assistant', agentProfileId: 'agent', toolCalls: [{ id: 'read', name: 'read', arguments: {} }] },
-            { id: 'answer', role: 'assistant', agentProfileId: 'agent', content: 'Ergebnis lesen' }
+            { id: 'answer', role: 'assistant', agentProfileId: 'agent', content: 'Ergebnis lesen', activeDurationMs: 57_000 }
           ] } }))
     await store.loadChildren('parent')
     const request = { id: 'request', sessionId: 'parent', runId: 'run', title: 'Datei freigeben', details: { toolCallId: 'read' }, availableDecisions: ['allow_once', 'deny'], payload: { subagentSessionId: 'child', subagentTitle: child.title } }
@@ -121,11 +174,18 @@ describe('subagent inspector navigation and presentation', () => {
     expect(dialog).not.toBeNull()
     expect(dialog.textContent).toContain('Nur Lesezugriff')
     expect(dialog.textContent).toContain('Ergebnis lesen')
+    const historyHeader = dialog.querySelector('.work-history__toggle')
+    expect(historyHeader).not.toBeNull()
+    expect([...dialog.querySelectorAll('.work-history__agent-header .chat-message__label span')].map((node) => node.textContent))
+      .toEqual(['Subagent', '·', 'Allgemein'])
+    expect(historyHeader.closest('.work-history__header-actions').previousElementSibling.classList)
+      .toContain('work-history__agent-header')
+    historyHeader.click()
+    await nextTick()
     expect(dialog.textContent).toContain('Ich prüfe die Datei.')
     expect(dialog.textContent).toContain('Datei freigeben')
     expect(dialog.textContent).toContain('Welche Datei?')
     expect(dialog.querySelector('.work-history')).not.toBeNull()
-    expect(dialog.querySelector('.work-history__panel')).toBeNull()
     expect(dialog.querySelector('.approval-card, .question-dock')).toBeNull()
     expect(dialog.querySelector('textarea, input, [contenteditable="true"]')).toBeNull()
     expect(dialog.textContent).not.toMatch(/Einmal erlauben|Antworten senden|Ablehnen|Erneut versuchen|Einstellungen/)
@@ -135,6 +195,11 @@ describe('subagent inspector navigation and presentation', () => {
     expect(api.post).not.toHaveBeenCalled()
     expect(api.patch).not.toHaveBeenCalled()
     expect(api.delete).not.toHaveBeenCalled()
+    expect(dialog.querySelector('.chat-message__meta [role="timer"]')).toBeNull()
+    store.run = { id: 'run', status: 'completed' }
+    await nextTick()
+    expect(dialog.querySelector('.chat-message__meta [role="timer"]')).toBeNull()
+    expect(dialog.querySelector('.work-history [role="timer"]').textContent).toContain('57 s')
     dialog.querySelector('a').click()
     await vi.waitFor(() => expect(router.currentRoute.value.query.subagent).toBeUndefined())
     expect(router.currentRoute.value.query).toEqual({ session: 'parent', project: 'project' })
@@ -163,14 +228,13 @@ describe('subagent inspector navigation and presentation', () => {
         },
         running: running.value,
         activity: { phase: 'streaming' },
-        presentation: { label: 'Antwort wird erstellt' },
         warnings: [{ code: 'privacy.placeholderRestorationIncomplete', modelRequest: 1 }]
       })
     })
     app.use(pinia).use(router).use(Quasar, { components })
     app.mount(root)
 
-    const historyHeader = root.querySelector('.work-history__panel .q-item')
+    const historyHeader = root.querySelector('.work-history__toggle')
     expect(root.textContent).not.toContain('Bisheriger Kommentar')
     historyHeader.click()
     await nextTick()
@@ -178,6 +242,648 @@ describe('subagent inspector navigation and presentation', () => {
     running.value = false
     await nextTick()
     expect(root.textContent).toContain('Bisheriger Kommentar')
+  })
+
+  it('omits aggregate status counts and places live duration before the history toggle', async () => {
+    const pinia = createPinia()
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        running: true,
+        activity: { phase: 'streaming', activeDurationMs: 296_000 },
+        history: {
+          activeDurationMs: 296_000,
+          entries: [{
+            key: 'failed', type: 'tool', tool: { id: 'failed', name: 'build_skill' },
+            result: { content: '{"error":{"code":"tool.executionFailed"}}' }
+          }, {
+            key: 'interrupted', type: 'tool', tool: { id: 'interrupted', name: 'edit_skill' },
+            result: { content: '{"error":{"code":"tool.executionInterrupted"}}' }
+          }]
+        }
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    const error = root.querySelector('.work-history__message-count--error')
+    const warning = root.querySelector('.work-history__message-count--warning')
+    const duration = root.querySelector('[role="timer"]')
+    const toggle = root.querySelector('.work-history__toggle')
+    expect(duration.textContent).toContain('4 min 56 s')
+    expect(error).toBeNull()
+    expect(warning).toBeNull()
+    expect(duration.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('hides completed activity entirely when only a duration exists', () => {
+    const pinia = createPinia()
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        history: { entries: [], activeDurationMs: 4_000 }
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.querySelector('.work-history')).toBeNull()
+    expect(root.querySelector('.work-history__toggle')).toBeNull()
+    expect(root.textContent).not.toContain('Verlauf')
+    expect(root.querySelector('[role="timer"]')).toBeNull()
+  })
+
+  it('shows initial activity beside live duration with a persistent history toggle', () => {
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => h(AgentActivityPanel, {
+      history: { entries: [] }, running: true,
+      activity: { phase: 'waiting_model', activeDurationMs: 38_000 }
+    }) })
+    app.use(createPinia()).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.querySelector('.work-history--preview')).not.toBeNull()
+    expect(root.querySelector('.activity-shimmer').textContent).toBe('Verarbeite Anfrage')
+    expect(root.querySelector('.work-history__meta-section [role="timer"]').textContent).toBe('38 s')
+    expect(root.querySelector('.work-history__header')).toBeNull()
+    expect(root.querySelector('.work-history__toggle').getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('keeps live status visible while tool messages are being persisted', async () => {
+    const activity = ref({ phase: 'waiting_model', modelRequest: 1 })
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => h(AgentActivityPanel, {
+      history: { entries: [{
+        key: 'completed', type: 'tool', result: {},
+        tool: { id: 'completed', name: 'web_search', arguments: { query: 'Vorherige Suche' } }
+      }] },
+      running: true,
+      activity: activity.value,
+      presentation: agentRunPresentation({ running: true, activity: activity.value })
+    }) })
+    app.use(createPinia()).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.querySelector('.work-history--preview')).not.toBeNull()
+    expect(root.textContent).toContain('Verarbeite Anfrage')
+    expect(root.querySelector('.work-history__activity-line .q-icon').textContent).toBe('settings')
+    expect(root.textContent).not.toContain('Verlauf')
+    expect(root.textContent).not.toContain('Vorherige Suche')
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    expect(root.querySelector('.work-history__toggle').getAttribute('aria-expanded')).toBe('true')
+    expect(root.textContent).toContain('Vorherige Suche')
+
+    activity.value = { phase: 'processing_tool', tool: 'read_file', toolCallId: 'pending' }
+    await nextTick()
+
+    expect(root.querySelector('.work-history--preview')).toBeNull()
+    expect(root.querySelector('.activity-shimmer').textContent).toContain('Datei lesen')
+    expect(root.textContent).not.toContain('Verlauf')
+    expect(root.textContent).toContain('Vorherige Suche')
+    expect(root.querySelector('.work-history__toggle').getAttribute('aria-expanded')).toBe('true')
+    const row = root.querySelector('.activity-shimmer').closest('.tool-call__header')
+    activity.value = mergeAgentActivity(activity.value, { phase: 'waiting_model', modelRequest: 2 })
+    await nextTick()
+    expect(root.querySelector('.activity-shimmer').closest('.tool-call__header')).toBe(row)
+    expect(root.querySelector('.activity-shimmer').textContent).toContain('Datei lesen')
+    expect(root.textContent).toContain('Vorherige Suche')
+    expect(root.querySelector('.work-history__header')).toBeNull()
+  })
+
+  it.each([true, false])('uses the shared tool row (running=%s)', async (running) => {
+    const pinia = createPinia()
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        history: { entries: [{
+          key: 'tool', type: 'tool', active: false,
+          tool: {
+            id: 'call', name: 'custom_browser_tool', arguments: { url: 'https://example.com/path' },
+            toolDisplay: { group: 'web', icon: 'language', label: 'Browser prüfen', summary: 'example.com/path' }
+          }
+        }] },
+        running,
+        activity: { phase: 'processing_tool', toolCallId: 'call' }
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    if (!running) {
+      expect(root.querySelector('.tool-call__header')).toBeNull()
+      root.querySelector('.work-history__toggle').click()
+      await nextTick()
+    }
+    const row = root.querySelector('.tool-call__header')
+    expect(row.querySelector('.q-icon').textContent).toBe('language')
+    expect(row.querySelector('.q-icon').classList.contains('work-history__activity-title--past'))
+      .toBe(!running)
+    expect(row.querySelector('.tool-call__title').textContent.trim()).toBe('Browser prüfen')
+    expect(row.querySelector('.tool-call__summary').textContent).toBe('example.com/path')
+    expect(row.querySelector('.tool-call__title').classList.contains('activity-shimmer'))
+      .toBe(running)
+  })
+
+  it('previews only the current call and groups all calls when expanded', async () => {
+    const pinia = createPinia()
+    const entries = ref([{
+      key: 'first', type: 'tool', result: {},
+      tool: { id: 'first', name: 'web_search', arguments: { query: 'Erste Suche' } }
+    }, {
+      key: 'second', type: 'tool', result: {},
+      tool: { id: 'second', name: 'web_search', arguments: { query: 'Zweite Suche' } }
+    }, {
+      key: 'active', type: 'tool', active: true,
+      tool: { id: 'active', name: 'web_search', arguments: { query: 'Aktuelle Suche' } }
+    }])
+    const activity = ref({ phase: 'processing_tool', toolCallId: 'active' })
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        history: { entries: entries.value },
+        running: true,
+        activity: activity.value
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.querySelector('.work-history__header')).toBeNull()
+    expect(root.querySelector('.work-history__tool-icons')).toBeNull()
+    expect(root.querySelector('.work-history__tool-group')).toBeNull()
+    expect(root.querySelectorAll('.tool-call__header')).toHaveLength(1)
+    expect(root.querySelector('.tool-call__summary').textContent).toBe('Aktuelle Suche')
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    const group = root.querySelector('.work-history__tool-group')
+    expect(group.querySelector('.work-history__activity-title').textContent.trim()).toBe('Websuche')
+    expect(group.querySelector('.work-history__activity-summary').textContent.trim()).toBe('· 3')
+    expect([...group.querySelectorAll('.tool-call__summary')].map((node) => node.textContent))
+      .toEqual(['Erste Suche', 'Zweite Suche', 'Aktuelle Suche'])
+    expect(group.querySelector('.work-history__tool-group-items')).not.toBeNull()
+    expect(group.querySelector('.work-history__activity-title').classList).toContain('activity-shimmer')
+    expect(root.querySelectorAll('.activity-shimmer')).toHaveLength(1)
+    expect(root.querySelector('.tool-call__title')).toBeNull()
+
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    expect(root.querySelector('.work-history__tool-group')).toBeNull()
+    expect(root.querySelectorAll('.tool-call__header')).toHaveLength(1)
+
+    entries.value = entries.value.map((entry) => entry.key === 'active'
+      ? { ...entry, active: false, completed: true }
+      : entry)
+    activity.value = { phase: 'waiting_model', modelRequest: 2 }
+    await nextTick()
+
+    expect(root.querySelector('.work-history__tool-group')).toBeNull()
+    expect(root.textContent).not.toContain('Erste Suche')
+    expect(root.textContent).not.toContain('Verarbeite Anfrage')
+    expect(root.querySelector('.activity-shimmer').textContent).toContain('Websuche')
+    expect(root.querySelector('.tool-call__summary').textContent).toBe('Aktuelle Suche')
+    expect(root.querySelector('.work-history__header')).toBeNull()
+
+    entries.value = [...entries.value, {
+      key: 'reasoning', type: 'reasoning', live: true,
+      reasoning: { kind: 'content', text: 'Ergebnisse prüfen' }
+    }]
+    await nextTick()
+
+    expect(root.querySelector('.work-history__tool-group')).toBeNull()
+    expect(root.textContent).not.toContain('Erste Suche')
+    expect(root.querySelector('.work-history__activity-title').textContent).toBe('Nachdenken')
+  })
+
+  it('omits empty detail rows from a tool group', async () => {
+    const pinia = createPinia()
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        history: { activeDurationMs: 4_000, entries: ['first', 'second'].map((id) => ({
+          key: id, type: 'tool', result: {},
+          tool: {
+            id, name: 'edit_skill', arguments: {},
+            toolDisplay: { group: 'agent', icon: 'smart_toy', label: 'Skill bearbeiten' }
+          }
+        })) }
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.querySelector('[role="timer"]').textContent).toBe('4 s')
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+
+    expect(root.querySelector('.work-history__header').textContent).not.toContain('Verlauf')
+    expect(root.querySelector('[role="timer"]').textContent).toBe('4 s')
+    expect(root.querySelector('.work-history__activity-title').textContent.trim()).toBe('Skill bearbeiten')
+    expect(root.querySelector('.work-history__tool-group .q-icon').classList)
+      .toContain('work-history__activity-title--past')
+    expect(root.querySelector('.work-history__activity-summary').textContent.trim()).toBe('· 2')
+    expect(root.querySelectorAll('.tool-call--detail')).toHaveLength(0)
+    expect(root.textContent).not.toContain('Aufruf')
+  })
+
+  it('keeps the same latest row while expanding older history', async () => {
+    const pinia = createPinia()
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        running: true,
+        activity: { phase: 'processing_tool', toolCallId: 'latest' },
+        history: { entries: [{
+          key: 'old', type: 'commentary', message: { content: 'Älterer Schritt' }
+        }, {
+          key: 'latest', type: 'tool',
+          tool: { id: 'latest', name: 'web_search', arguments: { query: 'Neuester Schritt' } }
+        }] }
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    const latest = root.querySelector('.tool-call__header')
+    expect(root.textContent).not.toContain('Älterer Schritt')
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+
+    expect(root.textContent).toContain('Älterer Schritt')
+    expect(root.querySelector('.tool-call__header')).toBe(latest)
+    expect(root.querySelectorAll('.tool-call__header')).toHaveLength(1)
+  })
+
+  it.each([
+    [1280, false], [1280, true], [390, false], [390, true]
+  ])('keeps commentary with its tools until output starts (width=%s, dark=%s)', async (width, dark) => {
+    vi.stubGlobal('innerWidth', width)
+    const pinia = createPinia()
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { render: () => null } }] })
+    await router.push('/')
+    const running = ref(true)
+    const activity = ref({ phase: 'processing_tool', toolCallId: 'search' })
+    const messages = ref([
+      { id: 'user', role: 'user', content: 'Bitte prüfen' },
+      { id: 'old', role: 'assistant', content: 'Älterer Schritt', toolCalls: [] },
+      {
+        id: 'step', role: 'assistant', content: 'Ich verifiziere das kurz über eine Online-Suche:',
+        toolCalls: [
+          { id: 'search', name: 'web_search', arguments: { query: 'Aktuelle Nachricht' } },
+          { id: 'fetch', name: 'webfetch', arguments: { url: 'https://example.com' } }
+        ]
+      }
+    ])
+    const history = computed(() => buildChatTranscript(messages.value, [], {
+      running: running.value,
+      toolExecutionActive: activity.value.phase === 'processing_tool',
+      activeToolCallId: activity.value.toolCallId
+    }).messages.find((message) => message.workHistory).workHistory)
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => h(AgentActivityPanel, {
+      history: history.value, running: running.value, activity: activity.value
+    }) })
+    app.use(pinia).use(router).use(Quasar, { components, config: { dark } })
+    app.mount(root)
+
+    const intro = 'Ich verifiziere das kurz über eine Online-Suche:'
+    expect(root.textContent).toContain(intro)
+    expect(root.textContent).toContain('Aktuelle Nachricht')
+    expect(root.textContent).not.toContain('Älterer Schritt')
+    const row = root.querySelector('.tool-call__header')
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    expect(root.textContent).toContain('Älterer Schritt')
+    expect(root.querySelector('.tool-call__header')).toBe(row)
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+
+    messages.value.push({ role: 'tool', toolCallId: 'search', content: '{}' })
+    activity.value = { phase: 'processing_tool', toolCallId: 'fetch' }
+    await nextTick()
+    expect(root.textContent).toContain(intro)
+    expect(root.querySelector('.tool-call__title').textContent).toContain('Webseite abrufen')
+    const fetchRow = root.querySelector('.tool-call__header')
+
+    messages.value.push({ role: 'tool', toolCallId: 'fetch', content: '{}' })
+    await nextTick()
+    expect(root.querySelector('.tool-call__header')).toBe(fetchRow)
+    expect(root.querySelector('.activity-shimmer').textContent).toContain('Webseite abrufen')
+    activity.value = { phase: 'waiting_model', modelRequest: 2 }
+    await nextTick()
+    expect(root.textContent).not.toContain('Verarbeite Anfrage')
+    expect(root.querySelector('.activity-shimmer').textContent).toContain('Webseite abrufen')
+    expect(root.querySelector('.tool-call__title').textContent).toContain('Webseite abrufen')
+    expect(root.querySelector('.tool-call__header')).toBe(fetchRow)
+    expect(root.querySelector('.work-history__header')).toBeNull()
+    expect(root.textContent).toContain(intro)
+
+    activity.value = { phase: 'streaming' }
+    await nextTick()
+    expect(root.textContent).not.toContain(intro)
+    expect(root.querySelector('.tool-call__header')).toBeNull()
+
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    const text = root.textContent
+    expect(text.indexOf(intro)).toBeLessThan(text.indexOf('Aktuelle Nachricht'))
+    expect(text.indexOf('Aktuelle Nachricht')).toBeLessThan(text.indexOf('example.com'))
+    expect(root.querySelectorAll('.tool-call__header')).toHaveLength(2)
+
+    messages.value.push({ id: 'final', role: 'assistant', content: 'Hier ist die Antwort.' })
+    running.value = false
+    activity.value = { phase: 'idle' }
+    await nextTick()
+    expect(root.textContent).toContain(intro)
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    expect(root.querySelector('.work-history__timeline')).toBeNull()
+    expect(root.querySelector('.tool-call__header')).toBeNull()
+  })
+
+  it('shows status icons only on each grouped tool', async () => {
+    const pinia = createPinia()
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        history: { entries: ['https://example.com/first', 'https://example.com/second'].map((url, index) => ({
+          key: `fetch-${index}`, type: 'tool',
+          tool: { id: `fetch-${index}`, name: 'webfetch', arguments: { url } },
+          result: { content: `{"error":{"code":"${index ? 'tool.executionInterrupted' : 'tool.executionFailed'}"}}` }
+        })) }
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.querySelector('.tool-call--detail')).toBeNull()
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    const details = [...root.querySelectorAll('.tool-call--detail')]
+    expect(details).toHaveLength(2)
+    expect(details.map((row) => row.querySelector('.tool-call__state .q-icon').textContent))
+      .toEqual(['error', 'warning'])
+    expect(root.querySelector('.work-history__message-count--error')).toBeNull()
+    expect(root.querySelector('.work-history__message-count--warning')).toBeNull()
+    expect(root.querySelectorAll('.tool-call__message')).toHaveLength(0)
+    details[0].click()
+    await nextTick()
+    expect(root.querySelectorAll('.tool-call__message')).toHaveLength(1)
+    expect(root.querySelector('.tool-call__message').textContent).toContain('Die Tool-Aktion ist fehlgeschlagen.')
+    expect(details[1].getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('renders tool calls as static rows without technical details', async () => {
+    const pinia = createPinia()
+    const entry = ref({
+      key: 'tool', type: 'tool', active: true,
+      tool: { id: 'call', name: 'browser_navigate', arguments: { url: 'https://example.com' } }
+    })
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        history: { entries: [entry.value] },
+        running: true,
+        activity: { phase: 'processing_tool', toolCallId: 'call' }
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.textContent).not.toContain('Technische Argumente')
+    expect(root.querySelector('.tool-call .q-expansion-item')).toBeNull()
+    expect(root.querySelector('.tool-call__title').classList).toContain('activity-shimmer')
+    entry.value = {
+      ...entry.value,
+      result: { content: '{"error":{"code":"tool.executionFailed"}}' }
+    }
+    await nextTick()
+    expect(root.textContent).not.toContain('Technische Argumente')
+    expect(root.querySelector('.tool-call__title').classList).toContain('activity-shimmer')
+    expect(root.textContent).not.toContain('Fehlgeschlagen')
+    expect(root.querySelector('.tool-call__status .q-icon').textContent).toBe('error')
+    expect(root.querySelector('.tool-call__status .q-icon').getAttribute('aria-label')).toBe('Fehlgeschlagen')
+    expect(root.textContent).not.toContain('Die Tool-Aktion ist fehlgeschlagen.')
+    root.querySelector('.tool-call__header').click()
+    await nextTick()
+    expect(root.textContent).toContain('Die Tool-Aktion ist fehlgeschlagen.')
+    expect(root.textContent).not.toContain('tool.executionFailed')
+    entry.value = {
+      ...entry.value,
+      result: { content: '{"error":{"code":"tool.executionInterrupted"}}' }
+    }
+    await nextTick()
+    expect(root.textContent).not.toContain('Unterbrochen')
+    expect(root.querySelector('.tool-call__status .q-icon').textContent).toBe('warning')
+    expect(root.querySelector('.tool-call__status .q-icon').getAttribute('aria-label')).toBe('Unterbrochen')
+    expect(root.textContent).toContain('Die Tool-Aktion wurde unterbrochen.')
+    expect(root.textContent).not.toContain('tool.executionInterrupted')
+  })
+
+  it('shows real reasoning between tools', async () => {
+    const pinia = createPinia()
+    const activity = ref({ phase: 'waiting_model', modelRequest: 2 })
+    const first = {
+      key: 'first', type: 'tool', result: { content: '{}' },
+      tool: { id: 'first', name: 'web_search', arguments: { query: 'Lokale KI' } }
+    }
+    const entries = ref([first])
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        history: { entries: entries.value }, running: true, activity: activity.value,
+        reasoning: { kind: 'content', text: 'Ergebnisse prüfen' }
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.textContent).toContain('Nachdenken')
+    expect(root.querySelector('.activity-shimmer')).not.toBeNull()
+    expect(root.querySelector('.work-history__activity-line .q-icon').textContent).toBe('psychology')
+    entries.value = [first, {
+      key: 'second', type: 'tool', active: true,
+      tool: { id: 'second', name: 'session_read', arguments: {} }
+    }]
+    activity.value = { phase: 'processing_tool', toolCallId: 'second' }
+    await nextTick()
+    const activeTitle = root.querySelector('.activity-shimmer')
+    expect(activeTitle.textContent).toContain('Session lesen')
+  })
+
+  it.each([
+    ['reasoning', { phase: 'waiting_model' }, { key: 'reasoning', type: 'reasoning', live: true, reasoning: { kind: 'content', text: 'Prüfen' } }],
+    ['compaction', { phase: 'compacting_context' }, { key: 'summary', type: 'context-summary', current: true, text: 'Kontext', presentation: { title: 'Gesprächskontext wird verdichtet' } }]
+  ])('keeps current %s subtly collapsible', async (_kind, activity, entry) => {
+    const pinia = createPinia()
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        history: { entries: [entry] }, running: true, activity
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+    await nextTick()
+
+    const reasoningHeader = root.querySelector('.work-history__reasoning .q-item')
+    expect(reasoningHeader.getAttribute('aria-expanded')).toBe('false')
+    expect(root.querySelector('.work-history__activity-title').classList).toContain('activity-shimmer')
+    reasoningHeader.click()
+    await nextTick()
+    expect(reasoningHeader.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('keeps past commentary in history without marking it active', async () => {
+    const pinia = createPinia()
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        running: true, activity: { phase: 'waiting_model', modelRequest: 2 },
+        history: { entries: [{ key: 'note', type: 'commentary', message: { content: 'Zwischenstand' } }] }
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.textContent).not.toContain('Zwischenstand')
+    expect(root.querySelector('.activity-shimmer')).toBeNull()
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    expect(root.textContent).toContain('Zwischenstand')
+    expect(root.querySelector('.activity-shimmer')).toBeNull()
+  })
+
+  it('shows the current reasoning summary beside its label and removes it afterwards', async () => {
+    const pinia = createPinia()
+    const activity = ref({ phase: 'waiting_model' })
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        history: { entries: [] }, running: true,
+        activity: activity.value,
+        reasoning: { kind: 'summary', text: '**Ergebnisse prüfen**' }
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.querySelector('.work-history__activity-title').textContent).toBe('Nachdenken')
+    expect(root.querySelector('.work-history__activity-title').classList).toContain('activity-shimmer')
+    expect(root.querySelector('.work-history__activity-summary').textContent.trim()).toBe('Ergebnisse prüfen')
+    activity.value = { phase: 'processing_tool' }
+    await nextTick()
+    expect(root.querySelector('.work-history__reasoning')).toBeNull()
+  })
+
+  it('does not offer an empty reasoning expander', () => {
+    const pinia = createPinia()
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        history: { entries: [] }, running: true,
+        activity: { phase: 'waiting_model' }, reasoning: { kind: 'content', text: '' }
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.textContent).toContain('Nachdenken')
+    expect(root.querySelector('.work-history__reasoning')).toBeNull()
+    expect(root.querySelector('.work-history__reasoning-static')).not.toBeNull()
+  })
+
+  it.each(['waiting_approval', 'waiting_input'])('pauses fallback activity during %s', (phase) => {
+    const pinia = createPinia()
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        history: { entries: [] }, running: true,
+        activity: { phase }
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.textContent).toContain('erforderlich')
+    expect(root.querySelector('.activity-shimmer')).toBeNull()
+  })
+
+  it('shows the concrete active tool ahead of warnings', () => {
+    const pinia = createPinia()
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        history: { entries: [
+          {
+            key: 'read', type: 'tool', active: true,
+            tool: { id: 'read', name: 'read_file', arguments: { path: 'README.md' } }
+          },
+          {
+            key: 'warning', type: 'warning', live: true,
+            presentation: { title: 'Hinweis', summary: 'Details' }
+          }
+        ] },
+        running: true,
+        activity: { phase: 'processing_tool', toolCallId: 'read' }
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.textContent).not.toContain('Kontext wird gesammelt')
+    expect(root.querySelector('.tool-call__title').textContent).toContain('Datei lesen')
+    expect(root.querySelector('.tool-call__title').classList).toContain('activity-shimmer')
+  })
+
+  it('hides completed reasoning but keeps current compaction details', async () => {
+    const pinia = createPinia()
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        running: true,
+        history: { entries: [{
+          key: 'reasoning', type: 'reasoning',
+          reasoning: { kind: 'content', text: 'Öffentliche Überlegung' }
+        }, {
+          key: 'summary', type: 'context-summary', text: 'Goal\nVollständiger Kontext',
+          presentation: { title: 'Gesprächskontext verdichtet', summary: null, duration: null }
+        }] },
+        activity: { phase: 'waiting_model', modelRequest: 2 },
+        presentation: agentRunPresentation({
+          running: true, activity: { phase: 'waiting_model', modelRequest: 2 }
+        })
+      })
+    })
+    app.use(pinia).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.textContent).not.toContain('Verarbeite Tool-Ergebnisse')
+    expect(root.textContent).not.toContain('Öffentliche Überlegung')
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    root.querySelector('.work-history__reasoning .q-item').click()
+    await nextTick()
+    expect(root.textContent).toContain('Goal\nVollständiger Kontext')
   })
 
   it('keeps timeline tool supplements beside their tool without aggregate duplicates', async () => {
@@ -203,7 +909,6 @@ describe('subagent inspector navigation and presentation', () => {
     document.body.append(root)
     app = createApp({
       setup: () => () => h(AgentActivityPanel, {
-        displayMode: 'timeline',
         readOnly: readOnly.value,
         subagents: [child],
         history: { entries: [
@@ -220,6 +925,8 @@ describe('subagent inspector navigation and presentation', () => {
     app.use(pinia).use(router).use(Quasar, { components })
     app.mount(root)
 
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
     const after = [...root.querySelectorAll('div')].find((element) => element.textContent === 'Nach dem Tool')
     const approvalCard = root.querySelector('.approval-card')
     const subagentList = root.querySelector('[aria-label="Subagenten"]')

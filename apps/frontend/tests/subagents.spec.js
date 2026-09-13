@@ -64,6 +64,73 @@ afterEach(() => {
 })
 
 describe('read-only subagents', () => {
+  it.each(['parent', 'child'])('projects the full activity event sequence for %s', async (consumer) => {
+    chat.current = { id: 'parent', messages: [] }
+    chat.watchRun('parent', 'parent-run', { status: 'running' })
+    await store.loadChildren('parent')
+    await store.open('parent', 'child')
+    const target = consumer === 'parent' ? chat : store
+    const source = EventSourceMock.instances[consumer === 'parent' ? 0 : 1]
+    // Keep canonical refresh pending to exercise the event-to-REST gap.
+    api.get.mockImplementation(() => new Promise(() => {}))
+    const presentation = () => agentRunPresentation({
+      running: target.running, activity: target.activity,
+      streamContent: target.streamContent, streamReasoning: target.streamReasoning,
+      transcript: buildChatTranscript(target.current.messages, [], {
+        running: target.running, toolExecutionActive: target.activity.phase === 'processing_tool',
+        activeToolCallId: target.activity.toolCallId, completedToolCallId: target.completedToolCallId
+      })
+    })
+    source.emit('run.started', {})
+    expect(presentation().label).toBe('Verarbeite Anfrage')
+    source.emit('run.phase', { phase: 'waiting_model', modelRequest: 1 })
+    source.emit('message.delta', { delta: 'Ich prüfe das.' })
+    expect(presentation().entry).toBeNull()
+    const tool = { id: 'read', name: 'read_file', arguments: { path: 'README.md' } }
+    source.emit('message.completed', { message: {
+      id: 'step', role: 'assistant', content: 'Ich prüfe das.', toolCalls: [tool]
+    } })
+    expect(presentation().entry).toMatchObject({ type: 'tool', tool, active: true })
+    expect(presentation().label).toBe('Datei lesen')
+    source.emit('run.phase', { phase: 'processing_tool', tool: tool.name, toolCallId: tool.id })
+    expect(presentation().entry).toMatchObject({ type: 'tool', tool, active: true })
+    source.emit('run.timing', { activeDurationMs: 1_000, activeDurationRunning: true, activeTimingRevision: 2 })
+    source.emit('run.phase', { phase: 'waiting_approval', activeTimingRevision: 2 })
+    expect(presentation().entry.active).toBe(false)
+    expect(target.activity.toolCallId).toBeNull()
+    source.emit('run.phase', { phase: 'waiting_input' })
+    expect(presentation().entry.active).toBe(false)
+    source.emit('run.phase', { phase: 'processing_tool', tool: tool.name, toolCallId: tool.id })
+    source.emit('tool.completed', { toolCallId: tool.id })
+    expect(presentation().entry).toMatchObject({ type: 'tool', tool, active: true })
+    source.emit('run.phase', { phase: 'waiting_model', modelRequest: 2 })
+    expect(presentation().entry).toMatchObject({ type: 'tool', tool, active: true })
+    expect(presentation().label).toBe('Datei lesen')
+    expect(target.activity).toMatchObject({ tool: 'read_file', toolCallId: 'read' })
+    source.emit('reasoning.updated', { reasoning: { kind: 'content', text: 'Ergebnis prüfen' } })
+    expect(presentation().entry).toMatchObject({ type: 'reasoning', active: true, presentation: { title: 'Nachdenken' } })
+    source.emit('message.completed', { message: {
+      id: 'second', role: 'assistant', content: '',
+      toolCalls: [{ id: 'search', name: 'web_search', arguments: { query: 'Neue Suche' } }]
+    } })
+    source.emit('run.phase', {
+      phase: 'processing_tool', tool: 'web_search', toolCallId: 'search',
+      toolDisplay: { group: 'web', icon: 'language', label: 'Websuche', summary: 'Neue Suche' }
+    })
+    source.emit('tool.completed', { toolCallId: 'search' })
+    source.emit('run.phase', { phase: 'waiting_model', modelRequest: 3 })
+    expect(presentation().entry).toMatchObject({ type: 'tool', active: true, tool: { id: 'search' } })
+    expect(presentation().summary).toBe('Neue Suche')
+    source.emit('message.delta', { delta: 'Ergebnis' })
+    expect(presentation().entry).toBeNull()
+    source.emit('message.completed', { message: { id: 'answer', role: 'assistant', content: 'Ergebnis' } })
+    expect(target.activity.phase).toBe('finalizing')
+    expect(presentation().entry).toBeNull()
+    source.emit('run.completed', {})
+    expect(target.running).toBe(false)
+    expect(presentation().entry).toBeNull()
+  })
+
   it.each(['parent', 'child'])('replaces shared approval reviews through the %s subscription and ignores stale streams', async (consumer) => {
     chat.current = { id: 'parent', messages: [] }
     chat.watchRun('parent', 'parent-run', { status: 'running' })
@@ -156,6 +223,46 @@ describe('read-only subagents', () => {
     expect(store.activity.toolCallId).toBe('tool')
   })
 
+  it('normalizes live run timing for the turn duration timer', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-12T12:00:05.000Z'))
+    run = {
+      ...run,
+      activeDurationMs: 5_000,
+      activeDurationRunning: true,
+      activeTimingRevision: 1
+    }
+
+    await store.open('parent', 'child')
+    expect(store.activity.activeDurationUpdatedAt).toBe('2026-09-12T12:00:05.000Z')
+
+    const source = EventSourceMock.instances[0]
+    source.emit('run.timing', {
+      activeDurationMs: 9_000,
+      activeDurationRunning: false,
+      activeTimingRevision: 2
+    })
+    expect(store.activity).toMatchObject({ activeDurationMs: 9_000, activeDurationUpdatedAt: null })
+
+    vi.setSystemTime(new Date('2026-09-12T12:00:10.000Z'))
+    source.emit('run.timing', {
+      activeDurationMs: 9_000,
+      activeDurationRunning: true,
+      activeTimingRevision: 3
+    })
+    expect(store.activity.activeDurationUpdatedAt).toBe('2026-09-12T12:00:10.000Z')
+    source.emit('run.timing', {
+      activeDurationMs: 1_000,
+      activeDurationRunning: false,
+      activeTimingRevision: 2
+    })
+    expect(store.activity).toMatchObject({
+      activeDurationMs: 9_000,
+      activeDurationRunning: true,
+      activeTimingRevision: 3
+    })
+  })
+
   it('refetches canonical messages and run on connection loss and rebuilds the live buffer', async () => {
     vi.useFakeTimers()
     await store.loadChildren('parent')
@@ -244,6 +351,7 @@ describe('read-only subagents', () => {
     const stale = deferred()
     api.get.mockReturnValueOnce(stale.promise)
     source.emit('tool.completed', { toolCallId: 'tool' })
+    expect(store.completedToolCallId).toBe('tool')
     const message = { id: 'answer', role: 'assistant', content: 'Neu' }
     session.messages = [message]
     source.emit('message.completed', { message })

@@ -1,7 +1,5 @@
 import { runWarningEntries } from 'src/utils/agent-activity'
 
-const CONTEXT_TOOL_NAMES = new Set(['read', 'read_file', 'glob', 'grep', 'list_directory'])
-
 export function retryAvailableForMessage(message, messages = [], running = false) {
   return message?.kind === 'runtime_error'
     && message.retryAvailable === true
@@ -38,45 +36,34 @@ export function withLiveTranscriptMessage(messages, liveMessage) {
   return liveMessage.workHistory ? [...messages, liveMessage] : messages
 }
 
-export function groupWorkHistoryEntries(entries = []) {
+export function groupWorkHistoryEntries(entries = [], current = null) {
   const grouped = []
   for (const entry of entries) {
-    if (entry.type !== 'tool' || !CONTEXT_TOOL_NAMES.has(entry.tool?.name)) {
+    if (entry.type !== 'tool') {
       grouped.push(entry)
       continue
     }
     const previous = grouped.at(-1)
-    if (previous?.type === 'context') {
-      previous.items.push(entry)
+    const completed = entry.result || entry.completed || entry === current
+    if (completed && previous?.type === 'tool'
+      && (previous.result || previous.completed) && previous.tool?.name === entry.tool?.name) {
+      grouped.splice(-1, 1, {
+        key: `tool-group-${previous.key}`,
+        type: 'tool-group',
+        tool: previous.tool,
+        items: [previous, entry],
+        ...(entry.active ? { active: true } : {})
+      })
       continue
     }
-    grouped.push({ key: `context-${entry.key}`, type: 'context', items: [entry] })
+    if (completed && previous?.type === 'tool-group' && previous.tool?.name === entry.tool?.name) {
+      previous.items.push(entry)
+      previous.active ||= Boolean(entry.active)
+      continue
+    }
+    grouped.push(entry)
   }
   return grouped
-}
-
-export function splitLiveWorkHistory(entries = [], activity = null) {
-  const attention = entries.find((entry) => (
-    entry.type === 'tool' && (entry.approval || entry.question)
-  ))
-  const liveReasoning = activity?.phase === 'waiting_model'
-    ? [...entries].reverse().find((entry) => entry.type === 'reasoning' && entry.live)
-    : null
-  const currentContextSummary = ['compacting_context', 'waiting_model'].includes(activity?.phase)
-    ? [...entries].reverse().find((entry) => entry.type === 'context-summary' && entry.current)
-    : null
-  const activeTool = activity?.phase === 'processing_tool'
-    ? entries.find((entry) => entry.type === 'tool' && (
-      entry.active || entry.tool?.id === activity.toolCallId
-    ))
-    : null
-  const liveWarning = [...entries].reverse().find((entry) => entry.type === 'warning' && entry.live)
-  const current = attention || liveWarning || liveReasoning || currentContextSummary || activeTool || null
-  const previous = entries.filter((entry) => (
-    entry !== current
-    && (entry.type !== 'tool' || entry.result || entry.approval || entry.question)
-  ))
-  return { current, previous }
 }
 
 export function buildChatTranscript(
@@ -87,6 +74,7 @@ export function buildChatTranscript(
     runId = null,
     toolExecutionActive = running,
     activeToolCallId = null,
+    completedToolCallId = null,
     processOutputs = {},
     questions = [],
     contextSummaries = []
@@ -146,6 +134,7 @@ export function buildChatTranscript(
           question,
           current: currentRound,
           active,
+          completed: currentRound && tool.id === completedToolCallId,
           ...(processOutputs[tool.id] ? { processOutput: processOutputs[tool.id] } : {})
         }
       }),
@@ -173,6 +162,7 @@ export function buildChatTranscript(
           && Number.isFinite(latestUserTime)
           && summaryTime >= latestUserTime,
         presentation: {
+          icon: 'compress',
           title: 'Gesprächskontext verdichtet',
           summary: summary.isFallback ? 'Vereinfachte Ersatzfassung' : null,
           duration: null
@@ -206,9 +196,8 @@ export function buildChatTranscript(
   function flushAssistantSection() {
     if (!assistantSection.length) return
     const reversedSection = [...assistantSection].reverse()
-    const finalAnswer = reversedSection.find((message) => (
-      message.content && !message.toolCalls.length
-    )) || null
+    const lastResponse = reversedSection.find((message) => message.content || message.toolCalls.length)
+    const finalAnswer = lastResponse?.content && !lastResponse.toolCalls.length ? lastResponse : null
     const workEntries = assistantSection.flatMap((message) => [
       ...(message.contextSummaryEntry ? [message.contextSummaryEntry] : []),
       ...(message.reasoning
@@ -219,6 +208,7 @@ export function buildChatTranscript(
         ? [{
             key: `commentary-${message.id || message._sourceIndex}`,
             type: 'commentary',
+            toolCallIds: message.toolCalls.map((item) => item.tool.id),
             message: {
               id: message.id,
               content: message.content,
@@ -270,6 +260,7 @@ export function buildChatTranscript(
       message.createdAt = null
       message.modelName = null
       message.trustLevel = null
+      message.activeDurationMs = null
     }
     const visibleMessages = assistantSection.filter((message) => (
       message.kind === 'runtime_error'
@@ -290,6 +281,7 @@ export function buildChatTranscript(
         finalMessage.modelName = hasContent ? finalModelName : null
         finalMessage.trustLevel = effectiveTrust
         finalMessage.hasAssistantContent = hasContent
+        finalMessage.activeDurationMs = workEntries.length ? null : activeDurationMs
       }
       groupedMessages.push(...visibleMessages)
     }

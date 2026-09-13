@@ -1,36 +1,36 @@
 <template>
-  <q-expansion-item
-    v-if="entry.type === 'context' && !contextHasAttention"
-    dense
-    class="work-history__context"
-    header-class="work-history__context-header"
-    expand-icon-class="work-history__context-toggle"
-    :duration="expansionDuration"
-    :toggle-aria-label="`${contextLabel} ein- oder ausblenden`"
-    @before-show="emit('resize-start')"
-    @before-hide="emit('resize-start')"
-    @after-show="emit('resized')"
-    @after-hide="emit('resized')"
-  >
-    <template #header>
+  <div v-if="entry.type === 'tool-group'" class="work-history__tool-group">
+    <q-item dense class="work-history__tool-group-header">
       <q-item-section>
         <q-item-label lines="1" class="work-history__activity-line">
+          <q-icon
+            :name="groupIdentity.icon"
+            size="18px"
+            :class="{ 'work-history__activity-title--past': !groupActive }"
+            aria-hidden="true"
+          />
           <span
             class="work-history__activity-title"
-            :class="{ 'activity-shimmer': contextActive }"
+            :class="{
+              'activity-shimmer': groupActive,
+              'work-history__activity-title--past': !groupActive
+            }"
           >
-            {{ contextLabel }}
+            {{ groupIdentity.label }}
           </span>
-          <span class="work-history__activity-summary">{{ contextSummary }}</span>
+          <span
+            class="work-history__activity-summary"
+            :aria-label="`${entry.items.length} Aufrufe`"
+          >· {{ entry.items.length }}</span>
         </q-item-label>
       </q-item-section>
-    </template>
-    <div class="work-history__context-items">
+    </q-item>
+    <div class="work-history__tool-group-items">
       <AgentActivityEntry
         v-for="item in entry.items"
         :key="item.key"
-        :entry="item"
-        :process-outputs="processOutputs"
+         :entry="{ ...item, detailOnly: true }"
+        :expanded-details="expandedDetails"
         :trusted-image-origins="trustedImageOrigins"
         :read-only="readOnly"
         :show-supplementary="showSupplementary"
@@ -39,90 +39,88 @@
         @rendered="emit('rendered')"
         @resize-start="emit('resize-start')"
         @resized="emit('resized')"
+        @toggle-details="emit('toggle-details', $event)"
         @trust-image-origin="emit('trust-image-origin', $event)"
       />
     </div>
-  </q-expansion-item>
-  <template v-else-if="entry.type === 'context'">
-    <AgentActivityEntry
-      v-for="item in entry.items"
-      :key="item.key"
-      :entry="item"
-      :process-outputs="processOutputs"
-      :trusted-image-origins="trustedImageOrigins"
-      :read-only="readOnly"
-      :show-supplementary="showSupplementary"
-      @open-approval-draft="emit('open-approval-draft', $event)"
-      @open-file="emit('open-file', $event)"
-      @rendered="emit('rendered')"
-      @resize-start="emit('resize-start')"
-      @resized="emit('resized')"
-      @trust-image-origin="emit('trust-image-origin', $event)"
-    />
-  </template>
-  <q-expansion-item
-    v-else-if="entry.type === 'reasoning' || entry.type === 'context-summary'"
-    dense
-    :default-opened="autoExpand"
-    class="work-history__reasoning"
-    header-class="work-history__reasoning-header"
-    expand-icon-class="work-history__reasoning-toggle"
-    :duration="expansionDuration"
-    :toggle-aria-label="`${entry.presentation.title} ein- oder ausblenden`"
-    @before-show="emit('resize-start')"
-    @before-hide="emit('resize-start')"
-    @after-show="emit('resized')"
-    @after-hide="emit('resized')"
+  </div>
+  <div
+    v-else-if="['tool', 'reasoning', 'context-summary'].includes(entry.type)"
+    :class="isTool ? 'work-history__tool' : hasDetails ? 'work-history__reasoning' : 'work-history__reasoning-static'"
   >
-    <template #header>
+    <q-item
+      v-if="!entry.detailOnly || summary || hasDetails || statusIcon"
+      dense
+      class="activity-row"
+      manual-focus
+      :class="isTool ? ['tool-call tool-call__header', `tool-call--${status.name}`, { 'tool-call--detail': entry.detailOnly }] : 'work-history__reasoning-header'"
+      :clickable="hasDetails"
+      :aria-expanded="hasDetails ? detailsOpen : undefined"
+      :aria-controls="hasDetails ? detailsId : undefined"
+      :aria-label="hasDetails ? detailsLabel : undefined"
+      @click="toggleDetails"
+    >
       <q-item-section>
         <q-item-label lines="1" class="work-history__activity-line">
-          <q-icon v-if="entry.warning" name="warning_amber" color="warning" size="18px" />
+          <q-icon
+            v-if="identity.icon && !entry.detailOnly"
+            :name="identity.icon"
+            size="18px"
+            :class="{ 'work-history__activity-title--past': !entry.active }"
+            aria-hidden="true"
+          />
           <span
-            class="work-history__activity-title"
-            :class="{ 'activity-shimmer': entry.live, 'text-warning': entry.warning }"
-          >{{ entry.presentation.title }}</span>
-          <span
-            v-if="entry.presentation.summary"
-            class="work-history__activity-summary"
-            :class="{ 'text-warning': entry.warning }"
-          >
-            {{ entry.presentation.summary }}
-          </span>
+            v-if="!entry.detailOnly"
+            class="work-history__activity-title ellipsis"
+            :class="{ 'tool-call__title': isTool, 'activity-shimmer': entry.active, 'work-history__activity-title--past': !entry.active }"
+          >{{ identity.label }}</span>
+          <span v-if="summary" class="work-history__activity-summary" :class="{ 'tool-call__summary': isTool }">{{ summary }}</span>
+          <q-icon
+            v-if="hasDetails"
+            :name="detailsOpen ? 'expand_more' : 'chevron_right'"
+            size="17px"
+            class="work-history__detail-indicator"
+            aria-hidden="true"
+          />
         </q-item-label>
       </q-item-section>
-      <q-item-section v-if="entry.presentation.duration" side>
-        <span class="work-history__reasoning-duration">{{ entry.presentation.duration }}</span>
+      <q-item-section v-if="statusIcon || entry.presentation?.duration" side class="tool-call__state">
+        <div class="tool-call__status row items-center no-wrap q-gutter-xs" :class="`tool-call__status--${status.name}`">
+          <span v-if="entry.presentation?.duration" class="work-history__reasoning-duration">{{ entry.presentation.duration }}</span>
+          <q-icon v-if="statusIcon" :name="statusIcon" size="17px" role="img" :aria-label="status.label" />
+        </div>
       </q-item-section>
-    </template>
-    <div class="work-history__reasoning-detail" :class="{ 'text-warning': entry.warning }">
-      <p v-if="entry.type === 'context-summary'" class="work-history__reasoning-block">
-        {{ entry.text }}
-      </p>
+    </q-item>
+    <div v-if="hasDetails && detailsOpen" :id="detailsId" class="work-history__reasoning-detail">
+      <p v-if="errorDetails" class="tool-call__message" :class="`tool-call__status--${status.name}`" role="status">{{ errorDetails }}</p>
+      <template v-if="isTool">
+        <div v-for="(item, index) in toolDetails" :key="index" class="q-mb-sm">
+          <div class="text-weight-medium">{{ item.label }}</div>
+          <ul v-if="item.format === 'list'" class="q-my-none q-pl-md"><li v-for="(value, i) in item.value" :key="i">{{ value }}</li></ul>
+          <pre v-else-if="item.format === 'code'" class="activity-row__code q-ma-none">{{ item.value }}</pre>
+          <div v-else>{{ item.value }}</div>
+        </div>
+      </template>
+      <p v-else-if="entry.type === 'context-summary'" class="work-history__reasoning-block" :class="{ 'text-warning': entry.warning }">{{ entry.text }}</p>
       <template v-else>
-        <p
-          v-for="(block, blockIndex) in entry.blocks"
-          :key="blockIndex"
-          class="work-history__reasoning-block"
-        >
-          <template v-for="(segment, segmentIndex) in block" :key="segmentIndex">
-            <strong v-if="segment.strong">{{ segment.text }}</strong>
-            <span v-else>{{ segment.text }}</span>
+        <p v-for="(block, blockIndex) in entry.blocks" :key="blockIndex" class="work-history__reasoning-block">
+          <template v-for="(segment, index) in block" :key="index">
+            <strong v-if="segment.strong">{{ segment.text }}</strong><span v-else>{{ segment.text }}</span>
           </template>
         </p>
       </template>
     </div>
-  </q-expansion-item>
+  </div>
   <q-item v-else-if="entry.type === 'warning'" dense class="text-warning" role="status">
-    <q-item-section avatar>
-      <q-icon name="warning_amber" size="18px" />
-    </q-item-section>
     <q-item-section>
       <q-item-label class="text-weight-medium">{{ entry.presentation.title }}</q-item-label>
       <q-item-label caption class="text-warning">{{ entry.presentation.summary }}</q-item-label>
     </q-item-section>
+    <q-item-section side>
+      <q-icon name="warning" color="warning" size="17px" aria-label="Warnung" />
+    </q-item-section>
   </q-item>
-  <div v-else-if="entry.type === 'commentary'" class="q-py-sm">
+  <div v-else-if="entry.type === 'commentary'" class="q-py-sm" :class="{ 'activity-shimmer': entry.active }">
     <MessageContent
       :content="entry.message.content"
       :research-sources="entry.message.research?.linkedSources || []"
@@ -138,23 +136,8 @@
       @open-file="emit('open-file', $event)"
     />
   </div>
-  <div v-else-if="entry.type === 'tool'">
-    <ToolCallItem
-      v-if="!supplementaryOnly"
-      class="work-history__tool"
-      :tool="entry.tool"
-      :result="entry.result"
-      :approval="entry.approval"
-      :question="entry.question"
-      :process-output="entry.processOutput || processOutputs[entry.tool.id]"
-      :active="entry.active"
-      :auto-expand="autoExpand"
-      technical-only
-      @open-file="emit('open-file', $event)"
-      @resize-start="emit('resize-start')"
-      @resized="emit('resized')"
-    />
-    <template v-if="showSupplementary || supplementaryOnly">
+  <div v-if="entry.type === 'tool'">
+    <template v-if="showSupplementary">
       <SubagentRows :children="entry.subagents || []" />
       <ApprovalCard
         v-if="entry.approval && !readOnly"
@@ -210,47 +193,45 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, nextTick, useId } from 'vue'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import MessageContent from 'components/MessageContent.vue'
 import SubagentRows from 'components/SubagentRows.vue'
-import ToolCallItem from 'components/ToolCallItem.vue'
-import { toolStatus } from 'src/utils/tool-display'
+import { parseToolResult, toolIdentity, toolPresentation, toolStatus } from 'src/utils/tool-display'
 
 defineOptions({ name: 'AgentActivityEntry' })
 
 const props = defineProps({
   entry: { type: Object, required: true },
-  processOutputs: { type: Object, default: () => ({}) },
+  expandedDetails: { type: Set, required: true },
   trustedImageOrigins: { type: Array, default: () => [] },
   readOnly: Boolean,
-  showSupplementary: Boolean,
-  supplementaryOnly: Boolean,
-  autoExpand: Boolean
+  showSupplementary: Boolean
 })
-const emit = defineEmits(['open-approval-draft', 'open-file', 'rendered', 'resize-start', 'resized', 'trust-image-origin'])
-const expansionDuration = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 180
-const contextActive = computed(() => props.entry.items?.some((item) => item.active))
-const contextHasAttention = computed(() => props.entry.items?.some((item) => (
-  ['approval', 'question', 'failed', 'denied', 'interrupted'].includes(toolStatus(item).name)
-  || item.subagents?.length
-  || item.output?.attachments.length
-  || item.output?.fileActions.length
-)))
-const contextLabel = computed(() => {
-  if (contextActive.value) return 'Kontext wird gesammelt'
-  if (props.entry.items?.some((item) => toolStatus(item).name === 'pending')) return 'Kontext ausstehend'
-  return 'Kontext gesammelt'
-})
-const contextSummary = computed(() => {
-  const reads = props.entry.items?.filter((item) => ['read', 'read_file'].includes(item.tool.name)).length
-  const searches = props.entry.items?.filter((item) => ['glob', 'grep'].includes(item.tool.name)).length
-  const lists = props.entry.items?.filter((item) => item.tool.name === 'list_directory').length
-  return [
-    reads ? `${reads} ${reads === 1 ? 'Lesevorgang' : 'Lesevorgänge'}` : '',
-    searches ? `${searches} ${searches === 1 ? 'Suche' : 'Suchen'}` : '',
-    lists ? `${lists} ${lists === 1 ? 'Auflistung' : 'Auflistungen'}` : ''
-  ].filter(Boolean).join(' · ')
-})
+const emit = defineEmits(['open-approval-draft', 'open-file', 'rendered', 'resize-start', 'resized', 'trust-image-origin', 'toggle-details'])
+const detailsId = useId()
+const isTool = computed(() => props.entry.type === 'tool')
+const identity = computed(() => isTool.value
+  ? toolIdentity(props.entry.tool)
+  : { label: props.entry.presentation?.title, icon: props.entry.presentation?.icon })
+const result = computed(() => isTool.value ? parseToolResult(props.entry.result?.content, props.entry.tool.name) : {})
+const toolInfo = computed(() => isTool.value ? toolPresentation(props.entry.tool, props.entry.approval?.details?.displayItems) : null)
+const summary = computed(() => isTool.value ? result.value.summary || toolInfo.value.summary : props.entry.presentation?.summary)
+const status = computed(() => isTool.value ? toolStatus(props.entry) : { name: props.entry.warning ? 'interrupted' : '', label: 'Warnung' })
+const statusIcon = computed(() => ({ failed: 'error', denied: 'error', interrupted: 'warning', approval: 'pending_actions', question: 'help_outline' })[status.value.name])
+const errorDetails = computed(() => result.value.errorMessage || '')
+const toolDetails = computed(() => (toolInfo.value?.items || []).filter((item) => item.value.length && item.value !== summary.value))
+const hasDetails = computed(() => Boolean(errorDetails.value || toolDetails.value.length || props.entry.text?.trim() || props.entry.blocks?.length))
+const detailKey = computed(() => isTool.value ? `${props.entry.runId || ''}:${props.entry.tool.id || props.entry.key}` : props.entry.key)
+const detailsOpen = computed(() => props.expandedDetails.has(detailKey.value))
+const detailsLabel = computed(() => `${identity.value.label}: Details ${detailsOpen.value ? 'ausblenden' : 'anzeigen'}`)
+function toggleDetails() {
+  if (!hasDetails.value) return
+  emit('resize-start')
+  emit('toggle-details', detailKey.value)
+  nextTick(() => emit('resized'))
+}
+const groupActive = computed(() => props.entry.active || props.entry.items?.some((item) => item.active))
+const groupIdentity = computed(() => toolIdentity(props.entry.tool))
 </script>

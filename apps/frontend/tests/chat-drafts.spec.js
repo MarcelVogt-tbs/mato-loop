@@ -121,11 +121,14 @@ describe('chat drafts', () => {
     expect(chat.activity).toMatchObject({ providerAttempt: 2, providerAttemptTotal: 3 })
 
     chat.setActivity('processing_tool', {
-      tool: 'read_file', toolCallId: 'call-1', index: 0, total: 2, startedAt: firstToolStartedAt
+      tool: 'read_file',
+      toolDisplay: { group: 'filesystem', icon: 'folder', label: 'Projektdatei lesen' },
+      toolCallId: 'call-1', index: 0, total: 2, startedAt: firstToolStartedAt
     })
     expect(chat.activity).toMatchObject({
       startedAt: firstToolStartedAt,
       tool: 'read_file',
+      toolDisplay: { group: 'filesystem', icon: 'folder', label: 'Projektdatei lesen' },
       toolCallId: 'call-1',
       index: 0,
       total: 2
@@ -1645,6 +1648,7 @@ describe('chat drafts', () => {
     source.emit('tool.completed', { tool: 'write_file', toolCallId: 'call-1', metadata: {} })
 
     expect(open).not.toHaveBeenCalled()
+    expect(chat.completedToolCallId).toBe('call-1')
     source.emit('run.completed', {})
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith({
       scope: 'session',

@@ -23,6 +23,7 @@ from mato_loop_backend.agent.permissions import (
 )
 from mato_loop_backend.agent.tool_arguments import QuestionArguments, TaskArguments
 from mato_loop_backend.agent.tool_contracts import ToolAction
+from mato_loop_backend.agent.tool_display import TOOL_GROUPS
 from mato_loop_backend.agent.tool_references import (
     InvalidToolReference,
     resolve_tool_references,
@@ -266,20 +267,6 @@ class ToolContext:
         if self.question_handler is None:
             return None
         return await self.question_handler(questions)
-
-
-TOOL_GROUPS = (
-    {"id": "filesystem", "label": "Dateisystem", "icon": "folder"},
-    {"id": "process", "label": "Prozesse", "icon": "terminal"},
-    {"id": "web", "label": "Web", "icon": "language"},
-    {"id": "media", "label": "Medien", "icon": "perm_media"},
-    {"id": "sessions", "label": "Sessions", "icon": "forum"},
-    {"id": "automations", "label": "Automationen", "icon": "schedule"},
-    {"id": "memory", "label": "Memory", "icon": "psychology"},
-    {"id": "agent", "label": "Agent", "icon": "smart_toy"},
-    {"id": "coding", "label": "Coding", "icon": "code"},
-    {"id": "integrations", "label": "Integrationen", "icon": "extension"},
-)
 
 
 @dataclass(frozen=True, slots=True)

@@ -15,6 +15,7 @@ from pydantic import (
 )
 
 from mato_loop_backend.agent.run_timing import run_timing_payload
+from mato_loop_backend.agent.tool_display import enrich_tool_calls
 from mato_loop_backend.attachment_processing import claimed_audio_format
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.integrations import WebFetchError, canonicalize_url
@@ -492,7 +493,7 @@ def message_payload(
         "generationStatus": item.generation_status or "completed",
         "trustLevel": item.trust_level,
         "toolCallId": item.tool_call_id,
-        "toolCalls": item.tool_calls,
+        "toolCalls": enrich_tool_calls(item.tool_calls),
         "reasoning": item.public_reasoning,
         "activeDurationMs": _public_active_duration_ms(item),
         "warnings": _public_warnings(item),

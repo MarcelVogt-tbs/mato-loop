@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { emptyActivity } from 'src/features/chat/state'
+import { mergeAgentActivity } from 'src/utils/agent-activity'
 import { notifyError } from 'src/utils/notifications'
 import { useApprovalStore } from 'src/stores/approvals'
 
@@ -33,6 +34,7 @@ export const useSubagentStore = defineStore('subagents', () => {
   const streamReasoning = ref(null)
   const streamContextSummary = ref(null)
   const processOutputs = ref({})
+  const completedToolCallId = ref(null)
   const warnings = ref([])
   const activity = ref(emptyActivity())
   const reconnecting = ref(false)
@@ -115,6 +117,7 @@ export const useSubagentStore = defineStore('subagents', () => {
     reconnecting.value = false
     clearStream()
     processOutputs.value = {}
+    completedToolCallId.value = null
     activity.value = emptyActivity()
   }
 
@@ -177,7 +180,10 @@ export const useSubagentStore = defineStore('subagents', () => {
           run.value = runData
           resetHistory = false
           error.value = null
-          if (!source) activity.value = { ...emptyActivity(), ...runData, phase: runData?.status || 'idle' }
+          if (!source) activity.value = mergeAgentActivity(emptyActivity(), {
+            ...runData,
+            phase: runData?.status || 'idle'
+          })
         } catch (failure) {
           if (version === selectionVersion && !signal.aborted) error.value = failure
           return
@@ -233,12 +239,13 @@ export const useSubagentStore = defineStore('subagents', () => {
     on('run.started', (payload) => {
       messageRevision += 1
       run.value = { ...run.value, ...payload, status: 'running' }
+      activity.value = mergeAgentActivity(activity.value, { ...payload, phase: 'preparing_context' })
     })
-    on('run.phase', (payload) => { activity.value = { ...activity.value, ...payload } })
-    on('run.timing', (payload) => { activity.value = { ...activity.value, ...payload } })
+    on('run.phase', (payload) => { activity.value = mergeAgentActivity(activity.value, payload) })
+    on('run.timing', (payload) => { activity.value = mergeAgentActivity(activity.value, { ...payload, phase: null }) })
     on('message.delta', (payload) => {
       if (typeof payload.delta === 'string') streamContent.value += payload.delta
-      activity.value.phase = 'streaming'
+      if (activity.value.phase !== 'streaming') activity.value = mergeAgentActivity(activity.value, { phase: 'streaming' })
     })
     on('reasoning.updated', (payload) => { streamReasoning.value = payload.reasoning })
     on('context.summary.updated', (payload) => { streamContextSummary.value = payload.summary })
@@ -266,11 +273,23 @@ export const useSubagentStore = defineStore('subagents', () => {
         messageRevision += 1
       }
       clearStream()
+      if (name === 'message.completed') {
+        const tool = payload.message?.toolCalls?.[0]
+        activity.value = mergeAgentActivity(activity.value, tool ? {
+          phase: 'processing_tool',
+          tool: tool.name,
+          toolCallId: tool.id,
+          toolDisplay: tool.toolDisplay
+        } : { phase: 'finalizing', activityLabel: payload.activityLabel })
+      }
       void refresh(parent)
     })
     for (const name of ['message.updated', 'tool.completed', 'context.compacted', 'session.title.updated']) {
       on(name, (payload) => {
-        if (name === 'tool.completed') delete processOutputs.value[payload.toolCallId]
+        if (name === 'tool.completed') {
+          completedToolCallId.value = payload.toolCallId || null
+          delete processOutputs.value[payload.toolCallId]
+        }
         if (name === 'context.compacted') streamContextSummary.value = null
         messageRevision += 1
         void refresh(parent)
@@ -306,6 +325,7 @@ export const useSubagentStore = defineStore('subagents', () => {
       source = null
       clearStream()
       processOutputs.value = {}
+      completedToolCallId.value = null
       // A disconnect can span more than one page. Restart pagination from the
       // canonical head instead of retaining a cursor that skips the missing gap.
       resetHistory = true
@@ -337,6 +357,6 @@ export const useSubagentStore = defineStore('subagents', () => {
   return {
     parentId, children, childrenLoading, childrenError, current, run, running,
     loading, error, olderLoading, streamContent, streamReasoning, streamContextSummary,
-    processOutputs, warnings, activity, reconnecting, loadChildren, open, close, loadOlder
+    processOutputs, completedToolCallId, warnings, activity, reconnecting, loadChildren, open, close, loadOlder
   }
 })

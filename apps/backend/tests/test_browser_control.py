@@ -152,7 +152,7 @@ def test_deny_never_publishes_or_opens(request_case):
 @pytest.mark.parametrize("change", ["integration", "generation", "run", "session", "policy", "legacy", "profile"])
 def test_changes_during_approval_never_publish(request_case, change):
     case = request_case
-    async def approve(*_args):
+    async def approve(*_args, **_kwargs):
         if change == "integration":
             case.instance.name = "Changed"
         elif change == "generation":
@@ -263,7 +263,7 @@ def test_approval_cannot_retarget_changed_browser_binding(request_case, change):
     if change in {"detach", "takeover"}:
         previous = case.client.portal.call(case.coordinator.open, case.user.id, case.instance.id,
                                            case.session.id, case.login.id, socket)
-    async def approve(*_args):
+    async def approve(*_args, **_kwargs):
         if change == "detach":
             previous.detach()
         elif change == "takeover":
@@ -547,10 +547,10 @@ def test_cancellation_before_fresh_start_never_dispatches_open_rpc(request_case,
     case = request_case
     entered, release = threading.Event(), asyncio.Event()
     start = case.coordinator._start
-    async def delayed_start(connection, previous, request):
+    async def delayed_start(connection, previous, request, color_scheme="light"):
         entered.set()
         await release.wait()
-        return await start(connection, previous, request)
+        return await start(connection, previous, request, color_scheme)
     monkeypatch.setattr(case.coordinator, "_start", delayed_start)
     future = case.start()
     info = case.get_request().json()["request"]

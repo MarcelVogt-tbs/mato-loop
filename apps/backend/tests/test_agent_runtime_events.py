@@ -122,6 +122,10 @@ async def test_run_phase_event_has_stable_language_neutral_payload(monkeypatch) 
         toolCallId="call-1",
         index=0,
         total=2,
+        toolDisplay={
+            "group": "filesystem", "groupLabel": "Dateisystem", "icon": "folder",
+            "emoji": "📁", "label": "Pfad lesen", "summary": "notes.txt",
+        },
     )
 
     started_at = published[0][1].pop("startedAt")
@@ -133,8 +137,12 @@ async def test_run_phase_event_has_stable_language_neutral_payload(monkeypatch) 
                 {
                     "type": "run.phase",
                     "phase": "processing_tool",
-                    "activityLabel": "Datei lesen",
-                    "tool": "read_file",
+                    "activityLabel": "Pfad lesen",
+                "tool": "read_file",
+                "toolDisplay": {
+                    "group": "filesystem", "groupLabel": "Dateisystem", "icon": "folder",
+                    "emoji": "📁", "label": "Pfad lesen", "summary": "notes.txt",
+                },
                 "toolCallId": "call-1",
                 "index": 0,
                 "total": 2,

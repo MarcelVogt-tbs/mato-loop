@@ -169,21 +169,68 @@ describe('tool display', () => {
     })).toBe('Nachricht 550e8400-e29b-41d4-a716-446655440000, ab Zeichen 12000')
   })
 
-  it('groups tool usage by name while preserving first-use order', () => {
+  it('groups tool usage by group while preserving first-use order', () => {
     expect(toolUsageSummary([
       { tool: { name: 'web_search' } },
       { tool: { name: 'webfetch' }, active: true },
       { tool: { name: 'web_search' }, active: true }
     ])).toEqual([
-      { name: 'web_search', label: 'Websuche', icon: 'travel_explore', count: 2, active: true },
-      { name: 'webfetch', label: 'Webseite abrufen', icon: 'language', count: 1, active: true }
+      { group: 'web', label: 'Web', icon: 'language', count: 3, active: true }
+    ])
+  })
+
+  it('combines argument-specific actions in their shared tool group', () => {
+    expect(toolUsageSummary([
+      { tool: { name: 'browser_tabs', toolDisplay: { group: 'web', icon: 'language', label: 'Browser-Tabs anzeigen' } } },
+      { tool: { name: 'browser_tabs', toolDisplay: { group: 'web', icon: 'language', label: 'Browser-Tab schließen' } } }
+    ])).toEqual([
+      { group: 'web', label: 'Web', icon: 'language', count: 2, active: false }
+    ])
+  })
+
+  it('groups legacy host tools like current backend metadata', () => {
+    expect(toolUsageSummary([
+      { tool: { name: 'get_system_info' } },
+      { tool: { name: 'change_directory' } }
+    ])).toEqual([
+      { group: 'process', label: 'Prozesse', icon: 'terminal', count: 2, active: false }
+    ])
+  })
+
+  it('prefers valid backend metadata and keeps browser family icons consistent', () => {
+    const enriched = {
+      name: 'custom_search',
+      arguments: { query: 'legacy query' },
+      toolDisplay: { group: 'web', icon: 'language', label: 'Wissen durchsuchen', summary: 'Kanonische Zusammenfassung' }
+    }
+    expect(toolIdentity(enriched)).toEqual({ label: 'Wissen durchsuchen', icon: 'language' })
+    expect(toolSummary(enriched)).toBe('Kanonische Zusammenfassung')
+    expect(toolSummary({
+      name: 'shell_run',
+      arguments: { command: 'cat /private/secret' },
+      toolDisplay: { group: 'process', icon: 'terminal', label: 'Shell-Befehl ausführen' }
+    })).toBe('')
+    expect(toolIdentity({
+      name: 'read_file',
+      toolDisplay: { label: '  ', icon: null, summary: {} }
+    })).toEqual({ label: 'Datei lesen', icon: 'description' })
+
+    const usage = toolUsageSummary([
+      { tool: { name: 'browser_snapshot' } },
+      { tool: { name: 'browser_click' } },
+      { tool: { name: 'browser_snapshot' }, active: true }
+    ])
+    expect(usage).toEqual([
+      { group: 'web', label: 'Web', icon: 'language', count: 3, active: true }
     ])
   })
 
   it('uses generic presentation for unrecognized historical tools', () => {
     const tool = { name: 'retired_tool', arguments: { path: 'project' } }
     expect(toolIdentity(tool.name)).toEqual({ label: 'Tool ausführen', icon: 'build' })
-    expect(toolPresentation(tool)).toEqual({ summary: 'project', items: [] })
+    expect(toolPresentation(tool)).toEqual({
+      summary: 'project', items: [{ label: 'Pfad', value: 'project', format: 'text' }]
+    })
     expect(toolPresentation({ name: tool.name, arguments: {} }))
       .toEqual({ summary: tool.name, items: [] })
     const items = [{ label: 'Aktion', value: 'Gespeicherte Aktion', format: 'text' }]
@@ -231,6 +278,13 @@ describe('tool display', () => {
     expect(toolIdentity('webfetch')).toEqual({ label: 'Webseite abrufen', icon: 'language' })
     expect(toolSummary({
       name: 'webfetch',
+      arguments: { url: 'https://user:secret@example.com/private?token=secret' }
+    })).toBe('https://example.com/private?…')
+  })
+
+  it('uses a safe URL summary for historical browser navigation', () => {
+    expect(toolSummary({
+      name: 'browser_navigate',
       arguments: { url: 'https://user:secret@example.com/private?token=secret' }
     })).toBe('https://example.com/private?…')
   })
@@ -336,6 +390,13 @@ describe('tool display', () => {
 
     expect(result.text).toBe('')
     expect(result.stdout).toBe('Ausgabe\n')
+  })
+
+  it('uses the returned session title as the safe session-read summary', () => {
+    expect(parseToolResult(JSON.stringify({
+      session: { id: '51680cd9-ff48-448c-a4bc-089896f7257d', title: 'Lokale KI recherchieren' },
+      messages: []
+    }), 'session_read').summary).toBe('Lokale KI recherchieren')
   })
 
   it('renders memory retrieval with its visible scope and contents', () => {

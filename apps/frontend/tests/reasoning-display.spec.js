@@ -51,13 +51,14 @@ describe('reasoning display', () => {
       text: '**Ergebnisse prüfen**\nDetails',
       observedDurationMs: 1600
     })).toEqual({
-      title: 'Überlegt',
+      icon: 'psychology',
+      title: 'Nachdenken',
       summary: 'Ergebnisse prüfen',
       duration: '1.6 s'
     })
     expect(reasoningHistoryPresentation({ kind: 'content', text: 'Öffentliche Überlegung' }, true))
-      .toEqual({ title: 'Modell überlegt', summary: null, duration: null })
+      .toEqual({ icon: 'psychology', title: 'Nachdenken', summary: null, duration: null })
     expect(reasoningHistoryPresentation({ status: 'interrupted' }))
-      .toEqual({ title: 'Überlegung unterbrochen', summary: null, duration: null })
+      .toEqual({ icon: 'psychology', title: 'Nachdenken unterbrochen', summary: null, duration: null })
   })
 })

@@ -447,7 +447,7 @@ async def test_runtime_replays_exact_tool_calls_without_persisting_them(monkeypa
         "oldText": "private old text",
         "newText": "private new text",
     }
-    db, run, _requests, projections, _events = await _runtime_setup(
+    db, run, _requests, projections, events = await _runtime_setup(
         monkeypatch,
         [
             ProviderResult(
@@ -472,6 +472,17 @@ async def test_runtime_replays_exact_tool_calls_without_persisting_them(monkeypa
         "oldText": {"characters": 16, "redacted": True},
         "newText": {"characters": 16, "redacted": True},
     }
+    display = _assistant_messages(db)[0].tool_calls[0]["toolDisplay"]
+    assert display == {
+        "group": "filesystem", "groupLabel": "Dateisystem", "icon": "folder",
+        "emoji": "📁", "label": "Datei bearbeiten", "summary": "note.txt",
+    }
+    assert next(event for event in events if event.get("phase") == "processing_tool")["toolDisplay"] == display
+    assert next(event for event in events if event.get("type") == "tool.completed")["toolDisplay"] == display
+    assert next(
+        event for event in events
+        if event.get("type") == "message.completed" and event["message"].get("toolCalls")
+    )["message"]["toolCalls"][0]["toolDisplay"] == display
 
 
 async def test_generated_openscad_source_requires_a_successful_render(monkeypatch) -> None:
@@ -1111,7 +1122,10 @@ async def test_failed_active_openscad_verifier_does_not_fallback_and_counts_budg
         event["modelRequest"]
         for event in events
         if event.get("type") == "run.phase" and event.get("phase") == "waiting_model"
-    ] == [1, 2, 3]
+    ] == [1, 3]
+    internal_phase = next(event for event in events if event.get("modelRequest") == 2)
+    assert internal_phase["phase"] == "processing_tool"
+    assert internal_phase["toolCallId"] == "render"
     render_message = next(
         call.args[0]
         for call in db.add.call_args_list
@@ -1308,7 +1322,7 @@ async def test_provider_retry_publishes_waiting_model_phase(monkeypatch) -> None
         {
             "type": "run.phase",
             "phase": "waiting_model",
-            "activityLabel": "Verarbeite Anfrage",
+            "activityLabel": None,
             "modelRequest": 1,
             "providerAttempt": 2,
             "providerAttemptTotal": 3,
@@ -1671,7 +1685,7 @@ async def test_skill_editor_sends_current_skill_and_merges_partial_patch(
     )
     skills = SkillsSettings(skills=[skill])
     original_execute = ToolRegistry._execute_definition
-    db, run, requests, _projections, _events = await _runtime_setup(
+    db, run, requests, _projections, events = await _runtime_setup(
         monkeypatch,
         [
             ProviderResult(
@@ -1728,6 +1742,26 @@ async def test_skill_editor_sends_current_skill_and_merges_partial_patch(
     await AgentRuntime._execute_loop(db, run)
 
     assert len(requests) == 3
+    internal_phase = next(event for event in events if event.get("modelRequest") == 2)
+    assert internal_phase.pop("startedAt").endswith("+00:00")
+    assert internal_phase == {
+        "type": "run.phase",
+        "phase": "processing_tool",
+        "activityLabel": "Skill bearbeiten",
+        "tool": "edit_skill",
+        "toolLabel": "Skill bearbeiten",
+        "toolDisplay": {
+            "group": "agent",
+            "groupLabel": "Agent",
+            "icon": "smart_toy",
+            "emoji": "🤖",
+            "label": "Skill bearbeiten",
+        },
+        "toolCallId": "edit-skill",
+        "index": 0,
+        "total": 1,
+        "modelRequest": 2,
+    }
     builder_request = requests[1]
     assert [tool["name"] for tool in builder_request["tools"]] == [
         "return_skill_edit"

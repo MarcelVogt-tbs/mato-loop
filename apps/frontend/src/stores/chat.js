@@ -39,7 +39,7 @@ import {
   sessionScopeParams,
   sortSessions
 } from 'src/features/chat/state'
-import { agentActivityDisplayKey } from 'src/utils/agent-activity'
+import { mergeAgentActivity } from 'src/utils/agent-activity'
 import { errorDescriptor } from 'src/utils/api-errors'
 import {
   managedSessionFileTarget,
@@ -153,6 +153,7 @@ export const useChatStore = defineStore('chat', {
     runWarnings: [],
     streamModelName: null,
     processOutputs: {},
+    completedToolCallId: null,
     eventSource: null,
     selectedSessionId: null,
     runSessionId: null,
@@ -421,74 +422,10 @@ export const useChatStore = defineStore('chat', {
       }
     },
     setActivity(phase, details = {}) {
-      const nextActivity = {
-        phase,
-        activityLabel: typeof details.activityLabel === 'string' && details.activityLabel.trim()
-          ? details.activityLabel.trim()
-          : null,
-        tool: details.tool || null,
-        toolCallId: details.toolCallId || null,
-        modelRequest: details.modelRequest || null,
-        providerAttempt: Number.isInteger(details.providerAttempt) ? details.providerAttempt : null,
-        providerAttemptTotal: Number.isInteger(details.providerAttemptTotal)
-          ? details.providerAttemptTotal
-          : null,
-        index: Number.isInteger(details.index) ? details.index : null,
-        total: Number.isInteger(details.total) ? details.total : null
-      }
-      const sameDisplay = agentActivityDisplayKey(this.activity) === agentActivityDisplayKey(nextActivity)
-      const sameModelRequest = phase === 'waiting_model'
-        && this.activity.phase === 'waiting_model'
-        && this.activity.modelRequest === nextActivity.modelRequest
-      const startedAt = sameDisplay
-        ? this.activity.startedAt || details.startedAt || new Date().toISOString()
-        : details.startedAt || new Date().toISOString()
-      const timingRevision = Number.isInteger(details.activeTimingRevision)
-        && details.activeTimingRevision >= 0
-        && Number.isInteger(details.activeDurationMs)
-        && details.activeDurationMs >= 0
-        && typeof details.activeDurationRunning === 'boolean'
-        ? details.activeTimingRevision
-        : null
-      const acceptTiming = timingRevision !== null && (
-        this.activity.activeTimingRevision === null
-        || timingRevision > this.activity.activeTimingRevision
-      )
-      this.activity = {
-        ...nextActivity,
-        reasoningLabel: sameModelRequest ? this.activity.reasoningLabel || null : null,
-        startedAt,
-        activeDurationMs: acceptTiming
-          ? details.activeDurationMs
-          : this.activity.activeDurationMs,
-        activeDurationUpdatedAt: acceptTiming
-          ? details.activeDurationRunning ? new Date().toISOString() : null
-          : this.activity.activeDurationUpdatedAt,
-        activeTimingRevision: acceptTiming
-          ? timingRevision
-          : this.activity.activeTimingRevision,
-        revision: this.activity.revision + 1
-      }
+      this.activity = mergeAgentActivity(this.activity, { ...details, phase })
     },
     setRunTiming(timing = {}) {
-      if (
-        !Number.isInteger(timing.activeTimingRevision)
-        || timing.activeTimingRevision < 0
-        || !Number.isInteger(timing.activeDurationMs)
-        || timing.activeDurationMs < 0
-        || typeof timing.activeDurationRunning !== 'boolean'
-        || (
-          this.activity.activeTimingRevision !== null
-          && timing.activeTimingRevision <= this.activity.activeTimingRevision
-        )
-      ) return
-      this.activity = {
-        ...this.activity,
-        activeDurationMs: timing.activeDurationMs,
-        activeDurationUpdatedAt: timing.activeDurationRunning ? new Date().toISOString() : null,
-        activeTimingRevision: timing.activeTimingRevision,
-        revision: this.activity.revision + 1
-      }
+      this.activity = mergeAgentActivity(this.activity, { ...timing, phase: null })
     },
     clearActivity() {
       this.activity = emptyActivity(this.activity.revision + 1)
@@ -1066,6 +1003,7 @@ export const useChatStore = defineStore('chat', {
         this.streamContextSummary = null
         this.streamModelName = null
         this.processOutputs = {}
+        this.completedToolCallId = null
         this.clearActivity()
       }
       if (!id) {
@@ -1378,6 +1316,7 @@ export const useChatStore = defineStore('chat', {
       this.runWarnings = []
       this.streamModelName = null
       this.processOutputs = {}
+      this.completedToolCallId = null
       this.clearActivity()
       if (sessionId) this.setSessionRunStatus(sessionId, null)
     },
@@ -1903,6 +1842,7 @@ export const useChatStore = defineStore('chat', {
       this.streamContextSummary = null
       this.streamModelName = null
       this.processOutputs = {}
+      this.completedToolCallId = null
       this.setActivity('submitting', { startedAt: new Date().toISOString() })
       const options = sanitizedSessionOptions(requestedOptions || this.drafts.newSession.options)
       try {
@@ -2018,6 +1958,7 @@ export const useChatStore = defineStore('chat', {
       this.streamContextSummary = null
       this.streamModelName = null
       this.processOutputs = {}
+      this.completedToolCallId = null
       this.setActivity('submitting', { startedAt: new Date().toISOString() })
       try {
         const activeFile = requestedActiveFile === undefined
@@ -2305,10 +2246,12 @@ export const useChatStore = defineStore('chat', {
         const payload = JSON.parse(event.data)
         promoteStreamedMessage(payload.message)
         this.runWarnings = []
-        this.setActivity(
-          payload.message?.toolCalls?.length ? 'preparing_tools' : 'finalizing',
-          { activityLabel: payload.activityLabel }
-        )
+        const tool = payload.message?.toolCalls?.[0]
+        this.setActivity(tool ? 'processing_tool' : 'finalizing', tool ? {
+          tool: tool.name,
+          toolCallId: tool.id,
+          toolDisplay: tool.toolDisplay
+        } : { activityLabel: payload.activityLabel })
         this.refreshSession(sessionId)
       })
       source.addEventListener('message.interrupted', (event) => {
@@ -2319,6 +2262,7 @@ export const useChatStore = defineStore('chat', {
       source.addEventListener('tool.completed', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
+        this.completedToolCallId = payload.toolCallId || null
         const refresh = this.refreshSession(sessionId)
         void refresh?.then(async (session) => {
           if (!session || this.current?.id !== sessionId) return

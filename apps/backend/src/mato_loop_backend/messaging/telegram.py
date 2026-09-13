@@ -96,6 +96,7 @@ OUTBOX_MAX_ATTEMPTS = 5
 TYPING_REFRESH_SECONDS = 4
 DRAFT_UPDATE_SECONDS = 1
 DRAFT_REFRESH_SECONDS = 20
+DRAFT_CLEAR_TEXT = "\u2063"
 MESSAGE_CONTENT_MAX_LENGTH = 200_000
 
 
@@ -1509,11 +1510,18 @@ async def _progress_target(run_id: UUID) -> tuple[str, str, int, int] | None:
 
 def _progress_activity(event: dict) -> str | None:
     event_type = event.get("type")
-    if event_type == "run.phase" and event.get("phase") in {
-        "preparing_tools",
-        "finalizing",
-    }:
+    if event_type == "run.phase" and event.get("phase") == "finalizing":
         return None
+    if event_type == "run.phase" and event.get("phase") == "processing_tool":
+        display = event.get("toolDisplay")
+        if isinstance(display, dict):
+            emoji, label, summary = (
+                display.get("emoji"),
+                display.get("label"),
+                display.get("summary"),
+            )
+            if isinstance(emoji, str) and isinstance(label, str):
+                return f"{emoji} {label}{f' · {summary}' if isinstance(summary, str) else ''}"
     supplied = event.get("activityLabel")
     if isinstance(supplied, str) and supplied.strip():
         return supplied
@@ -1621,10 +1629,10 @@ async def _relay_run_progress(run_id: UUID) -> None:
                                 activity = ""
                                 draft_dirty = True
                         elif event_type == "question.created":
+                            draft_dirty = bool(activity or content)
                             content = ""
                             activity = ""
                             reasoning_label = ""
-                            draft_dirty = False
                         elif (
                             event_type == "run.timing"
                             and event.get("activeDurationRunning") is True
@@ -1654,6 +1662,15 @@ async def _relay_run_progress(run_id: UUID) -> None:
                                         else None
                                     ),
                                 )
+                                display = details.get("toolDisplay") if isinstance(details, dict) else None
+                                if isinstance(display, dict):
+                                    resume_activity = _progress_activity(
+                                        {
+                                            "type": "run.phase",
+                                            "phase": "processing_tool",
+                                            "toolDisplay": display,
+                                        }
+                                    ) or resume_activity
                             if event_type == "approval.created" or (
                                 event_type == "run.phase"
                                 and phase in {"preparing_context", "processing_tool"}
@@ -1670,6 +1687,14 @@ async def _relay_run_progress(run_id: UUID) -> None:
                                 and reasoning_label
                             ):
                                 next_activity = reasoning_label
+                            if event_type == "tool.completed":
+                                next_activity = reasoning_label or ""
+                            if (
+                                event_type == "run.phase"
+                                and phase == "waiting_model"
+                                and next_activity is None
+                            ):
+                                next_activity = ""
                             if next_activity is not None and next_activity != activity:
                                 activity = next_activity
                                 draft_dirty = True
@@ -1715,7 +1740,7 @@ async def _relay_run_progress(run_id: UUID) -> None:
                     if send_draft:
                         parts = render_channel_text(
                             "telegram",
-                            _progress_draft(activity, content),
+                            _progress_draft(activity, content) or DRAFT_CLEAR_TEXT,
                             content_format="markdown",
                             partial=True,
                         )

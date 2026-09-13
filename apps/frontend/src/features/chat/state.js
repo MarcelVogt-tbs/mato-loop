@@ -124,6 +124,7 @@ export function emptyActivity(revision = 0) {
     activeDurationUpdatedAt: null,
     activeTimingRevision: null,
     tool: null,
+    toolDisplay: null,
     toolCallId: null,
     modelRequest: null,
     providerAttempt: null,

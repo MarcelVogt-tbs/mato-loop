@@ -1211,6 +1211,23 @@ def test_message_payload_exposes_only_public_reasoning() -> None:
     assert payload["attachments"] == []
 
 
+def test_message_payload_enriches_legacy_tool_calls_without_trusting_invalid_display() -> None:
+    message = Message(
+        id=uuid4(), session_id=uuid4(), role="assistant", content="",
+        tool_calls=[{
+            "id": "call-1", "name": "browser_navigate",
+            "arguments": {"url": "https://example.org/path?token=secret", "content": "secret"},
+            "toolDisplay": {"group": "web", "label": "Provider label", "icon": "danger"},
+        }],
+    )
+
+    display = message_payload(message)["toolCalls"][0]["toolDisplay"]
+    assert display["label"] == "Website aufrufen"
+    assert display["icon"] == "language"
+    assert display["summary"] == "https://example.org/path?REDACTED"
+    assert "secret" not in str(display)
+
+
 def test_assistant_message_and_run_payload_expose_attribution() -> None:
     run_id, profile_id = uuid4(), uuid4()
     message = Message(

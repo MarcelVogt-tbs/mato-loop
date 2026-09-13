@@ -22,10 +22,10 @@ describe('agent activity', () => {
     expect(agentActivityLabel({ phase: 'waiting_model', modelRequest: 1 }))
       .toBe('Verarbeite Anfrage')
     expect(agentActivityLabel({ phase: 'waiting_model', modelRequest: 2 }))
-      .toBe('Verarbeite Tool-Ergebnisse')
+      .toBe('Verarbeite Anfrage')
     expect(agentActivityLabel({
       phase: 'waiting_model', modelRequest: 2, providerAttempt: 2, providerAttemptTotal: 3
-    })).toBe('Verarbeite Tool-Ergebnisse')
+    })).toBe('Verarbeite Anfrage')
   })
 
   it('prefers non-empty backend activity labels for every phase kind', () => {
@@ -54,6 +54,10 @@ describe('agent activity', () => {
       .toBe('Websuche')
     expect(agentActivityLabel({ phase: 'processing_tool', tool: 'webfetch' }))
       .toBe('Webseite abrufen')
+    expect(agentActivityLabel({
+      phase: 'processing_tool', tool: 'custom',
+      toolDisplay: { group: 'integrations', icon: 'extension', label: 'Spezialaktion' }
+    })).toBe('Spezialaktion')
   })
 
   it('identifies changes to the visible activity independently from event timestamps', () => {
@@ -74,11 +78,12 @@ describe('agent activity', () => {
 
   it('keeps the current activity visible with the most useful summary', () => {
     const activity = { phase: 'waiting_model', modelRequest: 1 }
-    expect(agentRunPresentation({ running: true, activity })).toEqual({
+    expect(agentRunPresentation({ running: true, activity })).toMatchObject({
       showActivity: true,
       label: 'Verarbeite Anfrage',
       summary: '',
-      announcement: 'Verarbeite Anfrage'
+      announcement: 'Verarbeite Anfrage',
+      entry: { presentation: { icon: 'settings' } }
     })
     expect(agentRunPresentation({
       running: true,
@@ -86,37 +91,39 @@ describe('agent activity', () => {
       streamContextSummary: {
         content: 'Goal\nWeiterarbeiten\n\nFacts\nDer bisherige Kontext wird verdichtet'
       }
-    })).toEqual({
+    })).toMatchObject({
       showActivity: true,
       label: 'Kontext verdichten',
       summary: '',
-      announcement: 'Kontext verdichten'
+      announcement: 'Kontext verdichten',
+      entry: { presentation: { icon: 'compress' } }
     })
     expect(agentRunPresentation({
       running: true,
       activity,
       streamReasoning: { kind: 'summary', text: '**Ergebnisse prüfen**\nDetails' }
-    })).toEqual({
+    })).toMatchObject({
       showActivity: true,
-      label: 'Ergebnisse prüfen',
-      summary: '',
-      announcement: 'Nachdenken'
+      label: 'Nachdenken',
+      summary: 'Ergebnisse prüfen',
+      announcement: 'Nachdenken',
+      entry: { presentation: { icon: 'psychology' } }
     })
     expect(agentRunPresentation({
       running: true,
       activity: { ...activity, reasoningLabel: 'Kanonische Denkaktivität' },
       streamReasoning: { kind: 'content', text: 'Weitere Überlegung' }
-    })).toEqual({
+    })).toMatchObject({
       showActivity: true,
-      label: 'Kanonische Denkaktivität',
-      summary: '',
+      label: 'Nachdenken',
+      summary: 'Kanonische Denkaktivität',
       announcement: 'Nachdenken'
     })
     expect(agentRunPresentation({
       running: true,
       activity,
       streamReasoning: { kind: 'content', text: 'Öffentliche Überlegung' }
-    })).toEqual({
+    })).toMatchObject({
       showActivity: true,
       label: 'Nachdenken',
       summary: '',
@@ -128,7 +135,7 @@ describe('agent activity', () => {
       streamReasoning: { kind: 'summary', text: '**Ergebnisse prüfen**\nDetails' },
       streamContent: 'Antwort'
     }))
-      .toEqual({
+      .toMatchObject({
         showActivity: false,
         label: '',
         summary: '',
@@ -150,22 +157,23 @@ describe('agent activity', () => {
         }],
         unmatchedApprovals: []
       }
-    })).toEqual({
+    })).toMatchObject({
       showActivity: true,
       label: 'Datei lesen',
       summary: 'plan.md',
-      announcement: 'Datei lesen'
+      announcement: 'Datei lesen',
+      tool: { id: 'call-1', name: 'read_file', arguments: { path: 'plan.md' } }
     })
     expect(agentRunPresentation({
       running: true,
       activity,
       transcript: {
         messages: [{ workHistory: { entries: [{
-          type: 'tool', approval: { title: 'Datei schreiben?' }
+          type: 'tool', tool: { id: 'write', name: 'write_file' }, approval: { title: 'Datei schreiben?' }
         }] } }],
         unmatchedApprovals: []
       }
-    })).toEqual({
+    })).toMatchObject({
       showActivity: true,
       label: 'Freigabe erforderlich',
       summary: 'Datei schreiben?',
@@ -179,7 +187,7 @@ describe('agent activity', () => {
         unmatchedApprovals: [],
         unmatchedQuestions: [{ questions: [{ question: 'Welches Format?' }] }]
       }
-    })).toEqual({
+    })).toMatchObject({
       showActivity: true,
       label: 'Antwort erforderlich',
       summary: 'Welches Format?',
@@ -189,23 +197,50 @@ describe('agent activity', () => {
       running: true,
       stopping: true,
       activity
-    })).toEqual({
+    })).toMatchObject({
       showActivity: true,
       label: 'Anfrage abbrechen',
       summary: '',
       announcement: 'Anfrage abbrechen'
     })
-    expect(agentRunPresentation({ running: true, activity: { phase: 'finalizing' } })).toEqual({
+    expect(agentRunPresentation({ running: true, activity: { phase: 'finalizing' } })).toMatchObject({
       showActivity: false,
       label: '',
       summary: '',
       announcement: 'Antwort'
     })
-    expect(agentRunPresentation({ running: false, activity })).toEqual({
+    expect(agentRunPresentation({ running: false, activity })).toMatchObject({
       showActivity: false,
       label: '',
       summary: '',
       announcement: ''
+    })
+    expect(agentRunPresentation({
+      running: true,
+      activity: { phase: 'waiting_model', modelRequest: 2 }
+    })).toMatchObject({ showActivity: false, label: '', summary: '', announcement: '', entry: null })
+    expect(agentRunPresentation({
+      running: true,
+      activity: { phase: 'waiting_model', modelRequest: 2 },
+      streamReasoning: { kind: 'content', text: 'Öffentliche Überlegung' }
+    }).showActivity).toBe(true)
+    expect(agentRunPresentation({
+      running: true,
+      activity: { phase: 'waiting_model', modelRequest: 2 },
+      streamContextSummary: { content: 'Goal\nWeiterarbeiten' }
+    }).showActivity).toBe(true)
+    expect(agentRunPresentation({
+      running: true,
+      activity: {
+        phase: 'processing_tool', tool: 'browser_navigate',
+        toolDisplay: {
+          group: 'web', icon: 'language', label: 'Website aufrufen',
+          summary: 'https://example.com'
+        }
+      }
+    })).toMatchObject({
+      label: 'Website aufrufen', summary: 'https://example.com',
+      tool: { name: 'browser_navigate', toolDisplay: { icon: 'language' } }
     })
   })
 

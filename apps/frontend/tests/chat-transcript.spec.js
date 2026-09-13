@@ -4,7 +4,6 @@ import {
   buildChatTranscript,
   groupWorkHistoryEntries,
   retryAvailableForMessage,
-  splitLiveWorkHistory,
   withLiveTranscriptMessage
 } from '../src/utils/chat-transcript'
 
@@ -46,58 +45,55 @@ describe('chat transcript', () => {
     expect(canonical).not.toHaveProperty('workHistory')
   })
 
-  it('groups consecutive filesystem context tools without crossing other activity', () => {
+  it('does not group different tools or cross other activity', () => {
     const read = { key: 'read', type: 'tool', tool: { name: 'read_file' } }
     const search = { key: 'search', type: 'tool', tool: { name: 'grep' } }
     const note = { key: 'note', type: 'commentary', message: { content: 'Bearbeitung beginnt' } }
     const list = { key: 'list', type: 'tool', tool: { name: 'list_directory' } }
 
     expect(groupWorkHistoryEntries([read, search, note, list])).toEqual([
-      { key: 'context-read', type: 'context', items: [read, search] },
+      read,
+      search,
       note,
-      { key: 'context-list', type: 'context', items: [list] }
+      list
+    ])
+    expect(groupWorkHistoryEntries([read, search], search)).toEqual([
+      read,
+      search
     ])
   })
 
-  it('separates the current live step from completed steps and pending calls', () => {
-    const completed = {
-      key: 'completed', type: 'tool', tool: { id: 'call-1', name: 'web_search' }, result: {}
-    }
-    const active = {
-      key: 'active', type: 'tool', tool: { id: 'call-2', name: 'webfetch' }, active: true
-    }
-    const pending = {
-      key: 'pending', type: 'tool', tool: { id: 'call-3', name: 'read_file' }
-    }
-    const reasoning = {
-      key: 'live-reasoning', type: 'reasoning', live: true, reasoning: { text: 'Prüfen' }
-    }
-    const contextSummary = {
-      key: 'context-summary', type: 'context-summary', current: true, text: 'Verdichtet'
-    }
+  it('groups consecutive identical tools without crossing other activity', () => {
+    const first = { key: 'first', type: 'tool', tool: { name: 'web_search' }, result: {} }
+    const second = { key: 'second', type: 'tool', tool: { name: 'web_search' }, result: {} }
+    const note = { key: 'note', type: 'commentary', message: { content: 'Zwischenstand' } }
+    const third = { key: 'third', type: 'tool', tool: { name: 'web_search' }, result: {} }
+    const current = { key: 'current', type: 'tool', tool: { name: 'web_search' }, active: true }
 
-    expect(splitLiveWorkHistory(
-      [completed, active, pending],
-      { phase: 'processing_tool', toolCallId: 'call-2' }
-    )).toEqual({ current: active, previous: [completed] })
-    expect(splitLiveWorkHistory(
-      [completed, reasoning],
-      { phase: 'waiting_model' }
-    )).toEqual({ current: reasoning, previous: [completed] })
-    expect(splitLiveWorkHistory(
-      [completed, contextSummary],
-      { phase: 'compacting_context' }
-    )).toEqual({ current: contextSummary, previous: [completed] })
+    expect(groupWorkHistoryEntries([first, second, note, third, current], current)).toEqual([
+      {
+        key: 'tool-group-first', type: 'tool-group', tool: first.tool,
+        items: [first, second]
+      },
+      note,
+      {
+        key: 'tool-group-third', type: 'tool-group', tool: third.tool,
+        items: [third, current], active: true
+      }
+    ])
+  })
 
-    const warning = { key: 'warning', type: 'warning', live: true }
-    expect(splitLiveWorkHistory([completed, warning], { phase: 'streaming' }))
-      .toEqual({ current: warning, previous: [completed] })
-    expect(splitLiveWorkHistory([completed, reasoning, warning], { phase: 'waiting_model' }))
-      .toEqual({ current: warning, previous: [completed, reasoning] })
+  it('marks a completed tool immediately while its canonical result is refreshing', () => {
+    const transcript = buildChatTranscript([
+      { id: 'user', role: 'user', content: 'Start' },
+      {
+        id: 'assistant', role: 'assistant', content: '',
+        toolCalls: [{ id: 'call', name: 'web_search', arguments: { query: 'MatoLoop' } }]
+      }
+    ], [], { running: true, runId: 'run', completedToolCallId: 'call' })
+    const entry = transcript.messages[1].workHistory.entries[0]
 
-    const commentary = { key: 'commentary', type: 'commentary', message: { content: 'Zwischenstand' } }
-    expect(splitLiveWorkHistory([commentary, active], { phase: 'processing_tool', toolCallId: 'call-2' }))
-      .toEqual({ current: active, previous: [commentary] })
+    expect(entry).toMatchObject({ completed: true, result: null })
   })
 
   it('keeps privacy warnings in persisted assistant work history', () => {
@@ -363,6 +359,24 @@ describe('chat transcript', () => {
       activeDurationMs: 750,
       activeDurationUpdatedAt: null
     })
+    expect(transcript.messages[1].activeDurationMs).toBe(750)
+  })
+
+  it('places the completed duration on history when the turn has activity', () => {
+    const messages = [
+      { id: 'user', role: 'user', content: 'Prüfen' },
+      { id: 'step', role: 'assistant', content: 'Ich prüfe das.', activeDurationMs: 1_000,
+        toolCalls: [{ id: 'call', name: 'web_search', arguments: {} }] },
+      { id: 'result', role: 'tool', toolCallId: 'call', content: '{}' },
+      { id: 'final', role: 'assistant', content: 'Ergebnis', activeDurationMs: 57_000 }
+    ]
+    const completed = buildChatTranscript(messages).messages
+    expect(completed.find((message) => message.id === 'step').activeDurationMs).toBeNull()
+    expect(completed.find((message) => message.id === 'step').workHistory.activeDurationMs).toBe(57_000)
+    expect(completed.at(-1).activeDurationMs).toBeNull()
+    const live = buildChatTranscript(messages, [], { running: true }).messages
+    expect(live.filter((message) => message.role === 'assistant').every((message) => message.activeDurationMs === null)).toBe(true)
+    expect(messages[1].activeDurationMs).toBe(1_000)
   })
 
   it('starts a new assistant turn for delivered automation messages', () => {

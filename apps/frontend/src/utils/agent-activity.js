@@ -1,4 +1,4 @@
-import { reasoningStatusLabel } from 'src/utils/reasoning-display'
+import { reasoningBlocks, reasoningHistoryPresentation, reasoningStatusLabel } from 'src/utils/reasoning-display'
 import { toolActivityLabel, toolSummary } from 'src/utils/tool-display'
 
 const LABELS = {
@@ -23,6 +23,17 @@ const WARNING_PRESENTATIONS = {
   }
 }
 
+const ACTIVITY_ICONS = {
+  submitting: 'settings',
+  queued: 'settings',
+  preparing_context: 'settings',
+  waiting_model: 'settings',
+  compacting_context: 'compress',
+  waiting_approval: 'pending_actions',
+  waiting_input: 'help_outline',
+  reconnecting: 'sync'
+}
+
 export function runWarningEntries(warnings = [], keyPrefix = 'warning', live = false) {
   return warnings.flatMap((warning, index) => {
     const code = typeof warning === 'string' ? warning : warning?.code
@@ -42,10 +53,10 @@ export function agentActivityLabel(activity) {
   const suppliedLabel = typeof activity?.activityLabel === 'string' ? activity.activityLabel.trim() : ''
   if (suppliedLabel) return activity.activityLabel
   if (['preparing_context', 'waiting_model'].includes(activity?.phase)) {
-    return activity.modelRequest > 1 ? 'Verarbeite Tool-Ergebnisse' : 'Verarbeite Anfrage'
+    return 'Verarbeite Anfrage'
   }
   if (activity?.phase === 'processing_tool') {
-    return toolActivityLabel(activity.tool)
+    return toolActivityLabel({ name: activity.tool, toolDisplay: activity.toolDisplay })
   }
   return LABELS[activity?.phase] || 'Agent arbeitet'
 }
@@ -60,23 +71,53 @@ export function agentActivityDisplayKey(activity) {
   return activity?.phase || 'idle'
 }
 
+export function mergeAgentActivity(current, details) {
+  const next = { ...current, revision: current.revision + 1 }
+  if (details.phase) {
+    for (const key of ['tool', 'toolDisplay', 'toolCallId']) {
+      next[key] = details[key] || (details.phase === 'waiting_model' ? current[key] : null)
+    }
+    for (const key of ['modelRequest', 'providerAttempt', 'providerAttemptTotal', 'index', 'total']) {
+      next[key] = Number.isInteger(details[key]) ? details[key] : null
+    }
+    next.phase = details.phase
+    next.activityLabel = typeof details.activityLabel === 'string' ? details.activityLabel.trim() || null : null
+    next.reasoningLabel = next.phase === 'waiting_model' && current.phase === 'waiting_model'
+      && next.modelRequest === current.modelRequest ? current.reasoningLabel : null
+    next.startedAt = (agentActivityDisplayKey(current) === agentActivityDisplayKey(next) && current.startedAt)
+      || details.startedAt || new Date().toISOString()
+  }
+  if (
+    Number.isInteger(details.activeTimingRevision) && details.activeTimingRevision >= 0
+    && Number.isInteger(details.activeDurationMs) && details.activeDurationMs >= 0
+    && typeof details.activeDurationRunning === 'boolean'
+    && (current.activeTimingRevision == null || details.activeTimingRevision > current.activeTimingRevision)
+  ) {
+    next.activeTimingRevision = details.activeTimingRevision
+    next.activeDurationMs = details.activeDurationMs
+    next.activeDurationRunning = details.activeDurationRunning
+    next.activeDurationUpdatedAt = details.activeDurationRunning ? new Date().toISOString() : null
+  }
+  return next
+}
+
 export function agentRunPresentation({
   running = false,
   stopping = false,
   runId = null,
   activity = null,
   streamReasoning = null,
+  streamContextSummary = null,
   streamContent = '',
   transcript = null
 } = {}) {
-  if (!running) return { showActivity: false, label: '', summary: '', announcement: '' }
+  const hidden = { showActivity: false, label: '', summary: '', announcement: '', entry: null }
+  if (!running) return hidden
 
-  const toolItems = (transcript?.messages || []).flatMap((message) => (
-    message.workHistory?.entries?.filter((entry) => entry.type === 'tool') || message.toolCalls || []
+  const entries = (transcript?.messages || []).flatMap((message) => (
+    message.workHistory?.entries || message.toolCalls || []
   ))
-  const currentToolItems = toolItems.filter((item) => item.current)
-  const activeTool = toolItems.find((item) => item.active)
-    || currentToolItems.find((item) => item.tool?.id === activity?.toolCallId)
+  const toolItems = entries.filter((entry) => entry.tool && (!runId || !entry.runId || entry.runId === runId))
   const belongsToRun = (request) => request && (!runId || request.runId === runId)
   const approval = toolItems.find((item) => belongsToRun(item.approval))?.approval
     || transcript?.unmatchedApprovals?.find(belongsToRun)
@@ -86,27 +127,55 @@ export function agentRunPresentation({
     !stopping
     && !approval
     && !question
-    && (streamContent || ['preparing_tools', 'finalizing'].includes(activity?.phase))
+    && (streamContent || ['streaming', 'finalizing'].includes(activity?.phase))
   ) {
-    return { showActivity: false, label: '', summary: '', announcement: 'Antwort' }
+    return { ...hidden, announcement: 'Antwort' }
   }
+  streamReasoning ||= entries.findLast((entry) => entry.type === 'reasoning' && entry.live)?.reasoning
   const suppliedReasoningLabel = typeof activity?.reasoningLabel === 'string'
     ? activity.reasoningLabel.trim()
     : ''
-  const reasoningLabel = activity?.phase === 'waiting_model' && !streamContent
+  const reasoningSummary = activity?.phase === 'waiting_model' && !streamContent
     && (streamReasoning || suppliedReasoningLabel)
     ? suppliedReasoningLabel || reasoningStatusLabel(streamReasoning) || 'Nachdenken'
     : ''
+  const selectedTool = activity?.phase === 'processing_tool'
+    ? toolItems.find((item) => activity.toolCallId ? item.tool.id === activity.toolCallId : item.active)
+    : activity?.phase === 'waiting_model' && !reasoningSummary && !streamContextSummary?.content
+      ? activity.toolCallId
+        ? toolItems.find((item) => item.tool.id === activity.toolCallId)
+        : toolItems.findLast((item) => item.current !== false && (item.result || item.completed))
+      : null
+  const presentationTool = selectedTool?.tool || (
+    ['processing_tool', 'waiting_model'].includes(activity?.phase) && activity.tool && !reasoningSummary && !streamContextSummary?.content
+      ? { id: activity.toolCallId, name: activity.tool, arguments: {}, toolDisplay: activity.toolDisplay }
+      : null
+  )
+  if (
+    activity?.phase === 'waiting_model'
+    && (activity.modelRequest > 1 || toolItems.some((item) => item.current && (item.result || item.completed)))
+    && !stopping
+    && !reasoningSummary
+    && !presentationTool
+    && !streamContextSummary?.content
+    && !approval
+    && !question
+  ) {
+    return hidden
+  }
   const label = stopping
     ? 'Anfrage abbrechen'
     : approval
       ? 'Freigabe erforderlich'
-      : question ? 'Antwort erforderlich' : reasoningLabel || agentActivityLabel(activity)
+      : question
+        ? 'Antwort erforderlich'
+        : reasoningSummary ? 'Nachdenken' : (presentationTool ? toolActivityLabel(presentationTool) : agentActivityLabel(activity))
   const summary = activity?.phase === 'compacting_context'
     ? ''
     : approval?.title
       || question?.questions?.[0]?.question
-      || (activeTool ? toolSummary(activeTool.tool) : '')
+      || (reasoningSummary && reasoningSummary !== 'Nachdenken' ? reasoningSummary : '')
+      || (presentationTool ? toolSummary(presentationTool) : '')
       || ''
   let announcement = label
   if (approval) {
@@ -115,10 +184,35 @@ export function agentRunPresentation({
       : 'Freigabe erforderlich'
   } else if (question) {
     announcement = 'Antwort erforderlich'
-  } else if (streamReasoning || suppliedReasoningLabel) {
+  } else if (reasoningSummary) {
     announcement = 'Nachdenken'
   }
-  return { showActivity: true, label, summary, announcement }
+  const active = !stopping && !approval && !question && !['waiting_approval', 'waiting_input'].includes(activity?.phase)
+  let entry = toolItems.find((item) => (approval && item.approval === approval) || (question && item.question === question))
+  if (!entry && !stopping) {
+    if (presentationTool) entry = selectedTool || { key: `activity-tool-${activity.toolCallId}`, type: 'tool', tool: presentationTool, runId }
+    else if (activity?.phase === 'waiting_model' && streamReasoning) entry = {
+      key: `live-reasoning-${activity.modelRequest ?? 0}`, type: 'reasoning', blocks: reasoningBlocks(streamReasoning),
+      presentation: { ...reasoningHistoryPresentation(streamReasoning), title: label, summary }
+    }
+    else if (['compacting_context', 'waiting_model'].includes(activity?.phase) && streamContextSummary?.content) entry = {
+      key: `live-context-summary-${activity.startedAt ?? 0}`, type: 'context-summary', text: streamContextSummary.content,
+      warning: streamContextSummary.isFallback,
+      presentation: { title: 'Gesprächskontext wird verdichtet', icon: 'compress' }
+    }
+    else if (['compacting_context', 'waiting_model'].includes(activity?.phase)) entry = entries.findLast((item) => (
+      item.type === 'context-summary' && item.current
+    ))
+  }
+  entry ||= {
+    key: 'activity-status', type: 'reasoning',
+    presentation: {
+      title: label,
+      summary,
+      icon: reasoningSummary ? 'psychology' : ACTIVITY_ICONS[activity?.phase] || 'smart_toy'
+    }
+  }
+  return { showActivity: true, label, summary, announcement, entry: { ...entry, active }, ...(presentationTool ? { tool: presentationTool } : {}) }
 }
 
 export function activityDurationMs(history, running, now = Date.now()) {
