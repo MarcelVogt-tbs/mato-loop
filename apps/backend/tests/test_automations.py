@@ -580,6 +580,46 @@ async def test_due_schedules_are_bundled_into_one_skipped_run() -> None:
     db.commit.assert_awaited_once()
 
 
+async def test_disabled_bound_skill_fails_only_its_due_run(monkeypatch) -> None:
+    now = datetime(2026, 8, 18, 12, tzinfo=UTC)
+    automation = Automation(
+        id=uuid4(),
+        user_id=uuid4(),
+        execution_session_id=uuid4(),
+        name="Bericht",
+        task="Erstelle einen Bericht",
+        revision=1,
+        enabled=True,
+        skill_id=uuid4(),
+    )
+    schedule = AutomationSchedule(
+        id=uuid4(),
+        cron_expression="0 * * * *",
+        timezone="UTC",
+        enabled=True,
+        next_run_at=now,
+    )
+    automation.schedules = [schedule]
+    rows = MagicMock()
+    rows.all.return_value = [automation]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = rows
+    db.scalar.return_value = None
+    monkeypatch.setattr(
+        AutomationService,
+        "_snapshot",
+        AsyncMock(side_effect=AutomationError("skill.notFound")),
+    )
+
+    assert await AutomationService.enqueue_due(db, now=now) == 1
+
+    run = db.add.call_args.args[0]
+    assert run.status == "failed"
+    assert run.error_code == "skill.notFound"
+    assert schedule.next_run_at > now
+    db.commit.assert_awaited_once()
+
+
 async def test_due_one_time_schedule_is_enqueued_once_and_disabled() -> None:
     now = datetime(2026, 8, 20, 12, tzinfo=UTC)
     automation = Automation(

@@ -321,6 +321,8 @@ _MESSAGES = {
     "skill.loadMustBeExclusive": "The skill loader must be called without other tools in the same response.",
     "skill.notFound": "The skill was not found.",
     "skill.inUse": "The skill is still referenced by an automation.",
+    "skill.defaultProtected": "A default skill cannot be deleted.",
+    "skill.notEditable": "This skill cannot be edited personally.",
     "tool.executionFailed": "The tool execution failed.",
     "tool.executionInterrupted": (
         "The tool execution was interrupted and its outcome is unknown. Do not infer success or "

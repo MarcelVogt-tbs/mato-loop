@@ -245,7 +245,7 @@ describe('API error messages', () => {
       'Ein Skill mit diesem Namen ist bereits vorhanden.'
     )
     expect(apiErrorMessage({ error: { code: 'skill.limitReached' } })).toBe(
-      'Die maximale Anzahl persönlicher Skills ist erreicht.'
+      'Die maximale Anzahl Skills in diesem Bereich ist erreicht.'
     )
     expect(apiErrorMessage({ error: { code: 'skill.inUse' } })).toBe(
       'Der Skill wird noch von einer Automation verwendet und kann nicht gelöscht werden.'

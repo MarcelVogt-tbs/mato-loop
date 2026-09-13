@@ -1151,6 +1151,9 @@ class SkillDefinition(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     description: str = Field(min_length=1, max_length=240)
     instructions: str = Field(min_length=1, max_length=8_000)
+    enabled: StrictBool = True
+    owner_id: UUID | None = Field(default=None, exclude=True)
+    editable: bool = Field(default=True, exclude=True)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -1163,11 +1166,43 @@ class SkillDefinition(BaseModel):
         return normalize_skill_text(value, info.field_name) if isinstance(value, str) else value
 
 
+# Concrete shipped defaults are added in the next catalog step.
+DEFAULT_SKILLS: dict[UUID, SkillDefinition] = {}
+
+
+def default_skills() -> list[SkillDefinition]:
+    return [skill.model_copy(deep=True) for skill in DEFAULT_SKILLS.values()]
+
+
+class InstanceSkillsSettings(SettingsDocument):
+    settings_key = "skills"
+
+    skills: list[SkillDefinition] = Field(default_factory=default_skills, max_length=40)
+
+    @model_validator(mode="after")
+    def add_missing_defaults(self) -> Self:
+        existing = {skill.id for skill in self.skills}
+        self.skills.extend(
+            skill.model_copy(deep=True)
+            for skill_id, skill in DEFAULT_SKILLS.items()
+            if skill_id not in existing
+        )
+        if sum(skill.id not in DEFAULT_SKILLS for skill in self.skills) > 20:
+            raise ValueError("at most 20 custom skills are allowed")
+        return self
+
+
 class SkillsSettings(SettingsDocument):
     settings_key = "skills"
     settings_scope = SettingsScope.USER
 
-    skills: list[SkillDefinition] = Field(default_factory=list, max_length=20)
+    skills: list[SkillDefinition] = Field(default_factory=list, max_length=40)
+
+    @model_validator(mode="after")
+    def validate_custom_limit(self) -> Self:
+        if sum(skill.id not in DEFAULT_SKILLS for skill in self.skills) > 20:
+            raise ValueError("at most 20 custom skills are allowed")
+        return self
 
 
 class UserPreferences(SettingsDocument):

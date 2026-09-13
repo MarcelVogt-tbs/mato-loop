@@ -2166,7 +2166,7 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
     assert (
         context.approval_resolution["expected_revision"] == hashlib.sha256(draft_bytes).hexdigest()
     )
-    assert skills.skills[0].model_dump(exclude={"id"}) == json.loads(draft_bytes)
+    assert skills.skills[0].model_dump(exclude={"id", "enabled"}) == json.loads(draft_bytes)
     assert draft_file["initialRevision"] != context.approval_resolution["expected_revision"]
     assert len(draft_services) == 1
     assert draft_services[0].run_id is None

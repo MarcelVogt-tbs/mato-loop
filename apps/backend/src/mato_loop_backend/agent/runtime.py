@@ -188,7 +188,6 @@ from mato_loop_backend.settings import (
     MemorySettings,
     SettingsStore,
     SkillDefinition,
-    SkillsSettings,
     ToolExecutionPolicy,
     ToolSettings,
     UserProfileSettings,
@@ -199,6 +198,7 @@ from mato_loop_backend.settings import (
     load_effective_agent_identity,
     load_effective_ai,
     load_effective_integrations,
+    load_effective_skills,
     load_effective_tools,
 )
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
@@ -1609,10 +1609,10 @@ class AgentRuntime:
         user_profile = await SettingsStore.load(
             db, UserProfileSettings, user_id=chat_session.user_id
         )
-        skills_settings = await SettingsStore.load(
-            db, SkillsSettings, user_id=chat_session.user_id
+        skills = await load_effective_skills(
+            db, chat_session.user_id, enabled_only=True
         )
-        skill_state = RunSkillState.from_settings(skills_settings)
+        skill_state = RunSkillState.from_skills(skills)
         required_skill = (
             SkillDefinition.model_validate(run.required_skill)
             if run.required_skill is not None
@@ -3135,7 +3135,7 @@ class AgentRuntime:
                         }
                         if current_skill is not None:
                             payload["currentSkill"] = current_skill.model_dump(
-                                mode="json", exclude={"id"}
+                                mode="json", include={"name", "description", "instructions"}
                             )
                         user_payload = json.dumps(payload, ensure_ascii=False)
                         editing = current_skill is not None
@@ -3200,7 +3200,9 @@ class AgentRuntime:
                                     )
                                     return SkillDraft.model_validate(
                                         {
-                                            **current_skill.model_dump(exclude={"id"}),
+                                            **current_skill.model_dump(
+                                                include={"name", "description", "instructions"}
+                                            ),
                                             **patch.model_dump(exclude_none=True),
                                         }
                                     )

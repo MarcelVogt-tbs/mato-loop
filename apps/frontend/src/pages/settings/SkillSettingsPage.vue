@@ -7,14 +7,24 @@
           Wiederverwendbare Anweisungen für spezialisierte Aufgaben verwalten.
         </p>
       </div>
-      <q-btn
-        unelevated
-        no-caps
-        color="primary"
-        icon="add"
-        label="Skill erstellen"
-        @click="openCreateDialog"
-      />
+      <div class="settings-scope-actions row items-center col-auto">
+        <SettingsScopeToggle
+          :model-value="skills.scope"
+          :is-admin="auth.isAdmin"
+          :disable="skills.loading || skills.saving"
+          @update:model-value="changeScope"
+        />
+        <q-btn
+          unelevated
+          no-caps
+          no-wrap
+          color="primary"
+          icon="add"
+          label="Skill erstellen"
+          :disable="skills.loading"
+          @click="openCreateDialog"
+        />
+      </div>
     </header>
 
     <q-banner v-if="loadFailed" rounded class="bg-negative text-white q-mb-md">
@@ -30,29 +40,43 @@
         <q-spinner color="primary" size="36px" />
         <div class="app-muted q-mt-sm">Skills werden geladen ...</div>
       </q-card-section>
-      <q-card-section v-else-if="loaded && !skills.items.length" class="q-pa-xl">
+      <q-card-section v-else-if="loaded && !skills.scopedItems.length" class="q-pa-xl">
         <AppStateMessage
           icon="school"
           title="Noch keine Skills"
-          description="Erstelle einen persönlichen Skill mit wiederverwendbaren Anweisungen."
+          :description="skills.scope === 'instance'
+            ? 'Erstelle einen Skill, der allen Usern zur Verfügung steht.'
+            : 'Erstelle einen persönlichen Skill mit wiederverwendbaren Anweisungen.'"
         />
       </q-card-section>
 
       <q-list v-else separator>
-        <q-item v-for="skill in skills.items" :key="skill.id" class="q-py-md">
+        <q-item v-for="skill in skills.scopedItems" :key="skill.id" class="q-py-md">
           <q-item-section avatar top>
             <q-avatar rounded color="primary" text-color="white" icon="school" />
           </q-item-section>
           <q-item-section>
-            <q-item-label class="text-subtitle1 text-weight-medium">{{ skill.name }}</q-item-label>
+            <q-item-label class="text-subtitle1 text-weight-medium">
+              {{ skill.name }}
+              <q-badge v-if="skill.isDefault" outline color="primary" label="Standard" class="q-ml-xs" />
+            </q-item-label>
             <q-item-label caption class="text-body2 q-mt-xs">{{ skill.description }}</q-item-label>
           </q-item-section>
           <q-item-section side top>
             <div class="row no-wrap q-gutter-xs">
+              <q-toggle
+                :model-value="skill.enabled"
+                :aria-label="`${skill.name} ${skill.enabled ? 'deaktivieren' : 'aktivieren'}`"
+                :disable="skills.saving"
+                @update:model-value="setEnabled(skill, $event)"
+              />
               <q-btn flat round dense icon="edit" :aria-label="`${skill.name} bearbeiten`" @click="openEditDialog(skill)">
                 <q-tooltip>Bearbeiten</q-tooltip>
               </q-btn>
-              <q-btn flat round dense color="negative" icon="delete_outline" :aria-label="`${skill.name} löschen`" @click="removeSkill(skill)">
+              <q-btn v-if="skill.isDefault && skill.modified" flat round dense icon="restart_alt" :aria-label="`${skill.name} auf Standard zurücksetzen`" @click="resetSkill(skill)">
+                <q-tooltip>Auf Standard zurücksetzen</q-tooltip>
+              </q-btn>
+              <q-btn v-if="!skill.isDefault" flat round dense color="negative" icon="delete_outline" :aria-label="`${skill.name} löschen`" @click="removeSkill(skill)">
                 <q-tooltip>Löschen</q-tooltip>
               </q-btn>
             </div>
@@ -125,15 +149,22 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
+import { useRoute, useRouter } from 'vue-router'
 import AppStateMessage from 'components/AppStateMessage.vue'
+import SettingsScopeToggle from 'components/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
+import { resolveSettingsScope } from 'src/features/settings/scope'
 import { useSkillStore } from 'stores/skills'
+import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'SkillSettingsPage' })
 
 const $q = useQuasar()
+const route = useRoute()
+const router = useRouter()
 const { confirm } = useConfirm()
 const skills = useSkillStore()
+const auth = useAuthStore()
 const loaded = ref(false)
 const loadFailed = ref(false)
 const dialogOpen = ref(false)
@@ -147,11 +178,19 @@ const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtf
 async function load() {
   loadFailed.value = false
   try {
-    await skills.fetchSkills()
+    await skills.fetchSkills(skills.scope)
     loaded.value = true
   } catch {
     loadFailed.value = true
   }
+}
+
+async function changeScope(scope) {
+  dialogOpen.value = false
+  loaded.value = false
+  skills.selectScope(scope)
+  await router.replace({ query: { ...route.query, scope: skills.scope } })
+  await load()
 }
 
 function openCreateDialog() {
@@ -209,7 +248,34 @@ async function removeSkill(skill) {
   }
 }
 
-onMounted(load)
+async function setEnabled(skill, enabled) {
+  try {
+    await skills.setEnabled(skill.id, enabled)
+    $q.notify({ type: 'positive', message: enabled ? 'Skill aktiviert' : 'Skill deaktiviert' })
+  } catch {
+    // The central Axios interceptor displays the error.
+  }
+}
+
+async function resetSkill(skill) {
+  const accepted = await confirm(
+    `Soll der Skill „${skill.name}“ auf den ausgelieferten Standard zurückgesetzt werden?`,
+    'Skill zurücksetzen',
+    { okLabel: 'Zurücksetzen' }
+  )
+  if (!accepted) return
+  try {
+    await skills.resetSkill(skill.id)
+    $q.notify({ type: 'positive', message: 'Skill auf Standard zurückgesetzt' })
+  } catch {
+    // The central Axios interceptor displays the error.
+  }
+}
+
+onMounted(() => {
+  skills.selectScope(resolveSettingsScope(route.query.scope, auth.isAdmin))
+  void load()
+})
 </script>
 
 <style scoped>

@@ -2633,6 +2633,8 @@ async def _edit_skill(arguments: EditSkillArguments, context: ToolContext) -> To
     skill = context.skill_state.catalog.get(arguments.skill_id)
     if skill is None:
         return ToolResult.error("skill.notFound")
+    if not skill.editable:
+        return ToolResult.error("skill.notEditable")
     if context.skill_state.active is not None:
         return ToolResult.error("tool.unavailable")
     result = await _save_skill_draft(

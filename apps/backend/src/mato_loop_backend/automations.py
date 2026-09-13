@@ -32,10 +32,9 @@ from mato_loop_backend.notifications import NotificationDraft, NotificationServi
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 from mato_loop_backend.settings import (
     DEFAULT_AGENT_PROFILE_ID,
-    SettingsStore,
     SkillDefinition,
-    SkillsSettings,
     load_effective_ai,
+    load_effective_skills,
 )
 from mato_loop_backend.web_push import (
     WebPushAutomationRunTarget,
@@ -184,10 +183,8 @@ class AutomationService:
     ) -> SkillDefinition | None:
         if skill_id is None:
             return None
-        settings = await SettingsStore.load(
-            db, SkillsSettings, user_id=user_id, for_update=True
-        )
-        skill = next((item for item in settings.skills if item.id == skill_id), None)
+        skills = await load_effective_skills(db, user_id, enabled_only=True)
+        skill = next((item for item in skills if item.id == skill_id), None)
         if skill is None:
             raise AutomationError("skill.notFound", field="skillId")
         return skill
@@ -700,6 +697,25 @@ class AutomationService:
                     AutomationRun.status.in_(ACTIVE_STATUSES),
                 )
             )
+            try:
+                definition_snapshot = await AutomationService._snapshot(db, automation)
+            except AutomationError as exc:
+                run = AutomationRun(
+                    automation_id=automation.id,
+                    automation_revision=automation.revision,
+                    trigger="scheduled",
+                    status="failed",
+                    scheduled_for=scheduled_for,
+                    schedule_snapshots=snapshots,
+                    definition_snapshot={},
+                    output_session_id=automation.output_session_id,
+                    delivery_status="not_requested",
+                    error_code=exc.code,
+                    completed_at=now,
+                )
+                db.add(run)
+                count += 1
+                continue
             run = AutomationRun(
                 automation_id=automation.id,
                 automation_revision=automation.revision,
@@ -707,7 +723,7 @@ class AutomationService:
                 status="skipped" if active else "queued",
                 scheduled_for=scheduled_for,
                 schedule_snapshots=snapshots,
-                definition_snapshot=await AutomationService._snapshot(db, automation),
+                definition_snapshot=definition_snapshot,
                 output_session_id=automation.output_session_id,
                 delivery_status=(
                     "not_requested"
