@@ -311,11 +311,16 @@ check_platform() {
 }
 
 install_dependencies() {
+    local package status
     local missing=()
     command -v git >/dev/null || missing+=(git)
     command -v curl >/dev/null || missing+=(curl)
     command -v rg >/dev/null || missing+=(ripgrep)
     command -v python3 >/dev/null || missing+=(python3)
+    for package in gcc libc6-dev bash-builtins libreadline-dev; do
+        status="$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)"
+        [[ "$status" == "install ok installed" ]] || missing+=("$package")
+    done
     ((${#missing[@]} == 0)) && return
     require_interactive
     printf 'Missing Ubuntu packages: %s\n' "${missing[*]}"
@@ -323,6 +328,17 @@ install_dependencies() {
     sudo env DEBIAN_FRONTEND=noninteractive dpkg --configure -a
     sudo env DEBIAN_FRONTEND=noninteractive apt-get update
     sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
+}
+
+build_shared_terminal() {
+    local output temporary
+    output="$AGENT_PROJECT/src/matoloop_agent/native/shared.so"
+    temporary="$(mktemp "$AGENT_PROJECT/src/matoloop_agent/native/.shared.so.XXXXXX")"
+    if ! sh "$AGENT_PROJECT/build-native.sh" "$temporary"; then
+        rm -f -- "$temporary"
+        die "Could not build the shared terminal module."
+    fi
+    mv -- "$temporary" "$output"
 }
 
 install_uv() {
@@ -539,6 +555,7 @@ install_or_repair() {
     prompt_settings
     prepare_managed_directories
     prepare_source
+    build_shared_terminal
 
     if [[ ! -d "$VENV" ]]; then
         VENV_CREATED=true
@@ -658,7 +675,7 @@ uninstall_agent() {
 }
 
 self_test() (
-    local fixture prompted temporary
+    local fixture native_fixture prompted temporary
     temporary="$(mktemp -d)"
     trap 'rm -rf -- "$temporary"' EXIT
     HOME="$temporary/home"
@@ -734,6 +751,17 @@ self_test() (
     [[ "$(installation_state)" == installed ]]
 
     rm -rf -- "$PROJECT_ROOT" "$STATE_DIR" "$SERVICE_DIR"
+    native_fixture="$HOME/native-agent"
+    AGENT_PROJECT="$native_fixture"
+    mkdir -p "$native_fixture/src/matoloop_agent/native"
+    printf '%s\n' '#!/bin/sh' 'printf built > "$1"' > "$native_fixture/build-native.sh"
+    build_shared_terminal
+    [[ "$(< "$native_fixture/src/matoloop_agent/native/shared.so")" == built ]]
+    printf old > "$native_fixture/src/matoloop_agent/native/shared.so"
+    printf '%s\n' '#!/bin/sh' 'exit 1' > "$native_fixture/build-native.sh"
+    ! (build_shared_terminal >/dev/null 2>&1)
+    [[ "$(< "$native_fixture/src/matoloop_agent/native/shared.so")" == old ]]
+
     fixture="$HOME/fixture"
     mkdir -p "$fixture/apps/matoloop-agent"
     : > "$fixture/apps/matoloop-agent/pyproject.toml"
