@@ -731,7 +731,10 @@ async function load() {
     await agents.fetchAgents(scope.value)
     if (isCreate.value) {
       editingAgent.value = null
-      assignForm()
+      const template = agents.byId(String(route.query.copyFrom || ''))
+      const allowedTemplate = template && (scope.value === 'personal' || template.scope === 'instance')
+      assignForm(allowedTemplate ? template : null)
+      if (allowedTemplate) form.name = `Kopie von ${template.name}`.slice(0, 80)
       return
     }
     const agent = agents.byId(String(route.params.agentId || ''))

@@ -31,7 +31,7 @@
           icon="add"
           label="Agentenprofil erstellen"
           :disable="personalBlocked || agents.loading"
-          :to="{ name: 'settings-agent-create', query: { scope: agents.scope } }"
+          @click="openCreateDialog"
         />
       </div>
     </header>
@@ -98,11 +98,42 @@
       </q-list>
       <q-inner-loading :showing="agents.loading" />
     </q-card>
+
+    <q-dialog v-model="createDialogOpen" :maximized="$q.screen.lt.sm" aria-labelledby="create-agent-title">
+      <q-card class="agent-profile-dialog app-surface">
+        <q-form @submit.prevent="startCreating">
+          <q-card-section>
+            <div id="create-agent-title" class="text-h6">Agentenprofil erstellen</div>
+            <div class="text-body2 app-muted q-mt-xs">
+              Zielbereich: {{ agents.scope === 'instance' ? 'Instanz' : 'Persönlich' }}
+            </div>
+          </q-card-section>
+          <q-card-section class="q-pt-none">
+            <q-select
+              v-model="templateId"
+              outlined
+              emit-value
+              map-options
+              use-input
+              input-debounce="0"
+              label="Vorlage"
+              :options="filteredTemplateOptions"
+              hint="Die Einstellungen der Vorlage können vor dem Speichern bearbeitet werden."
+              @filter="filterTemplates"
+            />
+          </q-card-section>
+          <q-card-actions align="right" class="q-pa-md q-pt-none">
+            <q-btn v-close-popup flat no-caps label="Abbrechen" />
+            <q-btn unelevated no-caps color="primary" label="Weiter" type="submit" />
+          </q-card-actions>
+        </q-form>
+      </q-card>
+    </q-dialog>
   </section>
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import AppStateMessage from 'components/AppStateMessage.vue'
@@ -122,6 +153,18 @@ const agents = useAgentProfileStore()
 const auth = useAuthStore()
 const showEditor = computed(() => ['settings-agent-create', 'settings-agent-edit'].includes(route.name))
 const personalBlocked = computed(() => agents.scope === 'personal' && !agents.personalAgentsEnabled)
+const createDialogOpen = ref(false)
+const templateId = ref('new')
+const filteredTemplateOptions = ref([])
+const templateOptions = computed(() => [
+  { label: 'Ohne Vorlage – neu erstellen', value: 'new' },
+  ...agents.agents
+    .filter((agent) => agents.scope === 'personal' || agent.scope === 'instance')
+    .map((agent) => ({
+      label: `${agent.name} (${agent.scope === 'instance' ? 'Instanz' : 'Persönlich'})`,
+      value: agent.id
+    }))
+])
 
 async function load() {
   await agents.fetchAgents(agents.scope)
@@ -131,6 +174,32 @@ async function changeScope(scope) {
   agents.selectScope(scope)
   await router.replace({ query: { ...route.query, scope: agents.scope } })
   await load()
+}
+
+function openCreateDialog() {
+  templateId.value = 'new'
+  filteredTemplateOptions.value = templateOptions.value
+  createDialogOpen.value = true
+}
+
+function filterTemplates(value, update) {
+  update(() => {
+    const query = value.toLocaleLowerCase('de')
+    filteredTemplateOptions.value = templateOptions.value.filter((option) => (
+      option.label.toLocaleLowerCase('de').includes(query)
+    ))
+  })
+}
+
+async function startCreating() {
+  createDialogOpen.value = false
+  await router.push({
+    name: 'settings-agent-create',
+    query: {
+      scope: agents.scope,
+      ...(templateId.value === 'new' ? {} : { copyFrom: templateId.value })
+    }
+  })
 }
 
 async function removeAgent(agent) {

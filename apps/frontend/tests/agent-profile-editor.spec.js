@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { Quasar, QAvatar, QBadge, QBanner, QBtn, QBtnToggle, QCard, QCardSection, QChip, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QList, QSelect, QSeparator, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar, QToolbarTitle } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
-vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), put: vi.fn() } }))
+vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), put: vi.fn() } }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: async () => true }) }))
 
 import Editor from '../src/pages/settings/AgentProfileEditorPage.vue'
@@ -16,7 +16,7 @@ let app, root
 const first = '00000000-0000-4000-8000-000000000010'
 const second = '00000000-0000-4000-8000-000000000011'
 
-async function mountEditor() {
+async function mountEditor(path = '/agents/agent?scope=personal', extraAgents = []) {
   let agent = {
     id: 'agent', scope: 'personal', name: 'Recherche', instructions: 'Check sources.',
     answerDisplay: 'timeline',
@@ -26,7 +26,7 @@ async function mountEditor() {
     publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} }
   }
   api.get.mockImplementation(async () => ({ data: {
-    effectiveAgents: [agent], personalAgentsEnabled: true,
+    effectiveAgents: [agent, ...extraAgents], personalAgentsEnabled: true,
     integrations: [
       { id: first, name: 'Kalender', enabled: true, available: true, supportsPolicies: false },
       { id: second, name: 'SearXNG', enabled: true, available: true, supportsPolicies: false }
@@ -35,10 +35,11 @@ async function mountEditor() {
   api.put.mockImplementation(async (_url, payload) => { agent = { ...agent, ...payload }; return { data: {} } })
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/agents/:agentId', name: 'settings-agent-edit', component: Editor },
+    { path: '/agents/new', name: 'settings-agent-create', component: Editor },
     { path: '/agents', name: 'settings-agents', component: { render: () => null } },
     { path: '/personas', name: 'settings-personalization', component: { render: () => null } }
   ] })
-  await router.push('/agents/agent?scope=personal')
+  await router.push(path)
   root = document.createElement('div')
   document.body.append(root)
   let page
@@ -48,10 +49,30 @@ async function mountEditor() {
   app.use(createPinia()).use(router).use(Quasar, { components: { QAvatar, QBadge, QBanner, QBtn, QBtnToggle, QCard, QCardSection, QChip, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QList, QSelect, QSeparator, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar, QToolbarTitle } })
   app.config.globalProperties.$q.notify = vi.fn()
   app.mount(root)
-  await vi.waitFor(() => expect(page?.editingAgent?.id).toBe('agent'))
+  await vi.waitFor(() => expect(page?.savedPayload).toBeTruthy())
   await nextTick()
   return page
 }
+
+it('starts a personal profile as an independent copy of an instance profile', async () => {
+  const template = {
+    id: 'instance-template', scope: 'instance', name: 'Quellenprüfung', description: 'Prüft Quellen',
+    personaId: 'instance-persona', instructions: 'Arbeite sorgfältig.', maxToolCalls: 9,
+    integrationsEnabledByDefault: false, integrationAvailability: { [first]: true },
+    privatePermissions: { policies: { 'network.search': 'ask' }, integrationPolicies: {}, resourcePolicies: {} },
+    publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} }
+  }
+  const page = await mountEditor('/agents/new?scope=personal&copyFrom=instance-template', [template])
+
+  expect(page.editingAgent).toBeNull()
+  expect(page.form).toMatchObject({
+    name: 'Kopie von Quellenprüfung', description: 'Prüft Quellen', personaId: 'instance-persona',
+    instructions: 'Arbeite sorgfältig.', maxToolCalls: 9, integrationsEnabledByDefault: false
+  })
+  expect(page.dirty).toBe(true)
+  page.form.privatePermissions.policies['network.search'] = 'auto'
+  expect(template.privatePermissions.policies['network.search']).toBe('ask')
+})
 
 afterEach(() => {
   app?.unmount()

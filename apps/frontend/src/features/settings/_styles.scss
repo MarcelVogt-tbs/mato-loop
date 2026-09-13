@@ -56,7 +56,8 @@
   width: min(560px, calc(100vw - 32px));
 }
 
-.user-dialog {
+.user-dialog,
+.agent-profile-dialog {
   width: min(520px, calc(100vw - 32px));
 }
 
