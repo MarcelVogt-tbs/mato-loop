@@ -36,15 +36,15 @@ usage() {
 }
 
 run_backend() {
-    compose run --rm --no-deps backend sh -lc "$1"
+    compose run --rm --no-deps --volume /opt/mato-loop/backend backend sh -lc "$1"
 }
 
 run_frontend() {
-    compose run --rm --no-deps frontend sh -lc "$1"
+    compose run --rm --no-deps --volume /workspace/apps/frontend/node_modules frontend sh -lc "$1"
 }
 
 run_matoloop_agent() {
-    compose run --rm --no-deps --entrypoint sh matoloop-agent -lc "$1"
+    compose run --rm --no-deps --volume /opt/matoloop-agent --entrypoint sh matoloop-agent -lc "$1"
 }
 
 check_backend() {
