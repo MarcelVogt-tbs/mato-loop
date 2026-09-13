@@ -428,6 +428,7 @@ describe('subagent inspector navigation and presentation', () => {
     root.querySelector('.work-history__toggle').click()
     await nextTick()
     const group = root.querySelector('.work-history__tool-group')
+    expect(root.querySelector('.work-history__header')).toBeNull()
     expect(group.querySelector('.work-history__activity-title').textContent.trim()).toBe('Websuche')
     expect(group.querySelector('.work-history__activity-summary').textContent.trim()).toBe('· 3')
     expect([...group.querySelectorAll('.tool-call__summary')].map((node) => node.textContent))
@@ -488,7 +489,7 @@ describe('subagent inspector navigation and presentation', () => {
     root.querySelector('.work-history__toggle').click()
     await nextTick()
 
-    expect(root.querySelector('.work-history__header').textContent).not.toContain('Verlauf')
+    expect(root.querySelector('.work-history__header')).toBeNull()
     expect(root.querySelector('[role="timer"]').textContent).toBe('4 s')
     expect(root.querySelector('.work-history__activity-title').textContent.trim()).toBe('Skill bearbeiten')
     expect(root.querySelector('.work-history__tool-group .q-icon').classList)
@@ -523,6 +524,7 @@ describe('subagent inspector navigation and presentation', () => {
     await nextTick()
 
     expect(root.textContent).toContain('Älterer Schritt')
+    expect(root.querySelector('.work-history__header')).toBeNull()
     expect(root.querySelector('.tool-call__header')).toBe(latest)
     expect(root.querySelectorAll('.tool-call__header')).toHaveLength(1)
   })

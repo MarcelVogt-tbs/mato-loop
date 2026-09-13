@@ -10,8 +10,7 @@ import {
   toolIdentity,
   toolPresentation,
   toolStatus,
-  toolSummary,
-  toolUsageSummary
+  toolSummary
 } from '../src/utils/tool-display'
 
 describe('tool display', () => {
@@ -169,34 +168,6 @@ describe('tool display', () => {
     })).toBe('Nachricht 550e8400-e29b-41d4-a716-446655440000, ab Zeichen 12000')
   })
 
-  it('groups tool usage by group while preserving first-use order', () => {
-    expect(toolUsageSummary([
-      { tool: { name: 'web_search' } },
-      { tool: { name: 'webfetch' }, active: true },
-      { tool: { name: 'web_search' }, active: true }
-    ])).toEqual([
-      { group: 'web', label: 'Web', icon: 'language', count: 3, active: true }
-    ])
-  })
-
-  it('combines argument-specific actions in their shared tool group', () => {
-    expect(toolUsageSummary([
-      { tool: { name: 'browser_tabs', toolDisplay: { group: 'web', icon: 'language', label: 'Browser-Tabs anzeigen' } } },
-      { tool: { name: 'browser_tabs', toolDisplay: { group: 'web', icon: 'language', label: 'Browser-Tab schließen' } } }
-    ])).toEqual([
-      { group: 'web', label: 'Web', icon: 'language', count: 2, active: false }
-    ])
-  })
-
-  it('groups legacy host tools like current backend metadata', () => {
-    expect(toolUsageSummary([
-      { tool: { name: 'get_system_info' } },
-      { tool: { name: 'change_directory' } }
-    ])).toEqual([
-      { group: 'process', label: 'Prozesse', icon: 'terminal', count: 2, active: false }
-    ])
-  })
-
   it('prefers valid backend metadata and keeps browser family icons consistent', () => {
     const enriched = {
       name: 'custom_search',
@@ -214,15 +185,6 @@ describe('tool display', () => {
       name: 'read_file',
       toolDisplay: { label: '  ', icon: null, summary: {} }
     })).toEqual({ label: 'Datei lesen', icon: 'description' })
-
-    const usage = toolUsageSummary([
-      { tool: { name: 'browser_snapshot' } },
-      { tool: { name: 'browser_click' } },
-      { tool: { name: 'browser_snapshot' }, active: true }
-    ])
-    expect(usage).toEqual([
-      { group: 'web', label: 'Web', icon: 'language', count: 3, active: true }
-    ])
   })
 
   it('uses generic presentation for unrecognized historical tools', () => {

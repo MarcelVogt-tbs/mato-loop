@@ -4,8 +4,7 @@
     class="work-history"
     :class="{
       'work-history--preview': showPreview,
-      'work-history--with-agent-header': $slots.header,
-      'work-history--with-summary-header': showSummaryHeader
+      'work-history--with-agent-header': $slots.header
     }"
   >
     <div v-if="$slots.header" class="work-history__agent-header">
@@ -25,19 +24,6 @@
       >
         <q-tooltip>{{ historyExpanded ? 'Verlauf ausblenden' : 'Verlauf anzeigen' }}</q-tooltip>
       </q-btn>
-    </div>
-    <div v-if="showSummaryHeader" class="work-history__header work-history__identity" :aria-label="headerAriaLabel">
-      <div class="work-history__title">
-        <span v-if="toolUsage.length" class="work-history__tool-icons" aria-hidden="true">
-          <span v-for="tool in toolUsage" :key="tool.group" class="work-history__tool-usage">
-            <span class="work-history__tool-icon flex flex-center">
-              <q-icon :name="tool.icon" size="15px" />
-            </span>
-            <span class="work-history__tool-count">×{{ tool.count }}</span>
-            <q-tooltip>{{ tool.label }} · {{ tool.count }} {{ tool.count === 1 ? 'Aufruf' : 'Aufrufe' }}</q-tooltip>
-          </span>
-        </span>
-      </div>
     </div>
     <div v-if="!$slots.header" class="work-history__meta-section row items-center no-wrap" :class="showPreview ? 'self-start' : 'self-center'">
       <div class="work-history__meta row items-center no-wrap q-gutter-xs">
@@ -94,7 +80,6 @@ import {
 } from 'src/utils/attachments'
 import { agentRunPresentation, runWarningEntries } from 'src/utils/agent-activity'
 import { groupWorkHistoryEntries } from 'src/utils/chat-transcript'
-import { toolUsageSummary } from 'src/utils/tool-display'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
 
 defineOptions({ name: 'AgentActivityPanel' })
@@ -179,19 +164,10 @@ const currentEntries = computed(() => {
   ))
 })
 const showPreview = computed(() => !historyExpanded.value && currentEntries.value.length > 0)
-const showSummaryHeader = computed(() => historyExpanded.value && !props.running && entries.value.length > 0)
 const displayEntries = computed(() => historyExpanded.value ? entries.value : currentEntries.value)
 const items = computed(() => enrichedEntries.value.filter((entry) => entry.type === 'tool'))
-const toolUsage = computed(() => toolUsageSummary(items.value))
 const unmatchedSubagents = computed(() => {
   const matched = new Set(items.value.flatMap((item) => item.subagents || []).map((child) => child.id))
   return props.subagents.filter((child) => !matched.has(child.id))
 })
-const headerAriaLabel = computed(() => {
-  const parts = toolUsage.value.map((tool) => (
-    `${tool.label}: ${tool.count} ${tool.count === 1 ? 'Aufruf' : 'Aufrufe'}`
-  ))
-  return parts.join(', ')
-})
-
 </script>

@@ -112,26 +112,6 @@ const GROUP_ICONS = {
   coding: 'code',
   integrations: 'extension'
 }
-const GROUP_LABELS = {
-  filesystem: 'Dateisystem', process: 'Prozesse', web: 'Web', calendar: 'Kalender',
-  tasks: 'Aufgaben', mail: 'E-Mail', media: 'Medien', sessions: 'Sessions',
-  automations: 'Automationen', memory: 'Memory', agent: 'Agent', coding: 'Coding',
-  integrations: 'Integrationen'
-}
-const FILESYSTEM_TOOLS = new Set([
-  'read', 'glob', 'grep', 'list_directory', 'read_file', 'provide_file', 'write_file',
-  'edit_file', 'apply_patch', 'create_directory', 'delete_path', 'copy_path', 'move_path'
-])
-const WEB_TOOLS = new Set(['web_search', 'webfetch', 'fetch_transcript'])
-const MEDIA_TOOLS = new Set([
-  'generate_qr_code', 'read_qr_code', 'generate_image', 'edit_image', 'generate_speech',
-  'generate_audio', 'transcribe_audio', 'analyze_video'
-])
-const AGENT_TOOLS = new Set([
-  'question', 'task', 'load_skill', 'build_skill', 'edit_skill',
-  'update_agent_identity', 'update_user_profile'
-])
-
 const APPROVAL_PRESENTATIONS = {
   shell_run: 'shell',
   'shell.run': 'shell'
@@ -170,46 +150,6 @@ export function toolIdentity(tool) {
 
 export function toolActivityLabel(tool) {
   return toolIdentity(tool).label
-}
-
-function toolGroup(tool) {
-  if (validToolDisplay(tool?.toolDisplay)) return tool.toolDisplay.group
-  const name = tool?.name || ''
-  if (FILESYSTEM_TOOLS.has(name)) return 'filesystem'
-  if (WEB_TOOLS.has(name) || name === 'browser' || name.startsWith('browser_')) return 'web'
-  if (MEDIA_TOOLS.has(name)) return 'media'
-  if (AGENT_TOOLS.has(name)) return 'agent'
-  if (['get_system_info', 'change_directory'].includes(name)) return 'process'
-  if (['list_automations', 'get_automation', 'create_automation', 'edit_automation', 'run_automation', 'delete_automation'].includes(name)) return 'automations'
-  return ({
-    calendar: 'calendar', tasks: 'tasks', mail: 'mail', memory: 'memory', session: 'sessions',
-    coding: 'coding', process: 'process', shell: 'process', recipe: 'integrations',
-    recipes: 'integrations', meal: 'integrations', mealie: 'integrations', knowledge: 'integrations'
-  })[name.split(/[_.]/)[0]] || 'integrations'
-}
-
-export function toolUsageSummary(items = []) {
-  const tools = new Map()
-  for (const item of items) {
-    const name = item?.tool?.name
-    if (!name) continue
-    const identity = toolIdentity(item.tool)
-    const group = toolGroup(item.tool)
-    const existing = tools.get(group)
-    if (existing) {
-      existing.count += 1
-      existing.active ||= Boolean(item.active)
-    } else {
-      tools.set(group, {
-        group,
-        label: displayText(item.tool.toolDisplay?.groupLabel) || GROUP_LABELS[group],
-        icon: GROUP_ICONS[group] || identity.icon,
-        count: 1,
-        active: Boolean(item.active)
-      })
-    }
-  }
-  return [...tools.values()]
 }
 
 export function memoryWriteContent(tool) {
