@@ -5,8 +5,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { verifyExternalImage } from '../src/utils/image-verification'
 import {
   classifyMarkdownImageUrl,
-  containsMarkdownImage,
-  containsMermaidFence,
   renderMarkdown,
   safeMarkdownLinkUrl
 } from '../src/utils/markdown'
@@ -30,20 +28,6 @@ function renderedDom(markdown, options) {
 }
 
 describe('assistant markdown rendering', () => {
-  it('detects active Markdown and HTML image syntax for safe editor mode selection', () => {
-    expect(containsMarkdownImage('![Alt](https://example.com/image.png)')).toBe(true)
-    expect(containsMarkdownImage('<img src="https://example.com/image.png">')).toBe(true)
-    expect(containsMarkdownImage('\\![nur Text](https://example.com/image.png)')).toBe(false)
-    expect(containsMarkdownImage('[normaler Link](https://example.com)')).toBe(false)
-  })
-
-  it('detects Mermaid fences for safe editor mode selection', () => {
-    expect(containsMermaidFence('Text\n\n```mermaid\ngraph TD\nA --> B\n```\n\nMehr Text')).toBe(true)
-    expect(containsMermaidFence('~~~MERMAID extra\ngraph TD\n~~~')).toBe(true)
-    expect(containsMermaidFence('```mermaid\nnoch offen')).toBe(true)
-    expect(containsMermaidFence('`mermaid` und ```mermaidish\nText\n```')).toBe(false)
-  })
-
   it('blocks all markdown images in static file previews', () => {
     const { root, externalImages } = renderedDom('![Extern](https://example.com/image.png)', {
       allowImages: false,

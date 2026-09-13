@@ -58,10 +58,6 @@ export function modelOption(model, provider, disable = false) {
   }
 }
 
-export function modelSupportsTrust(model, requiredTrustLevel = 'public') {
-  return requiredTrustLevel !== 'private' || effectiveTrustLevel(model) === 'private'
-}
-
 export function selectedModelState(
   modelId,
   models,

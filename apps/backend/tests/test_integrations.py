@@ -16,7 +16,7 @@ from mato_loop_backend.agent.permissions import PermissionRequest
 from mato_loop_backend.agent.tools import (
     ToolAction,
     ToolResult,
-    available_tool_schemas,
+    tool_registry,
 )
 from mato_loop_backend.api.errors import ApiError, register_error_handlers
 from mato_loop_backend.api.routes import integrations as integrations_route_module
@@ -498,7 +498,7 @@ def test_no_key_provider_makes_search_available_without_configuration() -> None:
     settings = IntegrationSettings()
 
     assert search_available(settings) is True
-    schemas = available_tool_schemas(settings)
+    schemas = tool_registry.schemas(settings)
     search_schema = next(item for item in schemas if item["name"] == "web_search")
     properties = search_schema["parameters"]["properties"]
     assert set(properties) == {"query", "search_type"}

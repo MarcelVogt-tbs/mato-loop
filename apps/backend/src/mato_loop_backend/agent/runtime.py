@@ -94,7 +94,6 @@ from mato_loop_backend.agent.tools import (
     PROJECT_CODING_TOOL_NAMES,
     QuestionArguments,
     ToolContext,
-    ToolPermission,
     ToolResult,
     effective_tool_capabilities,
     resolve_tool_execution_policy,
@@ -5068,18 +5067,6 @@ class AgentRuntime:
             else PermissionDecision.ALLOW
         )
 
-    @staticmethod
-    async def _is_allowed(
-        db: AsyncSession,
-        chat_session: ChatSession,
-        permission: ToolPermission,
-        root_files: RootFileService,
-    ) -> bool:
-        return (
-            await PermissionPolicy.evaluate(db, chat_session, permission, root_files)
-            == PermissionDecision.ALLOW
-        )
-
     @classmethod
     async def _request_approval(
         cls,
@@ -5228,10 +5215,6 @@ class AgentRuntime:
             run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}
         )
         return decision
-
-    @staticmethod
-    def has_approval_waiter(approval_id: UUID) -> bool:
-        return approval_coordinator.is_waiting(approval_id)
 
     @staticmethod
     def claim_approval_resolution(approval_id: UUID) -> bool:

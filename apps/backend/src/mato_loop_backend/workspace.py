@@ -11,7 +11,7 @@ import shutil
 import stat
 import threading
 import unicodedata
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -185,80 +185,6 @@ def _publish_upload(
             os.unlink(temporary, dir_fd=parent_descriptor)
         except FileNotFoundError:
             pass
-
-
-def _replace_utf8_text_at(
-    parent_descriptor: int,
-    filename: str,
-    content: str,
-    expected_revision: str,
-    *,
-    before_publish: Callable[[int], None] | None = None,
-    max_bytes: int = MAX_EDITABLE_TEXT_BYTES,
-) -> str:
-    encoded_content = content.encode("utf-8")
-    if len(encoded_content) > max_bytes:
-        raise RootFileError("file.tooLarge", "File is too large")
-    if "\0" in content:
-        raise RootFileError("file.invalidEncoding", "File is not editable UTF-8 text")
-
-    try:
-        metadata = os.stat(filename, dir_fd=parent_descriptor, follow_symlinks=False)
-    except FileNotFoundError as exc:
-        raise RootFileError("file.fileNotFound", "File not found") from exc
-    if stat.S_ISLNK(metadata.st_mode):
-        raise RootFileError("file.symlinkForbidden", "Symlinks are not followed")
-    if not stat.S_ISREG(metadata.st_mode):
-        raise RootFileError("file.notAFile", "Target is not a regular file")
-    if metadata.st_size > max_bytes:
-        raise RootFileError("file.tooLarge", "File is too large")
-
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(filename, flags, dir_fd=parent_descriptor)
-    except FileNotFoundError as exc:
-        raise RootFileError("file.fileNotFound", "File not found") from exc
-    except OSError as exc:
-        if exc.errno == errno.ELOOP:
-            raise RootFileError("file.symlinkForbidden", "Symlinks are not followed") from exc
-        raise
-    with os.fdopen(descriptor, "rb") as handle:
-        current = handle.read(max_bytes + 1)
-    if len(current) > max_bytes:
-        raise RootFileError("file.tooLarge", "File is too large")
-    try:
-        current_text = current.decode("utf-8", errors="strict")
-    except UnicodeDecodeError as exc:
-        raise RootFileError("file.invalidEncoding", "File is not readable as UTF-8") from exc
-    if "\0" in current_text:
-        raise RootFileError("file.invalidEncoding", "File is not editable UTF-8 text")
-    if hashlib.sha256(current).hexdigest() != expected_revision:
-        raise RootFileError("file.changed", "File changed since it was read")
-
-    temporary, _ = _stage_upload(
-        parent_descriptor,
-        filename,
-        BytesIO(encoded_content),
-        max_bytes=max_bytes,
-    )
-    try:
-        if before_publish is not None:
-            before_publish(metadata.st_size)
-        os.replace(
-            temporary,
-            filename,
-            src_dir_fd=parent_descriptor,
-            dst_dir_fd=parent_descriptor,
-        )
-        os.chmod(filename, 0o600, dir_fd=parent_descriptor, follow_symlinks=False)
-        os.fsync(parent_descriptor)
-    except BaseException:
-        try:
-            os.unlink(temporary, dir_fd=parent_descriptor)
-        except FileNotFoundError:
-            pass
-        raise
-    return hashlib.sha256(encoded_content).hexdigest()
 
 
 @contextmanager
@@ -1194,30 +1120,6 @@ class RootFileService:
             truncated_lines=tuple(truncated_lines),
             sha256=digest,
         )
-
-    def read_revision(
-        self,
-        relative_path: str,
-        revision: int,
-        *,
-        offset: int = 1,
-        limit: int = 2_000,
-        max_line_length: int = 2_000,
-    ) -> FileReadResult:
-        if isinstance(offset, bool) or offset < 1 or isinstance(limit, bool) or limit < 1:
-            raise RootFileError("file.invalidPagination", "Invalid read range")
-        if isinstance(max_line_length, bool) or max_line_length < 1:
-            raise RootFileError("file.invalidPagination", "Invalid line length")
-        try:
-            with self.open_revision(relative_path, revision) as handle:
-                return self._read_text_handle(
-                    handle,
-                    offset=offset,
-                    limit=limit,
-                    max_line_length=max_line_length,
-                )
-        except UnicodeDecodeError as exc:
-            raise RootFileError("file.invalidEncoding", "File is not readable as UTF-8") from exc
 
     @staticmethod
     def _read_private_file(path: Path) -> bytes:

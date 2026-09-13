@@ -119,16 +119,6 @@ function precedingBackslashes(source, position, minimum = 0) {
   return count
 }
 
-export function containsMarkdownImage(content) {
-  const source = String(content || '')
-  let position = source.indexOf('![')
-  while (position !== -1) {
-    if (precedingBackslashes(source, position) % 2 === 0) return true
-    position = source.indexOf('![', position + 2)
-  }
-  return /<img(?:\s|\/?>)/i.test(source)
-}
-
 function dollarBoundary(state, position) {
   const before = state.src.charCodeAt(position - 1)
   const after = state.src.charCodeAt(position + 1)
@@ -374,12 +364,6 @@ function configureRenderRules() {
 }
 
 configureRenderRules()
-
-export function containsMermaidFence(content) {
-  return markdown.parse(String(content || ''), {}).some((token) => (
-    token.type === 'fence' && normalizedLanguage(token.info).toLowerCase() === 'mermaid'
-  ))
-}
 
 export function renderMarkdown(
   content,

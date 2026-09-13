@@ -33,7 +33,6 @@ from mato_loop_backend.agent.tools import (
     ToolDefinition,
     ToolRegistry,
     ToolResult,
-    permission_for,
     tool_execution_policy,
     tool_registry,
 )
@@ -4582,24 +4581,3 @@ async def test_webfetch_returns_stable_integration_errors(
     assert json.loads(result.content)["error"] == {
         "code": code, "params": params, "message": message,
     }
-
-
-def test_permission_for_is_safe_for_webfetch_and_unknown_tools(tmp_path) -> None:
-    call = ToolCall(id="call", name="read", arguments={})
-    root_files = _context(tmp_path, call).root_files
-
-    assert permission_for(
-        "webfetch", {"url": "https://example.com"}, root_files
-    ).resource_type == "url"
-    assert permission_for(
-        "write_file",
-        {"root": "files", "path": "result.txt"},
-        root_files,
-    ).capability == "session.files.write"
-    assert permission_for(
-        "write_file",
-        {"root": "computer", "path": "result.txt"},
-        root_files,
-    ) is None
-    assert permission_for("webfetch", {"url": "not a URL"}, root_files) is None
-    assert permission_for("unknown", {}, root_files) is None

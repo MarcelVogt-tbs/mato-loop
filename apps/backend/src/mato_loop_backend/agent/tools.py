@@ -26,7 +26,6 @@ from mato_loop_backend.agent.context import (
     _tool_names_by_message_id,
     _tool_result_reference,
 )
-from mato_loop_backend.agent.file_roots import internal_file_roots
 from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionDisplayItem,
@@ -141,9 +140,6 @@ from mato_loop_backend.agent.tool_registry import (
 )
 from mato_loop_backend.agent.tool_registry import (
     VideoAnalysisTargetResolver as VideoAnalysisTargetResolver,
-)
-from mato_loop_backend.agent.tool_registry import (
-    _actions_enabled as _registry_actions_enabled,
 )
 from mato_loop_backend.agent.tool_registry import _model_revision as _model_revision
 from mato_loop_backend.agent.tool_registry import _provider_revision as _provider_revision
@@ -2170,10 +2166,6 @@ def effective_tool_capabilities(
     ):
         capabilities.add("settings.agent_identity.update")
     return capabilities
-
-
-def _actions_enabled(definition: ToolDefinition, tool_settings: ToolSettings) -> bool:
-    return _registry_actions_enabled(definition, tool_settings, tool_execution_policy)
 
 
 class ToolRegistry(_BaseToolRegistry):
@@ -5244,98 +5236,3 @@ tool_registry = ToolRegistry(
         ),
     ],
 )
-
-ToolPermission = PermissionRequest
-
-
-def available_tool_schemas(
-    integration_settings: IntegrationSettings,
-    webfetch_enabled: bool = False,
-    web_search_enabled: bool = True,
-    memory_enabled: bool = False,
-    memory_write_enabled: bool = False,
-    tool_capabilities: set[str] | frozenset[str] = frozenset(),
-) -> list[dict[str, Any]]:
-    return tool_registry.schemas(
-        integration_settings,
-        webfetch_enabled,
-        web_search_enabled,
-        memory_enabled,
-        memory_write_enabled,
-        tool_capabilities,
-    )
-
-
-def permission_for(
-    tool_name: str,
-    arguments: dict[str, Any],
-    root_files: RootFileService,
-) -> PermissionRequest | None:
-    arguments = internal_file_roots(arguments)
-    if tool_name in {
-        "web_search",
-        "session_read",
-        "session_tool_result_read",
-        "session_browse",
-        "session_search",
-        "memory_write",
-        "memory_retrieve",
-    }:
-        return None
-    if tool_name in {"webfetch", "fetch_transcript"}:
-        try:
-            return (
-                transcript_permission(arguments.get("url", ""))
-                if tool_name == "fetch_transcript"
-                else webfetch_permission(arguments.get("url", ""))
-            )
-        except (TypeError, ValueError, TranscriptError, WebFetchError):
-            return None
-    path_value = arguments.get("path")
-    capability = {
-        "read": "filesystem.read",
-        "glob": "filesystem.read",
-        "grep": "filesystem.read",
-        "provide_file": "file.provide",
-        "write_file": (
-            "session.files.write"
-            if arguments.get("root") == "session"
-            else "filesystem.write"
-        ),
-        "edit_file": (
-            "session.files.write"
-            if arguments.get("root") == "session"
-            else "filesystem.write"
-        ),
-        "create_directory": (
-            "session.files.write"
-            if arguments.get("root") == "session"
-            else "filesystem.write"
-        ),
-        "delete_path": "filesystem.delete",
-    }.get(tool_name)
-    if capability is None:
-        return None
-    try:
-        root = FileRoot(arguments.get("root"))
-        relative_path = str(path_value or ".")
-        action = {
-            "read": "Pfad lesen",
-            "glob": "Dateien suchen",
-            "grep": "Dateiinhalte durchsuchen",
-            "provide_file": "Datei bereitstellen",
-            "write_file": "Datei schreiben",
-            "edit_file": "Datei bearbeiten",
-            "create_directory": "Ordner erstellen",
-            "delete_path": "Pfad löschen",
-        }[tool_name]
-        return path_permission(
-            root_files=root_files,
-            root=root,
-            capability=capability,
-            relative_path=relative_path,
-            action_kind=tool_name,
-            action_label=action,
-        )
-    except (RootFileError, TypeError, ValueError):
-        return None

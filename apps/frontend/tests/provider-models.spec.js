@@ -5,7 +5,6 @@ import {
   isModelEffective,
   modelOption,
   modelSupportsCapability,
-  modelSupportsTrust,
   normalizeModelCapabilities,
   selectedModelState
 } from '../src/utils/provider-models'
@@ -51,7 +50,6 @@ describe('effective model state', () => {
       trustLevel: 'private',
       trustIcon: 'lock'
     })
-    expect(modelSupportsTrust(inheritedPrivateModel, 'private')).toBe(true)
   })
 
   it('treats legacy models as chat models and keeps media capabilities separate from image input', () => {
