@@ -56,7 +56,7 @@
         <q-avatar color="grey-7" text-color="white" icon="hub" />
         <div>
           <div class="text-weight-medium">Noch kein Provider konfiguriert</div>
-          <div class="text-body2 app-muted">Füge ChatGPT Codex, Lemonade oder einen OpenAI-kompatiblen Endpunkt hinzu.</div>
+          <div class="text-body2 app-muted">Füge ChatGPT Codex, Lemonade, Azure Speech oder einen OpenAI-kompatiblen Endpunkt hinzu.</div>
         </div>
       </div>
     </q-card>
@@ -141,7 +141,7 @@
                 <q-tooltip>{{ supportsDiscovery(provider) ? 'Modelle vom Provider aktualisieren' : 'Automatische Erkennung wird nicht unterstützt' }}</q-tooltip>
               </q-btn>
               <q-btn
-                v-if="showProminentManualAction(provider) && providerModels(provider).length"
+                v-if="supportsManualModels(provider) && showProminentManualAction(provider) && providerModels(provider).length"
                 outline
                 no-caps
                 color="primary"
@@ -150,7 +150,7 @@
                 :disable="personalBlocked"
                 @click="openModelDialog(provider)"
               />
-              <q-btn v-else flat round dense icon="more_vert" aria-label="Weitere Modellaktionen">
+              <q-btn v-else-if="supportsManualModels(provider)" flat round dense icon="more_vert" aria-label="Weitere Modellaktionen">
                 <q-menu class="app-menu-popup app-action-menu">
                   <q-list dense style="min-width: 230px">
                     <q-item v-close-popup clickable :disable="personalBlocked" @click="openModelDialog(provider)">
@@ -184,10 +184,11 @@
               class="provider-models-empty app-surface-tonal q-mt-md"
               icon="view_in_ar"
               title="Keine Modelle verfügbar"
-              description="Starte die Erkennung erneut oder hinterlege ein Modell manuell."
+              :description="supportsManualModels(provider) ? 'Starte die Erkennung erneut oder hinterlege ein Modell manuell.' : 'Aktualisiere die Modelle, um Azure Speech Fast Transcription zu erkennen.'"
             >
               <template #actions>
                 <q-btn
+                  v-if="supportsManualModels(provider)"
                   unelevated
                   no-caps
                   color="primary"
@@ -322,7 +323,7 @@ const providerToggleLoading = reactive({})
 const modelToggleLoading = reactive({})
 const modelSearch = reactive({})
 const llmProviders = computed(() => providers.providers.filter((item) => (
-  ['openai-codex', 'openai-compatible', 'lemonade'].includes(item.adapterType)
+  ['openai-codex', 'openai-compatible', 'lemonade', 'azure-speech'].includes(item.adapterType)
 )))
 const personalBlocked = computed(() => (
   providers.scope === 'personal' && !providers.personalProvidersEnabled
@@ -386,11 +387,15 @@ function activeModelCount(provider) {
 function providerIcon(provider) {
   if (provider.adapterType === 'openai-codex') return 'key'
   if (provider.adapterType === 'lemonade') return 'developer_board'
+  if (provider.adapterType === 'azure-speech') return 'graphic_eq'
   return 'hub'
 }
 
 function providerStatus(provider) {
   if (!provider.enabled) return { label: 'Deaktiviert', color: 'grey-7' }
+  if (provider.adapterType === 'azure-speech' && !provider.hasCredential) {
+    return { label: 'API-Key fehlt', color: 'warning' }
+  }
   if (provider.adapterType === 'openai-codex' && !providers.codex.authenticated) {
     return { label: 'Nicht verbunden', color: 'warning' }
   }
@@ -401,6 +406,9 @@ function providerDescription(provider) {
   if (provider.adapterType === 'openai-codex') return 'ChatGPT-Abonnement · Codex OAuth'
   if (provider.adapterType === 'lemonade') {
     return `${provider.config?.baseUrl || provider.config?.base_url || 'Keine URL'} · Lemonade`
+  }
+  if (provider.adapterType === 'azure-speech') {
+    return `${provider.config?.baseUrl || provider.config?.base_url || 'Keine URL'} · Azure Speech Fast Transcription`
   }
   const apiType = provider.config?.apiType || provider.config?.api_type
   const protocol = apiType === 'responses' ? 'Responses API' : 'Chat Completions'
@@ -421,8 +429,13 @@ function canTestModel(model, provider) {
 }
 
 function supportsDiscovery(provider) {
-  return provider.adapterType === 'openai-compatible' || provider.adapterType === 'lemonade'
+  if (provider.adapterType === 'azure-speech') return provider.hasCredential === true
+  return ['openai-compatible', 'lemonade'].includes(provider.adapterType)
     || (provider.adapterType === 'openai-codex' && providers.codex.authenticated === true)
+}
+
+function supportsManualModels(provider) {
+  return provider.adapterType !== 'azure-speech'
 }
 
 function capabilityIcon(capability) {

@@ -119,7 +119,7 @@ const form = reactive(defaultForm())
 const isDiscovered = computed(() => props.model?.origin === 'discovered')
 const capabilitiesAreAuthoritative = computed(() => (
   isDiscovered.value && (
-    props.provider?.adapterType === 'lemonade'
+    ['lemonade', 'azure-speech'].includes(props.provider?.adapterType)
     || props.model?.discoveryMetadata?.capabilities_authoritative === true
   )
 ))

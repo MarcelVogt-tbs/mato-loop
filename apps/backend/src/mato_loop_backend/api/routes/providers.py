@@ -20,6 +20,7 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.models import Credential, UserAccount
+from mato_loop_backend.providers.azure_speech import validate_endpoint
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.codex_oauth import (
     CodexOAuthError,
@@ -247,6 +248,16 @@ class LemonadeProviderRequest(ApiRequest):
             raise ValueError("base_url must not contain query or fragment")
         if self.remove_api_key and self.api_key and self.api_key.strip():
             raise ValueError("api_key and remove_api_key are mutually exclusive")
+        return self
+
+
+class AzureSpeechProviderRequest(LemonadeProviderRequest):
+    trust_level: TrustLevel = TrustLevel.PUBLIC
+    pseudonymization_enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_azure_endpoint(self) -> Self:
+        validate_endpoint(self.base_url)
         return self
 
 
@@ -510,19 +521,20 @@ async def _save_openai_provider(
     return await _settings_response(db, settings, owner_id)
 
 
-async def _save_lemonade_provider(
+async def _save_media_provider(
     db: AsyncSession,
     settings: AiSettingsDocument,
-    payload: LemonadeProviderRequest,
+    payload: LemonadeProviderRequest | AzureSpeechProviderRequest,
     provider: LlmProviderConfig | None = None,
     owner_id: UUID | None = None,
 ) -> dict[str, Any]:
+    adapter_type = "azure-speech" if isinstance(payload, AzureSpeechProviderRequest) else "lemonade"
     await _apply_settings(
         ProviderSettingsService.save_configured_provider(
             db,
             settings,
-            adapter_type="lemonade",
-            credential_kind="lemonade-api-key",
+            adapter_type=adapter_type,
+            credential_kind=f"{adapter_type}-api-key",
             name=payload.name,
             config={"base_url": str(payload.base_url).rstrip("/")},
             api_key=payload.api_key,
@@ -610,7 +622,23 @@ async def save_lemonade_provider(
     settings, owner_id = await _load_scoped_ai(
         db, scope, user, for_update=True, mutation=True
     )
-    result = await _save_lemonade_provider(db, settings, payload, owner_id=owner_id)
+    result = await _save_media_provider(db, settings, payload, owner_id=owner_id)
+    result["providerId"] = str(settings.providers[-1].id)
+    await db.commit()
+    return result
+
+
+@router.post("/azure-speech", status_code=status.HTTP_201_CREATED)
+async def save_azure_speech_provider(
+    payload: AzureSpeechProviderRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
+    result = await _save_media_provider(db, settings, payload, owner_id=owner_id)
     result["providerId"] = str(settings.providers[-1].id)
     await db.commit()
     return result
@@ -619,7 +647,7 @@ async def save_lemonade_provider(
 @router.put("/configuration/{provider_id}")
 async def update_openai_provider(
     provider_id: UUID,
-    payload: OpenAIProviderRequest | LemonadeProviderRequest,
+    payload: OpenAIProviderRequest | LemonadeProviderRequest | AzureSpeechProviderRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
@@ -635,14 +663,24 @@ async def update_openai_provider(
             db, settings, payload, provider, owner_id=owner_id
         )
     elif provider.adapter_type == "lemonade":
-        if not isinstance(payload, LemonadeProviderRequest):
+        if type(payload) is not LemonadeProviderRequest:
             try:
                 payload = LemonadeProviderRequest.model_validate(
                     payload.model_dump(exclude_unset=True)
                 )
             except ValidationError as exc:
                 raise ApiError(400, "provider.configurationInvalid") from exc
-        result = await _save_lemonade_provider(
+        result = await _save_media_provider(
+            db, settings, payload, provider, owner_id=owner_id
+        )
+    elif provider.adapter_type == "azure-speech":
+        try:
+            payload = AzureSpeechProviderRequest.model_validate(
+                payload.model_dump(exclude_unset=True)
+            )
+        except ValidationError as exc:
+            raise ApiError(400, "provider.configurationInvalid") from exc
+        result = await _save_media_provider(
             db, settings, payload, provider, owner_id=owner_id
         )
     else:
