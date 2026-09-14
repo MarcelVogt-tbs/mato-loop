@@ -99,14 +99,10 @@
               <div v-if="message.generationStatus === 'interrupted'" class="text-caption app-muted q-mt-sm" role="status">
                 Anfrage abgebrochen
               </div>
-              <div v-if="message.createdAt || (Number.isInteger(message.activeDurationMs) && !message.workHistory?.entries?.length)" class="chat-message__meta items-center">
+              <div v-if="message.createdAt" class="chat-message__meta items-center">
                 <time v-if="message.createdAt" :datetime="message.createdAt">
                   {{ formatAbsoluteDateTime(message.createdAt) }}
                 </time>
-                <template v-if="Number.isInteger(message.activeDurationMs) && !message.workHistory?.entries?.length">
-                  <span v-if="message.createdAt" aria-hidden="true">·</span>
-                  <TurnDuration :history="message" />
-                </template>
               </div>
             </article>
           </template>
@@ -127,7 +123,6 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AgentActivityPanel from 'components/AgentActivityPanel.vue'
-import TurnDuration from 'components/TurnDuration.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import { useSubagentStore, subagentStatus } from 'stores/subagents'

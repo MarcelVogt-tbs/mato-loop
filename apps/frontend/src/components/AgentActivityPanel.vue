@@ -1,6 +1,6 @@
 <template>
   <div
-    v-if="entries.length || running || todos.length || unmatchedSubagents.length"
+    v-if="$slots.header || entries.length || running || todos.length || unmatchedSubagents.length"
     class="work-history"
     :class="{
       'work-history--preview': showPreview,

@@ -185,7 +185,6 @@
             </div>
             <div
               v-if="message.createdAt
-                || (Number.isInteger(message.activeDurationMs) && !message.workHistory?.entries?.length)
                 || showMessageModel(message)
                 || isMessageTrustLevel(message.trustLevel)"
               class="chat-message__meta items-center"
@@ -242,10 +241,6 @@
               >
                 {{ formatRelativeDateTime(message.createdAt, messageTimestampNow) }}
               </time>
-              <template v-if="Number.isInteger(message.activeDurationMs) && !message.workHistory?.entries?.length">
-                <span v-if="message.createdAt || showMessageModel(message) || isMessageTrustLevel(message.trustLevel)" aria-hidden="true">·</span>
-                <TurnDuration :history="message" />
-              </template>
               <q-btn
                 v-if="canRetryMessage(message)"
                 flat
@@ -440,7 +435,6 @@ import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import AgentActivityPanel from 'components/AgentActivityPanel.vue'
-import TurnDuration from 'components/TurnDuration.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ChatComposer from 'components/ChatComposer.vue'
 import ChatQueuedMessages from 'components/ChatQueuedMessages.vue'

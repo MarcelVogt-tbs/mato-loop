@@ -300,22 +300,21 @@ describe('subagent inspector navigation and presentation', () => {
     expect(duration.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('hides completed activity entirely when only a duration exists', () => {
+  it('keeps the answer header and duration when no activity entries exist', () => {
     const pinia = createPinia()
     root = document.createElement('div')
     document.body.append(root)
     app = createApp({
       render: () => h(AgentActivityPanel, {
         history: { entries: [], activeDurationMs: 4_000 }
-      })
+      }, { header: () => h('div', 'codemato · Allgemein') })
     })
     app.use(pinia).use(Quasar, { components })
     app.mount(root)
 
-    expect(root.querySelector('.work-history')).toBeNull()
-    expect(root.querySelector('.work-history__toggle')).toBeNull()
-    expect(root.textContent).not.toContain('Verlauf')
-    expect(root.querySelector('[role="timer"]')).toBeNull()
+    expect(root.querySelector('.work-history__agent-header').textContent).toContain('codemato · Allgemein')
+    expect(root.querySelector('.work-history__toggle')).not.toBeNull()
+    expect(root.querySelector('[role="timer"]').textContent).toBe('4 s')
   })
 
   it('shows initial activity beside live duration with a persistent history toggle', async () => {
