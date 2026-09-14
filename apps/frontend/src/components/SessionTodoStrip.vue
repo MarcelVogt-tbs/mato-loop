@@ -1,7 +1,12 @@
 <template>
   <q-card v-if="visibleTodos.length" flat bordered class="session-todos app-surface" aria-live="polite">
-    <div class="session-todos__header text-weight-medium app-muted">Aufgaben · {{ progressPosition }}/{{ todos.length }}</div>
-    <q-separator />
+    <div class="session-todos__header text-weight-medium app-muted">Aufgaben · {{ completedCount }} von {{ todos.length }} erledigt</div>
+    <q-linear-progress
+      :value="completedCount / todos.length"
+      :color="completedCount === todos.length ? 'positive' : 'primary'"
+      size="2px"
+      aria-label="Aufgabenfortschritt"
+    />
     <div class="session-todos__list" role="list" aria-label="Aufgaben dieser Session">
       <div v-for="(todo, index) in visibleTodos" :key="index" class="session-todos__item" role="listitem">
         <q-icon
@@ -17,7 +22,7 @@
 </template>
 
 <script setup>
-import { QCard, QIcon, QSeparator } from 'quasar'
+import { QCard, QIcon, QLinearProgress } from 'quasar'
 import { computed } from 'vue'
 
 defineOptions({ name: 'SessionTodoStrip' })
@@ -42,7 +47,7 @@ const visibleTodos = computed(() => {
   if (!props.running) return []
   return currentIndex.value >= 0 ? [props.todos[currentIndex.value]] : []
 })
-const progressPosition = computed(() => currentIndex.value >= 0 ? currentIndex.value + 1 : props.todos.length)
+const completedCount = computed(() => props.todos.filter((todo) => todo.status === 'completed').length)
 </script>
 
 <style scoped>
