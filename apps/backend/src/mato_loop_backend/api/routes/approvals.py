@@ -43,6 +43,21 @@ def _permission_payload(
             resource_display = "Persönliche Skills"
         elif source and isinstance(source.payload.get("resourceDisplay"), str):
             resource_display = source.payload["resourceDisplay"]
+        if source is not None and isinstance(source.payload.get("sessionGrants"), list):
+            matching_scope = next(
+                (
+                    item for item in source.payload["sessionGrants"]
+                    if isinstance(item, dict)
+                    and item.get("resourceType") == grant.resource_type
+                    and item.get("resourceScope") == grant.resource_scope
+                    and f"resource.{item.get('access')}" == grant.capability
+                ),
+                None,
+            )
+            if matching_scope is not None and isinstance(
+                matching_scope.get("resourceDisplay"), str
+            ):
+                resource_display = matching_scope["resourceDisplay"]
         if grant.resource_type == "shell_command" and source is not None:
             shell_details = {
                 "shellClassification": source.payload.get("shellClassification"),

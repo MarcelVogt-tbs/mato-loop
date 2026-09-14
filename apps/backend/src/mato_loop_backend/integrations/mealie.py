@@ -761,6 +761,7 @@ def _permission(
     title: str,
     summary: str,
     display_items: tuple[Any, ...],
+    resource_key: str,
 ) -> tuple[Any, ...]:
     from mato_loop_backend.agent.permissions import integration_operation_permission
 
@@ -771,15 +772,11 @@ def _permission(
             integration_id=arguments.integration_id,
             binding_revision=revision,
             operation_key=operation_key,
+            grant_resource_key=resource_key,
             resource_display=f'Mealie-Konto "{_display_text(instance.name)}"',
             title=title,
             summary=summary,
             display_items=display_items,
-            available_decisions=(
-                ("allow_once", "allow_session", "deny")
-                if capability in {"recipes.read", "meal_plan.read"}
-                else ("allow_once", "deny")
-            ),
         ),
     )
 
@@ -821,6 +818,7 @@ def _search_permission(
             PermissionDisplayItem("Suche", query),
             PermissionDisplayItem("Anzahl", f"Bis zu {arguments.limit}"),
         ),
+        resource_key="recipes",
     )
 
 
@@ -850,6 +848,7 @@ def _recipe_get_permission(
         title="Rezept lesen?",
         summary=f'Der Agent möchte das Rezept "{name}" lesen.',
         display_items=(PermissionDisplayItem("Rezept", name),),
+        resource_key="recipes",
     )
 
 
@@ -870,6 +869,7 @@ def _meal_plan_get_permission(
             PermissionDisplayItem("Zeitraum", period),
             PermissionDisplayItem("Anzahl", f"Bis zu {arguments.limit}"),
         ),
+        resource_key="meal-plan",
     )
 
 
@@ -891,6 +891,7 @@ def _meal_plan_add_permission(
             PermissionDisplayItem("Eintrag", label),
             PermissionDisplayItem("Typ", arguments.entry_type),
         ),
+        resource_key="meal-plan",
     )
 
 
@@ -942,6 +943,7 @@ def _meal_plan_update_permission(
             PermissionDisplayItem("Eintrag", entry),
             PermissionDisplayItem("Änderungen", tuple(changes), format="list"),
         ),
+        resource_key="meal-plan",
     )
 
 
@@ -967,6 +969,7 @@ def _meal_plan_delete_permission(
             PermissionDisplayItem("Eintrag", entry),
             PermissionDisplayItem("Datum", day),
         ),
+        resource_key="meal-plan",
     )
 
 

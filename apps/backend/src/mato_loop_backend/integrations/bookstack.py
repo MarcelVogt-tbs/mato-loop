@@ -1713,7 +1713,6 @@ async def _authorize_book_writes(
             ),
             title="Buchzuordnung ändern?",
             summary="Der Agent möchte die Regalzuordnung dieses Buchs ändern.",
-            available_decisions=("allow_once", "deny"),
         )
         if await context.ask(request) != PermissionDecision.ALLOW:
             return ToolResult.error("permission.denied")
@@ -1746,11 +1745,6 @@ def _permission(
             ),
             title=title,
             summary=summary,
-            available_decisions=(
-                ("allow_once", "allow_session", "deny")
-                if capability == "knowledge.read"
-                else ("allow_once", "deny")
-            ),
         ),
     )
 

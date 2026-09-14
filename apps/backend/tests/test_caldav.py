@@ -713,12 +713,14 @@ def test_task_permissions_use_task_capabilities_and_exact_task_list_scope() -> N
     assert query.policy_resource_key == key
     assert query.resource_display == '"Teamaufgaben" · Konto "Arbeit"'
     assert query.available_decisions == ("allow_once", "allow_session", "deny")
+    assert json.loads(query.effective_session_grants[0].resource_scope)["resourceKey"] == key
     assert create.capability == "tasks.write"
     assert delete.capability == "tasks.delete"
     for permission in (create, create_many, update, completed, delete):
         assert json.loads(permission.resource_scope)["resourceKey"] == key
         assert permission.policy_resource_key == key
-        assert permission.available_decisions == ("allow_once", "deny")
+        assert permission.available_decisions == ("allow_once", "allow_session", "deny")
+        assert permission.effective_session_grants[0].access == "write"
     assert [(item.label, item.value) for item in create.display_items] == [
         ("Aktion", "Aufgabe erstellen"),
         ("Aufgabe", "Bericht abgeben"),

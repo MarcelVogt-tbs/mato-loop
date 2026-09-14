@@ -10,7 +10,12 @@ from mato_loop_backend.agent.approval_decisions import (
     ApprovalDecisionError,
     decide_agent_action,
 )
-from mato_loop_backend.agent.permissions import PermissionRequest
+from mato_loop_backend.agent.permissions import (
+    PermissionRequest,
+    execution_directory_scope,
+    session_grants_fingerprint,
+    shell_command_scope,
+)
 from mato_loop_backend.agent.runtime import AgentRuntime, ApprovalResolution
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.approvals import ApprovalDecisionRequest, decide_approval
@@ -46,13 +51,43 @@ def _approval() -> ApprovalRequest:
     )
 
 
+def _fingerprint(approval: ApprovalRequest) -> None:
+    approval.payload["sessionGrantsFingerprint"] = session_grants_fingerprint(
+        approval.capability,
+        approval.resource_type,
+        approval.resource_scope,
+        approval.payload["sessionGrants"],
+    )
+
+
 async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None:
     approval = _approval()
     profile_id = uuid4()
+    agent_id = uuid4()
+    approval.capability = "shell.write"
+    approval.resource_type = "shell_command"
+    approval.resource_scope = shell_command_scope(
+        agent_id, "/source", "write", [], ["/target/file"], True
+    )
     approval.payload = {
         "agentProfileId": str(profile_id),
         "trustLevel": "public",
+        "sessionGrants": [
+            {
+                "access": "write",
+                "resourceType": "execution_directory",
+                "resourceScope": execution_directory_scope(agent_id, "/source"),
+                "resourceDisplay": "/source",
+            },
+            {
+                "access": "write",
+                "resourceType": "execution_directory",
+                "resourceScope": execution_directory_scope(agent_id, "/target"),
+                "resourceDisplay": "/target",
+            },
+        ],
     }
+    _fingerprint(approval)
     user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = approval
@@ -68,12 +103,16 @@ async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None
         approval.id, ApprovalDecisionRequest(decision="allow_session"), user, db
     )
 
-    grant = db.add.call_args.args[0]
-    assert isinstance(grant, PermissionGrant)
-    assert grant.session_id == approval.session_id
-    assert grant.resource_scope == approval.resource_scope
-    assert grant.agent_profile_id == profile_id
-    assert grant.trust_level == "public"
+    grants = [call.args[0] for call in db.add.call_args_list]
+    assert all(isinstance(grant, PermissionGrant) for grant in grants)
+    assert [grant.capability for grant in grants] == ["resource.write", "resource.write"]
+    assert [grant.resource_scope for grant in grants] == [
+        execution_directory_scope(agent_id, "/source"),
+        execution_directory_scope(agent_id, "/target"),
+    ]
+    assert all(grant.session_id == approval.session_id for grant in grants)
+    assert all(grant.agent_profile_id == profile_id for grant in grants)
+    assert all(grant.trust_level == "public" for grant in grants)
     assert approval.status == "approved"
     db.commit.assert_awaited_once()
     db.refresh.assert_awaited_once_with(approval, with_for_update=True)
@@ -81,6 +120,135 @@ async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None
         approval.id, ApprovalResolution(decision="allow_session")
     )
     assert result == {"status": "approved", "decision": "allow_session"}
+
+
+async def test_allow_session_rejects_entire_malformed_grant_set(monkeypatch) -> None:
+    approval = _approval()
+    approval.payload = {
+        "sessionGrants": [
+            {
+                "access": "read",
+                "resourceType": "execution_directory",
+                "resourceScope": "source",
+                "resourceDisplay": "/source",
+            },
+            {
+                "access": "execute",
+                "resourceType": "execution_directory",
+                "resourceScope": "target",
+                "resourceDisplay": "/target",
+            },
+        ]
+    }
+    _fingerprint(approval)
+    user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = approval
+    claim = Mock(return_value=True)
+    release = Mock()
+    monkeypatch.setattr(AgentRuntime, "claim_approval_resolution", claim)
+    monkeypatch.setattr(AgentRuntime, "release_approval_resolution", release)
+
+    with pytest.raises(ApiError) as exc_info:
+        await decide_approval(
+            approval.id, ApprovalDecisionRequest(decision="allow_session"), user, db
+        )
+
+    assert exc_info.value.code == "approval.targetChanged"
+    assert approval.status == "pending"
+    db.add.assert_not_called()
+    db.commit.assert_not_awaited()
+    release.assert_called_once_with(approval.id)
+
+
+async def test_allow_session_accepts_257_scopes_and_rejects_258(monkeypatch) -> None:
+    approval = _approval()
+    agent_id = uuid4()
+    paths = [f"/target/{index}" for index in range(256)]
+    approval.capability = "shell.read"
+    approval.resource_type = "shell_command"
+    approval.resource_scope = shell_command_scope(
+        agent_id, "/workspace", "read", [], paths, True
+    )
+    user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = approval
+    db.scalar.return_value = None
+    monkeypatch.setattr(
+        AgentRuntime, "claim_approval_resolution", Mock(return_value=True)
+    )
+    release = Mock()
+    monkeypatch.setattr(AgentRuntime, "release_approval_resolution", release)
+    monkeypatch.setattr(AgentRuntime, "resolve_approval", Mock(return_value=True))
+    monkeypatch.setattr(run_events, "publish", AsyncMock())
+
+    def scopes(count):
+        values = ["/workspace", *paths]
+        return [
+            {
+                "access": "read",
+                "resourceType": "execution_directory",
+                "resourceScope": execution_directory_scope(
+                    agent_id, values[index % len(values)]
+                ),
+                "resourceDisplay": None,
+            }
+            for index in range(count)
+        ]
+
+    approval.payload = {"sessionGrants": scopes(258)}
+    _fingerprint(approval)
+    with pytest.raises(ApiError) as exc_info:
+        await decide_approval(
+            approval.id, ApprovalDecisionRequest(decision="allow_session"), user, db
+        )
+    assert exc_info.value.code == "approval.targetChanged"
+    release.assert_called_once_with(approval.id)
+    db.add.assert_not_called()
+
+    approval.payload = {"sessionGrants": scopes(257)}
+    _fingerprint(approval)
+    await decide_approval(
+        approval.id, ApprovalDecisionRequest(decision="allow_session"), user, db
+    )
+    assert db.add.call_count == 257
+
+
+async def test_allow_session_rejects_a_changed_scope_fingerprint(monkeypatch) -> None:
+    approval = _approval()
+    agent_id = uuid4()
+    approval.capability = "filesystem.read"
+    approval.resource_type = "execution_directory"
+    approval.resource_scope = execution_directory_scope(agent_id, "/source/file")
+    approval.payload = {
+        "sessionGrants": [{
+            "access": "read",
+            "resourceType": "execution_directory",
+            "resourceScope": execution_directory_scope(agent_id, "/source"),
+            "resourceDisplay": "/source",
+        }]
+    }
+    _fingerprint(approval)
+    approval.payload["sessionGrants"][0]["resourceScope"] = execution_directory_scope(
+        agent_id, "/"
+    )
+    user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = approval
+    monkeypatch.setattr(
+        AgentRuntime, "claim_approval_resolution", Mock(return_value=True)
+    )
+    release = Mock()
+    monkeypatch.setattr(AgentRuntime, "release_approval_resolution", release)
+
+    with pytest.raises(ApiError) as exc_info:
+        await decide_approval(
+            approval.id, ApprovalDecisionRequest(decision="allow_session"), user, db
+        )
+
+    assert exc_info.value.code == "approval.targetChanged"
+    release.assert_called_once_with(approval.id)
+    db.add.assert_not_called()
 
 
 async def test_deny_is_persisted_before_resuming_without_a_grant(monkeypatch) -> None:
@@ -177,6 +345,14 @@ async def test_http_retry_of_matching_decision_remains_non_idempotent() -> None:
 
 async def test_approval_without_live_waiter_expires_without_creating_grant(monkeypatch) -> None:
     approval = _approval()
+    approval.payload = {
+        "sessionGrants": [{
+            "access": "read",
+            "resourceType": "session",
+            "resourceScope": approval.resource_scope,
+            "resourceDisplay": None,
+        }]
+    }
     user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = approval

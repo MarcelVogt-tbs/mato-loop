@@ -143,7 +143,7 @@
               Die Einstufung ist keine Garantie für rein lesendes Verhalten.
             </div>
             <div v-if="shellPrefixes.length" class="q-mt-sm">
-              <div class="text-caption app-muted">Session-Präfixe</div>
+              <div class="text-caption app-muted">Erkannte Befehlspräfixe</div>
               <code v-for="prefix in shellPrefixes" :key="prefix" class="q-mr-sm">{{ prefix }}</code>
             </div>
           </div>
@@ -364,7 +364,9 @@ const presentation = computed(() => toolPresentation(
   approvalTool.value,
   sharedDraft.value ? [
     { label: 'Shell-Befehl', value: sharedDraft.value.command, format: 'code' },
-    { label: 'Terminal-Ordner', value: sharedDraft.value.currentDirectory, format: 'code' }
+    { label: 'Terminal-Ordner', value: sharedDraft.value.currentDirectory, format: 'code' },
+    ...(props.approval.payload?.displayItems || [])
+      .filter((item) => !['Shell-Befehl', 'Terminal-Ordner'].includes(item.label))
   ] : props.approval.details?.displayItems
 ))
 const skillPreview = computed(() => skillDraftApproval.value

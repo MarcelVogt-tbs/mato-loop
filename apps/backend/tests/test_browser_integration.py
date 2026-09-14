@@ -539,6 +539,11 @@ async def test_approval_scope_binds_exact_action_and_live_attachment(browser_cas
     assert [request.capability for request in requests] == ["browser.write", "browser.read"]
     request = requests[0]
     assert request.policy_integration_id == case.instance.id
+    assert all(
+        item.effective_session_grants[0].resource_display
+        == "Freigegebener Browser (alle Tabs)"
+        for item in requests
+    )
     scope = json.loads(request.resource_scope)
     assert scope["integrationId"] == str(case.instance.id)
     args = case.coordinator.execute.await_args.args[-1]

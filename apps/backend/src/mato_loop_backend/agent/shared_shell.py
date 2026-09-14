@@ -13,6 +13,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionRequest,
+    session_grants_display,
+    session_grants_fingerprint,
+    session_grants_payload,
     shell_command_permission,
 )
 from mato_loop_backend.agent.tool_registry import ToolContext, ToolResult
@@ -66,16 +69,28 @@ class SharedCommand:
 
     def update_approval(self, approval: ApprovalRequest, snapshot: SharedInspectResult) -> PermissionRequest:
         permission = self.permission(snapshot)
+        grant_payload = session_grants_payload(permission)
         for name in ("capability", "resource_type", "resource_scope", "title", "summary", "risk_level"):
             setattr(approval, name, getattr(permission, name))
         approval.available_decisions = list(permission.available_decisions)
         approval.payload = {
             **approval.payload, **permission.approval_details,
             "resourceDisplay": permission.resource_display,
+            "sessionGrants": grant_payload,
+            "sessionGrantsFingerprint": session_grants_fingerprint(
+                permission.capability,
+                permission.resource_type,
+                permission.resource_scope,
+                grant_payload,
+            ),
             "displayItems": [
                 {"label": item.label, "value": item.value, "format": item.format}
                 for item in permission.display_items
-            ],
+            ] + ([{
+                "label": "Für diese Session",
+                "value": session_grants_display(permission),
+                "format": "list",
+            }] if "allow_session" in permission.available_decisions else []),
         }
         self.reviewed = snapshot
         return permission

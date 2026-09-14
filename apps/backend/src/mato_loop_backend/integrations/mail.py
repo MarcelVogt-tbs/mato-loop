@@ -599,11 +599,6 @@ def _permission(capability: str, operation: str, arguments: Any, context: Any):
             resource_display=instance.name,
             action_kind=operation,
             risk_level="high" if capability in {"mail.send", "mail.delete"} else "medium",
-            available_decisions=(
-                ("allow_once", "allow_session", "deny")
-                if capability == "mail.read"
-                else ("allow_once", "deny")
-            ),
         ),
     )
 

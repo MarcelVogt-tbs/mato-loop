@@ -1063,7 +1063,7 @@ class ProcessRunner:
                 path = path.rpartition("/")[0]
                 if not path or any(c in path for c in "$`*?[]{}~"):
                     return
-                kind, must_exist = "path", True
+                kind, must_exist = "directory", True
             # Missing literals still carry their absolute path for policy checks. Hard
             # no-follow/access errors must not be mistaken for incomplete analysis.
             target = self.filesystem.resolve_path_target(path, current, must_exist=False)

@@ -40,6 +40,9 @@ from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionPolicy,
     PermissionRequest,
+    session_grants_display,
+    session_grants_fingerprint,
+    session_grants_payload,
     shell_prefix_allowed,
 )
 from mato_loop_backend.agent.research import (
@@ -5190,6 +5193,13 @@ class AgentRuntime:
                     else None
                 ),
                 "trustLevel": run.trust_level,
+                "sessionGrants": (grant_payload := session_grants_payload(permission)),
+                "sessionGrantsFingerprint": session_grants_fingerprint(
+                    permission.capability,
+                    permission.resource_type,
+                    permission.resource_scope,
+                    grant_payload,
+                ),
                 **(permission.approval_details or {}),
                 **({"initialReviewRevision": permission.approval_details["sharedDraft"]["inspectionRevision"]}
                    if permission.shared_command_id is not None else {}),
@@ -5201,7 +5211,11 @@ class AgentRuntime:
                         "format": item.format,
                     }
                     for item in permission.display_items
-                ],
+                ] + ([{
+                    "label": "Für diese Session",
+                    "value": session_grants_display(permission),
+                    "format": "list",
+                }] if "allow_session" in permission.available_decisions else []),
             },
             available_decisions=list(permission.available_decisions),
         )

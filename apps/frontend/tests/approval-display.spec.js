@@ -112,6 +112,36 @@ describe('approval display', () => {
     }
   })
 
+  it('describes unified read and write areas explicitly', () => {
+    expect(permissionGrantDisplay({
+      capability: 'resource.read',
+      resourceType: 'execution_directory',
+      resourceDisplay: '/opt'
+    })).toEqual({
+      label: 'Alle passenden lesenden Datei- und Shell-Aktionen',
+      value: '/opt und Unterordner',
+      icon: 'visibility'
+    })
+    expect(permissionGrantDisplay({
+      capability: 'resource.write',
+      resourceType: 'integration_resource',
+      resourceDisplay: 'Kalender „Privat“'
+    })).toEqual({
+      label: 'Alle passenden schreibenden Aktionen',
+      value: 'Kalender „Privat“',
+      icon: 'edit'
+    })
+    expect(permissionGrantDisplay({
+      capability: 'resource.read',
+      resourceType: 'root_path',
+      resourceDisplay: 'Sitzungsdateien'
+    })).toEqual({
+      label: 'Alle passenden lesenden Dateiaktionen',
+      value: 'Sitzungsdateien und Unterordner',
+      icon: 'visibility'
+    })
+  })
+
   it.each([
     ['shell.read', 'Shell-Befehle ohne erkannte Schreibaktionen'],
     ['shell.write', 'Als schreibend eingestufte Shell-Befehle']

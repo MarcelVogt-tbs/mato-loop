@@ -255,6 +255,17 @@ def test_control_once_proof_is_bound_to_operation(request_case):
     future.cancel()
 
 
+def test_control_session_grant_displays_attachment_wide_scope(request_case):
+    case = request_case
+    future = case.start()
+    request = next(iter(control.browser_control_requests.requests.values()))
+    assert (
+        request.permission.effective_session_grants[0].resource_display
+        == "Freigegebener Browser (alle Tabs)"
+    )
+    future.cancel()
+
+
 @pytest.mark.parametrize("change", ["new-browser", "open-close", "detach", "takeover"])
 def test_approval_cannot_retarget_changed_browser_binding(request_case, change):
     case = request_case

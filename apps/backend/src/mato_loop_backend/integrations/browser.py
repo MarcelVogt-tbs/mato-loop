@@ -307,9 +307,12 @@ async def _release_authorization(_arguments: BrowserReleaseControlArguments, con
         integration_id=connection.integration_id,
         binding_revision=context.bound_options["binding_revision"],
         operation_key=f"release:{connection.browser_id}:{connection.attachment_revision}",
+        grant_resource_key=(
+            f"browser:{connection.browser_id}:attachment:{connection.attachment_revision}"
+        ),
         title="Browser-Steuerung freigeben?",
         summary="Der Agent möchte die Browser-Steuerung an dich zurückgeben.",
-        resource_display="Browser",
+        resource_display="Freigegebener Browser (alle Tabs)",
         action_kind="browser_control",
         risk_level="low",
     ),)
@@ -356,6 +359,9 @@ async def _authorization(arguments: BrowserActionArguments | _BrowserArguments, 
         integration_id=connection.integration_id,
         binding_revision=context.bound_options["binding_revision"],
         operation_key=hashlib.sha256(json.dumps({**operation, "capability": capability}, sort_keys=True).encode()).hexdigest(),
+        grant_resource_key=(
+            f"browser:{connection.browser_id}:attachment:{connection.attachment_revision}"
+        ),
         title="Browser-Code ausführen?" if arguments.action in {"run_code", "evaluate"} else "Browser verwenden?",
         summary=(
             "Der Agent möchte freien Python-Code mit den Betriebssystemrechten des Browser-Prozesses ausführen."
@@ -364,7 +370,7 @@ async def _authorization(arguments: BrowserActionArguments | _BrowserArguments, 
             if arguments.action == "evaluate" else
             "Der Agent möchte im freigegebenen Browser lesen oder eine Aktion ausführen."
         ),
-        resource_display=arguments.url or arguments.tab_id or "Browser",
+        resource_display="Freigegebener Browser (alle Tabs)",
         action_kind="browser_action",
     ), approval_details={"browser": operation}) for capability in capabilities)
 

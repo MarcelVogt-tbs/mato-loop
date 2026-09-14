@@ -1064,6 +1064,8 @@ class ShellInspectionTests(unittest.TestCase):
             {"/outside/file", "/confidential/file", "/workspace/new"}
             <= {t["path"] for t in result["targets"]}
         )
+        dynamic = self.inspect("cat /missing-parent/$MISSING")
+        self.assertIn({"path": "/missing-parent", "kind": "directory"}, dynamic["targets"])
         (self.root / "workspace/link").symlink_to("../outside/file")
         for command in (
             "cat missing link",

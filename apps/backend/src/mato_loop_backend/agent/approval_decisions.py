@@ -7,6 +7,11 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.permissions import (
+    SessionGrantScope,
+    session_grant_matches_request,
+    session_grants_fingerprint,
+)
 from mato_loop_backend.agent.runtime import AgentRuntime, ApprovalResolution
 from mato_loop_backend.events import run_events
 from mato_loop_backend.execution import ExecutionClientError
@@ -111,11 +116,50 @@ async def _decide_agent_action(
         reviewed_request = await prepare_decision(
             db, approval, shared_command, decision, expected_revision, submitted=terminal_submitted,
         )
+    scopes = (approval.payload or {}).get("sessionGrants")
     if not AgentRuntime.claim_approval_resolution(approval.id):
         approval.status = "expired"
         approval.resolved_at = datetime.now(UTC)
         await db.commit()
         raise ApprovalDecisionError(409, "approval.runInactive")
+    if decision == "allow_session" and (
+        not isinstance(scopes, list)
+        or not 1 <= len(scopes) <= 257
+        or (approval.payload or {}).get("sessionGrantsFingerprint")
+        != session_grants_fingerprint(
+            approval.capability,
+            approval.resource_type,
+            approval.resource_scope,
+            scopes,
+        )
+        or any(
+            not isinstance(scope, dict)
+            or set(scope) != {
+                "access", "resourceType", "resourceScope", "resourceDisplay"
+            }
+            or scope["access"] not in {"read", "write"}
+            or not isinstance(scope["resourceType"], str)
+            or not 1 <= len(scope["resourceType"]) <= 80
+            or not isinstance(scope["resourceScope"], str)
+            or len(scope["resourceScope"]) > 50_000
+            or scope["resourceDisplay"] is not None
+            and not isinstance(scope["resourceDisplay"], str)
+            or not session_grant_matches_request(
+                approval.capability,
+                approval.resource_type,
+                approval.resource_scope,
+                SessionGrantScope(
+                    scope["access"],
+                    scope["resourceType"],
+                    scope["resourceScope"],
+                    scope["resourceDisplay"],
+                ),
+            )
+            for scope in scopes
+        )
+    ):
+        AgentRuntime.release_approval_resolution(approval.id)
+        raise ApprovalDecisionError(409, "approval.targetChanged")
 
     approval.status = "approved" if decision.startswith("allow") else "denied"
     if terminal_cancelled:
@@ -128,7 +172,7 @@ async def _decide_agent_action(
             "approvedRevision": expected_revision,
         }
 
-    created_grant: PermissionGrant | None = None
+    created_grants: list[PermissionGrant] = []
     if decision == "allow_session":
         profile_id = approval.payload.get("agentProfileId")
         trust_level = approval.payload.get("trustLevel")
@@ -138,27 +182,30 @@ async def _decide_agent_action(
             profile_id = None
         if trust_level not in {"private", "public"}:
             trust_level = None
-        existing_grant = await db.scalar(
-            select(PermissionGrant).where(
-                PermissionGrant.session_id == approval.session_id,
-                PermissionGrant.capability == approval.capability,
-                PermissionGrant.resource_type == approval.resource_type,
-                PermissionGrant.resource_scope == approval.resource_scope,
-                PermissionGrant.agent_profile_id == profile_id,
-                PermissionGrant.trust_level == trust_level,
+        for scope in scopes:
+            capability = f"resource.{scope['access']}"
+            existing_grant = await db.scalar(
+                select(PermissionGrant).where(
+                    PermissionGrant.session_id == approval.session_id,
+                    PermissionGrant.capability == capability,
+                    PermissionGrant.resource_type == scope["resourceType"],
+                    PermissionGrant.resource_scope == scope["resourceScope"],
+                    PermissionGrant.agent_profile_id == profile_id,
+                    PermissionGrant.trust_level == trust_level,
+                )
             )
-        )
-        if existing_grant is None:
-            created_grant = PermissionGrant(
-                session_id=approval.session_id,
-                capability=approval.capability,
-                resource_type=approval.resource_type,
-                resource_scope=approval.resource_scope,
-                agent_profile_id=profile_id,
-                trust_level=trust_level,
-                source_approval_id=approval.id,
-            )
-            db.add(created_grant)
+            if existing_grant is None:
+                grant = PermissionGrant(
+                    session_id=approval.session_id,
+                    capability=capability,
+                    resource_type=scope["resourceType"],
+                    resource_scope=scope["resourceScope"],
+                    agent_profile_id=profile_id,
+                    trust_level=trust_level,
+                    source_approval_id=approval.id,
+                )
+                created_grants.append(grant)
+                db.add(grant)
 
     try:
         await db.commit()
@@ -179,8 +226,8 @@ async def _decide_agent_action(
             for key, value in approval.payload.items()
             if key != "approvedRevision"
         }
-        if created_grant is not None:
-            await db.delete(created_grant)
+        for grant in created_grants:
+            await db.delete(grant)
         await db.commit()
         raise ApprovalDecisionError(409, "approval.runInactive")
 

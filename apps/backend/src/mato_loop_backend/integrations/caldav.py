@@ -1387,11 +1387,6 @@ def _permission(
             use_integration_policy=use_integration_policy,
             title=title,
             summary=summary,
-            available_decisions=(
-                ("allow_once", "allow_session", "deny")
-                if capability == "calendar.read"
-                else ("allow_once", "deny")
-            ),
         ),
     )
 
@@ -1530,11 +1525,6 @@ def _task_permission(
             title=title,
             summary=summary,
             display_items=display_items,
-            available_decisions=(
-                ("allow_once", "allow_session", "deny")
-                if capability == "tasks.read"
-                else ("allow_once", "deny")
-            ),
         ),
     )
 

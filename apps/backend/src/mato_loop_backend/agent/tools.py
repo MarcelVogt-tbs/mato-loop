@@ -31,6 +31,7 @@ from mato_loop_backend.agent.permissions import (
     PermissionDisplayItem,
     PermissionPolicy,
     PermissionRequest,
+    SessionGrantScope,
     agent_identity_permission,
     automation_collection_scope,
     automation_scope,
@@ -371,6 +372,7 @@ def _filesystem_permission(
     root_files: RootFileService | None = None,
     target_session_id: UUID | None = None,
 ) -> PermissionRequest:
+    parent_grant = action_kind in {"write_file", "edit_file", "apply_patch"}
     if FileRoot(root) is FileRoot.WORKSPACE:
         client = _workspace_client(context)
         absolute_path = _execution_path(context, path)
@@ -381,6 +383,7 @@ def _filesystem_permission(
             action_kind=action_kind,
             title=f"{action_label} erlauben?",
             summary=f"Der Agent möchte {absolute_path} verwenden.",
+            grant_path=posixpath.dirname(absolute_path) if parent_grant else absolute_path,
         )
     selected_files = root_files or context.root_files
     if target_session_id is not None and target_session_id != context.session.id:
@@ -400,6 +403,7 @@ def _filesystem_permission(
         relative_path=path,
         action_kind=action_kind,
         action_label=action_label,
+        grant_path=(posixpath.dirname(path) or "." if parent_grant else path),
     )
 
 
@@ -572,7 +576,6 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
         if arguments.root == "workspace"
         else root_files.normalize_relative_path(arguments.path)
     )
-    kind: str
     if arguments.root == "workspace":
         stat_result = await _workspace_request(
             context,
@@ -580,6 +583,7 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
             {"path": normalized_path},
             WorkspaceStatResult,
         )
+        _require_workspace_path(stat_result.path, normalized_path)
         kind = stat_result.kind
     else:
         kind = root_files.path_kind(arguments.root, normalized_path)
@@ -850,7 +854,6 @@ async def _provide_file(
             return ToolResult.error("permission.denied")
 
     path = paths[0]
-    kind: str
     if arguments.root == "workspace":
         stat_result = await client.request(
             "filesystem.stat", {"path": path}, WorkspaceStatResult
@@ -872,7 +875,7 @@ async def _provide_file(
         if arguments.root == "workspace" and not client.supports("filesystem.list"):
             return ToolResult.error("executionAgent.operationUnavailable")
 
-        async def stat_source(source: str) -> ArchiveEntry:
+        async def archive_stat_source(source: str) -> ArchiveEntry:
             if arguments.root == "workspace":
                 item = await client.request(
                     "filesystem.stat", {"path": source}, WorkspaceStatResult
@@ -911,7 +914,7 @@ async def _provide_file(
         try:
             archive = await create_zip_archive(
                 paths,
-                stat_path=stat_source,
+                stat_path=archive_stat_source,
                 list_directory=list_source,
                 open_file=open_source,
                 file_list=arguments.paths is not None,
@@ -4329,6 +4332,21 @@ async def _authorize_coding(
             title=title,
             summary=summary,
             resource_display=project.name,
+            session_grants=(SessionGrantScope(
+                (
+                    "read"
+                    if capability in {"coding.analyze", "coding.plan.read"}
+                    else "write"
+                ),
+                "project",
+                json.dumps(
+                    {"capability": capability, "projectId": str(project.id)},
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+                project.name,
+            ),),
         ),
     )
     if not allowed:
