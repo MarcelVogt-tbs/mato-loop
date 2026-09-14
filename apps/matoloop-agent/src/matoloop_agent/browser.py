@@ -11,6 +11,7 @@ import shutil
 import signal
 import stat
 import sys
+import tempfile
 from pathlib import Path
 from time import monotonic
 from uuid import uuid4
@@ -24,13 +25,15 @@ from .browser_contracts import (
     BrowserClipboardResult,
     BrowserExecuteArguments,
     BrowserFileOkResult,
+    BrowserFilesResult,
     BrowserIdArguments,
     BrowserNavigationResult,
+    BrowserPublishResult,
     BrowserResizeResult,
     BrowserSetupReadResult,
     BrowserStatus,
 )
-from .filesystem import AgentError
+from .filesystem import AgentError, Filesystem, _parts
 from .terminal import MAX_BUFFER_BYTES, TerminalManager
 
 logger = logging.getLogger(__name__)
@@ -45,9 +48,12 @@ def browser_command(command: str) -> list[str]:
 
 
 class BrowserManager:
-    def __init__(self, config, terminal: TerminalManager) -> None:
+    def __init__(
+        self, config, terminal: TerminalManager, filesystem: Filesystem | None = None
+    ) -> None:
         self.config = config
         self.terminal = terminal
+        self.filesystem = filesystem
         self.lock = asyncio.Lock()
         self.worker = None
         self.container = os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1"
@@ -63,6 +69,7 @@ class BrowserManager:
         self.setup_offset = 0
         self.setup_task = None
         self.last_status = BrowserStatus(state="missing")
+        self.publish_receipts: dict[str, tuple[str, str, dict]] = {}
 
     def environment(self) -> tuple[dict[str, str], dict]:
         import pwd
@@ -242,6 +249,10 @@ class BrowserManager:
                 raise AgentError(code, "Browser worker operation failed")
             if op == "file":
                 return BROWSER_FILE_RESULT.validate_python(response["result"]).model_dump(
+                    by_alias=True, exclude_none=True
+                )
+            if op == "files":
+                return BrowserFilesResult.model_validate(response["result"]).model_dump(
                     by_alias=True, exclude_none=True
                 )
             if op == "execute":
@@ -475,6 +486,126 @@ class BrowserManager:
             if not ready.done():
                 ready.set_result(False)
 
+    async def publish(self, args) -> dict:
+        cached = self.publish_receipts.get(args.file_id)
+        if cached is not None:
+            if cached[:2] != (args.expected_origin, args.path):
+                raise AgentError("browser.invalidTarget", "Download publication differs")
+            return cached[2]
+        if self.filesystem is None:
+            raise AgentError("browser.actionFailed", "Filesystem is unavailable")
+        root = self.config.home_directory / "browser" / "downloads"
+        root_parts, destination_parts = _parts(os.fspath(root)), _parts(args.path)
+        if destination_parts[:-1] != root_parts or len(destination_parts) != len(root_parts) + 1:
+            raise AgentError("browser.invalidTarget", "Download destination is invalid")
+        listing = await self.rpc("files")
+        entry = next((item for item in listing["downloads"] if item["id"] == args.file_id), None)
+        if (
+            entry is None
+            or entry["status"] != "ready"
+            or entry.get("origin") != args.expected_origin
+        ):
+            raise AgentError("browser.invalidTarget", "Download is not publishable")
+        self.filesystem.mkdir(os.fspath(root), True)
+        with tempfile.TemporaryDirectory(
+            prefix="browser-publish-", dir=self.config.data_dir
+        ) as temporary:
+            source = Path(temporary) / "download"
+            digest = hashlib.sha256()
+            offset = 0
+            with source.open("xb") as handle:
+                while offset < entry["size"]:
+                    chunk = await self.rpc(
+                        "file",
+                        args={
+                            "browserId": args.browser_id,
+                            "action": "read",
+                            "fileId": args.file_id,
+                            "offset": offset,
+                        },
+                    )
+                    data = base64.b64decode(chunk["data"], validate=True)
+                    if (
+                        chunk["fileId"] != args.file_id
+                        or chunk["size"] != entry["size"]
+                        or chunk["offset"] != offset + len(data)
+                        or not data
+                    ):
+                        raise AgentError("browser.actionFailed", "Download chunk is invalid")
+                    offset = chunk["offset"]
+                    if chunk["complete"] != (offset == entry["size"]):
+                        raise AgentError("browser.actionFailed", "Download completion is invalid")
+                    digest.update(data)
+                    handle.write(data)
+            if offset != entry["size"] or digest.hexdigest() != entry["sha256"]:
+                raise AgentError("browser.actionFailed", "Download content is invalid")
+            result = self.filesystem.import_file(
+                args.path, source, False, entry["size"], entry["sha256"]
+            )
+        receipt = BrowserPublishResult.model_validate(result).model_dump()
+        self.publish_receipts[args.file_id] = (args.expected_origin, args.path, receipt)
+        with contextlib.suppress(AgentError):
+            await self.rpc(
+                "file",
+                args={
+                    "browserId": args.browser_id,
+                    "action": "delete",
+                    "fileId": args.file_id,
+                },
+            )
+        return receipt
+
+    async def stage_upload(self, args) -> dict:
+        if self.filesystem is None:
+            raise AgentError("browser.actionFailed", "Filesystem is unavailable")
+        export = self.filesystem.open_export(args.path)
+        handle, size, _ = export.__enter__()
+        file_id = None
+        try:
+            if size > MAX_FILE_BYTES:
+                raise AgentError("browser.fileTooLarge", "Browser file is too large")
+            staged = await self.rpc(
+                "file",
+                args={
+                    "browserId": args.browser_id,
+                    "action": "begin",
+                    "filename": Path(args.path).name,
+                    "size": size,
+                },
+            )
+            file_id = staged["fileId"]
+            offset = 0
+            while data := handle.read(65_536):
+                staged = await self.rpc(
+                    "file",
+                    args={
+                        "browserId": args.browser_id,
+                        "action": "write",
+                        "fileId": file_id,
+                        "offset": offset,
+                        "data": base64.b64encode(data).decode("ascii"),
+                    },
+                )
+                offset = staged["offset"]
+            return await self.rpc(
+                "file",
+                args={"browserId": args.browser_id, "action": "finish", "fileId": file_id},
+            )
+        except BaseException:
+            if file_id is not None:
+                with contextlib.suppress(AgentError):
+                    await self.rpc(
+                        "file",
+                        args={
+                            "browserId": args.browser_id,
+                            "action": "delete",
+                            "fileId": file_id,
+                        },
+                    )
+            raise
+        finally:
+            export.__exit__(None, None, None)
+
     async def dispatch(self, operation: str, args) -> dict:
         action = operation.rsplit(".", 1)[-1]
         try:
@@ -512,6 +643,7 @@ class BrowserManager:
                             return {"browserId": self.browser_id}
                         raise AgentError("browser.busy", "Another browser is active")
                     try:
+                        self.publish_receipts.clear()
                         await self.spawn(self.runtime_root(root))
                         self.last_status = BrowserStatus.model_validate(
                             await self.rpc("start", colorScheme=args.color_scheme)
@@ -545,6 +677,12 @@ class BrowserManager:
                     if not await ready:
                         raise AgentError("browser.notConnected", "Browser relay could not connect")
                     return {"ok": True}
+                if action == "files":
+                    return await self.rpc("files")
+                if action == "publish":
+                    return await self.publish(args)
+                if action == "upload":
+                    return await self.stage_upload(args)
                 if action == "execute" and not args.allow_network:
                     await self.close()
                     raise AgentError(
@@ -566,7 +704,9 @@ class BrowserManager:
                         raise
                 return await self.rpc(action, args=args.model_dump(by_alias=True))
         except AgentError as exc:
-            if exc.code.startswith("browser."):
+            if exc.code.startswith("browser.") or (
+                action == "publish" and exc.code == "path.exists"
+            ):
                 raise
             raise AgentError("browser.actionFailed", "Browser operation failed") from None
         except Exception:

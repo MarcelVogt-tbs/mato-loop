@@ -1,6 +1,6 @@
 # Linux Browser Runtime
 
-The agent advertises 55 operations, including 15 `integration.browser.*` operations.
+The agent advertises 58 operations, including 18 `integration.browser.*` operations.
 The browser is headed Playwright-managed Chromium, with an authenticated private Xvfb
 display, Openbox and x11vnc in inetd mode. VNC has no TCP listener or public port.
 Xvfb starts with a 3840x2160 allocation, then uses exact generated RandR modes through
@@ -339,6 +339,34 @@ The shared contract is implemented with these explicit additions:
 - Tabs are limited to 32, text to 32,768 characters, and diagnostics to 50 entries of
   500 characters. Scaled screenshots use the ordinary staging limits. Downloads are captured from both
   native clicks and model actions. User uploads are ordinary file-input selections.
+- Host-only `integration.browser.control` may additionally include both `origin` (a
+  non-empty opaque string of at most 255 characters) and `controlEpoch` (a non-negative
+  integer). Omitting both preserves compatibility. Supplying only one is invalid. Each
+  download event synchronously captures the current pair before asynchronous transfer work.
+  The origin is the controller active when Playwright emits the download event, not causal
+  attribution to an earlier click. Delayed site activity emitted after a control handoff
+  belongs to the new control epoch; the agent does not attempt impossible causal tracking.
+- Host-only `integration.browser.files` takes `{browserId}` and returns
+  `{downloads:[{id,filename,status,origin?,controlEpoch?,size?,sha256?,errorCode?}]}`.
+  Status is `pending`, `ready`, or `failed`; ready entries have verified size and SHA-256,
+  failed entries have a controlled browser error code, and the list remains bounded by the
+  existing 32-entry staging cap. Failed entries have no backing bytes and do not consume file
+  or byte admission capacity; the oldest failures are evicted when metadata needs room.
+  Existing execute results still list ready downloads as
+  `{id,filename,size}`.
+- Host-only `integration.browser.publish` takes
+  `{browserId,fileId,path,expectedOrigin}`. `path` must be an exact absolute direct child of
+  `<homeDirectory>/browser/downloads`. The manager creates that directory through the safe
+  filesystem API, reads checked worker chunks into a private temporary file, validates the
+  ready entry's size and SHA-256, and calls `Filesystem.import_file` with overwrite disabled.
+  It caches the `{path,size,sha256}` receipt before deleting worker staging, so an identical
+  retry is idempotent; reuse of the same file ID with another origin or path is rejected.
+  An existing destination preserves only the controlled `path.exists` agent code, which the
+  backend protocol maps to `file.pathAlreadyExists`; other filesystem errors remain masked.
+- Host-only `integration.browser.upload` takes `{browserId,path}` and returns the existing
+  completed file chunk descriptor. It holds `Filesystem.open_export(path)` while streaming
+  its bytes through existing browser `begin`/`write`/`finish` chunks. No durable upload copy
+  or additional transport is created; failed staging is deleted when possible.
 
 The native artifact includes the setup script and Playwright driver resources, but
 not Chromium itself; setup downloads the matched build. Frozen root-run installations

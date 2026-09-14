@@ -547,7 +547,9 @@ def test_cancelled_queued_takeover_never_dispatches_control_rpc(request_case, ca
         assert socket.receive_json()["type"] == "error"
     if cancel == "run":
         assert future.result(timeout=3).is_error
-    assert [operation for operation, _ in case.calls] == ["integration.browser.open", "integration.browser.close"]
+    assert [operation for operation, _ in case.calls] == [
+        "integration.browser.open", "integration.browser.control", "integration.browser.close",
+    ]
     assert not case.coordinator.connections
     assert previous.closed and not previous.attached
     old_socket.close.assert_awaited()
@@ -595,7 +597,7 @@ def test_takeover_revalidates_between_fences_before_next_rpc(request_case, cance
     with connect_request(case, info) as socket:
         assert receive_state(socket)["type"] == "error"
     assert future.result(timeout=3).is_error
-    assert [arguments["manual"] for operation, arguments in case.calls if operation == "integration.browser.control"] == [False]
+    assert [arguments["manual"] for operation, arguments in case.calls if operation == "integration.browser.control"] == [True, False]
     assert previous.closed and not previous.attached and not case.coordinator.connections
 
 

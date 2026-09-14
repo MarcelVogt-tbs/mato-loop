@@ -4,11 +4,13 @@ import asyncio
 import base64
 import binascii
 import hashlib
+import json
 import logging
 import secrets
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import PurePosixPath
 from tempfile import SpooledTemporaryFile
 from time import monotonic
 from typing import TYPE_CHECKING, Any
@@ -18,6 +20,11 @@ from anyio import CancelScope
 from fastapi import WebSocket
 from pydantic import ValidationError
 
+from mato_loop_backend.agent.permissions import (
+    PermissionDecision,
+    execution_directory_permission,
+    integration_operation_permission,
+)
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution.browser_contracts import (
@@ -26,18 +33,33 @@ from mato_loop_backend.execution.browser_contracts import (
     BrowserControlResult,
     BrowserExecuteArguments,
     BrowserFileArguments,
+    BrowserFileListResult,
     BrowserFileResult,
     BrowserInspectionData,
     BrowserNavigationArguments,
     BrowserNavigationResult,
     BrowserOpenResult,
+    BrowserOrigin,
+    BrowserPublishedDownloadResult,
     BrowserResizeResult,
 )
-from mato_loop_backend.execution.client import ExecutionClient, ExecutionClientError
+from mato_loop_backend.execution.client import (
+    ExecutionClient,
+    ExecutionClientError,
+    WorkspaceStatResult,
+)
 from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.integrations.browser import browser_client, load_browser_integration
-from mato_loop_backend.models import ChatSession, LoginSession, UserAccount
+from mato_loop_backend.models import (
+    AgentRun,
+    ChatSession,
+    ExecutionAgent,
+    LoginSession,
+    UserAccount,
+)
+from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings.effective import AgentProfileUnavailable, load_agent_profile
+from mato_loop_backend.workspace import RootFileService
 
 if TYPE_CHECKING:
     from mato_loop_backend.execution.browser_control import ControlRequest
@@ -45,7 +67,37 @@ if TYPE_CHECKING:
 ACCESS_INTERVAL = 2
 IDLE_SECONDS = 30
 MAX_BROWSERS = 32
+DOWNLOAD_COLLISION_LIMIT = 100
 logger = logging.getLogger(__name__)
+
+
+def browser_download_path(home: PurePosixPath, filename: str, index: int) -> str:
+    if index == 0:
+        name = filename
+    else:
+        suffix = PurePosixPath(filename).suffix
+        marker = f" ({index})"
+        if len(suffix) + len(marker) >= 255:
+            suffix = ""
+        stem = filename[:-len(suffix)] if suffix else filename
+        name = f"{stem[:255 - len(marker) - len(suffix)]}{marker}{suffix}"
+    return str(home / "browser" / "downloads" / name)
+
+
+async def available_browser_download_path(connection: Any, home: PurePosixPath, filename: str) -> str:
+    for index in range(DOWNLOAD_COLLISION_LIMIT):
+        candidate = browser_download_path(home, filename, index)
+        try:
+            result = await connection.request(
+                "filesystem.stat", {"path": candidate}, WorkspaceStatResult,
+            )
+        except ExecutionClientError as exc:
+            if exc.code == "file.pathNotFound":
+                return candidate
+            raise
+        if result.path != candidate:
+            raise ExecutionClientError("executionAgent.protocolError")
+    raise ExecutionClientError("file.pathAlreadyExists")
 
 
 @contextmanager
@@ -134,6 +186,9 @@ class BrowserConnection:
     resetting_view: bool = False
     manual_enabled: bool = True
     navigation: BrowserNavigationResult | None = None
+    downloads: list[dict[str, Any]] = field(default_factory=list)
+    origins: dict[str, tuple[BrowserOrigin, int]] = field(default_factory=dict)
+    control_epoch: int = 0
     task: asyncio.Task | None = None
     idle_task: asyncio.Task | None = None
     action_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -156,7 +211,19 @@ class BrowserConnection:
             "busy": self.busy or self.resetting_view or (not self.attached and not self.manual_enabled),
             "canAttach": self.can_attach,
             "attachReason": None if self.can_attach else "tool.unavailable",
+            "downloads": self.downloads,
         })
+
+    def origin(self, kind: str, *, run_id: UUID | None = None) -> dict[str, Any]:
+        origin = BrowserOrigin(
+            id=uuid4(), kind=kind, owner_id=self.owner_id, session_id=self.session_id,
+            integration_id=self.integration_id, run_id=run_id,
+            view_id=self.view_id if kind == "human" else None,
+        )
+        self.control_epoch += 1
+        token = str(origin.id)
+        self.origins[token] = (origin, self.control_epoch)
+        return {"origin": token, "controlEpoch": self.control_epoch}
 
     async def check_access(self) -> None:
         if self.closed or execution_agent_connections.generation(self.agent_id) != self.generation:
@@ -266,6 +333,8 @@ class BrowserCoordinator:
                 connection.action_lock = previous.action_lock
                 connection.attachment_revision = previous.attachment_revision
                 connection.manual_enabled = False
+                connection.origins = previous.origins
+                connection.control_epoch = previous.control_epoch
             from mato_loop_backend.execution.browser_control import browser_control_requests
 
             browser_control_requests.invalidate_agent(agent_id, control_request)
@@ -300,6 +369,14 @@ class BrowserCoordinator:
                 )
                 if result.browser_id != connection.browser_id:
                     raise ExecutionClientError("executionAgent.protocolError")
+                result = await connection.request(
+                    "integration.browser.control",
+                    {"browserId": str(connection.browser_id), "manual": True,
+                     **connection.origin("human")},
+                    BrowserControlResult,
+                )
+                if not result.ok:
+                    raise ExecutionClientError("browser.actionFailed")
             else:
                 await connection.send({"type": "availability", "status": "takingOver",
                                        "browserId": str(connection.browser_id)})
@@ -317,7 +394,11 @@ class BrowserCoordinator:
                                 await control_request.validate()
                         result = await connection.request(
                             "integration.browser.control",
-                            {"browserId": str(connection.browser_id), "manual": manual, "rotateView": not manual},
+                            {"browserId": str(connection.browser_id), "manual": manual,
+                             "rotateView": not manual, **connection.origin(
+                                 "model" if not manual and control_request is not None else "human",
+                                 run_id=control_request.info.run_id if not manual and control_request is not None else None,
+                             )},
                             BrowserControlResult,
                         )
                         if not result.ok:
@@ -377,6 +458,12 @@ class BrowserCoordinator:
                     except ExecutionClientError:
                         # Command failures have their own reply; transient observations retain state.
                         pass
+                if not connection.action_lock.locked():
+                    async with connection.action_lock:
+                        await connection.check_access()
+                        changed = await self.poll_downloads(connection)
+                    if changed:
+                        await connection.state()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -447,7 +534,11 @@ class BrowserCoordinator:
                     await control_request.validate()
                     control_request.viewer_ready()
                 result = await connection.request(
-                    "integration.browser.control", {"browserId": str(connection.browser_id), "manual": False},
+                    "integration.browser.control", {"browserId": str(connection.browser_id), "manual": False,
+                    **connection.origin(
+                        "model" if control_request is not None else "human",
+                        run_id=control_request.info.run_id if control_request is not None else None,
+                    )},
                     BrowserControlResult,
                 )
                 if not result.ok:
@@ -482,7 +573,8 @@ class BrowserCoordinator:
                 try:
                     await connection.send({"type": "view.reset"})
                     result = await connection.request(
-                        "integration.browser.control", {"browserId": str(connection.browser_id), "manual": True},
+                        "integration.browser.control", {"browserId": str(connection.browser_id), "manual": True,
+                         **connection.origin("human")},
                         BrowserControlResult,
                     )
                     if not result.ok:
@@ -545,7 +637,8 @@ class BrowserCoordinator:
                 raise ExecutionClientError("browser.busy")
             result = await connection.request(
                 "integration.browser.navigation",
-                {"browserId": str(connection.browser_id), **arguments.model_dump(mode="json", exclude_unset=True)},
+                {"browserId": str(connection.browser_id),
+                 **arguments.model_dump(mode="json", exclude_unset=True)},
                 BrowserNavigationResult, timeout=30,
             )
             if result != connection.navigation or completed:
@@ -582,6 +675,8 @@ class BrowserCoordinator:
             expected_id = payload.pop("expectedBrowserId", None)
             expected_revision = payload.pop("expectedAttachmentRevision", None)
             expected_snapshot = payload.pop("expectedSnapshot", None)
+            expected_run_id = payload.pop("expectedRunId", None)
+            run_id = UUID(expected_run_id) if expected_run_id is not None else None
             action = BrowserActionArguments.model_validate(payload)
             timings["action"] = action.action
             with ExitStack() as waiting:
@@ -600,6 +695,15 @@ class BrowserCoordinator:
                     result = None
                     try:
                         await connection.state()
+                        if run_id is not None:
+                            controlled = await connection.request(
+                                "integration.browser.control",
+                                {"browserId": str(connection.browser_id), "manual": False,
+                                 **connection.origin("model", run_id=run_id)},
+                                BrowserControlResult,
+                            )
+                            if not controlled.ok:
+                                raise ExecutionClientError("browser.actionFailed")
                         if expected_snapshot is not None:
                             try:
                                 BrowserInspectionData(snapshotSha256=expected_snapshot)
@@ -679,6 +783,141 @@ class BrowserCoordinator:
                         await connection.check_access()
                         check_binding()
                     return result
+
+    async def poll_downloads(self, connection: BrowserConnection) -> bool:
+        listed = await connection.request(
+            "integration.browser.files", {"browserId": str(connection.browser_id)}, BrowserFileListResult,
+        )
+        statuses = []
+        previous = {item["id"]: item for item in connection.downloads}
+        for download in listed.downloads:
+            captured = connection.origins.get(download.origin or "")
+            if captured is None or captured[1] != download.control_epoch:
+                continue
+            origin = captured[0]
+            status = download.model_dump(mode="json")
+            if download.status == "ready" and previous.get(download.id, {}).get("status") == "saved":
+                statuses.append(previous[download.id])
+                continue
+            if download.status == "ready":
+                home = await self._agent_home(connection)
+                for index in range(DOWNLOAD_COLLISION_LIMIT):
+                    destination = browser_download_path(home, download.filename, index)
+                    decision = await self._download_decision(connection, origin, destination)
+                    if decision == PermissionDecision.ASK:
+                        status.update(
+                            status="permission_required",
+                            errorCode="browser.downloadPermissionRequired",
+                            path=destination,
+                        )
+                        break
+                    if decision != PermissionDecision.ALLOW:
+                        status.update(status="failed", errorCode="permission.denied")
+                        break
+                    try:
+                        published = await connection.request(
+                            "integration.browser.publish",
+                            {"browserId": str(connection.browser_id), "fileId": download.id,
+                             "path": destination, "expectedOrigin": download.origin},
+                            BrowserPublishedDownloadResult, timeout=60,
+                        )
+                        if (
+                            published.path != destination or published.size != download.size
+                            or published.sha256 != download.sha256
+                        ):
+                            raise ExecutionClientError("executionAgent.protocolError")
+                        status.update(status="saved", path=published.path, sha256=published.sha256)
+                        break
+                    except ExecutionClientError as exc:
+                        if exc.code != "file.pathAlreadyExists":
+                            status.update(status="failed", errorCode=exc.code)
+                            break
+                else:
+                    status.update(status="failed", errorCode="file.pathAlreadyExists")
+            statuses.append(status)
+        listed_ids = {download.id for download in listed.downloads}
+        statuses.extend(
+            item for item in connection.downloads
+            if item.get("status") == "saved" and item.get("id") not in listed_ids
+        )
+        statuses = statuses[:32]
+        changed = statuses != connection.downloads
+        connection.downloads = statuses
+        return changed
+
+    async def _agent_home(self, connection: BrowserConnection) -> PurePosixPath:
+        async with AsyncSessionFactory() as db:
+            agent = await db.get(ExecutionAgent, connection.agent_id)
+            if agent is None or agent.user_id != connection.owner_id or not agent.home_directory:
+                raise ExecutionClientError("executionAgent.unavailable")
+            return PurePosixPath(agent.home_directory)
+
+    async def _download_decision(
+        self, connection: BrowserConnection, origin: BrowserOrigin, destination: str,
+    ) -> PermissionDecision:
+        if origin.kind == "human":
+            return PermissionDecision.ALLOW
+        from mato_loop_backend.agent.runtime import AgentRuntime
+        from mato_loop_backend.agent.tool_registry import _model_revision
+
+        async with AsyncSessionFactory() as db:
+            session = await db.get(ChatSession, origin.session_id)
+            run = await db.get(AgentRun, origin.run_id)
+            agent = await db.get(ExecutionAgent, connection.agent_id)
+            try:
+                instance = await load_browser_integration(
+                    db, origin.owner_id, origin.integration_id,
+                )
+            except ExecutionClientError:
+                return PermissionDecision.DENY
+            if (
+                session is None or run is None or agent is None
+                or session.user_id != origin.owner_id or run.session_id != session.id
+                or run.execution_agent_id != connection.agent_id or agent.user_id != origin.owner_id
+                or origin.integration_id != connection.integration_id
+                or instance.execution_agent_id != connection.agent_id
+                or not agent.home_directory
+            ):
+                return PermissionDecision.DENY
+            operation = {
+                "browserId": str(connection.browser_id),
+                "originId": str(origin.id),
+                "path": destination,
+            }
+            requests = (
+                integration_operation_permission(
+                    capability="browser.read",
+                    integration_id=origin.integration_id,
+                    binding_revision=_model_revision(instance),
+                    operation_key=hashlib.sha256(
+                        json.dumps(operation, sort_keys=True).encode()
+                    ).hexdigest(),
+                    title="Browser-Downloads lesen?",
+                    summary="Der Agent möchte den Status eines Browser-Downloads lesen.",
+                    resource_display=destination,
+                    action_kind="browser_download_status",
+                ),
+                execution_directory_permission(
+                    connection.agent_id, destination, capability="filesystem.write",
+                    action_kind="browser_download", title="Browser-Download speichern?",
+                    summary="Der Agent möchte einen Browser-Download auf dem ausgewählten Computer speichern.",
+                ),
+            )
+            call = ToolCall(
+                f"browser-download:{origin.id}", "browser_downloads", {"path": destination},
+            )
+            root_files = RootFileService(
+                session.id, project_id=session.project_id, run_id=run.id,
+            )
+            decisions = [
+                await AgentRuntime._authorize(
+                    db, run, session, call, request, root_files, check_only=True,
+                )
+                for request in requests
+            ]
+            if any(decision in {PermissionDecision.DENY, PermissionDecision.USER_DENIED} for decision in decisions):
+                return PermissionDecision.DENY
+            return PermissionDecision.ASK if PermissionDecision.ASK in decisions else PermissionDecision.ALLOW
 
     async def _screenshot(self, connection: BrowserConnection, payload: dict, check_binding) -> BrowserActionResult:
         result = None

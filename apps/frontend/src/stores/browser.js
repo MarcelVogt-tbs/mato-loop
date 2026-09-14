@@ -3,6 +3,7 @@ import { markRaw } from 'vue'
 import { Dark } from 'quasar'
 import { api } from 'src/boot/axios'
 import { browserSocketUrl, clipboardFits } from 'src/utils/browser'
+import { parentPath } from 'src/features/workspace/state'
 import { notifyError } from 'src/utils/notifications'
 import { useControlCenterStore } from 'stores/control-center'
 
@@ -17,6 +18,9 @@ export const useBrowserStore = defineStore('browser', {
     canAttach: false, attachReason: null, submitting: null,
     rfb: null, viewHost: null, viewParent: null, viewGeneration: 0, viewStatus: 'closed',
     downloads: [], uploadId: null, transferring: false, scaleViewport: true,
+    pickerScope: 'session', pickerDirectories: { session: '.', filesystem: '/' }, pickerEntries: [],
+    pickerHasMore: false, pickerNextOffset: null, pickerSelected: null, pickerLoading: false,
+    pickerError: null, pickerContext: null, pickerController: null, pickerGeneration: 0,
     activationKey: null, activationAttempted: false, viewVisible: false,
     resizeTarget: null, resizeInFlight: null, resizeLast: null, resizeTimer: null,
     desktopSize: null, controlKeys: [], navigation: null, navigationPending: false
@@ -240,6 +244,7 @@ export const useBrowserStore = defineStore('browser', {
       this.viewHost?.remove()
       this.requestController?.abort()
       this.requestController = null
+      this.resetPicker()
       this.transferring = false
     },
     async reconcileControlRequest(sessionId) {
@@ -291,6 +296,7 @@ export const useBrowserStore = defineStore('browser', {
       this.viewGeneration += 1
       this.requestController?.abort()
       this.requestController = null
+      this.resetPicker()
       this.transferring = false
       this.releaseControlKeys()
       this.viewStatus = status
@@ -524,7 +530,7 @@ export const useBrowserStore = defineStore('browser', {
         }
       }
     },
-    async transfer(action, file = null) {
+    async transfer(action) {
       if (!this.manual || (action === 'choose' && !this.uploadId)) return null
       const generation = this.generation
       const viewGeneration = this.viewGeneration
@@ -533,14 +539,6 @@ export const useBrowserStore = defineStore('browser', {
       this.transferring = true
       this.updateViewOnly()
       try {
-        if (action === 'upload') {
-          const form = new FormData()
-          form.append('file', file)
-          const data = await this.request((config) => api.post(`${path}/upload`, form, config))
-          if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration || displayGeneration !== this.displayGeneration) return null
-          this.uploadId = data.chosen ? null : data.uploadId
-          return data
-        }
         if (action === 'choose') {
           const data = await this.request((config) => api.post(`${path}/upload/${encodeURIComponent(this.uploadId)}/choose`, null, config))
           if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration || displayGeneration !== this.displayGeneration) return null
@@ -550,6 +548,151 @@ export const useBrowserStore = defineStore('browser', {
         const data = await this.request((config) => api.get(`${path}/downloads`, config))
         if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration || displayGeneration !== this.displayGeneration) return null
         this.downloads = data.downloads
+        return data
+      } finally {
+        if (generation === this.generation && viewGeneration === this.viewGeneration && displayGeneration === this.displayGeneration) {
+          this.transferring = false
+          this.updateViewOnly()
+        }
+      }
+    },
+    resetPicker() {
+      this.pickerController?.abort()
+      this.pickerController = null
+      this.pickerGeneration += 1
+      this.pickerEntries = []
+      this.pickerHasMore = false
+      this.pickerNextOffset = null
+      this.pickerSelected = null
+      this.pickerLoading = false
+      this.pickerError = null
+      this.pickerContext = null
+    },
+    openPicker(context) {
+      if (!this.manual || context?.sessionId !== this.sessionId) return false
+      this.resetPicker()
+      this.pickerContext = { ...context, currentDirectory: context.currentDirectory || context.homeDirectory || '/' }
+      this.pickerDirectories = {
+        session: '.',
+        filesystem: context.currentDirectory || context.homeDirectory || '/'
+      }
+      this.pickerScope = 'session'
+      void this.loadPicker()
+      return true
+    },
+    pickerParams(extra = {}, read = true) {
+      const filesystem = this.pickerScope === 'filesystem'
+      return {
+        scope: this.pickerScope,
+        session_id: this.sessionId,
+        ...(filesystem ? {
+          execution_agent_id: this.pickerContext.executionAgentId,
+          current_directory: this.pickerContext.currentDirectory
+        } : read && this.pickerContext.rootIdentity ? { root_identity: this.pickerContext.rootIdentity } : {}),
+        ...extra
+      }
+    },
+    async setPickerScope(scope) {
+      if (!this.manual || !['session', 'filesystem'].includes(scope) || !this.pickerContext
+        || (scope === 'filesystem' && !this.pickerContext.filesystemList)) return false
+      this.pickerScope = scope
+      return this.loadPicker()
+    },
+    openPickerDirectory(path) {
+      if (typeof path !== 'string' || (this.pickerScope === 'filesystem' && !path.startsWith('/'))) return false
+      this.pickerDirectories[this.pickerScope] = path
+      return this.loadPicker()
+    },
+    pickerParent() {
+      return parentPath(this.pickerDirectories[this.pickerScope])
+    },
+    async loadPicker(append = false) {
+      if (!this.manual || !this.pickerContext || (this.pickerScope === 'filesystem' && !this.pickerContext.filesystemList)) return false
+      this.pickerController?.abort()
+      const controller = markRaw(new AbortController())
+      this.pickerController = controller
+      const generation = ++this.pickerGeneration
+      const browserGeneration = this.generation
+      const viewGeneration = this.viewGeneration
+      const displayGeneration = this.displayGeneration
+      const directory = this.pickerDirectories[this.pickerScope]
+      this.pickerLoading = true
+      this.pickerError = null
+      try {
+        const { data } = await api.get('/workspace/entries', {
+          params: this.pickerParams({ path: directory, ...(append ? { offset: this.pickerNextOffset } : {}) }),
+          signal: controller.signal,
+          suppressErrorToast: true
+        })
+        if (controller.signal.aborted || generation !== this.pickerGeneration || browserGeneration !== this.generation
+          || viewGeneration !== this.viewGeneration || displayGeneration !== this.displayGeneration) return false
+        const entries = Array.isArray(data.entries) ? data.entries : []
+        this.pickerEntries = append ? [...this.pickerEntries, ...entries] : entries
+        this.pickerHasMore = data.hasMore === true
+        this.pickerNextOffset = data.nextOffset ?? null
+        this.pickerSelected = null
+        return true
+      } catch (error) {
+        if (!controller.signal.aborted && generation === this.pickerGeneration && browserGeneration === this.generation
+          && viewGeneration === this.viewGeneration && displayGeneration === this.displayGeneration) this.pickerError = error
+        return false
+      } finally {
+        if (generation === this.pickerGeneration) this.pickerLoading = false
+        if (this.pickerController === controller) this.pickerController = null
+      }
+    },
+    async chooseSource(source) {
+      if (!this.manual || !this.pickerContext || !['session', 'filesystem'].includes(source?.scope)
+        || typeof source.path !== 'string' || !source.path
+        || (source.scope === 'filesystem' && !source.path.startsWith('/'))) return null
+      const generation = this.generation
+      const viewGeneration = this.viewGeneration
+      const displayGeneration = this.displayGeneration
+      this.transferring = true
+      this.updateViewOnly()
+      try {
+        const data = await this.request((config) => api.post(`/browsers/${this.integrationId}/upload-source`, {
+          source: { scope: source.scope, path: source.path }
+        }, config))
+        if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration || displayGeneration !== this.displayGeneration) return null
+        this.uploadId = data.chosen ? null : data.uploadId
+        return data
+      } finally {
+        if (generation === this.generation && viewGeneration === this.viewGeneration && displayGeneration === this.displayGeneration) {
+          this.transferring = false
+          this.updateViewOnly()
+        }
+      }
+    },
+    async uploadPickerFile(file) {
+      if (!file || !this.manual || !this.pickerContext
+        || (this.pickerScope === 'filesystem' && !this.pickerContext.filesystemImport)) return null
+      const scope = this.pickerScope
+      const directory = this.pickerDirectories[scope]
+      const generation = this.generation
+      const viewGeneration = this.viewGeneration
+      const displayGeneration = this.displayGeneration
+      const pickerGeneration = this.pickerGeneration
+      this.transferring = true
+      this.updateViewOnly()
+      try {
+        const form = new FormData()
+        form.append('file', file, file.name)
+        const uploaded = await this.request((config) => api.post('/workspace/files', form, {
+          signal: config.signal,
+          suppressErrorToast: true,
+          params: this.pickerParams({ parent: directory }, false)
+        }))
+        if (!uploaded?.entry || generation !== this.generation || viewGeneration !== this.viewGeneration
+          || displayGeneration !== this.displayGeneration || pickerGeneration !== this.pickerGeneration) return null
+        const data = await this.request((config) => api.post(`/browsers/${this.integrationId}/upload-source`, {
+          source: { scope, path: uploaded.entry.path }
+        }, config))
+        if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration
+          || displayGeneration !== this.displayGeneration || pickerGeneration !== this.pickerGeneration) return null
+        this.pickerSelected = uploaded.entry
+        this.pickerEntries = [...this.pickerEntries.filter((entry) => entry.path !== uploaded.entry.path), uploaded.entry]
+        this.uploadId = data.chosen ? null : data.uploadId
         return data
       } finally {
         if (generation === this.generation && viewGeneration === this.viewGeneration && displayGeneration === this.displayGeneration) {

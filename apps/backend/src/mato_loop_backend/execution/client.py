@@ -329,6 +329,7 @@ _REMOTE_ERROR_CODES = {
     "browser.profileOwnerMismatch": "browser.profileOwnerMismatch",
     "browser.profileInUse": "browser.profileInUse",
     "browser.outcomeUnknown": "browser.outcomeUnknown",
+    "browser.downloadPermissionRequired": "browser.downloadPermissionRequired",
     "file.changed": "file.changed",
     "file.editTextNotFound": "file.editTextNotFound",
     "file.editTextNotUnique": "file.editTextNotUnique",

@@ -27,6 +27,7 @@ _MESSAGES = {
     "browser.profileOwnerMismatch": "The browser profile belongs to a different owner.",
     "browser.profileInUse": "The browser profile is locked by another browser process. Confirm that it is no longer in use before recovering it.",
     "browser.outcomeUnknown": "The browser operation was interrupted after dispatch. Its outcome is unknown. Inspect current state before retrying; do not repeat a mutation blindly.",
+    "browser.downloadPermissionRequired": "The browser download is staged and requires file-write permission before it can be published.",
     "agent.backendRestarted": "The agent run was interrupted by a backend restart.",
     "agent.emptyResponse": "The model returned no usable response.",
     "agent.contextWindowExceeded": "The request does not fit in the model's context window.",

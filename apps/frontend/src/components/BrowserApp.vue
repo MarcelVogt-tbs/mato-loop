@@ -86,26 +86,62 @@
       </q-card>
     </q-dialog>
     <q-dialog v-model="filesOpen" :maximized="$q.screen.lt.sm">
-      <q-card class="integration-dialog app-surface column no-wrap">
-        <q-card-section class="text-h6">Browser-Dateien</q-card-section>
-        <q-card-section class="col scroll">
-          <p>Klicke zuerst im entfernten Browser auf das Upload-Feld der Webseite. Öffne danach „Datei hochladen“, wähle hier eine lokale Datei und klicke auf „Datei bereitstellen“. Die Datei wird ohne Agenten in das wartende Datei-Feld eingesetzt.</p>
-          <q-file v-model="uploadFile" outlined label="Datei zum Hochladen" :disable="!browser.manual" />
-          <q-btn class="q-mt-sm" color="primary" no-caps label="Datei bereitstellen" :loading="browser.transferring" :disable="!uploadFile || !browser.manual" @click="upload()" />
+      <q-card class="integration-dialog app-surface column no-wrap" aria-labelledby="browser-files-title">
+        <q-card-section>
+          <div id="browser-files-title" class="text-h6">Browser-Dateien</div>
+          <div class="text-body2 app-muted q-mt-xs">Wähle eine vorhandene Datei aus oder füge eine lokale Datei im aktuellen Ordner hinzu.</div>
+        </q-card-section>
+        <q-tabs :model-value="browser.pickerScope" dense no-caps align="left" active-color="primary" :disable="!browser.manual" @update:model-value="browser.setPickerScope($event)">
+          <q-tab name="session" icon="folder_open" label="Ablage" />
+          <q-tab name="filesystem" icon="computer" label="Computer-Dateien" :disable="!pickerContext.filesystemList" />
+        </q-tabs>
+        <q-separator />
+        <q-toolbar class="q-px-sm" aria-label="Dateiordner durchsuchen">
+          <q-btn flat round dense icon="arrow_upward" aria-label="Zum übergeordneten Ordner" :disable="pickerAtRoot || browser.pickerLoading || !browser.manual" @click="openPickerDirectory(browser.pickerParent())"><q-tooltip>Zum übergeordneten Ordner</q-tooltip></q-btn>
+          <div class="col ellipsis q-px-sm" :title="pickerDirectory">{{ pickerDirectory }}</div>
+          <q-btn flat round dense icon="refresh" aria-label="Dateien aktualisieren" :loading="browser.pickerLoading" :disable="!browser.manual" @click="browser.loadPicker()"><q-tooltip>Dateien aktualisieren</q-tooltip></q-btn>
+          <q-btn flat round dense color="primary" icon="upload_file" aria-label="Lokale Datei hinzufügen" :loading="browser.transferring" :disable="!pickerCanUpload || !browser.manual" @click="chooseLocalFile"><q-tooltip>Lokale Datei hinzufügen</q-tooltip></q-btn>
+          <input ref="uploadInput" type="file" class="hidden" aria-label="Lokale Datei auswählen" @change="uploadLocalFile">
+        </q-toolbar>
+        <q-linear-progress v-if="browser.pickerLoading" indeterminate aria-label="Dateien werden geladen" />
+        <q-card-section class="browser-file-picker col scroll q-pa-sm">
+          <div v-if="browser.pickerError" class="file-load-state q-pa-md text-center" role="alert">
+            <div>{{ pickerError }}</div>
+            <q-btn flat no-caps color="primary" label="Erneut versuchen" class="q-mt-sm" @click="browser.loadPicker()" />
+          </div>
+          <q-list v-else separator role="group" aria-label="Dateien und Ordner">
+            <q-item v-for="entry in browser.pickerEntries" :key="entry.path" clickable v-ripple
+              :active="browser.pickerSelected?.path === entry.path" role="button"
+              :aria-pressed="entry.kind === 'file' ? browser.pickerSelected?.path === entry.path : undefined"
+              @click="activatePickerEntry(entry)" @dblclick="entry.kind === 'file' && useSelectedFile()">
+              <q-item-section avatar><q-icon :name="entry.kind === 'directory' ? 'folder' : entry.kind === 'file' ? 'description' : 'link'" :color="entry.kind === 'symlink' ? 'warning' : undefined" /></q-item-section>
+              <q-item-section><q-item-label>{{ entry.name }}</q-item-label><q-item-label v-if="entry.kind === 'file' && Number.isFinite(entry.size)" caption>{{ entry.size }} Bytes</q-item-label></q-item-section>
+              <q-item-section v-if="browser.pickerSelected?.path === entry.path" side><q-icon name="check" color="primary" aria-label="Ausgewählt" /></q-item-section>
+            </q-item>
+            <q-item v-if="!browser.pickerLoading && !browser.pickerEntries.length"><q-item-section class="app-muted">Dieser Ordner ist leer.</q-item-section></q-item>
+          </q-list>
+          <q-btn v-if="browser.pickerHasMore" flat dense no-caps color="primary" label="Weitere laden" class="q-mt-sm" :disable="browser.pickerLoading" @click="browser.loadPicker(true)" />
           <div v-if="browser.uploadId" role="status" class="q-mt-sm">
             Datei bereitgestellt, aber noch nicht eingesetzt. Schließe diesen Dialog, klicke auf das Upload-Feld der Webseite und wähle hier anschließend „Datei einsetzen“.
           </div>
-          <q-btn v-if="browser.uploadId" class="q-mt-sm" color="primary" no-caps label="Datei einsetzen" :loading="browser.transferring" :disable="!browser.manual" @click="upload(true)" />
-          <div class="row items-center q-mt-md"><div class="text-subtitle1 col">Downloads</div><q-btn flat round icon="refresh" aria-label="Downloads aktualisieren" :disable="!browser.manual" @click="refreshDownloads" /></div>
+          <q-btn v-if="browser.uploadId" class="q-mt-sm" color="primary" no-caps label="Datei einsetzen" :loading="browser.transferring" :disable="!browser.manual" @click="retryChoose" />
+          <q-separator spaced />
+          <div class="row items-center"><div class="text-subtitle1 col">Downloads</div><q-btn flat round dense icon="refresh" aria-label="Downloads aktualisieren" :disable="!browser.manual" @click="refreshDownloads" /></div>
           <q-list separator>
             <q-item v-for="file in browser.downloads" :key="file.id">
-              <q-item-section><q-item-label>{{ file.filename }}</q-item-label><q-item-label caption>{{ file.size }} Bytes</q-item-label></q-item-section>
-              <q-item-section side><q-btn flat round icon="download" :aria-label="`${file.filename} herunterladen`" :disable="!browser.manual" @click="download(file)" /></q-item-section>
+              <q-item-section avatar><q-icon :name="downloadIcon(file)" :color="downloadColor(file)" /></q-item-section>
+              <q-item-section><q-item-label>{{ file.filename }}</q-item-label><q-item-label caption>{{ downloadLabel(file) }}</q-item-label><q-item-label v-if="downloadPath(file)" caption class="ellipsis" :title="downloadPath(file)">{{ downloadPath(file) }}</q-item-label></q-item-section>
+              <q-item-section v-if="downloadCanFetch(file)" side><q-btn flat round icon="download" :aria-label="`${file.filename} herunterladen`" :disable="!browser.manual" @click="download(file)" /></q-item-section>
             </q-item>
             <q-item v-if="!browser.downloads.length"><q-item-section>Noch keine Downloads.</q-item-section></q-item>
           </q-list>
         </q-card-section>
-        <q-card-actions align="right"><q-btn flat no-caps label="Schließen" v-close-popup /></q-card-actions>
+        <q-card-actions align="right">
+          <q-btn v-if="downloadsDirectory" flat no-caps icon="folder_open" label="Downloads öffnen" :disable="controlCenter.saving" @click="openDownloads" />
+          <q-space />
+          <q-btn flat no-caps label="Schließen" v-close-popup />
+          <q-btn color="primary" no-caps label="Datei verwenden" :loading="browser.transferring" :disable="!browser.pickerSelected || !browser.manual" @click="useSelectedFile" />
+        </q-card-actions>
       </q-card>
     </q-dialog>
   </section>
@@ -123,7 +159,9 @@ import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import { browserNavigationUrl, browserStatusLabel, clipboardFits } from 'src/utils/browser'
+import { apiErrorMessage } from 'src/utils/api-errors'
 import { notifyError } from 'src/utils/notifications'
+import { useInstanceLimitsStore } from 'stores/instance-limits'
 
 const browser = useBrowserStore()
 const $q = useQuasar()
@@ -132,6 +170,7 @@ const controlCenter = useControlCenterStore()
 const route = useRoute()
 const agents = useExecutionAgentStore()
 const integrations = useIntegrationStore()
+const instanceLimits = useInstanceLimitsStore()
 const navigation = computed(() => browser.displayNavigation)
 const browserStateMessage = computed(() => ({
   occupied: {
@@ -157,15 +196,33 @@ const clipboardNotice = ref('')
 const clipboardReady = ref(false)
 let clipboardDialog = 0
 const filesOpen = ref(false)
-const uploadFile = ref(null)
+const uploadInput = ref(null)
+let uploadTrigger = null
 const fileActions = [
   { label: 'Text kopieren', icon: 'content_copy', run: () => openClipboard('copy') },
   { label: 'Text einfügen', icon: 'content_paste', run: () => openClipboard('paste') },
-  { label: 'Datei hochladen', icon: 'upload_file', run: () => { filesOpen.value = true } },
+  { label: 'Datei hochladen', icon: 'upload_file', run: () => openFiles() },
   { label: 'Downloads', icon: 'download', run: showDownloads }
 ]
 const options = computed(() => integrations.browser.instances.filter((item) => item.enabled && item.executionAgentId === chat.current?.preferredExecutionAgentId).map((item) => ({ label: item.name, value: item.id })))
 const available = computed(() => Boolean(chat.current?.id && integrations.adapterAvailable('browser', 'personal') && agents.byId(chat.current.preferredExecutionAgentId)?.connected && options.value.some((item) => item.value === selectedId.value)))
+const selectedAgent = computed(() => agents.byId(chat.current?.preferredExecutionAgentId))
+const pickerContext = computed(() => ({
+  sessionId: chat.current?.id,
+  rootIdentity: chat.current?.projectId || chat.current?.id,
+  executionAgentId: selectedAgent.value?.id || chat.current?.preferredExecutionAgentId,
+  currentDirectory: chat.current?.currentDirectory || selectedAgent.value?.homeDirectory || '/',
+  homeDirectory: selectedAgent.value?.homeDirectory,
+  filesystemList: selectedAgent.value?.connected === true && selectedAgent.value?.operations?.includes('filesystem.list') === true,
+  filesystemImport: selectedAgent.value?.connected === true && selectedAgent.value?.operations?.includes('filesystem.import') === true
+}))
+const pickerDirectory = computed(() => browser.pickerDirectories[browser.pickerScope])
+const pickerAtRoot = computed(() => pickerDirectory.value === (browser.pickerScope === 'session' ? '.' : '/'))
+const pickerCanUpload = computed(() => browser.pickerScope === 'session' || pickerContext.value.filesystemImport)
+const pickerError = computed(() => apiErrorMessage(browser.pickerError, 'Die Dateien konnten nicht geladen werden.'))
+const downloadsDirectory = computed(() => pickerContext.value.filesystemList && selectedAgent.value?.homeDirectory
+  ? `${selectedAgent.value.homeDirectory.replace(/\/$/u, '')}/browser/downloads`
+  : null)
 const status = computed(() => integrations.browserStatuses[selectedId.value])
 const visible = computed(() => route.name === 'chat' && route.query.session === chat.current?.id
   && controlCenter.sessionId === chat.current?.id && controlCenter.ready
@@ -194,9 +251,9 @@ watch(() => [browser.generation, browser.displayGeneration], () => {
   clipboardOpen.value = false
   filesOpen.value = false
   clipboardText.value = ''
-  uploadFile.value = null
 }, { flush: 'sync' })
 watch(clipboardOpen, () => { clipboardDialog += 1 }, { flush: 'sync' })
+watch(filesOpen, (open) => { if (!open) browser.resetPicker() }, { flush: 'sync' })
 watch(() => [visible.value, browser.viewGeneration, browser.attached, browser.busy, browser.submitting, browser.navigationPending], invalidateInput, { flush: 'sync' })
 watch(() => browser.activeTab, () => { if (!addressEditing) resetAddress() }, { immediate: true })
 watch(() => browser.attached, (attached) => { if (attached) resetAddress() })
@@ -479,17 +536,74 @@ async function paste() {
   } catch { /* Central API toast. */ }
 }
 async function refreshDownloads() { try { await browser.transfer('downloads') } catch { /* Central API toast. */ } }
-function showDownloads() { filesOpen.value = true; void refreshDownloads() }
-async function upload(choose = false) {
+function openFiles(downloads = false) {
+  if (!browser.openPicker(pickerContext.value)) return
+  filesOpen.value = true
+  if (downloads) void refreshDownloads()
+}
+function showDownloads() { openFiles(true) }
+function openPickerDirectory(path) { browser.openPickerDirectory(path) }
+function activatePickerEntry(entry) {
+  if (entry.kind === 'directory') openPickerDirectory(entry.path)
+  else browser.pickerSelected = entry.kind === 'file' ? entry : null
+}
+async function transferSource(action) {
   const generation = browser.displayGeneration
   try {
-    const result = await browser.transfer(choose ? 'choose' : 'upload', uploadFile.value)
+    const result = await action()
     if (!result || generation !== browser.displayGeneration) return
-    uploadFile.value = null
     if (result.chosen || result.ok) {
       $q.notify({ type: 'positive', message: 'Datei in das Upload-Feld eingesetzt.' })
       filesOpen.value = false
     }
+  } catch { /* Central API toast. */ }
+}
+function useSelectedFile() {
+  const entry = browser.pickerSelected
+  if (entry?.kind === 'file') void transferSource(() => browser.chooseSource({ scope: browser.pickerScope, path: entry.path }))
+}
+function retryChoose() { void transferSource(() => browser.transfer('choose')) }
+function chooseLocalFile(event) {
+  if (!uploadInput.value) return
+  uploadTrigger = event.currentTarget
+  uploadInput.value.click()
+}
+async function uploadLocalFile(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  try {
+    if (!file) return
+    if (file.size > instanceLimits.maxUploadBytes) {
+      $q.notify({ type: 'negative', message: `„${file.name}“ ist größer als ${instanceLimits.maxUploadMib} MiB.` })
+      return
+    }
+    await transferSource(() => browser.uploadPickerFile(file))
+  } finally {
+    await nextTick()
+    if (filesOpen.value) uploadTrigger?.focus()
+  }
+}
+function downloadPath(file) { return file.path || null }
+function downloadState(file) { return file.status || 'ready' }
+function downloadLabel(file) {
+  const labels = {
+    saved: 'Automatisch gespeichert', ready: `${file.size} Bytes`, pending: 'Download läuft ...',
+    permission_required: 'Berechtigung zum Speichern erforderlich', failed: 'Speichern fehlgeschlagen'
+  }
+  return labels[downloadState(file)] || `${file.size} Bytes`
+}
+function downloadIcon(file) { return ({ saved: 'check_circle', permission_required: 'lock', failed: 'error' })[downloadState(file)] || 'download' }
+function downloadColor(file) { return ({ saved: 'positive', permission_required: 'warning', failed: 'negative' })[downloadState(file)] }
+function downloadCanFetch(file) { return Boolean(file.id) && ['ready', 'permission_required'].includes(downloadState(file)) }
+async function openDownloads() {
+  if (!downloadsDirectory.value) return
+  try {
+    await controlCenter.setFileView({
+      scope: 'filesystem', selectedPath: downloadsDirectory.value, selectedKind: 'directory', viewedFilePath: null,
+      executionAgentId: selectedAgent.value.id, currentDirectory: selectedAgent.value.homeDirectory
+    })
+    await controlCenter.openApp('computer-files')
+    filesOpen.value = false
   } catch { /* Central API toast. */ }
 }
 async function download(file) { try { await browser.download(file) } catch { /* Central API toast. */ } }
@@ -498,4 +612,5 @@ async function download(file) { try { await browser.download(file) } catch { /* 
 <style scoped>
 .browser-app, .browser-app__view { min-height: 0; min-width: 0; }
 .browser-app__view:focus-within { outline: 2px solid var(--q-primary); outline-offset: -2px; }
+.browser-file-picker { min-height: 14rem; }
 </style>

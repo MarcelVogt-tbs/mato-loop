@@ -79,6 +79,14 @@ class BrowserViewArguments(BrowserIdArguments):
 class BrowserControlArguments(BrowserIdArguments):
     manual: bool
     rotate_view: bool = Field(default=False, alias="rotateView")
+    origin: str | None = Field(default=None, min_length=1, max_length=255)
+    control_epoch: int | None = Field(default=None, alias="controlEpoch", ge=0)
+
+    @model_validator(mode="after")
+    def complete_origin(self):
+        if (self.origin is None) != (self.control_epoch is None):
+            raise ValueError("Origin and controlEpoch must be supplied together")
+        return self
 
 
 class BrowserResizeResult(StrictModel):
@@ -292,6 +300,20 @@ class BrowserFileArguments(BrowserIdArguments):
         return self
 
 
+class BrowserFilesArguments(BrowserIdArguments):
+    pass
+
+
+class BrowserPublishArguments(BrowserIdArguments):
+    file_id: Id = Field(alias="fileId")
+    path: str = Field(min_length=1, max_length=4096)
+    expected_origin: str = Field(alias="expectedOrigin", min_length=1, max_length=255)
+
+
+class BrowserUploadArguments(BrowserIdArguments):
+    path: str = Field(min_length=1, max_length=4096)
+
+
 class BrowserNavigationArguments(BrowserIdArguments):
     action: Literal[
         "state", "select", "new", "close", "navigate", "back", "forward", "reload", "stop", "chrome"
@@ -369,8 +391,45 @@ class BrowserTab(StrictModel):
 
 class BrowserDownload(StrictModel):
     id: Id
-    filename: str = Field(max_length=255)
+    filename: str = Field(min_length=1, max_length=255)
     size: int = Field(ge=0, le=MAX_FILE_BYTES)
+
+    _plain_filename = field_validator("filename")(BrowserFileArguments.plain_filename.__func__)
+
+
+class BrowserDownloadStatus(StrictModel):
+    id: Id
+    filename: str = Field(min_length=1, max_length=255)
+    status: Literal["pending", "ready", "failed"]
+    origin: str | None = Field(default=None, min_length=1, max_length=255)
+    control_epoch: int | None = Field(default=None, alias="controlEpoch", ge=0)
+    size: int | None = Field(default=None, ge=0, le=MAX_FILE_BYTES)
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    error_code: BrowserErrorCode | None = Field(default=None, alias="errorCode")
+
+    _plain_filename = field_validator("filename")(BrowserFileArguments.plain_filename.__func__)
+
+    @model_validator(mode="after")
+    def valid_status(self):
+        if (self.origin is None) != (self.control_epoch is None):
+            raise ValueError("Origin and controlEpoch must agree")
+        if self.status == "ready" and (self.size is None or self.sha256 is None):
+            raise ValueError("Ready download requires size and sha256")
+        if self.status != "ready" and self.sha256 is not None:
+            raise ValueError("Only ready downloads have sha256")
+        if (self.status == "failed") != (self.error_code is not None):
+            raise ValueError("Failed download requires errorCode")
+        return self
+
+
+class BrowserFilesResult(StrictModel):
+    downloads: list[BrowserDownloadStatus] = Field(max_length=32)
+
+
+class BrowserPublishResult(StrictModel):
+    path: str = Field(min_length=1, max_length=4096)
+    size: int = Field(ge=0, le=MAX_FILE_BYTES)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class BrowserNavigationTab(BrowserTab):
@@ -507,6 +566,9 @@ BROWSER_ARGUMENT_MODELS = {
     "integration.browser.reset": BrowserOwnerArguments,
     "integration.browser.execute": BrowserExecuteArguments,
     "integration.browser.file": BrowserFileArguments,
+    "integration.browser.files": BrowserFilesArguments,
+    "integration.browser.publish": BrowserPublishArguments,
+    "integration.browser.upload": BrowserUploadArguments,
     "integration.browser.control": BrowserControlArguments,
     "integration.browser.resize": BrowserResizeArguments,
     "integration.browser.clipboard": BrowserClipboardArguments,

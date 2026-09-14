@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
+import os
+from contextlib import suppress
 from dataclasses import replace
+from pathlib import PurePosixPath
 from typing import Annotated, Any, ClassVar, Literal, Self
 from uuid import UUID
 
+from anyio import CancelScope
 from pydantic import Field, ValidationError, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,13 +20,18 @@ from mato_loop_backend.agent.tool_contracts import ToolAction
 from mato_loop_backend.attachments import validate_image
 from mato_loop_backend.execution.browser_contracts import (
     BROWSER_SNAPSHOT_ACTIONS,
+    MAX_BROWSER_FILE_BYTES,
     BrowserActionArguments,
     BrowserActionResult,
     BrowserConfig,
     BrowserControlResult,
+    BrowserFileArguments,
+    BrowserFileListResult,
+    BrowserFileResult,
     BrowserFormField,
     BrowserInspectionData,
     BrowserOpaqueId,
+    BrowserPublishedDownloadResult,
     BrowserSnapshotFile,
 )
 from mato_loop_backend.execution.client import ExecutionClient, ExecutionClientError
@@ -36,6 +47,7 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     UserIntegrationSettings,
 )
+from mato_loop_backend.workspace import FileRoot
 
 
 async def browser_settings(
@@ -282,6 +294,24 @@ class BrowserReleaseControlArguments(WireModel):
     pass
 
 
+class BrowserDownloadsArguments(WireModel):
+    download_id: BrowserOpaqueId
+
+
+class BrowserUploadArguments(_BrowserPageArguments):
+    root: Literal["session", "workspace"]
+    path: str = Field(min_length=1, max_length=4096)
+    ref: _Ref
+    element: str | None = Field(default=None, max_length=200)
+    observe: bool = True
+
+    def to_action(self, upload_id: str = str(UUID(int=0))) -> BrowserActionArguments:
+        return BrowserActionArguments(
+            action="upload", tab_id=self.tab_id, selector=f"aria-ref={self.ref}",
+            upload_id=upload_id, observe=self.observe,
+        )
+
+
 async def _control_authorization(arguments: BrowserRequestControlArguments, context: Any):
     from mato_loop_backend.execution.browser_control import capture_control_request
 
@@ -332,6 +362,244 @@ async def _release_control(_arguments: BrowserReleaseControlArguments, context: 
     return ToolResult.json({"ok": True})
 
 
+async def _downloads_authorization(arguments: BrowserDownloadsArguments, context: Any):
+    from mato_loop_backend.agent.permissions import (
+        execution_directory_permission,
+        integration_operation_permission,
+    )
+
+    connection = _bound_browser(context)
+    context.bound_options["browser_id"] = connection.browser_id
+    context.bound_options["attachment_revision"] = connection.attachment_revision
+    async with connection.action_lock:
+        await connection.check_access()
+        listed = await connection.request(
+            "integration.browser.files",
+            {"browserId": str(connection.browser_id)},
+            BrowserFileListResult,
+        )
+        await connection.check_access()
+    download = next((item for item in listed.downloads if item.id == arguments.download_id), None)
+    captured = connection.origins.get(download.origin or "") if download is not None else None
+    origin = captured[0] if captured is not None else None
+    if (
+        download is None or download.status != "ready" or captured is None
+        or captured[1] != download.control_epoch
+        or origin.kind != "model" or origin.owner_id != context.session.user_id
+        or origin.session_id != context.session.id or origin.run_id != context.run_id
+    ):
+        raise ExecutionClientError("browser.invalidTarget")
+    agent = await context.db.get(ExecutionAgent, connection.agent_id)
+    if agent is None or agent.user_id != context.session.user_id or not agent.home_directory:
+        raise ExecutionClientError("tool.unavailable")
+    from mato_loop_backend.execution.browsers import available_browser_download_path
+
+    destination = await available_browser_download_path(
+        connection, PurePosixPath(agent.home_directory), download.filename,
+    )
+    await connection.check_access()
+    context.bound_options.update(
+        download=download.model_dump(mode="json"), download_destination=destination,
+    )
+    operation = {
+        "browserId": str(connection.browser_id), "downloadId": download.id,
+        "originId": str(origin.id),
+    }
+    requests = (
+        integration_operation_permission(
+            capability="browser.read", integration_id=connection.integration_id,
+            binding_revision=context.bound_options["binding_revision"],
+            operation_key=hashlib.sha256(json.dumps(operation, sort_keys=True).encode()).hexdigest(),
+            title="Browser-Downloads lesen?",
+            summary="Der Agent möchte den Status eines Browser-Downloads lesen.",
+            resource_display=download.filename, action_kind="browser_download_status",
+        ),
+        execution_directory_permission(
+            connection.agent_id, destination, capability="filesystem.write",
+            action_kind="browser_download", title="Browser-Download speichern?",
+            summary="Der Agent möchte einen Browser-Download auf dem ausgewählten Computer speichern.",
+        ),
+    )
+    context.bound_options["browser_download_permissions"] = requests
+    return requests
+
+
+async def _publish_download(arguments: BrowserDownloadsArguments, context: Any):
+    from mato_loop_backend.agent.tool_registry import ToolResult
+
+    connection = _bound_browser(context)
+    if (
+        connection.browser_id != context.bound_options.get("browser_id")
+        or connection.attachment_revision != context.bound_options.get("attachment_revision")
+    ):
+        raise ExecutionClientError("browser.bindingChanged")
+    async with connection.action_lock:
+        await connection.check_access()
+        listed = await connection.request(
+            "integration.browser.files",
+            {"browserId": str(connection.browser_id)},
+            BrowserFileListResult,
+        )
+        download = next((item for item in listed.downloads if item.id == arguments.download_id), None)
+        if download is None or download.model_dump(mode="json") != context.bound_options.get("download"):
+            raise ExecutionClientError("browser.bindingChanged")
+        captured = connection.origins.get(download.origin or "")
+        if captured is None or captured[1] != download.control_epoch or captured[0].run_id != context.run_id:
+            raise ExecutionClientError("browser.bindingChanged")
+        from mato_loop_backend.agent.permissions import PermissionDecision
+
+        for request in context.bound_options["browser_download_permissions"]:
+            if await context.ask_handler(request, check_only=True) != PermissionDecision.ALLOW:
+                return ToolResult.error("permission.denied")
+        destination = context.bound_options["download_destination"]
+        result = await connection.request(
+            "integration.browser.publish",
+            {"browserId": str(connection.browser_id), "fileId": download.id,
+             "path": destination, "expectedOrigin": download.origin},
+            BrowserPublishedDownloadResult, timeout=60,
+        )
+        await connection.check_access()
+    if (
+        result.path != destination or result.size != download.size
+        or result.sha256 != download.sha256
+    ):
+        raise ExecutionClientError("executionAgent.protocolError")
+    return ToolResult.json({"path": result.path, "size": result.size, "sha256": result.sha256})
+
+
+async def _upload_authorization(arguments: BrowserUploadArguments, context: Any):
+    from mato_loop_backend.agent.tools import _execution_path, _filesystem_permission
+
+    source_path = (
+        _execution_path(context, arguments.path)
+        if arguments.root == "workspace"
+        else context.root_files.normalize_relative_path(arguments.path)
+    )
+    source = _filesystem_permission(
+        context, root=arguments.root, path=source_path, capability="filesystem.read",
+        action_kind="browser_upload_source", action_label="Upload-Datei lesen",
+    )
+    browser = await _authorization(arguments.to_action(), context)
+    requests = (source, *browser)
+    context.bound_options.update(
+        browser_upload_root=arguments.root,
+        browser_upload_path=source_path,
+        browser_upload_permissions=requests,
+    )
+    return requests
+
+
+async def _stage_browser_upload(arguments: BrowserUploadArguments, context: Any, connection: Any) -> str:
+    root = context.bound_options["browser_upload_root"]
+    path = context.bound_options["browser_upload_path"]
+    file_id = None
+    completed = False
+    handle = None
+    try:
+        if root == "session":
+            handle = await asyncio.to_thread(context.root_files.open_file, FileRoot.SESSION, path)
+            size = os.fstat(handle.fileno()).st_size
+            if size > MAX_BROWSER_FILE_BYTES:
+                raise ExecutionClientError("browser.fileTooLarge")
+        async with connection.action_lock:
+            await connection.check_access()
+            if root == "workspace":
+                result = await connection.request(
+                    "integration.browser.upload",
+                    {"browserId": str(connection.browser_id), "path": path},
+                    BrowserFileResult,
+                )
+                if not result.complete or result.offset != result.size:
+                    raise ExecutionClientError("executionAgent.protocolError")
+            else:
+                result = await connection.request(
+                    "integration.browser.file",
+                    BrowserFileArguments(
+                        browserId=connection.browser_id, action="begin",
+                        filename=PurePosixPath(path).name, size=size,
+                    ).model_dump(mode="json"),
+                    BrowserFileResult,
+                )
+                file_id = result.file_id
+                if result.offset != 0 or result.size != size or result.complete:
+                    raise ExecutionClientError("executionAgent.protocolError")
+                offset = 0
+                while chunk := await asyncio.to_thread(handle.read, 65536):
+                    result = await connection.request(
+                        "integration.browser.file",
+                        BrowserFileArguments(
+                            browserId=connection.browser_id, action="write", fileId=file_id,
+                            offset=offset, data=base64.b64encode(chunk).decode(),
+                        ).model_dump(mode="json"),
+                        BrowserFileResult,
+                    )
+                    offset += len(chunk)
+                    if result.file_id != file_id or result.offset != offset or result.size != size or result.complete:
+                        raise ExecutionClientError("executionAgent.protocolError")
+                result = await connection.request(
+                    "integration.browser.file",
+                    BrowserFileArguments(
+                        browserId=connection.browser_id, action="finish", fileId=file_id,
+                        offset=offset,
+                    ).model_dump(mode="json"),
+                    BrowserFileResult,
+                )
+                if result.file_id != file_id or result.offset != size or result.size != size or not result.complete:
+                    raise ExecutionClientError("executionAgent.protocolError")
+            file_id = result.file_id
+            await connection.check_access()
+            completed = True
+            return file_id
+    finally:
+        if handle is not None:
+            handle.close()
+        if file_id is not None and not completed:
+            await _delete_browser_upload(connection, file_id)
+
+
+async def _delete_browser_upload(connection: Any, file_id: str) -> None:
+    with suppress(Exception):
+        async with connection.action_lock:
+            await connection.request(
+                "integration.browser.file",
+                BrowserFileArguments(
+                    browserId=connection.browser_id, action="delete", fileId=file_id,
+                ).model_dump(mode="json"),
+                BrowserControlResult,
+                timeout=10,
+            )
+
+
+async def _execute_upload(arguments: BrowserUploadArguments, context: Any):
+    from mato_loop_backend.agent.permissions import PermissionDecision
+
+    connection = _bound_browser(context)
+    staging = asyncio.create_task(_stage_browser_upload(arguments, context, connection))
+    try:
+        file_id = await asyncio.shield(staging)
+    except asyncio.CancelledError:
+        with CancelScope(shield=True), suppress(Exception):
+            file_id = await staging
+            await _delete_browser_upload(connection, file_id)
+        raise
+    try:
+        for request in context.bound_options["browser_upload_permissions"]:
+            if await context.ask_handler(request, check_only=True) != PermissionDecision.ALLOW:
+                from mato_loop_backend.agent.tool_registry import ToolResult
+
+                return ToolResult.error("permission.denied")
+        current = _bound_browser(context)
+        if (
+            current is not connection
+            or current.browser_id != context.bound_options.get("browser_id")
+            or current.attachment_revision != context.bound_options.get("attachment_revision")
+        ):
+            raise ExecutionClientError("browser.bindingChanged")
+        return await execute_browser(arguments.to_action(file_id), context)
+    finally:
+        await _delete_browser_upload(connection, file_id)
+
+
 async def _authorization(arguments: BrowserActionArguments | _BrowserArguments, context: Any) -> tuple[Any, ...]:
     from mato_loop_backend.agent.permissions import integration_operation_permission
 
@@ -379,10 +647,17 @@ async def capture_browser_approval(request, call, session, run, approval_resolut
     """Capture a page guard only after the permission engine actually requests approval."""
     from mato_loop_backend.execution.browsers import browser_coordinator
 
-    tool = next((tool for tool in BROWSER_TOOLS if tool.name == call.name), None)
+    tool = next((tool for tool in (*BROWSER_TOOLS, BROWSER_UPLOAD) if tool.name == call.name), None)
     if tool is None:
         return request
-    arguments = tool.arguments_model.model_validate(call.arguments).to_action()
+    if tool is BROWSER_UPLOAD:
+        from mato_loop_backend.agent.file_roots import internal_file_roots
+
+        arguments = BrowserUploadArguments.model_validate(
+            internal_file_roots(call.arguments)
+        ).to_action()
+    else:
+        arguments = tool.arguments_model.model_validate(call.arguments).to_action()
     if arguments.action not in BROWSER_SNAPSHOT_ACTIONS:
         return request
     if approval_resolution is None:
@@ -471,6 +746,7 @@ async def execute_browser(arguments: BrowserActionArguments | _BrowserArguments,
          ),
          "expectedBrowserId": str(context.bound_options["browser_id"]),
          "expectedAttachmentRevision": context.bound_options["attachment_revision"],
+         "expectedRunId": str(context.run_id),
          **({"expectedSnapshot": snapshot} if snapshot is not None else {})},
     )
     result = BrowserActionResult.model_validate(result)
@@ -546,6 +822,9 @@ async def execute_browser(arguments: BrowserActionArguments | _BrowserArguments,
 _READ = ToolAction("browser.read", "Browser lesen", ToolExecutionPolicy.AUTO)
 _WRITE = ToolAction("browser.write", "Browser bedienen", ToolExecutionPolicy.AUTO, mutates=True)
 _CODE = ToolAction("browser.code", "Browser-Code ausführen", ToolExecutionPolicy.AUTO, mutates=True)
+_FILESYSTEM_WRITE = ToolAction("filesystem.write", "Workspace schreiben", ToolExecutionPolicy.ASK, mutates=True)
+_FILESYSTEM_READ = ToolAction("filesystem.read", "Computer-Dateien lesen", ToolExecutionPolicy.AUTO)
+_SESSION_FILES_READ = ToolAction("session.files.read", "Session-Dateien lesen", ToolExecutionPolicy.AUTO)
 BROWSER_TOOL = ToolContribution(
     name="browser", label="Browser", icon="language",
     description=(
@@ -646,10 +925,47 @@ BROWSER_RELEASE_CONTROL = ToolContribution(
     actions=(_RELEASE,), authorization_factory=_release_authorization,
     execution_operation="integration.browser.execute", result_model=BrowserControlResult,
 )
+BROWSER_DOWNLOADS = ToolContribution(
+    name="browser_downloads", label="Browser-Download speichern", icon="download",
+    description=(
+        "Publish one completed download from the attached browser to "
+        "<computer home>/browser/downloads. Use the exact downloadId returned by a browser action."
+    ),
+    arguments_model=BrowserDownloadsArguments, handler=_publish_download,
+    actions=(_READ, _FILESYSTEM_WRITE), authorization_factory=_downloads_authorization,
+    execution_operation="integration.browser.execute", result_model=BrowserPublishedDownloadResult,
+    required_execution_operations=(
+        "integration.browser.files", "integration.browser.publish", "filesystem.stat",
+    ),
+)
+BROWSER_UPLOAD = ToolContribution(
+    name="browser_upload", label="Browser-Datei hochladen", icon="upload",
+    description=(
+        "Upload one existing file from files or computer to a known file-input ref in a known tab. "
+        "Use a ref from the latest browser snapshot. Returns a new snapshot unless observe=false."
+    ),
+    arguments_model=BrowserUploadArguments, handler=_execute_upload,
+    actions=(_READ, _WRITE, _FILESYSTEM_READ, _SESSION_FILES_READ),
+    alternative_action_groups=(
+        frozenset({"browser.write"}),
+        frozenset({"browser.read", "browser.write"}),
+        frozenset({"filesystem.read", "session.files.read"}),
+    ),
+    authorization_factory=_upload_authorization,
+    execution_operation="integration.browser.execute",
+    required_execution_operations=("integration.browser.file", "integration.browser.upload"),
+    result_model=BrowserActionResult, releases_private_data=True,
+)
 
 BROWSER_ADAPTER = IntegrationAdapterDefinition(
     integration_type="browser", adapter_type="browser", config_model=BrowserConfig,
     execution_location="agent", execution_kind="browser", personal_only=True,
-    execution_tools=(*BROWSER_TOOLS, BROWSER_REQUEST_CONTROL, BROWSER_RELEASE_CONTROL),
-    resource_actions=(_READ, _WRITE, _CODE, _CONTROL, _RELEASE),
+    execution_tools=(
+        *BROWSER_TOOLS, BROWSER_UPLOAD, BROWSER_DOWNLOADS,
+        BROWSER_REQUEST_CONTROL, BROWSER_RELEASE_CONTROL,
+    ),
+    resource_actions=(
+        _READ, _WRITE, _CODE, _CONTROL, _RELEASE,
+        _FILESYSTEM_READ, _SESSION_FILES_READ, _FILESYSTEM_WRITE,
+    ),
 )

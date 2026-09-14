@@ -5025,7 +5025,7 @@ class AgentRuntime:
         )
         browser_approval_key = None
         if (
-            request.action_kind in {"browser_action", "browser_control"} and approval_resolution is not None
+            request.action_kind.startswith("browser_") and approval_resolution is not None
             and (check_only or decision == PermissionDecision.ASK)
         ):
             browser_approval_key = "browser_approved:" + json.dumps([

@@ -1273,7 +1273,7 @@ class ToolRegistry:
                         for request in requests
                     )
                 browser_requests = tuple(
-                    request for request in requests if request.action_kind in {"browser_action", "browser_control"}
+                    request for request in requests if request.action_kind.startswith("browser_")
                 )
                 if browser_requests:
                     for key in tuple(context.approval_resolution):
@@ -1319,7 +1319,7 @@ class ToolRegistry:
                 key.startswith("browser_approved:") for key in context.approval_resolution
             ):
                 # An approval wait may invalidate earlier capabilities; never prompt in this fence.
-                for request in browser_requests:
+                for request in requests:
                     if await context.ask_handler(request, check_only=True) != PermissionDecision.ALLOW:
                         return ToolResult.error("permission.denied")
             result = await definition.handler(arguments, context)
