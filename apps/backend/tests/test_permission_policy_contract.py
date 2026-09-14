@@ -220,7 +220,7 @@ async def test_plan_profile_only_auto_writes_its_canonical_plan(tmp_path) -> Non
     db = _db_with_grants()
     expected = _path_request(
         root_files,
-        f"plans/{session.id}/plan.md",
+        "plan.md",
         capability="session.files.write",
     )
     other = _path_request(

@@ -158,14 +158,29 @@ async def _file_context(
     if scope is FileScope.SESSION:
         if session is None:
             raise ApiError(400, "file.sessionRequired")
-        if root_identity is not None and root_identity != str(
-            session.project_id or session.id
-        ):
-            raise ApiError(404, "file.fileNotFound")
+        root_session = session
+        if root_identity is not None and root_identity != str(session.id):
+            try:
+                root_session_id = UUID(root_identity)
+            except (TypeError, ValueError) as exc:
+                raise ApiError(404, "file.fileNotFound") from exc
+            if str(root_session_id) != root_identity or session.project_id is None:
+                raise ApiError(404, "file.fileNotFound")
+            statement = select(ChatSession).where(
+                ChatSession.id == root_session_id,
+                ChatSession.user_id == user.id,
+                ChatSession.project_id == session.project_id,
+                ChatSession.session_type == "chat",
+            )
+            if for_update:
+                statement = statement.with_for_update()
+            root_session = await db.scalar(statement)
+            if root_session is None:
+                raise ApiError(404, "file.fileNotFound")
         return _FileContext(
             root_files=RootFileService(
-                session.id,
-                project_id=session.project_id,
+                root_session.id,
+                project_id=root_session.project_id,
                 session_quota_bytes=instance_limits.session_quota_bytes,
                 max_editable_text_bytes=instance_limits.max_editable_text_bytes,
             ),

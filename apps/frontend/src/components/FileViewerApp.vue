@@ -37,7 +37,7 @@ const workspaceContext = target.scope === 'filesystem'
 workspace.stashActiveFileTab()
 workspace.configure({
   sessionId: controlCenter.sessionId || chat.current?.id || null,
-  rootIdentity: target.scope === 'session' ? target.rootIdentity : chat.current?.projectId || chat.current?.id || null,
+  rootIdentity: target.scope === 'session' ? target.rootIdentity : chat.current?.id || null,
   currentDirectory: target.currentDirectory || chat.current?.currentDirectory || '/',
   workspaceContext,
   scope: target.scope

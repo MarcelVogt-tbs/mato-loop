@@ -286,7 +286,7 @@ it('keeps typing during a real store save and uses the saved content as the new 
   expect(mocks.api.put).toHaveBeenCalledWith('/workspace/files', {
     path: 'note.txt', content: 'sent', expected_revision: 'a'.repeat(64)
   }, {
-    params: { scope: 'session', session_id: 'session-id' },
+    params: { scope: 'session', session_id: 'session-id', root_identity: 'root-id' },
     suppressErrorToast: true
   })
   resolveSave({ data: { revision: 'b'.repeat(64) } })

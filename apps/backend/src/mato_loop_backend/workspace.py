@@ -403,7 +403,7 @@ class RootFileService:
     def root_identity(self, root: FileRoot | str) -> str:
         self._selected_root(root)
         self._root_path(FileRoot.SESSION)
-        return str(self.project_id or self.session_id)
+        return str(self.session_id)
 
     @staticmethod
     def _metadata(path: Path) -> os.stat_result:

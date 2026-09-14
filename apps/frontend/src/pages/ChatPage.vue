@@ -698,7 +698,7 @@ async function openApprovalDraft(approval) {
     scope: 'session',
     path: draft.path,
     name: draft.filename,
-    rootIdentity: draft.rootIdentity || chat.current.projectId || sessionId,
+    rootIdentity: draft.rootIdentity || sessionId,
     readOnly: false
   })
   if (tabId) workspace.startFileTabEdit(tabId)

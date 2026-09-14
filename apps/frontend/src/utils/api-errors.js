@@ -437,6 +437,7 @@ const messages = {
   'session.automationOutputLinked': ({ params }) => `Die Session ist mit ${params?.automationCount ?? 'einer oder mehreren'} Automation${params?.automationCount === 1 ? '' : 'en'} als Ausgabeziel verknüpft.`,
   'session.automationOutputRequired': ({ params }) => `Die Session wird von ${params?.automationCount ?? 'einer oder mehreren'} Automation${params?.automationCount === 1 ? '' : 'en'} als Ausgabeziel benötigt.`,
   'session.automationImpactChanged': () => 'Die Sessions oder verknüpften Automationen wurden zwischenzeitlich geändert. Bitte versuche es erneut.',
+  'session.filesReferenced': ({ params }) => `${params?.referenceCount ?? 'Eine oder mehrere'} Dateireferenz${params?.referenceCount === 1 ? '' : 'en'} mit dieser Session ${params?.referenceCount === 1 ? 'verhindert' : 'verhindern'} den Vorgang.`,
   'session.messageNotFound': () => 'Die Chatnachricht wurde nicht gefunden.',
   'session.modelUnavailable': () => 'Das ausgewählte Modell ist nicht verfügbar.',
   'session.modelToolsUnavailable': () => 'Das ausgewählte Modell unterstützt keine Tools und kann nicht als Agentmodell verwendet werden.',

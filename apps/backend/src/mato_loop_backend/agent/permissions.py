@@ -1528,7 +1528,7 @@ class PermissionPolicy:
                 return PermissionDecision.DENY
             if identity != current_identity:
                 return PermissionDecision.DENY
-            if identity != str(chat_session.project_id or chat_session.id):
+            if identity != str(chat_session.id):
                 return PermissionDecision.DENY
             if request.capability not in {
                 "filesystem.read",
@@ -1548,7 +1548,7 @@ class PermissionPolicy:
                 and request.capability == "session.files.write"
                 and (
                     root != FileRoot.SESSION
-                    or path != PurePosixPath(f"plans/{chat_session.id}/plan.md")
+                    or path != PurePosixPath("plan.md")
                 )
             ):
                 policy = ToolExecutionPolicy.DISABLED

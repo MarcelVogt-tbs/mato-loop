@@ -64,7 +64,7 @@ async function mountPage({ actionKind = 'build_skill', rootIdentity, reply } = {
   app.mount(root)
   await vi.waitFor(() => expect(root.querySelector('.approval-card')).not.toBeNull())
   workspace.sessionId = 'parent'
-  workspace.rootIdentity = 'parent-project'
+  workspace.rootIdentity = 'parent'
   workspace.scope = 'session'
   workspace.viewedEntry = { path: 'skill-draft.json' }
   workspace.editorActive = true
@@ -117,7 +117,7 @@ describe('child skill draft previews', () => {
     expect(startEdit).not.toHaveBeenCalled()
     expect(api.patch).not.toHaveBeenCalled()
     expect(workspace.sessionId).toBe('parent')
-    expect(workspace.rootIdentity).toBe('parent-project')
+    expect(workspace.rootIdentity).toBe('parent')
     expect(workspace.filePreviews).toBe(parentPreviews)
     expect(workspace.editorDraft).toBe('Unsaved parent draft')
     expect(workspace.editorDirty).toBe(true)

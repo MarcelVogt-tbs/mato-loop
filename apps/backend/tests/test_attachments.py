@@ -215,6 +215,50 @@ async def test_service_references_existing_revision_without_copy(tmp_path: Path)
     assert len(root_files.list_revisions("report.pdf")) == 1
 
 
+async def test_service_resolves_reference_owner_in_the_same_project(tmp_path: Path) -> None:
+    project_id = uuid4()
+    current_id, owner_id, user_id = uuid4(), uuid4(), uuid4()
+    sessions = SessionStorage(tmp_path / "sessions")
+    sessions.provision(current_id, project_id)
+    sessions.provision(owner_id, project_id)
+    owner_files = RootFileService(owner_id, project_id=project_id, session_storage=sessions)
+    revision = owner_files.create_output_file("report.pdf", b"report")
+    message = Message(id=uuid4(), session_id=current_id, role="tool", content="Datei")
+    current = chat_session(current_id, project_id=project_id)
+    current.user_id = user_id
+    owner = chat_session(owner_id, project_id=project_id)
+    owner.user_id = user_id
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [current, owner]
+
+    attachment = await AttachmentService(sessions).create_reference(
+        db, message, file_root_id=owner_id, file_id=revision.file_id,
+        file_revision=revision.revision, file_path=revision.path,
+        filename="report.pdf", position=0, category="downloaded",
+    )
+
+    assert attachment.file_root_id == owner_id
+    assert AttachmentService(sessions).read_source(attachment, current_id) == b"report"
+    assert "FOR UPDATE" in str(db.scalar.await_args_list[1].args[0])
+
+
+async def test_service_rejects_reference_owner_outside_current_project(tmp_path: Path) -> None:
+    project_id = uuid4()
+    current_id, owner_id = uuid4(), uuid4()
+    sessions = SessionStorage(tmp_path / "sessions")
+    sessions.provision(current_id, project_id)
+    message = Message(id=uuid4(), session_id=current_id, role="tool", content="Datei")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [chat_session(current_id, project_id=project_id), None]
+
+    with pytest.raises(AttachmentError, match="attachment.notFound"):
+        await AttachmentService(sessions).create_reference(
+            db, message, file_root_id=owner_id, file_id=uuid4(), file_revision=1,
+            file_path="report.pdf", filename="report.pdf", position=0,
+            category="downloaded",
+        )
+
+
 async def test_service_recognizes_referenced_image_without_copy(tmp_path: Path) -> None:
     session_id = uuid4()
     sessions = provisioned_storage(tmp_path, session_id)
@@ -303,8 +347,7 @@ async def test_attachment_reads_exact_revision_only_in_current_root(tmp_path: Pa
     sessions.move_session(session_id, project_id, None)
     with pytest.raises(AttachmentError, match="attachment.notFound"):
         await service.read_image(attachment, session_id, current_only=True)
-    with pytest.raises(AttachmentError, match="attachment.notFound"):
-        await service.read_image(attachment, session_id)
+    assert await service.read_image(attachment, session_id) == original
 
     sessions.move_session(session_id, None, project_id)
     assert await service.read_image(attachment, session_id) == original
@@ -562,22 +605,25 @@ async def test_service_enforces_session_quota_before_writing(tmp_path: Path) -> 
     assert list((sessions.session_path(session_id) / "files").iterdir()) == [quota_directory]
 
 
-async def test_project_attachment_quota_uses_shared_managed_root(tmp_path: Path) -> None:
+async def test_project_attachment_quota_is_per_session(tmp_path: Path) -> None:
     session_id = uuid4()
     project_id = uuid4()
     sessions = SessionStorage(tmp_path / "sessions")
     sessions.provision(session_id, project_id)
+    sibling_id = uuid4()
+    sessions.provision(sibling_id, project_id)
     message = Message(id=uuid4(), session_id=session_id, role="assistant", content="Bild")
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [chat_session(session_id, project_id=project_id), None]
-    shared_file = sessions.logical_root_path(session_id, project_id) / "files" / "shared.bin"
-    with shared_file.open("wb") as handle:
+    sibling_file = sessions.logical_root_path(sibling_id, project_id) / "files" / "large.bin"
+    with sibling_file.open("wb") as handle:
         handle.truncate(SESSION_ATTACHMENT_QUOTA_BYTES)
 
-    with pytest.raises(AttachmentError, match="attachment.sessionQuotaExceeded"):
-        await AttachmentService(sessions).create_image(
-            db, message, image_bytes("PNG"), "image/png"
-        )
+    attachment = await AttachmentService(sessions).create_image(
+        db, message, image_bytes("PNG"), "image/png"
+    )
+
+    assert attachment.file_root_id == session_id
 
 
 async def test_service_removes_file_when_database_flush_fails(tmp_path: Path) -> None:

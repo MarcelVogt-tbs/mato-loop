@@ -209,7 +209,7 @@ const available = computed(() => Boolean(chat.current?.id && integrations.adapte
 const selectedAgent = computed(() => agents.byId(chat.current?.preferredExecutionAgentId))
 const pickerContext = computed(() => ({
   sessionId: chat.current?.id,
-  rootIdentity: chat.current?.projectId || chat.current?.id,
+  rootIdentity: chat.current?.id,
   executionAgentId: selectedAgent.value?.id || chat.current?.preferredExecutionAgentId,
   currentDirectory: chat.current?.currentDirectory || selectedAgent.value?.homeDirectory || '/',
   homeDirectory: selectedAgent.value?.homeDirectory,

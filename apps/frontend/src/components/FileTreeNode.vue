@@ -65,13 +65,15 @@ defineOptions({ name: 'FileTreeNode' })
 const props = defineProps({
   entry: { type: Object, required: true },
   filter: { type: String, default: '' },
-  focusPath: { type: String, default: '.' }
+  focusPath: { type: String, default: '.' },
+  mutable: { type: Boolean, default: true }
 })
-const emit = defineEmits(['open-file', 'focus-entry', 'download-entry', 'rename-entry', 'delete-entry'])
+const emit = defineEmits(['open-file', 'open-directory', 'focus-entry', 'download-entry', 'rename-entry', 'delete-entry'])
 const workspace = useWorkspaceStore()
 const selected = computed(() => workspace.selectedPath === props.entry.path)
 const mutableEntry = computed(() => (
-  !workspace.toolContext
+  props.mutable
+  && !workspace.toolContext
   && ['file', 'directory'].includes(props.entry.kind)
 ))
 const canRename = computed(() => mutableEntry.value && workspace.operationAvailable('filesystem.rename'))
@@ -84,7 +86,7 @@ const icon = computed(() => ({ directory: 'folder', symlink: 'link', file: 'desc
 
 function activate() {
   if (props.entry.kind === 'directory') {
-    workspace.openDirectory(props.entry.path)
+    emit('open-directory', props.entry)
   }
   else if (props.entry.kind === 'file' && workspace.operationAvailable('filesystem.read')) {
     emit('open-file', { entry: props.entry })

@@ -21,7 +21,7 @@
         size="sm"
         icon="refresh"
         aria-label="Speichernutzung erneut laden"
-        @click.stop="workspace.fetchStorageUsage(chat.current.id)"
+        @click.stop="workspace.fetchStorageUsage(workspace.rootIdentity)"
       >
         <q-tooltip>Speichernutzung erneut laden</q-tooltip>
       </q-btn>
@@ -44,12 +44,12 @@ defineOptions({ name: 'FileExplorerFooter' })
 const chat = useChatStore()
 const workspace = useWorkspaceStore()
 const storage = computed(() => (
-  workspace.storageUsageSessionId === chat.current?.id ? workspace.storageUsage : null
+  workspace.storageUsageSessionId === workspace.rootIdentity ? workspace.storageUsage : null
 ))
 const storageLabel = computed(() => formatStorageUsage(storage.value))
 const storageProgress = computed(() => storageUsageProgress(storage.value))
 const storageScopeLabel = computed(() => (
-  storage.value?.scope === 'project' || chat.current?.projectId ? 'Projekt-Speicher' : 'Session-Speicher'
+  storage.value?.scope === 'project' ? 'Projekt-Speicher' : 'Session-Speicher'
 ))
 const storageDescription = computed(() => {
   if (workspace.storageUsageLoading && !storage.value) return `${storageScopeLabel.value}: Speichernutzung wird geladen.`
@@ -60,8 +60,8 @@ const storageDescription = computed(() => {
 })
 
 watch(
-  [() => chat.current?.id || null, () => chat.current?.projectId || null],
-  ([sessionId]) => {
+  () => workspace.rootIdentity || null,
+  (sessionId) => {
     if (
       !sessionId
       || (workspace.storageUsageSessionId === sessionId

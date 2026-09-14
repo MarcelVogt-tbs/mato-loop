@@ -194,8 +194,12 @@ async def test_project_delete_impact_counts_sessions_and_linked_automations() ->
     ]
     session_ids = [uuid4(), uuid4(), uuid4(), uuid4()]
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [project, None]
-    db.scalars.side_effect = [_rows(*reversed(session_ids)), _rows(*automations)]
+    db.scalar.side_effect = [project, None, 2]
+    db.scalars.side_effect = [
+        _rows(*reversed(session_ids)),
+        _rows(*session_ids),
+        _rows(*automations),
+    ]
 
     result = await project_delete_impact(project.id, user, db)
 
@@ -204,9 +208,10 @@ async def test_project_delete_impact_counts_sessions_and_linked_automations() ->
         "sessionIds": [str(item) for item in sorted(session_ids)],
         "automationCount": 2,
         "requiredAutomationCount": 1,
+        "fileReferenceCount": 2,
         "automationImpact": project_delete_impact_token(session_ids, automations),
     }
-    linked_query = db.scalars.await_args_list[1].args[0]
+    linked_query = db.scalars.await_args_list[2].args[0]
     assert user.id in linked_query.compile().params.values()
     assert project.id in linked_query.compile().params.values()
     assert project_delete_impact_token(session_ids[:-1], automations) != result[
@@ -231,7 +236,7 @@ async def test_delete_project_with_sessions_trashes_tree_and_database_rows(
     shared_file.write_text("shared", encoding="utf-8")
     monkeypatch.setattr(projects_route, "SessionStorage", lambda: storage)
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [project, project, None]
+    db.scalar.side_effect = [project, project, 0, None]
     db.scalars.side_effect = [
         _rows(session.id),
         _rows(),
@@ -240,6 +245,7 @@ async def test_delete_project_with_sessions_trashes_tree_and_database_rows(
         _rows(),
         _rows(),
     ]
+    db.execute.return_value = MagicMock(all=lambda: [])
 
     await delete_project(
         project.id,
@@ -359,6 +365,47 @@ async def test_delete_project_revalidates_locked_session_membership() -> None:
     db.delete.assert_not_awaited()
 
 
+async def test_delete_project_rejects_files_referenced_outside_project(
+    monkeypatch,
+) -> None:
+    user = _user()
+    project = _project(user.id)
+    child_id = uuid4()
+    session = ChatSession(
+        id=uuid4(), user_id=user.id, project_id=project.id, title="Referenced"
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [project, project, 3]
+    db.scalars.side_effect = [
+        _rows(session.id),
+        _rows(),
+        _rows(),
+        _rows(session),
+        _rows(),
+        _rows(),
+    ]
+    monkeypatch.setattr(
+        "mato_loop_backend.api.routes.projects.descendant_sessions",
+        AsyncMock(return_value=[(child_id, None)]),
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        await delete_project(
+            project.id,
+            user,
+            db,
+            automation_impact=project_delete_impact_token([session.id], []),
+        )
+
+    assert exc_info.value.code == "session.filesReferenced"
+    assert exc_info.value.params == {"referenceCount": 3}
+    query = db.scalar.await_args_list[2].args[0].compile()
+    assert {session.id, child_id} in [
+        set(value) for value in query.params.values() if isinstance(value, list)
+    ]
+    db.delete.assert_not_awaited()
+
+
 async def test_delete_project_rejects_uncancellable_active_database_run(
     monkeypatch,
 ) -> None:
@@ -449,7 +496,7 @@ async def test_delete_project_restores_storage_when_commit_fails(
     execution_file.write_text("history", encoding="utf-8")
     monkeypatch.setattr(projects_route, "SessionStorage", lambda: storage)
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [project, project, None]
+    db.scalar.side_effect = [project, project, 0, None]
     db.scalars.side_effect = [
         _rows(session.id),
         _rows(automation),

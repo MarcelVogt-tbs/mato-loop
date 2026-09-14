@@ -655,7 +655,7 @@ async def test_actual_context_projection_does_not_excerpt_replaced_upload(tmp_pa
     assert service.read_derived_text(attachment, session.id) == "OLD_SECRET"
 
 
-async def test_other_project_session_reads_active_shared_root_view(tmp_path):
+async def test_other_project_session_reads_its_active_session_root(tmp_path):
     project_id, user_id, run_id = uuid4(), uuid4(), uuid4()
     session = ChatSession(id=uuid4(), user_id=user_id, project_id=project_id)
     sibling = ChatSession(id=uuid4(), user_id=user_id, project_id=project_id)
@@ -667,7 +667,10 @@ async def test_other_project_session_reads_active_shared_root_view(tmp_path):
     files = RootFileService(
         session.id, project_id=project_id, session_storage=storage, run_id=run_id
     )
-    files.append_output_revision(public.working_revision("notes.txt").file_id, b"NEW_TEXT")
+    sibling_files = RootFileService(
+        sibling.id, project_id=project_id, session_storage=storage, run_id=run_id
+    )
+    sibling_files.write_file("session", "notes.txt", "NEW_TEXT")
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = sibling
     selected, target_id = await tools_module._project_read_files(
@@ -677,7 +680,8 @@ async def test_other_project_session_reads_active_shared_root_view(tmp_path):
     assert target_id == sibling.id
     assert selected.run_id == run_id
     assert selected.open_file("session", "notes.txt").read() == b"NEW_TEXT"
-    assert public.open_file("session", "notes.txt").read() == b"NEW_TEXT"
+    assert files.open_file("session", "notes.txt").read() == b"OLD_SECRET"
+    assert public.open_file("session", "notes.txt").read() == b"OLD_SECRET"
 
 
 def test_hidden_artifact_references_are_omitted_without_redacting_technical_history():

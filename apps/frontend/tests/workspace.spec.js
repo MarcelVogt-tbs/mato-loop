@@ -71,7 +71,7 @@ describe('workspace store', () => {
     expect(workspace.viewedEntry).toBeNull()
     expect(workspace.filter).toBe('')
     expect(api.get).toHaveBeenLastCalledWith('/workspace/entries', {
-      params: { path: '.', scope: 'session', session_id: 'session-b' },
+      params: { path: '.', scope: 'session', session_id: 'session-b', root_identity: 'session-b' },
       suppressErrorToast: true
     })
   })
@@ -114,16 +114,29 @@ describe('workspace store', () => {
     expect(workspace.storageUsage).toEqual({ scope: 'project', usedBytes: 20, quotaBytes: 500 })
   })
 
-  it('clears storage usage when a session moves to another managed root', async () => {
+  it('switches storage usage only when another session root is selected', async () => {
     const workspace = useWorkspaceStore()
     workspace.configure({ sessionId: 'session-a', rootIdentity: 'session-a' })
     workspace.storageUsageSessionId = 'session-a'
     workspace.storageUsage = { scope: 'session', usedBytes: 10, quotaBytes: 100 }
 
-    workspace.configure({ sessionId: 'session-a', rootIdentity: 'project-a' })
+    workspace.configure({ sessionId: 'session-a', rootIdentity: 'session-b' })
 
     expect(workspace.storageUsageSessionId).toBeNull()
     expect(workspace.storageUsage).toBeNull()
+  })
+
+  it('keeps the active draft when the owning session root is unchanged', () => {
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a' })
+    workspace.openEntry({ kind: 'file', path: 'notes.md' }, true)
+    workspace.updateEditorDraft('lokal', 'alt')
+
+    workspace.configure({ sessionId: 'session-a', rootIdentity: 'session-a' })
+
+    expect(workspace.viewedEntry.path).toBe('notes.md')
+    expect(workspace.editorDraft).toBe('lokal')
+    expect(workspace.editorDirty).toBe(true)
   })
 
   it('keeps usage failures quiet and retryable', async () => {
@@ -156,10 +169,11 @@ describe('workspace store', () => {
     expect(api.post.mock.calls[0][2].params).toEqual({
       parent: '.',
       scope: 'session',
-      session_id: 'session-a'
+      session_id: 'session-a',
+      root_identity: 'session-a'
     })
     expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
-      params: { path: '.', scope: 'session', session_id: 'session-a' },
+      params: { path: '.', scope: 'session', session_id: 'session-a', root_identity: 'session-a' },
       suppressErrorToast: true
     })
   })
@@ -311,7 +325,7 @@ describe('workspace store', () => {
     const workspace = useWorkspaceStore()
     workspace.configure({
       sessionId: 'session-a',
-      rootIdentity: 'project-a',
+      rootIdentity: 'session-a',
       currentDirectory: '/project',
       workspaceContext: liveContext(['filesystem.stat', 'filesystem.list', 'filesystem.export']),
       scope: 'filesystem'
@@ -333,10 +347,10 @@ describe('workspace store', () => {
 
   it('builds managed session archive URLs with their root identity', () => {
     const workspace = useWorkspaceStore()
-    workspace.configure({ sessionId: 'session-a', rootIdentity: 'project-a', scope: 'session' })
+    workspace.configure({ sessionId: 'session-a', rootIdentity: 'session-b', scope: 'session' })
 
     expect(workspace.archiveUrl('reports')).toBe(
-      '/api/workspace/files/download?scope=session&session_id=session-a&root_identity=project-a&path=reports&archive=zip'
+      '/api/workspace/files/download?scope=session&session_id=session-a&root_identity=session-b&path=reports&archive=zip'
     )
   })
 
@@ -346,7 +360,7 @@ describe('workspace store', () => {
       .mockResolvedValueOnce({ data: { kind: 'text', content: 'Bericht' } })
     const workspace = useWorkspaceStore()
     workspace.configure({
-      sessionId: 'session-a', rootIdentity: 'project-a', currentDirectory: '/current'
+      sessionId: 'session-a', rootIdentity: 'session-a', currentDirectory: '/current'
     })
 
     const target = workspace.fileTargetFromAction({
@@ -384,7 +398,7 @@ describe('workspace store', () => {
     expect(workspace.archiveUrl(workspace.directoryPath)).toBe('')
     await expect(workspace.createDirectory('.', 'blocked')).rejects.toThrow('Historical workspace snapshots are read-only')
     workspace.returnToCurrentContext()
-    expect(workspace.rootIdentity).toBe('project-a')
+    expect(workspace.rootIdentity).toBe('session-a')
   })
 
   it('restores a historical workspace file with its snapshot context', () => {
@@ -500,14 +514,14 @@ describe('workspace store', () => {
   it('opens a structured approval draft target in the editable session file editor', () => {
     const workspace = useWorkspaceStore()
     workspace.configure({
-      sessionId: 'session-a', rootIdentity: 'project-a', currentDirectory: '/current'
+      sessionId: 'session-a', rootIdentity: 'session-a', currentDirectory: '/current'
     })
     const tab = {
       tabId: 'draft-1',
       kind: 'file',
       fileTarget: {
         scope: 'session', path: 'skill-draft.json', name: 'skill-draft.json',
-        rootIdentity: 'project-a', readOnly: false
+        rootIdentity: 'session-a', readOnly: false
       }
     }
     const controlCenter = useControlCenterStore()
@@ -516,7 +530,7 @@ describe('workspace store', () => {
     workspace.startFileTabEdit(tab.tabId)
 
     expect(workspace.scope).toBe('session')
-    expect(workspace.rootIdentity).toBe('project-a')
+    expect(workspace.rootIdentity).toBe('session-a')
     expect(workspace.editorActive).toBe(true)
     expect(workspace.viewedEntry).toEqual({
       kind: 'file', name: 'skill-draft.json', path: 'skill-draft.json'
@@ -848,7 +862,7 @@ describe('workspace store', () => {
     controlCenter.tabs = [{ appId: 'files', pinned: false }]
     controlCenter.activeAppId = 'files'
     const workspace = useWorkspaceStore()
-    workspace.configure({ sessionId: 'session-a', rootIdentity: 'project-root' })
+    workspace.configure({ sessionId: 'session-a' })
     workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'notes.md' }, true)
     workspace.filePreviews['notes.md'] = {
       kind: 'markdown', content: 'alt', revision: 'a'.repeat(64)
@@ -857,7 +871,7 @@ describe('workspace store', () => {
 
     expect(workspace.activeFileSnapshot()).toEqual({
       root: 'session',
-      root_identity: 'project-root',
+      root_identity: 'session-a',
       path: 'notes.md',
       sha256: 'a'.repeat(64),
       dirty: true
@@ -879,6 +893,20 @@ describe('workspace store', () => {
     })
 
     workspace.toolContext = { executionAgentId: 'agent', currentDirectory: '/project' }
+    expect(workspace.activeFileSnapshot()).toBeNull()
+  })
+
+  it('does not snapshot a sibling session file for the current chat', () => {
+    const controlCenter = useControlCenterStore()
+    controlCenter.sessionId = 'session-a'
+    controlCenter.open = true
+    controlCenter.tabs = [{ appId: 'files', pinned: false }]
+    controlCenter.activeAppId = 'files'
+    const workspace = useWorkspaceStore()
+    workspace.configure({ sessionId: 'session-a', rootIdentity: 'session-b' })
+    workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'notes.md' })
+    workspace.filePreviews['notes.md'] = { revision: 'a'.repeat(64) }
+
     expect(workspace.activeFileSnapshot()).toBeNull()
   })
 
@@ -908,7 +936,7 @@ describe('workspace store', () => {
     const workspace = useWorkspaceStore()
     workspace.sessionId = 'session-a'
     workspace.scope = 'session'
-    workspace.rootIdentity = 'project-root'
+    workspace.rootIdentity = 'session-a'
     workspace.openEntry({ kind: 'file', name: 'notes.md', path: 'notes.md' })
     api.get.mockImplementation((url) => Promise.resolve({
       data: url.includes('/revisions/1/preview')
@@ -921,7 +949,7 @@ describe('workspace store', () => {
     const controlCenter = useControlCenterStore()
     controlCenter.tabs = [1, 2, 3].map((revision) => ({
       tabId: `history-${revision}`, kind: 'file',
-      fileTarget: { scope: 'session', rootIdentity: 'project-root', fileId: 'file-1', revision }
+      fileTarget: { scope: 'session', rootIdentity: 'session-a', fileId: 'file-1', revision }
     }))
     const close = vi.spyOn(controlCenter, 'closeFile').mockResolvedValue()
     workspace.fileTabStates['history-3'] = { editorDirty: false }
@@ -930,7 +958,7 @@ describe('workspace store', () => {
     await workspace.revisionPreview('notes.md', 1)
     await workspace.activateRevision('notes.md', 1)
 
-    const params = { path: 'notes.md', session_id: 'session-a', scope: 'session', root_identity: 'project-root' }
+    const params = { path: 'notes.md', session_id: 'session-a', scope: 'session', root_identity: 'session-a' }
     expect(api.get).toHaveBeenCalledWith('/workspace/files/revisions/1/preview', {
       params
     })
@@ -940,7 +968,7 @@ describe('workspace store', () => {
       expected_current_revision: 2,
       expected_current_sha256: 'b'.repeat(64)
     }, {
-      params: { session_id: 'session-a', scope: 'session', root_identity: 'project-root' }
+      params: { session_id: 'session-a', scope: 'session', root_identity: 'session-a' }
     })
     expect(workspace.fileRevisions['notes.md'].items[0].revision).toBe(2)
     expect(workspace.filePreviews['notes.md'].revision).toBe('b'.repeat(64))
@@ -962,7 +990,7 @@ describe('workspace store', () => {
 
     const body = api.post.mock.calls[0][1]
     expect(api.post).toHaveBeenCalledWith('/workspace/files', body, {
-      params: { parent: '.', scope: 'session', session_id: 'session-a' }
+      params: { parent: '.', scope: 'session', session_id: 'session-a', root_identity: 'session-a' }
     })
     expect(body.get('file')).toBeInstanceOf(File)
     expect(body.get('file').name).toBe('Notizen.txt')

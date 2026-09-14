@@ -6,7 +6,7 @@
 | --- | --- |
 | Computer-Dateien | Gewöhnliche absolute Pfade auf dem gewählten Computer |
 | Arbeitsordner | Aktueller absoluter Ordner auf dem gewählten Computer |
-| Backend-Dateien | Interner Speicher der Session oder ihres Projekts |
+| Backend-Dateien | Interner Speicher der Session |
 
 Neue Sessions besitzen zunächst nur ihren benutzergebundenen internen Session-Speicher. Dieser ist kein Workspace. Ein Workspace ist ein gewöhnlicher absoluter Pfad auf dem gewählten MatoLoop Agent; das Backend besitzt keinen eigenen Workspace. Ohne einen gewählten Computer und aktuellen Ordner funktioniert der Chat weiter und die Session-Dateien bleiben verfügbar. Computer-Dateien und lokale Integrationen stehen dann jedoch nicht zur Verfügung.
 
@@ -16,11 +16,13 @@ Computer gehören genau einem Benutzer und können nicht von anderen Konten ausg
 
 ## Backend-Dateien
 
-`root=files` zeigt den revisionierten Dateibereich der Session oder ihres Projekts; Pfade enthalten keinen vorangestellten Wurzelnamen. Eine Session ohne Projekt verwendet `/data/sessions/<session-id>/files` und `/data/sessions/<session-id>/revisions`. Alle Sessions eines Projekts verwenden gemeinsam `/data/projects/<projekt-id>/files` und `/data/projects/<projekt-id>/revisions`; die Projekt-ID ist dabei die Wurzelidentität.
+`root=files` zeigt den revisionierten Dateibereich einer Session; Pfade enthalten keinen vorangestellten Wurzelnamen. Eine Session ohne Projekt verwendet `/data/sessions/<session-id>/files` und `/data/sessions/<session-id>/revisions`. Eine Projekt-Session verwendet `/data/projects/<projekt-id>/sessions/<session-id>/files` und `/data/projects/<projekt-id>/sessions/<session-id>/revisions`. Die Session-ID bleibt immer die Wurzelidentität.
 
 Uploads, daraus erzeugte Begleitdateien und dauerhafte Binärausgaben von Backend-Tools sind normale verwaltete Dateien mit gespeicherten Vollversionen. Nachrichten speichern dafür Wurzel, Datei-ID, Version und Pfad.
 
-Wird eine eigenständige Session in ein Projekt verschoben, übernimmt MatoLoop ihre Dateien samt Versionsverlauf in den gemeinsamen Projektbereich. Vorhandene Projektordner werden zusammengeführt, bestehende gleichnamige Pfade aber niemals überschrieben; bei einem Konflikt bleibt die Session unverändert. Die übernommenen Dateien sind anschließend für alle Sessions des Projekts sichtbar und bleiben im Projekt, wenn die ursprüngliche Session später wieder herausgeschoben wird. Beim Verlassen eines Projekts erhält die Session einen neuen leeren Dateibereich.
+Beim Verschieben einer Session in ein anderes Projekt oder aus einem Projekt verschiebt MatoLoop ihren vollständigen Dateibaum samt Versionsverlauf. Datei-IDs, Versionen und Nachrichtenverweise bleiben erhalten. Solange eine andere Session auf ihre Dateien verweist, kann die besitzende Session weder verschoben noch gelöscht werden.
+
+Im Dateibrowser ist zunächst die aktuelle Session ausgewählt. Innerhalb eines Projekts können Sie unter **Dateien aus Session** ausdrücklich die Dateien einer anderen eigenen Session desselben Projekts öffnen und bearbeiten. Andere Projekte und Benutzer bleiben ausgeschlossen. Eine dort geöffnete Datei wird nicht als aktive Datei an eine Nachricht der aktuellen Session angehängt.
 
 ## Dateien im Control Center
 
@@ -48,7 +50,7 @@ Direkte Dateiaktionen unter **Control Center > Dateien** sind an den angemeldete
 
 Benötigt eine vom Modell angeforderte Computeraktion zwingend einen aktuellen Ordner und wurde keiner gewählt, fragt der Agent nach einem absoluten Pfad. Der anschließende Verzeichniswechsel folgt der Dateizugriffsrichtlinie für das Home-Verzeichnis oder externe Pfade und kann eine widerrufbare Session-Freigabe erzeugen.
 
-Bis zu vier Dateien können im Browser gemeinsam ausgewählt und nacheinander hochgeladen werden. Die maximale Uploadgröße und die Quote der jeweiligen Session- oder Projektwurzel werden global von Administratoren unter **Einstellungen > Instanzlimits** festgelegt. Aktuelle Dateibytes und alle gespeicherten Vollversionen zählen gemeinsam gegen diese Quote. Neue Dateien überschreiben keine vorhandenen Pfade.
+Bis zu vier Dateien können im Browser gemeinsam ausgewählt und nacheinander hochgeladen werden. Die maximale Uploadgröße und die Quote der jeweiligen Sessionwurzel werden global von Administratoren unter **Einstellungen > Instanzlimits** festgelegt. Aktuelle Dateibytes und alle gespeicherten Vollversionen zählen gemeinsam gegen diese Quote. Neue Dateien überschreiben keine vorhandenen Pfade.
 
 ## Vorschau und Bearbeitung
 

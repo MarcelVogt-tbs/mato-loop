@@ -14,6 +14,7 @@ from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.events import run_events
 from mato_loop_backend.models import AgentRun, ChatSession, Message, WebSearchPolicy
+from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     AgentProfileUnavailable,
     IntegrationSettings,
@@ -210,54 +211,66 @@ async def run_tasks(
             # Keep both policy layers: scoped overrides and shell prefixes cannot widen the old offer.
             snapshot["offeredCeiling"] = offered_snapshot
             prepared = []
-            for index, task in enumerate(arguments.tasks, start=count):
-                child_run_id = uuid4()
-                child_session = ChatSession(
-                    id=uuid4(), user_id=session.user_id,
-                    session_type="chat", title=task.description,
-                    title_generation_status="skipped", project_id=session.project_id,
-                    parent_session_id=session.id, spawned_by_run_id=parent.id,
-                    spawned_by_tool_call_id=tool_call_id, spawn_index=index,
-                    agent_profile_id=parent.agent_profile_id or session.agent_profile_id,
-                    model_config_id=parent.model_config_id,
-                    reasoning_effort=session.reasoning_effort,
-                    preferred_execution_agent_id=parent.execution_agent_id,
-                    current_directory=parent.current_directory_snapshot,
-                    memory_mode="disabled",
-                    web_search_policy=(
-                        WebSearchPolicy.DISABLED.value
-                        if session.web_search_policy == WebSearchPolicy.DISABLED
-                        else WebSearchPolicy.AVAILABLE.value
-                    ),
-                )
-                message = Message(
-                    id=uuid4(), session_id=child_session.id, role="user", content=task.prompt,
-                    trust_level=parent.trust_level, source_type="app",
-                    provider_data={"_matoloop": {
-                        "delegationCeiling": deepcopy(snapshot),
-                        "maxToolCallsByRun": {str(child_run_id): max_tool_calls},
-                        **({"activeFile": deepcopy(active_file)} if active_file is not None else {}),
-                    }},
-                )
-                child = AgentRun(
-                    id=child_run_id, session_id=child_session.id, parent_run_id=None,
-                    input_message_id=message.id, status="queued",
-                    agent_profile_id=child_session.agent_profile_id,
-                    model_config_id=parent.model_config_id, model_name=parent.model_name,
-                    trust_level=parent.trust_level,
-                    pseudonymization_enabled=parent.pseudonymization_enabled,
-                    execution_agent_id=parent.execution_agent_id,
-                    execution_agent_revision=parent.execution_agent_revision,
-                    current_directory_snapshot=parent.current_directory_snapshot,
-                    execution_operations=list(parent.execution_operations or []),
-                )
-                child_db.add(child_session)
-                await child_db.flush()
-                child_db.add(message)
-                await child_db.flush()
-                child_db.add(child)
-                prepared.append((child_session, child))
-            await child_db.commit()
+            storage = SessionStorage()
+            try:
+                for index, task in enumerate(arguments.tasks, start=count):
+                    child_run_id = uuid4()
+                    child_session = ChatSession(
+                        id=uuid4(), user_id=session.user_id,
+                        session_type="chat", title=task.description,
+                        title_generation_status="skipped", project_id=session.project_id,
+                        parent_session_id=session.id, spawned_by_run_id=parent.id,
+                        spawned_by_tool_call_id=tool_call_id, spawn_index=index,
+                        agent_profile_id=parent.agent_profile_id or session.agent_profile_id,
+                        model_config_id=parent.model_config_id,
+                        reasoning_effort=session.reasoning_effort,
+                        preferred_execution_agent_id=parent.execution_agent_id,
+                        current_directory=parent.current_directory_snapshot,
+                        memory_mode="disabled",
+                        web_search_policy=(
+                            WebSearchPolicy.DISABLED.value
+                            if session.web_search_policy == WebSearchPolicy.DISABLED
+                            else WebSearchPolicy.AVAILABLE.value
+                        ),
+                    )
+                    message = Message(
+                        id=uuid4(), session_id=child_session.id, role="user", content=task.prompt,
+                        trust_level=parent.trust_level, source_type="app",
+                        provider_data={"_matoloop": {
+                            "delegationCeiling": deepcopy(snapshot),
+                            "maxToolCallsByRun": {str(child_run_id): max_tool_calls},
+                            **({"activeFile": deepcopy(active_file)} if active_file is not None else {}),
+                        }},
+                    )
+                    child = AgentRun(
+                        id=child_run_id, session_id=child_session.id, parent_run_id=None,
+                        input_message_id=message.id, status="queued",
+                        agent_profile_id=child_session.agent_profile_id,
+                        model_config_id=parent.model_config_id, model_name=parent.model_name,
+                        trust_level=parent.trust_level,
+                        pseudonymization_enabled=parent.pseudonymization_enabled,
+                        execution_agent_id=parent.execution_agent_id,
+                        execution_agent_revision=parent.execution_agent_revision,
+                        current_directory_snapshot=parent.current_directory_snapshot,
+                        execution_operations=list(parent.execution_operations or []),
+                    )
+                    child_db.add(child_session)
+                    await child_db.flush()
+                    prepared.append((child_session, child))
+                    await asyncio.to_thread(
+                        storage.provision, child_session.id, child_session.project_id
+                    )
+                    child_db.add(message)
+                    await child_db.flush()
+                    child_db.add(child)
+                await child_db.commit()
+            except BaseException:
+                await child_db.rollback()
+                for child_session, _child in prepared:
+                    await asyncio.to_thread(
+                        storage.remove_session, child_session.id, child_session.project_id
+                    )
+                raise
             # No await between the durable checkpoint and registering every scheduled child.
             for child_session, child in prepared:
                 run_events.register_subagent(child.id, parent.id, {

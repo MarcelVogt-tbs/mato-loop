@@ -9,8 +9,8 @@
           dense
           icon="arrow_upward"
           aria-label="Zum übergeordneten Ordner"
-          :disable="!explorerAvailable || workspace.directoryPath === browserRootPath"
-          @click="navigateDirectory(selectedParentPath)"
+          :disable="!explorerAvailable || atBrowserRoot"
+          @click="navigateUp"
         >
           <q-tooltip>Zum übergeordneten Ordner</q-tooltip>
         </q-btn>
@@ -57,7 +57,7 @@
           dense
           icon="refresh"
           aria-label="Dateien aktualisieren"
-          :loading="workspace.loading[workspace.directoryPath]"
+          :loading="!projectOverview && workspace.loading[workspace.directoryPath]"
           :disable="!explorerAvailable"
           @click="refreshFiles"
         >
@@ -184,7 +184,7 @@
     </div>
     <q-separator />
     <q-linear-progress
-      v-if="workspace.loading[workspace.directoryPath]"
+      v-if="!projectOverview && workspace.loading[workspace.directoryPath]"
       indeterminate
       color="primary"
       aria-label="Dateien werden geladen"
@@ -204,16 +204,16 @@
         class="q-pa-sm"
         role="tree"
         aria-label="Dateien und Ordner"
-        :tabindex="treeFocusPath === workspace.directoryPath ? 0 : -1"
+        :tabindex="treeFocusPath === displayedDirectoryPath ? 0 : -1"
         @focus.self="focusTreeItem(visibleTreeItems()[0])"
         @keydown="handleTreeKeydown"
       >
-        <div v-if="workspace.loadErrors[workspace.directoryPath]" class="file-load-state q-ma-sm q-pa-md text-center" role="alert">
+        <div v-if="!projectOverview && workspace.loadErrors[workspace.directoryPath]" class="file-load-state q-ma-sm q-pa-md text-center" role="alert">
           <q-icon name="cloud_off" size="32px" class="app-muted" />
           <div class="q-mt-sm">{{ rootLoadError }}</div>
           <q-btn class="q-mt-sm" flat no-caps color="primary" label="Erneut versuchen" @click="workspace.load(workspace.directoryPath)" />
         </div>
-        <div v-if="workspace.loading[workspace.directoryPath] && !workspace.entries[workspace.directoryPath]" class="q-pa-lg text-center">
+        <div v-if="!projectOverview && workspace.loading[workspace.directoryPath] && !workspace.entries[workspace.directoryPath]" class="q-pa-lg text-center">
           <q-spinner color="primary" size="32px" />
           <div class="app-muted q-mt-sm">Dateien werden geladen ...</div>
         </div>
@@ -222,26 +222,28 @@
           <div class="q-mt-sm">Keine Dateien oder Ordner entsprechen dem Filter.</div>
         </div>
         <div
-          v-else-if="workspace.entries[workspace.directoryPath] && !workspace.entries[workspace.directoryPath].length && !workspace.loadErrors[workspace.directoryPath]"
+          v-else-if="displayEntries && !displayEntries.length && !workspace.loadErrors[workspace.directoryPath]"
           class="file-load-state app-muted q-ma-sm q-pa-md text-center"
         >
           <q-icon name="folder_open" size="32px" />
           <div class="q-mt-sm">Hier sind noch keine Dateien oder Ordner.</div>
         </div>
         <FileTreeNode
-          v-for="entry in workspace.entries[workspace.directoryPath] || []"
+          v-for="entry in displayEntries"
           :key="`${workspace.contextVersion}:${entry.path}`"
           :entry="entry"
           :filter="workspace.filter || ''"
           :focus-path="treeFocusPath"
+          :mutable="!projectOverview"
           @open-file="openViewer"
+          @open-directory="openDirectory"
           @focus-entry="treeFocusPath = $event"
           @download-entry="workspace.download($event.path)"
           @rename-entry="openRenameDialog"
           @delete-entry="removeEntry"
         />
         <q-btn
-          v-if="workspace.hasMore[workspace.directoryPath]"
+          v-if="!projectOverview && workspace.hasMore[workspace.directoryPath]"
           flat
           dense
           no-caps
@@ -378,6 +380,8 @@ const createKind = ref('file')
 const createName = ref('')
 const createSuffix = ref('.txt')
 const creating = ref(false)
+const selectedRootIdentity = ref(null)
+const projectOverview = ref(false)
 let typeahead = ''
 let typeaheadTimer = null
 const fileTypeOptions = [
@@ -390,7 +394,7 @@ const selectedIsDirectory = computed(() => workspace.selectedKind === 'directory
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
 ))
-const directoryArchiveUrl = computed(() => workspace.archiveUrl(workspace.directoryPath))
+const directoryArchiveUrl = computed(() => projectOverview.value ? '' : workspace.archiveUrl(workspace.directoryPath))
 const hasOverflowActions = computed(() => Boolean(
   directoryArchiveUrl.value || (workspace.scope === 'filesystem' && explorerAvailable.value)
 ))
@@ -399,7 +403,7 @@ const targetDirectory = computed(() => {
   return parentPath(workspace.selectedPath)
 })
 const mutationDirectory = computed(() => targetDirectory.value)
-const writableLocation = computed(() => !workspace.toolContext)
+const writableLocation = computed(() => !projectOverview.value && !workspace.toolContext)
 const canCreateFile = computed(() => writableLocation.value && workspace.operationAvailable('filesystem.import'))
 const canCreateDirectory = computed(() => writableLocation.value && workspace.operationAvailable('filesystem.mkdir'))
 const canUpload = computed(() => writableLocation.value && workspace.operationAvailable('filesystem.import'))
@@ -409,7 +413,7 @@ const canRename = computed(() => Boolean(
   && renameTarget.value
   && renameName.value.trim() !== renameTarget.value.name
 ))
-const explorerAvailable = computed(() => workspace.operationAvailable('filesystem.list'))
+const explorerAvailable = computed(() => projectOverview.value || workspace.operationAvailable('filesystem.list'))
 const explorerUnavailableMessage = computed(() => {
   if (explorerAvailable.value) return ''
   if (workspace.scope === 'session') {
@@ -432,10 +436,26 @@ const explorerUnavailableIcon = computed(() => (
   selectedExecutionAgent.value?.connected === false ? 'cloud_off' : 'folder_off'
 ))
 const browserRootPath = computed(() => workspace.scope === 'filesystem' ? '/' : '.')
-const selectedParentPath = computed(() => parentPath(workspace.directoryPath))
+const displayedDirectoryPath = computed(() => projectOverview.value ? '@project' : workspace.directoryPath)
+const atBrowserRoot = computed(() => projectOverview.value || (
+  workspace.directoryPath === browserRootPath.value && !chat.current?.projectId
+))
 const selectedBreadcrumbs = computed(() => {
   const filesystem = workspace.scope === 'filesystem'
   const parts = workspace.directoryPath.split('/').filter((part) => part && part !== '.')
+  if (!filesystem && chat.current?.projectId) {
+    if (projectOverview.value) return [{ icon: 'folder_open', label: 'Projekt', ariaLabel: 'Projekt', path: '@project' }]
+    const selected = managedSessionOptions.value.find((option) => option.value === workspace.rootIdentity)
+    return [
+      { icon: 'folder_open', label: 'Projekt', ariaLabel: 'Projekt', path: '@project' },
+      { icon: 'folder', label: selected?.label || 'Session', ariaLabel: selected?.label || 'Session', path: '.' },
+      ...parts.map((label, index) => ({
+        label,
+        ariaLabel: label,
+        path: parts.slice(0, index + 1).join('/')
+      }))
+    ]
+  }
   return [
     {
       icon: filesystem ? 'computer' : 'folder_open',
@@ -449,10 +469,18 @@ const selectedBreadcrumbs = computed(() => {
     }))
   ]
 })
+const projectSessionEntries = computed(() => managedSessionOptions.value.map((option) => ({
+  kind: 'directory',
+  name: option.label,
+  path: `@session/${option.value}`,
+  sessionId: option.value
+})))
+const displayEntries = computed(() => projectOverview.value
+  ? projectSessionEntries.value
+  : workspace.entries[workspace.directoryPath] || [])
 const filterEmpty = computed(() => Boolean(
   workspace.filter
-  && workspace.entries[workspace.directoryPath]
-  && !workspace.entries[workspace.directoryPath].some((entry) => (
+  && !displayEntries.value.some((entry) => (
     entry.name?.toLocaleLowerCase().includes(workspace.filter.toLocaleLowerCase())
   ))
 ))
@@ -462,10 +490,32 @@ const rootLoadError = computed(() => apiErrorMessage(
 ))
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Name erforderlich.'
 const activeWorkspaceContext = computed(() => executionAgents.workspaceContextFor(chat.activeContext))
+const managedSessionOptions = computed(() => {
+  const current = chat.current
+  if (props.scope !== 'session' || !current?.id || !current.projectId) return []
+  const sessions = chat.sessionList(current.projectId)?.items || []
+  const candidates = [current, ...sessions.filter((session) => session.id !== current.id)]
+    .filter((session) => session.projectId === current.projectId)
+  const titles = candidates.map((session) => session.title?.trim() || 'Unbenannte Session')
+  const titleCounts = new Map(titles.map((title) => [title, titles.filter((item) => item === title).length]))
+  return candidates.map((session, index) => ({
+    label: `${titles[index]}${titleCounts.get(titles[index]) > 1 || !session.title?.trim() ? ` · ${session.id.length > 12 ? session.id.slice(-8) : session.id}` : ''}${session.id === current.id ? ' (diese Session)' : ''}`,
+    value: session.id
+  }))
+})
+async function loadProjectSessions(projectId) {
+  if (!projectId) return
+  const list = chat.sessionList(projectId)
+  if (!list?.loaded) await chat.fetchSessions({ suppressErrorToast: true }, projectId)
+  while (chat.sessionList(projectId)?.nextCursor) {
+    await chat.fetchMoreSessions({ suppressErrorToast: true }, projectId)
+  }
+}
 
 function refreshFiles() {
+  if (projectOverview.value) return loadProjectSessions(chat.current?.projectId)
   const requests = [workspace.refresh()]
-  if (chat.current?.id) requests.push(workspace.fetchStorageUsage(chat.current.id))
+  if (workspace.rootIdentity) requests.push(workspace.fetchStorageUsage(workspace.rootIdentity))
   return Promise.all(requests)
 }
 
@@ -576,9 +626,9 @@ function handleTreeKeydown(event) {
     event.preventDefault()
     current.click()
     return
-  } else if (event.key === 'ArrowLeft' && workspace.directoryPath !== browserRootPath.value) {
+  } else if (event.key === 'ArrowLeft' && !atBrowserRoot.value) {
     event.preventDefault()
-    navigateDirectory(selectedParentPath.value)
+    navigateUp()
     return
   } else if (event.key === 'Enter' || event.key === ' ') {
     current.click()
@@ -595,9 +645,33 @@ function handleTreeKeydown(event) {
 }
 
 function navigateDirectory(path) {
+  if (path === '@project') {
+    projectOverview.value = true
+    treeFocusPath.value = '@project'
+    return
+  }
+  projectOverview.value = false
   workspace.openDirectory(path)
   treeFocusPath.value = path
   focusPath(path)
+}
+
+function navigateUp() {
+  if (workspace.scope === 'session' && chat.current?.projectId && workspace.directoryPath === '.') {
+    navigateDirectory('@project')
+    return
+  }
+  navigateDirectory(parentPath(workspace.directoryPath))
+}
+
+function openDirectory(entry) {
+  if (projectOverview.value && entry.sessionId) {
+    selectedRootIdentity.value = entry.sessionId
+    projectOverview.value = false
+    treeFocusPath.value = '.'
+    return
+  }
+  navigateDirectory(entry.path)
 }
 
 async function focusPath(path, fallback = workspace.directoryPath) {
@@ -689,24 +763,42 @@ function fileTargetForPath(path) {
 }
 
 watch(
+  [() => chat.current?.id || null, () => chat.current?.projectId || null],
+  ([sessionId, projectId]) => {
+    selectedRootIdentity.value = sessionId
+    projectOverview.value = false
+    void loadProjectSessions(projectId).catch(() => {})
+  },
+  { immediate: true }
+)
+
+watch(managedSessionOptions, (options) => {
+  if (!options.some((option) => option.value === selectedRootIdentity.value)) {
+    selectedRootIdentity.value = chat.current?.id || null
+    projectOverview.value = false
+  }
+})
+
+watch(
   [
     () => chat.selectedSessionId || null,
     () => chat.current?.id || null,
     () => chat.current?.projectId || null,
+    () => selectedRootIdentity.value,
     () => chat.current?.currentDirectory || null,
     () => chat.activeContext?.currentDirectory || null,
     () => workspaceContextKey(activeWorkspaceContext.value),
     () => controlCenter.requestGeneration,
     () => controlCenter.ready
   ],
-  ([selectedSessionId, currentSessionId, currentProjectId, currentDirectory, draftCurrentDirectory]) => {
+  ([selectedSessionId, currentSessionId, , selectedManagedSessionId, currentDirectory, draftCurrentDirectory]) => {
     const sessionId = selectedSessionId || currentSessionId
     const selectedDirectory = currentSessionId === sessionId
       ? currentDirectory
       : sessionId ? null : draftCurrentDirectory
     workspace.configure({
       sessionId,
-      rootIdentity: sessionId ? currentProjectId || sessionId : null,
+      rootIdentity: sessionId ? selectedManagedSessionId || sessionId : null,
       currentDirectory: selectedDirectory || selectedExecutionAgent.value?.homeDirectory || '/',
       workspaceContext: activeWorkspaceContext.value,
       scope: props.scope

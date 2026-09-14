@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -264,11 +265,12 @@ async def test_delete_restores_earlier_storage_when_later_trash_fails(
     session_result.all.return_value = sessions
     db.execute.return_value = session_result
     project_result = MagicMock()
-    project_result.all.return_value = []
+    project_result.all.return_value = [sessions[0][1]]
     db.scalars.return_value = project_result
     session_storage = MagicMock()
     first_trash = tmp_path / "first-trash"
-    session_storage.trash_session.side_effect = [first_trash, OSError("storage failed")]
+    session_storage.trash_project.return_value = first_trash
+    session_storage.trash_session.side_effect = OSError("storage failed")
     monkeypatch.setattr(user_routes, "SessionStorage", lambda: session_storage)
     monkeypatch.setattr(user_routes, "_shielded_quiesce", AsyncMock())
 
@@ -281,9 +283,7 @@ async def test_delete_restores_earlier_storage_when_later_trash_fails(
         await user_routes.delete_user(original_user_id, admin, db)
 
     db.rollback.assert_awaited_once()
-    session_storage.restore_session.assert_called_once_with(
-        sessions[0][0], first_trash, sessions[0][1]
-    )
+    session_storage.restore_project.assert_called_once_with(sessions[0][1], first_trash)
 
 
 async def test_delete_does_not_restore_storage_when_cancelled_commit_succeeds(
@@ -319,6 +319,84 @@ async def test_delete_does_not_restore_storage_when_cancelled_commit_succeeds(
         await task
 
     session_storage.restore_session.assert_not_called()
+
+
+async def test_delete_restores_project_when_cancelled_during_trash(
+    monkeypatch, tmp_path: Path
+) -> None:
+    admin = _user(admin=True)
+    target = _user(active=False)
+    project_id = uuid4()
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = target
+    session_result = MagicMock()
+    session_result.all.return_value = []
+    db.execute.return_value = session_result
+    project_result = MagicMock()
+    project_result.all.return_value = [project_id]
+    db.scalars.return_value = project_result
+    started, finish = threading.Event(), threading.Event()
+    trashed = tmp_path / "project-trash"
+    session_storage = MagicMock()
+
+    def trash_project(_project_id):
+        started.set()
+        finish.wait()
+        return trashed
+
+    session_storage.trash_project.side_effect = trash_project
+    monkeypatch.setattr(user_routes, "SessionStorage", lambda: session_storage)
+    monkeypatch.setattr(user_routes, "_shielded_quiesce", AsyncMock())
+
+    task = asyncio.create_task(user_routes.delete_user(target.id, admin, db))
+    await asyncio.to_thread(started.wait)
+    task.cancel()
+    finish.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    session_storage.restore_project.assert_called_once_with(project_id, trashed)
+    db.rollback.assert_awaited_once()
+
+
+async def test_delete_restores_standalone_session_when_cancelled_during_trash(
+    monkeypatch, tmp_path: Path
+) -> None:
+    admin = _user(admin=True)
+    target = _user(active=False)
+    session_id = uuid4()
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = target
+    session_result = MagicMock()
+    session_result.all.return_value = [(session_id, None)]
+    db.execute.return_value = session_result
+    project_result = MagicMock()
+    project_result.all.return_value = []
+    db.scalars.return_value = project_result
+    started, finish = threading.Event(), threading.Event()
+    trashed = tmp_path / "session-trash"
+    session_storage = MagicMock()
+
+    def trash_session(_session_id, _project_id):
+        started.set()
+        finish.wait()
+        return trashed
+
+    session_storage.trash_session.side_effect = trash_session
+    monkeypatch.setattr(user_routes, "SessionStorage", lambda: session_storage)
+    monkeypatch.setattr(user_routes, "_shielded_quiesce", AsyncMock())
+
+    task = asyncio.create_task(user_routes.delete_user(target.id, admin, db))
+    await asyncio.to_thread(started.wait)
+    task.cancel()
+    finish.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    session_storage.restore_session.assert_called_once_with(session_id, trashed)
+    db.rollback.assert_awaited_once()
 
 
 def test_static_password_route_precedes_dynamic_route() -> None:

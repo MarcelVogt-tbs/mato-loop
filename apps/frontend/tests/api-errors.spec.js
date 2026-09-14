@@ -163,6 +163,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'session.storageUnavailable' } })).toBe(
       'Der interne Dateispeicher dieser Session ist derzeit nicht verfügbar.'
     )
+    expect(apiErrorMessage({ error: { code: 'session.filesReferenced', params: { referenceCount: 2 } } })).toBe(
+      '2 Dateireferenzen mit dieser Session verhindern den Vorgang.'
+    )
     expect(apiErrorMessage({ error: { code: 'session.messageNotFound' } })).toBe(
       'Die Chatnachricht wurde nicht gefunden.'
     )

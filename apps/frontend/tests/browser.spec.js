@@ -1163,14 +1163,14 @@ it('automatically chooses pending file fields and offers an explicit retry witho
 it('browses both isolated workspace roots and fences late picker results', async () => {
   await open()
   const picker = {
-    sessionId: 'session-1', rootIdentity: 'project-1', executionAgentId: 'agent-1',
+    sessionId: 'session-1', rootIdentity: 'session-1', executionAgentId: 'agent-1',
     currentDirectory: '/work', filesystemList: true, filesystemImport: true
   }
   api.get.mockResolvedValueOnce({ data: { entries: [{ kind: 'directory', name: 'docs', path: 'docs' }] } })
   expect(browser.openPicker(picker)).toBe(true)
   await vi.waitFor(() => expect(browser.pickerEntries).toHaveLength(1))
   expect(api.get).toHaveBeenLastCalledWith('/workspace/entries', {
-    params: { scope: 'session', session_id: 'session-1', root_identity: 'project-1', path: '.' },
+    params: { scope: 'session', session_id: 'session-1', root_identity: 'session-1', path: '.' },
     signal: expect.any(AbortSignal), suppressErrorToast: true
   })
   api.get.mockResolvedValueOnce({ data: { entries: [{ kind: 'file', name: 'local.txt', path: '/work/local.txt' }] } })

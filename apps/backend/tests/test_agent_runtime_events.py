@@ -170,18 +170,15 @@ async def test_runtime_rejects_inactive_user() -> None:
         await AgentRuntime._ensure_user_active(db, uuid4())
 
 
-async def test_plan_directory_accepts_first_canonical_write(tmp_path) -> None:
+def test_canonical_plan_needs_no_runtime_directory(tmp_path) -> None:
     session_id = uuid4()
     storage = SessionStorage(tmp_path / "sessions")
     storage.provision(session_id)
     root_files = RootFileService(session_id, session_storage=storage)
 
-    await runtime_module._ensure_plan_directory(root_files, session_id)
-    await runtime_module._ensure_plan_directory(root_files, session_id)
     assert root_files.run_id is None
-    assert root_files.path_kind("session", f"plans/{session_id}") == "directory"
 
-    path = f"plans/{session_id}/plan.md"
+    path = "plan.md"
     run_id = uuid4()
     working = RootFileService(session_id, session_storage=storage, run_id=run_id)
     assert working.write_file("session", path, "# Plan") == path

@@ -312,6 +312,7 @@ _MESSAGES = {
     "session.automationOutputLinked": "The chat session is an automation output target.",
     "session.automationOutputRequired": "The chat session is required by an automation.",
     "session.automationImpactChanged": "The linked automations changed before deletion.",
+    "session.filesReferenced": "File references involving this session still prevent the operation.",
     "session.retryUnavailable": "The failed response can no longer be retried.",
     "skill.duplicate": "A skill with this name already exists.",
     "skill.alreadyActive": "A different skill is already active for this run.",

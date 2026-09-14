@@ -450,7 +450,7 @@ async def test_child_reuses_context_and_only_inherited_computer_files(
     assert "delegated task" in projections[0]["system_prompt"]
     assert "Plan workflow:" not in projections[0]["system_prompt"]
     assert "Build workflow:" not in projections[0]["system_prompt"]
-    assert f"root=files path=plans/{session.id}/plan.md" not in projections[0]["system_prompt"]
+    assert "root=files path=plan.md" not in projections[0]["system_prompt"]
     assert "delegationCeiling" not in str(requests[0]["messages"])
     retrieve.assert_not_awaited()
     provision.assert_not_called()

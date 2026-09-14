@@ -209,7 +209,6 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
 from mato_loop_backend.settings.models import (
-    PLAN_AGENT_PROFILE_ID,
     LlmProviderConfig,
     ModelAvailability,
     ModelCapability,
@@ -679,17 +678,6 @@ def _run_metadata(run: AgentRun, **values: Any) -> dict[str, Any]:
     }
 
 
-async def _ensure_plan_directory(root_files: RootFileService, session_id: UUID) -> None:
-    for path in ("plans", f"plans/{session_id}"):
-        try:
-            await asyncio.to_thread(root_files.create_directory, "session", path)
-        except RootFileError as exc:
-            if exc.code != "file.pathAlreadyExists" or (
-                await asyncio.to_thread(root_files.path_kind, "session", path)
-            ) != "directory":
-                raise
-
-
 async def _publish_run_phase(run_id: UUID, phase: str, **details: Any) -> None:
     if phase not in RUN_PHASES:
         raise ValueError(f"Unknown run phase: {phase}")
@@ -842,14 +830,6 @@ class AgentRuntime:
             )
         except AgentProfileUnavailable as exc:
             raise AgentRunError("agentProfile.selectedUnavailable") from exc
-        if chat_session.agent_profile_id == PLAN_AGENT_PROFILE_ID:
-            root_files = RootFileService(
-                chat_session.id,
-                project_id=chat_session.project_id,
-                session_quota_bytes=instance_limits.session_quota_bytes,
-                max_editable_text_bytes=instance_limits.max_editable_text_bytes,
-            )
-            await _ensure_plan_directory(root_files, chat_session.id)
         trust_level = effective_model_trust(provider, model)
         pseudonymization_enabled = (
             trust_level == TrustLevel.PUBLIC

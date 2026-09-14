@@ -249,7 +249,7 @@ describe('chat message queue', () => {
     const workspace = useWorkspaceStore()
     workspace.sessionId = 'session-1'
     workspace.scope = 'session'
-    workspace.rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
+    workspace.rootIdentity = 'session-1'
     workspace.openEntry({ kind: 'file', name: 'plan.md', path: 'plan.md' })
     workspace.filePreviews['plan.md'] = { revision: 'a'.repeat(64) }
 
@@ -262,7 +262,7 @@ describe('chat message queue', () => {
 
     const snapshot = {
       root: 'session',
-      root_identity: '550e8400-e29b-41d4-a716-446655440009',
+      root_identity: 'session-1',
       path: 'plan.md',
       sha256: 'a'.repeat(64),
       dirty: false
@@ -273,6 +273,28 @@ describe('chat message queue', () => {
       run_id: entry.id,
       active_file: snapshot
     }, { suppressErrorToast: true })
+  })
+
+  it('does not queue a sibling session file with the current chat message', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.running = true
+    const controlCenter = useControlCenterStore()
+    controlCenter.sessionId = 'session-1'
+    controlCenter.open = true
+    controlCenter.tabs = [{ appId: 'files', pinned: false }]
+    controlCenter.activeAppId = 'files'
+    const workspace = useWorkspaceStore()
+    workspace.sessionId = 'session-1'
+    workspace.scope = 'session'
+    workspace.rootIdentity = 'session-2'
+    workspace.openEntry({ kind: 'file', name: 'plan.md', path: 'plan.md' })
+    workspace.filePreviews['plan.md'] = { revision: 'a'.repeat(64) }
+
+    const entry = await chat.queueMessage('Ohne fremde Datei')
+
+    expect(entry.activeFile).toBeNull()
+    expect((await loadChatOutbox('user-1'))[0].activeFile).toBeNull()
   })
 
   it('waits for pending approvals and questions before sending', async () => {

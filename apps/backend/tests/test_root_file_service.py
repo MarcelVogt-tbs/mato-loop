@@ -287,7 +287,7 @@ def test_revision_history_rejects_invalid_previous_revision(tmp_path: Path) -> N
     assert invalid.value.code == "file.revisionInvalid"
 
 
-def test_project_sessions_share_files_and_revision_identity(tmp_path: Path) -> None:
+def test_project_sessions_have_distinct_files_and_revision_identity(tmp_path: Path) -> None:
     storage = SessionStorage(tmp_path / "sessions")
     project_id = uuid4()
     first_id = uuid4()
@@ -299,9 +299,11 @@ def test_project_sessions_share_files_and_revision_identity(tmp_path: Path) -> N
 
     first.write_file(FileRoot.SESSION, "shared.txt", "shared")
 
-    assert second.root_identity(FileRoot.SESSION) == str(project_id)
-    assert second.read_file(FileRoot.SESSION, "shared.txt").content == "1: shared"
-    assert second.list_revisions("shared.txt")[0].current is True
+    assert first.root_identity(FileRoot.SESSION) == str(first_id)
+    assert second.root_identity(FileRoot.SESSION) == str(second_id)
+    with pytest.raises(RootFileError) as missing:
+        second.read_file(FileRoot.SESSION, "shared.txt")
+    assert missing.value.code == "file.pathNotFound"
 
 
 def test_upload_replace_rename_copy_and_move_preserve_session_contract(
@@ -744,7 +746,7 @@ def test_run_quota_and_failed_index_write_keep_previous_state(tmp_path: Path, mo
     assert not list((root / "revisions").glob("*/1"))
 
 
-def test_project_runs_guard_shared_file_identity(tmp_path: Path) -> None:
+def test_project_runs_are_isolated_by_session_identity(tmp_path: Path) -> None:
     storage = SessionStorage(tmp_path / "sessions")
     project_id, first_id, second_id = uuid4(), uuid4(), uuid4()
     storage.provision(first_id, project_id)
@@ -752,13 +754,12 @@ def test_project_runs_guard_shared_file_identity(tmp_path: Path) -> None:
     first = RootFileService(first_id, session_storage=storage, project_id=project_id, run_id=uuid4())
     second = RootFileService(second_id, session_storage=storage, project_id=project_id, run_id=uuid4())
     first.write_file(FileRoot.SESSION, "shared.txt", "first")
-    with pytest.raises(RootFileError):
-        second.write_file(FileRoot.SESSION, "shared.txt", "second")
+    second.write_file(FileRoot.SESSION, "shared.txt", "second")
     assert second.finalize_run(first.run_id) == ()
-    assert second.pending_run_ids() == ()
+    assert second.pending_run_ids() == (second.run_id,)
     first.finalize_run(first.run_id)
-    assert second.finalize_run(second.run_id) == ()
-    assert second.read_bytes(FileRoot.SESSION, "shared.txt", limit=100) == b"first"
+    assert second.finalize_run(second.run_id)[0].revision == 1
+    assert second.read_bytes(FileRoot.SESSION, "shared.txt", limit=100) == b"second"
     assert first.read_bytes(FileRoot.SESSION, "shared.txt", limit=100) == b"first"
 
 
