@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createApp, h, nextTick, ref } from 'vue'
-import { Quasar, QIcon } from 'quasar'
+import { Quasar, QCard, QIcon, QSeparator } from 'quasar'
 import { afterEach, expect, it, vi } from 'vitest'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
@@ -28,12 +28,13 @@ it('uses the external history state for compact and complete todo views', async 
       ]
     })
   })
-  app.use(Quasar, { components: { QIcon } })
+  app.use(Quasar, { components: { QCard, QIcon, QSeparator } })
   app.mount(root)
 
   expect(root.textContent).not.toContain('Prüfen')
   expect(root.textContent).toContain('Umsetzen')
-  expect(root.textContent).toContain('2/2')
+  expect(root.textContent).toContain('Aufgaben · 2/2')
+  expect(root.querySelector('.q-card--bordered')).not.toBeNull()
   expect(root.querySelector('button')).toBeNull()
 
   running.value = false
@@ -44,4 +45,5 @@ it('uses the external history state for compact and complete todo views', async 
   await nextTick()
   expect(root.textContent).toContain('Prüfen')
   expect(root.textContent).toContain('Umsetzen')
+  expect(root.textContent).toContain('Aufgaben · 2/2')
 })

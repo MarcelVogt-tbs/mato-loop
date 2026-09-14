@@ -1,5 +1,7 @@
 <template>
-  <div v-if="visibleTodos.length" class="session-todos" aria-live="polite">
+  <q-card v-if="visibleTodos.length" flat bordered class="session-todos app-surface" aria-live="polite">
+    <div class="session-todos__header text-weight-medium app-muted">Aufgaben · {{ progressPosition }}/{{ todos.length }}</div>
+    <q-separator />
     <div class="session-todos__list" role="list" aria-label="Aufgaben dieser Session">
       <div v-for="(todo, index) in visibleTodos" :key="index" class="session-todos__item" role="listitem">
         <q-icon
@@ -9,14 +11,13 @@
           aria-hidden="true"
         />
         <span class="session-todos__content" :class="{ 'text-strike app-muted': todo.status === 'cancelled' }">{{ todo.content }}</span>
-        <span v-if="!expanded" class="session-todos__position app-muted">· {{ currentPosition }}/{{ todos.length }}</span>
       </div>
     </div>
-  </div>
+  </q-card>
 </template>
 
 <script setup>
-import { QIcon } from 'quasar'
+import { QCard, QIcon, QSeparator } from 'quasar'
 import { computed } from 'vue'
 
 defineOptions({ name: 'SessionTodoStrip' })
@@ -32,14 +33,16 @@ const statusIcon = {
   completed: 'check_circle',
   cancelled: 'remove_circle_outline'
 }
+const currentIndex = computed(() => {
+  const inProgress = props.todos.findIndex((todo) => todo.status === 'in_progress')
+  return inProgress >= 0 ? inProgress : props.todos.findIndex((todo) => todo.status === 'pending')
+})
 const visibleTodos = computed(() => {
   if (props.expanded) return props.todos
   if (!props.running) return []
-  const current = props.todos.find((todo) => todo.status === 'in_progress')
-    || props.todos.find((todo) => todo.status === 'pending')
-  return current ? [current] : []
+  return currentIndex.value >= 0 ? [props.todos[currentIndex.value]] : []
 })
-const currentPosition = computed(() => props.todos.indexOf(visibleTodos.value[0]) + 1)
+const progressPosition = computed(() => currentIndex.value >= 0 ? currentIndex.value + 1 : props.todos.length)
 </script>
 
 <style scoped>
@@ -47,9 +50,17 @@ const currentPosition = computed(() => props.todos.indexOf(visibleTodos.value[0]
   min-width: 0;
 }
 
+.session-todos__header {
+  min-height: 24px;
+  padding: 3px 8px;
+  font-size: 0.7rem;
+  line-height: 18px;
+}
+
 .session-todos__list {
   display: flex;
   min-width: 0;
+  padding: 4px;
   flex-direction: column;
 }
 
@@ -67,9 +78,5 @@ const currentPosition = computed(() => props.todos.indexOf(visibleTodos.value[0]
 .session-todos__content {
   min-width: 0;
   overflow-wrap: anywhere;
-}
-
-.session-todos__position {
-  flex: none;
 }
 </style>
