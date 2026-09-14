@@ -184,7 +184,7 @@ from mato_loop_backend.providers.media import MediaService, available_media_capa
 from mato_loop_backend.providers.output_budget import output_token_limit
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
-from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
+from mato_loop_backend.session_storage import SessionStorageError
 from mato_loop_backend.settings import (
     AgentProfileUnavailable,
     AgentRuntimeSettings,
@@ -1594,15 +1594,6 @@ class AgentRuntime:
             raise AgentRunError("session.notFound")
         delegated = chat_session.parent_session_id is not None
         ceiling = await delegation_snapshot(db, run, chat_session)
-        if delegated:
-            provisioning = asyncio.create_task(asyncio.to_thread(
-                SessionStorage().provision, chat_session.id, chat_session.project_id
-            ))
-            try:
-                await asyncio.shield(provisioning)
-            except asyncio.CancelledError:
-                await provisioning
-                raise
         project = (
             await db.get(Project, chat_session.project_id)
             if chat_session.project_id is not None
@@ -2182,6 +2173,17 @@ class AgentRuntime:
                     effective_toolset = effective_toolset.only(*ceiling["toolNames"]).without("task")
                 elif agent_profile_id not in DELEGATING_PROFILES:
                     effective_toolset = effective_toolset.without("task")
+                if delegated:
+                    effective_toolset = effective_toolset.without(
+                        "provide_file", "generate_qr_code", "generate_image", "edit_image",
+                        "generate_speech", "generate_audio", "build_skill", "edit_skill",
+                    )
+                    if execution_client is None:
+                        effective_toolset = effective_toolset.without(
+                            "read", "glob", "grep", "write_file", "edit_file",
+                            "create_directory", "delete_path", "copy_path", "move_path",
+                            "analyze_video",
+                        )
             if hide_skill_catalog_tools and effective_toolset is not None:
                 effective_toolset = effective_toolset.without("load_skill", "edit_skill")
             if (
@@ -2292,6 +2294,18 @@ class AgentRuntime:
                 current_directory=run.current_directory_snapshot,
             )
             schemas = effective_toolset.schemas() if effective_toolset else []
+            if delegated:
+                for schema in schemas:
+                    pending = [schema["parameters"]]
+                    while pending:
+                        value = pending.pop()
+                        if isinstance(value, dict):
+                            enum = value.get("enum")
+                            if isinstance(enum, list) and "files" in enum and "computer" in enum:
+                                value["enum"] = ["computer"]
+                            pending.extend(value.values())
+                        elif isinstance(value, list):
+                            pending.extend(value)
             tool_schema_tokens = (
                 estimate_tokens(schemas, model.characters_per_token) if schemas else 0
             )
@@ -3775,6 +3789,9 @@ class AgentRuntime:
                     )
                     assert effective_toolset is not None
                     tool_result = await effective_toolset.execute(call, tool_context)
+                    if delegated:
+                        for attachment in tool_result.attachments:
+                            attachment.ephemeral = True
                     if tool_context.user_denied:
                         tool_result = ToolResult.error("permission.userDenied")
                         user_denied_batch = True
@@ -4518,6 +4535,8 @@ class AgentRuntime:
     ) -> bool:
         session = await db.get(ChatSession, run.session_id)
         if session is None:
+            return True
+        if session.parent_session_id is not None:
             return True
         if not tolerate_conflict:
             limits = await SettingsStore.load(db, InstanceLimits)

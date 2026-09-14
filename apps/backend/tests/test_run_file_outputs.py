@@ -464,7 +464,7 @@ async def test_provided_working_file_and_actions_publish_only_final_output(tmp_p
     monkeypatch.setattr(tools_module, "_allow", AsyncMock(return_value=True))
     provided = await tools_module._provide_file(
         tools_module.ProvideFileArguments(root="session", path="model.scad"),
-        SimpleNamespace(run_id=run_id, root_files=files),
+        SimpleNamespace(run_id=run_id, root_files=files, session=session),
     )
     assert provided.attachments[0].file_revision is None
     assert provided.attachments[0].file_id == working.file_id
@@ -528,7 +528,7 @@ async def test_provided_zip_persists_fixed_snapshot_after_source_edit(tmp_path, 
     monkeypatch.setattr(tools_module, "_allow", AsyncMock(return_value=True))
     provided = await tools_module._provide_file(
         tools_module.ProvideFileArguments(root="session", path="reports"),
-        SimpleNamespace(run_id=run_id, root_files=files),
+        SimpleNamespace(run_id=run_id, root_files=files, session=session),
     )
     assert not provided.is_error
     output, = provided.attachments
@@ -1089,6 +1089,11 @@ async def test_runtime_finalizer_uses_session_and_preserves_conflicts(monkeypatc
     assert await AgentRuntime._finalize_run_files(db, run, tolerate_conflict=True) is False
     db.begin_nested.assert_called_once_with()
     assert db.begin_nested.return_value.__aexit__.await_args.args[0] is RootFileError
+
+    finalize.reset_mock(side_effect=True)
+    session.parent_session_id = uuid4()
+    assert await AgentRuntime._finalize_run_files(db, run) is True
+    finalize.assert_not_awaited()
 
 
 async def test_recovery_retries_failed_active_run_file_finalization(monkeypatch):

@@ -75,11 +75,14 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(inspected["classification"], "write")
             self.assertRegex(inspected["inspectionRevision"], r"^[0-9a-f]{64}$")
             self.assertEqual(
-                [(target["kind"], target["path"]) for target in inspected["targets"]],
                 [
-                    ("input", os.fspath(source)),
-                    ("output", os.fspath(root / "output.txt")),
-                    ("script", os.fspath(script)),
+                    (target["kind"], target["access"], target["path"])
+                    for target in inspected["targets"]
+                ],
+                [
+                    ("input", "read", os.fspath(source)),
+                    ("output", "write", os.fspath(root / "output.txt")),
+                    ("script", "read", os.fspath(script)),
                 ],
             )
             original_revision = inspected["inspectionRevision"]
@@ -1065,7 +1068,10 @@ class ShellInspectionTests(unittest.TestCase):
             <= {t["path"] for t in result["targets"]}
         )
         dynamic = self.inspect("cat /missing-parent/$MISSING")
-        self.assertIn({"path": "/missing-parent", "kind": "directory"}, dynamic["targets"])
+        self.assertIn(
+            {"path": "/missing-parent", "kind": "directory", "access": "read"},
+            dynamic["targets"],
+        )
         (self.root / "workspace/link").symlink_to("../outside/file")
         for command in (
             "cat missing link",
@@ -1075,6 +1081,18 @@ class ShellInspectionTests(unittest.TestCase):
             with self.subTest(command=command), self.assertRaises(AgentError) as raised:
                 self.inspect(command)
             self.assertEqual(raised.exception.code, "path.unsupportedType")
+
+    def test_mixed_command_retains_local_access_and_classification(self) -> None:
+        result = self.inspect("cat /outside/file > /workspace/output; touch /outside/file")
+        self.assertEqual(result["classification"], "write")
+        self.assertEqual(
+            {(target["path"], target["access"]) for target in result["targets"]},
+            {
+                ("/outside/file", "read"),
+                ("/outside/file", "write"),
+                ("/workspace/output", "write"),
+            },
+        )
 
     def test_incomplete_extraction_is_read_unless_a_bounded_known_write_is_seen(self) -> None:
         for command in (

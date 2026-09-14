@@ -2928,17 +2928,34 @@ def test_task_general_profiles_keep_main_plan_artifact_and_child_permissions() -
     assert "check it with glob before reading it" in main
     assert "Create a missing plan with write_file" in main
     assert "Plan workflow:" not in child
-    assert f"root=files path=plans/{session.id}/plan.md" in child
-    assert "not a requirement to create" in child
+    assert f"root=files path=plans/{session.id}/plan.md" not in child
     assert "do not inherit the parent transcript" in child
-    assert "paths/IDs and active skill instructions" in work
+    assert "complete goal" in work
+    assert "acceptance criteria" in work
+    assert "overlapping writes" in work
     assert f"root=files path=plans/{session.id}/plan.md" in work
     assert "asks to implement the current session plan" in work
     assert "answer inline when that fulfills the request" in work
-    assert "For repository work" in work
-    assert "not required for unrelated tasks" in work
-    for evidence in ("tests for code", "data checks", "source verification", "reconciliation"):
-        assert evidence in work
+    assert "Read AGENTS.md before repository work" in work
+    assert "skip unrelated tasks" in work
+    assert "follow-up plans limited to the requested change" in work
+    assert "repeat or broaden them only after changes" in work
+    assert "Report skipped checks" in work
+    assert "Verify code with tests and other claims with suitable evidence" in work
+
+
+def test_host_coding_workflow_applies_to_old_stored_profile_without_replacing_it() -> None:
+    stored = AgentProfile(
+        id=BUILD_AGENT_PROFILE_ID,
+        name="Build",
+        instructions="Keep this exact stored workflow and repeat every check.",
+    )
+
+    prompt = general_system_prompt(_session(), agent_profile=stored)
+
+    assert stored.instructions in prompt
+    assert prompt.index(stored.instructions) < prompt.index("Shared coding workflow:")
+    assert "repeat or broaden them only after changes" in prompt
 
 
 def test_question_contract_allows_follow_up_for_new_required_decisions() -> None:

@@ -316,7 +316,8 @@ async def test_shell_paths_require_complete_coverage_from_directory_grants(tmp_p
     request = PermissionRequest(
         capability="shell.read", resource_type="shell_command",
         resource_scope=shell_command_scope(
-            agent.id, "/work", "read", [["cat"]], ["/opt/tool", "/srv/data"], True
+            agent.id, "/work", "read", [["cat"]], ["/opt/tool", "/srv/data"], True,
+            ["read", "read"],
         ),
         action_kind="shell_run", risk_level="low", title="Lesen?", summary="Test",
         session_grants=requested,

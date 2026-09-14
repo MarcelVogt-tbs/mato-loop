@@ -991,6 +991,7 @@ def shell_command_scope(
     prefixes: list[list[str]],
     paths: list[str],
     analysis_complete: bool,
+    target_accesses: list[Literal["read", "write", "exempt"] | None] | None = None,
 ) -> str:
     return json.dumps(
         {
@@ -1000,6 +1001,7 @@ def shell_command_scope(
             "currentDirectory": current_directory,
             "paths": paths,
             "prefixes": prefixes,
+            "targetAccesses": target_accesses if target_accesses is not None else [None] * len(paths),
         },
         ensure_ascii=True,
         separators=(",", ":"),
@@ -1023,22 +1025,33 @@ def shell_command_permission(
         target.path for target in inspection.targets if target.kind not in metadata_kinds
     }
     grant_paths = list(dict.fromkeys([
-        current_directory,
+        (inspection.classification, current_directory),
         *(
-            str(PurePosixPath(target.path).parent)
-            if target.kind in {"input", "output", "source", "script", "executable", "path"}
-            else target.path
+            (
+                target.access,
+                str(PurePosixPath(target.path).parent)
+                if target.kind in {"input", "output", "source", "script", "executable", "path"}
+                else target.path,
+            )
             for target in inspection.targets
             if target.path not in metadata_paths
         ),
     ]))
-    access = inspection.classification
+    reusable = all(
+        target.access is not None
+        for target in inspection.targets
+        if target.kind not in metadata_kinds
+    )
     return PermissionRequest(
         capability=f"shell.{inspection.classification}",
         resource_type="shell_command",
         resource_scope=shell_command_scope(
             agent_id, current_directory, inspection.classification, prefixes,
             [target.path for target in inspection.targets], inspection.analysis_complete,
+            [
+                "exempt" if target.kind in metadata_kinds else target.access
+                for target in inspection.targets
+            ],
         ),
         action_kind="shell_run",
         risk_level="low" if inspection.classification == "read" else "high",
@@ -1064,7 +1077,8 @@ def shell_command_permission(
                 execution_directory_scope(agent_id, path),
                 path,
             )
-            for path in grant_paths
+            for access, path in grant_paths
+            if access is not None
         ),
         approval_details={
             "shellClassification": inspection.classification,
@@ -1074,7 +1088,7 @@ def shell_command_permission(
         display_items=(PermissionDisplayItem("Shell-Befehl", command_line, "code"),),
         available_decisions=(
             ("allow_once", "allow_session", "deny")
-            if not any(
+            if reusable and not any(
                 confidential_execution_path(path)
                 for path in [current_directory, *(target.path for target in inspection.targets)]
             )
@@ -1093,6 +1107,7 @@ def _shell_command_scope(resource_scope: str) -> dict[str, Any] | None:
             "currentDirectory",
             "paths",
             "prefixes",
+            "targetAccesses",
         }:
             return None
         agent_id = UUID(value["agentId"])
@@ -1100,6 +1115,7 @@ def _shell_command_scope(resource_scope: str) -> dict[str, Any] | None:
         classification = value["classification"]
         prefixes = value["prefixes"]
         paths = value["paths"]
+        target_accesses = value["targetAccesses"]
         analysis_complete = value["analysisComplete"]
         if (
             not isinstance(current_directory, str)
@@ -1126,6 +1142,9 @@ def _shell_command_scope(resource_scope: str) -> dict[str, Any] | None:
             )
             or not isinstance(paths, list)
             or len(paths) > 256
+            or not isinstance(target_accesses, list)
+            or len(target_accesses) != len(paths)
+            or any(access not in {None, "read", "write", "exempt"} for access in target_accesses)
             or any(
                 not isinstance(path, str)
                 or not PurePosixPath(path).is_absolute()
@@ -1141,6 +1160,7 @@ def _shell_command_scope(resource_scope: str) -> dict[str, Any] | None:
             prefixes,
             paths,
             analysis_complete,
+            target_accesses,
         )
         return value if canonical == resource_scope else None
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -1165,7 +1185,7 @@ def session_grant_matches_request(
     resource_scope: str,
     grant: SessionGrantScope,
 ) -> bool:
-    if grant.access != _access_for_capability(capability):
+    if resource_type != "shell_command" and grant.access != _access_for_capability(capability):
         return False
     if resource_type == "root_path":
         requested = _root_path_scope(resource_scope)
@@ -1192,11 +1212,20 @@ def session_grant_matches_request(
         granted = _execution_directory_scope(grant.resource_scope)
         if grant.resource_type != "execution_directory" or requested is None or granted is None:
             return False
-        paths = {PurePosixPath(requested["currentDirectory"])}
-        for path in requested["paths"]:
+        if None in requested["targetAccesses"]:
+            return False
+        paths = {
+            (requested["classification"], PurePosixPath(requested["currentDirectory"]))
+        }
+        for path, access in zip(requested["paths"], requested["targetAccesses"], strict=True):
+            if access == "exempt":
+                continue
             parsed = PurePosixPath(path)
-            paths.update((parsed, parsed.parent))
-        return str(granted[0]) == requested["agentId"] and granted[1] in paths
+            paths.update(((access, parsed), (access, parsed.parent)))
+        return (
+            str(granted[0]) == requested["agentId"]
+            and (grant.access, granted[1]) in paths
+        )
     if resource_type == "integration_operation":
         requested = _integration_operation_scope(resource_scope)
         granted = _integration_resource_scope(grant.resource_scope)
@@ -1460,6 +1489,8 @@ class PermissionPolicy:
                 return PermissionDecision.ASK
             if policy == ToolExecutionPolicy.AUTO and inside_workspace:
                 return PermissionDecision.ALLOW
+            if None in scope["targetAccesses"]:
+                return PermissionDecision.ASK
             grants = list(
                 (
                     await db.scalars(

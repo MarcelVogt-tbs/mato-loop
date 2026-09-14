@@ -67,7 +67,7 @@ async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None
     approval.capability = "shell.write"
     approval.resource_type = "shell_command"
     approval.resource_scope = shell_command_scope(
-        agent_id, "/source", "write", [], ["/target/file"], True
+        agent_id, "/source", "write", [], ["/target/file"], True, ["write"]
     )
     approval.payload = {
         "agentProfileId": str(profile_id),
@@ -168,7 +168,7 @@ async def test_allow_session_accepts_257_scopes_and_rejects_258(monkeypatch) -> 
     approval.capability = "shell.read"
     approval.resource_type = "shell_command"
     approval.resource_scope = shell_command_scope(
-        agent_id, "/workspace", "read", [], paths, True
+        agent_id, "/workspace", "read", [], paths, True, ["read"] * len(paths)
     )
     user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)

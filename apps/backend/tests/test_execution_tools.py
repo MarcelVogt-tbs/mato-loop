@@ -15,6 +15,7 @@ from mato_loop_backend.agent.permissions import (
     SessionGrantScope,
     execution_directory_permission,
     execution_directory_scope,
+    session_grant_matches_request,
     shell_command_permission,
     shell_command_scope,
     shell_prefix_allowed,
@@ -582,9 +583,9 @@ def test_shell_session_grants_include_cwd_and_every_target_directory() -> None:
         "cat /outside/input.txt > /other/output.txt",
         ShellInspectResult(
             targets=[
-                {"path": "/outside/input.txt", "kind": "input"},
-                {"path": "/other/output.txt", "kind": "output"},
-                {"path": "/generic/file.txt", "kind": "path"},
+                {"path": "/outside/input.txt", "kind": "input", "access": "read"},
+                {"path": "/other/output.txt", "kind": "output", "access": "write"},
+                {"path": "/generic/file.txt", "kind": "path", "access": "write"},
             ],
             analysis_complete=True,
             classification="write",
@@ -595,9 +596,71 @@ def test_shell_session_grants_include_cwd_and_every_target_directory() -> None:
     )
 
     assert [
-        json.loads(grant.resource_scope)["path"]
+        (grant.access, json.loads(grant.resource_scope)["path"])
         for grant in request.effective_session_grants
-    ] == ["/work", "/outside", "/other", "/generic"]
+    ] == [("write", "/work"), ("read", "/outside"), ("write", "/other"), ("write", "/generic")]
+    assert json.loads(request.resource_scope)["targetAccesses"] == ["read", "write", "write"]
+    assert all(
+        session_grant_matches_request(
+            request.capability, request.resource_type, request.resource_scope, grant
+        )
+        for grant in request.effective_session_grants
+    )
+    outside_read = request.effective_session_grants[1]
+    assert not session_grant_matches_request(
+        request.capability,
+        request.resource_type,
+        request.resource_scope,
+        replace(outside_read, access="write"),
+    )
+
+
+def test_legacy_shell_targets_remain_one_shot_only() -> None:
+    agent_id = uuid4()
+    request = shell_command_permission(
+        agent_id,
+        "/work",
+        "cat /outside/input.txt",
+        ShellInspectResult(
+            targets=[{"path": "/outside/input.txt", "kind": "input"}],
+            analysis_complete=True, classification="read", read_only=True,
+            commands=[], inspection_revision="a" * 64,
+        ),
+    )
+    assert request.available_decisions == ("allow_once", "deny")
+    assert json.loads(request.resource_scope)["targetAccesses"] == [None]
+
+
+async def test_legacy_shell_target_is_not_authorized_by_existing_directory_grant(tmp_path) -> None:
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, ToolCall("shell", "shell_run", {}), client)
+    context.session.current_directory = "/work"
+    request = shell_command_permission(
+        client.agent_id,
+        "/work",
+        "cat /outside/input.txt",
+        ShellInspectResult(
+            targets=[{"path": "/outside/input.txt", "kind": "input"}],
+            analysis_complete=True, classification="read", read_only=True,
+            commands=[], inspection_revision="a" * 64,
+        ),
+    )
+    cwd = request.effective_session_grants[0]
+    context.db.scalar.return_value = ExecutionAgent(
+        id=client.agent_id, user_id=context.session.user_id,
+        home_filesystem_policy="ask", external_filesystem_policy="ask",
+        home_shell_enabled=True, external_shell_enabled=True,
+    )
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[PermissionGrant(
+        session_id=context.session.id,
+        capability=cwd.capability,
+        resource_type=cwd.resource_type,
+        resource_scope=cwd.resource_scope,
+    )]))
+
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session, request, context.root_files, ToolExecutionPolicy.ASK,
+    ) == PermissionDecision.ASK
 
 
 def test_configured_shell_prefixes_are_class_specific(tmp_path) -> None:
@@ -1020,7 +1083,7 @@ async def test_shell_metadata_only_paths_preserve_profile_and_trust_policies(
         {"path": "/usr/local/bin", "kind": "toolchain_metadata"},
         {"path": "/usr/bin/python3", "kind": "toolchain_metadata"},
         {"path": "/dev/null", "kind": "discard"},
-        {"path": "/home/user/project/result.txt", "kind": "path"},
+        {"path": "/home/user/project/result.txt", "kind": "path", "access": classification},
     ]
     inspection = ShellInspectResult.model_validate({
         "targets": targets, "analysisComplete": analysis_complete,
@@ -1082,6 +1145,7 @@ async def test_shell_metadata_only_paths_preserve_profile_and_trust_policies(
         "classification": classification, "analysisComplete": analysis_complete,
         "prefixes": [unit.prefix for unit in inspection.commands],
         "paths": [target["path"] for target in targets],
+        "targetAccesses": ["exempt", "exempt", "exempt", "exempt", classification],
     }
     assert set(request.approval_details) == {
         "shellClassification", "shellAnalysisComplete", "shellPrefixes",
@@ -1100,14 +1164,21 @@ async def test_shell_ordinary_target_wins_over_metadata_for_the_same_path(
     tmp_path, classification, kind, conflicting_path,
 ) -> None:
     call = ToolCall("shell", "shell_run", {"command": "command -v python3; cat /usr/bin/python3"})
+    target_access = (
+        "write" if kind == "output"
+        else "read" if kind in {"input", "executable", "script", "source"}
+        else classification
+    )
+    effective_classification = "write" if target_access == "write" else classification
     client = FakeExecutionClient({
         "shell.inspect": ShellInspectResult(
             targets=[
                 {"path": "/usr/bin/python3", "kind": "toolchain_metadata"},
                 {"path": "/dev/null", "kind": "discard"},
-                {"path": conflicting_path, "kind": kind},
+                {"path": conflicting_path, "kind": kind, "access": target_access},
             ],
-            analysis_complete=False, classification=classification, read_only=classification == "read",
+            analysis_complete=False, classification=effective_classification,
+            read_only=effective_classification == "read",
             commands=[], inspection_revision="a" * 64,
         ),
     }, {"shell.inspect", "shell.run"})

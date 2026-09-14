@@ -325,3 +325,7 @@ The following independent cases are automated when their symbols are introduced.
 | `CONTEXT-03` | Same current tool output projected for different model windows | Requests build | Tool budget scales to model-dependent compaction threshold; canonical tool message is unchanged. |
 
 The restart boundary is tested independently in `apps/backend/tests/test_harness_restart_contract.py`. Registry, session tools, matchers, compaction, and model context settings receive executable tests when their public contracts exist.
+
+## Coding comparison reports
+
+`./scripts/dev.sh eval-coding-comparison` compares existing MatoLoop harness metadata with an OpenCode session export and writes a versioned JSON report plus Markdown. The JSON retains source paths and SHA-256 hashes, run identity, available objective metrics, and deltas only where both artifacts expose the same metric. It declares quality unknown unless both artifacts contain independent `checks`; it never treats duration, token use, approvals, or model self-reports as proof of correctness. Raw reports under ignored `data/` are local evidence and should be summarized in tracked documentation when they support a lasting decision.

@@ -444,7 +444,7 @@ async def test_busy_prompt_wait_is_cancellable_without_isolated_fallback(env):
 @pytest.mark.parametrize("path", ["/usr/bin/python3", "/home/user/project/.env"])
 async def test_shared_shell_keeps_normal_external_and_confidential_path_checks(env, path):
     env.policy = ToolExecutionPolicy.AUTO
-    env.native.targets = [{"path": path, "kind": "path"}]
+    env.native.targets = [{"path": path, "kind": "path", "access": "read"}]
     task = env.start()
     approval = await pending(env)
     assert approval.available_decisions == (
@@ -589,7 +589,7 @@ async def test_shared_allowlist_from_other_class_cannot_authorize_command(env, c
 
 @pytest.mark.parametrize("edited,targets", [
     ("touch changed.txt", []), ("custom-command", []),
-    ("cat .env", [{"path": "/home/user/project/.env", "kind": "input"}]),
+    ("cat .env", [{"path": "/home/user/project/.env", "kind": "input", "access": "read"}]),
 ])
 async def test_edit_refresh_updates_entire_permission_review_together(env, edited, targets):
     task = env.start()
@@ -733,7 +733,7 @@ async def test_native_execute_rechecks_after_approval_without_another_freeze(env
             if change == "cancel":
                 env.native.cancelled = True
             else:
-                env.native.targets = [{"path": "/home/user/project/changed.txt", "kind": "input"}]
+                env.native.targets = [{"path": "/home/user/project/changed.txt", "kind": "input", "access": "read"}]
 
     env.db.commit.side_effect = commit
     await decide_agent_action(env.db, approval, "allow_once")

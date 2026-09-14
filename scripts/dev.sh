@@ -32,7 +32,8 @@ usage() {
         "  check [target]      Check backend, frontend, and MatoLoop Agent" \
         "  test [target]       Test backend, frontend, MatoLoop Agent, or local RAG stack" \
         "  eval-prompts [args] Run serial live prompt evaluations" \
-        "  eval-session-cache [args] Evaluate cache reuse across real sessions"
+        "  eval-session-cache [args] Evaluate cache reuse across real sessions" \
+        "  eval-coding-comparison [args] Compare persisted coding-run artifacts"
 }
 
 run_backend() {
@@ -165,6 +166,7 @@ case "${1:-}" in
     test) run_target test "${2:-all}" "${@:3}" ;;
     eval-prompts) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.prompt_eval "$@" ;;
     eval-session-cache) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.session_cache_eval "$@" ;;
+    eval-coding-comparison) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.coding_eval "$@" ;;
     help|-h|--help|'') usage ;;
     *) usage >&2; exit 1 ;;
 esac
