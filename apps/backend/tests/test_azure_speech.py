@@ -1,3 +1,4 @@
+import asyncio
 import json
 from email.parser import BytesParser
 from email.policy import default
@@ -137,6 +138,24 @@ async def test_transport_errors_are_safe(monkeypatch, caplog, exception):
     if exception is httpx.ReadTimeout:
         assert error.value.params == {"timeoutSeconds": 12, "retryable": True}
     assert "secret-remote-detail" not in str(error.value) + caplog.text
+
+
+async def test_transcription_timeout_covers_locale_lookup_and_upload(monkeypatch):
+    async def wait_forever(**_kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(azure_speech, "_supported_locales", wait_forever)
+    with pytest.raises(ProviderError) as error:
+        await azure_speech.transcribe_audio(
+            base_url=ENDPOINT,
+            api_key="test-key",
+            model=azure_speech.MODEL_ID,
+            audio=b"audio",
+            language="de",
+            timeout=0.01,
+        )
+    assert error.value.public_code == "provider.timeout"
+    assert error.value.params == {"timeoutSeconds": 0.01, "retryable": True}
 
 
 @pytest.mark.parametrize(

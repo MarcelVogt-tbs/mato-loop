@@ -344,7 +344,7 @@ async function saveConfiguredProvider() {
     const payload = {
       name: form.name.trim(),
       base_url: form.base_url.trim(),
-      api_key: form.api_key.trim() || null,
+      api_key: form.remove_api_key ? null : form.api_key.trim() || null,
       remove_api_key: form.remove_api_key,
       trust_level: form.trust_level,
       pseudonymization_enabled: form.pseudonymization_enabled,

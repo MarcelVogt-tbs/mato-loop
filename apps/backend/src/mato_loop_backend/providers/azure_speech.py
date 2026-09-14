@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Annotated
@@ -162,27 +163,43 @@ async def transcribe_audio(
         )
     if not isinstance(audio, bytes) or not audio or len(audio) > MAX_AUDIO_BYTES:
         raise ProviderError("Invalid audio input", code="provider.configurationInvalid")
-    locales = None
-    if language is not None:
-        supported = await _supported_locales(
-            base_url=base_url, api_key=api_key, timeout=timeout
-        )
-        locales = [
-            locale for locale in supported
-            if locale.casefold() == language.casefold()
-            or ("-" not in language and locale.partition("-")[0].casefold() == language.casefold())
-        ]
-        if not locales:
-            raise ProviderError(
-                "Unsupported Azure Speech language",
-                code="provider.configurationInvalid",
-                params={"field": "language"},
+    try:
+        async with asyncio.timeout(timeout):
+            locales = None
+            if language is not None:
+                supported = await _supported_locales(
+                    base_url=base_url, api_key=api_key, timeout=timeout
+                )
+                locales = [
+                    locale
+                    for locale in supported
+                    if locale.casefold() == language.casefold()
+                    or (
+                        "-" not in language
+                        and locale.partition("-")[0].casefold() == language.casefold()
+                    )
+                ]
+                if not locales:
+                    raise ProviderError(
+                        "Unsupported Azure Speech language",
+                        code="provider.configurationInvalid",
+                        params={"field": "language"},
+                    )
+                # Azure language identification does not distinguish regional variants.
+                locales = locales[:1]
+            content = await _request(
+                base_url=base_url,
+                api_key=api_key,
+                timeout=timeout,
+                audio=audio,
+                locales=locales,
             )
-        # Azure language identification does not distinguish regional variants.
-        locales = locales[:1]
-    content = await _request(
-        base_url=base_url, api_key=api_key, timeout=timeout, audio=audio, locales=locales
-    )
+    except TimeoutError as exc:
+        raise ProviderError(
+            "Azure Speech request timed out",
+            code="provider.timeout",
+            params={"timeoutSeconds": timeout, "retryable": True},
+        ) from exc
     try:
         result = _TranscriptionResponse.model_validate_json(content)
     except ValidationError as exc:

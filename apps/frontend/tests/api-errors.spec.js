@@ -79,6 +79,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'provider.discoveryUnsupported' } })).toBe(
       'Dieser Provider unterstützt keine automatische Modellerkennung.'
     )
+    expect(apiErrorMessage({ error: { code: 'provider.notConnected' } })).toBe(
+      'Der Provider ist nicht verbunden.'
+    )
     expect(apiErrorMessage({ error: { code: 'provider.modelCapabilityUnavailable' } })).toBe(
       'Das ausgewählte Modell unterstützt die benötigte Fähigkeit nicht.'
     )

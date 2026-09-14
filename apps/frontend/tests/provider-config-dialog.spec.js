@@ -130,6 +130,7 @@ it.each([false, true])('retains or explicitly removes a saved Azure credential (
   expect(field('API-Protokoll')).toBeUndefined()
   expect(field('Neuer API-Key (optional)').textContent).toContain('Leer lassen')
   if (removeKey) {
+    await fill('Neuer API-Key (optional)', 'replacement-key')
     document.querySelector('.provider-dialog .q-checkbox').click()
     await nextTick()
     expect(document.querySelector('.provider-dialog').textContent).toContain('Ohne API-Key ist keine Transkription möglich.')

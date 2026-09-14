@@ -429,7 +429,8 @@ function canTestModel(model, provider) {
 }
 
 function supportsDiscovery(provider) {
-  return ['openai-compatible', 'lemonade', 'azure-speech'].includes(provider.adapterType)
+  if (provider.adapterType === 'azure-speech') return provider.hasCredential === true
+  return ['openai-compatible', 'lemonade'].includes(provider.adapterType)
     || (provider.adapterType === 'openai-codex' && providers.codex.authenticated === true)
 }
 
