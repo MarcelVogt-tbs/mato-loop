@@ -1,33 +1,25 @@
 <template>
-  <q-dialog
-    :model-value="true"
-    maximized
-    no-route-dismiss
-    transition-show="fade"
-    transition-hide="fade"
-    :transition-duration="reducedMotion ? 0 : 180"
+  <section
+    class="subagent-inspector chat-page__pane column no-wrap full-height"
     aria-labelledby="subagent-inspector-title"
-    @update:model-value="returnToParent"
   >
-    <q-card class="column no-wrap full-height">
-      <q-card-section class="row items-start no-wrap q-gutter-sm">
-        <div class="col overflow-hidden">
-          <q-breadcrumbs aria-label="Session-Navigation" class="q-mb-sm">
-            <q-breadcrumbs-el label="Hauptsession" icon="arrow_back" :to="parentRoute" />
-            <q-breadcrumbs-el label="Subagent" aria-current="page" />
-          </q-breadcrumbs>
-          <h1 id="subagent-inspector-title" class="text-h6 q-my-none ellipsis" :title="inspector.current?.title || child?.title">
-            {{ inspector.current?.title || child?.title || 'Subagent' }}
-          </h1>
-          <div class="text-caption app-muted" role="status">
-            Nur Lesezugriff · {{ inspector.reconnecting ? 'Verbindung wird wiederhergestellt' : subagentStatus(inspector.run || child?.run) }}
-          </div>
+    <header class="row items-start no-wrap q-gutter-sm q-pa-md">
+      <div class="col overflow-hidden">
+        <q-breadcrumbs aria-label="Session-Navigation" class="q-mb-sm">
+          <q-breadcrumbs-el label="Hauptsession" icon="arrow_back" :to="parentRoute" />
+          <q-breadcrumbs-el label="Subagent" aria-current="page" />
+        </q-breadcrumbs>
+        <h1 id="subagent-inspector-title" class="text-h6 q-my-none ellipsis" :title="inspector.current?.title || child?.title">
+          {{ inspector.current?.title || child?.title || 'Subagent' }}
+        </h1>
+        <div class="text-caption app-muted" role="status">
+          Nur Lesezugriff · {{ inspector.reconnecting ? 'Verbindung wird wiederhergestellt' : subagentStatus(inspector.run || child?.run) }}
         </div>
-        <q-btn flat round icon="close" aria-label="Zur Hauptsession zurück" @click="returnToParent" />
-      </q-card-section>
-      <q-separator />
-      <q-scroll-area ref="scrollArea" class="col" @scroll="onScroll">
-        <div class="chat-transcript q-pa-md">
+      </div>
+    </header>
+    <q-separator />
+    <q-scroll-area ref="scrollArea" class="col" @scroll="onScroll">
+      <div class="chat-transcript q-pa-md">
           <div v-if="inspector.loading" class="row justify-center q-pa-lg" role="status">
             <q-spinner color="primary" size="32px" />
             <span class="app-sr-only">Subagent wird geladen</span>
@@ -99,35 +91,22 @@
               <div v-if="message.generationStatus === 'interrupted'" class="text-caption app-muted q-mt-sm" role="status">
                 Anfrage abgebrochen
               </div>
-              <div v-if="message.createdAt || (Number.isInteger(message.activeDurationMs) && !message.workHistory?.entries?.length)" class="chat-message__meta items-center">
+              <div v-if="message.createdAt" class="chat-message__meta items-center">
                 <time v-if="message.createdAt" :datetime="message.createdAt">
                   {{ formatAbsoluteDateTime(message.createdAt) }}
                 </time>
-                <template v-if="Number.isInteger(message.activeDurationMs) && !message.workHistory?.entries?.length">
-                  <span v-if="message.createdAt" aria-hidden="true">·</span>
-                  <TurnDuration :history="message" />
-                </template>
               </div>
             </article>
           </template>
-        </div>
-      </q-scroll-area>
-      <q-separator />
-      <q-banner class="app-surface-tonal">
-        Freigaben und Rückfragen werden ausschließlich in der Hauptsession beantwortet.
-        <template #action>
-          <q-btn flat no-caps color="primary" label="Zur Hauptsession" :to="parentRoute" />
-        </template>
-      </q-banner>
-    </q-card>
-  </q-dialog>
+      </div>
+    </q-scroll-area>
+  </section>
 </template>
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import AgentActivityPanel from 'components/AgentActivityPanel.vue'
-import TurnDuration from 'components/TurnDuration.vue'
 import MessageContent from 'components/MessageContent.vue'
 import MessageAttachments from 'components/MessageAttachments.vue'
 import { useSubagentStore, subagentStatus } from 'stores/subagents'
@@ -140,7 +119,6 @@ import { apiErrorMessage } from 'src/utils/api-errors'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
 
 const props = defineProps({ parentId: { type: String, required: true }, childId: { type: String, required: true } })
-const router = useRouter()
 const route = useRoute()
 const inspector = useSubagentStore()
 const approvals = useApprovalStore()
@@ -150,7 +128,6 @@ const scrollArea = ref(null)
 const returnFocus = document.activeElement?.closest('[tabindex]:not([tabindex^="-"])') || document.activeElement
 const following = ref(true)
 const trustedImageOrigins = ref([])
-const reducedMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 const parentRoute = computed(() => {
   const query = { ...route.query, session: props.parentId }
   delete query.subagent
@@ -185,7 +162,6 @@ const messages = computed(() => withLiveTranscriptMessage(transcript.value.messa
 }))
 const agentProfileName = (message) => agentProfiles.byId(message.agentProfileId)?.name || 'Allgemein'
 
-function returnToParent() { void router.push(parentRoute.value) }
 function trustImageOrigin(origin) {
   if (!trustedImageOrigins.value.includes(origin)) trustedImageOrigins.value.push(origin)
 }
@@ -216,7 +192,6 @@ watch([() => props.parentId, () => props.childId], ([parent, id]) => {
 watch(messages, followBottom, { flush: 'post' })
 onBeforeUnmount(() => {
   inspector.close()
-  // Route-driven unmount bypasses QDialog's normal hide/refocus path.
   void nextTick(() => {
     if (!route.query.subagent && route.query.session === props.parentId && returnFocus?.isConnected) {
       returnFocus.focus({ preventScroll: true })

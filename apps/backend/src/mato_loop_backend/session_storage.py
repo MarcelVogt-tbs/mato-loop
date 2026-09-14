@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 
 from mato_loop_backend.config import get_runtime_config
 
-SESSION_DIRECTORIES: tuple[str, ...] = ()
+SESSION_DIRECTORIES: tuple[str, ...] = ("files", "revisions")
 _AUTO_LOCATION = object()
 
 
@@ -130,8 +130,6 @@ class SessionStorage:
         if prepare:
             self._prepare_directory(self.projects_dir)
             self._prepare_directory(project_root)
-            self._prepare_directory(project_root / "files")
-            self._prepare_directory(project_root / "revisions")
             self._prepare_directory(sessions)
         else:
             self._validate_directory(self.projects_dir)
@@ -146,23 +144,9 @@ class SessionStorage:
         *,
         require_exists: bool = False,
     ) -> Path:
-        if project_id is None:
-            target = self.session_path(
-                session_id, project_id=None, require_exists=require_exists
-            )
-        else:
-            target = self.projects_dir / str(self.normalize_project_id(project_id))
-        self._validate_directory(target)
-        if require_exists:
-            for name in ("files", "revisions"):
-                directory = target / name
-                self._validate_directory(directory)
-                if not directory.is_dir():
-                    raise SessionStorageError(
-                        "sessionStorage.invalidProjectTree",
-                        "Incomplete project storage",
-                    )
-        return target
+        return self.session_path(
+            session_id, project_id=project_id, require_exists=require_exists
+        )
 
     def _exact_path(
         self, session_id: UUID | str, project_id: UUID | str | None
@@ -243,6 +227,14 @@ class SessionStorage:
             self._validate_tree(target)
         return target
 
+    def session_project_id(self, session_id: UUID | str) -> UUID | None:
+        target = self.session_path(session_id, require_exists=True)
+        return (
+            None
+            if target.parent == self.sessions_dir
+            else self.normalize_project_id(target.parents[1].name)
+        )
+
     def _validate_tree(self, target: Path) -> None:
         try:
             target_metadata = target.lstat()
@@ -279,9 +271,6 @@ class SessionStorage:
         target = self._exact_path(normalized, project_id)
         if target.exists() or target.is_symlink():
             self._validate_tree(target)
-            if project_id is None:
-                for name in ("files", "revisions"):
-                    self._prepare_directory(target / name)
             return target
 
         staged = self.staging_dir / f"{normalized}.{uuid4().hex}"
@@ -289,9 +278,6 @@ class SessionStorage:
         try:
             for relative_path in SESSION_DIRECTORIES:
                 (staged / relative_path).mkdir(mode=0o700, parents=True, exist_ok=True)
-            if project_id is None:
-                (staged / "files").mkdir(mode=0o700)
-                (staged / "revisions").mkdir(mode=0o700)
             self._validate_tree(staged)
             try:
                 staged.rename(target)
@@ -707,29 +693,25 @@ class SessionStorage:
                 source,
                 changed=False,
             )
-        if normalized_source is not None and self.pending_run_ids(normalized, normalized_source):
-            raise SessionStorageError("file.changed", "Session has pending run files")
-        if normalized_source is None and normalized_target is not None:
-            return self._stage_standalone_import(
-                normalized, normalized_target, quota_bytes=quota_bytes
-            )
         self._validate_tree(source)
+        if self.pending_run_ids(normalized, normalized_source):
+            raise SessionStorageError("file.changed", "Session has pending run files")
         if target.exists() or target.is_symlink():
             raise SessionStorageError(
                 "sessionStorage.sessionAlreadyExists", "Session storage already exists"
             )
-        self.provision(normalized, normalized_target)
+        if normalized_target is None:
+            self._prepare_directory(self.sessions_dir)
+        else:
+            self._project_sessions_dir(normalized_target, prepare=True)
         try:
-            self._remove_empty_legacy_directories(source)
-            if normalized_source is None:
-                (source / "files").rmdir()
-                (source / "revisions").rmdir()
-            source.rmdir()
+            source.rename(target)
             self._fsync_directory(target)
             self._fsync_directory(target.parent)
             self._fsync_directory(source.parent)
         except BaseException:
-            self._remove_path(target)
+            if target.exists() and not source.exists():
+                target.rename(source)
             raise
         return SessionMoveReceipt(
             normalized,
@@ -739,16 +721,8 @@ class SessionStorage:
         )
 
     def finalize_session_move(self, receipt: SessionMoveReceipt) -> Path:
-        try:
-            if receipt.journal is not None:
-                source = self._exact_path(receipt.session_id, receipt.source_project_id)
-                self._remove_path(source)
-                self._fsync_directory(source.parent)
-                self._remove_path(receipt.journal)
-                self._fsync_directory(receipt.journal.parent)
-            return receipt.target
-        finally:
-            self._release_locks(receipt.lock_descriptors)
+        self._release_locks(receipt.lock_descriptors)
+        return receipt.target
 
     def abandon_session_move(self, receipt: SessionMoveReceipt) -> None:
         self._release_locks(receipt.lock_descriptors)
@@ -757,12 +731,21 @@ class SessionStorage:
         if not receipt.changed:
             return self._exact_path(receipt.session_id, receipt.source_project_id)
         if receipt.journal is None:
-            rolled_back = self.stage_session_move(
-                receipt.session_id,
-                receipt.target_project_id,
-                receipt.source_project_id,
-            )
-            return self.finalize_session_move(rolled_back)
+            source = self._exact_path(receipt.session_id, receipt.source_project_id)
+            if receipt.source_project_id is None:
+                self._prepare_directory(self.sessions_dir)
+            else:
+                self._project_sessions_dir(receipt.source_project_id, prepare=True)
+            if source.exists() or source.is_symlink():
+                raise SessionStorageError(
+                    "sessionStorage.sessionAlreadyExists", "Session storage already exists"
+                )
+            receipt.target.rename(source)
+            self._fsync_directory(source)
+            self._fsync_directory(source.parent)
+            self._fsync_directory(receipt.target.parent)
+            self._release_locks(receipt.lock_descriptors)
+            return source
         try:
             payload = self._move_manifest(receipt)
             source = self._exact_path(receipt.session_id, receipt.source_project_id)

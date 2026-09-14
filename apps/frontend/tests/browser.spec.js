@@ -264,7 +264,7 @@ it('accepts a changed controlling view on the same runtime and preserves it thro
   expect(notifyError).not.toHaveBeenCalled()
 })
 
-it.each(['read', 'write', 'copy', 'upload', 'choose', 'downloads', 'download'])('aborts and drops old %s responses/errors across A -> B -> A on the shared runtime', async (action) => {
+it.each(['read', 'write', 'copy', 'choose', 'downloads', 'download'])('aborts and drops old %s responses/errors across A -> B -> A on the shared runtime', async (action) => {
   for (const reject of [false, true]) {
     await open()
     browser.uploadId = 'old-upload'
@@ -629,10 +629,10 @@ it.each([false, true])('retains the owner, live viewer and model attachment acro
   expect(FakeWebSocket.instances).toHaveLength(1)
 })
 
-it.each(['clipboard', 'upload', 'downloads', 'download'])('aborts parked %s transfers without letting late A responses unlock a fresh A transfer', async (action) => {
+it.each(['clipboard', 'downloads', 'download'])('aborts parked %s transfers without letting late A responses unlock a fresh A transfer', async (action) => {
   await open()
   let finish, signal
-  const method = action === 'upload' ? 'post' : 'get'
+  const method = 'get'
   api[method].mockImplementationOnce((...args) => {
     signal = args.at(-1).signal
     return new Promise((resolve) => { finish = resolve })
@@ -1110,16 +1110,20 @@ it.each(['reset', 'attach', 'busy'])('discards confirmed copy when manual view c
   expect(notifyError).not.toHaveBeenCalled()
 })
 
-it('stages opaque uploads and downloads through the exact bound REST API and ignores late results', async () => {
+it('uses typed workspace sources and downloads through the exact bound REST API', async () => {
   await open()
-  const file = new File(['content'], 'example.txt')
   api.post.mockResolvedValueOnce({ data: { uploadId: 'opaque-id', chosen: false } })
-  await browser.transfer('upload', file)
-  const [path, form, config] = api.post.mock.calls[0]
-  expect(path).toBe('/browsers/browser-1/upload')
-  expect(form.get('file')).toBe(file)
-  expect(config).toEqual(transferConfig())
+  browser.pickerContext = { sessionId: 'session-1' }
+  await browser.chooseSource({ scope: 'session', path: 'reports/example.txt' })
+  expect(api.post).toHaveBeenCalledExactlyOnceWith('/browsers/browser-1/upload-source', {
+    source: { scope: 'session', path: 'reports/example.txt' }
+  }, transferConfig())
   expect(browser.uploadId).toBe('opaque-id')
+  api.post.mockResolvedValueOnce({ data: { uploadId: 'filesystem-id', chosen: false } })
+  await browser.chooseSource({ scope: 'filesystem', path: '/work/example.txt' })
+  expect(api.post).toHaveBeenLastCalledWith('/browsers/browser-1/upload-source', {
+    source: { scope: 'filesystem', path: '/work/example.txt' }
+  }, transferConfig())
   const downloads = [{ id: 'download-1', filename: 'report.pdf', size: 12 }]
   api.get.mockResolvedValueOnce({ data: { tabs: [], downloads } })
   await browser.transfer('downloads')
@@ -1130,31 +1134,21 @@ it('stages opaque uploads and downloads through the exact bound REST API and ign
   const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
   api.get.mockResolvedValueOnce({ data: new Blob(['pdf']) })
   await browser.download(downloads[0])
-  expect(api.get).toHaveBeenLastCalledWith('/browsers/browser-1/download/download-1', { ...config, responseType: 'blob' })
+  expect(api.get).toHaveBeenLastCalledWith('/browsers/browser-1/download/download-1', { ...transferConfig(), responseType: 'blob' })
   expect(click).toHaveBeenCalledOnce()
   click.mockRestore()
-  let resolve
-  api.post.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
-  const pending = browser.transfer('upload', file)
-  expect(browser.transferring).toBe(true)
-  expect(browser.rfb.viewOnly).toBe(true)
-  browser.release()
-  resolve({ data: { uploadId: 'stale', chosen: false } })
-  await pending
-  expect(browser.uploadId).toBeNull()
-  expect(browser.transferring).toBe(false)
 })
 
 it('automatically chooses pending file fields and offers an explicit retry without model arguments', async () => {
   await open()
-  const file = new File(['content'], 'example.txt')
+  browser.pickerContext = { sessionId: 'session-1' }
   api.post.mockResolvedValueOnce({ data: { uploadId: 'used', chosen: true } })
-  await browser.transfer('upload', file)
+  await browser.chooseSource({ scope: 'session', path: 'example.txt' })
   expect(browser.uploadId).toBeNull()
   expect(await browser.transfer('choose')).toBeNull()
   expect(api.post).toHaveBeenCalledTimes(1)
   api.post.mockResolvedValueOnce({ data: { uploadId: 'staged', chosen: false } })
-  await browser.transfer('upload', file)
+  await browser.chooseSource({ scope: 'session', path: 'example.txt' })
   expect(browser.uploadId).toBe('staged')
   api.post.mockRejectedValueOnce(new Error('No pending file chooser'))
   await expect(browser.transfer('choose')).rejects.toThrow('No pending file chooser')
@@ -1164,6 +1158,35 @@ it('automatically chooses pending file fields and offers an explicit retry witho
   await browser.transfer('choose')
   expect(api.post).toHaveBeenLastCalledWith('/browsers/browser-1/upload/staged/choose', null, transferConfig())
   expect(browser.uploadId).toBeNull()
+})
+
+it('browses both isolated workspace roots and fences late picker results', async () => {
+  await open()
+  const picker = {
+    sessionId: 'session-1', rootIdentity: 'session-1', executionAgentId: 'agent-1',
+    currentDirectory: '/work', filesystemList: true, filesystemImport: true
+  }
+  api.get.mockResolvedValueOnce({ data: { entries: [{ kind: 'directory', name: 'docs', path: 'docs' }] } })
+  expect(browser.openPicker(picker)).toBe(true)
+  await vi.waitFor(() => expect(browser.pickerEntries).toHaveLength(1))
+  expect(api.get).toHaveBeenLastCalledWith('/workspace/entries', {
+    params: { scope: 'session', session_id: 'session-1', root_identity: 'session-1', path: '.' },
+    signal: expect.any(AbortSignal), suppressErrorToast: true
+  })
+  api.get.mockResolvedValueOnce({ data: { entries: [{ kind: 'file', name: 'local.txt', path: '/work/local.txt' }] } })
+  await browser.setPickerScope('filesystem')
+  expect(browser.pickerEntries[0].path).toBe('/work/local.txt')
+  expect(api.get).toHaveBeenLastCalledWith('/workspace/entries', {
+    params: { scope: 'filesystem', session_id: 'session-1', execution_agent_id: 'agent-1', current_directory: '/work', path: '/work' },
+    signal: expect.any(AbortSignal), suppressErrorToast: true
+  })
+  let finish
+  api.get.mockImplementationOnce((path, config) => new Promise((resolve) => { finish = resolve; expect(config.signal.aborted).toBe(false) }))
+  const pending = browser.openPickerDirectory('/work/next')
+  browser.resetPicker()
+  finish({ data: { entries: [{ kind: 'file', name: 'late', path: '/work/next/late' }] } })
+  expect(await pending).toBe(false)
+  expect(browser.pickerEntries).toEqual([])
 })
 
 it('ignores a late choose response instead of clearing a new connection upload', async () => {
@@ -1319,7 +1342,7 @@ it('gates the launcher on the existing global catalog, configured enabled instan
 it('translates all browser error codes safely and never equates configuration with readiness', () => {
   const codes = ['unavailable', 'notReady', 'busy', 'notConnected', 'bindingChanged', 'setupFailed',
     'dependenciesMissing', 'unsupported', 'sandboxUnavailable', 'actionFailed', 'invalidTarget',
-    'fileTooLarge', 'profileOwnerMismatch', 'outcomeUnknown', 'controlTimeout']
+    'fileTooLarge', 'profileOwnerMismatch', 'outcomeUnknown', 'controlTimeout', 'downloadPermissionRequired']
   for (const code of codes) {
     const message = apiErrorMessage({ error: { code: `browser.${code}`, message: 'secret provider error' } })
     expect(message).not.toBe('Die Aktion ist fehlgeschlagen.')

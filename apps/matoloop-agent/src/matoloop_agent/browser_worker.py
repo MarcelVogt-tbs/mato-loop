@@ -144,6 +144,8 @@ class BrowserWorker:
         self.windows: set[int] = set()
         self.startup_stage = "storage"
         self.execution_metrics = {}
+        self.file_origin = None
+        self.control_epoch = None
 
     def task(self, coroutine) -> None:
         task = asyncio.create_task(coroutine)
@@ -481,7 +483,16 @@ class BrowserWorker:
                     await writer.wait_closed()
             self.tasks.discard(task)
 
-    async def control(self, manual: bool, *, rotate_view: bool = False) -> dict:
+    async def control(
+        self,
+        manual: bool,
+        *,
+        rotate_view: bool = False,
+        origin: str | None = None,
+        control_epoch: int | None = None,
+    ) -> dict:
+        if origin is not None:
+            self.file_origin, self.control_epoch = origin, control_epoch
         async with self.vnc_lock:
             if manual and self.manual:
                 return {"ok": True}
@@ -844,7 +855,12 @@ class BrowserWorker:
         # Listening intercepts the native picker; the human supplies an opaque staged file.
         page.on("filechooser", lambda chooser: self.pending_choosers.__setitem__(page, chooser))
         page.on("framenavigated", navigated)
-        page.on("download", lambda download: self.task(self.download(download)))
+        page.on(
+            "download",
+            lambda download: self.task(
+                self.download(download, self.file_origin, self.control_epoch)
+            ),
+        )
         page.on(
             "console",
             lambda message: self.diagnostics.append(f"{message.type}: {message.text[:500]}"),
@@ -1056,21 +1072,26 @@ class BrowserWorker:
         if done and not pending.result():
             raise fail("actionFailed")
 
-    async def download(self, download) -> None:
+    async def download(self, download, origin: str | None, control_epoch: int | None) -> None:
         file_id = None
         try:
-            if len(self.files) >= 32 or self.total_size() + MAX_FILE_BYTES > 256 * 1024 * 1024:
+            if not self.make_file_room() or self.total_size() + MAX_FILE_BYTES > 256 * 1024 * 1024:
                 await download.cancel()
                 return
             file_id = str(uuid4())
             filename = download.suggested_filename.replace("\\", "_").replace("/", "_")
             filename = "".join(c for c in filename if ord(c) >= 32 and ord(c) != 127)[:255]
+            if filename in {"", ".", ".."}:
+                filename = "download"
             self.files[file_id] = {
                 "id": file_id,
-                "filename": filename or "download",
+                "filename": filename,
                 "size": MAX_FILE_BYTES,
                 "ready": False,
                 "download": True,
+                "status": "pending",
+                "origin": origin,
+                "controlEpoch": control_epoch,
             }
             path = await download.path()
             if path is None:
@@ -1080,16 +1101,69 @@ class BrowserWorker:
                 raise fail("fileTooLarge")
             target = self.live / file_id
             await download.save_as(target)
-            self.files[file_id].update(size=size, ready=True)
+            fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, "rb") as handle:
+                size = os.fstat(handle.fileno()).st_size
+                if size > MAX_FILE_BYTES:
+                    raise fail("fileTooLarge")
+                digest = hashlib.file_digest(handle, "sha256").hexdigest()
+            self.files[file_id].update(size=size, ready=True, status="ready", sha256=digest)
             await download.delete()
-        except Exception:
-            self.files.pop(file_id, None)
+        except Exception as exc:
+            if file_id is not None:
+                (self.live / file_id).unlink(missing_ok=True)
+                self.files[file_id].update(
+                    size=None,
+                    ready=False,
+                    status="failed",
+                    errorCode=exc.code if isinstance(exc, AgentError) else "browser.actionFailed",
+                )
             with contextlib.suppress(Exception):
                 await download.delete()
             self.diagnostics.append("browser.actionFailed: download was not retained")
 
     def total_size(self) -> int:
-        return sum(entry["size"] for entry in self.files.values())
+        return sum(
+            entry["size"] for entry in self.files.values() if entry.get("status") != "failed"
+        )
+
+    def make_file_room(self) -> bool:
+        while len(self.files) >= 32:
+            failed = next(
+                (
+                    file_id
+                    for file_id, entry in self.files.items()
+                    if entry.get("status") == "failed"
+                ),
+                None,
+            )
+            if failed is None:
+                return False
+            del self.files[failed]
+        return True
+
+    def file_status(self) -> dict:
+        fields = (
+            "id",
+            "filename",
+            "status",
+            "origin",
+            "controlEpoch",
+            "size",
+            "sha256",
+            "errorCode",
+        )
+        return {
+            "downloads": [
+                {
+                    key: entry[key]
+                    for key in fields
+                    if key in entry and (key != "size" or entry["status"] == "ready")
+                }
+                for entry in self.files.values()
+                if entry["download"]
+            ]
+        }
 
     def upload_payload(self, file_id: str) -> dict:
         entry = self.files.get(file_id)
@@ -1114,7 +1188,7 @@ class BrowserWorker:
 
     async def file(self, args: BrowserFileArguments) -> dict:
         if args.action == "begin":
-            if len(self.files) >= 32 or self.total_size() + args.size > 256 * 1024 * 1024:
+            if not self.make_file_room() or self.total_size() + args.size > 256 * 1024 * 1024:
                 raise fail("fileTooLarge")
             file_id = str(uuid4())
             fd = os.open(
@@ -2038,9 +2112,16 @@ async def serve(root: Path) -> None:
                     )
                 elif op == "file":
                     result = await worker.file(BrowserFileArguments.model_validate(request["args"]))
+                elif op == "files":
+                    result = worker.file_status()
                 elif op == "control":
                     args = BrowserControlArguments.model_validate(request["args"])
-                    result = await worker.control(args.manual, rotate_view=args.rotate_view)
+                    result = await worker.control(
+                        args.manual,
+                        rotate_view=args.rotate_view,
+                        origin=args.origin,
+                        control_epoch=args.control_epoch,
+                    )
                 elif op == "clipboard":
                     result = await worker.clipboard(
                         BrowserClipboardArguments.model_validate(request["args"])

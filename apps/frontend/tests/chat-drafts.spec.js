@@ -1597,6 +1597,7 @@ describe('chat drafts', () => {
     api.get.mockResolvedValue({ data: { id: 'session-1', messages: [] } })
     const workspace = useWorkspaceStore()
     workspace.sessionId = 'session-1'
+    workspace.rootIdentity = 'session-1'
     const refresh = vi.spyOn(workspace, 'refresh').mockResolvedValue([])
     const chat = useChatStore()
     chat.current = { id: 'session-1', messages: [] }
@@ -1631,7 +1632,7 @@ describe('chat drafts', () => {
   it('opens a final file action only while the file view stays unchanged', async () => {
     global.EventSource = EventSourceMock
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
-    const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
+    const rootIdentity = sessionId
     const action = {
       operation: 'write', root: 'session', rootIdentity,
       path: 'result.md', filename: 'result.md', sizeBytes: 7,
@@ -1649,7 +1650,7 @@ describe('chat drafts', () => {
     const workspace = useWorkspaceStore()
     workspace.sessionId = sessionId
     workspace.scope = 'session'
-    workspace.rootIdentity = rootIdentity
+    workspace.rootIdentity = sessionId
     const controlCenter = useControlCenterStore()
     const open = vi.spyOn(controlCenter, 'openFile').mockResolvedValue('file-result')
     const chat = useChatStore()
@@ -1676,7 +1677,7 @@ describe('chat drafts', () => {
   it('opens a newly managed binary attachment through the guarded file view', async () => {
     global.EventSource = EventSourceMock
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
-    const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
+    const rootIdentity = sessionId
     const attachment = {
       kind: 'file',
       filename: 'generated.bin',
@@ -1725,7 +1726,7 @@ describe('chat drafts', () => {
   it('opens a newly managed attachment without replacing a dirty edit', async () => {
     global.EventSource = EventSourceMock
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
-    const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
+    const rootIdentity = sessionId
     api.get.mockResolvedValue({
       data: {
         id: sessionId,
@@ -1771,7 +1772,7 @@ describe('chat drafts', () => {
   it('refreshes an open managed attachment update without auto-opening another file', async () => {
     global.EventSource = EventSourceMock
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
-    const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
+    const rootIdentity = sessionId
     api.get.mockResolvedValue({
       data: {
         id: sessionId,
@@ -1818,7 +1819,7 @@ describe('chat drafts', () => {
   it('keeps the tool completion refresh alive when message completion follows', async () => {
     global.EventSource = EventSourceMock
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
-    const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
+    const rootIdentity = sessionId
     const action = {
       operation: 'write', root: 'session', rootIdentity,
       path: 'result.md', filename: 'result.md', sizeBytes: 7,
@@ -1872,7 +1873,7 @@ describe('chat drafts', () => {
   it('keeps a dirty open file and warns when the agent mutates it', async () => {
     global.EventSource = EventSourceMock
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
-    const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
+    const rootIdentity = sessionId
     const action = {
       operation: 'write', root: 'session', rootIdentity,
       path: 'result.md', filename: 'result.md', sizeBytes: 7,
@@ -1905,7 +1906,7 @@ describe('chat drafts', () => {
   it('keeps a dirty open file when the agent deletes it', async () => {
     global.EventSource = EventSourceMock
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
-    const rootIdentity = '550e8400-e29b-41d4-a716-446655440009'
+    const rootIdentity = sessionId
     api.get.mockResolvedValue({
       data: {
         id: sessionId,
@@ -2236,7 +2237,7 @@ describe('chat drafts', () => {
     expect(chat.sessionCatalog[1].lastMessageAt).toBe(lastMessageAt)
   })
 
-  it('rebinds queued session files when a standalone session joins a project', async () => {
+  it('keeps queued session file identity when a session moves into a project', async () => {
     api.patch.mockResolvedValue({
       data: { id: 'session-1', title: 'Session', projectId: 'project-2' }
     })
@@ -2265,9 +2266,9 @@ describe('chat drafts', () => {
     await chat.moveSession('session-1', 'project-2')
 
     expect(chat.queuedMessages['session-1'][0].projectId).toBe('project-2')
-    expect(chat.queuedMessages['session-1'][0].activeFile.root_identity).toBe('project-2')
+    expect(chat.queuedMessages['session-1'][0].activeFile.root_identity).toBe('session-1')
     const persisted = await loadChatOutbox('user-1')
-    expect(persisted[0].activeFile.root_identity).toBe('project-2')
+    expect(persisted[0].activeFile.root_identity).toBe('session-1')
   })
 
   it('does not let a stale destination refresh erase a moved session', async () => {

@@ -3,7 +3,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -401,14 +401,21 @@ async def test_session_reasoning_effort_reaches_primary_model_request(monkeypatc
     assert requests[0]["reasoning_effort"] == "low"
 
 
-async def test_child_reuses_context_and_generic_tools_without_main_workflows(monkeypatch):
+@pytest.mark.parametrize("computer", [False, True])
+async def test_child_reuses_context_and_only_inherited_computer_files(
+    monkeypatch, computer,
+):
     from mato_loop_backend.agent.subagents import permission_snapshot
     from mato_loop_backend.settings.models import plan_agent_profile
 
+    execution_agent_id = uuid4() if computer else None
     db, run, requests, projections, _events = await _runtime_setup(
         monkeypatch, [ProviderResult(content="Translated text", finish_reason="stop")],
         search_policy=WebSearchPolicy.REQUIRED, reasoning_effort="high",
+        execution_agent_id=execution_agent_id,
+        execution_operations=("filesystem.read", "filesystem.write") if computer else (),
     )
+    run.current_directory_snapshot = "/work"
     session = db.get.return_value
     session.parent_session_id = uuid4()
     session.memory_mode = "full"
@@ -425,19 +432,28 @@ async def test_child_reuses_context_and_generic_tools_without_main_workflows(mon
     db.get.side_effect = lambda model, _key, **kw: message if model is Message else session
     monkeypatch.setattr(runtime_module, "load_agent_profile", AsyncMock(return_value=profile))
     monkeypatch.setattr(runtime_module, "load_agent_profile_tools", AsyncMock(return_value=(settings, profile)))
-    monkeypatch.setattr(runtime_module.SessionStorage, "provision", lambda *_args: None)
+    provision = Mock(side_effect=AssertionError("Delegated runs must not provision session storage"))
+    monkeypatch.setattr(SessionStorage, "provision", provision)
     monkeypatch.setattr(runtime_module.memory_policy, "effective_memory", lambda *_args: runtime_module.memory_policy.EffectiveMemory(True, True, True))
     retrieve = AsyncMock(side_effect=AssertionError("Children must not retrieve automatic memory"))
     monkeypatch.setattr(runtime_module.MemoryService, "pinned_context", retrieve)
     await AgentRuntime._execute_loop(db, run)
     tools = {tool["name"] for tool in requests[0]["tools"]}
-    assert tools == {"question", "read", "web_search", "write_file"}
+    assert tools == {"question", "web_search"} | (
+        {"read", "write_file"} if computer else set()
+    )
+    for tool in requests[0]["tools"]:
+        root = tool["parameters"].get("properties", {}).get("root")
+        if root is not None:
+            assert root["enum"] == ["computer"]
     assert requests[0]["reasoning_effort"] == "high"
     assert "delegated task" in projections[0]["system_prompt"]
     assert "Plan workflow:" not in projections[0]["system_prompt"]
     assert "Build workflow:" not in projections[0]["system_prompt"]
+    assert "root=files path=plan.md" not in projections[0]["system_prompt"]
     assert "delegationCeiling" not in str(requests[0]["messages"])
     retrieve.assert_not_awaited()
+    provision.assert_not_called()
 
 
 async def test_runtime_replays_exact_tool_calls_without_persisting_them(monkeypatch) -> None:

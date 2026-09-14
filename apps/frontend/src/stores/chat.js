@@ -91,7 +91,7 @@ function controlCenterFileTarget(root, path, session) {
       scope: 'session',
       path,
       name,
-      rootIdentity: session.projectId || session.id,
+      rootIdentity: session.id,
       readOnly: false
     }
   }
@@ -1209,10 +1209,6 @@ export const useChatStore = defineStore('chat', {
       const queued = this.queuedMessages[id] || []
       for (const entry of queued) {
         entry.projectId = projectId || null
-        if (entry.activeFile?.root !== 'session') continue
-        entry.activeFile = projectId && entry.activeFile.root_identity === id
-          ? { ...entry.activeFile, root_identity: projectId }
-          : null
       }
       if (queued.length) {
         try {
@@ -2322,7 +2318,7 @@ export const useChatStore = defineStore('chat', {
             && workspace.viewedEntry?.path
             && (workspace.viewedEntry.path === sourcePath
               || workspace.viewedEntry.path.startsWith(`${sourcePath}/`))
-            && (sourceRoot !== 'files' || workspace.rootIdentity === (session.projectId || sessionId))
+            && (!['files', 'session'].includes(sourceRoot) || workspace.rootIdentity === sessionId)
             && !workspace.toolContext
             && ((sourceRoot === 'files' && workspace.scope === 'session')
               || (sourceRoot === 'computer' && workspace.scope === 'filesystem'))
@@ -2330,7 +2326,10 @@ export const useChatStore = defineStore('chat', {
         }).catch(() => {})
         if (FILESYSTEM_MUTATION_TOOLS.has(payload.tool) && !payload.metadata?.errorCode) {
           const workspace = useWorkspaceStore()
-          if (workspace.sessionId === sessionId) void workspace.refresh()
+          if (
+            workspace.sessionId === sessionId
+            && (workspace.scope !== 'session' || workspace.rootIdentity === sessionId)
+          ) void workspace.refresh()
         }
       })
       source.addEventListener('todo.updated', (event) => {

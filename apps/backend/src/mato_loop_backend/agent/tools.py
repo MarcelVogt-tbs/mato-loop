@@ -31,6 +31,7 @@ from mato_loop_backend.agent.permissions import (
     PermissionDisplayItem,
     PermissionPolicy,
     PermissionRequest,
+    SessionGrantScope,
     agent_identity_permission,
     automation_collection_scope,
     automation_scope,
@@ -271,6 +272,10 @@ IMAGE_AUTHORIZATION_LINEAGE_LIMIT = 100
 ALL_TOOL_EXECUTION_POLICIES = tuple(ToolExecutionPolicy)
 
 
+def _delegated_session_files(context: ToolContext, *roots: str) -> bool:
+    return context.session.parent_session_id is not None and "session" in roots
+
+
 async def _create_output_stream(
     output_files: RootFileService, filename: str, source: BinaryIO
 ) -> FileRevision | WorkingFileRevision:
@@ -371,6 +376,7 @@ def _filesystem_permission(
     root_files: RootFileService | None = None,
     target_session_id: UUID | None = None,
 ) -> PermissionRequest:
+    parent_grant = action_kind in {"write_file", "edit_file", "apply_patch"}
     if FileRoot(root) is FileRoot.WORKSPACE:
         client = _workspace_client(context)
         absolute_path = _execution_path(context, path)
@@ -381,6 +387,7 @@ def _filesystem_permission(
             action_kind=action_kind,
             title=f"{action_label} erlauben?",
             summary=f"Der Agent möchte {absolute_path} verwenden.",
+            grant_path=posixpath.dirname(absolute_path) if parent_grant else absolute_path,
         )
     selected_files = root_files or context.root_files
     if target_session_id is not None and target_session_id != context.session.id:
@@ -400,6 +407,7 @@ def _filesystem_permission(
         relative_path=path,
         action_kind=action_kind,
         action_label=action_label,
+        grant_path=(posixpath.dirname(path) or "." if parent_grant else path),
     )
 
 
@@ -551,6 +559,8 @@ async def _project_read_files(
 
 
 async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
+    if _delegated_session_files(context, arguments.root):
+        return ToolResult.error("tool.unavailable")
     selected = await _project_read_files(arguments, context)
     if selected is None:
         return ToolResult.error("permission.denied")
@@ -572,7 +582,6 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
         if arguments.root == "workspace"
         else root_files.normalize_relative_path(arguments.path)
     )
-    kind: str
     if arguments.root == "workspace":
         stat_result = await _workspace_request(
             context,
@@ -580,6 +589,7 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
             {"path": normalized_path},
             WorkspaceStatResult,
         )
+        _require_workspace_path(stat_result.path, normalized_path)
         kind = stat_result.kind
     else:
         kind = root_files.path_kind(arguments.root, normalized_path)
@@ -718,6 +728,8 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
 
 
 async def _glob(arguments: GlobArguments, context: ToolContext) -> ToolResult:
+    if _delegated_session_files(context, arguments.root):
+        return ToolResult.error("tool.unavailable")
     selected = await _project_read_files(arguments, context)
     if selected is None:
         return ToolResult.error("permission.denied")
@@ -760,6 +772,8 @@ async def _glob(arguments: GlobArguments, context: ToolContext) -> ToolResult:
 
 
 async def _grep(arguments: GrepArguments, context: ToolContext) -> ToolResult:
+    if _delegated_session_files(context, arguments.root):
+        return ToolResult.error("tool.unavailable")
     selected = await _project_read_files(arguments, context)
     if selected is None:
         return ToolResult.error("permission.denied")
@@ -805,6 +819,8 @@ async def _grep(arguments: GrepArguments, context: ToolContext) -> ToolResult:
 async def _provide_file(
     arguments: ProvideFileArguments, context: ToolContext
 ) -> ToolResult:
+    if context.session.parent_session_id is not None:
+        return ToolResult.error("tool.unavailable")
     selected = await _project_read_files(arguments, context)
     if selected is None:
         return ToolResult.error("permission.denied")
@@ -850,7 +866,6 @@ async def _provide_file(
             return ToolResult.error("permission.denied")
 
     path = paths[0]
-    kind: str
     if arguments.root == "workspace":
         stat_result = await client.request(
             "filesystem.stat", {"path": path}, WorkspaceStatResult
@@ -872,7 +887,7 @@ async def _provide_file(
         if arguments.root == "workspace" and not client.supports("filesystem.list"):
             return ToolResult.error("executionAgent.operationUnavailable")
 
-        async def stat_source(source: str) -> ArchiveEntry:
+        async def archive_stat_source(source: str) -> ArchiveEntry:
             if arguments.root == "workspace":
                 item = await client.request(
                     "filesystem.stat", {"path": source}, WorkspaceStatResult
@@ -911,7 +926,7 @@ async def _provide_file(
         try:
             archive = await create_zip_archive(
                 paths,
-                stat_path=stat_source,
+                stat_path=archive_stat_source,
                 list_directory=list_source,
                 open_file=open_source,
                 file_list=arguments.paths is not None,
@@ -1070,6 +1085,8 @@ def _workspace_file_action(
 
 
 async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> ToolResult:
+    if _delegated_session_files(context, arguments.root):
+        return ToolResult.error("tool.unavailable")
     if _omitted_file_content(arguments.content):
         return ToolResult.error("file.omittedContent", field="content")
     path = (
@@ -1147,6 +1164,8 @@ def _omitted_file_content(content: str) -> bool:
 
 
 async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> ToolResult:
+    if _delegated_session_files(context, arguments.root):
+        return ToolResult.error("tool.unavailable")
     if _omitted_file_content(arguments.old_text):
         return ToolResult.error("file.omittedContent", field="oldText")
     if _omitted_file_content(arguments.new_text):
@@ -1348,6 +1367,8 @@ async def _apply_patch(
 async def _create_directory(
     arguments: CreateDirectoryArguments, context: ToolContext
 ) -> ToolResult:
+    if _delegated_session_files(context, arguments.root):
+        return ToolResult.error("tool.unavailable")
     request = _filesystem_permission(
         context,
         root=arguments.root,
@@ -1381,6 +1402,8 @@ async def _create_directory(
 
 
 async def _delete_path(arguments: DeletePathArguments, context: ToolContext) -> ToolResult:
+    if _delegated_session_files(context, arguments.root):
+        return ToolResult.error("tool.unavailable")
     request = _filesystem_permission(
         context,
         root=arguments.root,
@@ -1412,6 +1435,10 @@ async def _delete_path(arguments: DeletePathArguments, context: ToolContext) -> 
 
 
 async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> ToolResult:
+    if _delegated_session_files(
+        context, arguments.source_root, arguments.destination_root
+    ):
+        return ToolResult.error("tool.unavailable")
     cross_root = arguments.source_root != arguments.destination_root
     if cross_root:
         client = _workspace_client(context)
@@ -1536,6 +1563,10 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
 
 
 async def _move_path(arguments: MovePathArguments, context: ToolContext) -> ToolResult:
+    if _delegated_session_files(
+        context, arguments.source_root, arguments.destination_root
+    ):
+        return ToolResult.error("tool.unavailable")
     if arguments.source_root != arguments.destination_root:
         return ToolResult.error("file.crossBoundaryMoveUnavailable")
     source_request = _filesystem_permission(
@@ -2993,6 +3024,8 @@ async def _transcribe_audio(
 async def _analyze_video(
     arguments: AnalyzeVideoArguments, context: ToolContext
 ) -> ToolResult:
+    if _delegated_session_files(context, arguments.root):
+        return ToolResult.error("tool.unavailable")
     if context.video_analysis_handler is None or context.video_analysis_target is None:
         return ToolResult.error("tool.unavailable")
     normalized_path = context.root_files.normalize_relative_path(arguments.path)
@@ -4329,6 +4362,21 @@ async def _authorize_coding(
             title=title,
             summary=summary,
             resource_display=project.name,
+            session_grants=(SessionGrantScope(
+                (
+                    "read"
+                    if capability in {"coding.analyze", "coding.plan.read"}
+                    else "write"
+                ),
+                "project",
+                json.dumps(
+                    {"capability": capability, "projectId": str(project.id)},
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+                project.name,
+            ),),
         ),
     )
     if not allowed:

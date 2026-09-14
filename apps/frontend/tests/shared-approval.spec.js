@@ -29,7 +29,16 @@ it.each(['read', 'write'])('displays the exact read-only shared review and actua
     title: 'Befehl ausführen?', summary: 'Befehl prüfen', riskLevel: classification === 'read' ? 'low' : 'high',
     capability: `shell.${classification}`, resourceType: 'shell_command', resourceDisplay: sharedDraft.currentDirectory,
     availableDecisions: ['allow_once', 'allow_session', 'deny'],
-    payload: { sharedDraft, shellClassification: classification, shellAnalysisComplete: true, shellPrefixes: [['ls', '-l']] },
+    payload: {
+      sharedDraft,
+      shellClassification: classification,
+      shellAnalysisComplete: true,
+      shellPrefixes: [['ls', '-l']],
+      displayItems: [
+        { label: 'Shell-Befehl', value: sharedDraft.command, format: 'code' },
+        { label: 'Für diese Session', value: ['Alle passenden lesenden Datei- und Shell-Aktionen: /extern und Unterordner'], format: 'list' }
+      ]
+    },
     details: { tool: 'shell_run', arguments: { command: 'unreviewed original' } }
   }
   approvals.add(approval)
@@ -41,9 +50,12 @@ it.each(['read', 'write'])('displays the exact read-only shared review and actua
   await nextTick()
   expect(root.querySelector('.tool-call__details').textContent).toBe(sharedDraft.command)
   expect(root.textContent).toContain(sharedDraft.currentDirectory)
+  expect(root.textContent).toContain('Alle passenden lesenden Datei- und Shell-Aktionen: /extern und Unterordner')
   expect(root.querySelector('textarea, [contenteditable="true"]')).toBeNull()
   expect(root.textContent).toContain(classification === 'read' ? 'Keine Schreibaktion erkannt' : 'Als schreibend eingestuft')
   expect(root.textContent).not.toContain('Analyse unvollständig')
+  expect(root.textContent).toContain('Erkannte Befehlspräfixe')
+  expect(root.textContent).not.toContain('Session-Präfixe')
   expect(root.textContent).toContain('ls -l')
   const changed = { ...approval, payload: { ...approval.payload, sharedDraft: {
     ...sharedDraft, command: 'printf edited', currentDirectory: '/new/terminal/cwd', inspectionRevision: 'inspection-new'

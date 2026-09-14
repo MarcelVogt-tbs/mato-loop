@@ -670,6 +670,7 @@ def _authorization(arguments: OpenScadRenderArguments, context: Any) -> tuple[An
                 sort_keys=True,
             ).encode()
         ).hexdigest(),
+        grant_resource_key=f"project:{hashlib.sha256(f'{arguments.root}:{project_path}'.encode()).hexdigest()}",
         title="OpenSCAD-Modell rendern?",
         summary="Der Agent möchte ein OpenSCAD-Projekt rendern.",
         resource_display=f"{arguments.root}:{project_path}",

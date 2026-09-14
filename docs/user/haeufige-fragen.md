@@ -30,7 +30,7 @@ Nein. Bilder aus MatoLoop-Anhängen werden lokal geladen. Für externe Bildurspr
 
 ## Wo liegen meine Dateien?
 
-Computer-Dateien liegen unter gewöhnlichen absoluten Pfaden des jeweiligen MatoLoop Agent. Beim Compose-Computer wird `MATOLOOP_AGENT_HOME` als `/workspace` eingebunden; Zustand und `/data/config.json` liegen unter `MATOLOOP_AGENT_DATA`. Die Produktionsvorlage verwendet dafür `/opt/matoloop-agent/home` und `/opt/matoloop-agent/data`. Das Backend greift nicht direkt auf diese Host-Pfade zu. Backend-Dateien einer Session ohne Projekt liegen unter `/data/sessions/<session-id>/files`. Sessions eines Projekts teilen `/data/projects/<project-id>/files`; ihre privaten Nachrichtenanhänge bleiben trotzdem je Session getrennt.
+Computer-Dateien liegen unter gewöhnlichen absoluten Pfaden des jeweiligen MatoLoop Agent. Beim Compose-Computer wird `MATOLOOP_AGENT_HOME` als `/workspace` eingebunden; Zustand und `/data/config.json` liegen unter `MATOLOOP_AGENT_DATA`. Die Produktionsvorlage verwendet dafür `/opt/matoloop-agent/home` und `/opt/matoloop-agent/data`. Das Backend greift nicht direkt auf diese Host-Pfade zu. Backend-Dateien einer eigenständigen Session liegen unter `/data/sessions/<session-id>/files`; Projekt-Sessions liegen getrennt unter `/data/projects/<project-id>/sessions/<session-id>/files`.
 
 ## Ist die Dokumentation nur nach Anmeldung erreichbar?
 

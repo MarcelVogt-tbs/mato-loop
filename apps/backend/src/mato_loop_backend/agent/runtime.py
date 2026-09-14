@@ -40,6 +40,9 @@ from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionPolicy,
     PermissionRequest,
+    session_grants_display,
+    session_grants_fingerprint,
+    session_grants_payload,
     shell_prefix_allowed,
 )
 from mato_loop_backend.agent.research import (
@@ -181,7 +184,7 @@ from mato_loop_backend.providers.media import MediaService, available_media_capa
 from mato_loop_backend.providers.output_budget import output_token_limit
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
-from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
+from mato_loop_backend.session_storage import SessionStorageError
 from mato_loop_backend.settings import (
     AgentProfileUnavailable,
     AgentRuntimeSettings,
@@ -206,7 +209,6 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
 from mato_loop_backend.settings.models import (
-    PLAN_AGENT_PROFILE_ID,
     LlmProviderConfig,
     ModelAvailability,
     ModelCapability,
@@ -676,17 +678,6 @@ def _run_metadata(run: AgentRun, **values: Any) -> dict[str, Any]:
     }
 
 
-async def _ensure_plan_directory(root_files: RootFileService, session_id: UUID) -> None:
-    for path in ("plans", f"plans/{session_id}"):
-        try:
-            await asyncio.to_thread(root_files.create_directory, "session", path)
-        except RootFileError as exc:
-            if exc.code != "file.pathAlreadyExists" or (
-                await asyncio.to_thread(root_files.path_kind, "session", path)
-            ) != "directory":
-                raise
-
-
 async def _publish_run_phase(run_id: UUID, phase: str, **details: Any) -> None:
     if phase not in RUN_PHASES:
         raise ValueError(f"Unknown run phase: {phase}")
@@ -839,14 +830,6 @@ class AgentRuntime:
             )
         except AgentProfileUnavailable as exc:
             raise AgentRunError("agentProfile.selectedUnavailable") from exc
-        if chat_session.agent_profile_id == PLAN_AGENT_PROFILE_ID:
-            root_files = RootFileService(
-                chat_session.id,
-                project_id=chat_session.project_id,
-                session_quota_bytes=instance_limits.session_quota_bytes,
-                max_editable_text_bytes=instance_limits.max_editable_text_bytes,
-            )
-            await _ensure_plan_directory(root_files, chat_session.id)
         trust_level = effective_model_trust(provider, model)
         pseudonymization_enabled = (
             trust_level == TrustLevel.PUBLIC
@@ -1591,15 +1574,6 @@ class AgentRuntime:
             raise AgentRunError("session.notFound")
         delegated = chat_session.parent_session_id is not None
         ceiling = await delegation_snapshot(db, run, chat_session)
-        if delegated:
-            provisioning = asyncio.create_task(asyncio.to_thread(
-                SessionStorage().provision, chat_session.id, chat_session.project_id
-            ))
-            try:
-                await asyncio.shield(provisioning)
-            except asyncio.CancelledError:
-                await provisioning
-                raise
         project = (
             await db.get(Project, chat_session.project_id)
             if chat_session.project_id is not None
@@ -2179,6 +2153,17 @@ class AgentRuntime:
                     effective_toolset = effective_toolset.only(*ceiling["toolNames"]).without("task")
                 elif agent_profile_id not in DELEGATING_PROFILES:
                     effective_toolset = effective_toolset.without("task")
+                if delegated:
+                    effective_toolset = effective_toolset.without(
+                        "provide_file", "generate_qr_code", "generate_image", "edit_image",
+                        "generate_speech", "generate_audio", "build_skill", "edit_skill",
+                    )
+                    if execution_client is None:
+                        effective_toolset = effective_toolset.without(
+                            "read", "glob", "grep", "write_file", "edit_file",
+                            "create_directory", "delete_path", "copy_path", "move_path",
+                            "analyze_video",
+                        )
             if hide_skill_catalog_tools and effective_toolset is not None:
                 effective_toolset = effective_toolset.without("load_skill", "edit_skill")
             if (
@@ -2289,6 +2274,18 @@ class AgentRuntime:
                 current_directory=run.current_directory_snapshot,
             )
             schemas = effective_toolset.schemas() if effective_toolset else []
+            if delegated:
+                for schema in schemas:
+                    pending = [schema["parameters"]]
+                    while pending:
+                        value = pending.pop()
+                        if isinstance(value, dict):
+                            enum = value.get("enum")
+                            if isinstance(enum, list) and "files" in enum and "computer" in enum:
+                                value["enum"] = ["computer"]
+                            pending.extend(value.values())
+                        elif isinstance(value, list):
+                            pending.extend(value)
             tool_schema_tokens = (
                 estimate_tokens(schemas, model.characters_per_token) if schemas else 0
             )
@@ -3772,6 +3769,9 @@ class AgentRuntime:
                     )
                     assert effective_toolset is not None
                     tool_result = await effective_toolset.execute(call, tool_context)
+                    if delegated:
+                        for attachment in tool_result.attachments:
+                            attachment.ephemeral = True
                     if tool_context.user_denied:
                         tool_result = ToolResult.error("permission.userDenied")
                         user_denied_batch = True
@@ -4516,6 +4516,8 @@ class AgentRuntime:
         session = await db.get(ChatSession, run.session_id)
         if session is None:
             return True
+        if session.parent_session_id is not None:
+            return True
         if not tolerate_conflict:
             limits = await SettingsStore.load(db, InstanceLimits)
             await AttachmentService(settings=limits).finalize_run(db, session, run.id)
@@ -5022,7 +5024,7 @@ class AgentRuntime:
         )
         browser_approval_key = None
         if (
-            request.action_kind in {"browser_action", "browser_control"} and approval_resolution is not None
+            request.action_kind.startswith("browser_") and approval_resolution is not None
             and (check_only or decision == PermissionDecision.ASK)
         ):
             browser_approval_key = "browser_approved:" + json.dumps([
@@ -5190,6 +5192,13 @@ class AgentRuntime:
                     else None
                 ),
                 "trustLevel": run.trust_level,
+                "sessionGrants": (grant_payload := session_grants_payload(permission)),
+                "sessionGrantsFingerprint": session_grants_fingerprint(
+                    permission.capability,
+                    permission.resource_type,
+                    permission.resource_scope,
+                    grant_payload,
+                ),
                 **(permission.approval_details or {}),
                 **({"initialReviewRevision": permission.approval_details["sharedDraft"]["inspectionRevision"]}
                    if permission.shared_command_id is not None else {}),
@@ -5201,7 +5210,11 @@ class AgentRuntime:
                         "format": item.format,
                     }
                     for item in permission.display_items
-                ],
+                ] + ([{
+                    "label": "Für diese Session",
+                    "value": session_grants_display(permission),
+                    "format": "list",
+                }] if "allow_session" in permission.available_decisions else []),
             },
             available_decisions=list(permission.available_decisions),
         )

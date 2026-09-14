@@ -180,7 +180,7 @@ describe('tool display', () => {
       name: 'shell_run',
       arguments: { command: 'cat /private/secret' },
       toolDisplay: { group: 'process', icon: 'terminal', label: 'Shell-Befehl ausführen' }
-    })).toBe('')
+    })).toBe('cat /private/secret')
     expect(toolIdentity({
       name: 'read_file',
       toolDisplay: { label: '  ', icon: null, summary: {} }

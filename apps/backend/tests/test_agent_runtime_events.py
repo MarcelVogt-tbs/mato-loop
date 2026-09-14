@@ -1,6 +1,5 @@
 import asyncio
 import json
-import threading
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
@@ -171,18 +170,15 @@ async def test_runtime_rejects_inactive_user() -> None:
         await AgentRuntime._ensure_user_active(db, uuid4())
 
 
-async def test_plan_directory_accepts_first_canonical_write(tmp_path) -> None:
+def test_canonical_plan_needs_no_runtime_directory(tmp_path) -> None:
     session_id = uuid4()
     storage = SessionStorage(tmp_path / "sessions")
     storage.provision(session_id)
     root_files = RootFileService(session_id, session_storage=storage)
 
-    await runtime_module._ensure_plan_directory(root_files, session_id)
-    await runtime_module._ensure_plan_directory(root_files, session_id)
     assert root_files.run_id is None
-    assert root_files.path_kind("session", f"plans/{session_id}") == "directory"
 
-    path = f"plans/{session_id}/plan.md"
+    path = "plan.md"
     run_id = uuid4()
     working = RootFileService(session_id, session_storage=storage, run_id=run_id)
     assert working.write_file("session", path, "# Plan") == path
@@ -521,53 +517,6 @@ async def test_cancel_descendants_uses_recursive_sessions_and_never_replays_orph
     )
     assert AgentRuntime.cancel_and_wait.await_count == 2
     schedule.assert_not_called()
-
-
-async def test_child_cancellation_joins_provisioning_thread_before_storage_cleanup(tmp_path, monkeypatch):
-    child = ChatSession(id=uuid4(), user_id=uuid4(), parent_session_id=uuid4())
-    run = AgentRun(id=uuid4(), session_id=child.id, input_message_id=uuid4())
-    message = Message(id=run.input_message_id, provider_data={"_matoloop": {"delegationCeiling": {}}})
-    db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = lambda model, _key: child if model is ChatSession else message
-    storage = SessionStorage(tmp_path / "sessions")
-    provision = storage.provision
-    started, cleaned = asyncio.Event(), asyncio.Event()
-    release, finished = threading.Event(), threading.Event()
-    loop = asyncio.get_running_loop()
-
-    def blocked_provision(*args):
-        loop.call_soon_threadsafe(started.set)
-        assert release.wait(timeout=5), "Test did not release provisioning"
-        provision(*args)
-        finished.set()
-
-    monkeypatch.setattr(storage, "provision", blocked_provision)
-    monkeypatch.setattr(runtime_module, "SessionStorage", lambda: storage)
-
-    async def child_and_cleanup():
-        try:
-            await AgentRuntime._execute_loop(db, run)
-        finally:
-            assert finished.is_set(), "Cleanup raced the still-running provisioning thread"
-            storage.remove_session(child.id)
-            cleaned.set()
-
-    task = asyncio.create_task(child_and_cleanup())
-    try:
-        await asyncio.wait_for(started.wait(), timeout=2)
-        task.cancel()
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        assert not task.done() and not cleaned.is_set()
-        release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, timeout=2)
-        assert finished.is_set() and cleaned.is_set()
-        assert not storage.session_path(child.id).exists()
-    finally:
-        release.set()
-        await asyncio.gather(task, return_exceptions=True)
-        assert await asyncio.to_thread(finished.wait, 2)
 
 
 @pytest.mark.parametrize("kind", ["approval", "question"])

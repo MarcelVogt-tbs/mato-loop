@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
@@ -325,39 +326,59 @@ async def delete_user(
         (await db.scalars(select(Project.id).where(Project.user_id == user.id))).all()
     )
     storage = SessionStorage()
-    trashed = []
+    standalone_sessions = [session_id for session_id, project_id in sessions if project_id is None]
+    trashed_sessions: list[tuple[UUID, Path | None]] = []
+    trashed_projects: list[tuple[UUID, Path | None]] = []
 
     async def restore_storage() -> None:
-        for (session_id, project_id), path in zip(sessions, trashed, strict=False):
+        for project_id, path in reversed(trashed_projects):
             if path is None:
                 continue
             try:
-                await asyncio.to_thread(
-                    storage.restore_session, session_id, path, project_id
-                )
+                await asyncio.to_thread(storage.restore_project, project_id, path)
             except Exception:
-                logger.exception("User session storage could not be restored")
+                logger.exception("User project storage could not be restored")
+        for session_id, path in reversed(trashed_sessions):
+            if path is not None:
+                try:
+                    await asyncio.to_thread(storage.restore_session, session_id, path)
+                except Exception:
+                    logger.exception("User session storage could not be restored")
 
     async def purge_storage() -> None:
-        for path in trashed:
+        for _session_id, path in trashed_sessions:
             try:
                 await asyncio.to_thread(storage.purge_trashed, path)
             except Exception:
                 logger.exception("Deleted user session storage could not be purged")
-        for project_id in project_ids:
+        for _project_id, path in trashed_projects:
             try:
-                await asyncio.to_thread(storage.remove_project, project_id)
+                await asyncio.to_thread(storage.purge_trashed, path)
             except Exception:
                 logger.exception("Deleted user project storage could not be purged")
 
     commit_task: asyncio.Task[None] | None = None
     try:
-        for session_id, project_id in sessions:
-            trashed.append(
-                await asyncio.to_thread(
-                    storage.trash_session, session_id, project_id
-                )
+        for project_id in project_ids:
+            trash_task = asyncio.create_task(
+                asyncio.to_thread(storage.trash_project, project_id)
             )
+            try:
+                trashed = await asyncio.shield(trash_task)
+            except asyncio.CancelledError:
+                trashed_projects.append((project_id, await trash_task))
+                raise
+            trashed_projects.append((project_id, trashed))
+        for session_id in standalone_sessions:
+            trash_task = asyncio.create_task(
+                asyncio.to_thread(storage.trash_session, session_id, None)
+            )
+            try:
+                trashed = await asyncio.shield(trash_task)
+            except asyncio.CancelledError:
+                trashed_sessions.append((session_id, await trash_task))
+                raise
+            trashed_sessions.append((session_id, trashed))
         await db.execute(delete(Automation).where(Automation.user_id == user.id))
         await db.delete(user)
         commit_task = asyncio.create_task(db.commit())

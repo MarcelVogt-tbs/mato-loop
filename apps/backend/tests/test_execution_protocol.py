@@ -197,6 +197,9 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "integration.browser.reset",
         "integration.browser.execute",
         "integration.browser.file",
+        "integration.browser.files",
+        "integration.browser.publish",
+        "integration.browser.upload",
         "shell.inspect",
         "terminal.open",
         "terminal.read",
@@ -508,6 +511,29 @@ def test_shell_inspection_preserves_legacy_target_kinds_and_incomplete_writes(ki
     assert result.targets[0].kind == kind
     assert result.classification == "write"
     assert result.read_only is False
+    assert result.targets[0].access is None
+
+
+@pytest.mark.parametrize("access", ["read", "write"])
+def test_shell_inspection_preserves_authoritative_target_access(access) -> None:
+    result = ShellInspectResult.model_validate({
+        "targets": [{"path": "/outside/target", "kind": "path", "access": access}],
+        "analysisComplete": True, "classification": "write", "commands": [],
+        "inspectionRevision": "a" * 64,
+    })
+    assert result.targets[0].access == access
+
+
+@pytest.mark.parametrize("target", [
+    {"path": "/outside/input", "kind": "input", "access": "write"},
+    {"path": "/outside/output", "kind": "output", "access": "read"},
+])
+def test_shell_inspection_rejects_access_inconsistent_with_target_kind(target) -> None:
+    with pytest.raises(ValidationError):
+        ShellInspectResult.model_validate({
+            "targets": [target], "analysisComplete": True, "classification": "write",
+            "commands": [], "inspectionRevision": "a" * 64,
+        })
 
 
 @pytest.mark.parametrize("target", [
@@ -521,6 +547,8 @@ def test_shell_inspection_preserves_legacy_target_kinds_and_incomplete_writes(ki
     {"path": "/usr/bin/../etc", "kind": "toolchain_metadata"},
     {"path": "/usr/bin//python3", "kind": "toolchain_metadata"},
     {"path": "/usr/bin/python3", "kind": "future_metadata"},
+    {"path": "/usr/bin/python3", "kind": "toolchain_metadata", "access": "read"},
+    {"path": "/dev/null", "kind": "discard", "access": "write"},
 ])
 async def test_shell_client_rejects_invalid_special_targets(monkeypatch, target) -> None:
     client = ExecutionClient(uuid4(), frozenset({"shell.inspect"}))

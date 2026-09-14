@@ -229,6 +229,9 @@ def test_openscad_source_read_does_not_inherit_the_integration_policy(
     )
 
     assert render.use_integration_policy is True
+    assert json.loads(render.effective_session_grants[0].resource_scope)["resourceKey"] == (
+        f"project:{hashlib.sha256(f'{root}:.'.encode()).hexdigest()}"
+    )
     assert read.capability == read_capability
     assert read.use_integration_policy is False
     capabilities = {render.capability, read.capability}

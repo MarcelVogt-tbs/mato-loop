@@ -118,8 +118,9 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
     configure({ sessionId = null, rootIdentity = null, currentDirectory = null, workspaceContext = null, scope = null } = {}) {
       const nextScope = scope || (sessionId ? 'session' : 'filesystem')
+      const nextRootIdentity = sessionId ? rootIdentity || sessionId : rootIdentity
       const sessionChanged = this.sessionId !== sessionId
-      const managedRootChanged = Boolean(sessionId && !this.toolContext && this.rootIdentity !== rootIdentity)
+      const managedRootChanged = Boolean(sessionId && !this.toolContext && this.rootIdentity !== nextRootIdentity)
       if (sessionChanged || managedRootChanged) this.clearStorageUsage()
       if (sessionChanged) {
         this.activeFileTabId = null
@@ -143,8 +144,8 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.currentDirectory = currentDirectory
       this.workspaceContext = workspaceContext
       if (changed) this.reset(false)
-      this.currentRootIdentity = rootIdentity
-      if (!this.toolContext) this.rootIdentity = rootIdentity
+      this.currentRootIdentity = nextRootIdentity
+      if (!this.toolContext) this.rootIdentity = nextRootIdentity
     },
     reset(fallbackToSession = true) {
       this.contextVersion += 1
@@ -411,6 +412,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       ) return null
       const rootIdentity = this.scope === 'session' ? this.rootIdentity : null
       if (this.scope === 'session' && !rootIdentity) return null
+      if (this.scope === 'session' && rootIdentity !== this.sessionId) return null
       if (
         this.scope === 'filesystem'
         && expectedExecutionAgentId !== undefined
@@ -434,6 +436,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       return {
         scope: this.scope,
         ...(this.sessionId ? { session_id: this.sessionId } : {}),
+        ...(this.scope === 'session' && this.rootIdentity ? { root_identity: this.rootIdentity } : {}),
         ...(liveFilesystemContext
           ? { execution_agent_id: this.workspaceContext.executionAgentId }
           : {}),
@@ -452,7 +455,6 @@ export const useWorkspaceStore = defineStore('workspace', {
     readRequestParams(extra = {}) {
       return {
         ...this.requestParams(),
-        ...(this.scope === 'session' && this.rootIdentity ? { root_identity: this.rootIdentity } : {}),
         ...extra
       }
     },
@@ -547,7 +549,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       return this.fetchStorageUsage(sessionId)
     },
     managedStorageSessionId() {
-      return this.scope === 'session' && !this.toolContext ? this.sessionId : null
+      return this.scope === 'session' && !this.toolContext ? this.rootIdentity || this.sessionId : null
     },
     async createDirectory(parent, name) {
       requireWritableContext(this)

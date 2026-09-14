@@ -55,7 +55,6 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage
-from mato_loop_backend.sessions.serialization import rebind_session_file_metadata
 from mato_loop_backend.sessions.service import (
     SessionServiceError,
     _latest_model_context,
@@ -65,7 +64,6 @@ from mato_loop_backend.sessions.service import (
 )
 from mato_loop_backend.settings import (
     AiSettings,
-    InstanceLimits,
     MemorySettings,
     SettingsStore,
     TrustLevel,
@@ -102,7 +100,7 @@ def _api_app_tab(app_id: str, *, pinned: bool = False) -> dict:
     }
 
 
-def test_workspace_active_file_requires_a_normalized_absolute_posix_path() -> None:
+async def test_workspace_active_file_requires_a_normalized_absolute_posix_path() -> None:
     agent_id = uuid4()
     session = ChatSession(
         id=uuid4(),
@@ -116,7 +114,10 @@ def test_workspace_active_file_requires_a_normalized_absolute_posix_path() -> No
         "sha256": "a" * 64,
         "dirty": True,
     }
-    active_file = active_file_payload(ActiveFileRequest.model_validate(payload), session)
+    db = AsyncMock(spec=AsyncSession)
+    active_file = await active_file_payload(
+        ActiveFileRequest.model_validate(payload), session, db
+    )
     assert active_file is not None
     assert active_file["path"] == "/"
 
@@ -131,7 +132,50 @@ def test_workspace_active_file_requires_a_normalized_absolute_posix_path() -> No
     ):
         payload["path"] = path
         with pytest.raises(SessionServiceError):
-            active_file_payload(ActiveFileRequest.model_validate(payload), session)
+            await active_file_payload(
+                ActiveFileRequest.model_validate(payload), session, db
+            )
+
+
+async def test_session_active_file_accepts_owned_same_project_session() -> None:
+    user_id, project_id, owner_id = uuid4(), uuid4(), uuid4()
+    session = ChatSession(id=uuid4(), user_id=user_id, project_id=project_id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = owner_id
+    payload = ActiveFileRequest.model_validate(
+        {
+            "root": "session",
+            "rootIdentity": str(owner_id),
+            "path": "notes.md",
+            "sha256": "a" * 64,
+            "dirty": False,
+        }
+    )
+
+    active_file = await active_file_payload(payload, session, db)
+
+    assert active_file["rootIdentity"] == str(owner_id)
+    statement = db.scalar.await_args.args[0]
+    assert {owner_id, user_id, project_id}.issubset(statement.compile().params.values())
+    assert "FOR UPDATE" in str(statement)
+
+
+async def test_session_active_file_rejects_session_outside_current_project() -> None:
+    session = ChatSession(id=uuid4(), user_id=uuid4(), project_id=uuid4())
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    payload = ActiveFileRequest.model_validate(
+        {
+            "root": "session",
+            "rootIdentity": str(uuid4()),
+            "path": "notes.md",
+            "sha256": "a" * 64,
+            "dirty": False,
+        }
+    )
+
+    with pytest.raises(SessionServiceError, match="validation.invalid"):
+        await active_file_payload(payload, session, db)
 
 
 def test_send_message_http_response_accepts_nested_message(monkeypatch) -> None:
@@ -341,7 +385,7 @@ async def test_failed_project_move_restores_the_session_tree(monkeypatch) -> Non
         id=uuid4(), user_id=user.id, title="Move", project_id=source_project_id
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session.id, None]
+    db.scalar.side_effect = [session.id, None, 0]
     db.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
     db.commit.side_effect = RuntimeError("commit failed")
     persisted_location = MagicMock()
@@ -376,14 +420,14 @@ async def test_failed_project_move_restores_the_session_tree(monkeypatch) -> Non
     assert db.rollback.await_count == 2
 
 
-async def test_standalone_project_move_rebinds_managed_file_references(monkeypatch) -> None:
+async def test_standalone_project_move_preserves_managed_file_identity(monkeypatch) -> None:
     from mato_loop_backend.api.routes import sessions as sessions_route
 
     user = _user()
     project_id = uuid4()
     session = ChatSession(id=uuid4(), user_id=user.id, title="Move")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session.id, None, project_id]
+    db.scalar.side_effect = [session.id, None, project_id, 0]
     db.scalars.side_effect = [
         MagicMock(all=MagicMock(return_value=[])),
         MagicMock(all=MagicMock(return_value=[])),
@@ -393,11 +437,6 @@ async def test_standalone_project_move_rebinds_managed_file_references(monkeypat
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
     monkeypatch.setattr(
         sessions_route, "_mutable_session", AsyncMock(return_value=session)
-    )
-    monkeypatch.setattr(
-        sessions_route.SettingsStore,
-        "load",
-        AsyncMock(return_value=InstanceLimits(session_quota_mib=512)),
     )
     monkeypatch.setattr(sessions_route, "_session_payload", AsyncMock(return_value={}))
 
@@ -412,147 +451,57 @@ async def test_standalone_project_move_rebinds_managed_file_references(monkeypat
         session.id,
         None,
         project_id,
-        quota_bytes=512 * 1024 * 1024,
+        quota_bytes=None,
     )
     storage.finalize_session_move.assert_called_once_with(receipt)
     storage.rollback_session_move.assert_not_called()
-    artifact_update = db.execute.await_args.args[0]
-    assert artifact_update.is_update
-    assert "message_attachments.file_root_id" in str(artifact_update)
-    params = artifact_update.compile().params.values()
-    assert session.id in params
-    assert project_id in params
-    assert {"companionFileRootId": str(project_id)} in params
+    db.execute.assert_not_awaited()
     assert session.project_id == project_id
 
 
-def test_standalone_project_move_rebinds_file_action_and_control_center_metadata() -> None:
-    session_id = uuid4()
-    project_id = uuid4()
-    file_tab_id = f"file-{uuid4()}"
-    session = ChatSession(
-        id=session_id,
-        user_id=uuid4(),
-        title="Move",
-        control_center={
-            "tabs": [
-                {"app_id": "files", "pinned": False},
-                {
-                    "tab_id": file_tab_id,
-                    "kind": "file",
-                    "app_id": "file-viewer",
-                    "pinned": False,
-                    "file_target": {
-                        "scope": "session",
-                        "path": "note.txt",
-                        "name": "note.txt",
-                        "root_identity": str(session_id),
-                    },
-                },
-            ],
-            "active_app_id": file_tab_id,
-            "open": True,
-            "file_view": {
-                "scope": "session",
-                "selected_path": "note.txt",
-                "selected_kind": "file",
-                "viewed_file_path": "note.txt",
-                "root_identity": str(session_id),
-            },
-            "file_views": {
-                "session": {
-                    "scope": "session",
-                    "selected_path": "note.txt",
-                    "selected_kind": "file",
-                    "viewed_file_path": "note.txt",
-                    "root_identity": str(session_id),
-                },
-                "filesystem": None,
-            },
-        },
-    )
-    message = Message(
-        session_id=session_id,
-        role="tool",
-        content="saved",
-        provider_data={
-            "_matoloop": {
-                "activeFile": {
-                    "root": "session",
-                    "rootIdentity": str(session_id),
-                    "path": "note.txt",
-                },
-                "fileActions": [
-                    {
-                        "root": "session",
-                        "rootIdentity": str(session_id),
-                        "path": "note.txt",
-                    }
-                ]
-            }
-        },
+async def test_project_move_rejects_files_referenced_by_another_session(monkeypatch) -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    user = _user()
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Move", project_id=uuid4())
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session.id, None, 2]
+    storage = MagicMock()
+    monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
+    monkeypatch.setattr(
+        sessions_route, "_mutable_session", AsyncMock(return_value=session)
     )
 
-    rebind_session_file_metadata(session, [message], session_id, project_id)
+    with pytest.raises(ApiError) as exc_info:
+        await update_session(
+            session.id, SessionUpdateRequest(project_id=None), user, db
+        )
 
-    assert session.control_center["file_view"]["root_identity"] == str(project_id)
-    assert session.control_center["file_views"]["session"]["root_identity"] == str(
-        project_id
-    )
-    assert session.control_center["tabs"][1]["file_target"]["root_identity"] == str(
-        project_id
-    )
-    assert (
-        message.provider_data["_matoloop"]["fileActions"][0]["rootIdentity"]
-        == str(project_id)
-    )
-    assert message.provider_data["_matoloop"]["activeFile"]["rootIdentity"] == str(
-        project_id
-    )
-
-    rebind_session_file_metadata(session, [message], project_id, None)
-
-    assert session.control_center["file_view"] is None
-    assert session.control_center["file_views"]["session"] is None
-    assert session.control_center["tabs"] == [{"app_id": "files", "pinned": False}]
-    assert session.control_center["active_app_id"] == "files"
-    assert message.provider_data["_matoloop"]["fileActions"] == []
-    assert "activeFile" not in message.provider_data["_matoloop"]
+    assert exc_info.value.code == "session.filesReferenced"
+    assert exc_info.value.params == {"referenceCount": 2}
+    storage.stage_session_move.assert_not_called()
 
 
-def test_removing_an_active_file_tab_falls_back_to_the_fixed_session_tab() -> None:
-    root_id = uuid4()
-    tab_id = f"file-{uuid4()}"
-    session = ChatSession(
-        id=uuid4(),
-        user_id=uuid4(),
-        title="Move",
-        control_center={
-            "tabs": [
-                {"app_id": "session", "pinned": False},
-                {
-                    "tab_id": tab_id,
-                    "kind": "file",
-                    "app_id": "file-viewer",
-                    "pinned": False,
-                    "file_target": {
-                        "scope": "session",
-                        "path": "note.txt",
-                        "name": "note.txt",
-                        "root_identity": str(root_id),
-                    },
-                },
-            ],
-            "active_app_id": tab_id,
-        },
+async def test_project_move_rejects_references_to_another_sessions_files(monkeypatch) -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    user = _user()
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Move", project_id=uuid4())
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session.id, None, 1]
+    storage = MagicMock()
+    monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
+    monkeypatch.setattr(
+        sessions_route, "_mutable_session", AsyncMock(return_value=session)
     )
 
-    rebind_session_file_metadata(session, [], root_id, None)
+    with pytest.raises(ApiError) as exc_info:
+        await update_session(
+            session.id, SessionUpdateRequest(project_id=None), user, db
+        )
 
-    assert session.control_center["tabs"] == [
-        {"app_id": "session", "pinned": False}
-    ]
-    assert session.control_center["active_app_id"] == "session"
+    assert exc_info.value.code == "session.filesReferenced"
+    storage.stage_session_move.assert_not_called()
 
 
 async def test_mark_session_read_uses_owned_assistant_message_monotonically() -> None:
@@ -2090,7 +2039,7 @@ async def test_session_delete_trashes_commits_and_purges_tree(
     active_runs_result = MagicMock()
     active_runs_result.all.return_value = []
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = session
+    db.scalar.side_effect = [session, 0, session, 0]
     db.scalars.return_value = active_runs_result
     db.execute.return_value = MagicMock(all=lambda: [])
     monkeypatch.setattr(AgentRuntime, "cancel_descendants", AsyncMock(), raising=False)
@@ -2102,6 +2051,35 @@ async def test_session_delete_trashes_commits_and_purges_tree(
     db.commit.assert_awaited_once()
     assert not session_path.exists()
     assert list(sessions.trash_dir.iterdir()) == []
+
+
+async def test_session_delete_rejects_files_referenced_by_another_session(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    session_id = uuid4()
+    child_id = uuid4()
+    user = _user()
+    session = ChatSession(id=session_id, user_id=user.id, title="Owner")
+    sessions = SessionStorage(tmp_path / "sessions")
+    session_path = sessions.provision(session_id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session, 1]
+    db.execute.return_value = MagicMock(all=lambda: [(child_id, None)])
+    monkeypatch.setattr(sessions_route, "SessionStorage", lambda: sessions)
+
+    with pytest.raises(ApiError) as exc_info:
+        await delete_session(session_id, user, db)
+
+    assert exc_info.value.code == "session.filesReferenced"
+    assert exc_info.value.params == {"referenceCount": 1}
+    query = db.scalar.await_args_list[1].args[0].compile()
+    assert {session_id, child_id} in [
+        set(value) for value in query.params.values() if isinstance(value, list)
+    ]
+    assert session_path.is_dir()
+    db.delete.assert_not_awaited()
 
 
 async def test_session_delete_restores_tree_when_database_commit_fails(
@@ -2119,7 +2097,7 @@ async def test_session_delete_restores_tree_when_database_commit_fails(
     active_runs_result = MagicMock()
     active_runs_result.all.return_value = []
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = session
+    db.scalar.side_effect = [session, 0, session, 0]
     db.scalars.return_value = active_runs_result
     db.execute.return_value = MagicMock(all=lambda: [])
     monkeypatch.setattr(AgentRuntime, "cancel_descendants", AsyncMock(), raising=False)

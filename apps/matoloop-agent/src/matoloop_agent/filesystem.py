@@ -158,6 +158,11 @@ class Filesystem:
         metadata = os.fstat(fd)
         return metadata.st_dev, metadata.st_ino
 
+    @staticmethod
+    def _set_ownership(fd: int, owner: os.stat_result) -> None:
+        if os.geteuid() == 0:
+            os.fchown(fd, owner.st_uid, owner.st_gid)
+
     def resolve_directory(self, path: str) -> dict[str, str]:
         parts = _parts(path)
         with self._root_fd() as root_fd:
@@ -584,6 +589,7 @@ class Filesystem:
                 with os.fdopen(fd, "wb") as handle:
                     handle.write(data)
                     handle.flush()
+                    self._set_ownership(handle.fileno(), metadata or os.fstat(parent))
                     os.fchmod(handle.fileno(), metadata.st_mode & 0o777 if metadata else 0o600)
                     os.fsync(handle.fileno())
                 if expected_sha256 is None:
@@ -662,6 +668,7 @@ class Filesystem:
                 with os.fdopen(fd, "wb") as handle:
                     handle.write(data)
                     handle.flush()
+                    self._set_ownership(handle.fileno(), metadata or os.fstat(parent))
                     os.fchmod(handle.fileno(), metadata.st_mode & 0o777 if metadata else 0o600)
                     os.fsync(handle.fileno())
                 os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
@@ -1132,11 +1139,27 @@ class Filesystem:
                             raise AgentError(
                                 "path.notDirectory", "Parent directory is unavailable"
                             ) from None
-                        os.mkdir(part, 0o700, dir_fd=fd)
-                        _fsync(fd)
-                        child = os.open(
-                            part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
-                        )
+                        temporary = f".mkdir-{uuid4().hex}.tmp"
+                        os.mkdir(temporary, 0o700, dir_fd=fd)
+                        child = None
+                        try:
+                            child = os.open(
+                                temporary,
+                                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                dir_fd=fd,
+                            )
+                            self._set_ownership(child, os.fstat(fd))
+                            os.fchmod(child, 0o700)
+                            _rename_no_replace(fd, temporary, fd, part)
+                            _fsync(fd)
+                        except BaseException:
+                            if child is not None:
+                                os.close(child)
+                            try:
+                                os.rmdir(temporary, dir_fd=fd)
+                            except FileNotFoundError:
+                                pass
+                            raise
                     except OSError as exc:
                         raise AgentError("path.notDirectory", "Directory is unavailable") from exc
                     os.close(fd)
@@ -1270,6 +1293,7 @@ class Filesystem:
                             )
                         destination_handle.write(chunk)
                     destination_handle.flush()
+                    self._set_ownership(destination_handle.fileno(), os.fstat(destination_parent))
                     os.fsync(destination_handle.fileno())
             except BaseException:
                 try:
@@ -1295,6 +1319,7 @@ class Filesystem:
                 pass
             raise
         try:
+            self._set_ownership(destination_fd, os.fstat(destination_parent))
             for child in os.listdir(source_fd):
                 _relative_parts(child)
                 self._copy_at(source_fd, child, destination_fd, child, usage, forbidden)
@@ -1333,21 +1358,6 @@ class Filesystem:
                     (os.fstat(destination_parent).st_dev, os.fstat(destination_parent).st_ino),
                 }
                 self._usage_at(source_parent, source_parts[-1], forbidden)
-                if move:
-                    try:
-                        _rename_no_replace(
-                            source_parent,
-                            source_parts[-1],
-                            destination_parent,
-                            destination_parts[-1],
-                        )
-                    except OSError as exc:
-                        if exc.errno != errno.EXDEV:
-                            raise
-                    else:
-                        _fsync(source_parent)
-                        _fsync(destination_parent)
-                        return {"path": destination_path}
                 temporary = f".copy-{uuid4().hex}.tmp"
                 source_temporary = f".move-{uuid4().hex}.tmp"
                 source_quarantined = False
@@ -1465,6 +1475,8 @@ class Filesystem:
                             digest.update(chunk)
                             target.write(chunk)
                         target.flush()
+                        self._set_ownership(target.fileno(), existing or os.fstat(parent))
+                        os.fchmod(target.fileno(), existing.st_mode & 0o777 if existing else 0o600)
                         os.fsync(target.fileno())
                     if (expected_size is not None and size != expected_size) or (
                         expected_sha256 is not None and digest.hexdigest() != expected_sha256

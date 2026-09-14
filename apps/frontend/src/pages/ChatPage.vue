@@ -11,7 +11,12 @@
         : { display: 'none' }"
     >
       <template #before>
-        <div class="chat-page__pane column no-wrap full-height">
+        <SubagentInspector
+          v-if="routeSessionId && routeSubagentId"
+          :parent-id="routeSessionId"
+          :child-id="routeSubagentId"
+        />
+        <div v-show="!routeSubagentId" class="chat-page__pane column no-wrap full-height">
     <q-scroll-area
       id="chat-scroll-area"
       ref="scrollArea"
@@ -138,6 +143,7 @@
                 :trusted-image-origins="trustedImageOrigins"
                 :todos="message.id === todoHistoryMessageId ? chat.current?.todos : []"
                 :running="chat.running && message.currentTurn"
+                :expanded="expandedWorkHistoryIds.has(message.id)"
                 :class="{
                   'q-mb-xs': message.content
                     || message.attachments?.length
@@ -145,6 +151,7 @@
                 }"
                 @open-file="openToolFile"
                 @open-approval-draft="openApprovalDraft"
+                @history-expanded="setWorkHistoryExpanded(message.id, $event)"
                 @rendered="handleMessageRendered"
                 @resize-start="beginActivityResize"
                 @resized="finishActivityResize"
@@ -185,7 +192,6 @@
             </div>
             <div
               v-if="message.createdAt
-                || (Number.isInteger(message.activeDurationMs) && !message.workHistory?.entries?.length)
                 || showMessageModel(message)
                 || isMessageTrustLevel(message.trustLevel)"
               class="chat-message__meta items-center"
@@ -242,10 +248,6 @@
               >
                 {{ formatRelativeDateTime(message.createdAt, messageTimestampNow) }}
               </time>
-              <template v-if="Number.isInteger(message.activeDurationMs) && !message.workHistory?.entries?.length">
-                <span v-if="message.createdAt || showMessageModel(message) || isMessageTrustLevel(message.trustLevel)" aria-hidden="true">·</span>
-                <TurnDuration :history="message" />
-              </template>
               <q-btn
                 v-if="canRetryMessage(message)"
                 flat
@@ -399,11 +401,6 @@
         </aside>
       </template>
     </q-splitter>
-    <SubagentInspector
-      v-if="routeSessionId && routeSubagentId"
-      :parent-id="routeSessionId"
-      :child-id="routeSubagentId"
-    />
     <q-dialog
       :model-value="Boolean(approvalDraftPreview)"
       maximized
@@ -440,7 +437,6 @@ import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import AgentActivityPanel from 'components/AgentActivityPanel.vue'
-import TurnDuration from 'components/TurnDuration.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ChatComposer from 'components/ChatComposer.vue'
 import ChatQueuedMessages from 'components/ChatQueuedMessages.vue'
@@ -512,6 +508,7 @@ const scrollContent = ref(null)
 const virtualScroll = ref(null)
 const composer = ref(null)
 const trustedImageOriginsBySession = ref(new Map())
+const expandedWorkHistoryIds = ref(new Set())
 const followingBottom = ref(true)
 const messageTimestampNow = ref(Date.now())
 const messageActionId = ref(null)
@@ -530,6 +527,12 @@ const userMessageLabel = (message) => (
     : 'Du'
 )
 const agentProfileName = (message) => agentProfiles.byId(message.agentProfileId)?.name || 'Allgemein'
+function setWorkHistoryExpanded(messageId, expanded) {
+  const next = new Set(expandedWorkHistoryIds.value)
+  if (expanded) next.add(messageId)
+  else next.delete(messageId)
+  expandedWorkHistoryIds.value = next
+}
 const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
 ))
@@ -695,7 +698,7 @@ async function openApprovalDraft(approval) {
     scope: 'session',
     path: draft.path,
     name: draft.filename,
-    rootIdentity: draft.rootIdentity || chat.current.projectId || sessionId,
+    rootIdentity: draft.rootIdentity || sessionId,
     readOnly: false
   })
   if (tabId) workspace.startFileTabEdit(tabId)

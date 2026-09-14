@@ -514,6 +514,15 @@ export const useControlCenterStore = defineStore('control-center', {
         : this.activeAppId
       return this.save({ tabs, activeAppId, open: this.open, fileView: this.fileView })
     },
+    async removeFileTabs(tabIds) {
+      const removed = new Set(tabIds)
+      const tabs = this.tabs.filter((tab) => !removed.has(tab.tabId))
+      if (tabs.length === this.tabs.length) return
+      const activeAppId = tabs.some((tab) => tab.tabId === this.activeAppId)
+        ? this.activeAppId
+        : tabs.find((tab) => tab.appId === 'files')?.tabId || 'session'
+      return this.save({ tabs, activeAppId, open: this.open, fileView: this.fileView })
+    },
     async rebindFileTargets(fileTarget, destination = null, tabIds = null) {
       const target = normalizedFileTarget(fileTarget)
       const destinationTarget = typeof destination === 'string'

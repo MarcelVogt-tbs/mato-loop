@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from matoloop_agent import filesystem as filesystem_module
 from matoloop_agent.config import AgentConfig
@@ -288,6 +288,142 @@ class FilesystemTests(unittest.TestCase):
                 finally:
                     os.umask(previous_umask)
                 self.assertEqual(target.stat().st_mode & 0o7777, 0o600)
+
+    def test_direct_mutations_use_destination_ownership(self) -> None:
+        parent = self.root / "owned"
+        parent.mkdir()
+        try:
+            os.chown(parent, os.geteuid() + 1, os.getegid() + 1)
+        except PermissionError:
+            self.skipTest("Changing ownership requires a privileged test process")
+        owner = parent.stat()
+        source = self.root / "source"
+        source.write_bytes(b"source")
+        source_directory = self.root / "source-directory"
+        source_directory.mkdir()
+        (source_directory / "child").write_text("child")
+
+        self.filesystem.write(str(parent / "write"), "write", None)
+        self.filesystem.upsert(str(parent / "upsert"), "upsert")
+        self.filesystem.import_file(str(parent / "import"), source, False)
+        self.filesystem.copy_or_move(str(source), str(parent / "copy"), move=False)
+        self.filesystem.copy_or_move(str(source_directory), str(parent / "tree"), move=False)
+        self.filesystem.mkdir(str(parent / "one/two"), True)
+        self.filesystem.patch(
+            f"*** Begin Patch\n*** Add File: {parent / 'patch'}\n+patch\n*** End Patch\n",
+            {},
+        )
+
+        for path in (
+            "write",
+            "upsert",
+            "import",
+            "copy",
+            "tree",
+            "tree/child",
+            "one",
+            "one/two",
+            "patch",
+        ):
+            with self.subTest(path=path):
+                metadata = (parent / path).stat()
+                self.assertEqual((metadata.st_uid, metadata.st_gid), (owner.st_uid, owner.st_gid))
+
+    def test_replacements_preserve_ownership_and_ordinary_mode(self) -> None:
+        parent = self.root / "replacements"
+        parent.mkdir()
+        source = self.root / "source"
+        source.write_text("new")
+        target = parent / "target"
+        for operation in ("write", "upsert", "edit", "patch", "import"):
+            with self.subTest(operation=operation):
+                target.write_text("old")
+                try:
+                    os.chown(target, os.geteuid() + 1, os.getegid() + 1)
+                except PermissionError:
+                    self.skipTest("Changing ownership requires a privileged test process")
+                target.chmod(0o6754)
+                before = target.stat()
+                if operation == "write":
+                    self.filesystem.write(str(target), "new", hashlib.sha256(b"old").hexdigest())
+                elif operation == "upsert":
+                    self.filesystem.upsert(str(target), "new")
+                elif operation == "edit":
+                    self.filesystem.edit(str(target), "old", "new", False)
+                elif operation == "patch":
+                    self.filesystem.patch(
+                        f"*** Begin Patch\n*** Update File: {target}\n"
+                        "@@\n-old\n+new\n*** End Patch\n",
+                        {str(target): hashlib.sha256(b"old").hexdigest()},
+                    )
+                else:
+                    self.filesystem.import_file(str(target), source, True)
+                after = target.stat()
+                self.assertEqual((after.st_uid, after.st_gid), (before.st_uid, before.st_gid))
+                self.assertEqual(after.st_mode & 0o7777, 0o754)
+
+    def test_move_uses_destination_ownership(self) -> None:
+        source = self.root / "source"
+        source.write_text("source")
+        parent = self.root / "owned"
+        parent.mkdir()
+        try:
+            os.chown(parent, os.geteuid() + 1, os.getegid() + 1)
+        except PermissionError:
+            self.skipTest("Changing ownership requires a privileged test process")
+        owner = parent.stat()
+        destination = parent / "destination"
+        self.filesystem.copy_or_move(str(source), str(destination), move=True)
+
+        metadata = destination.stat()
+        self.assertEqual((metadata.st_uid, metadata.st_gid), (owner.st_uid, owner.st_gid))
+        self.assertFalse(source.exists())
+
+    def test_non_root_operations_keep_kernel_assigned_ownership(self) -> None:
+        with (
+            patch.object(filesystem_module.os, "geteuid", return_value=1000),
+            patch.object(filesystem_module.os, "fchown") as chown,
+        ):
+            self.filesystem._set_ownership(1, Mock(st_uid=2000, st_gid=2000))
+        chown.assert_not_called()
+
+    def test_ownership_failure_does_not_publish_new_paths(self) -> None:
+        source = self.root / "source"
+        source.write_text("source")
+        operations = {
+            "write": lambda path: self.filesystem.write(path, "new", None),
+            "upsert": lambda path: self.filesystem.upsert(path, "new"),
+            "import": lambda path: self.filesystem.import_file(path, source, False),
+            "copy": lambda path: self.filesystem.copy_or_move(str(source), path, move=False),
+            "mkdir": lambda path: self.filesystem.mkdir(path, False),
+        }
+        for name, operation in operations.items():
+            target = self.root / name
+            with (
+                self.subTest(operation=name),
+                patch.object(filesystem_module.os, "fchown", side_effect=PermissionError),
+                self.assertRaises(PermissionError),
+            ):
+                operation(str(target))
+            self.assertFalse(target.exists())
+
+        replacements = {
+            "write-existing": lambda path: self.filesystem.write(
+                path, "new", hashlib.sha256(b"old").hexdigest()
+            ),
+            "upsert-existing": lambda path: self.filesystem.upsert(path, "new"),
+            "import-existing": lambda path: self.filesystem.import_file(path, source, True),
+        }
+        for name, operation in replacements.items():
+            target = self.root / name
+            target.write_text("old")
+            with (
+                self.subTest(operation=name),
+                patch.object(filesystem_module.os, "fchown", side_effect=PermissionError),
+                self.assertRaises(PermissionError),
+            ):
+                operation(str(target))
+            self.assertEqual(target.read_text(), "old")
 
     def test_patch_execution_failure_reports_completed_operations_and_destination(self) -> None:
         source = self.root / "source"

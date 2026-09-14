@@ -145,6 +145,17 @@ async def test_task_tool_has_bounded_prompt_and_delegates(tmp_path) -> None:
     assert schema["parameters"]["$defs"]["DelegatedTask"]["properties"]["prompt"]["maxLength"] == 8_000
 
 
+async def test_delegated_file_handler_rejects_internal_root_before_permissions(tmp_path) -> None:
+    call = ToolCall("read", "read", {"root": "files", "path": "note.txt"})
+    context = _context(tmp_path, call)
+    context.session.parent_session_id = uuid4()
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata["errorCode"] == "tool.unavailable"
+    context.ask_handler.assert_not_awaited()
+
+
 async def test_bound_tool_defaults_fill_only_fully_omitted_arguments(tmp_path) -> None:
     received = []
 

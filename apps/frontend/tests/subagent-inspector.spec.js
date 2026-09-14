@@ -90,25 +90,27 @@ describe('subagent inspector navigation and presentation', () => {
   })
 
   it('shows expanded shell commands without a repeated field label', async () => {
-    const command = 'sudo -n true\nprintf "done\\n"'
+    const commands = ['printf "first\\n"', 'sudo -n true\nprintf "done\\n"']
     root = document.createElement('div')
     document.body.append(root)
     app = createApp({ render: () => h(AgentActivityPanel, {
-      running: true,
-      activity: { phase: 'processing_tool', toolCallId: 'shell' },
-      history: { entries: [{
-        key: 'shell', type: 'tool',
-        tool: { id: 'shell', name: 'shell.run', arguments: { command }, toolDisplay: { group: 'process', icon: 'terminal', label: 'Shell-Befehl ausführen' } }
-      }] }
+      history: { entries: commands.map((command, index) => ({
+        key: `shell-${index}`, type: 'tool', result: {},
+        tool: { id: `shell-${index}`, name: 'shell.run', arguments: { command }, toolDisplay: { group: 'process', icon: 'terminal', label: 'Shell-Befehl ausführen' } }
+      })) }
     }) })
     app.use(createPinia()).use(Quasar, { components })
     app.mount(root)
 
-    root.querySelector('.activity-row').click()
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    expect([...root.querySelectorAll('.tool-call__summary')].map((node) => node.textContent))
+      .toEqual(commands.map((command) => command.replace(/\s+/g, ' ')))
+    root.querySelectorAll('.activity-row')[1].click()
     await nextTick()
 
     const shell = root.querySelector('.activity-row__shell-command')
-    expect(shell.textContent).toBe(command)
+    expect(shell.textContent).toBe(commands[1])
     expect(root.querySelector('.work-history__reasoning-detail').textContent).not.toContain('Shell-Befehl\n')
   })
 
@@ -193,37 +195,38 @@ describe('subagent inspector navigation and presentation', () => {
     row.click()
     await vi.waitFor(() => expect(store.current?.id).toBe('child'))
     await nextTick()
-    const dialog = document.querySelector('[role="dialog"]')
-    expect(dialog).not.toBeNull()
-    expect(dialog.textContent).toContain('Nur Lesezugriff')
-    expect(dialog.textContent).toContain('Ergebnis lesen')
-    const historyHeader = dialog.querySelector('.work-history__toggle')
+    const inspector = document.querySelector('.subagent-inspector')
+    expect(inspector).not.toBeNull()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(inspector.textContent).toContain('Nur Lesezugriff')
+    expect(inspector.textContent).toContain('Ergebnis lesen')
+    const historyHeader = inspector.querySelector('.work-history__toggle')
     expect(historyHeader).not.toBeNull()
-    expect([...dialog.querySelectorAll('.work-history__agent-header .chat-message__label span')].map((node) => node.textContent))
+    expect([...inspector.querySelectorAll('.work-history__agent-header .chat-message__label span')].map((node) => node.textContent))
       .toEqual(['Subagent', '·', 'Allgemein'])
     expect(historyHeader.closest('.work-history__header-actions').previousElementSibling.classList)
       .toContain('work-history__agent-header')
     historyHeader.click()
     await nextTick()
-    expect(dialog.textContent).toContain('Ich prüfe die Datei.')
-    expect(dialog.textContent).toContain('Datei freigeben')
-    expect(dialog.textContent).toContain('Welche Datei?')
-    expect(dialog.querySelector('.work-history')).not.toBeNull()
-    expect(dialog.querySelector('.approval-card, .question-dock')).toBeNull()
-    expect(dialog.querySelector('textarea, input, [contenteditable="true"]')).toBeNull()
-    expect(dialog.textContent).not.toMatch(/Einmal erlauben|Antworten senden|Ablehnen|Erneut versuchen|Einstellungen/)
-    const olderButton = [...dialog.querySelectorAll('button')].find((button) => button.textContent.includes('Ältere Nachrichten laden'))
+    expect(inspector.textContent).toContain('Ich prüfe die Datei.')
+    expect(inspector.textContent).toContain('Datei freigeben')
+    expect(inspector.textContent).toContain('Welche Datei?')
+    expect(inspector.querySelector('.work-history')).not.toBeNull()
+    expect(inspector.querySelector('.approval-card, .question-dock')).toBeNull()
+    expect(inspector.querySelector('textarea, input, [contenteditable="true"]')).toBeNull()
+    expect(inspector.textContent).not.toMatch(/Einmal erlauben|Antworten senden|Ablehnen|Erneut versuchen|Einstellungen/)
+    const olderButton = [...inspector.querySelectorAll('button')].find((button) => button.textContent.includes('Ältere Nachrichten laden'))
     olderButton.click()
-    await vi.waitFor(() => expect(dialog.textContent).toContain('Alter Auftrag'))
+    await vi.waitFor(() => expect(inspector.textContent).toContain('Alter Auftrag'))
     expect(api.post).not.toHaveBeenCalled()
     expect(api.patch).not.toHaveBeenCalled()
     expect(api.delete).not.toHaveBeenCalled()
-    expect(dialog.querySelector('.chat-message__meta [role="timer"]')).toBeNull()
+    expect(inspector.querySelector('.chat-message__meta [role="timer"]')).toBeNull()
     store.run = { id: 'run', status: 'completed' }
     await nextTick()
-    expect(dialog.querySelector('.chat-message__meta [role="timer"]')).toBeNull()
-    expect(dialog.querySelector('.work-history [role="timer"]').textContent).toContain('57 s')
-    dialog.querySelector('a').click()
+    expect(inspector.querySelector('.chat-message__meta [role="timer"]')).toBeNull()
+    expect(inspector.querySelector('.work-history [role="timer"]').textContent).toContain('57 s')
+    inspector.querySelector('a').click()
     await vi.waitFor(() => expect(router.currentRoute.value.query.subagent).toBeUndefined())
     expect(router.currentRoute.value.query).toEqual({ session: 'parent', project: 'project' })
     expect(document.getElementById('parent-scroll')).toBe(parentScroll)
@@ -300,32 +303,34 @@ describe('subagent inspector navigation and presentation', () => {
     expect(duration.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('hides completed activity entirely when only a duration exists', () => {
+  it('keeps the answer header and duration when no activity entries exist', () => {
     const pinia = createPinia()
     root = document.createElement('div')
     document.body.append(root)
     app = createApp({
       render: () => h(AgentActivityPanel, {
         history: { entries: [], activeDurationMs: 4_000 }
-      })
+      }, { header: () => h('div', 'codemato · Allgemein') })
     })
     app.use(pinia).use(Quasar, { components })
     app.mount(root)
 
-    expect(root.querySelector('.work-history')).toBeNull()
-    expect(root.querySelector('.work-history__toggle')).toBeNull()
-    expect(root.textContent).not.toContain('Verlauf')
-    expect(root.querySelector('[role="timer"]')).toBeNull()
+    expect(root.querySelector('.work-history__agent-header').textContent).toContain('codemato · Allgemein')
+    expect(root.querySelector('.work-history__toggle')).not.toBeNull()
+    expect(root.querySelector('[role="timer"]').textContent).toBe('4 s')
   })
 
   it('shows initial activity beside live duration with a persistent history toggle', async () => {
-    let historyExpanded = null
+    const panelKey = ref('live')
+    const historyExpanded = ref(false)
     root = document.createElement('div')
     document.body.append(root)
     app = createApp({ render: () => h(AgentActivityPanel, {
+      key: panelKey.value,
       history: { entries: [] }, running: true,
       activity: { phase: 'waiting_model', activeDurationMs: 38_000 },
-      onHistoryExpanded: (value) => { historyExpanded = value }
+      expanded: historyExpanded.value,
+      onHistoryExpanded: (value) => { historyExpanded.value = value }
     }) })
     app.use(createPinia()).use(Quasar, { components })
     app.mount(root)
@@ -337,7 +342,10 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.querySelector('.work-history__toggle').getAttribute('aria-expanded')).toBe('false')
     root.querySelector('.work-history__toggle').click()
     await nextTick()
-    expect(historyExpanded).toBe(true)
+    expect(historyExpanded.value).toBe(true)
+    panelKey.value = 'canonical'
+    await nextTick()
+    expect(root.querySelector('.work-history__toggle').getAttribute('aria-expanded')).toBe('true')
   })
 
   it('keeps live status visible while tool messages are being persisted', async () => {

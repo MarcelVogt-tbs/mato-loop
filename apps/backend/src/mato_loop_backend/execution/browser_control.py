@@ -164,9 +164,13 @@ async def capture_control_request(reason: str, context: ToolContext) -> ControlR
         capability="browser.control", integration_id=integration_id,
         binding_revision=context.bound_options["binding_revision"],
         operation_key=hashlib.sha256(json.dumps(operation, sort_keys=True).encode()).hexdigest(),
+        grant_resource_key=(
+            f"browser:{current.browser_id}:attachment:{current.attachment_revision}"
+            if current is not None else f"control:{client.agent_id}:{generation}"
+        ),
         title="Browser-Steuerung erlauben?",
         summary="Der Agent möchte den Browser in diesem Chat öffnen, gegebenenfalls übernehmen und die Modellsteuerung aktivieren.",
-        resource_display=reason, action_kind="browser_control",
+        resource_display="Freigegebener Browser (alle Tabs)", action_kind="browser_control",
     )
     request = ControlRequest(
         info, context.session.user_id, context.bound_options["binding_revision"], generation,

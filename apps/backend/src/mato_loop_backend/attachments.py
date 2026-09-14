@@ -471,13 +471,15 @@ class AttachmentService:
         self.run_id = run_id
 
     def _root_files(self, session_id: UUID, file_root_id: UUID, *, run_id: UUID | None = None) -> RootFileService:
-        project_id = None if file_root_id == session_id else file_root_id
         try:
-            self.sessions.session_path(
-                session_id, project_id=project_id, require_exists=True
-            )
+            session_project_id = self.sessions.session_project_id(session_id)
+            project_id = self.sessions.session_project_id(file_root_id)
+            if file_root_id != session_id and (
+                project_id is None or project_id != session_project_id
+            ):
+                raise SessionStorageError("sessionStorage.sessionNotFound", "Session storage not found")
             service = RootFileService(
-                session_id,
+                file_root_id,
                 project_id=project_id,
                 session_storage=self.sessions,
                 run_id=run_id,
@@ -590,14 +592,26 @@ class AttachmentService:
         )
         if locked_session is None:
             raise AttachmentError("attachment.messageNotFound")
+        root_session = locked_session
+        if file_root_id != locked_session.id:
+            if locked_session.project_id is None:
+                raise AttachmentError("attachment.notFound")
+            root_session = await db.scalar(
+                select(ChatSession).where(
+                    ChatSession.id == file_root_id,
+                    ChatSession.user_id == locked_session.user_id,
+                    ChatSession.project_id == locked_session.project_id,
+                    ChatSession.session_type == "chat",
+                ).with_for_update()
+            )
+            if root_session is None:
+                raise AttachmentError("attachment.notFound")
         root_files = RootFileService(
-            message.session_id,
-            project_id=locked_session.project_id,
+            root_session.id,
+            project_id=root_session.project_id,
             session_storage=self.sessions,
             run_id=self.run_id,
         )
-        if UUID(root_files.root_identity(FileRoot.SESSION)) != file_root_id:
-            raise AttachmentError("attachment.notFound")
         try:
             revision = await asyncio.to_thread(root_files.working_revision, file_path) if file_revision is None else await asyncio.to_thread(
                 root_files.file_revision, file_id, file_revision

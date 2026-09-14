@@ -30,7 +30,9 @@ vi.mock('stores/chat', async () => {
   const chat = reactive({ current: null })
   return { useChatStore: () => chat }
 })
-vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({ byId: () => ({ connected: true }) }) }))
+vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({ byId: () => ({
+  id: 'agent-1', connected: true, homeDirectory: '/home/user', operations: ['filesystem.list', 'filesystem.import']
+}) }) }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   static strings = {}
   constructor() { this.options = {}; this.cols = 80; this.rows = 24 }
@@ -1059,41 +1061,102 @@ it('offers the Browser shortcut in Agent-Coding only for the enabled integration
   expect(browserAction()).toBeUndefined()
 })
 
-it.each([true, false])('uploads files without an agent, with automatic choose=%s', async (chosen) => {
+it('selects files with Space and enters directories with Enter', async () => {
+  Object.assign(browser, { sessionId: 'session-1', integrationId: 'browser-1', browserId: 'runtime-1', viewId, status: 'open', viewStatus: 'open' })
+  await mount(BrowserApp)
+  api.get.mockResolvedValueOnce({ data: { entries: [
+    { kind: 'directory', name: 'Dokumente', path: 'docs' },
+    { kind: 'file', name: 'bericht.txt', path: 'bericht.txt', size: 4 }
+  ] } })
+  await fileAction('Datei hochladen')
+  await vi.waitFor(() => expect(document.body.textContent).toContain('bericht.txt'))
+  const entries = [...document.querySelectorAll('[aria-label="Dateien und Ordner"] [role="button"]')]
+  const directory = entries.find((entry) => entry.textContent.includes('Dokumente'))
+  const file = entries.find((entry) => entry.textContent.includes('bericht.txt'))
+  expect(document.querySelector('[role="listbox"], [role="option"]')).toBeNull()
+  expect(file.tabIndex).toBe(0)
+  file.focus()
+  file.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', keyCode: 32, bubbles: true, cancelable: true }))
+  await nextTick()
+  expect(browser.pickerSelected?.path).toBe('bericht.txt')
+  expect(file.getAttribute('aria-pressed')).toBe('true')
+  api.get.mockResolvedValueOnce({ data: { entries: [] } })
+  directory.focus()
+  directory.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }))
+  await vi.waitFor(() => expect(browser.pickerDirectories.session).toBe('docs'))
+  expect(api.get).toHaveBeenLastCalledWith('/workspace/entries', {
+    params: { scope: 'session', session_id: 'session-1', root_identity: 'session-1', path: 'docs' },
+    signal: expect.any(AbortSignal), suppressErrorToast: true
+  })
+})
+
+it.each([true, false])('imports local files through the workspace and uses the typed source, with automatic choose=%s', async (chosen) => {
   Object.assign(browser, { ...{ sessionId: 'session-1', integrationId: 'browser-1', browserId: 'runtime-1', viewId }, status: 'open', viewStatus: 'open' })
   await mount(BrowserApp, { width: 390 })
   const notify = vi.spyOn(app.config.globalProperties.$q, 'notify').mockImplementation(() => {})
-  expect(root.querySelector('[role="combobox"]')).toBeNull()
+  api.get.mockResolvedValueOnce({ data: { entries: [{ kind: 'file', name: 'vorhanden.txt', path: 'vorhanden.txt', size: 4 }] } })
   await fileAction('Datei hochladen')
   await vi.waitFor(() => expect(document.querySelector('input[type="file"]')).not.toBeNull())
-  expect(document.body.textContent).toContain('Klicke zuerst im entfernten Browser auf das Upload-Feld')
+  await vi.waitFor(() => expect(document.body.textContent).toContain('vorhanden.txt'))
+  expect(document.body.textContent).toContain('Ablage')
+  expect(document.body.textContent).toContain('Computer-Dateien')
   const input = document.querySelector('input[type="file"]')
+  expect(input.getAttribute('aria-label')).toBe('Lokale Datei auswählen')
+  const uploadButton = document.querySelector('[aria-label="Lokale Datei hinzufügen"]')
+  uploadButton.click()
   const file = new File(['content'], 'example.txt')
   Object.defineProperty(input, 'files', { configurable: true, value: [file] })
-  input.dispatchEvent(new Event('change', { bubbles: true }))
-  await nextTick()
+  api.post.mockResolvedValueOnce({ data: { entry: { kind: 'file', name: 'example.txt', path: 'example.txt', size: file.size } } })
   api.post.mockResolvedValueOnce({ data: { uploadId: 'staged-id', chosen } })
-  button('Datei bereitstellen').click()
-  await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(1))
-  expect(api.post.mock.calls[0][1].get('file')).toBe(file)
+  input.dispatchEvent(new Event('change', { bubbles: true }))
+  await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(2))
+  expect(api.post.mock.calls[0][0]).toBe('/workspace/files')
+  expect(api.post.mock.calls[0][1].get('file').name).toBe(file.name)
+  expect(api.post.mock.calls[0][2].params).toEqual({ parent: '.', scope: 'session', session_id: 'session-1' })
+  expect(api.post.mock.calls[1]).toEqual(['/browsers/browser-1/upload-source', {
+    source: { scope: 'session', path: 'example.txt' }
+  }, transferConfig()])
+  expect(api.post.mock.calls.filter(([path, body]) => path === '/browsers/browser-1/upload-source' && body instanceof FormData)).toEqual([])
   if (!chosen) {
     await vi.waitFor(() => expect(button('Datei einsetzen')).toBeDefined())
+    expect(document.activeElement).toBe(uploadButton)
     expect(browser.uploadId).toBe('staged-id')
     expect(document.body.textContent).not.toContain('Upload-ID')
     expect(document.body.textContent).toContain('Datei bereitgestellt, aber noch nicht eingesetzt')
     expect(notify).not.toHaveBeenCalled()
     api.post.mockResolvedValueOnce({ data: { ok: true } })
     button('Datei einsetzen').click()
-    await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(3))
     expect(api.post).toHaveBeenLastCalledWith('/browsers/browser-1/upload/staged-id/choose', null, transferConfig())
   }
   await vi.waitFor(() => expect(notify).toHaveBeenCalledExactlyOnceWith({ type: 'positive', message: 'Datei in das Upload-Feld eingesetzt.' }))
   expect(browser.uploadId).toBeNull()
   await vi.waitFor(() => expect(document.querySelector('input[type="file"]')).toBeNull())
-  await fileAction('Datei hochladen')
-  await vi.waitFor(() => expect(document.querySelector('input[type="file"]')).not.toBeNull())
-  expect(button('Datei bereitstellen').disabled).toBe(true)
-  expect(button('Datei einsetzen')).toBeUndefined()
+})
+
+it('shows saved and failed download statuses and opens the existing computer files app', async () => {
+  Object.assign(browser, { sessionId: 'session-1', integrationId: 'browser-1', browserId: 'runtime-1', viewId, status: 'open', viewStatus: 'open' })
+  await mount(BrowserApp)
+  api.get.mockResolvedValueOnce({ data: { entries: [] } })
+  api.get.mockResolvedValueOnce({ data: { downloads: [
+    { id: 'saved', filename: 'bericht.pdf', size: 12, status: 'saved', path: '/home/user/browser/downloads/bericht.pdf' },
+    { id: 'permission', filename: 'privat.txt', size: 2, status: 'permission_required' },
+    { id: 'failed', filename: 'kaputt.zip', size: 3, status: 'failed' }
+  ] } })
+  await fileAction('Downloads')
+  await vi.waitFor(() => expect(document.body.textContent).toContain('Automatisch gespeichert'))
+  expect(document.body.textContent).toContain('/home/user/browser/downloads/bericht.pdf')
+  expect(document.body.textContent).toContain('Berechtigung zum Speichern erforderlich')
+  expect(document.body.textContent).toContain('Speichern fehlgeschlagen')
+  const center = useControlCenterStore()
+  const setFileView = vi.spyOn(center, 'setFileView').mockResolvedValue()
+  const openApp = vi.spyOn(center, 'openApp').mockResolvedValue()
+  button('Downloads öffnen').click()
+  await vi.waitFor(() => expect(openApp).toHaveBeenCalledWith('computer-files'))
+  expect(setFileView).toHaveBeenCalledWith({
+    scope: 'filesystem', selectedPath: '/home/user/browser/downloads', selectedKind: 'directory', viewedFilePath: null,
+    executionAgentId: 'agent-1', currentDirectory: '/home/user'
+  })
 })
 
 it('opens setup from settings without a chat and starts only after confirmation', async () => {

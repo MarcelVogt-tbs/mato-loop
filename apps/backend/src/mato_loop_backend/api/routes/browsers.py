@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hmac
 import logging
+import os
 from contextlib import suppress
 from typing import Annotated, Literal
 from urllib.parse import quote
@@ -12,16 +13,18 @@ from uuid import UUID
 from anyio import CancelScope
 from fastapi import APIRouter, Depends, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import Field, TypeAdapter, ValidationError
+from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.responses import StreamingResponse
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.browser_integrations import browser_api_error
 from mato_loop_backend.api.routes.terminals import _browser_login, _origin_allowed
+from mato_loop_backend.api.workspace_service import _normalize_agent_path
 from mato_loop_backend.config import get_runtime_config
+from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution.browser_contracts import (
     MAX_BROWSER_FILE_BYTES,
-    BrowserActionResult,
     BrowserClipboard,
     BrowserControlResult,
     BrowserFileArguments,
@@ -47,6 +50,8 @@ from mato_loop_backend.execution.browsers import (
 from mato_loop_backend.execution.client import ExecutionClientError
 from mato_loop_backend.execution.protocol import WireModel
 from mato_loop_backend.integrations.browser import browser_client
+from mato_loop_backend.models import ChatSession
+from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -78,6 +83,15 @@ class BrowserResize(BrowserResizeResult):
 
 class BrowserNavigation(BrowserNavigationArguments):
     type: Literal["navigation"]
+
+
+class BrowserUploadSource(WireModel):
+    scope: Literal["session", "filesystem"]
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class BrowserUploadRequest(WireModel):
+    source: BrowserUploadSource
 
 
 _BROWSER_CONTROL = TypeAdapter(Annotated[BrowserControl | BrowserResize | BrowserNavigation | BrowserTakeover | BrowserRequestedAttachment, Field(discriminator="type")])
@@ -645,71 +659,131 @@ async def browser_downloads(connection: ManualBrowser):
     try:
         async with connection.action_lock:
             await connection.check_manual()
-            result = await connection.request(
-                "integration.browser.execute", {"browserId": str(connection.browser_id), "action": "tabs"}, BrowserActionResult,
-            )
+            await browser_coordinator.poll_downloads(connection)
             await connection.check_manual()
-            return result
+            return {"downloads": connection.downloads}
     except ExecutionClientError as exc:
         raise browser_api_error(exc) from exc
 
 
 @router.post("/browsers/{integration_id}/upload")
-async def browser_upload(connection: ManualBrowser, file: UploadFile):
-    file_id = None
-    completed = False
+async def browser_upload(connection: ManualBrowser, request: Request):
+    file = request if isinstance(request, UploadFile) else None
     try:
-        if file.size is None or not 0 <= file.size <= MAX_BROWSER_FILE_BYTES:
-            raise ExecutionClientError("browser.fileTooLarge")
-        async with connection.action_lock:
-            try:
-                await connection.check_manual()
-                beginning = asyncio.create_task(_file_request(
-                    connection, action="begin", filename=file.filename or "upload", size=file.size,
-                ))
-                try:
-                    result = await asyncio.shield(beginning)
-                except asyncio.CancelledError:
-                    with CancelScope(shield=True), suppress(Exception):
-                        file_id = (await beginning).file_id
-                    raise
-                file_id = result.file_id
-                if result.offset != 0 or result.size != file.size or result.complete:
-                    raise ExecutionClientError("executionAgent.protocolError")
-                offset = 0
-                while chunk := await file.read(65536):
-                    await connection.check_manual()
-                    result = await _file_request(connection, action="write", file_id=file_id, offset=offset,
-                                                 data=base64.b64encode(chunk).decode("ascii"))
-                    offset += len(chunk)
-                    if result.offset != offset or result.size != file.size or result.complete:
-                        raise ExecutionClientError("executionAgent.protocolError")
-                await connection.check_manual()
-                result = await _file_request(connection, action="finish", file_id=file_id)
-                if not result.complete or result.size != file.size or result.offset != file.size:
-                    raise ExecutionClientError("executionAgent.protocolError")
-                completed = True
-                chosen = False
-                try:
-                    await connection.check_manual()
-                    await _file_request(connection, action="choose", file_id=file_id)
-                    chosen = True
-                except ExecutionClientError as exc:
-                    if exc.code != "browser.invalidTarget":
-                        raise
-                await connection.check_manual()
-                return {"uploadId": file_id, "chosen": chosen}
-            finally:
-                if file_id is not None and not completed:
-                    # Dispose only this request's unfinished staging before handing off the lock.
-                    with CancelScope(shield=True), suppress(Exception):
-                        await _file_request(connection, action="delete", file_id=file_id)
+        if file is None and request.headers.get("content-type", "").split(";", 1)[0].strip().lower() == "multipart/form-data":
+            candidate = (await request.form()).get("file")
+            if not isinstance(candidate, StarletteUploadFile):
+                raise ApiError(422, "validation.invalid")
+            file = candidate
+        if file is not None:
+            return await _upload_stream(connection, file, file.filename or "upload", file.size)
+        try:
+            payload = BrowserUploadRequest.model_validate(await request.json())
+        except (ValidationError, ValueError) as exc:
+            raise ApiError(422, "validation.invalid") from exc
+        return await _browser_upload_source(connection, payload)
     except ValidationError as exc:
         raise ApiError(400, "browser.invalidTarget") from exc
     except ExecutionClientError as exc:
         raise browser_api_error(exc) from exc
     finally:
-        await file.close()
+        if file is not None:
+            await file.close()
+
+
+@router.post("/browsers/{integration_id}/upload-source")
+async def browser_upload_source(connection: ManualBrowser, payload: BrowserUploadRequest):
+    try:
+        return await _browser_upload_source(connection, payload)
+    except ValidationError as exc:
+        raise ApiError(400, "browser.invalidTarget") from exc
+    except ExecutionClientError as exc:
+        raise browser_api_error(exc) from exc
+
+
+async def _browser_upload_source(connection: BrowserConnection, payload: BrowserUploadRequest):
+    if payload.source.scope == "filesystem":
+        path = _normalize_agent_path(payload.source.path)
+        async with connection.action_lock:
+            await connection.check_manual()
+            result = await connection.request(
+                "integration.browser.upload",
+                {"browserId": str(connection.browser_id), "path": path},
+                BrowserFileResult,
+            )
+            if not result.complete or result.offset != result.size:
+                raise ExecutionClientError("executionAgent.protocolError")
+            await connection.check_manual()
+            await _file_request(connection, action="choose", file_id=result.file_id)
+            await connection.check_manual()
+        return {"uploadId": result.file_id, "chosen": True, "size": result.size}
+    async with AsyncSessionFactory() as db:
+        session = await db.get(ChatSession, connection.session_id)
+        if session is None or session.user_id != connection.owner_id:
+            raise ExecutionClientError("session.notFound")
+        root_files = RootFileService(session.id, project_id=session.project_id)
+    try:
+        handle = await asyncio.to_thread(root_files.open_file, FileRoot.SESSION, payload.source.path)
+    except RootFileError as exc:
+        raise ApiError(404 if exc.code.endswith("NotFound") else 400, exc.code) from exc
+    with handle:
+        size = os.fstat(handle.fileno()).st_size
+        return await _upload_stream(
+            connection, handle, payload.source.path.rsplit("/", 1)[-1], size,
+        )
+
+
+async def _upload_stream(connection: BrowserConnection, file, filename: str, size: int | None):
+    file_id = None
+    completed = False
+    if size is None or not 0 <= size <= MAX_BROWSER_FILE_BYTES:
+        raise ExecutionClientError("browser.fileTooLarge")
+    async with connection.action_lock:
+        try:
+            await connection.check_manual()
+            beginning = asyncio.create_task(_file_request(
+                connection, action="begin", filename=filename, size=size,
+            ))
+            try:
+                result = await asyncio.shield(beginning)
+            except asyncio.CancelledError:
+                with CancelScope(shield=True), suppress(Exception):
+                    file_id = (await beginning).file_id
+                raise
+            file_id = result.file_id
+            if result.offset != 0 or result.size != size or result.complete:
+                raise ExecutionClientError("executionAgent.protocolError")
+            offset = 0
+            while chunk := (
+                await file.read(65536)
+                if isinstance(file, StarletteUploadFile)
+                else await asyncio.to_thread(file.read, 65536)
+            ):
+                await connection.check_manual()
+                result = await _file_request(connection, action="write", file_id=file_id, offset=offset,
+                                             data=base64.b64encode(chunk).decode("ascii"))
+                offset += len(chunk)
+                if result.offset != offset or result.size != size or result.complete:
+                    raise ExecutionClientError("executionAgent.protocolError")
+            await connection.check_manual()
+            result = await _file_request(connection, action="finish", file_id=file_id)
+            if not result.complete or result.size != size or result.offset != size:
+                raise ExecutionClientError("executionAgent.protocolError")
+            completed = True
+            chosen = False
+            try:
+                await connection.check_manual()
+                await _file_request(connection, action="choose", file_id=file_id)
+                chosen = True
+            except ExecutionClientError as exc:
+                if exc.code != "browser.invalidTarget":
+                    raise
+            await connection.check_manual()
+            return {"uploadId": file_id, "chosen": chosen}
+        finally:
+            if file_id is not None and not completed:
+                with CancelScope(shield=True), suppress(Exception):
+                    await _file_request(connection, action="delete", file_id=file_id)
 
 
 @router.post("/browsers/{integration_id}/upload/{upload_id}/choose")

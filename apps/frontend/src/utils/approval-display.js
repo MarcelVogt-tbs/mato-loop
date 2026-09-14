@@ -134,6 +134,12 @@ export function approvalResource(approval, sessions = []) {
       value: approval?.resourceDisplay || 'Exakt angeforderte Integrationsaktion'
     }
   }
+  if (approval?.resourceType === 'integration_resource') {
+    return {
+      label: 'Integrationsbereich',
+      value: approval?.resourceDisplay || 'Gebundener Integrationsbereich'
+    }
+  }
   if (approval?.resourceType === 'memory_collection') {
     return { label: 'Memory-Sammlung', value: approval?.resourceDisplay || 'Eigene Memories' }
   }
@@ -200,6 +206,21 @@ function sanitize(value, depth, seen, key = '', truncate = true) {
 
 export function permissionGrantDisplay(grant, sessions = []) {
   const resource = approvalResource(grant, sessions)
+  if (['resource.read', 'resource.write'].includes(grant?.capability)) {
+    const includesShell = grant.resourceType === 'execution_directory'
+    const includesChildren = ['execution_directory', 'root_path'].includes(grant.resourceType)
+    const write = grant.capability === 'resource.write'
+    const target = includesShell
+      ? 'Datei- und Shell-Aktionen'
+      : grant.resourceType === 'root_path' ? 'Dateiaktionen' : 'Aktionen'
+    return {
+      label: `Alle passenden ${write ? 'schreibenden' : 'lesenden'} ${target}`,
+      value: includesChildren
+        ? `${resource.value} und Unterordner`
+        : resource.value,
+      icon: write ? 'edit' : 'visibility'
+    }
+  }
   if (grant?.resourceType === 'shell_command') {
     const prefixes = Array.isArray(grant.shellPrefixes)
       ? grant.shellPrefixes

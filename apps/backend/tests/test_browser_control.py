@@ -255,6 +255,17 @@ def test_control_once_proof_is_bound_to_operation(request_case):
     future.cancel()
 
 
+def test_control_session_grant_displays_attachment_wide_scope(request_case):
+    case = request_case
+    future = case.start()
+    request = next(iter(control.browser_control_requests.requests.values()))
+    assert (
+        request.permission.effective_session_grants[0].resource_display
+        == "Freigegebener Browser (alle Tabs)"
+    )
+    future.cancel()
+
+
 @pytest.mark.parametrize("change", ["new-browser", "open-close", "detach", "takeover"])
 def test_approval_cannot_retarget_changed_browser_binding(request_case, change):
     case = request_case
@@ -536,7 +547,9 @@ def test_cancelled_queued_takeover_never_dispatches_control_rpc(request_case, ca
         assert socket.receive_json()["type"] == "error"
     if cancel == "run":
         assert future.result(timeout=3).is_error
-    assert [operation for operation, _ in case.calls] == ["integration.browser.open", "integration.browser.close"]
+    assert [operation for operation, _ in case.calls] == [
+        "integration.browser.open", "integration.browser.control", "integration.browser.close",
+    ]
     assert not case.coordinator.connections
     assert previous.closed and not previous.attached
     old_socket.close.assert_awaited()
@@ -584,7 +597,7 @@ def test_takeover_revalidates_between_fences_before_next_rpc(request_case, cance
     with connect_request(case, info) as socket:
         assert receive_state(socket)["type"] == "error"
     assert future.result(timeout=3).is_error
-    assert [arguments["manual"] for operation, arguments in case.calls if operation == "integration.browser.control"] == [False]
+    assert [arguments["manual"] for operation, arguments in case.calls if operation == "integration.browser.control"] == [True, False]
     assert previous.closed and not previous.attached and not case.coordinator.connections
 
 

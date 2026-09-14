@@ -359,11 +359,19 @@ async def test_auto_concurrent_edit_reauthorizes_outside_workspace(env):
 
 @pytest.mark.parametrize("classification", ["read", "write"])
 async def test_normal_shell_prefix_grants_remain_class_bound_in_shared_shell(env, classification):
-    from mato_loop_backend.agent.permissions import shell_command_scope
-
+    env.native.line = "cat README.md"
+    permission = shell_command_permission(
+        env.agent.id,
+        env.session.current_directory,
+        "cat README.md",
+        env.native.snapshot().inspection,
+    )
+    scope = replace(
+        permission.effective_session_grants[0], access=classification
+    )
     env.grants.append(PermissionGrant(
-        session_id=env.session.id, capability=f"shell.{classification}", resource_type="shell_command",
-        resource_scope=shell_command_scope(env.agent.id, env.session.current_directory, classification, [["cat"]], [], True),
+        session_id=env.session.id, capability=scope.capability,
+        resource_type=scope.resource_type, resource_scope=scope.resource_scope,
     ))
     task = env.start()
     if classification == "read":
@@ -436,7 +444,7 @@ async def test_busy_prompt_wait_is_cancellable_without_isolated_fallback(env):
 @pytest.mark.parametrize("path", ["/usr/bin/python3", "/home/user/project/.env"])
 async def test_shared_shell_keeps_normal_external_and_confidential_path_checks(env, path):
     env.policy = ToolExecutionPolicy.AUTO
-    env.native.targets = [{"path": path, "kind": "path"}]
+    env.native.targets = [{"path": path, "kind": "path", "access": "read"}]
     task = env.start()
     approval = await pending(env)
     assert approval.available_decisions == (
@@ -581,7 +589,7 @@ async def test_shared_allowlist_from_other_class_cannot_authorize_command(env, c
 
 @pytest.mark.parametrize("edited,targets", [
     ("touch changed.txt", []), ("custom-command", []),
-    ("cat .env", [{"path": "/home/user/project/.env", "kind": "input"}]),
+    ("cat .env", [{"path": "/home/user/project/.env", "kind": "input", "access": "read"}]),
 ])
 async def test_edit_refresh_updates_entire_permission_review_together(env, edited, targets):
     task = env.start()
@@ -603,7 +611,7 @@ async def test_edit_refresh_updates_entire_permission_review_together(env, edite
     assert not env.grants and approval.decision == "allow_once"
 
 
-async def test_edited_allow_session_grants_only_actual_class_and_prefix(env):
+async def test_edited_allow_session_grants_only_actual_class_and_area(env):
     task = env.start()
     approval = await pending(env)
     original = approval.payload["initialReviewRevision"]
@@ -615,8 +623,8 @@ async def test_edited_allow_session_grants_only_actual_class_and_prefix(env):
     assert not (await asyncio.wait_for(task, 2)).is_error
     assert len(env.grants) == 1
     grant = env.grants[0]
-    assert grant.capability == "shell.write"
-    assert json.loads(grant.resource_scope)["prefixes"] == [["touch"]]
+    assert grant.capability == "resource.write"
+    assert json.loads(grant.resource_scope)["path"] == env.session.current_directory
     assert grant.agent_profile_id == env.session.agent_profile_id and grant.trust_level == "public"
     assert [args["freeze"] for op, args in env.native.calls if op == "terminal.shared.inspect"] == [False, True]
     assert not (await asyncio.wait_for(env.start("touch next.txt"), 2)).is_error
@@ -628,30 +636,39 @@ async def test_edited_allow_session_grants_only_actual_class_and_prefix(env):
     await read
 
 
-async def test_edit_without_prefix_removes_session_grant_decision(env):
+async def test_edit_without_prefix_keeps_area_session_grant_decision(env):
     task = env.start()
     approval = await pending(env)
     original = approval.payload["initialReviewRevision"]
     env.native.edit("custom-command")
     with pytest.raises(ApprovalDecisionError, match="approval.targetChanged"):
         await decide_agent_action(env.db, approval, "allow_session", expected_revision=original)
-    assert approval.available_decisions == ["allow_once", "deny"]
+    assert approval.available_decisions == ["allow_once", "allow_session", "deny"]
     assert approval.capability == "shell.read" and not approval.payload["shellAnalysisComplete"]
     assert approval.payload["shellPrefixes"] == []
-    with pytest.raises(ApprovalDecisionError, match="approval.decisionUnavailable"):
-        await decide_agent_action(env.db, approval, "allow_session", expected_revision=approval.payload["sharedDraft"]["inspectionRevision"])
-    assert not env.grants and env.native.executions == 0
-    env.native.submitted = True
+    await decide_agent_action(
+        env.db,
+        approval,
+        "allow_session",
+        expected_revision=approval.payload["sharedDraft"]["inspectionRevision"],
+    )
     assert not (await asyncio.wait_for(task, 2)).is_error
-    assert not env.grants and approval.decision == "allow_once"
+    assert env.grants[0].capability == "resource.read"
+    assert approval.decision == "allow_session"
 
 
 async def test_read_grant_cannot_authorize_edit_to_write(env):
-    from mato_loop_backend.agent.permissions import shell_command_scope
-
+    env.native.line = "cat README.md"
+    request = shell_command_permission(
+        env.agent.id,
+        env.session.current_directory,
+        "cat README.md",
+        env.native.snapshot().inspection,
+    )
+    scope = request.effective_session_grants[0]
     env.grants.append(PermissionGrant(
-        session_id=env.session.id, capability="shell.read", resource_type="shell_command",
-        resource_scope=shell_command_scope(env.agent.id, env.session.current_directory, "read", [["cat"]], [], True),
+        session_id=env.session.id, capability=scope.capability,
+        resource_type=scope.resource_type, resource_scope=scope.resource_scope,
     ))
     authorize = env.context.ask_handler
     first = True
@@ -671,7 +688,7 @@ async def test_read_grant_cannot_authorize_edit_to_write(env):
     assert approval.payload["shellPrefixes"] == [["cat"]]
     await decide_agent_action(env.db, approval, "allow_once")
     assert not (await asyncio.wait_for(task, 2)).is_error
-    assert len(env.grants) == 1 and env.grants[0].capability == "shell.read"
+    assert len(env.grants) == 1 and env.grants[0].capability == "resource.read"
     assert [args["freeze"] for op, args in env.native.calls if op == "terminal.shared.inspect"] == [False, True]
 
 
@@ -716,7 +733,7 @@ async def test_native_execute_rechecks_after_approval_without_another_freeze(env
             if change == "cancel":
                 env.native.cancelled = True
             else:
-                env.native.targets = [{"path": "/home/user/project/changed.txt", "kind": "input"}]
+                env.native.targets = [{"path": "/home/user/project/changed.txt", "kind": "input", "access": "read"}]
 
     env.db.commit.side_effect = commit
     await decide_agent_action(env.db, approval, "allow_once")

@@ -271,7 +271,7 @@ def test_mail_search_scopes_preserve_query_arguments(mail_binding) -> None:
     "operation",
     ["mail_update_draft", "mail_delete_draft", "mail_send_draft", "mail_delete_message"],
 )
-def test_mail_mutation_scopes_and_decisions_remain_unchanged(mail_binding, operation) -> None:
+def test_mail_mutations_offer_account_scoped_write_grants(mail_binding, operation) -> None:
     account, context = mail_binding
     tool = next(tool for tool in MAIL_ADAPTER.shared_tools if tool.name == operation)
     scopes = set()
@@ -283,7 +283,9 @@ def test_mail_mutation_scopes_and_decisions_remain_unchanged(mail_binding, opera
             arguments.model_dump_json(exclude={"integration_id"}).encode()
         ).hexdigest()[:24]
         assert json.loads(request.resource_scope)["operationKey"] == f"{operation}:{digest}"
-        assert request.available_decisions == ("allow_once", "deny")
+        assert request.available_decisions == ("allow_once", "allow_session", "deny")
+        assert request.effective_session_grants[0].access == "write"
+        assert request.effective_session_grants[0].resource_type == "integration_resource"
         scopes.add(request.resource_scope)
     assert len(scopes) == 2
 
@@ -322,7 +324,7 @@ def test_mail_config_and_adapter_allow_only_encrypted_transports_and_account_pol
     request = delete_draft.authorization_factory(
         MailTokenArguments(integration_id=account.id, message_token="opaque"), context
     )[0]
-    assert request.available_decisions == ("allow_once", "deny")
+    assert request.available_decisions == ("allow_once", "allow_session", "deny")
 
 
 def test_mail_drafts_allow_missing_recipients_but_sending_does_not() -> None:

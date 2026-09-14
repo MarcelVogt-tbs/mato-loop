@@ -1,3 +1,4 @@
+import hashlib
 import json
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent.context import (
     _SHORTENED_TOOL_OUTPUT,
     MAX_ATTACHMENT_EXCERPT_CHARACTERS,
+    PLAN_PROGRESS_CONTRACT,
     ContextError,
     ContextManager,
     SummaryResult,
@@ -1551,18 +1553,16 @@ def test_general_system_prompt_requires_supported_factual_claims() -> None:
     assert "otherwise omit the claim" in prompt
 
 
-def test_general_system_prompt_adds_todo_workflow_only_when_offered() -> None:
+def test_builtin_plan_uses_host_progress_contract_with_or_without_todo_tool() -> None:
     plan = AgentProfile(id=PLAN_AGENT_PROFILE_ID, name="Plan", instructions="Plan work.")
     offered = general_system_prompt(
         _session(), agent_profile=plan, offered_tool_names=frozenset({"todo_write"})
     )
     unavailable = general_system_prompt(_session(), agent_profile=plan)
 
-    assert "three or more tool-executed steps" in offered
-    assert "update it only when scope changes" in offered
-    assert "For Plan work, keep implementation steps pending" in offered
-    assert "three or more tool-executed steps" not in unavailable
-    assert "For Plan work, keep implementation steps pending" not in unavailable
+    assert PLAN_PROGRESS_CONTRACT in offered
+    assert PLAN_PROGRESS_CONTRACT in unavailable
+    assert "Update only when scope changes" in offered
 
 
 def test_general_system_prompt_keeps_permission_denials_host_scoped() -> None:
@@ -2920,25 +2920,49 @@ def test_task_general_profiles_keep_main_plan_artifact_and_child_permissions() -
     child = general_system_prompt(session, agent_profile=plan, delegated=True)
     work = general_system_prompt(session, agent_profile=build, offered_tool_names=tools)
 
-    assert f"root=files path=plans/{session.id}/plan.md" in main
+    assert main.count(PLAN_PROGRESS_CONTRACT) == 1
+    assert "root=files path=plan.md" in main
     assert "expectedSha256" in main
-    assert "For informational requests, answer directly" in main
-    assert "do not call glob, read, or write_file for the canonical plan" in main
-    assert "Only when the request calls for planning or preparing changes" in main
-    assert "check it with glob before reading it" in main
-    assert "Create a missing plan with write_file" in main
-    assert "Plan workflow:" not in child
-    assert f"root=files path=plans/{session.id}/plan.md" in child
-    assert "not a requirement to create" in child
+    assert "answer informational requests directly" in main
+    assert "Glob before reading because it may not exist" in main
+    assert "create it with write_file" in main
+    assert PLAN_PROGRESS_CONTRACT not in child
+    assert "root=files path=plan.md" not in child
     assert "do not inherit the parent transcript" in child
-    assert "paths/IDs and active skill instructions" in work
-    assert f"root=files path=plans/{session.id}/plan.md" in work
-    assert "asks to implement the current session plan" in work
-    assert "answer inline when that fulfills the request" in work
-    assert "For repository work" in work
-    assert "not required for unrelated tasks" in work
-    for evidence in ("tests for code", "data checks", "source verification", "reconciliation"):
-        assert evidence in work
+    assert "Respond in English" in child
+    assert "Respond in the user's language" not in child
+    assert "complete goal" in work
+    assert "acceptance criteria" in work
+    assert "write each task prompt in English" in work
+    assert "overlapping writes" in work
+    assert work.count(PLAN_PROGRESS_CONTRACT) == 1
+    assert "root=files path=plan.md" in work
+    assert "asked to implement the current session plan" in work
+    assert "Read AGENTS.md before repository work" in work
+    assert "skip unrelated tasks" in work
+    assert "checks actually performed, and remaining gaps" in work
+    assert "Verify code with tests and other claims with suitable evidence" in work
+
+
+def test_host_coding_workflow_applies_to_old_stored_profile_without_replacing_it() -> None:
+    stored = AgentProfile(
+        id=BUILD_AGENT_PROFILE_ID,
+        name="Build",
+        instructions="Keep this exact stored workflow and repeat every check.",
+    )
+
+    prompt = general_system_prompt(_session(), agent_profile=stored)
+
+    assert stored.instructions in prompt
+    assert prompt.index(stored.instructions) < prompt.index(PLAN_PROGRESS_CONTRACT)
+    assert prompt.count(PLAN_PROGRESS_CONTRACT) == 1
+
+
+def test_plan_progress_contract_is_exactly_114_words() -> None:
+    assert len(PLAN_PROGRESS_CONTRACT.split()) == 114
+    assert hashlib.sha256(PLAN_PROGRESS_CONTRACT.encode()).hexdigest() == (
+        "972cd4b1290c02beda4bf391a34a21cb13bf5e92f941777f4c8c34eb19632f7d"
+    )
 
 
 def test_question_contract_allows_follow_up_for_new_required_decisions() -> None:

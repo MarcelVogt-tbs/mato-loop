@@ -8,7 +8,7 @@ import { useControlCenterStore } from 'stores/control-center'
 import { useIntegrationStore } from 'stores/integrations'
 import { useRoute } from 'vue-router'
 
-const { chat, projects, pending, quasar, terminal, workspace } = vi.hoisted(() => {
+const { chat, confirm, projects, pending, quasar, routeUpdate, terminal, workspace } = vi.hoisted(() => {
   const sessions = [
     { id: 'standalone', title: 'Standalone', projectId: null },
     { id: 'project-session', title: 'Project session', projectId: 'a' }
@@ -18,7 +18,12 @@ const { chat, projects, pending, quasar, terminal, workspace } = vi.hoisted(() =
   }]))
   return {
     terminal: { syncContext: vi.fn(), release: vi.fn(), close: vi.fn() },
-    workspace: { hasDirtyEditors: false },
+    workspace: {
+      hasDirtyEditors: false, sessionId: null,
+      fileTabDirty: vi.fn(() => false), discardFileTab: vi.fn()
+    },
+    confirm: vi.fn(),
+    routeUpdate: { callback: null },
     chat: {
       cachedSessions: sessions, sessionLists,
       sessionList: (id) => sessionLists[id ?? 'standalone'],
@@ -35,7 +40,19 @@ vi.mock('quasar', () => ({ useQuasar: () => quasar }))
 vi.mock('vue-router', async () => {
   const { reactive } = await import('vue')
   const route = reactive({ name: 'chat', query: {} })
-  return { useRoute: () => route, useRouter: () => ({ push: vi.fn() }), onBeforeRouteLeave: vi.fn(), onBeforeRouteUpdate: vi.fn() }
+  const router = { push: vi.fn(async (to) => {
+    const next = { name: to.name, query: to.query || {} }
+    if (await routeUpdate.callback?.(next, { name: route.name, query: route.query }) === false) return false
+    route.name = next.name
+    route.query = next.query
+    return true
+  }) }
+  return {
+    useRoute: () => route,
+    useRouter: () => router,
+    onBeforeRouteLeave: vi.fn(),
+    onBeforeRouteUpdate: (callback) => { routeUpdate.callback = callback }
+  }
 })
 vi.mock('stores/chat', async () => {
   const { reactive } = await import('vue')
@@ -51,7 +68,10 @@ vi.mock('stores/in-app-notifications', () => ({ useInAppNotificationStore: () =>
 }) }))
 vi.mock('stores/control-center', async () => {
   const { reactive } = await import('vue')
-  const store = reactive({ sessionId: null, ready: true, open: false, tabs: [], confirmedState: { tabs: [] } })
+  const store = reactive({
+    sessionId: null, ready: true, open: false, tabs: [], fileTabs: [], confirmedState: { tabs: [] },
+    removeFileTabs: vi.fn().mockResolvedValue()
+  })
   return { useControlCenterStore: () => store }
 })
 vi.mock('stores/terminal', () => ({ useTerminalStore: () => terminal }))
@@ -72,7 +92,7 @@ vi.mock('stores/automations', () => ({ useAutomationStore: () => ({}) }))
 vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({ byId: (id) => id === 'agent-1' ? { connected: true, operations: [] } : null }) }))
 vi.mock('stores/workspace', () => ({ useWorkspaceStore: () => workspace }))
 vi.mock('stores/search', () => ({ useSearchStore: () => ({ openDialog: vi.fn() }) }))
-vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: vi.fn() }) }))
+vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 vi.mock('components/AccountDialog.vue', () => ({ default: { render: () => null } }))
 vi.mock('components/SearchDialog.vue', () => ({ default: { render: () => null } }))
@@ -85,11 +105,13 @@ beforeEach(async () => {
   useRoute().name = 'chat'
   useRoute().query = {}
   Object.assign(useBrowserStore(), { sessionId: null, agentId: null, integrationId: null })
-  Object.assign(useControlCenterStore(), { sessionId: null, ready: true, tabs: [], confirmedState: { tabs: [] } })
+  Object.assign(useControlCenterStore(), { sessionId: null, ready: true, tabs: [], fileTabs: [], confirmedState: { tabs: [] } })
   useIntegrationStore().browser.instances = []
   Object.assign(useIntegrationStore(), { browserLoaded: true, catalogLoaded: true, catalogLoadFailed: false })
   useIntegrationStore().adapterAvailable.mockReturnValue(true)
   workspace.hasDirtyEditors = false
+  workspace.sessionId = null
+  workspace.fileTabDirty.mockReturnValue(false)
   vi.useFakeTimers()
   root = document.createElement('div')
   app = createApp(MainLayout)
@@ -236,6 +258,21 @@ it.each([
   dialog.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
   await nextTick()
   expect(chat.moveSession).toHaveBeenCalledExactlyOnceWith(id, destination)
+})
+
+it('moves the current session to another project without guarding its unchanged file root', async () => {
+  useChatStore().current = { id: 'project-session', projectId: 'b' }
+  useRoute().query = { session: 'project-session', project: 'a' }
+  workspace.hasDirtyEditors = true
+  const transfer = { setData: vi.fn() }
+  await drag(source('project-session'), 'dragstart', transfer)
+  await drag(target('b'), 'drop', transfer)
+
+  root.querySelector('[role="dialog"] form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+
+  await vi.waitFor(() => expect(useRoute().query).toEqual({ session: 'project-session', project: 'b' }))
+  expect(confirm).not.toHaveBeenCalled()
+  expect(workspace.hasDirtyEditors).toBe(true)
 })
 
 it.each([['standalone', null], ['project-session', 'a'], [null, 'b']])(

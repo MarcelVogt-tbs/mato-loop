@@ -116,7 +116,7 @@ class MatoLoopAgent:
         self.cache = SessionCache(config.data_dir, config.max_session_cache_bytes)
         self.process = ProcessRunner(config, self.filesystem)
         self.terminal = TerminalManager(config, self.process)
-        self.browser = BrowserManager(config, self.terminal)
+        self.browser = BrowserManager(config, self.terminal, self.filesystem)
         self.shared_terminal = SharedTerminals(self.terminal)
         self.search = FilesystemSearch(self.filesystem)
         self.transfer = transfer_client or TransferClient(
@@ -616,8 +616,13 @@ class MatoLoopAgent:
                     raise
                 except AgentError as exc:
                     code = exc.code
-                    if request.operation in BROWSER_ARGUMENT_MODELS and not code.startswith(
-                        "browser."
+                    if (
+                        request.operation in BROWSER_ARGUMENT_MODELS
+                        and not code.startswith("browser.")
+                        and not (
+                            request.operation == "integration.browser.publish"
+                            and code == "path.exists"
+                        )
                     ):
                         code = (
                             "browser.fileTooLarge"

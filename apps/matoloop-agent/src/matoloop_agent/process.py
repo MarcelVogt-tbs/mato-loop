@@ -1029,16 +1029,18 @@ class ProcessRunner:
             return result()
         source = command.encode("utf-8")
 
-        seen_targets: dict[tuple[str, str], dict] = {}
+        seen_targets: dict[tuple[str, str, str | None], dict] = {}
 
-        def retain(target: dict, kind: str) -> None:
+        def retain(target: dict, kind: str, access: str | None = None) -> None:
             target_kind = target.pop("targetKind", None)
             target["kind"] = (
                 "directory"
                 if target_kind == "directory" and kind not in {"toolchain_metadata", "discard"}
                 else kind
             )
-            key = (target["path"], target["kind"])
+            if access is not None:
+                target["access"] = access
+            key = (target["path"], target["kind"], target.get("access"))
             if key in seen_targets:
                 if "listingFingerprint" in target:
                     previous = seen_targets[key]
@@ -1055,7 +1057,14 @@ class ProcessRunner:
             seen_targets[key] = target
             targets.append(target)
 
-        def add(path: str, kind: str, *, must_exist: bool, literal: bool = True) -> None:
+        def add(
+            path: str,
+            kind: str,
+            *,
+            access: str,
+            must_exist: bool,
+            literal: bool = True,
+        ) -> None:
             nonlocal analysis_complete
             if not literal and any(c in path for c in "$`*?[]{}~"):
                 analysis_complete = False
@@ -1063,13 +1072,13 @@ class ProcessRunner:
                 path = path.rpartition("/")[0]
                 if not path or any(c in path for c in "$`*?[]{}~"):
                     return
-                kind, must_exist = "path", True
+                kind, must_exist = "directory", True
             # Missing literals still carry their absolute path for policy checks. Hard
             # no-follow/access errors must not be mistaken for incomplete analysis.
             target = self.filesystem.resolve_path_target(path, current, must_exist=False)
             if must_exist and "mode" not in target:
                 analysis_complete = False
-            retain(target, kind)
+            retain(target, kind, access)
 
         command_nodes = _nodes(root, "command")
         if len(command_nodes) > 64:
@@ -1140,7 +1149,7 @@ class ProcessRunner:
                 ):
                     command_unit["prefix"] = prefix
                 commands.append(command_unit)
-            units.append((command_unit, words))
+            units.append((command_unit, words, "write" if unit_writes else "read"))
 
         if any(
             _nodes(root, kind)
@@ -1222,7 +1231,7 @@ class ProcessRunner:
             if not writes:
                 if operator in {"<", "<&"} and not descriptor_only:
                     if static:
-                        add(destination, "input", must_exist=True)
+                        add(destination, "input", access="read", must_exist=True)
                     else:
                         analysis_complete = False
                 continue
@@ -1230,11 +1239,11 @@ class ProcessRunner:
             if commands:
                 commands[0]["classification"] = "write"
             if static and not descriptor_only:
-                add(destination, "output", must_exist=False)
+                add(destination, "output", access="write", must_exist=False)
             elif not descriptor_only:
                 analysis_complete = False
 
-        for command_unit, words in units:
+        for command_unit, words, target_access in units:
             tokens = command_unit["tokens"]
             ansi_words = {_node_text(source, word) for word in words if _has_ansi_quoting(word)}
             docker = _docker_command(tokens[1:]) if Path(tokens[0]).name == "docker" else None
@@ -1245,7 +1254,7 @@ class ProcessRunner:
                 payload = _docker_exec_payload(remaining, compose=semantic[1] == "compose")
                 if payload is not None:
                     for path in payload[1]:
-                        add(path, "input", must_exist=True)
+                        add(path, "input", access="read", must_exist=True)
                     tokens = tokens[: len(tokens) - len(remaining)]
             metadata_paths = set()
             installed_ls = (
@@ -1290,9 +1299,9 @@ class ProcessRunner:
                         and any(fnmatch.fnmatchcase(dot, basename) for dot in (".", ".."))
                     ):
                         analysis_complete = False
-                        add(directory, "path", must_exist=True)
+                        add(directory, "path", access="read", must_exist=True)
                         if fnmatch.fnmatchcase("..", basename):
-                            add(directory + "/..", "path", must_exist=True)
+                            add(directory + "/..", "path", access="read", must_exist=True)
                         continue
                     for target in self.filesystem.inspect_toolchain_directory(
                         directory,
@@ -1307,7 +1316,8 @@ class ProcessRunner:
                     ):
                         if "mode" not in target:
                             analysis_complete = False
-                        retain(target, target.pop("kind", "toolchain_metadata"))
+                        kind = target.pop("kind", "toolchain_metadata")
+                        retain(target, kind, "read" if kind != "toolchain_metadata" else None)
                     metadata_paths.add(path)
                 if metadata_paths:
                     retain(
@@ -1318,21 +1328,32 @@ class ProcessRunner:
                     )
                     if installed_ls == "/bin/ls":
                         for target in self.filesystem.inspect_toolchain_directory("/bin", "ls"):
-                            retain(target, target.pop("kind", "toolchain_metadata"))
+                            kind = target.pop("kind", "toolchain_metadata")
+                            retain(target, kind, "read" if kind != "toolchain_metadata" else None)
             if "/" in tokens[0] and not (
                 metadata_paths and tokens[0] in {"/usr/bin/ls", "/bin/ls"}
             ):
                 if tokens[0] in ansi_words:
                     unsupported_target_quoting = True
                 else:
-                    add(tokens[0], "executable", must_exist=True)
+                    add(tokens[0], "executable", access="read", must_exist=True)
             for path, kind, must_exist in _path_operands(tokens):
                 if path in metadata_paths:
                     continue
                 if path in ansi_words:
                     unsupported_target_quoting = True
                     continue
-                add(path, kind, must_exist=must_exist, literal=path in literal_paths)
+                add(
+                    path,
+                    kind,
+                    access=(
+                        "read"
+                        if kind in {"input", "source", "script", "executable"}
+                        else target_access
+                    ),
+                    must_exist=must_exist,
+                    literal=path in literal_paths,
+                )
             for token in tokens[1:]:
                 if token in ansi_words:
                     if "/" in token:
@@ -1346,7 +1367,13 @@ class ProcessRunner:
                     or not token.startswith(("/", "./", "../"))
                 ):
                     continue
-                add(token, "path", must_exist=False, literal=token in literal_paths)
+                add(
+                    token,
+                    "path",
+                    access=target_access,
+                    must_exist=False,
+                    literal=token in literal_paths,
+                )
 
         return result()
 

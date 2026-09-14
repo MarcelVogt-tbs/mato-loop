@@ -22,6 +22,8 @@ from mato_loop_backend.models import (
     Automation,
     AutomationRun,
     ChatSession,
+    Message,
+    MessageAttachment,
     Project,
     ProjectPlanExecution,
     UserAccount,
@@ -127,6 +129,25 @@ def _project_session_ids(project_id: UUID, user_id: UUID):
         ChatSession.project_id == project_id,
         ChatSession.user_id == user_id,
         ChatSession.parent_session_id.is_(None),
+    )
+
+
+async def _external_file_reference_count(
+    db: AsyncSession, session_ids: list[UUID]
+) -> int:
+    if not session_ids:
+        return 0
+    return int(
+        await db.scalar(
+            select(func.count())
+            .select_from(MessageAttachment)
+            .join(Message, Message.id == MessageAttachment.message_id)
+            .where(
+                MessageAttachment.file_root_id.in_(session_ids),
+                Message.session_id.not_in(session_ids),
+            )
+        )
+        or 0
     )
 
 
@@ -255,6 +276,16 @@ async def project_delete_impact(
     session_ids = list(
         (await db.scalars(_project_session_ids(project_db_id, owner_id))).all()
     )
+    storage_session_ids = list(
+        (
+            await db.scalars(
+                select(ChatSession.id).where(
+                    ChatSession.project_id == project_db_id,
+                    ChatSession.user_id == owner_id,
+                )
+            )
+        ).all()
+    )
     linked = await _linked_automations(db, project_db_id, owner_id)
     sorted_session_ids = sorted(session_ids)
     return {
@@ -263,6 +294,9 @@ async def project_delete_impact(
         "automationCount": len(linked),
         "requiredAutomationCount": sum(
             item.output_session_required for item in linked
+        ),
+        "fileReferenceCount": await _external_file_reference_count(
+            db, storage_session_ids
         ),
         "automationImpact": project_delete_impact_token(session_ids, linked),
     }
@@ -376,8 +410,24 @@ async def delete_project(
         if automation_mode == "deleteAutomations":
             deletion_roots.extend(item.execution_session_id for item in linked_automations)
         descendants = await descendant_sessions(db, deletion_roots)
+        storage_session_ids = [
+            *deletion_roots,
+            *(child_id for child_id, _ in descendants),
+        ]
+        await db.execute(
+            select(ChatSession.id)
+            .where(ChatSession.id.in_(storage_session_ids))
+            .with_for_update()
+        )
+        reference_count = await _external_file_reference_count(db, storage_session_ids)
+        if reference_count:
+            raise ApiError(
+                409,
+                "session.filesReferenced",
+                params={"referenceCount": reference_count},
+            )
         late_run_ids = await active_run_ids(
-            [*deletion_roots, *(child_id for child_id, _ in descendants)], automation_ids
+            storage_session_ids, automation_ids
         )
         coding_execution_id = await db.scalar(
             select(ProjectPlanExecution.id)

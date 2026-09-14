@@ -477,7 +477,7 @@
               rounded
               class="app-surface-tonal q-mt-md"
             >
-              Verweise auf gemeinsame Projektdateien in dieser Session werden entfernt.
+              Die Dateien bleiben dieser Session zugeordnet. Dateiverweise zwischen Sessions verhindern das Verschieben aus dem Projekt.
             </q-banner>
             <q-banner
               v-if="!moveSourceProjectId && moveProjectId"
@@ -485,7 +485,7 @@
               rounded
               class="app-surface-tonal q-mt-md"
             >
-              Die Dateien der Session werden zu gemeinsamen Projektdateien. Sie bleiben im Projekt, wenn die Session später wieder verschoben wird.
+              Die Dateien werden mit der Session in das Projekt verschoben und bleiben ihr zugeordnet.
             </q-banner>
           </q-card-section>
           <q-card-actions align="right" class="q-pa-md q-pt-none">
@@ -777,8 +777,15 @@ async function deleteProject(project) {
     notifyError(error)
     return
   }
+  if (impact.fileReferenceCount) {
+    $q.notify({
+      type: 'negative',
+      message: `${impact.fileReferenceCount} Dateireferenz${impact.fileReferenceCount === 1 ? '' : 'en'} ${impact.fileReferenceCount === 1 ? 'verhindert' : 'verhindern'} das Löschen dieses Projekts.`
+    })
+    return
+  }
   const accepted = await confirm(
-    `Projekt „${project.name}“ mit ${impact.sessionCount} ${impact.sessionCount === 1 ? 'Session' : 'Sessions'} sowie allen gemeinsamen Projektdateien und deren Versionen dauerhaft löschen?`,
+    `Projekt „${project.name}“ mit ${impact.sessionCount} ${impact.sessionCount === 1 ? 'Session' : 'Sessions'} sowie allen zugehörigen Dateien und Versionen dauerhaft löschen?`,
     'Projekt löschen?',
     { okLabel: 'Löschen', okColor: 'negative' }
   )
@@ -803,12 +810,11 @@ async function deleteProject(project) {
     if (!automationsAccepted) return
     automationMode = 'unlink'
   }
-  const workspaceEdit = selectedProjectId.value === project.id && workspace.hasDirtyEditors
-    ? {
-        sessionId: workspace.sessionId
-      }
-    : null
-  if (workspaceEdit && !await confirmDiscardedEdit({ discard: false })) return
+  const affectedTabs = controlCenter.fileTabs.filter((tab) => (
+    tab.fileTarget.scope === 'session' && impact.sessionIds.includes(tab.fileTarget.rootIdentity)
+  ))
+  const dirtyAffectedTabs = affectedTabs.filter((tab) => workspace.fileTabDirty(tab.tabId))
+  if (dirtyAffectedTabs.length && !await confirmDiscardedEdit({ discard: false })) return
   let outboxDeletion
   try {
     outboxDeletion = await chat.prepareProjectOutboxDeletion(project.id, impact.sessionIds)
@@ -825,11 +831,7 @@ async function deleteProject(project) {
     await chat.restoreProjectOutboxDeletion(outboxDeletion)
     return
   }
-  if (
-    selectedProjectId.value === project.id
-    && workspaceEdit
-    && workspace.sessionId === workspaceEdit.sessionId
-  ) workspace.discardAllEdits()
+  affectedTabs.forEach((tab) => workspace.discardFileTab(tab.tabId))
   delete expandedProjects[project.id]
   if (selectedProjectId.value === project.id) {
     try {
@@ -904,10 +906,23 @@ async function moveSession() {
   if (!moveSessionId.value || moveProjectId.value === moveSourceProjectId.value) return
   const sessionId = moveSessionId.value
   const targetProjectId = moveProjectId.value || null
-  if (route.query.session === sessionId && !await confirmDiscardedEdit()) return
+  const affectedTabs = controlCenter.fileTabs.filter((tab) => (
+    tab.fileTarget.scope === 'session'
+    && (workspace.sessionId === sessionId
+      ? tab.fileTarget.rootIdentity !== sessionId
+      : tab.fileTarget.rootIdentity === sessionId)
+  ))
+  if (
+    affectedTabs.some((tab) => workspace.fileTabDirty(tab.tabId))
+    && !await confirmDiscardedEdit({ discard: false })
+  ) return
   movingSession.value = true
   try {
     await chat.moveSession(sessionId, targetProjectId)
+    if (affectedTabs.length) {
+      affectedTabs.forEach((tab) => workspace.discardFileTab(tab.tabId))
+      void controlCenter.removeFileTabs(affectedTabs.map((tab) => tab.tabId)).catch(() => {})
+    }
     moveDialogOpen.value = false
     $q.notify({ type: 'positive', message: 'Session verschoben.' })
     if (route.query.session === sessionId) {
@@ -1104,6 +1119,13 @@ async function removeSession(session) {
     notifyError(error)
     return
   }
+  if (impact.fileReferenceCount) {
+    $q.notify({
+      type: 'negative',
+      message: `${impact.fileReferenceCount} Dateireferenz${impact.fileReferenceCount === 1 ? '' : 'en'} ${impact.fileReferenceCount === 1 ? 'verhindert' : 'verhindern'} das Löschen dieser Session.`
+    })
+    return
+  }
   let automationMode = null
   if (impact.requiredAutomationCount) {
     const count = impact.automationCount
@@ -1124,7 +1146,13 @@ async function removeSession(session) {
     if (!accepted) return
     automationMode = 'unlink'
   }
-  if (workspace.sessionId === id && !await confirmDiscardedEdit({ discard: false })) return
+  const affectedTabs = controlCenter.fileTabs.filter((tab) => (
+    tab.fileTarget.scope === 'session' && tab.fileTarget.rootIdentity === id
+  ))
+  if (
+    affectedTabs.some((tab) => workspace.fileTabDirty(tab.tabId))
+    && !await confirmDiscardedEdit({ discard: false })
+  ) return
   try {
     await chat.deleteSession(id, {
       automationMode,
@@ -1134,7 +1162,10 @@ async function removeSession(session) {
   } catch {
     return
   }
-  if (workspace.sessionId === id) workspace.discardAllEdits()
+  if (workspace.sessionId !== id && affectedTabs.length) {
+    void controlCenter.removeFileTabs(affectedTabs.map((tab) => tab.tabId)).catch(() => {})
+  }
+  affectedTabs.forEach((tab) => workspace.discardFileTab(tab.tabId))
   if (automationMode) void automations.fetchAutomations().catch(() => {})
   if (route.query.session === id) {
     await router.push({ name: 'chat', query: chatQuery(null, sourceProjectId) })
@@ -1241,7 +1272,14 @@ watch(
 onBeforeRouteUpdate((to, from) => {
   if (to.name === 'chat' && from.name === 'chat'
     && to.query.session === from.query.session
-    && to.query.subagent !== from.query.subagent) return true
+    && (to.query.subagent !== from.query.subagent
+      || (to.query.project !== from.query.project
+        && to.query.session === chat.current?.id
+        && !controlCenter.fileTabs.some((tab) => (
+          tab.fileTarget.scope === 'session'
+          && tab.fileTarget.rootIdentity !== chat.current?.id
+          && workspace.fileTabDirty(tab.tabId)
+        ))))) return true
   return confirmDiscardedEdit()
 })
 onBeforeRouteLeave(confirmDiscardedEdit)

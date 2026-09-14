@@ -13,16 +13,12 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     and_,
-    case,
-    cast,
     delete,
     func,
     or_,
     select,
     tuple_,
-    update,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
@@ -63,8 +59,6 @@ from mato_loop_backend.settings import (
     DEFAULT_AGENT_PROFILE_ID,
     AgentProfileUnavailable,
     AiSettings,
-    InstanceLimits,
-    SettingsStore,
     effective_model_trust,
     load_agent_profile,
     load_effective_ai,
@@ -73,7 +67,6 @@ from mato_loop_backend.settings.models import ModelAvailability, ModelCapability
 from mato_loop_backend.workspace import RootFileError, RootFileService
 
 from .cleanup import descendant_sessions
-from .serialization import rebind_session_file_metadata
 
 logger = logging.getLogger(__name__)
 VISIBLE_MESSAGE_ROLES = ("user", "assistant")
@@ -1018,7 +1011,7 @@ async def create_session(
             content,
             run_id=payload.run_id,
             attachments=attachments,
-            active_file=active_file_payload(payload.active_file, item),
+            active_file=await active_file_payload(payload.active_file, item, db),
         )
     except (OSError, SessionStorageError) as exc:
         await db.rollback()
@@ -1062,7 +1055,9 @@ async def create_session(
     }
 
 
-def active_file_payload(active_file, session: ChatSession) -> dict[str, Any] | None:
+async def active_file_payload(
+    active_file, session: ChatSession, db: AsyncSession
+) -> dict[str, Any] | None:
     if active_file is None:
         return None
     if active_file.root == "session":
@@ -1071,10 +1066,21 @@ def active_file_payload(active_file, session: ChatSession) -> dict[str, Any] | N
             path = RootFileService(UUID(int=0)).normalize_relative_path(active_file.path)
         except (RootFileError, TypeError, ValueError) as exc:
             raise SessionServiceError(422, "validation.invalid", field="activeFile") from exc
-        if (
-            str(identity) != active_file.root_identity
-            or identity != (session.project_id or session.id)
-            or path == "."
+        if str(identity) != active_file.root_identity or path == ".":
+            raise SessionServiceError(422, "validation.invalid", field="activeFile")
+        if identity != session.id and (
+            session.project_id is None
+            or await db.scalar(
+                select(ChatSession.id)
+                .where(
+                    ChatSession.id == identity,
+                    ChatSession.user_id == session.user_id,
+                    ChatSession.project_id == session.project_id,
+                    ChatSession.session_type == "chat",
+                )
+                .with_for_update()
+            )
+            is None
         ):
             raise SessionServiceError(422, "validation.invalid", field="activeFile")
     else:
@@ -1144,7 +1150,7 @@ async def send_message(
             content,
             run_id=payload.run_id,
             attachments=attachments,
-            active_file=active_file_payload(payload.active_file, item),
+            active_file=await active_file_payload(payload.active_file, item, db),
         )
     except AgentRunError as exc:
         raise SessionServiceError(409, exc.code, params=exc.params) from exc
@@ -1222,6 +1228,8 @@ async def update_session(
         )
         if project is None:
             raise SessionServiceError(404, "project.notFound", field="projectId")
+    if target_project_id != source_project_id:
+        await _ensure_session_move_has_no_external_file_references(db, session_id)
     if target_project_id != source_project_id:
         for grant in list(
             (
@@ -1384,18 +1392,13 @@ async def update_session(
     commit_task: asyncio.Task[None] | None = None
     try:
         if target_project_id != source_project_id:
-            quota_bytes = None
-            if source_project_id is None and target_project_id is not None:
-                quota_bytes = (
-                    await SettingsStore.load(db, InstanceLimits)
-                ).session_quota_bytes
             stage_task = asyncio.create_task(
                 asyncio.to_thread(
                     storage.stage_session_move,
                     item.id,
                     source_project_id,
                     target_project_id,
-                    quota_bytes=quota_bytes,
+                    quota_bytes=None,
                 )
             )
             try:
@@ -1404,52 +1407,6 @@ async def update_session(
                 move_receipt = await stage_task
                 raise
             item.project_id = target_project_id
-            if source_project_id is None and target_project_id is not None:
-                await db.execute(
-                    update(MessageAttachment)
-                    .where(
-                        MessageAttachment.file_root_id == item.id,
-                        MessageAttachment.message_id.in_(
-                            select(Message.id).where(Message.session_id == item.id)
-                        ),
-                    )
-                    .values(
-                        file_root_id=target_project_id,
-                        metadata_json=case(
-                            (
-                                MessageAttachment.metadata_json[
-                                    "companionFileRootId"
-                                ].as_string()
-                                == str(item.id),
-                                MessageAttachment.metadata_json.op("||")(
-                                    cast(
-                                        {
-                                            "companionFileRootId": str(
-                                                target_project_id
-                                            )
-                                        },
-                                        JSONB,
-                                    )
-                                ),
-                            ),
-                            else_=MessageAttachment.metadata_json,
-                        ),
-                    )
-                )
-            source_identity = source_project_id or item.id
-            stored_messages = list(
-                (
-                    await db.scalars(
-                        select(Message).where(Message.session_id == item.id)
-                    )
-                ).all()
-            )
-            rebind_session_file_metadata(
-                item,
-                stored_messages,
-                source_identity,
-                target_project_id if source_project_id is None else None,
-            )
         await db.flush()
         await db.refresh(item)
         commit_task = asyncio.create_task(db.commit())
@@ -1512,7 +1469,75 @@ async def session_delete_impact(
         "automationCount": len(linked),
         "requiredAutomationCount": sum(item.output_session_required for item in linked),
         "automationImpact": automation_impact_token(linked),
+        "fileReferenceCount": await _external_file_reference_count_for_roots(
+            db,
+            [
+                session_id,
+                *(child_id for child_id, _ in await descendant_sessions(db, [session_id])),
+            ],
+        ),
     }
+
+
+async def _external_file_reference_count(
+    db: AsyncSession, session_id: UUID
+) -> int:
+    return await _external_file_reference_count_for_roots(db, [session_id])
+
+
+async def _external_file_reference_count_for_roots(
+    db: AsyncSession, session_ids: list[UUID]
+) -> int:
+    return int(
+        await db.scalar(
+            select(func.count())
+            .select_from(MessageAttachment)
+            .join(Message, Message.id == MessageAttachment.message_id)
+            .where(
+                MessageAttachment.file_root_id.in_(session_ids),
+                Message.session_id.not_in(session_ids),
+            )
+        )
+        or 0
+    )
+
+
+async def _ensure_files_not_referenced(db: AsyncSession, session_id: UUID) -> None:
+    count = await _external_file_reference_count(db, session_id)
+    if count:
+        raise SessionServiceError(
+            409, "session.filesReferenced", params={"referenceCount": count}
+        )
+
+
+async def _ensure_session_move_has_no_external_file_references(
+    db: AsyncSession, session_id: UUID
+) -> None:
+    count = int(
+        await db.scalar(
+            select(func.count())
+            .select_from(MessageAttachment)
+            .join(Message, Message.id == MessageAttachment.message_id)
+            .where(
+                or_(
+                    and_(
+                        MessageAttachment.file_root_id == session_id,
+                        Message.session_id != session_id,
+                    ),
+                    and_(
+                        Message.session_id == session_id,
+                        MessageAttachment.file_root_id.is_not(None),
+                        MessageAttachment.file_root_id != session_id,
+                    ),
+                )
+            )
+        )
+        or 0
+    )
+    if count:
+        raise SessionServiceError(
+            409, "session.filesReferenced", params={"referenceCount": count}
+        )
 
 
 async def delete_session(
@@ -1536,6 +1561,16 @@ async def delete_session(
         raise SessionServiceError(404, "session.notFound")
     if item.parent_session_id is not None:
         raise SessionServiceError(403, "session.readOnly")
+    initial_descendants = await descendant_sessions(db, [session_id])
+    initial_reference_count = await _external_file_reference_count_for_roots(
+        db, [session_id, *(child_id for child_id, _ in initial_descendants)]
+    )
+    if initial_reference_count:
+        raise SessionServiceError(
+            409,
+            "session.filesReferenced",
+            params={"referenceCount": initial_reference_count},
+        )
     linked_automations = list(
         (
             await db.scalars(
@@ -1708,9 +1743,24 @@ async def delete_session(
     storage_sessions.extend(
         await descendant_sessions(db, [storage_id for storage_id, _ in storage_sessions])
     )
+    storage_session_ids = [storage_id for storage_id, _ in storage_sessions]
+    await db.execute(
+        select(ChatSession.id)
+        .where(ChatSession.id.in_(storage_session_ids))
+        .with_for_update()
+    )
+    reference_count = await _external_file_reference_count_for_roots(
+        db, storage_session_ids
+    )
+    if reference_count:
+        raise SessionServiceError(
+            409,
+            "session.filesReferenced",
+            params={"referenceCount": reference_count},
+        )
     if (await db.scalars(
         select(AgentRun.id).where(
-            AgentRun.session_id.in_([storage_id for storage_id, _ in storage_sessions]),
+            AgentRun.session_id.in_(storage_session_ids),
             AgentRun.status.in_(ACTIVE_RUN_STATUSES),
         ).limit(1)
     )).all():

@@ -261,7 +261,7 @@ async def get_workspace_usage(
     except RootFileError as exc:
         raise _context_error(exc) from exc
     return WorkspaceUsageResponse(
-        scope="project" if context.root_files.project_id is not None else "session",
+        scope="session",
         used_bytes=used_bytes,
         quota_bytes=context.root_files.SESSION_QUOTA_BYTES,
     )

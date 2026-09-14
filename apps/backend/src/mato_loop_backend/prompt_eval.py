@@ -804,8 +804,8 @@ CASES = (
         id="codebase_investigation_uses_delegated_task",
         kind="general",
         user=(
-            "Untersuche die Codebasis: Wo werden Agent-Runs persistiert und welche Stellen prüfen "
-            "Dateisystem-Berechtigungen? Berichte nur deine Fundstellen."
+            "Untersuche zwei unabhängige Bereiche der Codebasis parallel: Wo werden Agent-Runs "
+            "persistiert, und welche Stellen prüfen Dateisystem-Berechtigungen? Berichte nur Fundstellen."
         ),
         tools=("task", "read", "glob", "grep"),
         working_directory="/data/home/project",

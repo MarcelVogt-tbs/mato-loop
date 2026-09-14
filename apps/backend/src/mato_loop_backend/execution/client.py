@@ -215,6 +215,7 @@ class ShellTarget(ExecutionResult):
         "toolchain_metadata", "discard",
         "path",
     ]
+    access: Literal["read", "write"] | None = None
 
     _validate_path = field_validator("path")(_absolute_path)
 
@@ -228,6 +229,15 @@ class ShellTarget(ExecutionResult):
             }
             if self.path not in directories and str(PurePosixPath(self.path).parent) not in directories:
                 raise ValueError("invalid shell toolchain metadata target")
+        if self.kind in {"toolchain_metadata", "discard"} and self.access is not None:
+            raise ValueError("invalid shell special target access")
+        if self.kind in {"input", "source", "script", "executable"} and self.access not in {
+            None,
+            "read",
+        }:
+            raise ValueError("invalid shell read target access")
+        if self.kind == "output" and self.access not in {None, "write"}:
+            raise ValueError("invalid shell output target access")
         return self
 
 
@@ -268,7 +278,10 @@ class ShellInspectResult(ExecutionResult):
     def validate_classification(self) -> Self:
         if self.read_only != (self.classification == "read") or (
             self.classification == "read"
-            and any(command.classification == "write" for command in self.commands)
+            and (
+                any(command.classification == "write" for command in self.commands)
+                or any(target.access == "write" for target in self.targets)
+            )
         ):
             raise ValueError("inconsistent shell classification")
         return self
@@ -329,6 +342,7 @@ _REMOTE_ERROR_CODES = {
     "browser.profileOwnerMismatch": "browser.profileOwnerMismatch",
     "browser.profileInUse": "browser.profileInUse",
     "browser.outcomeUnknown": "browser.outcomeUnknown",
+    "browser.downloadPermissionRequired": "browser.downloadPermissionRequired",
     "file.changed": "file.changed",
     "file.editTextNotFound": "file.editTextNotFound",
     "file.editTextNotUnique": "file.editTextNotUnique",

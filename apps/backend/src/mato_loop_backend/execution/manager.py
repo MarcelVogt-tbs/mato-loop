@@ -61,6 +61,7 @@ def disconnect_error_code(operation: str, dispatched: bool) -> str:
         "integration.browser.setupwrite", "integration.browser.open",
         "integration.browser.close", "integration.browser.reset",
         "integration.browser.file", "integration.browser.navigation",
+        "integration.browser.files", "integration.browser.publish", "integration.browser.upload",
     }:
         return "browser.outcomeUnknown"
     if operation in _MUTATING_FILESYSTEM_OPERATIONS:

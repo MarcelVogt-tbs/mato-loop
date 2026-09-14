@@ -12,7 +12,11 @@ from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionPolicy,
     PermissionRequest,
+    SessionGrantScope,
     execution_directory_permission,
+    execution_directory_scope,
+    session_grant_matches_request,
+    shell_command_permission,
     shell_command_scope,
     shell_prefix_allowed,
 )
@@ -38,7 +42,11 @@ from mato_loop_backend.execution import (
 from mato_loop_backend.execution import (
     transfers as transfers_module,
 )
-from mato_loop_backend.execution.client import WorkspaceExportResult, WorkspaceStatResult
+from mato_loop_backend.execution.client import (
+    WorkspaceExportResult,
+    WorkspaceListResult,
+    WorkspaceStatResult,
+)
 from mato_loop_backend.execution.protocol import ResponseMessage
 from mato_loop_backend.execution.terminals import terminal_coordinator
 from mato_loop_backend.execution.transfers import (
@@ -304,9 +312,12 @@ async def test_workspace_read_dispatches_absolute_filesystem_path(tmp_path) -> N
     )
     client = FakeExecutionClient(
         {
-            "filesystem.stat": lambda arguments: type(
-                "Stat", (), {"kind": "file"}
-            )(),
+            "filesystem.stat": WorkspaceStatResult(
+                path="/home/user/project/README.md",
+                kind="file",
+                size=5,
+                modified_at=0.0,
+            ),
             "filesystem.read": WorkspaceReadResult(
                 content="hello",
                 lines_read=1,
@@ -324,6 +335,39 @@ async def test_workspace_read_dispatches_absolute_filesystem_path(tmp_path) -> N
     assert client.requests[0] == (
         "filesystem.stat",
         {"path": "/home/user/project/README.md"},
+    )
+
+
+async def test_workspace_directory_read_grants_only_that_directory(tmp_path) -> None:
+    call = ToolCall(
+        "call",
+        "read",
+        {"root": "workspace", "path": "/etc", "offset": 1, "limit": 20},
+    )
+    client = FakeExecutionClient(
+        {
+            "filesystem.stat": WorkspaceStatResult(
+                path="/etc", kind="directory", size=None, modified_at=0.0
+            ),
+            "filesystem.list": WorkspaceListResult(
+                entries=[], has_more=False, next_offset=None
+            ),
+        },
+        {"filesystem.stat", "filesystem.list"},
+    )
+    context = _context(tmp_path, call, client)
+
+    result = await _tools(client.operations).execute(call, context)
+
+    assert not result.is_error
+    request = context.ask_handler.await_args.args[0]
+    assert request.effective_session_grants == (
+        SessionGrantScope(
+            "read",
+            "execution_directory",
+            execution_directory_scope(client.agent_id, "/etc"),
+            "/etc",
+        ),
     )
 
 
@@ -481,6 +525,7 @@ async def test_execution_error_params_are_validated_before_tool_serialization(tm
 def _shell_permission(
     client, classification="write", prefixes=None, directory=None, paths=None, analysis_complete=True
 ):
+    grant_paths = paths or [directory or client.current_directory]
     return PermissionRequest(
         capability=f"shell.{classification}",
         resource_type="shell_command",
@@ -496,10 +541,19 @@ def _shell_permission(
         risk_level="high",
         title="Shell-Befehl ausführen?",
         summary="Test",
+        session_grants=tuple(
+            SessionGrantScope(
+                classification,
+                "execution_directory",
+                execution_directory_scope(client.agent_id, path),
+                path,
+            )
+            for path in grant_paths
+        ),
     )
 
 
-def test_shell_grant_matches_prefix_class_agent_and_directory(tmp_path) -> None:
+def test_shell_grant_matches_access_class_agent_and_directory(tmp_path) -> None:
     client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
     context = _context(tmp_path, ToolCall("shell", "shell_run", {}), client)
     granted = _shell_permission(client, prefixes=[["git", "status"]])
@@ -508,16 +562,105 @@ def test_shell_grant_matches_prefix_class_agent_and_directory(tmp_path) -> None:
     wrong_directory = _shell_permission(
         client, prefixes=[["git", "status"]], directory="/home/user/other"
     )
+    scope = granted.effective_session_grants[0]
     grant = PermissionGrant(
         session_id=context.session.id,
-        capability=granted.capability,
-        resource_type=granted.resource_type,
-        resource_scope=granted.resource_scope,
+        capability=scope.capability,
+        resource_type=scope.resource_type,
+        resource_scope=scope.resource_scope,
     )
 
     assert PermissionPolicy.grant_matches(grant, matching, context.root_files)
     assert not PermissionPolicy.grant_matches(grant, wrong_class, context.root_files)
     assert not PermissionPolicy.grant_matches(grant, wrong_directory, context.root_files)
+
+
+def test_shell_session_grants_include_cwd_and_every_target_directory() -> None:
+    agent_id = uuid4()
+    request = shell_command_permission(
+        agent_id,
+        "/work",
+        "cat /outside/input.txt > /other/output.txt",
+        ShellInspectResult(
+            targets=[
+                {"path": "/outside/input.txt", "kind": "input", "access": "read"},
+                {"path": "/other/output.txt", "kind": "output", "access": "write"},
+                {"path": "/generic/file.txt", "kind": "path", "access": "write"},
+            ],
+            analysis_complete=True,
+            classification="write",
+            read_only=False,
+            commands=[],
+            inspection_revision="a" * 64,
+        ),
+    )
+
+    assert [
+        (grant.access, json.loads(grant.resource_scope)["path"])
+        for grant in request.effective_session_grants
+    ] == [("write", "/work"), ("read", "/outside"), ("write", "/other"), ("write", "/generic")]
+    assert json.loads(request.resource_scope)["targetAccesses"] == ["read", "write", "write"]
+    assert all(
+        session_grant_matches_request(
+            request.capability, request.resource_type, request.resource_scope, grant
+        )
+        for grant in request.effective_session_grants
+    )
+    outside_read = request.effective_session_grants[1]
+    assert not session_grant_matches_request(
+        request.capability,
+        request.resource_type,
+        request.resource_scope,
+        replace(outside_read, access="write"),
+    )
+
+
+def test_legacy_shell_targets_remain_one_shot_only() -> None:
+    agent_id = uuid4()
+    request = shell_command_permission(
+        agent_id,
+        "/work",
+        "cat /outside/input.txt",
+        ShellInspectResult(
+            targets=[{"path": "/outside/input.txt", "kind": "input"}],
+            analysis_complete=True, classification="read", read_only=True,
+            commands=[], inspection_revision="a" * 64,
+        ),
+    )
+    assert request.available_decisions == ("allow_once", "deny")
+    assert json.loads(request.resource_scope)["targetAccesses"] == [None]
+
+
+async def test_legacy_shell_target_is_not_authorized_by_existing_directory_grant(tmp_path) -> None:
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, ToolCall("shell", "shell_run", {}), client)
+    context.session.current_directory = "/work"
+    request = shell_command_permission(
+        client.agent_id,
+        "/work",
+        "cat /outside/input.txt",
+        ShellInspectResult(
+            targets=[{"path": "/outside/input.txt", "kind": "input"}],
+            analysis_complete=True, classification="read", read_only=True,
+            commands=[], inspection_revision="a" * 64,
+        ),
+    )
+    cwd = request.effective_session_grants[0]
+    context.db.scalar.return_value = ExecutionAgent(
+        id=client.agent_id, user_id=context.session.user_id,
+        home_filesystem_policy="ask", external_filesystem_policy="ask",
+        home_shell_enabled=True, external_shell_enabled=True,
+    )
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[PermissionGrant(
+        session_id=context.session.id,
+        capability=cwd.capability,
+        resource_type=cwd.resource_type,
+        resource_scope=cwd.resource_scope,
+    )]))
+
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session, request, context.root_files, ToolExecutionPolicy.ASK,
+    ) == PermissionDecision.ASK
 
 
 def test_configured_shell_prefixes_are_class_specific(tmp_path) -> None:
@@ -744,19 +887,18 @@ async def test_shell_dispatches_with_inspection_classification(
         "shellPrefixes": prefixes,
     }
     assert json.loads(request.resource_scope)["prefixes"] == prefixes
-    assert request.available_decisions == (
-        ("allow_once", "allow_session", "deny") if prefixes else ("allow_once", "deny")
-    )
+    assert request.available_decisions == ("allow_once", "allow_session", "deny")
     allowed = [["docker"], ["curl"], ["cat"]]
     assert shell_prefix_allowed(ToolSettings(shell_prefixes={"read": allowed}), request) == bool(prefixes)
-    granted = _shell_permission(client, classification="read", prefixes=allowed)
+    granted = request
+    scope = granted.effective_session_grants[0]
     grant = PermissionGrant(
         session_id=context.session.id,
-        capability=granted.capability,
-        resource_type=granted.resource_type,
-        resource_scope=granted.resource_scope,
+        capability=scope.capability,
+        resource_type=scope.resource_type,
+        resource_scope=scope.resource_scope,
     )
-    assert PermissionPolicy.grant_matches(grant, request, context.root_files) == bool(prefixes)
+    assert PermissionPolicy.grant_matches(grant, request, context.root_files)
 
 
 @pytest.mark.parametrize("classification", ["read", "write"])
@@ -941,7 +1083,7 @@ async def test_shell_metadata_only_paths_preserve_profile_and_trust_policies(
         {"path": "/usr/local/bin", "kind": "toolchain_metadata"},
         {"path": "/usr/bin/python3", "kind": "toolchain_metadata"},
         {"path": "/dev/null", "kind": "discard"},
-        {"path": "/home/user/project/result.txt", "kind": "path"},
+        {"path": "/home/user/project/result.txt", "kind": "path", "access": classification},
     ]
     inspection = ShellInspectResult.model_validate({
         "targets": targets, "analysisComplete": analysis_complete,
@@ -1003,6 +1145,7 @@ async def test_shell_metadata_only_paths_preserve_profile_and_trust_policies(
         "classification": classification, "analysisComplete": analysis_complete,
         "prefixes": [unit.prefix for unit in inspection.commands],
         "paths": [target["path"] for target in targets],
+        "targetAccesses": ["exempt", "exempt", "exempt", "exempt", classification],
     }
     assert set(request.approval_details) == {
         "shellClassification", "shellAnalysisComplete", "shellPrefixes",
@@ -1021,14 +1164,21 @@ async def test_shell_ordinary_target_wins_over_metadata_for_the_same_path(
     tmp_path, classification, kind, conflicting_path,
 ) -> None:
     call = ToolCall("shell", "shell_run", {"command": "command -v python3; cat /usr/bin/python3"})
+    target_access = (
+        "write" if kind == "output"
+        else "read" if kind in {"input", "executable", "script", "source"}
+        else classification
+    )
+    effective_classification = "write" if target_access == "write" else classification
     client = FakeExecutionClient({
         "shell.inspect": ShellInspectResult(
             targets=[
                 {"path": "/usr/bin/python3", "kind": "toolchain_metadata"},
                 {"path": "/dev/null", "kind": "discard"},
-                {"path": conflicting_path, "kind": kind},
+                {"path": conflicting_path, "kind": kind, "access": target_access},
             ],
-            analysis_complete=False, classification=classification, read_only=classification == "read",
+            analysis_complete=False, classification=effective_classification,
+            read_only=effective_classification == "read",
             commands=[], inspection_revision="a" * 64,
         ),
     }, {"shell.inspect", "shell.run"})
@@ -1152,9 +1302,10 @@ async def test_shell_reinspection_keeps_existing_grants_class_bound(tmp_path) ->
     context.ask_handler = AsyncMock(side_effect=authorize)
     assert (await _tools(client.operations).execute(call, context)).is_error
     pending = context.ask_handler.await_args.args[0]
+    scope = pending.effective_session_grants[0]
     grants.append(PermissionGrant(
-        session_id=context.session.id, capability=pending.capability,
-        resource_type=pending.resource_type, resource_scope=pending.resource_scope,
+        session_id=context.session.id, capability=scope.capability,
+        resource_type=scope.resource_type, resource_scope=scope.resource_scope,
     ))
     client.responses["shell.inspect"] = ShellInspectResult.model_validate({
         **inspection.model_dump(), "classification": "write", "read_only": False,

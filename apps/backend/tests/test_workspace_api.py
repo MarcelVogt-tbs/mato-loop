@@ -94,6 +94,51 @@ async def test_file_context_hides_foreign_sessions() -> None:
     assert exc_info.value.code == "session.notFound"
 
 
+async def test_file_context_resolves_explicit_same_project_session_root() -> None:
+    user = _user()
+    project_id = uuid4()
+    current = ChatSession(id=uuid4(), user_id=user.id, project_id=project_id, title="Current")
+    owner = ChatSession(id=uuid4(), user_id=user.id, project_id=project_id, title="Owner")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = current
+    db.scalar.return_value = owner
+
+    context = await workspace_route._file_context(
+        FileScope.SESSION,
+        current.id,
+        user,
+        db,
+        root_identity=str(owner.id),
+        instance_limits=InstanceLimits(),
+    )
+
+    assert context.root_files is not None
+    assert context.root_files.session_id == owner.id
+    statement = db.scalar.await_args.args[0]
+    assert current.project_id in statement.compile().params.values()
+    assert user.id in statement.compile().params.values()
+
+
+async def test_file_context_rejects_explicit_root_outside_current_project() -> None:
+    user = _user()
+    current = ChatSession(id=uuid4(), user_id=user.id, project_id=uuid4(), title="Current")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = current
+    db.scalar.return_value = None
+
+    with pytest.raises(ApiError) as exc_info:
+        await workspace_route._file_context(
+            FileScope.SESSION,
+            current.id,
+            user,
+            db,
+            root_identity=str(uuid4()),
+            instance_limits=InstanceLimits(),
+        )
+
+    assert exc_info.value.code == "file.fileNotFound"
+
+
 @pytest.mark.parametrize(
     ("agent_code", "status_code", "api_code"),
     [
@@ -111,7 +156,7 @@ def test_workspace_maps_file_access_errors(
     assert error.code == api_code
 
 
-async def test_usage_reports_project_shared_root_and_effective_quota(
+async def test_usage_reports_session_root_and_effective_quota(
     tmp_path: Path, monkeypatch
 ) -> None:
     storage = SessionStorage(tmp_path / "sessions")
@@ -139,7 +184,7 @@ async def test_usage_reports_project_shared_root_and_effective_quota(
     )
 
     assert response.model_dump(by_alias=True) == {
-        "scope": "project",
+        "scope": "session",
         "usedBytes": expected_usage,
         "quotaBytes": 8 * 1024 * 1024,
     }

@@ -43,11 +43,13 @@ from mato_loop_backend.execution.protocol import SUPPORTED_OPERATIONS, ResponseM
 from mato_loop_backend.integrations import browser as browser_module
 from mato_loop_backend.integrations.browser import (
     BROWSER_ADAPTER,
+    BROWSER_DOWNLOADS,
     BROWSER_RELEASE_CONTROL,
     BROWSER_REQUEST_CONTROL,
     BROWSER_TOOL,
     BROWSER_TOOL_ACTIONS,
     BROWSER_TOOLS,
+    BROWSER_UPLOAD,
     BrowserEvaluateArguments,
     BrowserRunCodeArguments,
 )
@@ -150,8 +152,16 @@ def test_public_browser_tools_have_narrow_static_schemas_and_no_legacy_tool():
         "browser_run_code": {"tabId", "code", "observe"},
     }
     assert BROWSER_ADAPTER.execution_tools == (
-        *BROWSER_TOOLS, BROWSER_REQUEST_CONTROL, BROWSER_RELEASE_CONTROL,
+        *BROWSER_TOOLS, BROWSER_UPLOAD, BROWSER_DOWNLOADS,
+        BROWSER_REQUEST_CONTROL, BROWSER_RELEASE_CONTROL,
     )
+    upload = tools_module.ToolRegistry._contributed_definition(BROWSER_UPLOAD).schema()
+    assert set(upload["parameters"]["properties"]) == {"root", "path", "tabId", "ref", "element", "observe"}
+    assert upload["parameters"]["properties"]["root"]["enum"] == ["files", "computer"]
+    assert BROWSER_UPLOAD.required_execution_operations == (
+        "integration.browser.file", "integration.browser.upload",
+    )
+    assert set(BROWSER_DOWNLOADS.arguments_model.model_json_schema()["properties"]) == {"downloadId"}
     assert set(BROWSER_REQUEST_CONTROL.arguments_model.model_json_schema()["properties"]) == {"reason"}
     assert not BROWSER_RELEASE_CONTROL.arguments_model.model_json_schema()["properties"]
     assert set(BROWSER_TOOL_ACTIONS) == set(expected)
@@ -366,10 +376,16 @@ def test_browser_schema_requires_live_binding_and_preserves_profile_exclusion():
         settings, instance.execution_agent_id, {"integration.browser.execute"},
     )).tools] == ["browser_request_control"]
     active = effective_execution_integration_settings(
-        settings, instance.execution_agent_id, {"integration.browser.execute"}, browser_integration_id=instance.id,
+        settings, instance.execution_agent_id,
+        {
+            "integration.browser.execute", "integration.browser.file", "integration.browser.upload",
+            "integration.browser.files", "integration.browser.publish", "filesystem.stat",
+        },
+        browser_integration_id=instance.id,
     )
     assert [tool.name for tool in effective_integration_contributions(active).tools] == [
-        *BROWSER_TOOL_ACTIONS, "browser_request_control", "browser_release_control",
+        *BROWSER_TOOL_ACTIONS, "browser_upload", "browser_downloads",
+        "browser_request_control", "browser_release_control",
     ]
     excluded = filter_agent_profile_integrations(active, None, allowed_ids=[])
     assert not effective_integration_contributions(excluded).tools
@@ -539,6 +555,11 @@ async def test_approval_scope_binds_exact_action_and_live_attachment(browser_cas
     assert [request.capability for request in requests] == ["browser.write", "browser.read"]
     request = requests[0]
     assert request.policy_integration_id == case.instance.id
+    assert all(
+        item.effective_session_grants[0].resource_display
+        == "Freigegebener Browser (alle Tabs)"
+        for item in requests
+    )
     scope = json.loads(request.resource_scope)
     assert scope["integrationId"] == str(case.instance.id)
     args = case.coordinator.execute.await_args.args[-1]
@@ -782,6 +803,40 @@ async def test_page_actions_bind_host_snapshot_before_approval(guarded_browser_c
     if action == "inspect":
         assert json.loads(result.content)["data"] == {"snapshotSha256": snapshot}
         assert json.loads(result.content)["text"] == inspection
+
+
+async def test_upload_approval_binds_exact_unobserved_action(browser_case):
+    case = browser_case
+    tab_id = str(uuid4())
+    case.call.name = "browser_upload"
+    case.call.arguments = {
+        "root": "files", "path": "sample.txt", "tabId": tab_id,
+        "ref": "e7", "observe": False,
+    }
+    case.context.root_files.normalize_relative_path.return_value = "sample.txt"
+    case.context.root_files.root_identity.return_value = "session-files"
+    case.context.bound_options["integration_id"] = str(case.instance.id)
+    case.context.bound_options["binding_revision"] = "{}"
+    arguments = BROWSER_UPLOAD.arguments_model.model_validate({
+        **case.call.arguments, "root": "session",
+    })
+    requests = await BROWSER_UPLOAD.authorization_factory(arguments, case.context)
+
+    captured = await browser_module.capture_browser_approval(
+        requests[-1], case.call, case.context.session,
+        SimpleNamespace(execution_agent_id=case.connection.agent_id),
+        case.context.approval_resolution,
+    )
+
+    case.coordinator.snapshot.assert_awaited_once_with(
+        case.context.session.id, case.connection.agent_id, case.instance.id, tab_id,
+    )
+    assert captured.approval_details["browser"] == {
+        "browserId": str(case.connection.browser_id),
+        "attachmentRevision": 1,
+        **arguments.to_action().model_dump(mode="json"),
+        "snapshotSha256": "a" * 64,
+    }
 
 
 @pytest.mark.parametrize("name,arguments", [
@@ -1074,6 +1129,7 @@ async def test_profile_disabled_browser_actions_are_not_offered():
     assert not set(BROWSER_TOOL_ACTIONS) & effective.tools.keys()
     assert {action.capability for action in tools_module.tool_registry.integration_resource_actions(instance)} == {
         "browser.read", "browser.write", "browser.code", "browser.control", "browser.release",
+        "filesystem.read", "session.files.read", "filesystem.write",
     }
 
 
@@ -1097,5 +1153,5 @@ def test_narrow_write_and_code_tools_are_not_offered_with_write_disabled():
     effective = tools_module.ToolRegistry([]).effective(IntegrationSettings(instances=[instance]), tool_settings=settings)
     assert set(effective.tools) == {
         "browser_tabs", "browser_snapshot", "browser_take_screenshot", "browser_diagnostics",
-        "browser_request_control", "browser_release_control",
+        "browser_downloads", "browser_request_control", "browser_release_control",
     }

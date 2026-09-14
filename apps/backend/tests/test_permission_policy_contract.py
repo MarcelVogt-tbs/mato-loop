@@ -10,10 +10,12 @@ from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionPolicy,
     PermissionRequest,
+    SessionGrantScope,
     agent_identity_permission,
     automation_collection_scope,
     automation_scope,
     execution_directory_permission,
+    execution_directory_scope,
     integration_operation_permission,
     media_permission,
     memory_write_permission,
@@ -79,6 +81,17 @@ def _db_with_grants(*grants: PermissionGrant) -> AsyncMock:
     return db
 
 
+def _grant(request: PermissionRequest, session_id=None, **values) -> PermissionGrant:
+    scope = request.effective_session_grants[0]
+    return PermissionGrant(
+        session_id=session_id or uuid4(),
+        capability=scope.capability,
+        resource_type=scope.resource_type,
+        resource_scope=scope.resource_scope,
+        **values,
+    )
+
+
 def _tool_settings(data: dict) -> ToolSettings:
     values = dict(data)
     permissions = {
@@ -97,6 +110,34 @@ def _root_files(tmp_path, session: ChatSession) -> RootFileService:
         session.id,
         session_storage=storage,
     )
+
+
+def test_integration_write_grants_do_not_cross_capability_families(tmp_path) -> None:
+    integration_id = uuid4()
+    regular = integration_operation_permission(
+        capability="browser.write",
+        integration_id=integration_id,
+        binding_revision="{}",
+        operation_key="click",
+        grant_resource_key="browser:one:attachment:1",
+        title="Browser verwenden?",
+        summary="Browseraktion",
+    )
+    code = integration_operation_permission(
+        capability="browser.code",
+        integration_id=integration_id,
+        binding_revision="{}",
+        operation_key="run-code",
+        grant_resource_key="browser:one:attachment:1",
+        title="Browser-Code ausführen?",
+        summary="Codeausführung",
+    )
+    session = _session()
+    grant = _grant(regular, session.id)
+    root_files = _root_files(tmp_path, session)
+
+    assert PermissionPolicy.grant_matches(grant, regular, root_files)
+    assert not PermissionPolicy.grant_matches(grant, code, root_files)
 
 
 def _path_request(
@@ -147,12 +188,7 @@ def test_root_path_grant_matches_only_same_root_identity_and_subtree(tmp_path) -
     session = _session()
     root_files = _root_files(tmp_path, session)
     granted = _path_request(root_files, "files/docs")
-    grant = PermissionGrant(
-        session_id=session.id,
-        capability="filesystem.read",
-        resource_type=granted.resource_type,
-        resource_scope=granted.resource_scope,
-    )
+    grant = _grant(granted, session.id)
 
     assert PermissionPolicy.grant_matches(
         grant, _path_request(root_files, "files/docs/readme.md"), root_files
@@ -167,19 +203,12 @@ async def test_managed_read_reuses_saved_filesystem_grant(tmp_path) -> None:
     root_files = _root_files(tmp_path, session)
     request = _path_request(root_files, "notes.txt")
     assert request.capability == "session.files.read"
-    grant = PermissionGrant(
-        session_id=session.id,
-        capability="filesystem.read",
-        resource_type=request.resource_type,
-        resource_scope=request.resource_scope,
-    )
+    grant = _grant(request, session.id)
     db = _db_with_grants(grant)
     assert await PermissionPolicy.evaluate(
         db, session, request, root_files, ToolExecutionPolicy.ASK
     ) == PermissionDecision.ALLOW
-    assert list(db.scalars.await_args.args[0].compile().params.values()).count(
-        ["session.files.read", "filesystem.read"]
-    ) == 1
+    assert ["resource.read"] in db.scalars.await_args.args[0].compile().params.values()
     assert await PermissionPolicy.evaluate(
         db, session, request, root_files, ToolExecutionPolicy.DISABLED
     ) == PermissionDecision.DENY
@@ -191,7 +220,7 @@ async def test_plan_profile_only_auto_writes_its_canonical_plan(tmp_path) -> Non
     db = _db_with_grants()
     expected = _path_request(
         root_files,
-        f"plans/{session.id}/plan.md",
+        "plan.md",
         capability="session.files.write",
     )
     other = _path_request(
@@ -232,13 +261,7 @@ async def test_managed_deletion_asks_but_honors_grants_and_disabled(
     assert await PermissionPolicy.evaluate(
         _db_with_grants(), session, request, root_files, policy, trust_level=trust_level
     ) == (PermissionDecision.DENY if disabled else PermissionDecision.ASK)
-    grant = PermissionGrant(
-        session_id=session.id,
-        capability=request.capability,
-        resource_type=request.resource_type,
-        resource_scope=request.resource_scope,
-        trust_level=trust_level.value,
-    )
+    grant = _grant(request, session.id, trust_level=trust_level.value)
     assert await PermissionPolicy.evaluate(
         _db_with_grants(grant), session, request, root_files, policy, trust_level=trust_level
     ) == (PermissionDecision.DENY if disabled else PermissionDecision.ALLOW)
@@ -251,6 +274,7 @@ def test_execution_directory_grant_matches_only_same_agent_subtree(tmp_path) -> 
     granted = execution_directory_permission(
         agent_id, "/home/user/project"
     )
+    assert granted.available_decisions == ("allow_once", "deny")
     grant = PermissionGrant(
         session_id=session.id,
         capability=granted.capability,
@@ -275,6 +299,51 @@ def test_execution_directory_grant_matches_only_same_agent_subtree(tmp_path) -> 
     assert not PermissionPolicy.grant_matches(
         grant, _path_request(root_files, "docs/readme.md", root="session"), root_files
     )
+
+
+async def test_shell_paths_require_complete_coverage_from_directory_grants(tmp_path) -> None:
+    session = _session(user_id=uuid4(), current_directory="/work")
+    root_files = _root_files(tmp_path, session)
+    agent = ExecutionAgent(
+        id=uuid4(), user_id=session.user_id, home_directory="/home/user",
+        home_filesystem_policy="ask", external_filesystem_policy="ask",
+        home_shell_enabled=True, external_shell_enabled=True,
+    )
+    requested = (
+        SessionGrantScope("read", "execution_directory", execution_directory_scope(agent.id, "/opt/tool")),
+        SessionGrantScope("read", "execution_directory", execution_directory_scope(agent.id, "/srv/data")),
+    )
+    request = PermissionRequest(
+        capability="shell.read", resource_type="shell_command",
+        resource_scope=shell_command_scope(
+            agent.id, "/work", "read", [["cat"]], ["/opt/tool", "/srv/data"], True,
+            ["read", "read"],
+        ),
+        action_kind="shell_run", risk_level="low", title="Lesen?", summary="Test",
+        session_grants=requested,
+    )
+    grants = [
+        PermissionGrant(
+            session_id=session.id, capability="resource.read",
+            resource_type="execution_directory",
+            resource_scope=execution_directory_scope(agent.id, path),
+        )
+        for path in ("/opt", "/srv")
+    ]
+    db = _db_with_grants(*grants)
+    db.scalar.return_value = agent
+
+    assert await PermissionPolicy.evaluate(
+        db, session, request, root_files, ToolExecutionPolicy.ASK
+    ) == PermissionDecision.ALLOW
+    db.scalars.return_value.all.return_value = grants[:1]
+    assert await PermissionPolicy.evaluate(
+        db, session, request, root_files, ToolExecutionPolicy.ASK
+    ) == PermissionDecision.ASK
+    outside = replace(
+        requested[0], resource_scope=execution_directory_scope(agent.id, "/optional/tool")
+    )
+    assert not PermissionPolicy.scope_matches(grants[0], outside, root_files)
 
 
 @pytest.mark.parametrize(
@@ -352,12 +421,7 @@ async def test_confidential_workspace_paths_always_require_one_time_approval(
     request = execution_directory_permission(
         agent.id, "/home/user/project/.env", capability="filesystem.read"
     )
-    grant = PermissionGrant(
-        session_id=session.id,
-        capability=request.capability,
-        resource_type=request.resource_type,
-        resource_scope=request.resource_scope,
-    )
+    grant = _grant(request, session.id)
     db = _db_with_grants(grant)
     db.scalar.return_value = agent
 
@@ -430,12 +494,7 @@ async def test_automation_scopes_are_canonical_current_session_and_revision_exac
         title="Automation ändern?",
         summary="Test",
     )
-    grant = PermissionGrant(
-        session_id=session.id,
-        capability=request.capability,
-        resource_type=request.resource_type,
-        resource_scope=request.resource_scope,
-    )
+    grant = _grant(request, session.id)
 
     assert PermissionPolicy.grant_matches(grant, request, root_files)
     changed = replace(
@@ -881,7 +940,7 @@ def test_integration_policy_precedence_and_hard_limits() -> None:
     )
 
 
-def test_integration_operation_grants_match_only_exact_canonical_scope(tmp_path) -> None:
+def test_integration_grants_match_stable_resource_not_operation(tmp_path) -> None:
     session = _session()
     root_files = _root_files(tmp_path, session)
     integration_id = uuid4()
@@ -905,12 +964,7 @@ def test_integration_operation_grants_match_only_exact_canonical_scope(tmp_path)
         )
 
     granted = request()
-    grant = PermissionGrant(
-        session_id=session.id,
-        capability=granted.capability,
-        resource_type=granted.resource_type,
-        resource_scope=granted.resource_scope,
-    )
+    grant = _grant(granted, session.id)
 
     assert PermissionPolicy.grant_matches(grant, granted, root_files)
     assert not PermissionPolicy.grant_matches(
@@ -924,7 +978,7 @@ def test_integration_operation_grants_match_only_exact_canonical_scope(tmp_path)
     assert not PermissionPolicy.grant_matches(
         grant, request(resource_key="project:other"), root_files
     )
-    assert not PermissionPolicy.grant_matches(
+    assert PermissionPolicy.grant_matches(
         grant, request(operation_key="read:other"), root_files
     )
 
@@ -1001,8 +1055,7 @@ async def test_child_uses_parent_grants_and_revocation_stops_execution(tmp_path,
             resource_scope=shell_command_scope(agent.id, "/work", "read", [["pwd"]], [], True),
             action_kind="shell", risk_level="low", title="Read", summary="Read"),
     }[kind]
-    grant = PermissionGrant(session_id=parent.id, capability=request.capability,
-                            resource_type=request.resource_type, resource_scope=request.resource_scope)
+    grant = _grant(request, parent.id)
     db = _db_with_grants(grant)
     db.get.return_value = parent
     db.scalar.return_value = agent
@@ -1150,10 +1203,8 @@ async def test_project_file_grant_reuse_is_exact_and_rechecks_eligibility(tmp_pa
         action_kind="read", action_label="Datei lesen",
     )
     profile_id = uuid4()
-    grant = PermissionGrant(
-        session_id=session.id, capability=request.capability,
-        resource_type=request.resource_type, resource_scope=request.resource_scope,
-        agent_profile_id=profile_id, trust_level=trust.value,
+    grant = _grant(
+        request, session.id, agent_profile_id=profile_id, trust_level=trust.value
     )
     roots = _root_files(tmp_path, session)
     db = _db_with_grants(grant)
@@ -1202,10 +1253,8 @@ async def test_profile_grants_bind_owner_and_data_audience(tmp_path, trust, audi
         session.user_id, field_labels=["Name"], model_scope=audience
     )
     profile_id = uuid4()
-    grant = PermissionGrant(
-        session_id=session.id, capability=request.capability,
-        resource_type=request.resource_type, resource_scope=request.resource_scope,
-        agent_profile_id=profile_id, trust_level=trust.value,
+    grant = _grant(
+        request, session.id, agent_profile_id=profile_id, trust_level=trust.value
     )
     db = _db_with_grants(grant)
     same_audience = user_profile_permission(
@@ -1259,12 +1308,7 @@ async def test_invalid_profile_scopes_are_denied(tmp_path, scope):
 async def test_session_grant_only_allows_its_exact_target(tmp_path) -> None:
     session = _session()
     granted_target = uuid4()
-    grant = PermissionGrant(
-        session_id=session.id,
-        capability="session.read",
-        resource_type="session",
-        resource_scope=str(granted_target),
-    )
+    grant = _grant(session_permission(granted_target), session.id)
     db = _db_with_grants(grant)
     root_files = _root_files(tmp_path, session)
 
@@ -1279,12 +1323,7 @@ async def test_session_grant_only_allows_its_exact_target(tmp_path) -> None:
 async def test_media_session_grant_matches_capability_and_current_session(tmp_path) -> None:
     session = _session()
     request = media_permission(session.id, "media.generate.audio", "generate_audio")
-    grant = PermissionGrant(
-        session_id=session.id,
-        capability=request.capability,
-        resource_type="session",
-        resource_scope=str(session.id),
-    )
+    grant = _grant(request, session.id)
 
     assert await PermissionPolicy.evaluate(
         _db_with_grants(grant), session, request, _root_files(tmp_path, session)
@@ -1294,7 +1333,7 @@ async def test_media_session_grant_matches_capability_and_current_session(tmp_pa
     )
     assert await PermissionPolicy.evaluate(
         _db_with_grants(grant), session, other_capability, _root_files(tmp_path, session)
-    ) == PermissionDecision.ASK
+    ) == PermissionDecision.ALLOW
 
 
 async def test_media_model_grant_matches_only_exact_target(tmp_path) -> None:
@@ -1310,12 +1349,7 @@ async def test_media_model_grant_matches_only_exact_target(tmp_path) -> None:
         model_name="Image",
         trust_level="public",
     )
-    grant = PermissionGrant(
-        session_id=session.id,
-        capability=request.capability,
-        resource_type=request.resource_type,
-        resource_scope=request.resource_scope,
-    )
+    grant = _grant(request, session.id)
     root_files = _root_files(tmp_path, session)
 
     assert await PermissionPolicy.evaluate(
@@ -1346,12 +1380,7 @@ async def test_memory_write_uses_current_session_grant(tmp_path) -> None:
         _db_with_grants(), session, request, root_files
     ) == PermissionDecision.ASK
 
-    grant = PermissionGrant(
-        session_id=session.id,
-        capability=request.capability,
-        resource_type=request.resource_type,
-        resource_scope=request.resource_scope,
-    )
+    grant = _grant(request, session.id)
     assert await PermissionPolicy.evaluate(
         _db_with_grants(grant),
         session,
@@ -1376,12 +1405,7 @@ async def test_agent_identity_session_grant_matches_exact_user(tmp_path) -> None
         changes_name=True,
         changes_instructions=False,
     )
-    grant = PermissionGrant(
-        session_id=session.id,
-        capability=request.capability,
-        resource_type=request.resource_type,
-        resource_scope=str(session.user_id),
-    )
+    grant = _grant(request, session.id)
     root_files = _root_files(tmp_path, session)
 
     assert await PermissionPolicy.evaluate(
@@ -1400,12 +1424,7 @@ async def test_agent_identity_session_grant_matches_exact_user(tmp_path) -> None
 async def test_skill_collection_grant_matches_exact_user_and_capability(tmp_path) -> None:
     session = _session(user_id=uuid4())
     request = skill_load_permission(session.user_id, "Recherche")
-    grant = PermissionGrant(
-        session_id=session.id,
-        capability=request.capability,
-        resource_type=request.resource_type,
-        resource_scope=request.resource_scope,
-    )
+    grant = _grant(request, session.id)
     root_files = _root_files(tmp_path, session)
 
     assert await PermissionPolicy.evaluate(
@@ -1429,17 +1448,9 @@ async def test_skill_edit_grant_matches_only_exact_skill(tmp_path) -> None:
     session = _session(user_id=uuid4())
     skill_id = uuid4()
     request = skill_edit_permission(skill_id, "Songfinder")
-    grant = PermissionGrant(
-        session_id=session.id,
-        capability=request.capability,
-        resource_type=request.resource_type,
-        resource_scope=request.resource_scope,
-    )
-    collection_grant = PermissionGrant(
-        session_id=session.id,
-        capability="skills.write",
-        resource_type="skill_collection",
-        resource_scope=str(session.user_id),
+    grant = _grant(request, session.id)
+    collection_grant = _grant(
+        skill_write_permission(session.user_id, "Recherche"), session.id
     )
     root_files = _root_files(tmp_path, session)
 
@@ -1460,18 +1471,8 @@ async def test_skill_edit_grant_matches_only_exact_skill(tmp_path) -> None:
 async def test_session_search_and_session_read_grants_remain_separate(tmp_path) -> None:
     session = _session()
     target_id = uuid4()
-    read_grant = PermissionGrant(
-        session_id=session.id,
-        capability="session.read",
-        resource_type="session",
-        resource_scope=str(target_id),
-    )
-    search_grant = PermissionGrant(
-        session_id=session.id,
-        capability="session.search",
-        resource_type="session_collection",
-        resource_scope="all",
-    )
+    read_grant = _grant(session_permission(target_id), session.id)
+    search_grant = _grant(session_search_permission(), session.id)
     root_files = _root_files(tmp_path, session)
 
     assert await PermissionPolicy.evaluate(
@@ -1520,12 +1521,7 @@ def test_transcript_permission_normalizes_equivalent_video_urls() -> None:
 async def test_webfetch_grant_matches_only_the_exact_url_hash(tmp_path) -> None:
     session = _session()
     granted = webfetch_permission("https://example.com/page?lang=de")
-    grant = PermissionGrant(
-        session_id=session.id,
-        capability=granted.capability,
-        resource_type=granted.resource_type,
-        resource_scope=granted.resource_scope,
-    )
+    grant = _grant(granted, session.id)
     root_files = _root_files(tmp_path, session)
 
     assert await PermissionPolicy.evaluate(

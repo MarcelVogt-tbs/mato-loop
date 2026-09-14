@@ -602,7 +602,7 @@ def test_error_mapping_covers_mealie_client_failures() -> None:
     ) == "integration.rateLimited"
 
 
-def test_permissions_name_the_account_show_details_and_limit_writes() -> None:
+def test_permissions_name_the_account_and_offer_scoped_writes() -> None:
     account = _account(name="Familienküche")
     revision = _revision(account)
     context = _context(account, revision)
@@ -630,7 +630,9 @@ def test_permissions_name_the_account_show_details_and_limit_writes() -> None:
     assert read.resource_display == 'Mealie-Konto "Familienküche"'
     assert read.available_decisions == ("allow_once", "allow_session", "deny")
     assert read.display_items
-    assert write.available_decisions == ("allow_once", "deny")
+    assert write.available_decisions == ("allow_once", "allow_session", "deny")
+    assert write.effective_session_grants[0].access == "write"
+    assert json.loads(write.effective_session_grants[0].resource_scope)["resourceKey"] == "meal-plan"
     assert write.display_items
     scope = json.loads(write.resource_scope)
     operation = scope["operationKey"]
