@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.attachments import AttachmentError, image_mime_type, validate_image
 from mato_loop_backend.models import Credential
 from mato_loop_backend.privacy import PseudonymizationError, RequestPseudonymizer
-from mato_loop_backend.providers import codex_images, lemonade
+from mato_loop_backend.providers import azure_speech, codex_images, lemonade
 from mato_loop_backend.providers.base import MAX_PROVIDER_IMAGE_BYTES, ProviderError
 from mato_loop_backend.providers.codex_auth import refresh_codex_credential
 from mato_loop_backend.providers.codex_oauth import CODEX_IMAGE_MODEL_ID
@@ -83,6 +83,7 @@ _DEFAULT_FIELDS = {
 }
 
 _ADAPTER_CAPABILITIES = {
+    "azure-speech": frozenset({ModelCapability.AUDIO_TRANSCRIPTION}),
     "lemonade": frozenset(
         {
             ModelCapability.IMAGE_GENERATION,
@@ -116,6 +117,13 @@ def _media_target(
         or model.availability != ModelAvailability.AVAILABLE
         or capability not in model.capabilities
         or capability not in _ADAPTER_CAPABILITIES.get(provider.adapter_type, ())
+        or (
+            provider.adapter_type == "azure-speech"
+            and (
+                provider.credential_id is None
+                or model.model_id != azure_speech.MODEL_ID
+            )
+        )
         or (
             provider.adapter_type == "openai-codex"
             and (
@@ -388,7 +396,7 @@ class MediaService:
             )
         provider, model = target
         base_url = str(provider.config.get("base_url") or "").rstrip("/")
-        if provider.adapter_type == "lemonade" and not base_url:
+        if provider.adapter_type in {"lemonade", "azure-speech"} and not base_url:
             raise ProviderError(
                 "Provider base URL is missing", code="provider.configurationInvalid"
             )
@@ -646,7 +654,12 @@ class MediaService:
             user_id=user_id,
         )
         await db.commit()
-        text = await lemonade.transcribe_audio(
+        transcribe = (
+            azure_speech.transcribe_audio
+            if resolved.provider.adapter_type == "azure-speech"
+            else lemonade.transcribe_audio
+        )
+        text = await transcribe(
             base_url=resolved.base_url,
             api_key=resolved.api_key,
             model=resolved.model.model_id,

@@ -20,7 +20,7 @@ from mato_loop_backend.api.routes import sessions as sessions_route
 from mato_loop_backend.api.routes.media import create_transcription
 from mato_loop_backend.attachments import AttachmentError, AttachmentInput, AttachmentService
 from mato_loop_backend.models import AgentRun, ChatSession, Message, UserAccount
-from mato_loop_backend.providers import TranscriptionResult, lemonade
+from mato_loop_backend.providers import TranscriptionResult, azure_speech, lemonade
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.media import MediaService
 from mato_loop_backend.session_storage import SessionStorage
@@ -308,16 +308,20 @@ async def test_common_voice_transcription_preserves_persisted_audio_and_is_idemp
     assert events == [(run.id, {"type": "message.updated", "messageId": str(message.id)})]
 
 
-async def test_transcription_releases_model_lookup_transaction_before_provider_io(monkeypatch) -> None:
+@pytest.mark.parametrize("adapter", [lemonade, azure_speech])
+async def test_transcription_releases_model_lookup_transaction_before_provider_io(monkeypatch, adapter) -> None:
     db = AsyncMock(spec=AsyncSession)
-    resolved = SimpleNamespace(base_url="http://media", api_key=None, model=SimpleNamespace(model_id="stt"))
+    resolved = SimpleNamespace(
+        base_url="http://media", api_key=None, model=SimpleNamespace(model_id="stt"),
+        provider=SimpleNamespace(adapter_type="azure-speech" if adapter is azure_speech else "lemonade"),
+    )
     monkeypatch.setattr(MediaService, "resolve_model", AsyncMock(return_value=resolved))
 
     async def transcribe(**_kwargs):
         db.commit.assert_awaited_once()
         return "Spoken text"
 
-    monkeypatch.setattr(lemonade, "transcribe_audio", transcribe)
+    monkeypatch.setattr(adapter, "transcribe_audio", transcribe)
     result = await MediaService.transcribe_audio(db, audio=wav_bytes(), user_id=uuid4())
     assert result.text == "Spoken text"
 

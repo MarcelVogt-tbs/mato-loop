@@ -27,11 +27,19 @@ it('shows the inherited effective title model in personal settings', async () =>
     return { data: {
       providers: [],
       models: [],
-      availableProviders: [{ id: 'instance-provider', name: 'AI-PC', enabled: true }],
+      availableProviders: [
+        { id: 'instance-provider', name: 'AI-PC', enabled: true },
+        { id: 'azure', name: 'Azure Speech', adapterType: 'azure-speech', enabled: true, hasCredential: true }
+      ],
       availableModels: [{
         id: 'instance-title', providerId: 'instance-provider', modelId: 'gemma',
         name: 'Gemma', capabilities: ['chat'], enabled: true
+      }, {
+        id: 'transcription', providerId: 'azure', modelId: 'azure-speech-fast-transcription',
+        name: 'Fast Transcription', capabilities: ['audio_transcription'],
+        executableCapabilities: ['audio_transcription'], enabled: true
       }],
+      audioTranscriptionModelId: 'transcription',
       titleGenerationModelId: null,
       effectiveTitleGenerationModelId: 'instance-title'
     } }
@@ -48,6 +56,9 @@ it('shows the inherited effective title model in personal settings', async () =>
   await vi.waitFor(() => {
     expect(root.textContent).toContain('Instanzvorgabe: Gemma · AI-PC')
   })
+  const transcriptionField = [...root.querySelectorAll('.default-model-setting .q-field')]
+    .find((element) => element.querySelector('.q-field__label')?.textContent === 'Transkriptionsmodell')
+  expect(transcriptionField.textContent).toContain('Fast Transcription · Azure Speech')
   expect([...root.querySelectorAll('.default-model-setting__description .text-subtitle1')]
     .map((element) => element.textContent)).toEqual([
     'Agent', 'Skill-Erstellung', 'Videoanalyse', 'Bildanalyse', 'Kontextkomprimierung',

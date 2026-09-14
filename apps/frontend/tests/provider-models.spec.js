@@ -39,6 +39,20 @@ describe('effective model state', () => {
     })
   })
 
+  it('requires a saved Azure Speech credential for an effective transcription model', () => {
+    const azure = { ...provider, adapterType: 'azure-speech', hasCredential: true }
+    const transcription = { ...model, capabilities: ['audio_transcription'] }
+    expect(isModelEffective(transcription, azure)).toBe(true)
+    expect(isModelEffective(transcription, { ...azure, hasCredential: false })).toBe(false)
+    expect(isModelEffective(transcription, { ...azure, effectiveEnabled: false })).toBe(false)
+    expect(selectedModelState(model.id, [transcription], [azure], {}, 'audio_transcription').available).toBe(true)
+    expect(selectedModelState(model.id, [transcription], [{ ...azure, hasCredential: false }], {}, 'audio_transcription')).toMatchObject({
+      available: false,
+      message: 'Der Provider dieses Modells ist deaktiviert oder nicht verbunden.'
+    })
+    expect(selectedModelState(model.id, [transcription], [azure]).available).toBe(false)
+  })
+
   it('uses effective trust instead of the nullable model override', () => {
     const inheritedPrivateModel = {
       ...model,

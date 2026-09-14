@@ -350,43 +350,87 @@ describe('provider store', () => {
     expect(store.skillCreationModelId).toBe('compact')
   })
 
-  it.each(['openai-compatible', 'lemonade'])('creates and updates %s providers through the configured endpoints', async (type) => {
+  it.each(['openai-compatible', 'lemonade', 'azure-speech'])('creates and updates %s providers through the configured endpoints', async (type) => {
     const store = useProviderStore()
     const payload = {
-      name: 'Lemonade lokal',
-      base_url: 'http://lemonade-host:13305/v1',
-      api_key: null,
+      name: 'Medienprovider',
+      base_url: type === 'azure-speech' ? 'https://my-speech.cognitiveservices.azure.com' : 'http://lemonade-host:13305/v1',
+      api_key: type === 'azure-speech' ? 'test-key' : null,
       remove_api_key: false,
-      trust_level: 'private',
-      pseudonymization_enabled: false,
+      trust_level: type === 'azure-speech' ? 'public' : 'private',
+      pseudonymization_enabled: type === 'azure-speech',
       memory_policy: 'inherit'
     }
     const providerPayload = {
       enabled: true,
       providers: [{
-        id: 'lemonade',
+        id: 'configured',
         name: payload.name,
-        adapterType: 'lemonade',
-        config: { baseUrl: payload.base_url }
+        adapterType: type,
+        config: { base_url: payload.base_url }
       }],
       models: [],
       defaultModelId: null
     }
-    api.post.mockResolvedValue({ data: { ...providerPayload, providerId: 'lemonade' } })
+    api.post.mockResolvedValue({ data: { ...providerPayload, providerId: 'configured' } })
     api.put.mockResolvedValue({ data: providerPayload })
     api.get.mockImplementation((url) => Promise.resolve({
       data: url.endsWith('/codex/status') ? { authenticated: false } : providerPayload
     }))
 
-    await expect(store.createProvider(type, payload)).resolves.toBe('lemonade')
-    await store.updateProvider('lemonade', payload)
+    await expect(store.createProvider(type, payload)).resolves.toBe('configured')
+    await store.updateProvider('configured', payload)
 
     expect(api.post).toHaveBeenCalledWith(
       `/providers/${type}`, payload, { params: { scope: 'instance' } }
     )
     expect(api.put).toHaveBeenCalledWith(
-      '/providers/configuration/lemonade', payload, { params: { scope: 'instance' } }
+      '/providers/configuration/configured', payload, { params: { scope: 'instance' } }
     )
+  })
+
+  it('discovers Azure Speech and offers its built-in model only for transcription', async () => {
+    const store = useProviderStore()
+    const azure = {
+      id: 'azure', name: 'Azure Speech', adapterType: 'azure-speech',
+      enabled: true, hasCredential: true, trustLevel: 'public'
+    }
+    const transcription = {
+      id: 'transcription', providerId: 'azure',
+      modelId: 'azure-speech-fast-transcription', name: 'Fast Transcription',
+      enabled: true, origin: 'discovered', availability: 'available',
+      capabilities: ['audio_transcription'], executableCapabilities: ['audio_transcription'],
+      supportsTools: false, supportsStreaming: false, inputModalities: ['audio']
+    }
+    api.post.mockResolvedValue({ data: {
+      providers: [azure], models: [transcription], audioTranscriptionModelId: transcription.id
+    } })
+
+    await store.syncModels(azure.id)
+
+    expect(api.post).toHaveBeenCalledWith(
+      '/providers/configuration/azure/models/sync', null, { params: { scope: 'instance' } }
+    )
+    expect(store.audioTranscriptionModelId).toBe('transcription')
+    expect(store.capabilityOptions('audio_transcription')).toEqual([{
+      label: 'Fast Transcription · Azure Speech', value: 'transcription',
+      trustLevel: 'public', trustIcon: 'public', disable: false
+    }])
+    expect(store.modelOptions).toEqual([])
+    expect(store.skillCreationModelOptions).toEqual([])
+    expect(store.visionModelOptions).toEqual([])
+    expect(store.videoModelOptions).toEqual([])
+    for (const capability of ['image_generation', 'speech_generation', 'audio_generation']) {
+      expect(store.capabilityOptions(capability)).toEqual([])
+    }
+    store.providers[0].hasCredential = false
+    expect(store.capabilityOptions('audio_transcription')).toEqual([])
+    store.providers[0].hasCredential = true
+    store.models[0].enabled = false
+    expect(store.capabilityOptions('audio_transcription')).toEqual([])
+    store.models[0].enabled = true
+    store.providers[0].enabled = false
+    expect(store.capabilityOptions('audio_transcription')).toEqual([])
   })
 
   it('keeps public and private models selectable', () => {

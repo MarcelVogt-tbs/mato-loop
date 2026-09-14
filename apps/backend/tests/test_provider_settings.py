@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import providers as provider_routes
 from mato_loop_backend.api.routes.providers import (
+    AzureSpeechProviderRequest,
     DefaultModelRequest,
     DefaultModelsRequest,
     EnabledRequest,
@@ -24,6 +25,7 @@ from mato_loop_backend.api.routes.providers import (
     delete_provider,
     get_personal_provider_policy,
     list_providers,
+    save_azure_speech_provider,
     save_openai_provider,
     set_default_model,
     set_default_models,
@@ -37,7 +39,7 @@ from mato_loop_backend.api.routes.providers import (
 from mato_loop_backend.api.routes.providers import (
     test_model as run_model_test,
 )
-from mato_loop_backend.providers import codex_oauth
+from mato_loop_backend.providers import azure_speech, codex_oauth
 from mato_loop_backend.providers.openai_compatible import DiscoveredModel
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.providers.settings_service import ProviderSettingsService
@@ -98,6 +100,131 @@ async def test_provider_create_needs_no_model_and_accepts_camel_case(monkeypatch
     }
     assert result["providerId"] == str(settings.providers[0].id)
     assert result["providers"][0]["memoryPolicy"] == "inherit"
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://speech.cognitiveservices.azure.com",
+        "https://speech.cognitiveservices.azure.com/speechtotext",
+        "https://speech.cognitiveservices.azure.com?key=secret",
+        "https://speech.cognitiveservices.azure.com#fragment",
+        "https://user:password@speech.cognitiveservices.azure.com",
+    ],
+)
+def test_azure_endpoint_requires_https_origin(endpoint):
+    with pytest.raises(ValidationError):
+        AzureSpeechProviderRequest(name="Azure", base_url=endpoint)
+
+
+@pytest.mark.parametrize("scope", ["instance", "personal"])
+async def test_azure_provider_stores_scoped_key_outside_settings(monkeypatch, scope):
+    settings = AiSettings() if scope == "instance" else UserAiSettings()
+    owner_id = None if scope == "instance" else uuid4()
+    db = _db()
+    _mock_settings(monkeypatch, settings)
+    monkeypatch.setattr(
+        provider_routes, "_load_scoped_ai", AsyncMock(return_value=(settings, owner_id))
+    )
+    credential = SimpleNamespace(id=uuid4())
+    store = AsyncMock(return_value=credential)
+    monkeypatch.setattr(provider_routes, "store_credential", store)
+    result = await save_azure_speech_provider(
+        AzureSpeechProviderRequest.model_validate({
+            "name": "Azure", "baseUrl": "https://speech.cognitiveservices.azure.com/",
+            "apiKey": "test-key",
+        }),
+        db, scope=scope,
+    )
+    provider = settings.providers[0]
+    assert provider.adapter_type == "azure-speech"
+    assert provider.owner_id == owner_id
+    assert provider.credential_id == credential.id
+    assert provider.trust_level == "public"
+    assert provider.pseudonymization_enabled is True
+    assert provider.config == {"base_url": "https://speech.cognitiveservices.azure.com"}
+    assert "test-key" not in settings.model_dump_json() + str(result)
+    assert result["providers"][0]["hasCredential"] is True
+    store.assert_awaited_once_with(
+        db, owner_id=owner_id, kind="azure-speech-api-key", label="Azure",
+        payload={"api_key": "test-key"}, credential=None,
+    )
+
+
+async def test_azure_provider_update_preserves_key_and_removal_clears_default(monkeypatch):
+    provider = LlmProviderConfig(
+        name="Azure", adapter_type="azure-speech", credential_id=uuid4(),
+        config={"base_url": "https://speech.cognitiveservices.azure.com"},
+    )
+    model = ModelConfig(
+        provider_id=provider.id, model_id=azure_speech.MODEL_ID,
+        capabilities={ModelCapability.AUDIO_TRANSCRIPTION},
+    )
+    settings = AiSettings(
+        providers=[provider], models=[model], audio_transcription_model_id=model.id
+    )
+    _mock_settings(monkeypatch, settings)
+    db = _db()
+    key_id = provider.credential_id
+    payload = OpenAIProviderRequest.model_validate({
+        "name": "Azure renamed", "baseUrl": "https://speech.cognitiveservices.azure.com"
+    })
+    await update_openai_provider(provider.id, payload, db)
+    assert provider.name == "Azure renamed"
+    assert provider.credential_id == key_id
+    assert settings.audio_transcription_model_id == model.id
+    delete = AsyncMock()
+    monkeypatch.setattr(provider_routes, "delete_credential", delete)
+    await update_openai_provider(
+        provider.id,
+        AzureSpeechProviderRequest(
+            name="Azure", base_url="https://speech.cognitiveservices.azure.com",
+            remove_api_key=True,
+        ),
+        db,
+    )
+    delete.assert_awaited_once_with(db, key_id, owner_id=None)
+    assert provider.credential_id is None
+    assert settings.audio_transcription_model_id is None
+
+
+async def test_azure_update_revalidates_union_payload_for_actual_provider(monkeypatch):
+    provider = LlmProviderConfig(
+        name="Azure", adapter_type="azure-speech", credential_id=uuid4()
+    )
+    _mock_settings(monkeypatch, AiSettings(providers=[provider]))
+    with pytest.raises(ApiError) as error:
+        await update_openai_provider(
+            provider.id,
+            OpenAIProviderRequest(name="Azure", base_url="http://unsafe.test/v1"),
+            _db(),
+        )
+    assert error.value.code == "provider.configurationInvalid"
+
+
+async def test_azure_sync_creates_disabled_transcription_only_model(monkeypatch):
+    provider = LlmProviderConfig(
+        name="Azure", adapter_type="azure-speech", credential_id=uuid4()
+    )
+    settings = AiSettings(providers=[provider])
+    _mock_settings(monkeypatch, settings)
+    discovered = DiscoveredModel(
+        id=azure_speech.MODEL_ID, name="Azure Speech Fast Transcription",
+        capabilities={ModelCapability.AUDIO_TRANSCRIPTION},
+        input_modalities={ModelInputModality.AUDIO},
+        supports_tools=False, supports_parallel_tool_calls=False,
+        capabilities_authoritative=True,
+    )
+    monkeypatch.setattr(
+        ProviderService, "discover_models", AsyncMock(return_value=[discovered])
+    )
+    result = await sync_provider_models(provider.id, _db())
+    model = settings.models[0]
+    assert model.enabled is False
+    assert model.capabilities == {ModelCapability.AUDIO_TRANSCRIPTION}
+    assert model.supports_tools is False
+    assert model.supports_streaming is False
+    assert result["models"][0]["agentAvailable"] is False
 
 
 @pytest.mark.parametrize(

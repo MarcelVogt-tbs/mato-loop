@@ -7,7 +7,7 @@ from typing import Any, Literal, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.providers import codex_oauth
+from mato_loop_backend.providers import azure_speech, codex_oauth
 from mato_loop_backend.providers.base import (
     DeltaCallback,
     ProviderError,
@@ -143,6 +143,37 @@ async def _discover_codex(
     )
 
 
+async def _discover_azure_speech(
+    runtime: AdapterRuntime,
+    _db: AsyncSession,
+    provider: LlmProviderConfig,
+    credential: Any | None,
+    timeout: float,
+) -> list[DiscoveredModel]:
+    payload = runtime.read_credential(credential) if credential else {}
+    return await azure_speech.discover_models(
+        base_url=_base_url(provider),
+        api_key=payload.get("api_key"),
+        timeout=timeout,
+    )
+
+
+async def _transcription_only_operation(
+    _runtime: AdapterRuntime,
+    _db: AsyncSession,
+    _provider: LlmProviderConfig,
+    _credential: Any | None,
+    _api_key: str | None,
+    _api_type: ApiType,
+    _request: ProviderRequest,
+    _on_delta: DeltaCallback | None,
+    _on_reasoning: ReasoningDeltaCallback | None,
+) -> ProviderOperation:
+    raise ProviderError(
+        "Provider supports transcription only", code="provider.modelCapabilityUnavailable"
+    )
+
+
 async def _openai_operation(
     runtime: AdapterRuntime,
     _db: AsyncSession,
@@ -245,7 +276,15 @@ _LEMONADE = ProviderAdapter(
     include_stream_usage=True,
     controls_thinking_without_profile=True,
 )
+_AZURE_SPEECH = ProviderAdapter(
+    adapter_type="azure-speech",
+    discover=_discover_azure_speech,
+    operation=_transcription_only_operation,
+)
 
 PROVIDER_ADAPTERS: Mapping[str, ProviderAdapter] = MappingProxyType(
-    {adapter.adapter_type: adapter for adapter in (_OPENAI_COMPATIBLE, _CODEX, _LEMONADE)}
+    {
+        adapter.adapter_type: adapter
+        for adapter in (_OPENAI_COMPATIBLE, _CODEX, _LEMONADE, _AZURE_SPEECH)
+    }
 )

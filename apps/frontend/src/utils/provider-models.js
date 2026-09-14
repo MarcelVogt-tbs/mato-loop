@@ -29,6 +29,7 @@ export function isModelPresent(model) {
 export function isProviderEffective(provider, codex = {}) {
   if (!provider?.enabled) return false
   if (provider.effectiveEnabled === false) return false
+  if (provider.adapterType === 'azure-speech' && provider.hasCredential !== true) return false
   return provider.adapterType !== 'openai-codex'
     || provider.hasCredential === true
     || codex.authenticated === true

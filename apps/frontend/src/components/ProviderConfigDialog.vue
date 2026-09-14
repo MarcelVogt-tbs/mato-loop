@@ -6,7 +6,7 @@
         <div class="col">
           <div class="text-h6">{{ dialogTitle }}</div>
           <div class="text-body2 app-muted">
-            {{ isEditing ? 'Verbindung und Zugang bearbeiten.' : 'Wähle den gewünschten LLM-Provider.' }}
+            {{ isEditing ? 'Verbindung und Zugang bearbeiten.' : 'Wähle einen Provider für Chat- oder Medienmodelle.' }}
           </div>
         </div>
         <q-btn flat round dense icon="close" aria-label="Dialog schließen" @click="close" />
@@ -74,8 +74,9 @@
           <q-input
             v-model="form.base_url"
             outlined
-            label="Base URL"
-            :placeholder="providerType === 'lemonade' ? 'http://lemonade-host:13305/v1' : 'https://api.example.com/v1'"
+            :label="isAzureSpeech ? 'Azure-Speech-Endpunkt' : 'Base URL'"
+            :placeholder="endpointPlaceholder"
+            :hint="isAzureSpeech ? 'HTTPS-Ressourcenadresse oder regionaler Endpunkt, ohne API-Pfad oder Abfrageparameter.' : ''"
             lazy-rules
             :rules="[requiredRule, urlRule]"
           />
@@ -92,9 +93,11 @@
             v-model="form.api_key"
             outlined
             type="password"
-            :label="provider?.hasCredential ? 'Neuer API-Key (optional)' : 'API-Key (optional)'"
-            :hint="provider?.hasCredential ? 'Leer lassen, um den gespeicherten API-Key beizubehalten.' : ''"
+            :label="provider?.hasCredential ? 'Neuer API-Key (optional)' : isAzureSpeech ? 'Azure-Speech-API-Key' : 'API-Key (optional)'"
+            :hint="apiKeyHint"
             :disable="form.remove_api_key"
+            lazy-rules
+            :rules="isAzureSpeech && !provider?.hasCredential ? [requiredRule] : []"
           />
           <q-checkbox
             v-if="provider?.hasCredential"
@@ -103,6 +106,12 @@
             label="Gespeicherten API-Key entfernen"
           />
 
+          <q-banner v-if="isAzureSpeech" rounded class="provider-form-section app-surface-tonal">
+            Azure Speech Fast Transcription transkribiert abgeschlossene Sprachnachrichten und Audiodateien.
+            Keine Live-Transkription, kein Chat und keine Tool-Aufrufe.
+            Das Originalaudio wird ohne Pseudonymisierung an Azure gesendet – auch wenn der Schutz für Kennungen und Secrets aktiviert ist.
+            Nach der Modellerkennung kannst du das Modell unter Standardmodelle für die Transkription auswählen.
+          </q-banner>
         </q-form>
 
         <q-form
@@ -235,7 +244,17 @@ const memoryPolicyOptions = [
 ]
 const isEditing = computed(() => Boolean(props.provider))
 const hasCodexProvider = computed(() => providers.providers.some((item) => item.adapterType === 'openai-codex'))
-const isConfiguredProvider = computed(() => ['openai-compatible', 'lemonade'].includes(providerType.value))
+const isAzureSpeech = computed(() => providerType.value === 'azure-speech')
+const isConfiguredProvider = computed(() => ['openai-compatible', 'lemonade', 'azure-speech'].includes(providerType.value))
+const endpointPlaceholder = computed(() => {
+  if (isAzureSpeech.value) return 'https://my-speech.cognitiveservices.azure.com'
+  return providerType.value === 'lemonade' ? 'http://lemonade-host:13305/v1' : 'https://api.example.com/v1'
+})
+const apiKeyHint = computed(() => {
+  if (isAzureSpeech.value && form.remove_api_key) return 'Ohne API-Key ist keine Transkription möglich.'
+  if (props.provider?.hasCredential) return 'Leer lassen, um den gespeicherten API-Key beizubehalten.'
+  return isAzureSpeech.value ? 'Für die Transkription ist ein API-Key der Azure-Speech-Ressource erforderlich.' : ''
+})
 const providerOptions = computed(() => [
   {
     label: 'ChatGPT Codex',
@@ -255,12 +274,19 @@ const providerOptions = computed(() => [
     value: 'lemonade',
     icon: 'developer_board',
     description: 'Lokaler Lemonade-Server für Chat- und Medienmodelle'
+  },
+  {
+    label: 'Azure Speech',
+    value: 'azure-speech',
+    icon: 'graphic_eq',
+    description: 'Fast Transcription für fertige Sprachnachrichten und Audiodateien'
   }
 ])
 const dialogTitle = computed(() => isEditing.value ? `${props.provider.name} bearbeiten` : 'Provider hinzufügen')
 const dialogIcon = computed(() => ({
   'openai-codex': 'key',
-  lemonade: 'developer_board'
+  lemonade: 'developer_board',
+  'azure-speech': 'graphic_eq'
 })[providerType.value] || 'hub')
 
 function defaultForm(type = null) {
@@ -282,10 +308,18 @@ function requiredRule(value) {
 }
 
 function urlRule(value) {
+  const message = isAzureSpeech.value
+    ? 'Bitte gib einen HTTPS-Endpunkt ohne Zugangsdaten, API-Pfad oder Abfrageparameter ein.'
+    : 'Bitte gib eine gültige HTTP-URL ein.'
   try {
-    return ['http:', 'https:'].includes(new URL(value).protocol) || 'Bitte gib eine gültige HTTP-URL ein.'
+    const url = new URL(value)
+    if (isAzureSpeech.value) {
+      return (url.protocol === 'https:' && !url.username && !url.password
+        && url.pathname === '/' && !url.search && !url.hash) || message
+    }
+    return ['http:', 'https:'].includes(url.protocol) || message
   } catch {
-    return 'Bitte gib eine gültige HTTP-URL ein.'
+    return message
   }
 }
 
