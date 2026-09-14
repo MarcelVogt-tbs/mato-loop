@@ -2930,8 +2930,11 @@ def test_task_general_profiles_keep_main_plan_artifact_and_child_permissions() -
     assert "Plan workflow:" not in child
     assert f"root=files path=plans/{session.id}/plan.md" not in child
     assert "do not inherit the parent transcript" in child
+    assert "Respond in English" in child
+    assert "Respond in the user's language" not in child
     assert "complete goal" in work
     assert "acceptance criteria" in work
+    assert "write each task prompt in English" in work
     assert "overlapping writes" in work
     assert f"root=files path=plans/{session.id}/plan.md" in work
     assert "asks to implement the current session plan" in work

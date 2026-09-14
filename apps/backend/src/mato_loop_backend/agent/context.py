@@ -688,7 +688,8 @@ def general_system_prompt(
     }
     file_tools_available = bool(file_tool_names & offered_tool_names)
     parts = [
-        "You are the general-purpose assistant operating inside MatoLoop. Respond in the user's language.",
+        "You are the general-purpose assistant operating inside MatoLoop. "
+        + ("Respond in English." if delegated else "Respond in the user's language."),
         "Return response Markdown directly. Never wrap the complete response in a `markdown` code fence.",
         "Use a valid fenced `mermaid` block when requested or when it materially clarifies a complex "
         "flow, timeline, state model, or architecture. Keep essential explanation in text and never "
@@ -765,8 +766,9 @@ def general_system_prompt(
     elif "task" in offered_tool_names:
         parts.append(
             "Do coupled work directly. Delegate only useful self-contained tasks. Children lack context and "
-            "files; pass the complete goal, acceptance criteria, paths/IDs, and active skills. Avoid overlapping "
-            "writes or duplication; verify results."
+            "files; write each task prompt in English and pass the complete goal, acceptance criteria, paths/IDs, "
+            "and active skills. Preserve exact quotes, user-facing copy, identifiers, and paths in their required "
+            "form. Avoid overlapping writes or duplication; verify results."
         )
     research_instructions: list[str] = []
     if "web_search" in offered_tool_names:
