@@ -28,6 +28,9 @@ class _Result:
     def __iter__(self):
         return iter(self.rows)
 
+    def scalar_one(self):
+        return self.rows[0]
+
 
 class _Connection:
     def __init__(self, rows, *, session_rows=(), fail_insert_at=None):
@@ -40,6 +43,8 @@ class _Connection:
     def execute(self, statement, params=None):
         sql = str(statement)
         self.statements.append((sql, params))
+        if "SELECT EXISTS" in sql:
+            return _Result([bool(self.rows or self.session_rows)])
         if "FROM projects AS project" in sql:
             return _Result(self.rows)
         if "FROM chat_sessions" in sql:
@@ -292,8 +297,26 @@ def test_upgrade_rolls_back_plan_when_attachment_update_fails(tmp_path, monkeypa
     assert not (root / "files" / "plan.md").exists()
 
 
-def test_downgrade_is_refused() -> None:
+def test_downgrade_allows_empty_storage(tmp_path, monkeypatch) -> None:
     migration = _migration_module()
+    monkeypatch.setenv("MATO_LOOP_DATA_DIR", str(tmp_path))
 
-    with pytest.raises(RuntimeError, match="may have changed"):
-        migration.downgrade()
+    migration._downgrade(_Connection([]))
+
+
+def test_downgrade_rejects_database_records(tmp_path, monkeypatch) -> None:
+    migration = _migration_module()
+    monkeypatch.setenv("MATO_LOOP_DATA_DIR", str(tmp_path))
+
+    with pytest.raises(RuntimeError, match="requires empty"):
+        migration._downgrade(_Connection([{"id": uuid4()}]))
+
+
+def test_downgrade_rejects_orphaned_storage(tmp_path, monkeypatch) -> None:
+    migration = _migration_module()
+    orphan = tmp_path / "sessions" / str(uuid4())
+    orphan.mkdir(parents=True)
+    monkeypatch.setenv("MATO_LOOP_DATA_DIR", str(tmp_path))
+
+    with pytest.raises(RuntimeError, match="requires empty"):
+        migration._downgrade(_Connection([]))
