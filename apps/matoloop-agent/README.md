@@ -7,7 +7,9 @@ without a recognized write remain `shell.read`, even when analysis is incomplete
 The mutable shared shell is trusted; this is not a sandbox guarantee. Isolated
 command execution remains unchanged.
 
-Standalone Linux agent for bounded filesystem, process, POSIX terminal, transfer, OpenSCAD, and session-cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
+Standalone agent with a portable connection and dispatch core. The current Linux platform adapter provides bounded filesystem, process, POSIX terminal, transfer, OpenSCAD, browser, credential-storage, and session-cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
+
+Platform adapters compose complete host operations behind the common core. Linux is currently the only implementation. Future macOS and Windows adapters must preserve each operation's security guarantees; Windows support also requires a coordinated extension of the protocol's normalized absolute POSIX path contract and the backend permission model.
 
 The [Linux browser runtime](BROWSER.md) provides a persistent owner-bound headed Chromium,
 private graphical viewing, interactive prerequisite setup, and bounded browser actions.

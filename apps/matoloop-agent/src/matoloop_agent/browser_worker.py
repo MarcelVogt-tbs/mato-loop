@@ -60,7 +60,7 @@ from .browser_contracts import (
     BrowserStatus,
     decode_chunk,
 )
-from .filesystem import AgentError
+from .errors import AgentError
 
 OPENBOX_CONFIG = """\
 <?xml version="1.0" encoding="UTF-8"?>

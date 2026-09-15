@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 
 import httpx
 
-from .filesystem import AgentError
+from .errors import AgentError
 from .protocol import TransferSpec
 
 

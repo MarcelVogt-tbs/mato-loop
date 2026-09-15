@@ -18,7 +18,8 @@ import tree_sitter_bash
 from tree_sitter import Language, Node, Parser
 
 from .config import AgentConfig
-from .filesystem import AgentError, Filesystem, _parts
+from .errors import AgentError
+from .filesystem import Filesystem, _parts
 
 StreamCallback = Callable[[str, str], Awaitable[None]]
 

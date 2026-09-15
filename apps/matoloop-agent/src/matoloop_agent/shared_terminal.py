@@ -18,7 +18,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from . import terminal as terminal_support
-from .filesystem import AgentError
+from .errors import AgentError
 from .process import EXECUTION_PATH, _parse_shell
 from .terminal import MAX_TERMINALS, PTY_AVAILABLE, TerminalManager
 

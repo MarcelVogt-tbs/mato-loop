@@ -2,11 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import shlex
-import shutil
-import socket
-import sys
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Any
@@ -14,15 +9,11 @@ from typing import Any
 import websockets
 from pydantic import ValidationError
 
-from .browser import BrowserManager
 from .browser_contracts import BROWSER_ARGUMENT_MODELS
-from .cache import SessionCache
 from .config import AgentConfig
-from .filesystem import AgentError, Filesystem
-from .openscad import OpenScadRunner
-from .process import ProcessRunner
+from .errors import AgentError
+from .platform import RuntimeServices, TransferAdapter, current_platform
 from .protocol import (
-    ARGUMENT_MODELS,
     CacheEnsureArguments,
     CacheExportArguments,
     CacheStoreArguments,
@@ -71,10 +62,6 @@ from .protocol import (
     parse_inbound,
     validate_arguments,
 )
-from .search import FilesystemSearch
-from .shared_terminal import SHARED_OPERATIONS, SharedTerminals
-from .terminal import TerminalManager
-from .transfer import TransferClient
 
 logger = logging.getLogger(__name__)
 MAX_WIRE_BYTES = 1024 * 1024
@@ -107,58 +94,40 @@ class MatoLoopAgent:
         config: AgentConfig,
         access_key: str,
         *,
-        transfer_client: TransferClient | None = None,
+        transfer_client: TransferAdapter | None = None,
+        runtime: RuntimeServices | None = None,
     ) -> None:
         if config.backend_url is None or config.agent_id is None:
             raise ValueError("MatoLoop Agent connection is not configured")
+        if transfer_client is not None and runtime is not None:
+            raise ValueError("transfer_client and runtime cannot both be supplied")
         self.config = config
-        self.filesystem = Filesystem(config)
-        self.cache = SessionCache(config.data_dir, config.max_session_cache_bytes)
-        self.process = ProcessRunner(config, self.filesystem)
-        self.terminal = TerminalManager(config, self.process)
-        self.browser = BrowserManager(config, self.terminal, self.filesystem)
-        self.shared_terminal = SharedTerminals(self.terminal)
-        self.search = FilesystemSearch(self.filesystem)
-        self.transfer = transfer_client or TransferClient(
-            max_bytes=config.max_transfer_bytes,
-            backend_url=config.backend_url,
-            access_key=access_key,
+        self.runtime = runtime or current_platform().build_runtime(
+            config,
+            access_key,
+            transfer_client=transfer_client,
         )
-        self.openscad = OpenScadRunner(config, self.filesystem, self.cache, self.transfer)
+        self.platform = self.runtime.platform
+        self.filesystem = self.runtime.filesystem
+        self.cache = self.runtime.cache
+        self.process = self.runtime.process
+        self.terminal = self.runtime.terminal
+        self.browser = self.runtime.browser
+        self.shared_terminal = self.runtime.shared_terminal
+        self.search = self.runtime.search
+        self.transfer = self.runtime.transfer
+        self.openscad = self.runtime.openscad
         self._access_key = access_key
-        operations = set(ARGUMENT_MODELS) | set(BROWSER_ARGUMENT_MODELS)
-        if self.process.shell is None:
-            operations.remove("shell.run")
-        if not self.terminal.available:
-            operations -= {
-                "terminal.open",
-                "terminal.read",
-                "terminal.write",
-                "terminal.resize",
-                "terminal.close",
-                "terminal.run",
-            }
-        if not self.shared_terminal.available:
-            operations -= SHARED_OPERATIONS
-        else:
-            operations |= {"terminal.read", "terminal.write", "terminal.resize", "terminal.close"}
-        if self.search.executable is None:
-            operations -= {"filesystem.glob", "filesystem.grep"}
-        if not self.openscad.render_available:
-            operations -= {
-                "integration.openscad.render",
-                "integration.openscad.render6",
-            }
-        self.operations = sorted(operations)
+        self.operations = list(self.runtime.operations)
 
     def hello(self) -> Hello:
-        home = self.filesystem.resolve_directory(os.fspath(self.config.home_directory))
+        home = self.filesystem.resolve_directory(str(self.config.home_directory))
         info = self.system_info(None)
         return Hello(
             agentId=self.config.agent_id,
             agentVersion=info["agentVersion"],
-            computerName=socket.gethostname(),
-            platform=sys.platform,
+            computerName=self.platform.computer_name(),
+            platform=self.platform.platform_id,
             homeDirectory=home["path"],
             operations=self.operations,
             systemInfo=SystemInfo.model_validate(
@@ -170,99 +139,7 @@ class MatoLoopAgent:
         )
 
     def system_info(self, current_directory: str | None) -> dict[str, Any]:
-        try:
-            from importlib.metadata import version
-
-            agent_version = version("matoloop-agent")
-        except Exception:
-            agent_version = "0.1.0"
-        result: dict[str, Any] = {
-            "agentVersion": agent_version,
-            "platform": sys.platform[:80],
-            "operatingSystem": None,
-            "kernel": None,
-            "architecture": None,
-            "logicalCpuCount": None,
-        }
-        with suppress(OSError, ValueError):
-            uname = os.uname()
-            result.update(
-                operatingSystem=uname.sysname, kernel=uname.release, architecture=uname.machine
-            )
-        with suppress(OSError, ValueError):
-            count = os.cpu_count()
-            if type(count) is int and 1 <= count <= 2147483647:
-                result["logicalCpuCount"] = count
-        if sys.platform.startswith("linux"):
-            # Read directly because platform.freedesktop_os_release caches across reconnects.
-            for path in ("/etc/os-release", "/usr/lib/os-release"):
-                try:
-                    with open(path, encoding="utf-8") as handle:
-                        for line in handle:
-                            name, _, value = line.partition("=")
-                            if name.strip() == "PRETTY_NAME":
-                                parts = shlex.split(value, comments=True)
-                                if len(parts) == 1:
-                                    result["distribution"] = parts[0]
-                                break
-                    break
-                except (OSError, ValueError):
-                    continue
-            with suppress(OSError, ValueError):
-                models = {}
-                with open("/proc/cpuinfo", encoding="utf-8") as handle:
-                    for line in handle:
-                        name, _, value = line.partition(":")
-                        name, value = name.strip(), value.strip()
-                        if name in {"model name", "Hardware", "Processor"} and value:
-                            if not value.isdecimal():
-                                models.setdefault(name, value)
-                result["cpuModel"] = next(
-                    (
-                        models[name]
-                        for name in ("model name", "Hardware", "Processor")
-                        if name in models
-                    ),
-                    None,
-                )
-            values = {}
-            try:
-                with open("/proc/meminfo", encoding="ascii") as handle:
-                    for line in handle:
-                        name, _, value = line.partition(":")
-                        if name in {"MemTotal", "MemAvailable"}:
-                            with suppress(ValueError):
-                                amount, unit = value.split()
-                                size = int(amount) * 1024
-                                minimum = 1 if name == "MemTotal" else 0
-                                if unit == "kB" and minimum <= size <= 9223372036854775807:
-                                    values[name] = size
-            except (OSError, ValueError):
-                pass
-            result["totalMemoryBytes"] = values.get("MemTotal")
-            if values.keys() >= {"MemTotal", "MemAvailable"}:
-                result["memory"] = {
-                    "totalBytes": values["MemTotal"],
-                    "availableBytes": values["MemAvailable"],
-                }
-        for name, limit in (
-            ("operatingSystem", 80),
-            ("distribution", 255),
-            ("kernel", 160),
-            ("architecture", 80),
-            ("cpuModel", 255),
-        ):
-            value = result.get(name)
-            result[name] = value.strip()[:limit] or None if isinstance(value, str) else None
-        if current_directory is not None:
-            directory = self.filesystem.resolve_directory(current_directory)
-            usage = shutil.disk_usage(directory["path"])
-            result["disk"] = {
-                "totalBytes": usage.total,
-                "availableBytes": usage.free,
-                **directory,
-            }
-        return result
+        return self.platform.system_info(current_directory, self.filesystem)
 
     async def dispatch(
         self, request: Request, stream=None, *, backend_id: str | None = None
@@ -273,6 +150,9 @@ class MatoLoopAgent:
             if request.operation.startswith("integration.browser."):
                 raise AgentError("browser.invalidTarget", "Invalid browser arguments") from exc
             raise AgentError("request.invalid", "Invalid operation arguments") from exc
+
+        if request.operation not in self.operations:
+            raise AgentError("operation.unsupported", "Operation is not supported")
 
         if request.operation in BROWSER_ARGUMENT_MODELS:
             return await self.browser.dispatch(request.operation, arguments)
@@ -449,13 +329,11 @@ class MatoLoopAgent:
                 expected_inspection_revision=arguments.expected_inspection_revision,
             )
         if isinstance(arguments, ShellInspectArguments):
-            result = await asyncio.to_thread(
+            return await asyncio.to_thread(
                 self.process.inspect_shell,
                 arguments.command,
                 arguments.current_directory,
             )
-            result.setdefault("inspectionRevision", self.process._inspection_revision(result))
-            return result
         if isinstance(arguments, SharedOpenArguments):
             return await self.shared_terminal.open(
                 arguments.rows, arguments.columns, terminal_id=arguments.terminal_id
