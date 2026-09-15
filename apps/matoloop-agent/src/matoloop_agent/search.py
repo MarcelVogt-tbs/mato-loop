@@ -9,7 +9,8 @@ import sys
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
-from .filesystem import AgentError, Filesystem, _parts, _path
+from .errors import AgentError
+from .filesystem import Filesystem, _parts, _path
 from .process import ProcessRunner
 
 MAX_RESULTS = 100

@@ -1,0 +1,253 @@
+from __future__ import annotations
+
+import asyncio
+import os
+import shlex
+import shutil
+import signal
+import socket
+import sys
+import threading
+from collections.abc import Coroutine, Mapping
+from contextlib import suppress
+from importlib.metadata import version
+from pathlib import Path
+from typing import Any
+
+from .browser import BrowserManager
+from .browser_contracts import BROWSER_ARGUMENT_MODELS
+from .cache import SessionCache
+from .config import AgentConfig
+from .credentials_linux import LinuxCredentialStore
+from .filesystem import Filesystem
+from .openscad import OpenScadRunner
+from .platform import FilesystemAdapter, RuntimeServices
+from .process import ProcessRunner
+from .protocol import ARGUMENT_MODELS
+from .search import FilesystemSearch
+from .shared_terminal import SHARED_OPERATIONS, SharedTerminals
+from .terminal import TerminalManager
+from .transfer import TransferClient
+
+
+class LinuxPlatform:
+    @property
+    def platform_id(self) -> str:
+        return sys.platform
+
+    def computer_name(self) -> str:
+        return socket.gethostname()
+
+    def default_config_path(self, environ: Mapping[str, str]) -> Path:
+        configured = environ.get("MATOLOOP_AGENT_CONFIG")
+        if configured:
+            return Path(configured)
+        data_home = Path(environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+        return data_home / "matoloop-agent" / "config.json"
+
+    def credential_store(self, data_dir: Path) -> LinuxCredentialStore:
+        return LinuxCredentialStore(data_dir)
+
+    def clear_cache(self, config: AgentConfig) -> int:
+        return SessionCache(config.data_dir, config.max_session_cache_bytes).clear()
+
+    def run_auxiliary(self, command: str, arguments: list[str]) -> bool:
+        if command == "browser-install":
+            from .browser import finish_setup
+
+            raise SystemExit(asyncio.run(finish_setup()))
+        if command == "browser-install-worker":
+            from playwright.__main__ import main as install_playwright
+
+            if os.getuid() == 0:
+                raise SystemExit(1)
+            sys.argv = ["playwright", "install", "--no-shell", "chromium"]
+            install_playwright()
+            return True
+        if command == "browser-worker":
+            from .browser_worker import serve
+
+            asyncio.run(serve(Path(arguments[0])))
+            return True
+        return False
+
+    def build_runtime(
+        self,
+        config: AgentConfig,
+        access_key: str,
+        *,
+        transfer_client: TransferClient | None = None,
+    ) -> RuntimeServices:
+        filesystem = Filesystem(config)
+        cache = SessionCache(config.data_dir, config.max_session_cache_bytes)
+        process = ProcessRunner(config, filesystem)
+        terminal = TerminalManager(config, process)
+        shared_terminal = SharedTerminals(terminal)
+        search = FilesystemSearch(filesystem)
+        transfer = transfer_client or TransferClient(
+            max_bytes=config.max_transfer_bytes,
+            backend_url=config.backend_url,
+            access_key=access_key,
+        )
+        openscad = OpenScadRunner(config, filesystem, cache, transfer)
+        operations = set(ARGUMENT_MODELS) | set(BROWSER_ARGUMENT_MODELS)
+        if process.shell is None:
+            operations.remove("shell.run")
+        if not terminal.available:
+            operations -= {
+                "terminal.open",
+                "terminal.read",
+                "terminal.write",
+                "terminal.resize",
+                "terminal.close",
+                "terminal.run",
+            }
+        if not shared_terminal.available:
+            operations -= SHARED_OPERATIONS
+        else:
+            operations |= {"terminal.read", "terminal.write", "terminal.resize", "terminal.close"}
+        if search.executable is None:
+            operations -= {"filesystem.glob", "filesystem.grep"}
+        if not openscad.render_available:
+            operations -= {"integration.openscad.render", "integration.openscad.render6"}
+        return RuntimeServices(
+            platform=self,
+            filesystem=filesystem,
+            cache=cache,
+            process=process,
+            terminal=terminal,
+            shared_terminal=shared_terminal,
+            search=search,
+            browser=BrowserManager(config, terminal, filesystem),
+            openscad=openscad,
+            transfer=transfer,
+            operations=tuple(sorted(operations)),
+        )
+
+    def system_info(
+        self, current_directory: str | None, filesystem: FilesystemAdapter
+    ) -> dict[str, Any]:
+        try:
+            agent_version = version("matoloop-agent")
+        except Exception:
+            agent_version = "0.1.0"
+        result: dict[str, Any] = {
+            "agentVersion": agent_version,
+            "platform": self.platform_id[:80],
+            "operatingSystem": None,
+            "kernel": None,
+            "architecture": None,
+            "logicalCpuCount": None,
+        }
+        with suppress(OSError, ValueError):
+            uname = os.uname()
+            result.update(
+                operatingSystem=uname.sysname,
+                kernel=uname.release,
+                architecture=uname.machine,
+            )
+        with suppress(OSError, ValueError):
+            count = os.cpu_count()
+            if type(count) is int and 1 <= count <= 2147483647:
+                result["logicalCpuCount"] = count
+        for path in ("/etc/os-release", "/usr/lib/os-release"):
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    for line in handle:
+                        name, _, value = line.partition("=")
+                        if name.strip() == "PRETTY_NAME":
+                            parts = shlex.split(value, comments=True)
+                            if len(parts) == 1:
+                                result["distribution"] = parts[0]
+                            break
+                break
+            except (OSError, ValueError):
+                continue
+        with suppress(OSError, ValueError):
+            models = {}
+            with open("/proc/cpuinfo", encoding="utf-8") as handle:
+                for line in handle:
+                    name, _, value = line.partition(":")
+                    name, value = name.strip(), value.strip()
+                    if name in {"model name", "Hardware", "Processor"} and value:
+                        if not value.isdecimal():
+                            models.setdefault(name, value)
+            result["cpuModel"] = next(
+                (
+                    models[name]
+                    for name in ("model name", "Hardware", "Processor")
+                    if name in models
+                ),
+                None,
+            )
+        values = {}
+        try:
+            with open("/proc/meminfo", encoding="ascii") as handle:
+                for line in handle:
+                    name, _, value = line.partition(":")
+                    if name in {"MemTotal", "MemAvailable"}:
+                        with suppress(ValueError):
+                            amount, unit = value.split()
+                            size = int(amount) * 1024
+                            minimum = 1 if name == "MemTotal" else 0
+                            if unit == "kB" and minimum <= size <= 9223372036854775807:
+                                values[name] = size
+        except (OSError, ValueError):
+            pass
+        result["totalMemoryBytes"] = values.get("MemTotal")
+        if values.keys() >= {"MemTotal", "MemAvailable"}:
+            result["memory"] = {
+                "totalBytes": values["MemTotal"],
+                "availableBytes": values["MemAvailable"],
+            }
+        for name, limit in (
+            ("operatingSystem", 80),
+            ("distribution", 255),
+            ("kernel", 160),
+            ("architecture", 80),
+            ("cpuModel", 255),
+        ):
+            value = result.get(name)
+            result[name] = value.strip()[:limit] or None if isinstance(value, str) else None
+        if current_directory is not None:
+            directory = filesystem.resolve_directory(current_directory)
+            usage = shutil.disk_usage(directory["path"])
+            result["disk"] = {
+                "totalBytes": usage.total,
+                "availableBytes": usage.free,
+                **directory,
+            }
+        return result
+
+    def run(self, coroutine: Coroutine[Any, Any, None]) -> None:
+        stopping = False
+        previous = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)}
+        deadline = threading.Timer(25, os._exit, args=(1,))
+        deadline.daemon = True
+
+        async def run() -> None:
+            nonlocal stopping
+            task = asyncio.current_task()
+
+            def stop() -> None:
+                nonlocal stopping
+                if not stopping:
+                    stopping = True
+                    deadline.start()
+                    task.cancel()
+
+            loop = asyncio.get_running_loop()
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                loop.add_signal_handler(signum, stop)
+            try:
+                await coroutine
+            except asyncio.CancelledError:
+                if not stopping:
+                    raise
+
+        try:
+            asyncio.run(run())
+        finally:
+            deadline.cancel()
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)

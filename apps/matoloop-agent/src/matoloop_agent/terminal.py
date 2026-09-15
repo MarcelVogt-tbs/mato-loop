@@ -23,7 +23,7 @@ except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts
     fcntl = pty = pwd = termios = None
 
 from .config import AgentConfig
-from .filesystem import AgentError
+from .errors import AgentError
 from .process import EXECUTION_PATH, ProcessRunner
 
 PTY_AVAILABLE = (

@@ -17,19 +17,7 @@ from typing import BinaryIO
 from uuid import uuid4
 
 from .config import AgentConfig
-
-
-class AgentError(Exception):
-    def __init__(
-        self,
-        code: str,
-        message: str,
-        params: dict[str, str | bool | int | float] | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.params = params
-
+from .errors import AgentError
 
 _RENAME_NOREPLACE = 1
 _RENAME_EXCHANGE = 2

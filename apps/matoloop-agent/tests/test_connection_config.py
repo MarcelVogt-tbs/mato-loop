@@ -137,14 +137,14 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                 "/proc/meminfo": "MemTotal: 8192 kB\nMemAvailable: 2048 kB\n",
             }
             with (
-                patch("matoloop_agent.connection.sys.platform", "linux"),
+                patch("matoloop_agent.platform_linux.sys.platform", "linux"),
                 patch(
-                    "matoloop_agent.connection.os.uname",
+                    "matoloop_agent.platform_linux.os.uname",
                     return_value=os.uname_result(("Linux", "host", "6.12", "version", "x86_64")),
                 ),
-                patch("matoloop_agent.connection.os.cpu_count", return_value=8),
+                patch("matoloop_agent.platform_linux.os.cpu_count", return_value=8),
                 patch(
-                    "matoloop_agent.connection.open",
+                    "matoloop_agent.platform_linux.open",
                     side_effect=lambda path, **_: io.StringIO(files[path]),
                 ),
             ):
@@ -178,7 +178,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(refreshed.total_memory_bytes, 16384 * 1024)
                 files["/proc/meminfo"] = "MemTotal: 32768 kB\n"
                 files["/proc/cpuinfo"] = "processor: 0\nProcessor: 0\n"
-                with patch("matoloop_agent.connection.os.cpu_count", return_value=16):
+                with patch("matoloop_agent.platform_linux.os.cpu_count", return_value=16):
                     refreshed = agent.hello().system_info
                 self.assertEqual(refreshed.logical_cpu_count, 16)
                 self.assertEqual(refreshed.total_memory_bytes, 32768 * 1024)
@@ -190,10 +190,10 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temporary:
             agent = MatoLoopAgent(configuration(Path(temporary)), "secret")
             with (
-                patch("matoloop_agent.connection.sys.platform", "linux"),
-                patch("matoloop_agent.connection.os.uname", side_effect=OSError),
-                patch("matoloop_agent.connection.os.cpu_count", side_effect=OSError),
-                patch("matoloop_agent.connection.open", side_effect=FileNotFoundError),
+                patch("matoloop_agent.platform_linux.sys.platform", "linux"),
+                patch("matoloop_agent.platform_linux.os.uname", side_effect=OSError),
+                patch("matoloop_agent.platform_linux.os.cpu_count", side_effect=OSError),
+                patch("matoloop_agent.platform_linux.open", side_effect=FileNotFoundError),
             ):
                 self.assertEqual(json.loads(serialize_message(agent.hello()))["systemInfo"], {})
             files = {
@@ -203,18 +203,18 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                 "/proc/meminfo": "MemTotal: bad kB\nMemAvailable: 0 kB\n",
             }
             with (
-                patch("matoloop_agent.connection.sys.platform", "linux"),
+                patch("matoloop_agent.platform_linux.sys.platform", "linux"),
                 patch(
-                    "matoloop_agent.connection.os.uname",
+                    "matoloop_agent.platform_linux.os.uname",
                     return_value=os.uname_result(("L" * 100, "host", "K" * 200, "version", " ")),
                 ),
                 patch(
-                    "matoloop_agent.connection.open",
+                    "matoloop_agent.platform_linux.open",
                     side_effect=lambda path, **_: io.StringIO(files[path]),
                 ),
             ):
                 for count in (None, 0, -1, True, "8", 2147483648):
-                    with patch("matoloop_agent.connection.os.cpu_count", return_value=count):
+                    with patch("matoloop_agent.platform_linux.os.cpu_count", return_value=count):
                         info = agent.hello().system_info
                         self.assertIsNone(info.logical_cpu_count)
                         self.assertIsNone(info.total_memory_bytes)

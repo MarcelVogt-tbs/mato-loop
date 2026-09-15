@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import BinaryIO
 from uuid import uuid4
 
-from .filesystem import AgentError, _relative_parts
+from .errors import AgentError
+from .filesystem import _relative_parts
 from .protocol import ArtifactDescriptor, TransferSpec
 from .transfer import TransferClient
 

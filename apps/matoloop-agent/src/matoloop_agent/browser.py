@@ -33,7 +33,8 @@ from .browser_contracts import (
     BrowserSetupReadResult,
     BrowserStatus,
 )
-from .filesystem import AgentError, Filesystem, _parts
+from .errors import AgentError
+from .filesystem import Filesystem, _parts
 from .terminal import MAX_BUFFER_BYTES, TerminalManager
 
 logger = logging.getLogger(__name__)

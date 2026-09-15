@@ -21,7 +21,8 @@ from uuid import uuid4
 
 from .cache import SessionCache
 from .config import AgentConfig
-from .filesystem import AgentError, Filesystem, _parts, _relative_parts
+from .errors import AgentError
+from .filesystem import Filesystem, _parts, _relative_parts
 from .process import ProcessRunner
 from .protocol import (
     ArtifactDescriptor,

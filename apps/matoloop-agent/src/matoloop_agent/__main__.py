@@ -5,13 +5,10 @@ import asyncio
 import getpass
 import logging
 import os
-import signal
 import sys
-import threading
 from collections.abc import Coroutine
 from pathlib import Path
 
-from .cache import SessionCache
 from .config import AgentConfig, ConnectionConfig
 from .connection import MatoLoopAgent
 from .credentials import (
@@ -22,6 +19,7 @@ from .credentials import (
     resolve_credential,
     select_pairing_token,
 )
+from .platform import current_platform
 
 
 def _environment(name: str) -> str | None:
@@ -29,11 +27,7 @@ def _environment(name: str) -> str | None:
 
 
 def _default_config_path() -> Path:
-    configured = _environment("MATOLOOP_AGENT_CONFIG")
-    if configured is not None:
-        return Path(configured)
-    data_home = Path(_environment("XDG_DATA_HOME") or Path.home() / ".local" / "share")
-    return data_home / "matoloop-agent" / "config.json"
+    return current_platform().default_config_path(os.environ)
 
 
 def _connection(
@@ -124,6 +118,7 @@ async def _execute(
     pairing_token: str | None,
 ) -> None:
     waiting = False
+    platform = current_platform()
     while True:
         try:
             credential = await resolve_credential(
@@ -131,6 +126,7 @@ async def _execute(
                 backend_url=connection.backend_url if connection else None,
                 agent_id=connection.agent_id if connection else None,
                 pairing_token=pairing_token,
+                store_factory=platform.credential_store,
             )
             break
         except NotPairedError:
@@ -168,6 +164,7 @@ async def _execute(
             backend_url=None,
             agent_id=None,
             pairing_token=None,
+            store_factory=platform.credential_store,
         )
         return refreshed.access_key
 
@@ -175,60 +172,15 @@ async def _execute(
 
 
 def _run(coroutine: Coroutine) -> None:
-    stopping = False
-    previous = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)}
-    # asyncio.run also waits for cancellation-resistant requests and executor threads.
-    deadline = threading.Timer(25, os._exit, args=(1,))
-    deadline.daemon = True
-
-    async def run() -> None:
-        task = asyncio.current_task()
-
-        def stop() -> None:
-            nonlocal stopping
-            if not stopping:
-                stopping = True
-                deadline.start()
-                task.cancel()
-
-        loop = asyncio.get_running_loop()
-        for signum in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(signum, stop)
-        try:
-            await coroutine
-        except asyncio.CancelledError:
-            if not stopping:
-                raise
-
-    try:
-        asyncio.run(run())
-    finally:
-        deadline.cancel()
-        for signum, handler in previous.items():
-            signal.signal(signum, handler)
+    current_platform().run(coroutine)
 
 
 def main() -> None:
-    if len(sys.argv) > 1 and sys.argv[1] in {
-        "browser-worker",
-        "browser-install",
-        "browser-install-worker",
-    }:
-        if sys.argv[1] == "browser-install":
-            from .browser import finish_setup
-
-            raise SystemExit(asyncio.run(finish_setup()))
-        elif sys.argv[1] == "browser-install-worker":
-            from playwright.__main__ import main as install_playwright
-
-            if os.getuid() == 0:
-                raise SystemExit(1)
-            sys.argv = ["playwright", "install", "--no-shell", "chromium"]
-            install_playwright()
-        else:
-            from .browser_worker import serve
-
-            asyncio.run(serve(Path(sys.argv[2])))
+    try:
+        platform = current_platform()
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from None
+    if len(sys.argv) > 1 and platform.run_auxiliary(sys.argv[1], sys.argv[2:]):
         return
     parser = argparse.ArgumentParser(description="Standalone MatoLoop Agent")
     parser.add_argument(
@@ -254,7 +206,7 @@ def main() -> None:
     try:
         config = AgentConfig.load(arguments.config)
         if arguments.command == "cache-clear":
-            SessionCache(config.data_dir, config.max_session_cache_bytes).clear()
+            platform.clear_cache(config)
             return
     except (OSError, ValueError):
         parser.error("invalid or unavailable MatoLoop Agent configuration")

@@ -15,6 +15,7 @@ from matoloop_agent.credentials import (
     resolve_credential,
     select_pairing_token,
 )
+from matoloop_agent.credentials_linux import LinuxCredentialStore
 
 AGENT_ID = "2ea504cc-e3c6-4e0d-aa05-080328100fe8"
 BACKEND_URL = "wss://mato.example/base/api/execution-agents/connect"
@@ -75,6 +76,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
                 agent_id=AGENT_ID,
                 pairing_token="pairing-secret",
                 client=http,
+                store_factory=LinuxCredentialStore,
             )
             saved = state(base)
             self.assertEqual(received["url"], derive_pairing_url(BACKEND_URL))
@@ -102,6 +104,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
                 agent_id=None,
                 pairing_token=None,
                 client=http,
+                store_factory=LinuxCredentialStore,
             )
             self.assertEqual(restored, credential)
             with self.assertRaises(CredentialError):
@@ -111,6 +114,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
                     agent_id=AGENT_ID,
                     pairing_token=None,
                     client=http,
+                    store_factory=LinuxCredentialStore,
                 )
             await http.aclose()
 
@@ -129,6 +133,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
                     agent_id=AGENT_ID,
                     pairing_token="first-token",
                     client=failed,
+                    store_factory=LinuxCredentialStore,
                 )
             pending_key = state(base)["pending"]["accessKey"]
             await failed.aclose()
@@ -147,6 +152,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
                 agent_id=AGENT_ID,
                 pairing_token="ignored-new-token",
                 client=retry,
+                store_factory=LinuxCredentialStore,
             )
             self.assertEqual(credential.access_key, pending_key)
             self.assertEqual(received["authorization"], "Bearer first-token")
@@ -164,6 +170,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
                     agent_id=AGENT_ID,
                     pairing_token="temporary-token",
                     client=unavailable,
+                    store_factory=LinuxCredentialStore,
                 )
             self.assertEqual(state(base)["pending"]["pairingToken"], "temporary-token")
             await unavailable.aclose()
@@ -178,6 +185,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
                     agent_id=AGENT_ID,
                     pairing_token="rejected-token",
                     client=rejected,
+                    store_factory=LinuxCredentialStore,
                 )
             self.assertNotIn("rejected-token", str(raised.exception))
             self.assertNotIn("backend-secret-details", str(raised.exception))
@@ -194,6 +202,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
                 agent_id=AGENT_ID,
                 pairing_token="original-token",
                 client=paired,
+                store_factory=LinuxCredentialStore,
             )
             await paired.aclose()
 
@@ -205,6 +214,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
                     agent_id=AGENT_ID,
                     pairing_token="original-token",
                     client=unused,
+                    store_factory=LinuxCredentialStore,
                 ),
                 old_credential,
             )
@@ -218,6 +228,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
                     agent_id=AGENT_ID,
                     pairing_token="invalid-new-token",
                     client=rejected,
+                    store_factory=LinuxCredentialStore,
                 )
             self.assertEqual(state(base)["accessKey"], old_credential.access_key)
             self.assertNotIn("pending", state(base))
@@ -230,6 +241,7 @@ class CredentialTests(unittest.IsolatedAsyncioTestCase):
                 agent_id=AGENT_ID,
                 pairing_token="valid-new-token",
                 client=rotated,
+                store_factory=LinuxCredentialStore,
             )
             self.assertNotEqual(new_credential.access_key, old_credential.access_key)
             self.assertEqual(state(base)["accessKey"], new_credential.access_key)
