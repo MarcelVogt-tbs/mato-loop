@@ -473,7 +473,8 @@ const projectSessionEntries = computed(() => managedSessionOptions.value.map((op
   kind: 'directory',
   name: option.label,
   path: `@session/${option.value}`,
-  sessionId: option.value
+  sessionId: option.value,
+  currentSession: option.value === chat.current.id
 })))
 const displayEntries = computed(() => projectOverview.value
   ? projectSessionEntries.value
@@ -499,7 +500,7 @@ const managedSessionOptions = computed(() => {
   const titles = candidates.map((session) => session.title?.trim() || 'Unbenannte Session')
   const titleCounts = new Map(titles.map((title) => [title, titles.filter((item) => item === title).length]))
   return candidates.map((session, index) => ({
-    label: `${titles[index]}${titleCounts.get(titles[index]) > 1 || !session.title?.trim() ? ` · ${session.id.length > 12 ? session.id.slice(-8) : session.id}` : ''}${session.id === current.id ? ' (diese Session)' : ''}`,
+    label: `${titles[index]}${titleCounts.get(titles[index]) > 1 || !session.title?.trim() ? ` · ${session.id.length > 12 ? session.id.slice(-8) : session.id}` : ''}`,
     value: session.id
   }))
 })

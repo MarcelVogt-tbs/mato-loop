@@ -9,6 +9,7 @@ import { useInstanceLimitsStore } from 'src/stores/instance-limits'
 import { useQuestionStore } from 'src/stores/questions'
 import { useSubagentStore } from 'src/stores/subagents'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { mergeResearchSources } from 'src/utils/research-sources'
 import {
   attachmentKind,
   attachmentPreviewUrl,
@@ -148,6 +149,7 @@ export const useChatStore = defineStore('chat', {
     stopping: false,
     cancelRequested: false,
     streamContent: '',
+    streamResearchSources: [],
     streamReasoning: null,
     streamContextSummary: null,
     runWarnings: [],
@@ -999,6 +1001,7 @@ export const useChatStore = defineStore('chat', {
         this.stopping = false
         this.cancelRequested = false
         this.streamContent = ''
+        this.streamResearchSources = []
         this.streamReasoning = null
         this.streamContextSummary = null
         this.streamModelName = null
@@ -1307,6 +1310,7 @@ export const useChatStore = defineStore('chat', {
       this.stopping = false
       this.cancelRequested = false
       this.streamContent = ''
+      this.streamResearchSources = []
       this.streamReasoning = null
       this.streamContextSummary = null
       this.runWarnings = []
@@ -1834,6 +1838,7 @@ export const useChatStore = defineStore('chat', {
       const projectId = requestedProjectId === undefined ? this.sessionsProjectId : requestedProjectId
       this.running = !this.cancelRequested
       this.streamContent = ''
+      this.streamResearchSources = []
       this.streamReasoning = null
       this.streamContextSummary = null
       this.streamModelName = null
@@ -1950,6 +1955,7 @@ export const useChatStore = defineStore('chat', {
       const sessionLoadVersion = this.sessionLoadVersion
       this.running = !this.cancelRequested
       this.streamContent = ''
+      this.streamResearchSources = []
       this.streamReasoning = null
       this.streamContextSummary = null
       this.streamModelName = null
@@ -2258,6 +2264,10 @@ export const useChatStore = defineStore('chat', {
       source.addEventListener('tool.completed', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
+        this.streamResearchSources = mergeResearchSources(
+          this.streamResearchSources,
+          payload.metadata?.sources
+        )
         this.completedToolCallId = payload.toolCallId || null
         const refresh = this.refreshSession(sessionId)
         void refresh?.then(async (session) => {
@@ -2429,6 +2439,7 @@ export const useChatStore = defineStore('chat', {
         this.stopping = false
         this.cancelRequested = false
         this.streamContent = ''
+        this.streamResearchSources = []
         this.streamReasoning = null
         this.streamContextSummary = null
         this.runWarnings = []
@@ -2467,6 +2478,7 @@ export const useChatStore = defineStore('chat', {
         source.close()
         this.eventSource = null
         this.streamContent = ''
+        this.streamResearchSources = []
         this.streamReasoning = null
         this.streamContextSummary = null
         if (finished) return

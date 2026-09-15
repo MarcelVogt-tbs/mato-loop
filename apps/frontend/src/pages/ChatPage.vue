@@ -609,6 +609,7 @@ const displayMessages = computed(() => {
     content: chat.streamContent,
     currentTurn: true,
     modelName: chat.streamModelName,
+    research: { linkedSources: chat.streamResearchSources },
     agentProfileId: chat.runAgentProfileId || chat.current?.activeRun?.agentProfileId || null,
     showAgentLabel: !hasCurrentAssistantTurn.value,
     streaming: Boolean(chat.streamContent),

@@ -5,6 +5,7 @@ import { emptyActivity } from 'src/features/chat/state'
 import { mergeAgentActivity } from 'src/utils/agent-activity'
 import { notifyError } from 'src/utils/notifications'
 import { useApprovalStore } from 'src/stores/approvals'
+import { mergeResearchSources } from 'src/utils/research-sources'
 
 const ACTIVE = new Set(['queued', 'running', 'waiting_approval', 'waiting_input'])
 
@@ -31,6 +32,7 @@ export const useSubagentStore = defineStore('subagents', () => {
   const error = ref(null)
   const olderLoading = ref(false)
   const streamContent = ref('')
+  const streamResearchSources = ref([])
   const streamReasoning = ref(null)
   const streamContextSummary = ref(null)
   const processOutputs = ref({})
@@ -121,8 +123,9 @@ export const useSubagentStore = defineStore('subagents', () => {
     activity.value = emptyActivity()
   }
 
-  function clearStream() {
+  function clearStream({ preserveResearch = false } = {}) {
     streamContent.value = ''
+    if (!preserveResearch) streamResearchSources.value = []
     streamReasoning.value = null
     streamContextSummary.value = null
     warnings.value = []
@@ -272,7 +275,7 @@ export const useSubagentStore = defineStore('subagents', () => {
         current.value.messages = mergeById(current.value.messages, [payload.message])
         messageRevision += 1
       }
-      clearStream()
+      clearStream({ preserveResearch: true })
       if (name === 'message.completed') {
         const tool = payload.message?.toolCalls?.[0]
         activity.value = mergeAgentActivity(activity.value, tool ? {
@@ -287,6 +290,10 @@ export const useSubagentStore = defineStore('subagents', () => {
     for (const name of ['message.updated', 'tool.completed', 'context.compacted', 'session.title.updated']) {
       on(name, (payload) => {
         if (name === 'tool.completed') {
+          streamResearchSources.value = mergeResearchSources(
+            streamResearchSources.value,
+            payload.metadata?.sources
+          )
           completedToolCallId.value = payload.toolCallId || null
           delete processOutputs.value[payload.toolCallId]
         }
@@ -356,7 +363,7 @@ export const useSubagentStore = defineStore('subagents', () => {
 
   return {
     parentId, children, childrenLoading, childrenError, current, run, running,
-    loading, error, olderLoading, streamContent, streamReasoning, streamContextSummary,
+    loading, error, olderLoading, streamContent, streamResearchSources, streamReasoning, streamContextSummary,
     processOutputs, completedToolCallId, warnings, activity, reconnecting, loadChildren, open, close, loadOlder
   }
 })

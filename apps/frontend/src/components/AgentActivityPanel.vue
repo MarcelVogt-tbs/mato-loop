@@ -88,6 +88,7 @@ import {
 } from 'src/utils/attachments'
 import { agentRunPresentation, runWarningEntries } from 'src/utils/agent-activity'
 import { groupWorkHistoryEntries } from 'src/utils/chat-transcript'
+import { reasoningBlocks, reasoningHistoryPresentation } from 'src/utils/reasoning-display'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
 
 defineOptions({ name: 'AgentActivityPanel' })
@@ -129,9 +130,16 @@ const presentation = computed(() => props.presentation || agentRunPresentation({
 }))
 const preparedEntries = computed(() => {
   const current = presentation.value.entry
-  const history = (props.history?.entries || []).filter((entry) => entry.type !== 'reasoning' && (
+  const history = (props.history?.entries || []).filter((entry) => !(entry.type === 'reasoning' && entry.live) && (
     entry.type !== 'tool' || !props.running || entry.result || entry.completed || entry.approval || entry.question || entry.key === current?.key
-  )).map((entry) => entry.key === current?.key ? current : { ...entry, active: false })
+  )).map((entry) => {
+    const prepared = entry.key === current?.key ? current : { ...entry, active: false }
+    return prepared.type === 'reasoning' ? {
+      ...prepared,
+      blocks: reasoningBlocks(prepared.reasoning),
+      presentation: reasoningHistoryPresentation(prepared.reasoning)
+    } : prepared
+  })
   return [
     ...history,
     ...runWarningEntries(props.warnings, 'live-warning', true),

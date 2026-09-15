@@ -13,7 +13,14 @@
       @focus="emit('focus-entry', entry.path)"
     >
       <div class="file-tree-row__main col row items-center no-wrap q-px-sm">
-        <q-icon :name="icon" :color="entry.kind === 'symlink' ? 'warning' : undefined" size="20px" />
+        <q-icon
+          :name="icon"
+          :color="entry.currentSession ? 'primary' : entry.kind === 'symlink' ? 'warning' : undefined"
+          size="20px"
+          :aria-label="entry.currentSession ? 'Diese Session' : undefined"
+        >
+          <q-tooltip v-if="entry.currentSession">Diese Session</q-tooltip>
+        </q-icon>
         <span class="ellipsis q-ml-sm">{{ entry.name }}</span>
       </div>
       <q-btn
@@ -82,7 +89,9 @@ const canDownload = computed(() => (
   props.entry.kind === 'file' && workspace.operationAvailable('filesystem.export')
 ))
 const visible = computed(() => !props.filter || props.entry.name.toLocaleLowerCase().includes(props.filter.toLocaleLowerCase()))
-const icon = computed(() => ({ directory: 'folder', symlink: 'link', file: 'description' })[props.entry.kind])
+const icon = computed(() => props.entry.currentSession
+  ? 'folder_special'
+  : ({ directory: 'folder', symlink: 'link', file: 'description' })[props.entry.kind])
 
 function activate() {
   if (props.entry.kind === 'directory') {

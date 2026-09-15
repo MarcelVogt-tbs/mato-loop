@@ -897,7 +897,7 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.querySelector('.tool-call__title').classList).toContain('activity-shimmer')
   })
 
-  it('hides completed reasoning but keeps current compaction details', async () => {
+  it('keeps completed reasoning and compaction details in history', async () => {
     const pinia = createPinia()
     root = document.createElement('div')
     document.body.append(root)
@@ -924,7 +924,14 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.textContent).not.toContain('Öffentliche Überlegung')
     root.querySelector('.work-history__toggle').click()
     await nextTick()
-    root.querySelector('.work-history__reasoning .q-item').click()
+    const detailRows = root.querySelectorAll('.work-history__reasoning .q-item')
+    expect(detailRows).toHaveLength(2)
+    expect([...root.querySelectorAll('.work-history__activity-title')].map((node) => node.textContent.trim()))
+      .toEqual(['Nachdenken', 'Gesprächskontext verdichtet'])
+    detailRows[0].click()
+    await nextTick()
+    expect(root.textContent).toContain('Öffentliche Überlegung')
+    detailRows[1].click()
     await nextTick()
     expect(root.textContent).toContain('Goal\nVollständiger Kontext')
   })

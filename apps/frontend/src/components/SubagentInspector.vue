@@ -154,6 +154,7 @@ const presentation = computed(() => agentRunPresentation({
 }))
 const messages = computed(() => withLiveTranscriptMessage(transcript.value.messages, {
   id: `live-${props.childId}`, role: 'assistant', content: inspector.streamContent,
+  research: { linkedSources: inspector.streamResearchSources },
   agentProfileId: inspector.run?.agentProfileId || null,
   streaming: Boolean(inspector.streamContent), currentTurn: true,
   showAgentLabel: !transcript.value.messages.some((message) => message.currentTurn),

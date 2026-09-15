@@ -5,6 +5,7 @@
       class="chat-markdown"
       @click="handleClick"
       @error.capture="handleImageError"
+      @pointerdown="handlePointerDown"
       v-html="rendered.html"
     />
 
@@ -68,6 +69,8 @@ const mermaidDialog = ref(false)
 const mermaidImage = ref(null)
 const STREAM_RENDER_INTERVAL_MS = 50
 let renderTimer = null
+let linkPointerActive = false
+let linkReleaseTimer = null
 let streamRenderStarted = false
 let renderVersion = 0
 let mermaidObjectUrl = ''
@@ -121,6 +124,7 @@ async function hydrateMermaid(version) {
 }
 
 function scheduleRender() {
+  if (linkPointerActive) return
   if (!props.streaming) {
     streamRenderStarted = false
     if (renderTimer !== null) window.clearTimeout(renderTimer)
@@ -133,6 +137,28 @@ function scheduleRender() {
     return
   }
   if (renderTimer === null) renderTimer = window.setTimeout(renderContent, STREAM_RENDER_INTERVAL_MS)
+}
+
+function handlePointerDown(event) {
+  const link = event.target.closest?.('a[href]')
+  if (!props.streaming || !link || !event.currentTarget.contains(link)) return
+  linkPointerActive = true
+  if (renderTimer !== null) {
+    window.clearTimeout(renderTimer)
+    renderTimer = null
+  }
+  window.clearTimeout(linkReleaseTimer)
+  window.addEventListener('pointerup', releaseLinkPointer)
+  window.addEventListener('pointercancel', releaseLinkPointer)
+}
+
+function releaseLinkPointer() {
+  window.removeEventListener('pointerup', releaseLinkPointer)
+  window.removeEventListener('pointercancel', releaseLinkPointer)
+  linkReleaseTimer = window.setTimeout(() => {
+    linkPointerActive = false
+    scheduleRender()
+  })
 }
 
 function setImageState(url, status) {
@@ -269,6 +295,9 @@ watch(
 onBeforeUnmount(() => {
   renderVersion += 1
   if (renderTimer !== null) window.clearTimeout(renderTimer)
+  window.clearTimeout(linkReleaseTimer)
+  window.removeEventListener('pointerup', releaseLinkPointer)
+  window.removeEventListener('pointercancel', releaseLinkPointer)
   clearMermaidImage()
   for (const task of verificationTasks.values()) task.cancel()
   verificationTasks.clear()

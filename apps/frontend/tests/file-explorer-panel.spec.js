@@ -32,7 +32,7 @@ vi.mock('stores/instance-limits', () => ({ useInstanceLimitsStore: () => ({ maxU
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: vi.fn() }) }))
 vi.mock('components/FileTreeNode.vue', () => ({ default: {
   props: ['entry'], emits: ['open-directory'],
-  template: '<button role="treeitem" :data-file-path="entry.path" @click="$emit(\'open-directory\', entry)">{{ entry.name }}</button>'
+  template: '<button role="treeitem" :data-file-path="entry.path" :data-current-session="entry.currentSession || undefined" @click="$emit(\'open-directory\', entry)">{{ entry.name }}</button>'
 } }))
 
 import FileExplorerPanel from '../src/components/FileExplorerPanel.vue'
@@ -140,9 +140,11 @@ it('starts in the session folder and opens sibling sessions through the parent p
   await nextTick()
   const folders = [...root.querySelectorAll('[data-file-path^="@session/"]')]
   expect(folders.map((folder) => folder.textContent)).toEqual([
-    expect.stringContaining('Eigene (diese Session)'),
+    expect.stringContaining('Eigene'),
     expect.stringContaining('Andere')
   ])
+  expect(folders[0].dataset.currentSession).toBe('true')
+  expect(folders[1].dataset.currentSession).toBeUndefined()
   expect(root.textContent).not.toContain('Fremd')
   folders[1].click()
 
@@ -174,7 +176,7 @@ it('distinguishes duplicate session folders and returns to the current session w
   await nextTick()
   const folders = [...root.querySelectorAll('[data-file-path^="@session/"]')]
   expect(folders.map((folder) => folder.textContent.trim())).toEqual([
-    'Gleich · session-a (diese Session)',
+    'Gleich · session-a',
     'Gleich · session-b',
     'Unbenannte Session · session-c',
     'Unbenannte Session · session-d'
