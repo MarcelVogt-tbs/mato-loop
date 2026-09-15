@@ -1,4 +1,3 @@
-import hashlib
 import json
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -2958,11 +2957,10 @@ def test_host_coding_workflow_applies_to_old_stored_profile_without_replacing_it
     assert prompt.count(PLAN_PROGRESS_CONTRACT) == 1
 
 
-def test_plan_progress_contract_is_exactly_114_words() -> None:
-    assert len(PLAN_PROGRESS_CONTRACT.split()) == 114
-    assert hashlib.sha256(PLAN_PROGRESS_CONTRACT.encode()).hexdigest() == (
-        "972cd4b1290c02beda4bf391a34a21cb13bf5e92f941777f4c8c34eb19632f7d"
-    )
+def test_plan_progress_contract_prioritizes_scanable_execution_details() -> None:
+    assert "quick to scan and sufficient to implement" in PLAN_PROGRESS_CONTRACT
+    assert "Reference existing requirements instead of repeating them" in PLAN_PROGRESS_CONTRACT
+    assert "risks and open decisions only" in PLAN_PROGRESS_CONTRACT
 
 
 def test_question_contract_allows_follow_up_for_new_required_decisions() -> None:

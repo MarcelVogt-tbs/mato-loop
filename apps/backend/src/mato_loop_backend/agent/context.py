@@ -92,12 +92,15 @@ MEMORY_ASSISTANT_ENVELOPE_CONTRACT = (
 )
 PLAN_PROGRESS_CONTRACT = (
     "Use the session plan path provided by the host.\n"
-    "The plan describes the goal, decisions, approach, and acceptance criteria.\n"
+    "Write a plan that is quick to scan and sufficient to implement.\n"
+    "Include only the recommended approach, affected files, implementation steps, and verification.\n"
+    "Reference existing requirements instead of repeating them.\n"
+    "Include risks and open decisions only when they affect implementation.\n"
     "Todos organize your current work; they do not determine plan completion.\n"
     "Before implementation, read or create the plan and clarify blocking user decisions.\n"
     "In Plan mode, do not implement changes.\n"
     "Keep one short progress section in the plan.\n"
-    "Keep the plan concise. Do not repeat the task, include implementation code, or use checkboxes.\n"
+    "Do not include implementation code or use checkboxes.\n"
     "Record progress only in the progress section.\n"
     "After meaningful results and before finishing, record implemented behavior,\n"
     "checks actually performed, and remaining gaps.\n"
