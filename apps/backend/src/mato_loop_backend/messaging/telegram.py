@@ -1582,6 +1582,7 @@ async def _relay_run_progress(run_id: UUID) -> None:
         activity = ""
         reasoning_label = ""
         resume_activity = ""
+        pending_interactions: set[str] = set()
         draft_dirty = False
         next_draft_at = 0.0
         next_indicator_at = 0.0
@@ -1631,6 +1632,29 @@ async def _relay_run_progress(run_id: UUID) -> None:
                             return
                         event_task = asyncio.create_task(anext(events))
                         event_type = event.get("type")
+                        interaction_finished = False
+                        if event_type == "approval.created":
+                            approval = event.get("approval")
+                            if isinstance(approval, dict) and isinstance(approval.get("id"), str):
+                                pending_interactions.add(f"approval:{approval['id']}")
+                        elif event_type == "question.created":
+                            question = event.get("question")
+                            if isinstance(question, dict) and isinstance(question.get("id"), str):
+                                pending_interactions.add(f"question:{question['id']}")
+                        elif event_type in {"approval.resolved", "approval.expired"}:
+                            approval_id = event.get("approvalId")
+                            if isinstance(approval_id, str):
+                                pending_interactions.discard(f"approval:{approval_id}")
+                                interaction_finished = True
+                        elif event_type in {
+                            "question.answered",
+                            "question.rejected",
+                            "question.expired",
+                        }:
+                            question_id = event.get("questionId")
+                            if isinstance(question_id, str):
+                                pending_interactions.discard(f"question:{question_id}")
+                                interaction_finished = True
                         if event_type == "message.delta":
                             delta = event.get("delta")
                             if isinstance(delta, str) and delta:
@@ -1638,41 +1662,47 @@ async def _relay_run_progress(run_id: UUID) -> None:
                                 activity = ""
                                 draft_dirty = True
                         elif event_type == "question.created":
+                            resume_activity = resume_activity or activity
                             draft_dirty = bool(activity or content)
                             content = ""
                             activity = ""
                             reasoning_label = ""
+                        elif interaction_finished and not pending_interactions:
+                            if resume_activity:
+                                activity = resume_activity
+                                resume_activity = ""
+                                draft_dirty = True
+                            next_indicator_at = 0.0
                         elif (
                             event_type == "run.timing"
                             and event.get("activeDurationRunning") is True
                         ):
-                            if activity == f"🔐 {run_activity_label('waiting_approval')}":
-                                activity = resume_activity or run_activity_label(
-                                    "processing_tool"
-                                )
+                            if resume_activity and not pending_interactions:
+                                activity = resume_activity
                                 resume_activity = ""
                                 draft_dirty = True
-                            else:
-                                next_indicator_at = 0.0
+                            next_indicator_at = 0.0
                         elif not content:
                             phase = event.get("phase")
                             if event_type == "approval.created":
+                                resume_activity = resume_activity or activity
                                 approval = event.get("approval")
                                 details = (
                                     approval.get("details")
                                     if isinstance(approval, dict)
                                     else None
                                 )
-                                resume_activity = run_activity_label(
-                                    "processing_tool",
-                                    tool=(
-                                        details.get("tool")
-                                        if isinstance(details, dict)
-                                        else None
-                                    ),
-                                )
+                                if not resume_activity:
+                                    resume_activity = run_activity_label(
+                                        "processing_tool",
+                                        tool=(
+                                            details.get("tool")
+                                            if isinstance(details, dict)
+                                            else None
+                                        ),
+                                    )
                                 display = details.get("toolDisplay") if isinstance(details, dict) else None
-                                if isinstance(display, dict):
+                                if isinstance(display, dict) and not activity:
                                     resume_activity = _progress_activity(
                                         {
                                             "type": "run.phase",
@@ -1696,11 +1726,12 @@ async def _relay_run_progress(run_id: UUID) -> None:
                                 and reasoning_label
                             ):
                                 next_activity = reasoning_label
-                            if (
-                                event_type == "run.phase"
-                                and phase == "waiting_model"
-                                and next_activity is None
-                            ):
+                            if event_type == "run.phase" and phase in {
+                                "preparing_context",
+                                "waiting_model",
+                            } and activity:
+                                next_activity = None
+                            if event_type == "run.phase" and phase == "finalizing" and not content:
                                 next_activity = ""
                             if next_activity is not None and next_activity != activity:
                                 activity = next_activity
@@ -1709,9 +1740,22 @@ async def _relay_run_progress(run_id: UUID) -> None:
                             message = event.get("message")
                             if isinstance(message, dict) and message.get("toolCalls"):
                                 content = ""
-                                if reasoning_label:
-                                    activity = reasoning_label
-                                    draft_dirty = True
+                                tool = message["toolCalls"][0]
+                                if isinstance(tool, dict):
+                                    activity = _progress_activity(
+                                        {
+                                            "type": "run.phase",
+                                            "phase": "processing_tool",
+                                            "tool": tool.get("name"),
+                                            "toolDisplay": tool.get("toolDisplay"),
+                                        }
+                                    ) or activity
+                                draft_dirty = bool(activity)
+                            elif isinstance(message, dict) and isinstance(message.get("content"), str):
+                                completed_content = message["content"]
+                                draft_dirty = bool(activity or completed_content != content)
+                                content = completed_content
+                                activity = ""
                         elif event_type in {
                             "run.completed",
                             "run.failed",
@@ -1740,7 +1784,7 @@ async def _relay_run_progress(run_id: UUID) -> None:
                         or current_draft_id != draft_id
                     ):
                         return
-                    if status in {"waiting_approval", "waiting_input"}:
+                    if pending_interactions or status in {"waiting_approval", "waiting_input"}:
                         if send_typing:
                             next_indicator_at = now + TYPING_REFRESH_SECONDS
                         send_typing = False
@@ -1748,7 +1792,7 @@ async def _relay_run_progress(run_id: UUID) -> None:
                         parts = render_channel_text(
                             "telegram",
                             _progress_draft(activity, content) or DRAFT_CLEAR_TEXT,
-                            content_format="markdown",
+                            content_format="markdown" if content else "plain",
                             partial=True,
                         )
                         part = parts[-1] if parts else RenderedChannelText("")

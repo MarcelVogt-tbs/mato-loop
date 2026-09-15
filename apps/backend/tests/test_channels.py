@@ -946,12 +946,17 @@ async def test_telegram_relays_typing_and_native_drafts(monkeypatch) -> None:
             "type": "run.phase",
             "phase": "waiting_model",
             "modelRequest": 1,
-            "activityLabel": "Verarbeite Anfrage",
         }
         yield {"type": "message.delta", "delta": "Zwischenstand"}
         yield {
             "type": "message.completed",
-            "message": {"toolCalls": [{"name": "test"}]},
+            "message": {"toolCalls": [{
+                "name": "read_file",
+                "toolDisplay": {
+                    "group": "filesystem", "groupLabel": "Dateisystem", "icon": "folder",
+                    "emoji": "📁", "label": "Pfad lesen", "summary": "note_*_[1].md",
+                },
+            }]},
         }
         yield {
             "type": "run.phase",
@@ -960,7 +965,7 @@ async def test_telegram_relays_typing_and_native_drafts(monkeypatch) -> None:
             "toolLabel": "Datei lesen",
             "toolDisplay": {
                 "group": "filesystem", "groupLabel": "Dateisystem", "icon": "folder",
-                "emoji": "📁", "label": "Pfad lesen", "summary": "note.md",
+                "emoji": "📁", "label": "Pfad lesen", "summary": "note_*_[1].md",
             },
         }
         yield {
@@ -969,11 +974,13 @@ async def test_telegram_relays_typing_and_native_drafts(monkeypatch) -> None:
             "toolLabel": "Datei lesen",
             "toolDisplay": {
                 "group": "filesystem", "groupLabel": "Dateisystem", "icon": "folder",
-                "emoji": "📁", "label": "Pfad lesen", "summary": "note.md",
+                "emoji": "📁", "label": "Pfad lesen", "summary": "note_*_[1].md",
             },
             "output": "secret output",
             "metadata": {"private": "secret metadata"},
         }
+        yield {"type": "run.phase", "phase": "preparing_context", "modelRequest": 2}
+        yield {"type": "run.phase", "phase": "waiting_model", "modelRequest": 2}
         yield {"type": "message.delta", "delta": "Antwort"}
         yield {"type": "run.phase", "phase": "finalizing"}
         yield {"type": "run.completed"}
@@ -1013,8 +1020,7 @@ async def test_telegram_relays_typing_and_native_drafts(monkeypatch) -> None:
         "🧠 Nachdenken",
         "🧠 Nachdenken · Vorgehen prüfen",
         "Zwischenstand",
-        "🧠 Nachdenken · Vorgehen prüfen",
-        "📁 Pfad lesen · note.md",
+        "📁 Pfad lesen · note_*_[1].md",
         "Antwort",
     ]
     assert "secret" not in "".join(drafts)
@@ -1023,11 +1029,9 @@ async def test_telegram_relays_typing_and_native_drafts(monkeypatch) -> None:
         for kind, payload in calls
         if kind == "draft"
     )
-    assert all(
-        payload["parse_mode"] == telegram.ParseMode.HTML
-        for kind, payload in calls
-        if kind == "draft" and payload["text"]
-    )
+    assert [
+        payload["parse_mode"] for kind, payload in calls if kind == "draft"
+    ] == [None, None, telegram.ParseMode.HTML, None, telegram.ParseMode.HTML]
 
 
 def test_telegram_omits_finalizing_activity() -> None:
@@ -1086,6 +1090,7 @@ async def test_telegram_keeps_typing_during_native_draft(monkeypatch) -> None:
 
     async def events():
         yield {"type": "run.started"}
+        yield {"type": "run.phase", "phase": "waiting_model", "modelRequest": 1}
         await asyncio.sleep(0.005)
         yield {"type": "message.delta", "delta": "Antwort"}
         await asyncio.sleep(0.005)
@@ -1121,6 +1126,83 @@ async def test_telegram_keeps_typing_during_native_draft(monkeypatch) -> None:
     assert drafts == ["⚙️ Verarbeite Anfrage", "Antwort"]
 
 
+async def test_telegram_clears_stale_activity_when_finalizing_without_text(monkeypatch) -> None:
+    drafts = []
+
+    async def events():
+        yield {"type": "run.started"}
+        yield {"type": "run.phase", "phase": "finalizing"}
+        yield {"type": "run.completed"}
+
+    class FakeBot:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def send_chat_action(self, **_kwargs):
+            return None
+
+        async def send_message_draft(self, **kwargs):
+            drafts.append(kwargs["text"])
+
+    monkeypatch.setattr(telegram, "DRAFT_UPDATE_SECONDS", 0)
+    monkeypatch.setattr(
+        telegram,
+        "_progress_target",
+        AsyncMock(return_value=("running", "token", 123, 456)),
+    )
+    monkeypatch.setattr(telegram.run_events, "subscribe", lambda _run_id: events())
+    monkeypatch.setattr(telegram, "Bot", lambda **_kwargs: FakeBot())
+
+    await telegram._relay_run_progress(uuid4())
+
+    assert drafts == ["⚙️ Verarbeite Anfrage", telegram.DRAFT_CLEAR_TEXT]
+
+
+async def test_telegram_previews_completed_message_without_streamed_deltas(monkeypatch) -> None:
+    drafts = []
+
+    async def events():
+        yield {"type": "run.started"}
+        yield {
+            "type": "message.completed",
+            "message": {"content": "**Fertig**", "toolCalls": []},
+        }
+        yield {"type": "run.phase", "phase": "finalizing"}
+        yield {"type": "run.completed"}
+
+    class FakeBot:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def send_chat_action(self, **_kwargs):
+            return None
+
+        async def send_message_draft(self, **kwargs):
+            drafts.append((kwargs["text"], kwargs["parse_mode"]))
+
+    monkeypatch.setattr(telegram, "DRAFT_UPDATE_SECONDS", 0)
+    monkeypatch.setattr(
+        telegram,
+        "_progress_target",
+        AsyncMock(return_value=("running", "token", 123, 456)),
+    )
+    monkeypatch.setattr(telegram.run_events, "subscribe", lambda _run_id: events())
+    monkeypatch.setattr(telegram, "Bot", lambda **_kwargs: FakeBot())
+
+    await telegram._relay_run_progress(uuid4())
+
+    assert drafts == [
+        ("⚙️ Verarbeite Anfrage", None),
+        ("<b>Fertig</b>", telegram.ParseMode.HTML),
+    ]
+
+
 async def test_telegram_resumes_progress_after_approval(monkeypatch) -> None:
     drafts = []
     typing_statuses = []
@@ -1131,6 +1213,7 @@ async def test_telegram_resumes_progress_after_approval(monkeypatch) -> None:
         yield {
             "type": "approval.created",
             "approval": {
+                "id": "approval-1",
                 "summary": "secret",
                 "details": {
                     "tool": "web_search",
@@ -1141,6 +1224,7 @@ async def test_telegram_resumes_progress_after_approval(monkeypatch) -> None:
                 },
             },
         }
+        yield {"type": "approval.resolved", "approvalId": "approval-1"}
         status = "running"
         yield {"type": "run.timing", "activeDurationRunning": True}
         yield {"type": "run.completed"}
@@ -1173,7 +1257,60 @@ async def test_telegram_resumes_progress_after_approval(monkeypatch) -> None:
     await telegram._relay_run_progress(uuid4())
 
     assert drafts == ["🔐 Freigabe erforderlich", "🌐 Im Web suchen · MatoLoop"]
-    assert typing_statuses == []
+    assert typing_statuses == ["running"]
+
+
+async def test_telegram_pauses_forwarded_approval_until_it_is_resolved(monkeypatch) -> None:
+    calls = []
+
+    async def events():
+        yield {
+            "type": "run.phase",
+            "phase": "processing_tool",
+            "toolDisplay": {
+                "emoji": "🤖", "label": "Aufgaben delegieren", "summary": "Recherche",
+            },
+        }
+        yield {
+            "type": "approval.created",
+            "approval": {"id": "child-approval", "details": {"tool": "web_search"}},
+            "subagentSessionId": "child-session",
+        }
+        await asyncio.sleep(0.012)
+        yield {"type": "approval.resolved", "approvalId": "child-approval"}
+        yield {"type": "run.completed"}
+
+    class FakeBot:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def send_chat_action(self, **_kwargs):
+            calls.append(("typing", None))
+
+        async def send_message_draft(self, **kwargs):
+            calls.append(("draft", kwargs["text"]))
+
+    monkeypatch.setattr(telegram, "TYPING_REFRESH_SECONDS", 0.005)
+    monkeypatch.setattr(telegram, "DRAFT_UPDATE_SECONDS", 0)
+    monkeypatch.setattr(
+        telegram,
+        "_progress_target",
+        AsyncMock(return_value=("running", "token", 123, 456)),
+    )
+    monkeypatch.setattr(telegram.run_events, "subscribe", lambda _run_id: events())
+    monkeypatch.setattr(telegram, "Bot", lambda **_kwargs: FakeBot())
+
+    await telegram._relay_run_progress(uuid4())
+
+    assert [text for kind, text in calls if kind == "draft"] == [
+        "🤖 Aufgaben delegieren · Recherche",
+        "🔐 Freigabe erforderlich",
+        "🤖 Aufgaben delegieren · Recherche",
+    ]
+    assert sum(kind == "typing" for kind, _text in calls) == 2
 
 
 async def test_telegram_resumes_progress_after_question(monkeypatch) -> None:
@@ -1191,7 +1328,8 @@ async def test_telegram_resumes_progress_after_question(monkeypatch) -> None:
                 "emoji": "🌐", "label": "Im Web suchen", "summary": "MatoLoop",
             },
         }
-        yield {"type": "question.created"}
+        yield {"type": "question.created", "question": {"id": "question-1"}}
+        yield {"type": "question.answered", "questionId": "question-1"}
         status = "running"
         yield {"type": "run.timing", "activeDurationRunning": True}
         yield {"type": "run.completed"}
@@ -1223,7 +1361,11 @@ async def test_telegram_resumes_progress_after_question(monkeypatch) -> None:
 
     await telegram._relay_run_progress(uuid4())
 
-    assert drafts == ["🌐 Im Web suchen · MatoLoop", telegram.DRAFT_CLEAR_TEXT]
+    assert drafts == [
+        "🌐 Im Web suchen · MatoLoop",
+        telegram.DRAFT_CLEAR_TEXT,
+        "🌐 Im Web suchen · MatoLoop",
+    ]
     assert typing_statuses == ["running"]
 
 
