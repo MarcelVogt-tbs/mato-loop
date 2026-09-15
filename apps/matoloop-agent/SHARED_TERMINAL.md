@@ -150,8 +150,8 @@ cannot be established. This outcome must never be automatically replayed.
 Build dependencies are a C compiler, libc headers, `bash-builtins` headers, and
 Readline headers (Debian/Ubuntu: `gcc libc6-dev bash-builtins libreadline-dev`).
 There is no compiler invocation at agent runtime and no second linked Readline
-library. Docker builds the module in a separate stage; native PyInstaller
-artifacts bundle the compiled module. Bash/Readline remain system dependencies.
+library. Docker builds the module in a separate stage; the native installer builds it
+before activating a new environment. Bash/Readline remain system dependencies.
 
 Source installations can build explicitly with:
 

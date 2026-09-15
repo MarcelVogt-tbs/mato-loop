@@ -43,8 +43,6 @@ BROWSER_PATH = "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
 
 
 def browser_command(command: str) -> list[str]:
-    if getattr(sys, "frozen", False):
-        return [sys.executable, command]
     return [sys.executable, "-m", "matoloop_agent", command]
 
 
@@ -397,7 +395,6 @@ class BrowserManager:
             "LANG": "C.UTF-8",
             "TERM": "xterm-256color",
             "MATOLOOP_BROWSER_EXECUTABLE": sys.executable,
-            "MATOLOOP_BROWSER_FROZEN": "1" if getattr(sys, "frozen", False) else "0",
             "MATOLOOP_AGENT_CONTAINER": "1" if self.container else "0",
             "MATOLOOP_BROWSER_DATA_DIR": str(self.config.data_dir),
             "MATOLOOP_BROWSER_ROOT": str(root),

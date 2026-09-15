@@ -51,14 +51,13 @@ Container images include pinned Playwright 1.59.0 and its matching Chromium buil
 `/usr/local/lib/matoloop-agent/tools/browser`, outside the development `/opt` dependency
 volume. `MATOLOOP_AGENT_CONTAINER=1` selects this fixed installation; RPC arguments cannot
 override it. Native managed installation is `<config-parent-parent>/tools/browser`,
-independent of checkout, Python virtual environment or frozen executable location.
-Native setup uses a fixed packaged script with an interactive PTY, `sudo` only for
-apt prerequisites, then installs the managed Chromium as the runtime user. Native
-automatic prerequisites target Debian/Ubuntu. Both container and native setup finish
+independent of the checkout and Python virtual environment location.
+Native setup uses the bundled script to verify host prerequisites without changing
+system packages, then installs the managed Chromium as the runtime user. Both container and native setup finish
 with a disposable headed launch, screenshot and private RFB handshake as the runtime
 user. A zero setup exit code means this functional probe succeeded, not just that
 packages exist. Missing prerequisites, inaccessible storage and launch failures exit
-nonzero. Setup PATH includes `/usr/sbin` and `/sbin` for root apt helpers and `useradd`.
+nonzero.
 The setup PTY has a 1 MiB rolling replay
 buffer and survives viewer and main agent WebSocket disconnects, not agent process
 termination. `setupread.offset` is the next absolute byte offset, including any skipped
@@ -368,20 +367,13 @@ The shared contract is implemented with these explicit additions:
   its bytes through existing browser `begin`/`write`/`finish` chunks. No durable upload copy
   or additional transport is created; failed staging is deleted when possible.
 
-The native artifact includes the setup script and Playwright driver resources, but
-not Chromium itself; setup downloads the matched build. Frozen root-run installations
-must place the executable and required resources somewhere executable/readable by the
-runtime user; an executable hidden under `/root` is not made accessible automatically.
-Re-executed frozen workers receive a clean environment and perform their own extraction.
-The frozen artifact, native root setup with a fresh Chromium download, and sandboxed
-worker execution are verified in a disposable Debian development container by the
-opt-in `tests/test_browser_package.py`. Pristine Ubuntu Server and interactive non-root
-sudo authentication still require independent platform verification. Development smoke tests perform a real sandboxed headed launch
-and return controlled readiness codes if namespaces are blocked. Never weaken the
-browser sandbox to make a smoke test pass. Tests may explicitly select an existing image's
-bundled assets to exercise new code without rebuilding; this is not a runtime fallback.
+Native setup downloads the matched Chromium build into the managed installation.
+Development smoke tests perform a real sandboxed headed launch and return controlled
+readiness codes if namespaces are blocked. Never weaken the browser sandbox to make a
+smoke test pass. Tests may explicitly select an existing image's bundled assets to
+exercise new code without rebuilding; this is not a runtime fallback.
 
-The development container smoke test also exercises the packaged setup PTY, native
+The development container smoke test also exercises the setup PTY, native
 file-input upload, direct browser download, screenshot, persisted cookies across close
 and reopen, staging invalidation, network denial, and profile reset. The private binary
 relay reconnect and rolling setup replay have separate focused checks.
