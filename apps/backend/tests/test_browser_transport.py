@@ -423,12 +423,21 @@ def test_profile_gate_allows_manual_view_but_never_attachment(env, monkeypatch, 
 
 @pytest.mark.parametrize("change", ["login", "expired", "tab", "binding", "disabled", "global-disabled", "generation", "profile"])
 def test_live_access_revocation_closes_or_detaches_viewer(env, monkeypatch, change):
+    watch = env.coordinator.watch
+    watch_gate = asyncio.Event()
+
+    async def gated_watch(connection):
+        await watch_gate.wait()
+        await watch(connection)
+
+    monkeypatch.setattr(env.coordinator, "watch", gated_watch)
     monkeypatch.setattr(execution, "ACCESS_INTERVAL", 0.01)
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
             control.send_json({"type": "attach"})
-            assert control.receive_json()["attached"]
+            attached = control.receive_json()
+            assert attached.get("attached"), attached
             if change == "login":
                 env.objects.pop((LoginSession, env.login.id))
             elif change == "expired":
@@ -445,6 +454,7 @@ def test_live_access_revocation_closes_or_detaches_viewer(env, monkeypatch, chan
                 env.generation = 2
             else:
                 env.profile.integration_availability[str(env.instance.id)] = False
+            env.client.portal.call(watch_gate.set)
             event = control.receive_json()
             assert event["type"] == ("state" if change == "profile" else "error")
             assert env.coordinator.attached_for(env.session.id, env.agent.id) is None
