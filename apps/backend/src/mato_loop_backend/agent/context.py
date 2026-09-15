@@ -378,6 +378,14 @@ def _model_tool_calls(
         arguments = item.get("arguments")
         if isinstance(arguments, dict):
             projected_arguments = dict(arguments)
+            if (
+                item.get("name") in {"webfetch", "fetch_transcript"}
+                and isinstance(projected_arguments.get("url"), str)
+                and projected_arguments["url"].endswith("?REDACTED")
+            ):
+                projected_arguments["url"] = projected_arguments["url"].removesuffix(
+                    "REDACTED"
+                ) + "QUERY_VALUES_OMITTED_RECONSTRUCT_BEFORE_REUSE"
             content = projected_arguments.get("content")
             if isinstance(content, dict) and isinstance(content.get("preview"), str):
                 preview = content["preview"]

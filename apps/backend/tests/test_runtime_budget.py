@@ -182,6 +182,15 @@ def test_only_one_identical_snapshot_retry_is_allowed_after_unstable_observation
     assert not _retryable_transient_read(mutation, signature, failures, set())
 
 
+def test_only_one_identical_webfetch_retry_is_allowed_after_empty_response():
+    call = ToolCall("fetch", "webfetch", {"url": "https://example.com/data"})
+    signature = _tool_call_signature(call)
+    failures = {signature: "webfetch.emptyResponse"}
+
+    assert _retryable_transient_read(call, signature, failures, set())
+    assert not _retryable_transient_read(call, signature, failures, {signature})
+
+
 def test_transcript_signature_canonicalizes_youtube_url():
     shared = ToolCall(
         "shared", "fetch_transcript", {"url": "https://youtu.be/6RDAAZBYEzs?si=token"}

@@ -617,8 +617,11 @@ def _retryable_transient_read(
     retried: set[str],
 ) -> bool:
     return (
-        call.name == "browser_snapshot"
-        and failures.get(signature) == "browser.observationUnstable"
+        (call.name, failures.get(signature))
+        in {
+            ("browser_snapshot", "browser.observationUnstable"),
+            ("webfetch", "webfetch.emptyResponse"),
+        }
         and signature not in retried
     )
 

@@ -1221,6 +1221,23 @@ def test_webfetch_url_query_is_redacted_before_persistence() -> None:
     }
 
 
+def test_redacted_webfetch_query_is_marked_unusable_in_model_history() -> None:
+    projected = _model_tool_calls(
+        [
+            {
+                "id": "fetch-1",
+                "name": "webfetch",
+                "arguments": {"url": "https://example.com/page?REDACTED"},
+            }
+        ]
+    )
+
+    assert projected is not None
+    assert projected[0]["arguments"]["url"] == (
+        "https://example.com/page?QUERY_VALUES_OMITTED_RECONSTRUCT_BEFORE_REUSE"
+    )
+
+
 def test_write_file_content_is_fully_redacted_before_persistence() -> None:
     secret = "vertraulicher Dateiinhalt"
 
