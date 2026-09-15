@@ -461,14 +461,15 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"MATOLOOP_AGENT_CONTAINER": "1"}):
             container = BrowserManager(self.agent.config, self.agent.terminal)
             self.assertEqual(container.installation, CONTAINER_INSTALLATION)
-        environment, options = self.manager.environment()
+        user = SimpleNamespace(pw_name="matoloop-browser", pw_uid=10001, pw_gid=10001)
+        with patch("os.getuid", return_value=0), patch("pwd.getpwnam", return_value=user):
+            environment, options = self.manager.environment()
         self.assertNotIn("MATOLOOP_AGENT_PAIRING_TOKEN", environment)
         self.assertNotIn("MATOLOOP_AGENT_BACKEND_URL", environment)
         self.assertEqual(environment["HOME"], str(self.root / "tools" / "browser"))
         self.assertIn("/usr/sbin", environment["PATH"].split(":"))
-        if os.getuid() == 0:
-            self.assertNotEqual(options["user"], 0)
-            self.assertEqual(options["extra_groups"], [])
+        self.assertEqual(options["user"], 10001)
+        self.assertEqual(options["extra_groups"], [])
         with patch("sys.frozen", True, create=True):
             self.assertEqual(
                 browser_command("browser-install"), [os.sys.executable, "browser-install"]
@@ -500,7 +501,10 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 readline=AsyncMock(return_value=b'{"ok":false,"error":"browser.notReady"}\n')
             ),
         )
-        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)) as spawn:
+        with (
+            patch.object(self.manager, "environment", return_value=({}, {})),
+            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)) as spawn,
+        ):
             await self.manager.spawn(self.root)
             self.assertEqual(spawn.call_args.kwargs["stderr"], asyncio.subprocess.DEVNULL)
             with self.assertLogs("matoloop_agent.browser", level="WARNING") as logs:
@@ -519,6 +523,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_open_passes_color_scheme_to_new_browser_context(self):
         self.manager.spawn = AsyncMock()
         self.manager.rpc = AsyncMock(return_value={"state": "ready"})
+        self.manager.runtime_root = Mock(return_value=self.root)
 
         result = await self.manager.dispatch(
             "integration.browser.open",
@@ -784,6 +789,9 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error.exception.code, "browser.actionFailed")
         self.assertTrue(worker.manual)
 
+    @unittest.skipUnless(
+        os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1", "Prepared browser container required"
+    )
     async def test_setup_requires_real_runtime_probe_and_preserves_private_parents(self):
         self.manager.container = True
         self.manager.installation = self.root / "missing-installation"

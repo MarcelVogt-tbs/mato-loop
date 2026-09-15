@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from matoloop_agent.config import AgentConfig
 from matoloop_agent.filesystem import AgentError, Filesystem
-from matoloop_agent.process import ProcessRunner
+from matoloop_agent.process import EXECUTION_PATH, ProcessRunner
 from matoloop_agent.terminal import PTY_AVAILABLE, TerminalManager
 
 
@@ -118,12 +118,14 @@ class ProcessExecutionTests(unittest.IsolatedAsyncioTestCase):
             json.dumps({"scripts": {"probe": "python3 probe.py"}})
         )
         commands = ["python3 probe.py", "python3 probe.py; printf '%s' \"$PWD\""]
-        if shutil.which("uv"):
+        if shutil.which("uv", path=EXECUTION_PATH):
+            python = shutil.which("python3", path=EXECUTION_PATH)
+            self.assertIsNotNone(python)
             commands.append(
                 "uv run --offline --no-project --no-config --no-python-downloads "
-                f"--python {Path('/usr/local/bin/python3').resolve()} python probe.py"
+                f"--python {shlex.quote(str(Path(python).resolve()))} python probe.py"
             )
-        if shutil.which("npm"):
+        if shutil.which("npm", path=EXECUTION_PATH):
             commands.append("npm run probe")
         for pty in (False, True):
             for command in commands:
