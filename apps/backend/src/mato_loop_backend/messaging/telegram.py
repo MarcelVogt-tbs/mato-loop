@@ -1523,26 +1523,37 @@ def _progress_activity(event: dict) -> str | None:
             if isinstance(emoji, str) and isinstance(label, str):
                 return f"{emoji} {label}{f' · {summary}' if isinstance(summary, str) else ''}"
     supplied = event.get("activityLabel")
-    if isinstance(supplied, str) and supplied.strip():
-        return supplied
+    supplied = supplied.strip() if isinstance(supplied, str) else ""
     if event_type == "run.started":
-        return run_activity_label("preparing_context")
+        return f"⚙️ {run_activity_label('preparing_context')}"
     if event_type == "run.phase":
         phase = event.get("phase")
         if not isinstance(phase, str):
             return None
-        return run_activity_label(
+        label = supplied or run_activity_label(
             phase,
             model_request=event.get("modelRequest"),
             provider_attempt=event.get("providerAttempt"),
             provider_attempt_total=event.get("providerAttemptTotal"),
             tool=event.get("tool"),
         )
+        if label is None:
+            return None
+        icon = {
+            "compacting_context": "🗜️",
+            "waiting_approval": "🔐",
+            "waiting_input": "❓",
+            "reconnecting": "🔄",
+        }.get(phase, "⚙️")
+        return f"{icon} {label}"
     if event_type == "reasoning.updated":
         reasoning = event.get("reasoning")
-        return reasoning_activity_label(reasoning if isinstance(reasoning, dict) else None)
+        label = supplied or reasoning_activity_label(
+            reasoning if isinstance(reasoning, dict) else None
+        )
+        return f"🧠 Nachdenken{f' · {label}' if label != 'Nachdenken' else ''}"
     if event_type == "approval.created":
-        return run_activity_label("waiting_approval")
+        return f"🔐 {run_activity_label('waiting_approval')}"
     return None
 
 
@@ -1604,9 +1615,7 @@ async def _relay_run_progress(run_id: UUID) -> None:
                         )
                 while True:
                     now = asyncio.get_running_loop().time()
-                    deadlines = []
-                    if not activity and not content:
-                        deadlines.append(next_indicator_at)
+                    deadlines = [next_indicator_at]
                     if draft_dirty:
                         deadlines.append(next_draft_at)
                     elif activity or content:
@@ -1637,7 +1646,7 @@ async def _relay_run_progress(run_id: UUID) -> None:
                             event_type == "run.timing"
                             and event.get("activeDurationRunning") is True
                         ):
-                            if activity == run_activity_label("waiting_approval"):
+                            if activity == f"🔐 {run_activity_label('waiting_approval')}":
                                 activity = resume_activity or run_activity_label(
                                     "processing_tool"
                                 )
@@ -1678,7 +1687,7 @@ async def _relay_run_progress(run_id: UUID) -> None:
                                 reasoning_label = ""
                             next_activity = _progress_activity(event)
                             if event_type == "reasoning.updated":
-                                if next_activity and next_activity != "Nachdenken":
+                                if next_activity and next_activity != "🧠 Nachdenken":
                                     reasoning_label = next_activity
                                 next_activity = reasoning_label or next_activity
                             elif (
@@ -1687,8 +1696,6 @@ async def _relay_run_progress(run_id: UUID) -> None:
                                 and reasoning_label
                             ):
                                 next_activity = reasoning_label
-                            if event_type == "tool.completed":
-                                next_activity = reasoning_label or ""
                             if (
                                 event_type == "run.phase"
                                 and phase == "waiting_model"
@@ -1720,7 +1727,7 @@ async def _relay_run_progress(run_id: UUID) -> None:
                     ):
                         draft_dirty = True
                     send_draft = draft_dirty and now >= next_draft_at
-                    send_typing = not has_draft and now >= next_indicator_at
+                    send_typing = now >= next_indicator_at
                     if not send_draft and not send_typing:
                         continue
                     target = await _progress_target(run_id)

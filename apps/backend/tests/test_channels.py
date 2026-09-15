@@ -1010,12 +1010,11 @@ async def test_telegram_relays_typing_and_native_drafts(monkeypatch) -> None:
     assert calls[0][0] == "typing"
     drafts = [payload["text"] for kind, payload in calls if kind == "draft"]
     assert drafts == [
-        "Nachdenken",
-        "Vorgehen prüfen",
+        "🧠 Nachdenken",
+        "🧠 Nachdenken · Vorgehen prüfen",
         "Zwischenstand",
-        "Vorgehen prüfen",
+        "🧠 Nachdenken · Vorgehen prüfen",
         "📁 Pfad lesen · note.md",
-        telegram.DRAFT_CLEAR_TEXT,
         "Antwort",
     ]
     assert "secret" not in "".join(drafts)
@@ -1082,7 +1081,7 @@ async def test_telegram_refreshes_unchanged_draft_before_expiry(monkeypatch) -> 
     assert set(drafts) == {"Antwort"}
 
 
-async def test_telegram_stops_typing_after_native_draft(monkeypatch) -> None:
+async def test_telegram_keeps_typing_during_native_draft(monkeypatch) -> None:
     calls = []
 
     async def events():
@@ -1117,9 +1116,9 @@ async def test_telegram_stops_typing_after_native_draft(monkeypatch) -> None:
 
     await telegram._relay_run_progress(uuid4())
 
-    assert sum(kind == "typing" for kind, _text in calls) == 1
+    assert sum(kind == "typing" for kind, _text in calls) >= 2
     drafts = [text for kind, text in calls if kind == "draft"]
-    assert drafts == ["Verarbeite Anfrage", "Antwort"]
+    assert drafts == ["⚙️ Verarbeite Anfrage", "Antwort"]
 
 
 async def test_telegram_resumes_progress_after_approval(monkeypatch) -> None:
@@ -1173,7 +1172,7 @@ async def test_telegram_resumes_progress_after_approval(monkeypatch) -> None:
 
     await telegram._relay_run_progress(uuid4())
 
-    assert drafts == ["Freigabe erforderlich", "🌐 Im Web suchen · MatoLoop"]
+    assert drafts == ["🔐 Freigabe erforderlich", "🌐 Im Web suchen · MatoLoop"]
     assert typing_statuses == []
 
 
