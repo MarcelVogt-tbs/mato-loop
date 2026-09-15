@@ -59,6 +59,8 @@
         <div class="col column no-wrap drawer-navigation q-py-sm">
           <q-scroll-area
             class="col session-scroll-area"
+            :content-style="{ width: '100%' }"
+            :content-active-style="{ width: '100%' }"
             visible
             tabindex="0"
             aria-label="Projekte und Sessions"
@@ -68,7 +70,7 @@
                 clickable
                 dense
                 tag="div"
-                class="q-px-md q-py-xs"
+                class="q-px-sm q-py-xs"
                 aria-controls="project-list"
                 :aria-expanded="projectsSectionOpen"
                 @click="projectsSectionOpen = !projectsSectionOpen"
@@ -100,7 +102,7 @@
                 </q-item-section>
               </q-item>
 
-              <q-list id="project-list" v-show="projectsSectionOpen" class="project-list q-px-sm">
+              <q-list id="project-list" v-show="projectsSectionOpen" class="project-list">
                 <div v-if="projects.loading && !projects.loaded" class="row justify-center q-pa-sm" aria-label="Projekte werden geladen">
                   <q-spinner-dots color="primary" size="24px" />
                 </div>
@@ -120,17 +122,18 @@
                   v-for="project in projects.items"
                   :key="project.id"
                   v-model="expandedProjects[project.id]"
+                  dense
                   hide-expand-icon
                   class="project-list-item rounded-borders q-my-xs"
                   :class="{ 'app-surface-tonal': sessionDropTarget === project.id }"
-                  header-class="project-list-item__header"
+                  header-class="project-list-item__header q-px-sm"
                   @dragover="dragSessionOver($event, project.id)"
                   @dragleave="leaveSessionDropTarget"
                   @drop="dropSession($event, project.id)"
                   @show="loadProjectSessions(project.id)"
                 >
                   <template #header>
-                    <q-item-section avatar>
+                    <q-item-section avatar class="project-list-item__icon">
                       <q-icon :name="expandedProjects[project.id] ? mdiFolderOpenOutline : mdiFolderOutline" size="22px" />
                     </q-item-section>
                     <q-item-section>
@@ -216,7 +219,7 @@
               <q-item
                 dense
                 tag="div"
-                class="q-px-md q-py-xs"
+                class="q-px-sm q-py-xs"
               >
                 <q-item-section
                   role="button"

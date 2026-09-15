@@ -134,6 +134,11 @@ body.body--dark .app-floating-control--flat {
   border-radius: 12px;
 }
 
+.project-list-item__icon {
+  min-width: auto;
+  padding-right: 8px;
+}
+
 .project-list-item__actions {
   min-width: auto;
   padding-left: 0;
