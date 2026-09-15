@@ -383,6 +383,11 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.textContent).toContain('Vorherige Suche')
     expect(root.querySelector('.work-history__toggle').getAttribute('aria-expanded')).toBe('true')
     const row = root.querySelector('.activity-shimmer').closest('.tool-call__header')
+    activity.value = mergeAgentActivity(activity.value, { phase: 'preparing_context', modelRequest: 2 })
+    await nextTick()
+    expect(root.querySelector('.activity-shimmer').closest('.tool-call__header')).toBe(row)
+    expect(root.querySelector('.activity-shimmer').textContent).toContain('Datei lesen')
+
     activity.value = mergeAgentActivity(activity.value, { phase: 'waiting_model', modelRequest: 2 })
     await nextTick()
     expect(root.querySelector('.activity-shimmer').closest('.tool-call__header')).toBe(row)

@@ -75,7 +75,7 @@ export function mergeAgentActivity(current, details) {
   const next = { ...current, revision: current.revision + 1 }
   if (details.phase) {
     for (const key of ['tool', 'toolDisplay', 'toolCallId']) {
-      next[key] = details[key] || (details.phase === 'waiting_model' ? current[key] : null)
+      next[key] = details[key] || (['preparing_context', 'waiting_model'].includes(details.phase) ? current[key] : null)
     }
     for (const key of ['modelRequest', 'providerAttempt', 'providerAttemptTotal', 'index', 'total']) {
       next[key] = Number.isInteger(details[key]) ? details[key] : null
@@ -141,13 +141,13 @@ export function agentRunPresentation({
     : ''
   const selectedTool = activity?.phase === 'processing_tool'
     ? toolItems.find((item) => activity.toolCallId ? item.tool.id === activity.toolCallId : item.active)
-    : activity?.phase === 'waiting_model' && !reasoningSummary && !streamContextSummary?.content
+    : ['preparing_context', 'waiting_model'].includes(activity?.phase) && !reasoningSummary && !streamContextSummary?.content
       ? activity.toolCallId
         ? toolItems.find((item) => item.tool.id === activity.toolCallId)
         : toolItems.findLast((item) => item.current !== false && (item.result || item.completed))
       : null
   const presentationTool = selectedTool?.tool || (
-    ['processing_tool', 'waiting_model'].includes(activity?.phase) && activity.tool && !reasoningSummary && !streamContextSummary?.content
+    ['preparing_context', 'processing_tool', 'waiting_model'].includes(activity?.phase) && activity.tool && !reasoningSummary && !streamContextSummary?.content
       ? { id: activity.toolCallId, name: activity.tool, arguments: {}, toolDisplay: activity.toolDisplay }
       : null
   )
