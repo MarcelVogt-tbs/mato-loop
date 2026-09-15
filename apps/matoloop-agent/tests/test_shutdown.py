@@ -125,9 +125,11 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(process.wait(), 3)
                 self.assertEqual(process.returncode, 0, (await process.stderr.read()).decode())
 
+    @unittest.skipUnless(os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), "Bundled browser smoke test")
     async def test_foreign_profile_singleton_is_preserved_and_classified(self):
         owner = str(uuid4())
         manager = BrowserManager(self.config, None)
+        manager.installation = Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"])
         root = manager.runtime_root(manager.storage(owner))
         profile = root / "profile"
         profile.mkdir(mode=0o700)
@@ -152,9 +154,11 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await manager.close()
 
+    @unittest.skipUnless(os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), "Bundled browser smoke test")
     async def test_active_profile_is_not_unlocked_by_second_browser(self):
         owner = str(uuid4())
         first, second = BrowserManager(self.config, None), BrowserManager(self.config, None)
+        first.installation = second.installation = Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"])
         try:
             await first.dispatch(
                 "integration.browser.open",
