@@ -3,7 +3,6 @@ import base64
 import os
 import shutil
 import signal
-import subprocess
 import tempfile
 import threading
 import unittest
@@ -558,51 +557,6 @@ class SharedTerminalTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.shared.capture)
         self.assertFalse(self.shared.executing)
         await self.idle()
-
-    async def test_bundled_module_loads_without_a_runtime_compiler(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            entry = root / "entry.py"
-            entry.write_text(
-                "from matoloop_agent.shared_terminal import native_library\n"
-                "import subprocess, sys\n"
-                "library = native_library()\n"
-                "assert library is not None\n"
-                "assert str(library).startswith(sys._MEIPASS + '/')\n"
-                "subprocess.run(['/bin/bash', '--noprofile', '--norc', '-c', "
-                "'enable -f \"$1\" ml_shared', 'bash', str(library)], check=True)\n"
-            )
-            command = [
-                "uv",
-                "run",
-                "--frozen",
-                "--group",
-                "build",
-                "pyinstaller",
-                "--clean",
-                "--onefile",
-                "--name",
-                "shared-smoke",
-                "--paths",
-                "src",
-                "--add-binary",
-                f"{self.library}:matoloop_agent/native",
-                "--distpath",
-                str(root / "dist"),
-                "--workpath",
-                str(root / "work"),
-                "--specpath",
-                str(root),
-                str(entry),
-            ]
-            await asyncio.to_thread(subprocess.run, command, check=True, capture_output=True)
-            await asyncio.to_thread(
-                subprocess.run,
-                [str(root / "dist/shared-smoke")],
-                check=True,
-                env={"PATH": "/no-compiler"},
-                capture_output=True,
-            )
 
     async def test_lost_acceptance_is_unknown_and_never_replayed(self):
         snapshot = await self.prepare("printf x >> once")

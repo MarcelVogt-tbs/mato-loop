@@ -88,9 +88,10 @@ jobs:
       - name: Check MatoLoop Agent
         working-directory: apps/matoloop-agent
         run: |
-          uv run --no-sync python -m compileall src tests
-          uv run --no-sync ruff check src tests
-          uv run --no-sync ruff format --check src tests
+          sh -n ../../scripts/install-matoloop-agent.sh
+          uv run --no-sync python -m compileall src tests ../../scripts/matoloop-agent-installer.py
+          uv run --no-sync ruff check src tests ../../scripts/matoloop-agent-installer.py
+          uv run --no-sync ruff format --check src tests ../../scripts/matoloop-agent-installer.py
       - name: Test MatoLoop Agent
         working-directory: apps/matoloop-agent
         run: uv run --no-sync python -m unittest discover -s tests -v
@@ -143,14 +144,11 @@ jobs:
           persist-credentials: false
       - name: Syntax-check CI scripts
         run: |
-          bash -n scripts/build-matoloop-agent-artifact.sh
-          bash -n scripts/install-matoloop-agent.sh
           bash -n scripts/release.sh
           bash -n scripts/ci/publish-docker-image.sh
           python3 -m py_compile scripts/check-version.py scripts/ci/create-forgejo-release.py
       - name: Test CI helpers
         run: |
-          bash scripts/install-matoloop-agent.sh --self-test
           bash scripts/release.sh --self-test
           bash scripts/ci/publish-docker-image.sh --self-test
           python3 scripts/ci/create-forgejo-release.py --self-test
@@ -178,36 +176,6 @@ jobs:
           persist-credentials: false
       - name: Build production image
         run: bash scripts/ci/publish-docker-image.sh build mato-loop . apps/backend/Dockerfile
-
-  native-matoloop-agent:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
-    needs: [backend, frontend, matoloop-agent, migrations, version]
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/catthehacker/ubuntu:act-22.04@sha256:d3f239e395525feaa4eb88a0f55eb67b1d44f728f061c809caaa3a8bea346915
-    timeout-minutes: 30
-    steps:
-      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-      - uses: https://github.com/actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        with:
-          python-version: "3.13"
-      - name: Build native MatoLoop Agent
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y gcc libc6-dev bash-builtins libreadline-dev
-          python -m pip install uv==0.10.9
-          bash scripts/build-matoloop-agent-artifact.sh "develop-${GITHUB_SHA:0:12}"
-      - name: Upload native MatoLoop Agent
-        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
-        with:
-          name: matoloop-agent-linux-amd64-develop-${{ github.sha }}
-          path: |
-            dist/matoloop-agent-linux-amd64-develop-*.tar.gz
-            dist/matoloop-agent-linux-amd64-develop-*.tar.gz.sha256
-          if-no-files-found: error
-          retention-days: 7
 
   image-matoloop-agent:
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'

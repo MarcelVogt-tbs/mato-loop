@@ -23,7 +23,7 @@ private graphical viewing, interactive prerequisite setup, and bounded browser a
 }
 ```
 
-`homeDirectory` is mandatory and canonicalized at startup. The configuration file's parent directory is the agent data directory for credentials, transfers, and cache data. Native installations read `${XDG_DATA_HOME:-~/.local/share}/matoloop-agent/config.json` by default. `MATOLOOP_AGENT_CONFIG` or `--config` selects another file, including `/data/config.json`.
+`homeDirectory` is mandatory and canonicalized at startup. The configuration file's parent directory is the agent data directory for credentials, transfers, and cache data. Native lifecycle installations read `${XDG_DATA_HOME:-~/.local/share}/matoloop-agent/data/config.json` by default. `MATOLOOP_AGENT_CONFIG` or `--config` selects another file, including `/data/config.json`.
 
 Personal terminal.open and terminal.run require POSIX PTYs and a configured
 `shellExecutable`. Managed shared Bash is a separate capability, independent of
@@ -40,7 +40,7 @@ uv run matoloop-agent --config config.example.json run
 uv run matoloop-agent --config config.example.json cache-clear
 ```
 
-## Native Ubuntu development installation
+## Native Linux installation
 
 From a MatoLoop checkout, run the interactive installer as a normal user:
 
@@ -48,35 +48,35 @@ From a MatoLoop checkout, run the interactive installer as a normal user:
 ./scripts/install-matoloop-agent.sh
 ```
 
-When run from a MatoLoop checkout, the installer uses that checkout so local Agent changes can be
-tested. A standalone copy of the script instead clones
-`https://git.devmato.net/devmato/MatoLoop.git` into `~/mato-loop-agent/source`. It asks for the Agent
-data directory, home/workspace directory, and normal MatoLoop instance URL, then derives the
-WebSocket endpoint and reuses the Agent's secure pairing prompt for the computer ID and one-time
-token. Defaults place runtime data under `~/mato-loop-agent` and connect to
-`http://127.0.0.1:10020`. An `http://` instance enables insecure transport; use `https://` outside a
-trusted local network. Path and URL prompts use Readline, so their prefilled values can be edited
-with the cursor, Home, and End keys.
+The bootstrap installs pinned, private `uv` and Python runtimes below
+`~/.local/share/matoloop-agent`; it never installs system packages or changes shell profiles. From a
+checkout it uses the current source. A standalone script requires `git` to obtain the private
+repository because there is no native release package. The setup asks for the Agent home directory
+and normal MatoLoop instance URL, derives the WebSocket endpoint, and reuses the Agent's secure
+pairing prompt. An `http://` instance enables insecure transport; use `https://` outside a trusted
+local network.
 
-The user systemd service runs with the installing user's permissions. The installer can also
-update a clone it created, repair an interrupted installation, show its status, or remove its
-managed state:
+The user systemd service runs with the installing user's permissions. Repeating `install` deploys
+the checkout as it currently exists and repairs an interrupted installation. The same script is
+installed as the `matoloop-agent` command; there is no second wrapper implementation:
 
 ```bash
-./scripts/install-matoloop-agent.sh update
-./scripts/install-matoloop-agent.sh repair
-./scripts/install-matoloop-agent.sh status
-./scripts/install-matoloop-agent.sh uninstall
+matoloop-agent update
+matoloop-agent install
+matoloop-agent status
+matoloop-agent uninstall
+matoloop-agent uninstall --purge
 ```
 
-Updates require a clean installer-managed clone and use a fast-forward-only Git pull before
-reinstalling dependencies and restarting the service. Existing development checkouts are never
-updated by the installer; update them manually and run `repair`.
-
-Uninstalling never removes an existing checkout, `uv`, shared system packages, or a pre-existing
-workspace. It removes a clone created by the installer; the interactive uninstall can separately
-remove an installer-created workspace. This helper currently targets Ubuntu or Debian hosts with
-systemd and `apt-get`; the native Agent itself remains unsandboxed and should not run as root.
+`update` requires a clean checkout on a branch with an upstream, runs `git pull --ff-only`, then
+prepares source and dependencies before replacing the running version. This is identical for an
+existing checkout and an installer-created checkout: the selected branch alone determines whether
+the Agent follows stable `main`, bleeding-edge `develop`, or another tracked branch. Use `install`
+instead to deploy uncommitted local changes without pulling.
+`uninstall` preserves credentials, while `uninstall --purge` removes all managed Agent files. Agent
+home directories and workspaces are always preserved. The first platform implementation targets
+Linux user services with systemd. It does not enable linger automatically. Browser and shared
+terminal capabilities remain unavailable until their host prerequisites already exist.
 
 Run tests:
 

@@ -470,10 +470,10 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/usr/sbin", environment["PATH"].split(":"))
         self.assertEqual(options["user"], 10001)
         self.assertEqual(options["extra_groups"], [])
-        with patch("sys.frozen", True, create=True):
-            self.assertEqual(
-                browser_command("browser-install"), [os.sys.executable, "browser-install"]
-            )
+        self.assertEqual(
+            browser_command("browser-install"),
+            [os.sys.executable, "-m", "matoloop_agent", "browser-install"],
+        )
 
     def test_seccomp_excludes_vsock(self):
         app = Path(__file__).resolve().parents[1]
@@ -485,13 +485,14 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(PermissionError):
                 socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
 
-    def test_native_setup_refreshes_metadata_before_package_detection(self):
+    def test_native_setup_does_not_modify_system_packages(self):
         script = (
             Path(__file__).resolve().parents[1] / "src" / "matoloop_agent" / "browser-setup.sh"
         ).read_text()
-        probe = script.index("apt-cache show libasound2t64")
-        self.assertLess(script.index("    apt-get update"), probe)
-        self.assertLess(script.index("    sudo -- apt-get update"), probe)
+        self.assertNotIn("apt-get", script)
+        self.assertNotIn("sudo", script)
+        self.assertIn("MatoLoop veraendert keine Systempakete", script)
+        self.assertNotIn("MATOLOOP_BROWSER_FROZEN", script)
 
     async def test_worker_stderr_is_discarded_and_errors_are_controlled(self):
         process = SimpleNamespace(

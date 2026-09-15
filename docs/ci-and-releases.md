@@ -11,7 +11,7 @@ ${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/mato-loop
 ${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/matoloop-agent
 ```
 
-Both images currently target `linux/amd64` only. Successful `develop` pushes publish both the mutable `develop` tag and an immutable `sha-<12>` tag derived from the Git commit ID. They also provide a native Linux amd64 MatoLoop Agent archive as a seven-day Forgejo workflow artifact. There is no multi-architecture manifest or stable native release archive yet.
+Both images currently target `linux/amd64` only. Successful `develop` pushes publish both the mutable `develop` tag and an immutable `sha-<12>` tag derived from the Git commit ID. Native MatoLoop Agent installations use a selected branch from a Git checkout; CI does not publish native archives.
 
 The tag policy deliberately limits mutable artifact storage:
 
@@ -19,13 +19,11 @@ The tag policy deliberately limits mutable artifact storage:
 | --- | --- | --- | --- |
 | Pull request | Full checks and tests | Both images | Never |
 | Feature branch push | Checks and tests only | No | Never |
-| `develop` push | Full checks and tests | Both images and native MatoLoop Agent | Mutable `develop`, immutable `sha-<12>`, and seven-day workflow artifact |
+| `develop` push | Full checks and tests | Both images | Mutable `develop` and immutable `sha-<12>` |
 | `main` push | Full checks and tests | No | Never; release tags only |
 | Release `vX.Y.Z` | Full checks and tests | Both images | `vX.Y.Z`, `X.Y.Z`, `latest` |
 
-Feature branches therefore consume runner cache only, each accepted `develop` revision retains an immutable image tag plus the moving `develop` tag and short-lived native artifacts, and releases retain fixed version tags. Forgejo registry retention and unreferenced-blob cleanup remain instance-administrator responsibilities.
-
-The native archive is named `matoloop-agent-linux-amd64-develop-<commit>.tar.gz` and includes the `matoloop-agent` executable, README, a capability-enabled example configuration, and build metadata. Its adjacent `.sha256` file verifies the download. The workflow builds in a digest-pinned Ubuntu 22.04 amd64 container, so the executable targets glibc 2.35 or newer and does not support musl-based distributions. A Git tag is not required; select the successful `develop` workflow run in Forgejo Actions and download its artifact. Stable releases do not include a native archive yet.
+Feature branches therefore consume runner cache only, each accepted `develop` revision retains an immutable image tag plus the moving `develop` tag, and releases retain fixed version tags. Forgejo registry retention and unreferenced-blob cleanup remain instance-administrator responsibilities.
 
 Pull requests run the complete test and production-image build path, but registry login, publication, and release creation are disabled. Repository secrets must not be passed to pull request jobs. This applies to same-repository and fork pull requests.
 

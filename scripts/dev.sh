@@ -57,7 +57,7 @@ check_frontend() {
 }
 
 check_matoloop_agent() {
-    run_matoloop_agent "test \"\$(id -u)\" = 0 && command -v apt-get git openscad rg xauth xvfb-run >/dev/null && uv sync --frozen && uv run --no-sync python -m compileall src tests && uv run --no-sync ruff check src tests && uv run --no-sync ruff format --check src tests"
+    run_matoloop_agent "test \"\$(id -u)\" = 0 && command -v apt-get git openscad rg xauth xvfb-run >/dev/null && uv sync --frozen && uv run --no-sync python -m compileall src tests && uv run --no-sync ruff check src tests /source/scripts/matoloop-agent-installer.py && uv run --no-sync ruff format --check src tests /source/scripts/matoloop-agent-installer.py"
 }
 
 test_backend() {
@@ -84,7 +84,7 @@ format_backend() {
 }
 
 format_matoloop_agent() {
-    run_matoloop_agent "uv sync --frozen && uv run --no-sync ruff format src tests"
+    run_matoloop_agent "uv sync --frozen && uv run --no-sync ruff format src tests /source/scripts/matoloop-agent-installer.py"
 }
 
 run_target() {
