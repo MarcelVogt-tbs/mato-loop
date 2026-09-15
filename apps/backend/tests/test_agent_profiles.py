@@ -81,6 +81,9 @@ def test_builtin_agent_profile_defaults() -> None:
     assert "Do not finish by merely listing blocking questions" in plan.instructions
     assert "Answer informational questions directly" in plan.instructions
     assert "Selecting Plan mode alone does not require a plan artifact" in plan.instructions
+    assert "quick to scan and sufficient to implement" in plan.instructions
+    assert "Reference existing requirements instead of repeating them" in plan.instructions
+    assert "risks and open decisions only" in plan.instructions
     assert "keep an analysis-only task read-only" in build.instructions
     assert "read that plan and apply newer user instructions" in build.instructions
 

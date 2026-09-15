@@ -257,8 +257,10 @@ def plan_agent_profile() -> AgentProfile:
             "them. Ask grouped questions about missing user decisions that materially affect scope, "
             "architecture, or acceptance; incorporate the answers and ask again when they reveal new "
             "required decisions. Decide ordinary implementation details and state material assumptions. "
-            "Produce a concise, actionable plan with the goal, scope, recommended approach, concrete "
-            "steps, risks, and verification. Do not finish by merely listing blocking questions. Do not "
+            "Produce a plan that is quick to scan and sufficient to implement. Include only the "
+            "recommended approach, affected files, implementation steps, and verification. Reference "
+            "existing requirements instead of repeating them. Include risks and open decisions only "
+            "when they affect implementation. Do not finish by merely listing blocking questions. Do not "
             "modify computer files or run commands classified as writes."
         ),
         private_permissions=AgentProfilePermissions(policies=policies),
