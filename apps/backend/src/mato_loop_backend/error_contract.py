@@ -364,6 +364,7 @@ _MESSAGES = {
     "webfetch.contentTypeMismatch": "The web server sent content that does not match its declared type.",
     "webfetch.contentTypeUnsupported": "The web server sent an unsupported content type.",
     "webfetch.dnsFailed": "The web server's host name could not be resolved.",
+    "webfetch.emptyResponse": "The web server returned no usable content.",
     "webfetch.pdfInvalid": "The PDF document is invalid or unsupported.",
     "webfetch.pdfRenderFailed": "The PDF page could not be rendered.",
     "webfetch.pdfVisionFailed": "The PDF page could not be read by the vision model.",

@@ -1869,6 +1869,10 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
         pdf_pages=arguments.pdf_pages,
         user_agent=context.tool_settings.web_fetch.user_agent,
     )
+    if not result.content.strip() and not result.images:
+        return ToolResult.error(
+            "webfetch.emptyResponse", params={"statusCode": result.status_code}
+        )
     canonical_source_url = canonicalize_url(result.final_url)
     source_url = sanitize_url_for_display(canonical_source_url)
     source = {
@@ -1912,10 +1916,6 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
             for image in result.images
         ],
     }
-    if not result.content.strip() and not attachments:
-        payload["notice"] = (
-            "No extractable text or attachments were returned. The cause is unknown."
-        )
     if result.page_count is not None:
         payload["pageCount"] = result.page_count
         payload["renderedPages"] = [
