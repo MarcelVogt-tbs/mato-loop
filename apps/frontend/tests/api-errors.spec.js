@@ -178,6 +178,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'webfetch.addressBlocked' } })).toBe(
       'Diese Netzwerkadresse ist aus Sicherheitsgründen gesperrt.'
     )
+    expect(apiErrorMessage({ error: { code: 'webfetch.emptyResponse' } })).toBe(
+      'Die Webadresse hat keinen verwertbaren Inhalt geliefert.'
+    )
     expect(apiErrorMessage({ error: { code: 'webfetch.tlsFailed' } })).toBe(
       'Das TLS-Zertifikat der Webadresse konnte nicht überprüft werden.'
     )

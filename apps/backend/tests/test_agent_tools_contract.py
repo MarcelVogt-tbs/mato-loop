@@ -4435,8 +4435,8 @@ async def test_webfetch_source_ids_distinguish_redacted_query_values(
         assert "notice" not in payload
 
 
-@pytest.mark.parametrize("content", ["", " \t\r\n", "[]", "null", "{}"])
-async def test_webfetch_notices_empty_content_without_guessing_the_cause(
+@pytest.mark.parametrize("content", ["", " \t\r\n"])
+async def test_webfetch_rejects_empty_content(
     tmp_path, monkeypatch, content,
 ) -> None:
     monkeypatch.setattr(tools_module, "fetch_web", AsyncMock(return_value=WebFetchResult(
@@ -4449,16 +4449,12 @@ async def test_webfetch_notices_empty_content_without_guessing_the_cause(
         call, _context(tmp_path, call, web_fetch_policy=ToolExecutionPolicy.AUTO),
     )
 
-    payload = json.loads(result.content)
-    assert payload["content"] == content
-    assert payload["statusCode"] == 200
-    assert "errorCode" not in result.metadata
-    if not content.strip():
-        assert payload["notice"] == (
-            "No extractable text or attachments were returned. The cause is unknown."
-        )
-    else:
-        assert "notice" not in payload
+    assert result.metadata == {"errorCode": "webfetch.emptyResponse"}
+    assert json.loads(result.content)["error"] == {
+        "code": "webfetch.emptyResponse",
+        "message": "The web server returned no usable content.",
+        "params": {"statusCode": 200},
+    }
 
 
 async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch) -> None:

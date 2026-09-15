@@ -513,6 +513,7 @@ const messages = {
   'webfetch.contentTypeUnsupported': () => 'Dieser Inhaltstyp kann nicht abgerufen werden.',
   'webfetch.decodeFailed': () => 'Der abgerufene Text konnte nicht gelesen werden.',
   'webfetch.dnsFailed': () => 'Die Webadresse konnte nicht aufgelöst werden.',
+  'webfetch.emptyResponse': () => 'Die Webadresse hat keinen verwertbaren Inhalt geliefert.',
   'webfetch.formatUnsupported': () => 'Das angeforderte Ausgabeformat wird nicht unterstützt.',
   'webfetch.invalidOrigin': () => 'Die private Origin ist ungültig.',
   'webfetch.invalidUrl': () => 'Die Webadresse ist ungültig.',
