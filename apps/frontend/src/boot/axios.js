@@ -2,7 +2,11 @@ import axios from 'axios'
 import { getActivePinia } from 'pinia'
 import { boot } from 'quasar/wrappers'
 import { decodeBlobApiError, errorDescriptor } from 'src/utils/api-errors'
-import { notifyError } from 'src/utils/notifications'
+import {
+  notifyBackendReachable,
+  notifyBackendUnavailable,
+  notifyError
+} from 'src/utils/notifications'
 
 const api = axios.create({
   baseURL: '/api',
@@ -44,12 +48,21 @@ export async function recoverControlledAuth(error) {
 }
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    notifyBackendReachable()
+    return response
+  },
   async (error) => {
     if (axios.isCancel(error)) return Promise.reject(error)
     const decoded = await decodeBlobApiError(error)
     await recoverControlledAuth(decoded)
-    if (!decoded.config?.suppressErrorToast) notifyError(decoded)
+    const backendUnavailable = (decoded.request && !decoded.response)
+      || (!errorDescriptor(decoded) && [502, 503, 504].includes(decoded.response?.status))
+    if (backendUnavailable) notifyBackendUnavailable()
+    else {
+      notifyBackendReachable()
+      if (!decoded.config?.suppressErrorToast) notifyError(decoded)
+    }
     return Promise.reject(decoded)
   }
 )
