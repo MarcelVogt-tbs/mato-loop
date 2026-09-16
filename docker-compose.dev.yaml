@@ -136,7 +136,7 @@ services:
     shm_size: 256mb
     security_opt:
       - no-new-privileges:true
-      - seccomp:./apps/matoloop-agent/docker/browser-seccomp.json
+      - seccomp:unconfined
     environment:
       UV_PROJECT_ENVIRONMENT: /opt/matoloop-agent/venv
       MATOLOOP_AGENT_CONTAINER: "1"

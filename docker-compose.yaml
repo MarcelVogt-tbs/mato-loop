@@ -87,7 +87,7 @@ services:
     shm_size: 256mb
     security_opt:
       - no-new-privileges:true
-      - seccomp:./apps/matoloop-agent/docker/browser-seccomp.json
+      - seccomp:unconfined
     environment:
       MATOLOOP_AGENT_BACKEND_URL: ws://mato-loop:6020/api/execution-agents/connect
       MATOLOOP_AGENT_CONTAINER: "1"
