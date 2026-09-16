@@ -115,49 +115,35 @@
             >
               <q-tooltip>{{ session.pinned ? 'Nicht mehr anheften' : 'Anheften' }}</q-tooltip>
             </q-btn>
-            <q-btn
-              flat
-              round
-              dense
-              size="sm"
-              icon="more_horiz"
+            <SidebarActionMenu
+              :model-value="openActionMenuSessionId === session.id"
               class="session-list-item__action session-list-item__menu-button"
               :color="$q.dark.isActive ? 'grey-5' : 'grey-7'"
               :aria-label="`Aktionen für ${session.title}`"
-              @click.stop
+              list-class="session-actions-menu"
+              @update:model-value="setActionMenu(session.id, $event)"
             >
-              <q-menu
-                anchor="bottom right"
-                self="top right"
-                :offset="[0, 8]"
-                class="app-action-menu"
-                @before-show="openActionMenuSessionId = session.id"
-                @hide="closeActionMenu(session.id)"
+              <q-item clickable v-ripple v-close-popup @click="emit('rename', session)">
+                <q-item-section avatar><q-icon name="edit" /></q-item-section>
+                <q-item-section>Umbenennen</q-item-section>
+              </q-item>
+              <q-item clickable v-ripple v-close-popup @click="emit('move', session)">
+                <q-item-section avatar><q-icon name="drive_file_move" /></q-item-section>
+                <q-item-section>Verschieben</q-item-section>
+              </q-item>
+              <q-separator class="q-my-xs" />
+              <q-item
+                clickable
+                v-ripple
+                v-close-popup
+                class="text-negative"
+                v-confirm="{ message: `Session „${session.title}“ löschen?`, title: 'Session löschen', okLabel: 'Löschen' }"
+                @click="emit('delete', session)"
               >
-                <q-list padding class="session-actions-menu">
-                  <q-item clickable v-ripple v-close-popup @click="emit('rename', session)">
-                    <q-item-section avatar><q-icon name="edit" /></q-item-section>
-                    <q-item-section>Umbenennen</q-item-section>
-                  </q-item>
-                  <q-item clickable v-ripple v-close-popup @click="emit('move', session)">
-                    <q-item-section avatar><q-icon name="drive_file_move" /></q-item-section>
-                    <q-item-section>Verschieben</q-item-section>
-                  </q-item>
-                  <q-separator class="q-my-xs" />
-                  <q-item
-                    clickable
-                    v-ripple
-                    v-close-popup
-                    class="text-negative"
-                    v-confirm="{ message: `Session „${session.title}“ löschen?`, title: 'Session löschen', okLabel: 'Löschen' }"
-                    @click="emit('delete', session)"
-                  >
-                    <q-item-section avatar><q-icon name="delete_outline" /></q-item-section>
-                    <q-item-section>Löschen</q-item-section>
-                  </q-item>
-                </q-list>
-              </q-menu>
-            </q-btn>
+                <q-item-section avatar><q-icon name="delete_outline" /></q-item-section>
+                <q-item-section>Löschen</q-item-section>
+              </q-item>
+            </SidebarActionMenu>
           </q-item-section>
         </q-item>
       </template>
@@ -181,6 +167,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import SidebarActionMenu from 'components/SidebarActionMenu.vue'
 import { groupSessionsByRecency } from 'src/utils/session-groups'
 
 defineOptions({ name: 'SidebarSessionList' })
@@ -208,7 +195,8 @@ const emit = defineEmits([
 const openActionMenuSessionId = ref(null)
 const groupedSessions = computed(() => groupSessionsByRecency(props.list.items))
 
-function closeActionMenu(id) {
-  if (openActionMenuSessionId.value === id) openActionMenuSessionId.value = null
+function setActionMenu(id, open) {
+  if (open) openActionMenuSessionId.value = id
+  else if (openActionMenuSessionId.value === id) openActionMenuSessionId.value = null
 }
 </script>

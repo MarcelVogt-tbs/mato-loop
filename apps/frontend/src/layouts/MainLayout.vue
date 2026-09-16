@@ -125,7 +125,10 @@
                   dense
                   hide-expand-icon
                   class="project-list-item rounded-borders q-my-xs"
-                  :class="{ 'app-surface-tonal': sessionDropTarget === project.id }"
+                  :class="{
+                    'app-surface-tonal': sessionDropTarget === project.id,
+                    'project-list-item--menu-open': openProjectActionMenuId === project.id
+                  }"
                   header-class="project-list-item__header q-px-sm"
                   @dragover="dragSessionOver($event, project.id)"
                   @dragleave="leaveSessionDropTarget"
@@ -152,36 +155,28 @@
                       >
                         <q-tooltip>Neue Session</q-tooltip>
                       </q-btn>
-                      <q-btn
-                        flat
-                        round
-                        dense
-                        size="sm"
-                        icon="more_horiz"
+                      <SidebarActionMenu
+                        :model-value="openProjectActionMenuId === project.id"
                         class="project-list-item__action"
                         :aria-label="`Aktionen für ${project.name}`"
-                        @click.stop
+                        @update:model-value="setProjectActionMenu(project.id, $event)"
                       >
-                        <q-menu class="app-action-menu">
-                          <q-list padding>
-                            <q-item clickable v-ripple v-close-popup @click="openProjectDialog('edit', project)">
-                              <q-item-section avatar><q-icon name="edit" /></q-item-section>
-                              <q-item-section>Projekt bearbeiten</q-item-section>
-                            </q-item>
-                            <q-separator />
-                            <q-item
-                              clickable
-                              v-ripple
-                              v-close-popup
-                              class="text-negative"
-                              @click="deleteProject(project)"
-                            >
-                              <q-item-section avatar><q-icon name="delete_outline" /></q-item-section>
-                              <q-item-section>Projekt löschen</q-item-section>
-                            </q-item>
-                          </q-list>
-                        </q-menu>
-                      </q-btn>
+                        <q-item clickable v-ripple v-close-popup @click="openProjectDialog('edit', project)">
+                          <q-item-section avatar><q-icon name="edit" /></q-item-section>
+                          <q-item-section>Projekt bearbeiten</q-item-section>
+                        </q-item>
+                        <q-separator />
+                        <q-item
+                          clickable
+                          v-ripple
+                          v-close-popup
+                          class="text-negative"
+                          @click="deleteProject(project)"
+                        >
+                          <q-item-section avatar><q-icon name="delete_outline" /></q-item-section>
+                          <q-item-section>Projekt löschen</q-item-section>
+                        </q-item>
+                      </SidebarActionMenu>
                     </q-item-section>
                   </template>
                   <SidebarSessionList
@@ -536,6 +531,7 @@ import AccountDialog from 'components/AccountDialog.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ControlCenterPanel from 'components/ControlCenterPanel.vue'
 import SearchDialog from 'components/SearchDialog.vue'
+import SidebarActionMenu from 'components/SidebarActionMenu.vue'
 import SidebarSessionList from 'components/SidebarSessionList.vue'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
@@ -586,6 +582,7 @@ const projects = useProjectStore()
 const projectsSectionOpen = ref(true)
 const sessionsSectionOpen = ref(true)
 const expandedProjects = reactive({})
+const openProjectActionMenuId = ref(null)
 const selectedProjectId = computed(() => (
   typeof route.query.project === 'string' ? route.query.project : null
 ))
@@ -745,6 +742,11 @@ function openProjectDialog(mode, project = null) {
   projectName.value = mode === 'edit' ? project?.name || '' : ''
   projectInstructions.value = mode === 'edit' ? project?.instructions || '' : ''
   projectDialogOpen.value = true
+}
+
+function setProjectActionMenu(id, open) {
+  if (open) openProjectActionMenuId.value = id
+  else if (openProjectActionMenuId.value === id) openProjectActionMenuId.value = null
 }
 
 async function saveProject() {

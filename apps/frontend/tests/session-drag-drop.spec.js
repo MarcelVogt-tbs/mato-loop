@@ -120,7 +120,17 @@ beforeEach(async () => {
   for (const name of ['QLayout', 'QDrawer', 'QToolbar', 'QSpace', 'QSeparator', 'QScrollArea', 'QItem', 'QItemSection', 'QItemLabel', 'QIcon', 'QList', 'QAvatar', 'QBadge', 'QCard', 'QCardSection', 'QCardActions', 'QBanner', 'QPageContainer', 'RouterLink']) {
     app.component(name, container)
   }
-  for (const name of ['QTooltip', 'QMenu', 'QInput', 'QSkeleton', 'QSpinnerDots', 'RouterView']) app.component(name, { render: () => null })
+  for (const name of ['QTooltip', 'QInput', 'QSkeleton', 'QSpinnerDots', 'RouterView']) app.component(name, { render: () => null })
+  app.component('QMenu', {
+    props: ['modelValue'], emits: ['update:modelValue'],
+    render() {
+      return h('span', { class: 'menu-stub' }, [
+        h('button', { class: 'menu-stub__show', onClick: () => this.$emit('update:modelValue', true) }),
+        h('button', { class: 'menu-stub__hide', onClick: () => this.$emit('update:modelValue', false) }),
+        this.modelValue ? this.$slots.default?.() : null
+      ])
+    }
+  })
   app.component('QExpansionItem', {
     props: ['modelValue'], emits: ['update:modelValue', 'show'],
     render() {
@@ -148,6 +158,21 @@ beforeEach(async () => {
   await nextTick()
 })
 afterEach(() => { app?.unmount(); vi.useRealTimers() })
+
+it('keeps project and session actions visible while their shared menu is open', async () => {
+  const projectAction = root.querySelector('[aria-label="Aktionen für Alpha"]')
+  projectAction.querySelector('.menu-stub__show').click()
+  await nextTick()
+  expect(projectAction.closest('.project-list-item').classList.contains('project-list-item--menu-open')).toBe(true)
+  projectAction.querySelector('.menu-stub__hide').click()
+  await nextTick()
+  expect(projectAction.closest('.project-list-item').classList.contains('project-list-item--menu-open')).toBe(false)
+
+  const sessionAction = root.querySelector('[aria-label="Aktionen für Project session"]')
+  sessionAction.querySelector('.menu-stub__show').click()
+  await nextTick()
+  expect(sessionAction.closest('.session-list-item').classList.contains('session-list-item--menu-open')).toBe(true)
+})
 
 it.each([false, true])('beforeunload only warns about dirty editors (%s), leaving a cancelled exit connected', (dirty) => {
   workspace.hasDirtyEditors = dirty
