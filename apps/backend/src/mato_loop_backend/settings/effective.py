@@ -312,6 +312,11 @@ async def load_effective_tools(
                 and personal.personal_tool_defaults_enabled
             ),
         ).model_dump()
+        instance_mcp_policy = getattr(instance, field).policies.get("mcp.call")
+        if instance_mcp_policy is None:
+            data[field]["policies"].pop("mcp.call", None)
+        else:
+            data[field]["policies"]["mcp.call"] = instance_mcp_policy
     effective = ToolSettings.model_validate(data)
     effective.tool_availability = dict(instance.tool_availability)
     effective.web_fetch.user_agent = instance.web_fetch.user_agent

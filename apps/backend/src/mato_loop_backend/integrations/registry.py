@@ -15,6 +15,7 @@ from mato_loop_backend.integrations.contracts import (
     ToolOptionContribution,
 )
 from mato_loop_backend.integrations.mail import MAIL_ADAPTER
+from mato_loop_backend.integrations.mcp import MCP_ADAPTER
 from mato_loop_backend.integrations.mealie import MEALIE_ADAPTER
 from mato_loop_backend.integrations.opencode import OPENCODE_ADAPTER
 from mato_loop_backend.integrations.openscad import OPENSCAD_ADAPTER
@@ -70,6 +71,7 @@ _ADAPTERS = {
     ("openscad", "openscad"): OPENSCAD_ADAPTER,
     ("coding", "opencode"): OPENCODE_ADAPTER,
     ("browser", "browser"): BROWSER_ADAPTER,
+    ("mcp", "mcp_streamable_http"): MCP_ADAPTER,
 }
 
 
@@ -80,7 +82,9 @@ def integration_adapter(
 
 
 def integration_adapters() -> tuple[IntegrationAdapterDefinition, ...]:
-    return tuple(_ADAPTERS[key] for key in sorted(_ADAPTERS))
+    return tuple(
+        _ADAPTERS[key] for key in sorted(_ADAPTERS) if _ADAPTERS[key].catalog_visible
+    )
 
 
 def integration_adapter_type_registered(adapter_type: str) -> bool:

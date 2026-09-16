@@ -5475,7 +5475,7 @@ def expanded_baseline_tool_schemas(effective: EffectiveToolSet) -> list[dict[str
 
     schemas = []
     for tool in effective.tools.values():
-        parameters = tool.definition.arguments_model.model_json_schema()
+        parameters = tool.definition.schema()["parameters"]
         remove_titles(parameters)
         instance_argument = tool.definition.instance_argument
         if instance_argument is not None and tool.integration_revisions:

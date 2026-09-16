@@ -152,6 +152,10 @@ def test_integration_catalog_read_and_admin_update(monkeypatch) -> None:
         unknown = client.put(
             "/api/integrations/catalog/unknown", json={"availability": "disabled"}
         )
+        hidden = client.put(
+            "/api/integrations/catalog/mcp_streamable_http",
+            json={"availability": "full"},
+        )
 
     adapters = listed.json()["adapters"]
     assert listed.status_code == 200
@@ -191,6 +195,8 @@ def test_integration_catalog_read_and_admin_update(monkeypatch) -> None:
     }
     assert unknown.status_code == 409
     assert unknown.json()["error"]["code"] == "integration.providerUnsupported"
+    assert hidden.status_code == 409
+    assert hidden.json()["error"]["code"] == "integration.providerUnsupported"
     assert settings.adapter_availability == {}
     save.assert_awaited_once_with(db, settings)
     db.commit.assert_awaited_once()

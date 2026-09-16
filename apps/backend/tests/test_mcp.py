@@ -1,0 +1,1094 @@
+import asyncio
+import json
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import httpx
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from jsonschema import ValidationError as JsonSchemaValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from mato_loop_backend.agent.tool_registry import ToolDefinition, ToolRegistry, ToolResult
+from mato_loop_backend.agent.tools import resolve_tool_execution_policy, tool_registry
+from mato_loop_backend.api.errors import ApiError, register_error_handlers
+from mato_loop_backend.api.routes import mcp as mcp_routes
+from mato_loop_backend.api.routes.mcp import (
+    McpAccessRequest,
+    McpServerRequest,
+    get_mcp_access,
+    update_mcp_access,
+    update_mcp_server,
+)
+from mato_loop_backend.api.routes.mcp import (
+    router as mcp_router,
+)
+from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.integrations import mcp_client as client_module
+from mato_loop_backend.integrations import mcp_service as service_module
+from mato_loop_backend.integrations.contracts import IntegrationResource
+from mato_loop_backend.integrations.mcp import (
+    MCP_ADAPTER,
+    McpConfig,
+    mcp_resource_key,
+)
+from mato_loop_backend.integrations.mcp_client import (
+    McpClient,
+    McpClientError,
+    _BoundedTransport,
+)
+from mato_loop_backend.integrations.mcp_service import McpIntegrationService
+from mato_loop_backend.integrations.registry import integration_adapters
+from mato_loop_backend.integrations.service import IntegrationSettingsError
+from mato_loop_backend.security import require_admin, require_user
+from mato_loop_backend.settings import (
+    AgentProfilePermissions,
+    IntegrationAdapterAvailability,
+    IntegrationInstance,
+    IntegrationSettings,
+    SettingsStore,
+    ToolExecutionPolicy,
+    ToolSettings,
+    TrustLevel,
+    UserIntegrationSettings,
+    UserToolSettings,
+    load_effective_integrations,
+    load_effective_tools,
+)
+
+
+class FakeSession:
+    calls = []
+    list_calls = []
+    output_schema_at_call = "unset"
+
+    def __init__(self, *_args, **_kwargs):
+        self._tool_output_schemas = {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def initialize(self):
+        return None
+
+    async def list_tools(self, cursor=None):
+        if cursor is None:
+            return SimpleNamespace(
+                tools=[
+                    SimpleNamespace(
+                        name="lookup",
+                        title="Lookup",
+                        description="Look up a value",
+                        inputSchema={
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                            "required": ["query"],
+                            "additionalProperties": False,
+                        },
+                        outputSchema=None,
+                        annotations=SimpleNamespace(
+                            readOnlyHint=True,
+                            destructiveHint=False,
+                            idempotentHint=True,
+                            openWorldHint=False,
+                        ),
+                    )
+                ],
+                nextCursor="next",
+            )
+        self.list_calls.append(cursor)
+        return SimpleNamespace(tools=[], nextCursor=None)
+
+    async def call_tool(self, name, arguments):
+        self.calls.append((name, arguments))
+        type(self).output_schema_at_call = self._tool_output_schemas[name]
+        return SimpleNamespace(
+            isError=False,
+            model_dump=lambda **_kwargs: {"content": [{"type": "text", "text": "ok"}]},
+        )
+
+
+@asynccontextmanager
+async def fake_transport(url, *, http_client):
+    assert url == "https://mcp.example.test/rpc"
+    assert http_client.headers["Authorization"] == "Bearer secret"
+    assert http_client.timeout.connect == 10
+    assert http_client.timeout.read == 60
+    assert isinstance(http_client._transport, _BoundedTransport)
+    yield object(), object(), lambda: None
+
+
+async def test_mcp_client_uses_streamable_http_transport(monkeypatch) -> None:
+    real_client = httpx.AsyncClient
+    client_settings = []
+
+    def client_factory(**kwargs):
+        client_settings.append(kwargs)
+        return real_client(**kwargs)
+
+    FakeSession.calls.clear()
+    FakeSession.list_calls.clear()
+    monkeypatch.setattr(client_module.httpx, "AsyncClient", client_factory)
+    monkeypatch.setattr(client_module, "streamable_http_client", fake_transport)
+    monkeypatch.setattr(client_module, "ClientSession", FakeSession)
+    client = McpClient("https://mcp.example.test/rpc", "secret")
+
+    tools = await client.discover_tools()
+    result, is_error = await client.call_tool("lookup", {"query": "x"}, None)
+
+    assert tools == [
+        {
+            "name": "lookup",
+            "title": "Lookup",
+            "description": "Look up a value",
+            "input_schema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            "output_schema": None,
+            "annotations": {
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            },
+        }
+    ]
+    assert result == {"content": [{"type": "text", "text": "ok"}]}
+    assert is_error is False
+    assert FakeSession.calls[-1] == ("lookup", {"query": "x"})
+    assert FakeSession.output_schema_at_call is None
+    assert FakeSession.list_calls == ["next"]
+    assert all(settings["trust_env"] is False for settings in client_settings)
+
+
+class ChunkStream(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b"a" * 600_000
+        yield b"b" * 600_000
+
+
+class ChunkTransport(httpx.AsyncBaseTransport):
+    async def handle_async_request(self, request):
+        return httpx.Response(200, stream=ChunkStream())
+
+    async def aclose(self):
+        pass
+
+
+async def test_mcp_transport_bounds_each_response() -> None:
+    async with httpx.AsyncClient(
+        transport=_BoundedTransport(ChunkTransport())
+    ) as client:
+        async with client.stream("GET", "https://mcp.example.test/rpc") as response:
+            with pytest.raises(McpClientError, match="mcp.responseTooLarge"):
+                await response.aread()
+
+
+async def test_mcp_call_failure_after_dispatch_is_outcome_unknown(monkeypatch) -> None:
+    class FailingSession(FakeSession):
+        async def call_tool(self, name, arguments):
+            assert self._tool_output_schemas[name] == {"type": "object"}
+            raise RuntimeError("raw upstream failure")
+
+    monkeypatch.setattr(client_module, "streamable_http_client", fake_transport)
+    monkeypatch.setattr(client_module, "ClientSession", FailingSession)
+
+    with pytest.raises(McpClientError) as exc_info:
+        await McpClient(
+            "https://mcp.example.test/rpc", "secret"
+        ).call_tool("lookup", {}, {"type": "object"})
+
+    assert exc_info.value.code == "mcp.outcomeUnknown"
+
+
+async def test_mcp_call_cancellation_after_dispatch_is_outcome_unknown(monkeypatch) -> None:
+    class CancelledSession(FakeSession):
+        async def call_tool(self, name, arguments):
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(client_module, "streamable_http_client", fake_transport)
+    monkeypatch.setattr(client_module, "ClientSession", CancelledSession)
+
+    with pytest.raises(McpClientError) as exc_info:
+        await McpClient("https://mcp.example.test/rpc", "secret").call_tool(
+            "lookup", {}, None
+        )
+
+    assert exc_info.value.code == "mcp.outcomeUnknown"
+
+
+async def test_mcp_discovery_rejects_repeated_pagination_cursor(monkeypatch) -> None:
+    class RepeatingSession(FakeSession):
+        async def list_tools(self, cursor=None):
+            return SimpleNamespace(tools=[], nextCursor="same")
+
+    monkeypatch.setattr(client_module, "streamable_http_client", fake_transport)
+    monkeypatch.setattr(client_module, "ClientSession", RepeatingSession)
+
+    with pytest.raises(McpClientError) as exc_info:
+        await McpClient("https://mcp.example.test/rpc", "secret").discover_tools()
+
+    assert exc_info.value.code == "mcp.invalidResponse"
+
+
+def test_mcp_contribution_has_stable_schema_and_tool_resource_policy() -> None:
+    instance = IntegrationInstance(
+        id=uuid4(),
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": "https://mcp.example.test/rpc",
+            "tools": [
+                {
+                    "name": "lookup",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                }
+            ],
+        },
+    )
+    contribution = MCP_ADAPTER.contributions(instance).tools[0]
+    definition = ToolRegistry._contributed_definition(contribution)
+    context = SimpleNamespace(bound_options={"binding_revision": "{}"})
+
+    assert definition.schema()["parameters"]["required"] == ["query"]
+    assert definition.validate_arguments({"query": "value"}) == {"query": "value"}
+    with pytest.raises(JsonSchemaValidationError):
+        definition.validate_arguments({})
+    request = contribution.authorization_factory({}, context)[0]
+    assert request.capability == "mcp.call"
+    assert request.policy_resource_key == mcp_resource_key("lookup")
+    assert request.policy_integration_id == instance.id
+    assert contribution.integration_id == str(instance.id)
+    assert contribution.policy_resource_key == mcp_resource_key("lookup")
+    assert contribution.name.startswith(f"mcp_{instance.id.hex}_")
+
+
+def test_mcp_permission_accepts_catalog_sized_binding_revision() -> None:
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": "https://mcp.example.test/rpc",
+            "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+        },
+    )
+    contribution = MCP_ADAPTER.contributions(instance).tools[0]
+    revision = json.dumps({"catalog": "x" * (256 * 1024)}, separators=(",", ":"))
+
+    request = contribution.authorization_factory(
+        {}, SimpleNamespace(bound_options={"binding_revision": revision})
+    )[0]
+
+    assert request.capability == "mcp.call"
+
+
+async def test_mcp_resource_label_is_bounded_without_changing_tool_name() -> None:
+    name = "x" * 256
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": "https://mcp.example.test/rpc",
+            "tools": [{"name": name, "input_schema": {"type": "object"}}],
+        },
+    )
+
+    resources = await MCP_ADAPTER.resources(instance, None)
+
+    assert resources[0].key == mcp_resource_key(name)
+    assert resources[0].label == name[:160]
+
+
+def test_dynamic_mcp_schema_keeps_file_roots_and_allows_only_local_refs() -> None:
+    schema = {
+        "type": "object",
+        "$defs": {"root": {"enum": ["session", "workspace"]}},
+        "properties": {"root": {"$ref": "#/$defs/root"}},
+        "required": ["root"],
+    }
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": "https://mcp.example.test/rpc",
+            "tools": [{"name": "lookup", "input_schema": schema}],
+        },
+    )
+    definition = ToolRegistry._contributed_definition(
+        MCP_ADAPTER.contributions(instance).tools[0]
+    )
+
+    assert definition.schema()["parameters"]["$defs"]["root"]["enum"] == [
+        "session",
+        "workspace",
+    ]
+    assert definition.validate_arguments({"root": "session"}) == {"root": "session"}
+    with pytest.raises(ValueError, match="fragment references"):
+        McpConfig.model_validate(
+            {
+                "endpoint": "https://mcp.example.test/rpc",
+                "tools": [
+                    {
+                        "name": "bad",
+                        "input_schema": {"$ref": "https://example.test/schema.json"},
+                    }
+                ],
+            }
+        )
+
+
+def test_mcp_result_json_does_not_translate_file_root_values() -> None:
+    assert ToolResult.raw_json({"root": "session"}).content == '{"root": "session"}'
+
+
+def test_mcp_config_rejects_endpoint_query() -> None:
+    with pytest.raises(ValueError):
+        McpConfig(endpoint="https://mcp.example.test/rpc?token=secret")
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"value": float("nan")},
+        {"value": "x" * (256 * 1024)},
+    ],
+)
+def test_dynamic_mcp_arguments_are_bounded_finite_json(arguments) -> None:
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": "https://mcp.example.test/rpc",
+            "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+        },
+    )
+    definition = ToolRegistry._contributed_definition(
+        MCP_ADAPTER.contributions(instance).tools[0]
+    )
+    with pytest.raises(ValueError):
+        definition.validate_arguments(arguments)
+
+
+def test_dynamic_mcp_arguments_have_bounded_depth() -> None:
+    value = 0
+    for _ in range(66):
+        value = [value]
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": "https://mcp.example.test/rpc",
+            "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+        },
+    )
+    definition = ToolRegistry._contributed_definition(
+        MCP_ADAPTER.contributions(instance).tools[0]
+    )
+    with pytest.raises(ValueError, match="depth"):
+        definition.validate_arguments({"value": value})
+
+
+def test_mcp_policy_resolves_global_server_and_tool_levels() -> None:
+    integration_id = uuid4()
+    resource_key = mcp_resource_key("lookup")
+    tools = ToolSettings()
+    tools.private_permissions.policies["mcp.call"] = ToolExecutionPolicy.AUTO
+    tools.private_permissions.integration_policies[str(integration_id)] = {
+        "mcp.call": ToolExecutionPolicy.ASK
+    }
+    tools.private_permissions.resource_policies[str(integration_id)] = {
+        resource_key: {"mcp.call": ToolExecutionPolicy.DISABLED}
+    }
+
+    assert resolve_tool_execution_policy(tools, "mcp.call").policy == ToolExecutionPolicy.AUTO
+    assert (
+        resolve_tool_execution_policy(
+            tools, "mcp.call", integration_id=integration_id
+        ).policy
+        == ToolExecutionPolicy.ASK
+    )
+    assert (
+        resolve_tool_execution_policy(
+            tools,
+            "mcp.call",
+            integration_id=integration_id,
+            resource_key=resource_key,
+        ).policy
+        == ToolExecutionPolicy.DISABLED
+    )
+
+
+@pytest.mark.parametrize(
+    ("global_policy", "server_policy", "tool_policy", "profile_policy", "offered"),
+    [
+        ("disabled", "auto", None, None, True),
+        (None, "disabled", "auto", None, True),
+        ("auto", "auto", "disabled", None, False),
+        ("auto", "auto", "auto", "disabled", False),
+    ],
+    ids=[
+        "server-widens-global-disabled",
+        "tool-widens-server-disabled",
+        "tool-disabled",
+        "profile-caps-tool",
+    ],
+)
+def test_mcp_tool_offering_uses_exact_policy_scope(
+    global_policy, server_policy, tool_policy, profile_policy, offered
+) -> None:
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": "https://mcp.example.test/rpc",
+            "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+        },
+    )
+    contribution = MCP_ADAPTER.contributions(instance).tools[0]
+    resource_key = mcp_resource_key("lookup")
+    settings = ToolSettings()
+    if global_policy is not None:
+        settings.private_permissions.policies["mcp.call"] = global_policy
+    if server_policy is not None:
+        settings.private_permissions.integration_policies[str(instance.id)] = {
+            "mcp.call": server_policy
+        }
+    if tool_policy is not None:
+        settings.private_permissions.resource_policies[str(instance.id)] = {
+            resource_key: {"mcp.call": tool_policy}
+        }
+    if profile_policy is not None:
+        settings._agent_permissions = AgentProfilePermissions(
+            resource_policies={
+                str(instance.id): {resource_key: {"mcp.call": profile_policy}}
+            }
+        )
+
+    effective = tool_registry.effective(
+        IntegrationSettings(instances=[instance]), tool_settings=settings
+    )
+
+    assert (contribution.name in effective.tools) is offered
+
+
+def test_mcp_tool_offering_does_not_use_another_profile_resource_override() -> None:
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": "https://mcp.example.test/rpc",
+            "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+        },
+    )
+    contribution = MCP_ADAPTER.contributions(instance).tools[0]
+    settings = ToolSettings()
+    settings._agent_permissions = AgentProfilePermissions(
+        policies={"mcp.call": "disabled"},
+        resource_policies={
+            str(instance.id): {
+                mcp_resource_key("another-tool"): {"mcp.call": "auto"}
+            }
+        },
+    )
+
+    effective = tool_registry.effective(
+        IntegrationSettings(instances=[instance]), tool_settings=settings
+    )
+
+    assert contribution.name not in effective.tools
+
+
+def test_resource_argument_tools_remain_unscoped_during_offering() -> None:
+    calls = []
+
+    def resolve(*_args, **kwargs):
+        calls.append(kwargs)
+        return ToolExecutionPolicy.AUTO
+
+    registry = ToolRegistry([], policy_resolver=resolve)
+    definition = ToolDefinition(
+        "dynamic_resource",
+        "Dynamic resource",
+        None,
+        AsyncMock(),
+        actions=MCP_ADAPTER.resource_actions,
+        resource_argument="resource_key",
+    )
+
+    assert registry._actions_enabled(definition, ToolSettings(), str(uuid4()))
+    assert calls == [
+        {
+            "integration_id": None,
+            "resource_key": None,
+            "include_scoped": True,
+        }
+    ]
+
+
+def test_mcp_adapter_is_hidden_from_normal_integration_catalog() -> None:
+    assert "mcp_streamable_http" not in {
+        adapter.adapter_type for adapter in integration_adapters()
+    }
+
+
+def test_mcp_availability_defaults_instance_only_and_has_dedicated_admin_api(
+    monkeypatch,
+) -> None:
+    settings = IntegrationSettings()
+    load = AsyncMock(return_value=settings)
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    db = AsyncMock(spec=AsyncSession)
+    user = SimpleNamespace(id=uuid4(), is_admin=True)
+    app = FastAPI()
+    register_error_handlers(app)
+    app.include_router(mcp_router, prefix="/api")
+
+    async def override_db():
+        yield db
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[require_user] = lambda: user
+    app.dependency_overrides[require_admin] = lambda: user
+
+    with TestClient(app) as client:
+        initial = client.get("/api/mcp/settings")
+        blocked = client.get("/api/mcp/servers?scope=personal")
+        enabled = client.put("/api/mcp/settings", json={"personalAllowed": True})
+        del app.dependency_overrides[require_admin]
+        user.is_admin = False
+        denied = client.put("/api/mcp/settings", json={"personalAllowed": False})
+
+    assert settings.availability_for("mcp_streamable_http") == IntegrationAdapterAvailability.FULL
+    assert initial.json() == {"personalAllowed": False}
+    assert blocked.status_code == 409
+    assert enabled.json() == {"personalAllowed": True}
+    assert denied.status_code == 403
+    assert settings.adapter_availability == {
+        "mcp_streamable_http": IntegrationAdapterAvailability.FULL
+    }
+
+
+async def test_omitted_mcp_availability_excludes_personal_runtime_server(
+    monkeypatch,
+) -> None:
+    global_server = IntegrationInstance(
+        name="Global",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={"endpoint": "https://global.example.test/rpc", "tools": []},
+    )
+    personal_server = IntegrationInstance(
+        name="Personal",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={"endpoint": "https://personal.example.test/rpc", "tools": []},
+    )
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(return_value=IntegrationSettings(instances=[global_server])),
+    )
+    monkeypatch.setattr(
+        SettingsStore,
+        "load_optional",
+        AsyncMock(return_value=UserIntegrationSettings(instances=[personal_server])),
+    )
+
+    effective = await load_effective_integrations(AsyncMock(), uuid4())
+
+    assert [server.id for server in effective.instances] == [global_server.id]
+
+
+async def test_failed_refresh_keeps_persisted_catalog(monkeypatch) -> None:
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": "https://mcp.example.test/rpc",
+            "tools": [{"name": "old", "input_schema": {"type": "object"}}],
+        },
+    )
+    settings = IntegrationSettings(instances=[instance])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+    monkeypatch.setattr(
+        McpClient,
+        "discover_tools",
+        AsyncMock(side_effect=McpClientError("mcp.refreshFailed")),
+    )
+    db = AsyncMock()
+
+    with pytest.raises(McpClientError, match="mcp.refreshFailed"):
+        await McpIntegrationService.refresh(db, instance.id, owner_id=None)
+
+    assert McpConfig.model_validate(instance.config).tools[0].name == "old"
+    save.assert_not_awaited()
+    db.commit.assert_not_awaited()
+
+
+def test_api_request_rejects_new_bearer_over_http() -> None:
+    with pytest.raises(ValueError):
+        McpServerRequest(
+            name="Server",
+            endpoint="http://mcp.example.test/rpc",
+            bearerToken="secret",
+        )
+
+
+async def test_api_update_rejects_retained_bearer_downgrade(monkeypatch) -> None:
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        credential_id=uuid4(),
+        config={"endpoint": "https://mcp.example.test/rpc", "tools": []},
+    )
+    monkeypatch.setattr(mcp_routes, "_owner_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        mcp_routes,
+        "_settings",
+        AsyncMock(return_value=IntegrationSettings(instances=[instance])),
+    )
+    update = AsyncMock()
+    monkeypatch.setattr(McpIntegrationService, "update", update)
+
+    with pytest.raises(ApiError) as exc_info:
+        await update_mcp_server(
+            instance.id,
+            McpServerRequest(name="Server", endpoint="http://mcp.example.test/rpc"),
+            AsyncMock(),
+            "instance",
+            SimpleNamespace(is_admin=True),
+        )
+
+    assert exc_info.value.code == "mcp.configurationInvalid"
+    update.assert_not_awaited()
+
+
+async def test_service_rejects_retained_bearer_downgrade(monkeypatch) -> None:
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        credential_id=uuid4(),
+        config={"endpoint": "https://mcp.example.test/rpc", "tools": []},
+    )
+    monkeypatch.setattr(
+        SettingsStore,
+        "load",
+        AsyncMock(return_value=IntegrationSettings(instances=[instance])),
+    )
+    monkeypatch.setattr(McpIntegrationService, "_token", AsyncMock(return_value="secret"))
+    discover = AsyncMock()
+    monkeypatch.setattr(McpIntegrationService, "_discover", discover)
+
+    with pytest.raises(IntegrationSettingsError) as exc_info:
+        await McpIntegrationService.update(
+            AsyncMock(),
+            instance.id,
+            name="Server",
+            endpoint="http://mcp.example.test/rpc",
+            token=None,
+            remove_token=False,
+            enabled=True,
+            owner_id=None,
+        )
+
+    assert exc_info.value.code == "mcp.configurationInvalid"
+    discover.assert_not_awaited()
+
+
+async def test_endpoint_change_clears_server_and_tool_policy_state(monkeypatch) -> None:
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": "https://old.example.test/rpc",
+            "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+        },
+    )
+    integrations = IntegrationSettings(instances=[instance])
+    tools = ToolSettings()
+    for permissions in (tools.private_permissions, tools.public_permissions):
+        permissions.integration_policies[str(instance.id)] = {
+            "mcp.call": ToolExecutionPolicy.AUTO
+        }
+        permissions.resource_policies[str(instance.id)] = {
+            mcp_resource_key("lookup"): {"mcp.call": ToolExecutionPolicy.ASK}
+        }
+    tools.resource_labels[str(instance.id)] = {mcp_resource_key("lookup"): "Lookup"}
+
+    async def load(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else tools
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    monkeypatch.setattr(
+        McpClient,
+        "discover_tools",
+        AsyncMock(return_value=[{"name": "new", "input_schema": {"type": "object"}}]),
+    )
+    db = AsyncMock()
+
+    await McpIntegrationService.update(
+        db,
+        instance.id,
+        name="Server",
+        endpoint="https://new.example.test/rpc",
+        token=None,
+        remove_token=False,
+        enabled=True,
+        owner_id=None,
+    )
+
+    for permissions in (tools.private_permissions, tools.public_permissions):
+        assert str(instance.id) not in permissions.integration_policies
+        assert str(instance.id) not in permissions.resource_policies
+    assert str(instance.id) not in tools.resource_labels
+    db.commit.assert_awaited_once()
+
+
+async def test_same_endpoint_update_prunes_only_removed_tool_state(monkeypatch) -> None:
+    endpoint = "https://mcp.example.test/rpc"
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": endpoint,
+            "tools": [
+                {"name": "keep", "input_schema": {"type": "object"}},
+                {"name": "remove", "input_schema": {"type": "object"}},
+            ],
+        },
+    )
+    integrations = IntegrationSettings(instances=[instance])
+    tools = ToolSettings()
+    keep = mcp_resource_key("keep")
+    remove = mcp_resource_key("remove")
+    tools.private_permissions.integration_policies[str(instance.id)] = {
+        "mcp.call": ToolExecutionPolicy.AUTO
+    }
+    tools.private_permissions.resource_policies[str(instance.id)] = {
+        keep: {"mcp.call": ToolExecutionPolicy.AUTO},
+        remove: {"mcp.call": ToolExecutionPolicy.DISABLED},
+    }
+    tools.resource_labels[str(instance.id)] = {keep: "Keep", remove: "Remove"}
+
+    async def load(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else tools
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    monkeypatch.setattr(
+        McpClient,
+        "discover_tools",
+        AsyncMock(return_value=[{"name": "keep", "input_schema": {"type": "object"}}]),
+    )
+
+    await McpIntegrationService.update(
+        AsyncMock(),
+        instance.id,
+        name="Renamed",
+        endpoint=endpoint,
+        token=None,
+        remove_token=False,
+        enabled=True,
+        owner_id=None,
+    )
+
+    assert tools.private_permissions.integration_policies[str(instance.id)] == {
+        "mcp.call": ToolExecutionPolicy.AUTO
+    }
+    assert tools.private_permissions.resource_policies[str(instance.id)] == {
+        keep: {"mcp.call": ToolExecutionPolicy.AUTO}
+    }
+    assert tools.resource_labels[str(instance.id)] == {keep: "Keep"}
+
+
+async def test_refresh_prunes_removed_tool_state_only(monkeypatch) -> None:
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": "https://mcp.example.test/rpc",
+            "tools": [
+                {"name": "keep", "input_schema": {"type": "object"}},
+                {"name": "remove", "input_schema": {"type": "object"}},
+            ],
+        },
+    )
+    integrations = IntegrationSettings(instances=[instance])
+    tools = ToolSettings()
+    keep = mcp_resource_key("keep")
+    remove = mcp_resource_key("remove")
+    tools.private_permissions.resource_policies[str(instance.id)] = {
+        keep: {"mcp.call": ToolExecutionPolicy.AUTO},
+        remove: {"mcp.call": ToolExecutionPolicy.DISABLED},
+    }
+    tools.resource_labels[str(instance.id)] = {keep: "Keep", remove: "Remove"}
+
+    async def load(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else tools
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    monkeypatch.setattr(
+        McpClient,
+        "discover_tools",
+        AsyncMock(return_value=[{"name": "keep", "input_schema": {"type": "object"}}]),
+    )
+
+    await McpIntegrationService.refresh(AsyncMock(), instance.id, owner_id=None)
+
+    assert tools.private_permissions.resource_policies[str(instance.id)] == {
+        keep: {"mcp.call": ToolExecutionPolicy.AUTO}
+    }
+    assert tools.resource_labels[str(instance.id)] == {keep: "Keep"}
+
+
+async def test_credential_decode_failure_maps_to_safe_configuration_error(monkeypatch) -> None:
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        credential_id=uuid4(),
+    )
+    monkeypatch.setattr(service_module, "load_credential", AsyncMock(return_value=SimpleNamespace(kind="mcp.bearer")))
+    monkeypatch.setattr(service_module, "read_credential", lambda _record: (_ for _ in ()).throw(ValueError("secret raw error")))
+
+    with pytest.raises(IntegrationSettingsError) as exc_info:
+        await McpIntegrationService._token(AsyncMock(), instance)
+
+    assert exc_info.value.code == "mcp.configurationInvalid"
+
+
+async def test_create_encrypts_bearer_outside_persisted_config(monkeypatch) -> None:
+    settings = IntegrationSettings()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    monkeypatch.setattr(
+        McpClient,
+        "discover_tools",
+        AsyncMock(return_value=[{"name": "lookup", "input_schema": {"type": "object"}}]),
+    )
+    credential_id = uuid4()
+    store = AsyncMock(return_value=SimpleNamespace(id=credential_id))
+    monkeypatch.setattr(service_module, "store_credential", store)
+    db = AsyncMock()
+
+    instance = await McpIntegrationService.create(
+        db,
+        name="Server",
+        endpoint="https://mcp.example.test/rpc",
+        token="secret",
+        enabled=True,
+        owner_id=None,
+    )
+
+    assert instance.credential_id == credential_id
+    assert "secret" not in str(instance.config)
+    assert store.await_args.kwargs["payload"] == {"token": "secret"}
+
+
+def test_mcp_servers_are_available_only_from_dedicated_catalog_route(monkeypatch) -> None:
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": "https://mcp.example.test/rpc",
+            "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+        },
+    )
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(return_value=IntegrationSettings(instances=[instance]))
+    )
+    db = AsyncMock(spec=AsyncSession)
+    app = FastAPI()
+    register_error_handlers(app)
+    app.include_router(mcp_router, prefix="/api")
+
+    async def override_db():
+        yield db
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[require_user] = lambda: SimpleNamespace(
+        id=uuid4(), is_admin=True
+    )
+
+    response = TestClient(app).get("/api/mcp/servers")
+
+    assert response.status_code == 200
+    assert response.json()["servers"][0]["tools"][0]["name"] == "lookup"
+    assert all(adapter.adapter_type != "mcp_streamable_http" for adapter in integration_adapters())
+
+
+async def test_mcp_access_updates_global_server_and_tool_policies_atomically(
+    monkeypatch,
+) -> None:
+    instance = IntegrationInstance(
+        name="Server",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": "https://mcp.example.test/rpc",
+            "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+        },
+    )
+    integrations = IntegrationSettings(instances=[instance])
+    tools = ToolSettings()
+    resource = IntegrationResource(mcp_resource_key("lookup"), "Lookup")
+    monkeypatch.setattr(
+        mcp_routes,
+        "_load_scoped_integrations",
+        AsyncMock(side_effect=[(integrations, None), (integrations, None)]),
+    )
+    monkeypatch.setattr(
+        mcp_routes, "_integration_resources", AsyncMock(return_value=(resource,))
+    )
+    monkeypatch.setattr(mcp_routes, "_load_scoped_tools", AsyncMock(return_value=tools))
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+    db = AsyncMock()
+
+    response = await update_mcp_access(
+        instance.id,
+        McpAccessRequest.model_validate(
+            {
+                "globalPolicy": "auto",
+                "policies": {"mcp.call": "ask"},
+                "resources": {resource.key: {"mcp.call": "disabled"}},
+            }
+        ),
+        db,
+        TrustLevel.PRIVATE,
+        "instance",
+        SimpleNamespace(is_admin=True),
+    )
+
+    assert tools.private_permissions.policies["mcp.call"] == ToolExecutionPolicy.AUTO
+    assert tools.private_permissions.integration_policies[str(instance.id)]["mcp.call"] == ToolExecutionPolicy.ASK
+    assert tools.private_permissions.resource_policies[str(instance.id)][resource.key]["mcp.call"] == ToolExecutionPolicy.DISABLED
+    assert response["globalPolicy"] == "auto"
+    assert response["effectiveGlobalPolicy"] == "auto"
+    save.assert_awaited_once_with(db, tools, user_id=None)
+    db.commit.assert_awaited_once()
+
+
+async def test_personal_mcp_global_policy_always_inherits_instance(
+    monkeypatch,
+) -> None:
+    instance = ToolSettings()
+    instance.private_permissions.policies["mcp.call"] = ToolExecutionPolicy.ASK
+    personal = UserToolSettings(personal_tool_defaults_enabled=True)
+    personal.private_permissions.policies["mcp.call"] = ToolExecutionPolicy.AUTO
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))
+
+    effective = await load_effective_tools(AsyncMock(), uuid4(), TrustLevel.PRIVATE)
+
+    assert effective.private_permissions.policies["mcp.call"] == ToolExecutionPolicy.ASK
+
+
+async def test_personal_mcp_access_reports_inherited_global_and_no_override(
+    monkeypatch,
+) -> None:
+    owner_id = uuid4()
+    instance = IntegrationInstance(
+        name="Personal",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={
+            "endpoint": "https://mcp.example.test/rpc",
+            "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+        },
+    )
+    integrations = UserIntegrationSettings(instances=[instance])
+    stored = UserToolSettings()
+    effective = ToolSettings()
+    effective.private_permissions.policies["mcp.call"] = ToolExecutionPolicy.AUTO
+    resource = IntegrationResource(mcp_resource_key("lookup"), "lookup")
+    monkeypatch.setattr(
+        mcp_routes,
+        "_load_scoped_integrations",
+        AsyncMock(return_value=(integrations, owner_id)),
+    )
+    monkeypatch.setattr(
+        mcp_routes, "_integration_resources", AsyncMock(return_value=(resource,))
+    )
+    monkeypatch.setattr(
+        mcp_routes, "_load_scoped_tools", AsyncMock(return_value=stored)
+    )
+    monkeypatch.setattr(
+        mcp_routes, "load_effective_tools", AsyncMock(return_value=effective)
+    )
+
+    response = await get_mcp_access(
+        instance.id,
+        AsyncMock(),
+        TrustLevel.PRIVATE,
+        "personal",
+        SimpleNamespace(id=owner_id, is_admin=False),
+    )
+
+    assert response["globalPolicy"] is None
+    assert response["effectiveGlobalPolicy"] == "auto"
+
+
+async def test_personal_mcp_access_rejects_global_policy_update(monkeypatch) -> None:
+    owner_id = uuid4()
+    instance = IntegrationInstance(
+        name="Personal",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        config={"endpoint": "https://mcp.example.test/rpc", "tools": []},
+    )
+    monkeypatch.setattr(
+        mcp_routes,
+        "_load_scoped_integrations",
+        AsyncMock(
+            return_value=(UserIntegrationSettings(instances=[instance]), owner_id)
+        ),
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        await update_mcp_access(
+            instance.id,
+            McpAccessRequest.model_validate(
+                {"globalPolicy": "auto", "policies": {}, "resources": {}}
+            ),
+            AsyncMock(),
+            TrustLevel.PRIVATE,
+            "personal",
+            SimpleNamespace(id=owner_id, is_admin=False),
+        )
+
+    assert exc_info.value.code == "validation.invalidChoice"
+    assert exc_info.value.field == "globalPolicy"

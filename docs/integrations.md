@@ -1,6 +1,6 @@
 # Integrations and Tool Contributions
 
-Integrations extend the MatoLoop harness without bypassing the provider-neutral agent loop or permission boundary. A persisted instance names an integration type and a host-known adapter. The adapter validates its configuration and produces only statically implemented contributions.
+Integrations extend the MatoLoop harness without bypassing the provider-neutral agent loop or permission boundary. A persisted instance names an integration type and a host-known adapter. The adapter validates its configuration and normally produces only statically implemented contributions. The bounded MCP exception is described below.
 
 The adapter registry is the availability catalog. Registered adapters default to `full`; administrators may set backend adapters to `instance_only` or `disabled`, while owner-bound agent adapters support only `full` or `disabled`. Availability changes retain configured instances, and deletion remains possible when other operations are blocked.
 
@@ -12,11 +12,11 @@ An adapter can:
 - add values to an explicitly extensible host configuration field of an existing tool,
 - provide a static host-controlled prompt fragment for a tool that is actually offered.
 
-Every contributed tool declares its host-controlled group, German UI metadata, and security actions. A configurable action requires a host-side authorization factory that creates typed permission requests from validated arguments. Integration configuration and remote responses cannot provide groups, capabilities, resource matchers, or authorization behavior.
+Every contributed tool declares its host-controlled group, German UI metadata, and security actions. A configurable action requires a host-side authorization factory that creates typed permission requests from validated arguments. Integration configuration and remote responses cannot provide groups, capabilities, resource matchers, or authorization behavior. MCP discovery may provide only validated tool schemas and untrusted display metadata; MatoLoop supplies the group, capability, resource key, handler, and authorization behavior.
 
 Authorization factories also provide the German approval title, concise action summary, and resource display from validated host data. The frontend renders this common permission metadata and does not interpret integration-specific tool arguments. Display text never participates in authorization matching.
 
-Persisted configuration and external responses must not provide handlers, arbitrary JSON schemas, or prompt instructions. Duplicate tool names and contributions to undeclared configuration fields are programming errors. Host configuration values never become model arguments merely because an adapter contributes them.
+Persisted configuration and external responses must not provide handlers or prompt instructions. Except for the bounded MCP tool-schema contract below, they also cannot provide JSON schemas. Duplicate tool names and contributions to undeclared configuration fields are programming errors. Host configuration values never become model arguments merely because an adapter contributes them.
 
 ## Control Center Integrations
 
@@ -31,6 +31,16 @@ Control Center session metadata stores only bounded inert app and resource-tab I
 Every adapter declares one static execution location. `backend` adapters execute inside MatoLoop and cannot have a MatoLoop Agent assignment. `agent` adapters represent local operations, require one configured MatoLoop Agent, and contribute only host-declared tools whose operation names and schemas are compiled into MatoLoop. Configuration and the agent's operation advertisement cannot add executable schemas or permission behavior.
 
 An agent-bound integration is offered only when its configured agent matches the immutable agent snapshot of the current run, is connected, and advertises the static operation. Multiple MatoLoop Agents are supported, with at most one instance of an agent adapter kind per agent. There is no model-selected target, automatic failover, backend fallback, retry, or redelivery. The backend still validates arguments and results and owns policies, approvals, credentials, and canonical tool results; the selected outbound MatoLoop Agent performs the local operation.
+
+## MCP
+
+MCP is managed under its own settings menu but reuses the integration persistence and permission core. The initial client supports Streamable HTTP with no authentication or one encrypted static Bearer token. Personal MCP servers are disabled by default and require a dedicated administrator setting; MCP does not appear in the normal integration catalog.
+
+Creating, updating, or refreshing a server performs bounded, paginated tool discovery. MatoLoop persists at most 100 validated tools with their names, descriptions, input and optional output schemas, and standard annotations. Descriptions and annotations remain untrusted display and model data and never weaken a policy. External schema references, non-finite data, excessive nesting, oversized schemas, arguments, responses, repeated cursors, and cross-origin redirects fail closed. A failed discovery leaves the previous catalog unchanged.
+
+Every discovered tool receives a stable model-facing name and a stable hashed resource key. The host owns its handler and the `mcp.call` action. Policy resolution is the instance-wide MCP default, then the server override, then the tool override, followed by ordinary profile restrictions. The general default is configured only at instance scope; personal servers inherit it and may define server and tool overrides. All levels remain separate for private and public models.
+
+Calls use the normal effective-tool snapshot, argument validation, revision fence, approval flow, and post-approval revalidation. Changing the endpoint clears server and tool policies; catalog updates remove policies for tools that disappeared. Each call opens a short-lived MCP session, does not retry, and reports failures after dispatch as an uncertain outcome. MCP prompts, resources, sampling, elicitation, OAuth, stdio, and server-provided executable code are outside this initial contract.
 
 ## Resource Policies
 

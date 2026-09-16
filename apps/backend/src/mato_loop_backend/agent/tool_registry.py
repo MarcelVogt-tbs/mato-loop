@@ -4,11 +4,17 @@ import inspect
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
+from jsonschema import SchemaError
+from jsonschema import ValidationError as JsonSchemaValidationError
+from jsonschema.validators import validator_for
 from pydantic import BaseModel, ValidationError
+from referencing import Registry
+from referencing.exceptions import Unresolvable
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -94,6 +100,22 @@ VideoAnalysisTargetResolver = Callable[[int], ResolvedVideoModel | None]
 TaskHandler = Callable[[TaskArguments], Awaitable["ToolResult"]]
 PolicyResolver = Callable[..., ToolExecutionPolicy]
 CapabilityResolver = Callable[..., set[str]]
+MAX_DYNAMIC_ARGUMENT_BYTES = 256 * 1024
+MAX_DYNAMIC_JSON_DEPTH = 64
+
+
+class DynamicToolArgumentsError(ValueError):
+    pass
+
+
+def _json_depth(value: Any, depth: int = 0) -> int:
+    if depth > MAX_DYNAMIC_JSON_DEPTH:
+        raise DynamicToolArgumentsError("dynamic JSON exceeds maximum depth")
+    if isinstance(value, dict):
+        return max((_json_depth(item, depth + 1) for item in value.values()), default=depth)
+    if isinstance(value, list):
+        return max((_json_depth(item, depth + 1) for item in value), default=depth)
+    return depth
 
 
 def _model_revision(value: BaseModel) -> str:
@@ -168,6 +190,10 @@ class ToolResult:
             file_actions=file_actions,
             trust_level=trust_level,
         )
+
+    @classmethod
+    def raw_json(cls, value: Any) -> ToolResult:
+        return cls(json.dumps(value, ensure_ascii=False, allow_nan=False), {})
 
     @classmethod
     def error(
@@ -273,7 +299,7 @@ class ToolContext:
 class ToolDefinition:
     name: str
     description: str
-    arguments_model: type[BaseModel]
+    arguments_model: type[BaseModel] | None
     handler: Callable[[Any, ToolContext], Awaitable[ToolResult]]
     tool_type: Literal["backend", "computer", "shared"] = "backend"
     requires_search: bool = False
@@ -289,19 +315,41 @@ class ToolDefinition:
     alternative_action_groups: tuple[frozenset[str], ...] = ()
     instance_argument: str | None = None
     resource_argument: str | None = None
+    policy_resource_key: str | None = None
     releases_private_data: bool = False
     authorization_factory: (
         Callable[[Any, ToolContext], tuple[PermissionRequest, ...] | Awaitable[tuple[PermissionRequest, ...]]] | None
     ) = None
     prompt_fragments: tuple[str, ...] = ()
+    arguments_schema: dict[str, Any] | None = None
 
     def schema(self) -> dict[str, Any]:
+        if self.arguments_schema is not None:
+            schema = deepcopy(self.arguments_schema)
+            _remove_schema_titles(schema)
+            return {"name": self.name, "description": self.description, "parameters": schema}
         schema = self.arguments_model.model_json_schema()
         _remove_schema_titles(schema)
         model_file_root_schema(schema)
         return {"name": self.name, "description": self.description, "parameters": schema}
 
-    def validate_arguments(self, value: object) -> BaseModel:
+    def validate_arguments(self, value: object) -> Any:
+        if self.arguments_schema is not None:
+            _json_depth(value)
+            try:
+                size = len(
+                    json.dumps(
+                        value, ensure_ascii=True, separators=(",", ":"), allow_nan=False
+                    ).encode()
+                )
+            except (TypeError, ValueError) as exc:
+                raise DynamicToolArgumentsError("dynamic arguments are not finite JSON") from exc
+            if size > MAX_DYNAMIC_ARGUMENT_BYTES:
+                raise DynamicToolArgumentsError("dynamic arguments exceed maximum size")
+            validator_for(self.arguments_schema)(
+                self.arguments_schema, registry=Registry()
+            ).validate(value)
+            return value
         return self.arguments_model.model_validate(internal_file_roots(value))
 
     def actions_satisfied(self, capabilities: set[str]) -> bool:
@@ -332,6 +380,8 @@ def _actions_enabled(
     definition: ToolDefinition,
     tool_settings: ToolSettings,
     policy_resolver: PolicyResolver,
+    *,
+    integration_id: UUID | None = None,
 ) -> bool:
     if not _tool_available(definition.name, tool_settings):
         return False
@@ -342,6 +392,8 @@ def _actions_enabled(
             tool_settings,
             action.capability,
             action.default_policy,
+            integration_id=integration_id,
+            resource_key=definition.policy_resource_key,
             include_scoped=True,
         )
         != ToolExecutionPolicy.DISABLED
@@ -493,11 +545,23 @@ class ToolRegistry:
         return await context.ask(request) == PermissionDecision.ALLOW
 
     def _actions_enabled(
-        self, definition: ToolDefinition, tool_settings: ToolSettings
+        self,
+        definition: ToolDefinition,
+        tool_settings: ToolSettings,
+        source_id: str | None = None,
     ) -> bool:
         if self._policy_resolver is None:
             raise RuntimeError("tool registry policy resolver is not configured")
-        return _actions_enabled(definition, tool_settings, self._policy_resolver)
+        return _actions_enabled(
+            definition,
+            tool_settings,
+            self._policy_resolver,
+            integration_id=(
+                UUID(source_id)
+                if source_id is not None and definition.policy_resource_key is not None
+                else None
+            ),
+        )
 
     def _combined_definitions(
         self, integration_settings: IntegrationSettings
@@ -555,6 +619,7 @@ class ToolRegistry:
             description=contribution.description,
             arguments_model=contribution.arguments_model,
             handler=contribution.handler,
+            arguments_schema=contribution.arguments_schema,
             tool_type="computer" if contribution.execution_operation else "backend",
             requires_search=contribution.requires_search,
             requires_webfetch=contribution.requires_webfetch,
@@ -568,6 +633,7 @@ class ToolRegistry:
             alternative_action_groups=contribution.alternative_action_groups,
             instance_argument=contribution.instance_argument,
             resource_argument=contribution.resource_argument,
+            policy_resource_key=contribution.policy_resource_key,
             releases_private_data=contribution.releases_private_data,
             authorization_factory=contribution.authorization_factory,
             prompt_fragments=contribution.prompt_fragments,
@@ -798,7 +864,10 @@ class ToolRegistry:
                 tool_capabilities=tool_capabilities,
                 execution_operations=execution_operations,
             )
-            and (tool_settings is None or self._actions_enabled(item, tool_settings))
+            and (
+                tool_settings is None
+                or self._actions_enabled(item, tool_settings, sources[item.name][1])
+            )
             and (item.required_capability != "project.coding" or bool(coding_instances))
             and (
                 item.name != "web_search" or tool_settings is None
@@ -1139,6 +1208,14 @@ class ToolRegistry:
             return ToolResult.error("integration.staleReference", field=exc.field)
         try:
             arguments = definition.validate_arguments(raw_arguments)
+        except JsonSchemaValidationError as exc:
+            field_name = next(
+                (str(part) for part in reversed(exc.absolute_path) if isinstance(part, str)),
+                None,
+            )
+            return ToolResult.error("tool.invalidArguments", field=field_name)
+        except (DynamicToolArgumentsError, SchemaError, Unresolvable):
+            return ToolResult.error("tool.invalidArguments")
         except ValidationError as exc:
             errors = exc.errors(include_url=False, include_input=False, include_context=False)
             for error in errors:

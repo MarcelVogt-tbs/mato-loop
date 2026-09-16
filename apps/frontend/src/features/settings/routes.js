@@ -43,6 +43,19 @@ export const settingsRoutes = [
     ]
   },
   {
+    path: 'mcp',
+    name: 'settings-mcp',
+    component: () => import('pages/settings/McpSettingsPage.vue'),
+    meta: { settingsLabel: 'MCP-Server', settingsIcon: 'hub' },
+    children: [
+      {
+        path: ':serverId/access',
+        name: 'settings-mcp-access',
+        component: () => import('pages/settings/McpAccessPage.vue')
+      }
+    ]
+  },
+  {
     path: 'channels',
     name: 'settings-channels',
     component: () => import('pages/settings/ChannelSettingsPage.vue'),

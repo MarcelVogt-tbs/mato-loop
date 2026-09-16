@@ -46,7 +46,7 @@ ResourceLoader = Callable[
 class ToolContribution:
     name: str
     description: str
-    arguments_model: type[BaseModel]
+    arguments_model: type[BaseModel] | None
     handler: ToolHandler | None
     requires_search: bool = False
     requires_webfetch: bool = False
@@ -62,6 +62,7 @@ class ToolContribution:
     integration_ids: tuple[str, ...] = ()
     instance_argument: str | None = None
     resource_argument: str | None = None
+    policy_resource_key: str | None = None
     releases_private_data: bool = False
     authorization_factory: Callable[[Any, Any], tuple[Any, ...] | Awaitable[tuple[Any, ...]]] | None = None
     execution_operation: str | None = None
@@ -69,6 +70,7 @@ class ToolContribution:
     required_execution_operations: tuple[str, ...] = ()
     result_model: type[BaseModel] | None = None
     prompt_fragments: tuple[str, ...] = ()
+    arguments_schema: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +104,7 @@ class IntegrationAdapterDefinition:
     execution_kind: str | None = None
     execution_tools: tuple[ToolContribution, ...] = ()
     personal_only: bool = False
+    catalog_visible: bool = True
 
     def __post_init__(self) -> None:
         if self.execution_location == "backend":

@@ -1005,12 +1005,16 @@ class IntegrationSettings(IntegrationSettingsBase):
             adapter_type: availability
             for adapter_type, availability in self.adapter_availability.items()
             if availability != IntegrationAdapterAvailability.FULL
+            or adapter_type == "mcp_streamable_http"
         }
         return self
 
     def availability_for(self, adapter_type: str) -> IntegrationAdapterAvailability:
         return self.adapter_availability.get(
-            adapter_type, IntegrationAdapterAvailability.FULL
+            adapter_type,
+            IntegrationAdapterAvailability.INSTANCE_ONLY
+            if adapter_type == "mcp_streamable_http"
+            else IntegrationAdapterAvailability.FULL,
         )
 
 

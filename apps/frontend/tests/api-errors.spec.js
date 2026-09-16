@@ -73,6 +73,14 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'integration.permissionDenied' } })).toBe(
       'Der verbundene Dienst erlaubt diese Aktion nicht.'
     )
+    expect(apiErrorMessage({ error: { code: 'mcp.protocolError', message: 'private server detail' } })).toBe(
+      'Der MCP-Server hat einen Protokollfehler gemeldet.'
+    )
+    expect(apiErrorMessage({ error: { code: 'mcp.toolNotFound' } })).toContain('Tools des Servers')
+    expect(apiErrorMessage({ error: { code: 'mcp.outcomeUnknown', message: 'private transport detail' } })).toContain('nicht blind')
+    for (const code of ['mcp.callFailed', 'mcp.catalogTooLarge', 'mcp.configurationInvalid', 'mcp.discoveryFailed', 'mcp.invalidCatalog', 'mcp.notFound', 'mcp.responseTooLarge', 'mcp.unavailable']) {
+      expect(apiErrorMessage({ error: { code } })).not.toBe('Die Aktion ist fehlgeschlagen.')
+    }
     expect(apiErrorMessage({ error: { code: 'integration.adapterDisabled' } })).toBe(
       'Dieser Integrationstyp ist derzeit nicht verfügbar.'
     )

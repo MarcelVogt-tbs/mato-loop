@@ -376,6 +376,23 @@ def test_tool_registry_rejects_duplicate_names() -> None:
         ToolRegistry([_definition(), _definition()])
 
 
+async def test_dynamic_tool_unresolved_local_ref_is_controlled_invalid_arguments(
+    tmp_path,
+) -> None:
+    definition = ToolDefinition(
+        "dynamic",
+        "Dynamic tool",
+        None,
+        _successful_handler,
+        arguments_schema={"type": "object", "$ref": "#/$defs/missing"},
+    )
+    call = ToolCall("call", "dynamic", {})
+
+    result = await ToolRegistry([definition]).execute(call, _context(tmp_path, call))
+
+    assert result.metadata == {"errorCode": "tool.invalidArguments"}
+
+
 async def test_generate_qr_code_returns_scannable_png(tmp_path) -> None:
     content = "WIFI:T:WPA;S:Gäste;P:correct-horse-battery-staple;;"
     call = ToolCall(

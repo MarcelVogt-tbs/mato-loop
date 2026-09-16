@@ -29,6 +29,7 @@ describe('MatoLoop frontend scaffold', () => {
       'settings-default-models',
       'settings-agents',
       'settings-integrations',
+      'settings-mcp',
       'settings-channels',
       'settings-tools',
       'settings-approvals',
@@ -46,6 +47,10 @@ describe('MatoLoop frontend scaffold', () => {
         .map((route) => route.name)
     ).toEqual(['settings-integration-access'])
     expect(
+      settingsRoute.children.find((route) => route.name === 'settings-mcp').children
+        .map((route) => ({ name: route.name, path: route.path }))
+    ).toEqual([{ name: 'settings-mcp-access', path: ':serverId/access' }])
+    expect(
       settingsRoute.children.find((route) => route.name === 'settings-agents').children
         .map((route) => route.name)
     ).toEqual(['settings-agent-create', 'settings-agent-edit'])
@@ -62,6 +67,9 @@ describe('MatoLoop frontend scaffold', () => {
     expect(settingsRoutes.find((route) => route.name === 'settings-instance-limits')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-channels')?.meta).toEqual({
       settingsLabel: 'Kanäle', settingsIcon: 'forum'
+    })
+    expect(settingsRoutes.find((route) => route.name === 'settings-mcp')?.meta).toEqual({
+      settingsLabel: 'MCP-Server', settingsIcon: 'hub'
     })
     expect(settingsRoutes.find((route) => route.name === 'settings-approvals')?.redirect).toEqual({
       name: 'chat', query: { controlCenter: 'notifications' }

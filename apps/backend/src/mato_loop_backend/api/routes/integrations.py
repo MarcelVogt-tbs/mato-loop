@@ -818,11 +818,12 @@ async def update_integration_catalog(
     _admin: Annotated[UserAccount, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
-    if not integration_adapter_type_registered(adapter_type):
-        raise ApiError(409, "integration.providerUnsupported")
     adapter = next(
-        item for item in integration_adapters() if item.adapter_type == adapter_type
+        (item for item in integration_adapters() if item.adapter_type == adapter_type),
+        None,
     )
+    if adapter is None or not integration_adapter_type_registered(adapter_type):
+        raise ApiError(409, "integration.providerUnsupported")
     if (
         (adapter.execution_location == "agent" or adapter.personal_only)
         and payload.availability == IntegrationAdapterAvailability.INSTANCE_ONLY
@@ -1574,6 +1575,8 @@ async def get_integration_access(
     instance = _integration(integrations, integration_id)
     if instance is None:
         raise ApiError(404, "integration.notFound")
+    if instance.integration_type == "mcp":
+        raise ApiError(404, "integration.notFound")
     await _load_scoped_integrations(
         db, scope, user, adapter_type=instance.adapter_type
     )
@@ -1600,6 +1603,8 @@ async def update_integration_access(
     )
     instance = _integration(integrations, integration_id)
     if instance is None:
+        raise ApiError(404, "integration.notFound")
+    if instance.integration_type == "mcp":
         raise ApiError(404, "integration.notFound")
     await _load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type=instance.adapter_type
