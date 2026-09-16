@@ -70,12 +70,41 @@ if [ -d "$INSTALL_ROOT" ] && [ ! -f "$INSTALL_ROOT/.managed-by-matoloop-agent" ]
     [ -n "$(ls -A "$INSTALL_ROOT")" ]; then
     fail "The installation root is not empty and is not managed by MatoLoop."
 fi
-command -v curl >/dev/null 2>&1 || fail "curl is required to bootstrap the private runtime."
-
 mkdir -p "$TOOLS_DIR/bin" "$TOOLS_DIR/python" "$INSTALL_ROOT/cache/uv"
 chmod 700 "$INSTALL_ROOT" "$TOOLS_DIR"
 : > "$INSTALL_ROOT/.managed-by-matoloop-agent"
 chmod 600 "$INSTALL_ROOT/.managed-by-matoloop-agent"
+
+MISSING_PACKAGES=
+command -v curl >/dev/null 2>&1 || MISSING_PACKAGES=curl
+if [ ! -f "$ROOT/apps/matoloop-agent/pyproject.toml" ] && ! command -v git >/dev/null 2>&1; then
+    MISSING_PACKAGES="${MISSING_PACKAGES:+$MISSING_PACKAGES }git"
+fi
+if [ -n "$MISSING_PACKAGES" ]; then
+    printf 'Missing system packages: %s\n' "$MISSING_PACKAGES"
+    answer=n
+    if [ -t 0 ]; then
+        printf '%s' 'Install missing system dependencies? [Y/n] '
+        read -r answer
+        answer=${answer:-y}
+    fi
+    case "$answer" in
+        y|Y|yes|YES|Yes)
+            command -v apt-get >/dev/null 2>&1 && command -v dpkg-query >/dev/null 2>&1 ||
+                fail "Automatic system dependency installation requires Debian or Ubuntu."
+            command -v sudo >/dev/null 2>&1 || fail "sudo is required to install system dependencies."
+            [ ! -L "$INSTALL_ROOT/system-packages.txt" ] || fail "Invalid system package tracking file."
+            sudo apt-get update
+            # shellcheck disable=SC2086
+            sudo apt-get install -y --no-install-recommends $MISSING_PACKAGES
+            for package in $MISSING_PACKAGES; do
+                printf '%s\n' "$package" >> "$INSTALL_ROOT/system-packages.txt"
+            done
+            chmod 600 "$INSTALL_ROOT/system-packages.txt"
+            ;;
+        *) fail "$MISSING_PACKAGES is required to bootstrap the private runtime." ;;
+    esac
+fi
 
 if [ ! -x "$UV" ]; then
     printf 'Installing private uv %s...\n' "$UV_VERSION"
@@ -92,7 +121,6 @@ if [ -f "$ROOT/apps/matoloop-agent/pyproject.toml" ]; then
     exec "$BOOTSTRAP_PYTHON" "$ROOT/scripts/matoloop-agent-installer.py" install --source "$ROOT" "$@"
 fi
 
-command -v git >/dev/null 2>&1 || fail "git is required when installing outside a MatoLoop checkout."
 BRANCH=${MATOLOOP_AGENT_BRANCH:-}
 if [ -z "$BRANCH" ]; then
     BRANCH=main

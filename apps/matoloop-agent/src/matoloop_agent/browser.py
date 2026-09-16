@@ -747,10 +747,10 @@ async def finish_setup() -> int:
         status = BrowserStatus.model_validate(await manager.rpc("start", probe=True))
         if status.state != "ready":
             raise AgentError(status.error_code or "browser.notReady", "Browser probe failed")
-        print("Browser ist einsatzbereit.", flush=True)
+        print("Browser is ready.", flush=True)
         return 0
     except Exception:
-        print("Browser-Einrichtung oder Startpruefung fehlgeschlagen.", flush=True)
+        print("Browser setup or startup check failed.", flush=True)
         return 1
     finally:
         await manager.close()

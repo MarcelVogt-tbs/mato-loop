@@ -16,6 +16,32 @@ SPEC.loader.exec_module(installer)
 
 
 class InstallerTests(unittest.TestCase):
+    def test_system_dependencies_install_only_missing_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            packages = Path(temporary) / "system-packages.txt"
+            layout = {"packages": packages}
+
+            def fake_run(*command, **_kwargs):
+                if command[0] == "dpkg-query":
+                    status = b"ii " if command[-1] == "bash" else b""
+                    return subprocess.CompletedProcess(command, 0 if status else 1, stdout=status)
+                return subprocess.CompletedProcess(command, 0)
+
+            with (
+                patch.object(installer.shutil, "which", return_value="/usr/bin/tool"),
+                patch.object(installer, "confirm", return_value=True),
+                patch.object(installer, "run", side_effect=fake_run) as commands,
+            ):
+                installer.install_system_dependencies(layout)
+
+            installed = commands.call_args_list[-1].args
+            self.assertEqual(
+                installed[:5],
+                ("sudo", "apt-get", "install", "-y", "--no-install-recommends"),
+            )
+            self.assertNotIn("bash", installed)
+            self.assertEqual(set(packages.read_text().splitlines()), set(installed[5:]))
+
     def test_home_directory_is_never_a_valid_purge_root(self) -> None:
         with patch.dict(os.environ, {"MATOLOOP_AGENT_INSTALL_ROOT": str(Path.home())}):
             with self.assertRaises(SystemExit):
@@ -272,10 +298,32 @@ class InstallerTests(unittest.TestCase):
                 layout["data"].mkdir(parents=True)
                 layout["marker"].touch()
                 installer.write_json(layout["state"], {"source": "test"})
+                layout["packages"].write_text("ripgrep\n")
                 inactive = subprocess.CompletedProcess([], 3)
-                with patch.object(installer, "run", return_value=inactive):
+                with (
+                    patch.object(installer, "confirm", return_value=True),
+                    patch.object(installer.shutil, "which", return_value="/usr/bin/tool"),
+                    patch.object(installer, "run", return_value=inactive) as commands,
+                ):
                     installer.uninstall(purge=True, yes=True)
                 self.assertFalse(root.exists())
+                calls = [call.args for call in commands.call_args_list]
+                self.assertIn(
+                    ("sudo", "apt-get", "remove", "-y", "--", "ripgrep"),
+                    calls,
+                )
+                self.assertLess(
+                    calls.index(
+                        (
+                            "systemctl",
+                            "--user",
+                            "is-active",
+                            "--quiet",
+                            "matoloop-agent.service",
+                        )
+                    ),
+                    calls.index(("sudo", "apt-get", "remove", "-y", "--", "ripgrep")),
+                )
 
     def test_uninstall_keeps_files_when_the_running_service_cannot_stop(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

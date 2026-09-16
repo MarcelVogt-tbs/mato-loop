@@ -482,13 +482,14 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             [os.sys.executable, "-m", "matoloop_agent", "browser-install"],
         )
 
-    def test_native_setup_does_not_modify_system_packages(self):
+    def test_native_setup_offers_system_packages_in_english(self):
         script = (
             Path(__file__).resolve().parents[1] / "src" / "matoloop_agent" / "browser-setup.sh"
         ).read_text()
-        self.assertNotIn("apt-get", script)
-        self.assertNotIn("sudo", script)
-        self.assertIn("ohne grafische Oberfläche geprüft", script)
+        self.assertIn("playwright install-deps chromium", script)
+        self.assertLess(script.index("browser-install; then"), script.index("Install missing"))
+        self.assertIn("&& [ -t 0 ]", script)
+        self.assertNotIn("Browser-Einrichtung", script)
         self.assertNotIn("MATOLOOP_BROWSER_FROZEN", script)
 
     async def test_headless_control_needs_no_desktop_fence(self):
@@ -814,7 +815,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         output = await self.manager.setup_io(
             "setupread", BrowserSetupReadArguments(setupId=result["setupId"], offset=0)
         )
-        self.assertIn("Startpruefung fehlgeschlagen", base64.b64decode(output["data"]).decode())
+        self.assertIn("startup check failed", base64.b64decode(output["data"]).decode())
 
     async def test_setup_replay_survives_terminal_and_browser_disconnect(self):
         entry = self.agent.terminal._spawn(

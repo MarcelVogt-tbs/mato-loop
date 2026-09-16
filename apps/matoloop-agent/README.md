@@ -49,7 +49,8 @@ From a MatoLoop checkout, run the interactive installer as a normal user:
 ```
 
 The bootstrap installs pinned, private `uv` and Python runtimes below
-`~/.local/share/matoloop-agent`; it never installs system packages or changes shell profiles. From a
+`~/.local/share/matoloop-agent`; it offers to install missing Debian/Ubuntu system packages and
+never changes shell profiles. From a
 checkout it uses the current source. A standalone script requires `git` to obtain the private
 repository because there is no native release package. The setup asks for the Agent home directory
 and normal MatoLoop instance URL, derives the WebSocket endpoint, and reuses the Agent's secure
@@ -73,10 +74,11 @@ prepares source and dependencies before replacing the running version. This is i
 existing checkout and an installer-created checkout: the selected branch alone determines whether
 the Agent follows stable `main`, bleeding-edge `develop`, or another tracked branch. Use `install`
 instead to deploy uncommitted local changes without pulling.
-`uninstall` preserves credentials, while `uninstall --purge` removes all managed Agent files. Agent
+`uninstall` preserves credentials, while `uninstall --purge` removes all managed Agent files. Both
+offer to remove only the system packages recorded as newly installed by MatoLoop. Agent
 home directories and workspaces are always preserved. The first platform implementation targets
 Linux user services with systemd. It does not enable linger automatically. Browser and shared
-terminal capabilities remain unavailable until their host prerequisites already exist.
+terminal capabilities remain unavailable when their host prerequisites are declined or unsupported.
 
 Run tests:
 

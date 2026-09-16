@@ -15,6 +15,15 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 SOURCE_URL = "https://git.devmato.net/devmato/MatoLoop.git"
+SYSTEM_PACKAGES = (
+    "bash",
+    "gcc",
+    "libc6-dev",
+    "bash-builtins",
+    "libreadline-dev",
+    "openscad",
+    "ripgrep",
+)
 
 
 def paths() -> dict[str, Path]:
@@ -45,6 +54,7 @@ def paths() -> dict[str, Path]:
         "uv": root / "tools/bin/uv",
         "python": root / "bin/python",
         "installer": root / "installer.py",
+        "packages": root / "system-packages.txt",
         "marker": root / ".managed-by-matoloop-agent",
         "wrapper": Path(
             stored.get("wrapperPath")
@@ -130,6 +140,13 @@ def prompt(label: str, default: str) -> str:
     return input(f"{label} [{default}]: ").strip() or default
 
 
+def confirm(label: str, *, default: bool) -> bool:
+    if not sys.stdin.isatty():
+        return False
+    answer = input(f"{label} [{'Y/n' if default else 'y/N'}] ").strip().lower()
+    return answer in {"y", "yes"} or (default and not answer)
+
+
 def backend_url(instance_url: str) -> tuple[str, bool]:
     value = instance_url.rstrip("/")
     try:
@@ -182,6 +199,44 @@ def check_linux() -> None:
     for command in ("systemctl",):
         if shutil.which(command) is None:
             fail(f"{command} is required for the Linux user service")
+
+
+def install_system_dependencies(layout: dict[str, Path]) -> None:
+    if layout["packages"].is_symlink():
+        fail("invalid system package tracking file")
+    if shutil.which("apt-get") is None or shutil.which("dpkg-query") is None:
+        print("Automatic system dependency installation requires Debian or Ubuntu.")
+        return
+    missing = [
+        package
+        for package in SYSTEM_PACKAGES
+        if run(
+            "dpkg-query",
+            "-W",
+            "-f=${db:Status-Abbrev}",
+            package,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ).stdout
+        != b"ii "
+    ]
+    if not missing:
+        return
+    print("Missing system packages: " + " ".join(missing))
+    if not confirm("Install missing system dependencies?", default=True):
+        print("Continuing without optional system dependencies.")
+        return
+    if shutil.which("sudo") is None:
+        fail("sudo is required to install system dependencies")
+    run("sudo", "apt-get", "update")
+    run("sudo", "apt-get", "install", "-y", "--no-install-recommends", *missing)
+    tracked = set(missing)
+    try:
+        tracked.update(layout["packages"].read_text(encoding="utf-8").splitlines())
+    except FileNotFoundError:
+        pass
+    write_file(layout["packages"], ("\n".join(sorted(tracked)) + "\n").encode(), 0o600)
 
 
 def sync_environment(layout: dict[str, Path], source: Path, destination: Path) -> None:
@@ -359,6 +414,7 @@ def install(arguments: argparse.Namespace) -> None:
 
     layout["data"].mkdir(parents=True, exist_ok=True)
     layout["data"].chmod(0o700)
+    install_system_dependencies(layout)
     staged_source = layout["root"] / (".source-new" if managed else ".source-build")
     shutil.rmtree(staged_source, ignore_errors=True)
     cleanup_paths = [staged_source]
@@ -583,6 +639,24 @@ def uninstall(purge: bool, yes: bool) -> None:
         == 0
     ):
         fail("the MatoLoop Agent service is still running; no files were removed")
+    packages = []
+    if layout["packages"].is_symlink():
+        fail("the system package tracking file is invalid")
+    try:
+        packages = layout["packages"].read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        pass
+    if packages and confirm("Remove system packages installed by MatoLoop?", default=False):
+        if any(
+            not package
+            or package.startswith("-")
+            or not all(character.isalnum() or character in "+.-:" for character in package)
+            for package in packages
+        ):
+            fail("the tracked system package list is invalid")
+        if shutil.which("sudo") is None or shutil.which("apt-get") is None:
+            fail("sudo and apt-get are required to remove system dependencies")
+        run("sudo", "apt-get", "remove", "-y", "--", *packages)
     if layout["service"].exists():
         run("systemctl", "--user", "disable", "matoloop-agent.service")
     layout["service"].unlink(missing_ok=True)
