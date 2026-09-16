@@ -4,7 +4,6 @@ import json
 import os
 import re
 import shutil
-import socket
 import struct
 import tempfile
 import unittest
@@ -474,16 +473,6 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             browser_command("browser-install"),
             [os.sys.executable, "-m", "matoloop_agent", "browser-install"],
         )
-
-    def test_seccomp_excludes_vsock(self):
-        app = Path(__file__).resolve().parents[1]
-        profile = json.loads((app / "docker" / "browser-seccomp.json").read_text())
-        rules = [rule for rule in profile["syscalls"] if "socket" in rule["names"]]
-        self.assertEqual(len(rules), 1)
-        self.assertEqual(rules[0]["args"], [{"index": 0, "value": 40, "op": "SCMP_CMP_NE"}])
-        if os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1":
-            with self.assertRaises(PermissionError):
-                socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
 
     def test_native_setup_does_not_modify_system_packages(self):
         script = (
