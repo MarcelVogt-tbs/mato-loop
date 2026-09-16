@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 from weakref import WeakValueDictionary
 
+from anyio import CancelScope
 from fastapi import WebSocket
 
 from mato_loop_backend.agent.permissions import (
@@ -17,9 +18,7 @@ from mato_loop_backend.agent.permissions import (
     integration_operation_permission,
 )
 from mato_loop_backend.db.session import AsyncSessionFactory
-from mato_loop_backend.events import run_events
 from mato_loop_backend.execution.browsers import (
-    ACCESS_INTERVAL,
     BrowserConnection,
     browser_coordinator,
 )
@@ -54,7 +53,7 @@ class ControlRequestResponse(WireModel):
 def _binding(connection: BrowserConnection | None) -> tuple:
     return () if connection is None else (
         connection.browser_id, connection.view_id, connection.attachment_revision,
-        connection.generation, connection.websocket, connection.closed,
+        connection.generation, connection.closed,
     )
 
 
@@ -133,10 +132,10 @@ class ControlRequest:
         self.connection = connection
         self.expected = _binding(connection)
 
-    def viewer_ready(self) -> None:
+    def binding_ready(self) -> None:
         self.check_binding()
         connection = self.connection
-        if connection is None or not connection.ready or connection.websocket is not self.socket:
+        if connection is None or not connection.ready:
             raise ExecutionClientError("browser.notConnected")
 
 
@@ -226,16 +225,45 @@ class BrowserControlRequests:
             raise ExecutionClientError("browser.busy")
         self.requests[request.info.id] = request
         try:
-            await run_events.publish(request.info.run_id, {
-                "type": "browser.control.requested", "request": request.info.model_dump(mode="json"),
-            })
-            while not request.done.is_set():
+            current = browser_coordinator.connections.get(request.info.agent_id)
+
+            async def bind() -> None:
                 try:
-                    await asyncio.wait_for(request.done.wait(), min(ACCESS_INTERVAL, max(0, request.deadline - monotonic())))
-                except TimeoutError:
-                    await request.validate()
-            if request.error:
-                raise ExecutionClientError(request.error)
+                    connection = await browser_coordinator.open(
+                        request.owner_id,
+                        request.info.integration_id,
+                        request.info.session_id,
+                        None,
+                        None,
+                        expected_browser_id=current.browser_id if current else None,
+                        expected_view_id=current.view_id if current else None,
+                        control_request=request,
+                    )
+                    await browser_coordinator.attachment(
+                        connection, True, control_request=request,
+                    )
+                except BaseException:
+                    if request.connection is not None:
+                        await browser_coordinator.close(request.connection)
+                    raise
+
+            binding = asyncio.create_task(bind())
+            try:
+                async with asyncio.timeout(max(0, request.deadline - monotonic())):
+                    await asyncio.shield(binding)
+            except TimeoutError:
+                binding.cancel()
+                with CancelScope(shield=True):
+                    await asyncio.gather(binding, return_exceptions=True)
+                    if request.connection is not None:
+                        await browser_coordinator.close(request.connection)
+                raise ExecutionClientError("browser.controlTimeout") from None
+            except asyncio.CancelledError:
+                with CancelScope(shield=True):
+                    await asyncio.gather(binding, return_exceptions=True)
+                    if request.connection is not None:
+                        await browser_coordinator.close(request.connection)
+                raise
             return ToolResult.json({"ok": True})
         finally:
             self.finish(request, "browser.notConnected")
@@ -246,13 +274,7 @@ class BrowserControlRequests:
             if (session is None or session.user_id != owner_id or session.session_type != "chat"
                     or session.parent_session_id is not None):
                 raise ExecutionClientError("session.notFound")
-        for request in list(self.requests.values()):
-            if request.owner_id == owner_id and request.info.session_id == session_id:
-                try:
-                    await request.validate()
-                    return request.info
-                except ExecutionClientError as exc:
-                    self.finish(request, exc.code)
+        # Existing frontends still reconcile this endpoint, but binding is backend-owned.
         return None
 
     async def claim(self, request_id: UUID, owner_id: UUID, session_id: UUID,

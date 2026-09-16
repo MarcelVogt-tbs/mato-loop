@@ -91,6 +91,13 @@ class LinuxPlatform:
         )
         openscad = OpenScadRunner(config, filesystem, cache, transfer)
         operations = set(ARGUMENT_MODELS) | set(BROWSER_ARGUMENT_MODELS)
+        if os.environ.get("MATOLOOP_AGENT_CONTAINER") != "1":
+            operations -= {
+                "integration.browser.view",
+                "integration.browser.resize",
+                "integration.browser.navigation",
+                "integration.browser.clipboard",
+            }
         if process.shell is None:
             operations.remove("shell.run")
         if not terminal.available:

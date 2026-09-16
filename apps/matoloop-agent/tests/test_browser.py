@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import re
@@ -457,9 +458,16 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"MATOLOOP_AGENT_CONTAINER": "0"}):
             native = BrowserManager(self.agent.config, self.agent.terminal)
             self.assertEqual(native.installation, self.root.parent / "tools" / "browser")
+            self.assertEqual(native.environment()[0]["MATOLOOP_AGENT_CONTAINER"], "0")
+            native_agent = MatoLoopAgent(self.agent.config, "not-for-browser")
+            self.assertIn("integration.browser.execute", native_agent.hello().operations)
+            self.assertNotIn("integration.browser.view", native_agent.hello().operations)
         with patch.dict(os.environ, {"MATOLOOP_AGENT_CONTAINER": "1"}):
             container = BrowserManager(self.agent.config, self.agent.terminal)
             self.assertEqual(container.installation, CONTAINER_INSTALLATION)
+            self.assertEqual(container.environment()[0]["MATOLOOP_AGENT_CONTAINER"], "1")
+            container_agent = MatoLoopAgent(self.agent.config, "not-for-browser")
+            self.assertIn("integration.browser.view", container_agent.hello().operations)
         user = SimpleNamespace(pw_name="matoloop-browser", pw_uid=10001, pw_gid=10001)
         with patch("os.getuid", return_value=0), patch("pwd.getpwnam", return_value=user):
             environment, options = self.manager.environment()
@@ -480,8 +488,19 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         ).read_text()
         self.assertNotIn("apt-get", script)
         self.assertNotIn("sudo", script)
-        self.assertIn("MatoLoop veraendert keine Systempakete", script)
+        self.assertIn("ohne grafische Oberfläche geprüft", script)
         self.assertNotIn("MATOLOOP_BROWSER_FROZEN", script)
+
+    async def test_headless_control_needs_no_desktop_fence(self):
+        with patch.dict(os.environ, {"MATOLOOP_AGENT_CONTAINER": "0"}):
+            worker = BrowserWorker(self.root)
+        with patch.object(worker, "x_command", AsyncMock()) as x_command:
+            self.assertEqual(
+                await worker.control(False, origin="model", control_epoch=1), {"ok": True}
+            )
+        self.assertFalse(worker.manual)
+        self.assertEqual((worker.file_origin, worker.control_epoch), ("model", 1))
+        x_command.assert_not_awaited()
 
     async def test_worker_stderr_is_discarded_and_errors_are_controlled(self):
         process = SimpleNamespace(
@@ -857,6 +876,58 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(await ready)
                 await asyncio.wait_for(task, 5)
         self.assertEqual(seen, [b"test", b"test"])
+
+    @unittest.skipUnless(os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), "Bundled browser smoke test")
+    async def test_real_sandboxed_headless_runtime(self):
+        manager = self.manager
+        manager.installation = Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"])
+        manager.container = False
+        self.root.chmod(0o711)
+
+        async def http(reader, writer):
+            with contextlib.suppress(asyncio.IncompleteReadError):
+                await reader.readuntil(b"\r\n\r\n")
+                body = b"<!doctype html><title>Headless smoke</title><p>ready</p>"
+                writer.write(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: "
+                    + str(len(body)).encode()
+                    + b"\r\nConnection: close\r\n\r\n"
+                    + body
+                )
+                await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        server = await asyncio.start_server(http, "127.0.0.1", 0)
+        url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/"
+        try:
+            status = await manager.dispatch("integration.browser.status", BrowserStatusArguments())
+            if status["errorCode"] == "browser.sandboxUnavailable":
+                self.skipTest("Host denies Chromium sandbox; controlled readiness code returned")
+            self.assertEqual(status["state"], "ready", status)
+            await manager.dispatch(
+                "integration.browser.open",
+                BrowserOpenArguments(ownerId=self.owner_id, browserId=self.browser_id),
+            )
+            await manager.dispatch(
+                "integration.browser.control",
+                BrowserControlArguments(browserId=self.browser_id, manual=False),
+            )
+            result = await manager.dispatch(
+                "integration.browser.execute",
+                BrowserExecuteArguments(browserId=self.browser_id, action="navigate", url=url),
+            )
+            self.assertEqual(result["url"], url)
+            result = await manager.dispatch(
+                "integration.browser.execute",
+                BrowserExecuteArguments(browserId=self.browser_id, action="inspect"),
+            )
+            self.assertIn("ready", result["text"])
+            self.assertIsNone(manager.worker.returncode)
+        finally:
+            server.close()
+            await server.wait_closed()
+            await manager.close()
 
     @unittest.skipUnless(os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), "Bundled browser smoke test")
     async def test_real_sandboxed_headed_runtime(self):

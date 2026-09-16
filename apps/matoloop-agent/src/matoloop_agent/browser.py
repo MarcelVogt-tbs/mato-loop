@@ -81,6 +81,7 @@ class BrowserManager:
             "PATH": BROWSER_PATH,
             "LANG": "C.UTF-8",
             "PLAYWRIGHT_BROWSERS_PATH": str(self.installation),
+            "MATOLOOP_AGENT_CONTAINER": "1" if self.container else "0",
         }
         options = (
             {"user": user.pw_uid, "group": user.pw_gid, "extra_groups": []}

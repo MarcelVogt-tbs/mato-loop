@@ -170,7 +170,7 @@ class BrowserConnection:
     integration_id: UUID
     agent_id: UUID
     session_id: UUID
-    login_id: UUID
+    login_id: UUID | None
     client: ExecutionClient
     generation: int
     browser_id: UUID = field(default_factory=uuid4)
@@ -369,6 +369,8 @@ class BrowserCoordinator:
                 )
                 if result.browser_id != connection.browser_id:
                     raise ExecutionClientError("executionAgent.protocolError")
+                if control_request is not None:
+                    await control_request.validate()
                 result = await connection.request(
                     "integration.browser.control",
                     {"browserId": str(connection.browser_id), "manual": True,
@@ -485,6 +487,8 @@ class BrowserCoordinator:
             connection.view_socket = None
         if not connection.closed and not connection.attached:
             connection.detach()
+            if connection.idle_task is not None:
+                connection.idle_task.cancel()
             async def expire():
                 await asyncio.sleep(IDLE_SECONDS)
                 await self.close(connection)
@@ -532,7 +536,7 @@ class BrowserCoordinator:
                 await connection.check_access()
                 if control_request is not None:
                     await control_request.validate()
-                    control_request.viewer_ready()
+                    control_request.binding_ready()
                 result = await connection.request(
                     "integration.browser.control", {"browserId": str(connection.browser_id), "manual": False,
                     **connection.origin(
@@ -551,7 +555,7 @@ class BrowserCoordinator:
                     raise ExecutionClientError("browser.bindingChanged")
                 if control_request is not None:
                     await control_request.validate()
-                    control_request.viewer_ready()
+                    control_request.binding_ready()
                 connection.detach()
                 connection.attached = True
                 if control_request is not None:
@@ -590,6 +594,13 @@ class BrowserCoordinator:
                 finally:
                     connection.resetting_view = False
                 await connection.state()
+                if connection.websocket is None and not connection.closed:
+                    if connection.idle_task is not None:
+                        connection.idle_task.cancel()
+                    async def expire():
+                        await asyncio.sleep(IDLE_SECONDS)
+                        await self.close(connection)
+                    connection.idle_task = asyncio.create_task(expire())
 
     async def _snapshot(self, connection: BrowserConnection, tab_id: str, *, settle: bool = False) -> tuple[str, BrowserActionResult]:
         result = await connection.client.request(

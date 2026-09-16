@@ -172,7 +172,14 @@ const agents = useExecutionAgentStore()
 const integrations = useIntegrationStore()
 const instanceLimits = useInstanceLimitsStore()
 const navigation = computed(() => browser.displayNavigation)
-const browserStateMessage = computed(() => ({
+const selectedAgent = computed(() => agents.byId(chat.current?.preferredExecutionAgentId))
+const viewAvailable = computed(() => selectedAgent.value?.operations?.includes('integration.browser.view') !== false)
+const headlessBrowser = computed(() => selectedAgent.value?.connected === true
+  && selectedAgent.value?.operations?.includes('integration.browser.execute') === true && !viewAvailable.value)
+const browserStateMessage = computed(() => headlessBrowser.value ? {
+  title: 'Browser läuft im Hintergrund',
+  description: 'Der Agent steuert diesen Browser ohne grafische Ansicht.'
+} : ({
   occupied: {
     title: 'In einer anderen Ansicht geöffnet',
     description: `Der Browser wird bereits in ${browser.displayOffer?.ownerSession?.title || 'einer anderen Ansicht'} verwendet.${browser.displayOffer?.busy ? ' Eine laufende Aktion wird vor der Übernahme beendet.' : ''}`
@@ -206,7 +213,6 @@ const fileActions = [
 ]
 const options = computed(() => integrations.browser.instances.filter((item) => item.enabled && item.executionAgentId === chat.current?.preferredExecutionAgentId).map((item) => ({ label: item.name, value: item.id })))
 const available = computed(() => Boolean(chat.current?.id && integrations.adapterAvailable('browser', 'personal') && agents.byId(chat.current.preferredExecutionAgentId)?.connected && options.value.some((item) => item.value === selectedId.value)))
-const selectedAgent = computed(() => agents.byId(chat.current?.preferredExecutionAgentId))
 const pickerContext = computed(() => ({
   sessionId: chat.current?.id,
   rootIdentity: chat.current?.id,
@@ -244,7 +250,7 @@ watch(() => [browser.authorizedRequest, browser.ownsDisplay, browser.integration
 watch(() => route.name === 'chat' && route.query.session === chat.current?.id ? chat.current?.id : null,
   (id) => browser.setDisplayedSession(id), { immediate: true, flush: 'sync' })
 watch(() => [visible.value, confirmed.value, selectedId.value, available.value, chat.current?.id, chat.current?.preferredExecutionAgentId,
-  browser.authorizedRequest, browser.requestOpening, browser.requestRefresh, controlCenter.saving], activate, { flush: 'post' })
+  browser.authorizedRequest, browser.requestOpening, browser.requestRefresh, controlCenter.saving, viewAvailable.value], activate, { flush: 'post' })
 watch(() => [visible.value, browser.ownsDisplay, browser.browserId, browser.viewId, browser.ready, host.value], refreshView, { flush: 'post' })
 watch(() => [browser.generation, browser.displayGeneration], () => {
   resetAddress()
@@ -284,11 +290,11 @@ function measurable() {
 }
 function activate() {
   const context = { integrationId: selectedId.value, sessionId: chat.current?.id, agentId: chat.current?.preferredExecutionAgentId }
-  browser.activate(visible.value ? JSON.stringify(context) : null, context, confirmed.value && available.value && measurable())
+  browser.activate(visible.value ? JSON.stringify(context) : null, context, confirmed.value && available.value && viewAvailable.value && measurable())
 }
 async function refreshView() {
   await nextTick()
-  if (measurable() && browser.ownsDisplay && browser.browserId) await browser.mountView(host.value)
+  if (viewAvailable.value && measurable() && browser.ownsDisplay && browser.browserId) await browser.mountView(host.value)
   if (browser.viewParent === host.value) {
     browser.viewVisible = measurable() && browser.ownsDisplay
     browser.updateViewOnly()

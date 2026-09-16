@@ -113,6 +113,7 @@ def launch_error_code(error: Exception) -> str:
 class BrowserWorker:
     def __init__(self, root: Path) -> None:
         self.root = root
+        self.desktop = os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1"
         self.context = None
         self.playwright = None
         self.processes: list[subprocess.Popen] = []
@@ -130,7 +131,14 @@ class BrowserWorker:
         self.clipboard_owner = None
         self.document_ids: dict[object, str] = {}
         self.snapshot_key = os.urandom(32)
-        self.geometry = {"width": 3840, "height": 2160}
+        self.geometry = (
+            {"width": 3840, "height": 2160}
+            if self.desktop
+            else {
+                "width": 1280,
+                "height": 800,
+            }
+        )
         self.resize_mode = None
         self.page_sessions: dict[object, asyncio.Task] = {}
         self.loading_frames: dict[object, set[str]] = {}
@@ -170,7 +178,7 @@ class BrowserWorker:
         missing = [
             name
             for name in ("Xvfb", "xrandr", "xprop", "openbox", "x11vnc", "xclip")
-            if not shutil.which(name)
+            if self.desktop and not shutil.which(name)
         ]
         if missing:
             return BrowserStatus(
@@ -183,6 +191,87 @@ class BrowserWorker:
         self.temporary = tempfile.TemporaryDirectory(prefix="matoloop-browser-")
         live = Path(self.temporary.name)
         self.live = live
+        self.environment = {
+            **os.environ,
+            "HOME": str(live),
+            "XDG_CONFIG_HOME": str(live / "config"),
+            "XDG_CACHE_HOME": str(live / "cache"),
+            "XDG_RUNTIME_DIR": str(live),
+        }
+        if self.desktop:
+            await self.start_desktop(live)
+        self.startup_stage = "chromium"
+        self.playwright = await async_playwright().start()
+        executable = self.playwright.chromium.executable_path
+        if not Path(executable).is_file():
+            return BrowserStatus(
+                state="missing",
+                missing=["chromium"],
+                errorCode="browser.dependenciesMissing",
+                playwrightVersion=version("playwright"),
+            ).model_dump(by_alias=True)
+        launch = {
+            "headless": not self.desktop,
+            "chromium_sandbox": True,
+            "env": self.environment,
+            "accept_downloads": True,
+            "color_scheme": color_scheme,
+            "downloads_path": str(live / "downloads"),
+            "args": ["--disable-gpu", "--hide-crash-restore-bubble"],
+        }
+        if self.desktop:
+            launch.update(
+                no_viewport=True,
+                args=[
+                    *launch["args"],
+                    "--start-maximized",
+                    # App mode suppresses fullscreen overlays but retains DevTools.
+                    "--force-app-mode",
+                ],
+            )
+        else:
+            launch["viewport"] = self.geometry
+            launch["channel"] = "chromium"
+        try:
+            self.context = await self.playwright.chromium.launch_persistent_context(
+                str(live / "probe" if probe else self.root / "profile"),
+                **launch,
+                timeout=20_000,
+            )
+            if self.desktop:
+                await self.disable_translation_prompt()
+        except Exception as exc:
+            # Classify locally; raw Playwright errors can contain profile data and secrets.
+            raise fail(launch_error_code(exc)) from None
+        self.startup_stage = "page"
+        self.context.set_default_timeout(8000)
+        self.context.on(
+            "requestfailed", lambda request: self.network_diagnostic("requestfailed", request.url)
+        )
+        self.context.on(
+            "response",
+            lambda response: self.network_diagnostic("response", response.url, response.status),
+        )
+        self.context.on("page", self.add_page)
+        for page in self.context.pages:
+            self.add_page(page)
+        if not self.context.pages:
+            raise fail("notReady")
+        await self.context.pages[0].bring_to_front()
+        await self.page_sessions[self.context.pages[0]]
+        if self.desktop:
+            self.startup_stage = "resize"
+            # Exercise the native minimum-size workaround and both directions at startup.
+            await self.resize(320, 240)
+            await self.resize(1280, 800)
+        await self.context.pages[0].screenshot(type="png", timeout=8000)
+        return BrowserStatus(
+            state="ready",
+            browserVersion=self.context.browser.version,
+            playwrightVersion=version("playwright"),
+        ).model_dump(by_alias=True)
+
+    async def start_desktop(self, live: Path) -> None:
         auth = live / "Xauthority"
         # FamilyWild cookie authorizes only clients with this private file, never TCP.
         cookie = os.urandom(16)
@@ -231,15 +320,12 @@ class BrowserWorker:
                         await asyncio.sleep(0.05)
         finally:
             os.close(read_fd)
-        self.environment = {
-            **os.environ,
-            "DISPLAY": ":" + str(int(display)),
-            "XAUTHORITY": str(auth),
-            "HOME": str(live),
-            "XDG_CONFIG_HOME": str(live / "config"),
-            "XDG_CACHE_HOME": str(live / "cache"),
-            "XDG_RUNTIME_DIR": str(live),
-        }
+        self.environment.update(
+            {
+                "DISPLAY": ":" + str(int(display)),
+                "XAUTHORITY": str(auth),
+            }
+        )
         openbox_config = live / "config" / "openbox" / "rc.xml"
         openbox_config.parent.mkdir(parents=True)
         openbox_config.write_text(OPENBOX_CONFIG)
@@ -263,66 +349,6 @@ class BrowserWorker:
         finally:
             writer.close()
             await writer.wait_closed()
-        self.startup_stage = "chromium"
-        self.playwright = await async_playwright().start()
-        executable = self.playwright.chromium.executable_path
-        if not Path(executable).is_file():
-            return BrowserStatus(
-                state="missing",
-                missing=["chromium"],
-                errorCode="browser.dependenciesMissing",
-                playwrightVersion=version("playwright"),
-            ).model_dump(by_alias=True)
-        try:
-            self.context = await self.playwright.chromium.launch_persistent_context(
-                str(live / "probe" if probe else self.root / "profile"),
-                headless=False,
-                chromium_sandbox=True,
-                env=self.environment,
-                no_viewport=True,
-                accept_downloads=True,
-                color_scheme=color_scheme,
-                downloads_path=str(live / "downloads"),
-                args=[
-                    "--disable-gpu",
-                    "--hide-crash-restore-bubble",
-                    "--start-maximized",
-                    # Chromium app mode suppresses fullscreen exit overlays but retains
-                    # native DevTools via Ctrl+Shift+I; --kiosk disables DevTools entirely.
-                    "--force-app-mode",
-                ],
-                timeout=20_000,
-            )
-            await self.disable_translation_prompt()
-        except Exception as exc:
-            # Classify locally; raw Playwright errors can contain profile data and secrets.
-            raise fail(launch_error_code(exc)) from None
-        self.startup_stage = "page"
-        self.context.set_default_timeout(8000)
-        self.context.on(
-            "requestfailed", lambda request: self.network_diagnostic("requestfailed", request.url)
-        )
-        self.context.on(
-            "response",
-            lambda response: self.network_diagnostic("response", response.url, response.status),
-        )
-        self.context.on("page", self.add_page)
-        for page in self.context.pages:
-            self.add_page(page)
-        if not self.context.pages:
-            raise fail("notReady")
-        await self.context.pages[0].bring_to_front()
-        await self.page_sessions[self.context.pages[0]]
-        self.startup_stage = "resize"
-        # Exercise the native minimum-size workaround and both resize directions at startup.
-        await self.resize(320, 240)
-        await self.resize(1280, 800)
-        await self.context.pages[0].screenshot(type="png", timeout=8000)
-        return BrowserStatus(
-            state="ready",
-            browserVersion=self.context.browser.version,
-            playwrightVersion=version("playwright"),
-        ).model_dump(by_alias=True)
 
     async def x_command(self, *arguments: str) -> str:
         process = await asyncio.create_subprocess_exec(
@@ -493,6 +519,11 @@ class BrowserWorker:
     ) -> dict:
         if origin is not None:
             self.file_origin, self.control_epoch = origin, control_epoch
+        if not self.desktop:
+            self.manual = manual
+            if not manual:
+                self.pending_choosers.clear()
+            return {"ok": True}
         async with self.vnc_lock:
             if manual and self.manual:
                 return {"ok": True}
@@ -802,6 +833,8 @@ class BrowserWorker:
             return
         tab_id = str(uuid4())
         self.tabs[tab_id] = page
+        if self.active_tab_id is None:
+            self.active_tab_id = tab_id
         self.document_ids[page] = str(uuid4())
         self.loading_frames[page] = set()
         self.pending_requests[page] = set()
@@ -837,6 +870,8 @@ class BrowserWorker:
 
         def closed():
             self.tabs.pop(tab_id, None)
+            if self.active_tab_id == tab_id:
+                self.active_tab_id = next(reversed(self.tabs), None)
             self.pending_choosers.pop(page, None)
             self.document_ids.pop(page, None)
             self.loading_frames.pop(page, None)
@@ -869,17 +904,19 @@ class BrowserWorker:
 
     async def observe_page(self, page):
         session = await self.context.new_cdp_session(page)
-        # Playwright otherwise emulates focus in background tabs. Never trust page-world APIs.
-        await session.send("Emulation.setFocusEmulationEnabled", {"enabled": False})
+        if self.desktop:
+            # Playwright otherwise emulates focus in background tabs. Never trust page-world APIs.
+            await session.send("Emulation.setFocusEmulationEnabled", {"enabled": False})
         frames = self.loading_frames[page]
         session.on("Page.frameStartedLoading", lambda event: frames.add(event["frameId"]))
         session.on("Page.frameStoppedLoading", lambda event: frames.discard(event["frameId"]))
         await session.send("Page.enable")
-        window = await session.send("Browser.getWindowForTarget")
-        if window["windowId"] not in self.windows:
-            self.windows.add(window["windowId"])
-            # Once per browser window, never on status reads or native permission dialogs.
-            await self.set_chrome(session, window, self.native_chrome)
+        if self.desktop:
+            window = await session.send("Browser.getWindowForTarget")
+            if window["windowId"] not in self.windows:
+                self.windows.add(window["windowId"])
+                # Once per browser window, never on status reads or native permission dialogs.
+                await self.set_chrome(session, window, self.native_chrome)
         return session
 
     async def page_focus(self, session) -> dict:
@@ -1364,7 +1401,7 @@ class BrowserWorker:
             await self.close()
             raise fail("invalidTarget")
         action = args.action
-        if not args.tab_id:
+        if not args.tab_id and self.desktop:
             await self.navigation_state()
         page = self.tabs.get(args.tab_id or self.active_tab_id)
         if args.tab_id and page is None:
@@ -1392,6 +1429,10 @@ class BrowserWorker:
                     await step("await page.bring_to_front()", page.bring_to_front)
                 else:
                     await page.bring_to_front()
+                self.active_tab_id = next(
+                    (tab_id for tab_id, candidate in self.tabs.items() if candidate is page),
+                    self.active_tab_id,
+                )
             if action == "select":
                 self.active_tab_id = args.tab_id
             if action in {"navigate", "newtab"} and args.url:
@@ -1406,7 +1447,8 @@ class BrowserWorker:
                 if len(self.tabs) == 1:
                     await step("await page.context.new_page()", self.context.new_page)
                 await step("await page.close()", page.close)
-                await self.navigation_state()
+                if self.desktop:
+                    await self.navigation_state()
                 page = self.tabs.get(self.active_tab_id)
             elif action == "inspect":
                 if args.settle:

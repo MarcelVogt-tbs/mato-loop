@@ -2732,6 +2732,39 @@ def test_requester_cancellation_drains_takeover_then_expires_without_orphan_ai(e
     env.client.portal.call(scenario)
 
 
+def test_detach_and_disconnect_keep_one_cancellable_idle_timer(env, monkeypatch):
+    monkeypatch.setattr(execution, "IDLE_SECONDS", 0.02)
+
+    async def scenario():
+        websocket = AsyncMock()
+        connection = await env.coordinator.open(
+            env.user.id, env.instance.id, env.session.id, env.login.id, websocket,
+        )
+        connection.view_socket = AsyncMock()
+        await env.coordinator.attachment(connection, True)
+        await connection.action_lock.acquire()
+        detaching = asyncio.create_task(env.coordinator.attachment(connection, False))
+        try:
+            async with asyncio.timeout(1):
+                while connection.attached:
+                    await asyncio.sleep(0)
+            await env.coordinator.release(connection, websocket)
+            first_idle_task = connection.idle_task
+        finally:
+            connection.action_lock.release()
+        await asyncio.wait_for(detaching, 1)
+        assert first_idle_task.cancelled()
+
+        resumed = await env.coordinator.open(
+            env.user.id, env.instance.id, env.session.id, env.login.id, AsyncMock(),
+        )
+        assert resumed is connection and connection.idle_task is None
+        await asyncio.sleep(0.03)
+        assert env.coordinator.connections[env.agent.id] is connection
+
+    env.client.portal.call(scenario)
+
+
 def test_takeover_drains_cancelled_metadata_watch_without_publishing_retired_navigation(env, wire, monkeypatch):
     monkeypatch.setattr(execution, "ACCESS_INTERVAL", 0.01)
 

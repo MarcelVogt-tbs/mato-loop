@@ -10,16 +10,7 @@ elif [ "$(uname -s)" != Linux ]; then
     printf '%s\n' 'Die Browser-Einrichtung wird auf diesem System noch nicht unterstuetzt.'
     exit 1
 else
-    missing=()
-    for command in Xvfb xrandr xprop openbox x11vnc xclip; do
-        command -v "$command" >/dev/null || missing+=("$command")
-    done
-    if [ "${#missing[@]}" -gt 0 ]; then
-        printf 'Fehlende Browser-Voraussetzungen: %s\n' "${missing[*]}"
-        printf '%s\n' 'MatoLoop veraendert keine Systempakete. Installieren Sie die Voraussetzungen ueber Ihr Betriebssystem.'
-        exit 1
-    fi
-    printf '%s\n' 'Die passende Chromium-Version wird im Agent-Verzeichnis installiert.'
+    printf '%s\n' 'Die passende Chromium-Version wird im Agent-Verzeichnis installiert und ohne grafische Oberfläche geprüft.'
 fi
-printf '%s\n' 'Die grafische Browser-Funktionspruefung wird ausgefuehrt.'
+printf '%s\n' 'Die Browser-Funktionspruefung wird ausgefuehrt.'
 exec "${MATOLOOP_BROWSER_EXECUTABLE}" -m matoloop_agent browser-install

@@ -1,8 +1,11 @@
 # Linux Browser Runtime
 
-The agent advertises 58 operations, including 18 `integration.browser.*` operations.
-The browser is headed Playwright-managed Chromium, with an authenticated private Xvfb
-display, Openbox and x11vnc in inetd mode. VNC has no TCP listener or public port.
+Container agents advertise 18 `integration.browser.*` operations and run headed
+Playwright-managed Chromium with an authenticated private Xvfb display, Openbox and
+x11vnc in inetd mode. VNC has no TCP listener or public port. Native agents omit the
+viewer, resize, navigation and clipboard host operations and run the same persistent
+Playwright context headless with a 1280x800 viewport. Model automation, screenshots,
+uploads, downloads and profile persistence use the same operations in both modes.
 Xvfb starts with a 3840x2160 allocation, then uses exact generated RandR modes through
 `xrandr` (the `x11-xserver-utils` package). Debian's development Xvfb was verified to
 accept added modes, including 1001x701 below its startup maximum; no alternate X server
@@ -52,11 +55,11 @@ Container images include pinned Playwright 1.59.0 and its matching Chromium buil
 volume. `MATOLOOP_AGENT_CONTAINER=1` selects this fixed installation; RPC arguments cannot
 override it. Native managed installation is `<config-parent-parent>/tools/browser`,
 independent of the checkout and Python virtual environment location.
-Native setup uses the bundled script to verify host prerequisites without changing
-system packages, then installs the managed Chromium as the runtime user. Both container and native setup finish
-with a disposable headed launch, screenshot and private RFB handshake as the runtime
-user. A zero setup exit code means this functional probe succeeded, not just that
-packages exist. Missing prerequisites, inaccessible storage and launch failures exit
+Native setup uses the bundled script to install managed Chromium as the runtime user
+without changing system packages. It finishes with a disposable headless launch and
+screenshot. Container setup retains the headed launch and private RFB handshake. A zero
+setup exit code means the mode-appropriate functional probe succeeded, not just that
+packages exist. Missing runtime libraries, inaccessible storage and launch failures exit
 nonzero.
 The setup PTY has a 1 MiB rolling replay
 buffer and survives viewer and main agent WebSocket disconnects, not agent process
@@ -77,10 +80,11 @@ directories readable to solve traversal. Ordinary non-root native agents use the
 user and need no permission widening. Runtime HOME/XDG directories are private temporary
 directories, not the account's passwd home. Native browser installation uses the owned
 browser data directory as HOME. Changed owner bindings are refused, not silently reused.
-Reset deletes runtime
-profile data only, with symlink-resistant traversal, and retains the binding and browser
-installation. Status performs a disposable headed launch, renderer capture and RFB handshake when idle;
-it never interprets an installed executable alone as readiness.
+Reset deletes runtime profile data only, with symlink-resistant traversal, and retains
+the binding and browser installation. Status performs the same disposable headless or
+headed launch used by that deployment and captures the renderer when idle; container
+status additionally checks RFB. It never interprets an installed executable alone as
+readiness.
 
 ## Resource Limits
 

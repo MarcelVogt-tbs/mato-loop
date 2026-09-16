@@ -18,8 +18,8 @@ import { FakeWebSocket } from './terminal-websocket'
 import KeyboardModule from '@novnc/novnc/lib/input/keyboard.js'
 import { notifyError } from 'src/utils/notifications'
 
-const { api, confirm, readText, writeText } = vi.hoisted(() => ({
-  api: { get: vi.fn(), put: vi.fn(), post: vi.fn(), patch: vi.fn() }, confirm: vi.fn(), readText: vi.fn(), writeText: vi.fn()
+const { agentOperations, api, confirm, readText, writeText } = vi.hoisted(() => ({
+  agentOperations: [], api: { get: vi.fn(), put: vi.fn(), post: vi.fn(), patch: vi.fn() }, confirm: vi.fn(), readText: vi.fn(), writeText: vi.fn()
 }))
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api }))
@@ -31,7 +31,7 @@ vi.mock('stores/chat', async () => {
   return { useChatStore: () => chat }
 })
 vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({ byId: () => ({
-  id: 'agent-1', connected: true, homeDirectory: '/home/user', operations: ['filesystem.list', 'filesystem.import']
+  id: 'agent-1', connected: true, homeDirectory: '/home/user', operations: agentOperations
 }) }) }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   static strings = {}
@@ -50,6 +50,7 @@ let app, root, pinia, browser, keyboard, router
 let observers
 beforeEach(() => {
   vi.clearAllMocks()
+  agentOperations.splice(0, Infinity, 'filesystem.list', 'filesystem.import', 'integration.browser.execute', 'integration.browser.view')
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
   pinia = createPinia()
   setActivePinia(pinia)
@@ -150,6 +151,14 @@ const navigation = { type: 'navigation', browserId: 'runtime-1', tabs: [
   { id: 'tab-1', title: 'Erste Seite', url: 'https://example.com/', loading: false },
   { id: 'tab-2', title: 'Zweite Seite', url: 'https://second.example/', loading: false }
 ], activeTabId: 'tab-1', canGoBack: true, canGoForward: false, loading: false, nativeChrome: false }
+
+it('shows a background state without opening a viewer for a headless agent', async () => {
+  agentOperations.splice(agentOperations.indexOf('integration.browser.view'), 1)
+  await mount(BrowserApp)
+  expect(root.textContent).toContain('Browser läuft im Hintergrund')
+  expect(FakeWebSocket.instances).toHaveLength(0)
+  expect(browser.mountView).not.toHaveBeenCalled()
+})
 
 it.each([{ width: 390, dark: false }, { width: 390, dark: true }, { width: 1440, dark: false }, { width: 1440, dark: true }])(
   'shows one explicit takeover action, progress and quiet replacement without reclaim (%j)', async (viewport) => {
