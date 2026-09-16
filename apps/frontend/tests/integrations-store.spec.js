@@ -433,7 +433,8 @@ describe('integration store', () => {
       '/integrations/recipes': recipesResponse,
       '/integrations/openscad': openScadResponse,
       '/integrations/coding': codingResponse,
-      '/integrations/browser': { configured: false, instances: [] }
+      '/integrations/browser': { configured: false, instances: [] },
+      '/integrations/support/tbs-desk': { configured: false, accounts: [] }
     }
     api.get.mockImplementation((url) => Promise.resolve({ data: responses[url] }))
     const store = useIntegrationStore()
@@ -443,10 +444,13 @@ describe('integration store', () => {
 
     expect(api.get).toHaveBeenCalledTimes(Object.keys(responses).length)
     for (const path of Object.keys(responses)) {
-      expect(api.get).toHaveBeenCalledWith(path, {
-        params: { scope: 'personal' },
-        ...(['/integrations/coding', '/integrations/browser'].includes(path) ? { suppressErrorToast: true } : {})
-      })
+      if (path === '/integrations/support/tbs-desk') expect(api.get).toHaveBeenCalledWith(path)
+      else {
+        expect(api.get).toHaveBeenCalledWith(path, {
+          params: { scope: 'personal' },
+          ...(['/integrations/coding', '/integrations/browser'].includes(path) ? { suppressErrorToast: true } : {})
+        })
+      }
     }
     expect(store.search.providers).toHaveLength(1)
     expect(store.openscad.instances).toHaveLength(1)

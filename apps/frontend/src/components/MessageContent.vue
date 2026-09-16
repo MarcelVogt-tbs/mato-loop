@@ -54,12 +54,16 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
+  preparedReplies: {
+    type: Array,
+    default: () => []
+  },
   trustedImageOrigins: {
     type: Array,
     default: () => []
   }
 })
-const emit = defineEmits(['rendered', 'trust-image-origin'])
+const emit = defineEmits(['prepared-reply', 'rendered', 'trust-image-origin'])
 const $q = useQuasar()
 const contentRoot = ref(null)
 const rendered = ref({ codeBlocks: [], html: '', externalImages: [], mermaidBlocks: [] })
@@ -200,6 +204,17 @@ function syncImageVerifications() {
 }
 
 async function handleClick(event) {
+  const replyLink = event.target.closest?.('a[href^="#reply-"]')
+  if (replyLink && event.currentTarget.contains(replyLink)) {
+    const id = replyLink.getAttribute('href').slice('#reply-'.length)
+    const reply = props.preparedReplies.find((item) => item?.id === id)
+    if (reply && typeof reply.content === 'string') {
+      event.preventDefault()
+      emit('prepared-reply', reply.content)
+      return
+    }
+  }
+
   const mermaidButton = event.target.closest?.('.chat-markdown__mermaid-fullscreen')
   if (mermaidButton && event.currentTarget.contains(mermaidButton)) {
     const diagram = mermaidButton.closest('.chat-markdown__mermaid-block')?.querySelector('svg')

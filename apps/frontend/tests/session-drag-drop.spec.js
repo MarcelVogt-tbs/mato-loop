@@ -83,7 +83,7 @@ vi.mock('stores/browser', async () => {
 })
 vi.mock('stores/integrations', async () => {
   const { reactive } = await import('vue')
-  const store = reactive({ fetchCatalog: vi.fn().mockResolvedValue(), fetchBrowser: vi.fn().mockResolvedValue(),
+  const store = reactive({ fetchCatalog: vi.fn().mockResolvedValue(), fetchBrowser: vi.fn().mockResolvedValue(), fetchTbsDesk: vi.fn().mockResolvedValue(),
     adapterAvailable: vi.fn(() => true), browser: { instances: [] }, browserLoaded: true, catalogLoaded: true, catalogLoadFailed: false })
   return { useIntegrationStore: () => store }
 })

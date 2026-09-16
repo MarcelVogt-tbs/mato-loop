@@ -186,6 +186,8 @@ class AgentProfile(BaseModel):
         default_factory=AgentProfilePermissions
     )
     owner_id: UUID | None = Field(default=None, exclude=True)
+    integration_id: UUID | None = Field(default=None, exclude=True)
+    editable: bool = Field(default=True, exclude=True)
 
     @model_validator(mode="before")
     @classmethod

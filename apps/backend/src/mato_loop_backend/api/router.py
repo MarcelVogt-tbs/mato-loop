@@ -24,6 +24,7 @@ from mato_loop_backend.api.routes.questions import router as questions_router
 from mato_loop_backend.api.routes.search import router as search_router
 from mato_loop_backend.api.routes.sessions import router as sessions_router
 from mato_loop_backend.api.routes.skills import router as skills_router
+from mato_loop_backend.api.routes.tbs_desk import router as tbs_desk_router
 from mato_loop_backend.api.routes.terminals import router as terminals_router
 from mato_loop_backend.api.routes.tool_settings import router as tool_settings_router
 from mato_loop_backend.api.routes.user_profile import router as user_profile_router
@@ -59,4 +60,5 @@ api_router.include_router(questions_router, tags=["questions"])
 api_router.include_router(workspace_router, tags=["workspace"])
 api_router.include_router(tool_settings_router, tags=["tools"])
 api_router.include_router(terminals_router, tags=["terminals"])
+api_router.include_router(tbs_desk_router, tags=["tbs-desk"])
 api_router.include_router(user_profile_router, tags=["user-profile"])

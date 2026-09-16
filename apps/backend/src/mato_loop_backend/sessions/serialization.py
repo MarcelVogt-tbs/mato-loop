@@ -90,6 +90,20 @@ class _StoredFileAction(BaseModel):
         return self
 
 
+class _PreparedReplyOption(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]+$", min_length=1, max_length=100)
+    content: str = Field(min_length=1, max_length=2_000)
+
+
+class _PreparedReply(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    markdown: str = Field(min_length=1, max_length=50_000)
+    options: list[_PreparedReplyOption] = Field(min_length=1, max_length=20)
+
+
 def _public_research_payload(item: Message) -> dict[str, Any] | None:
     provider_data = item.provider_data if isinstance(item.provider_data, dict) else {}
     runtime_data = provider_data.get("_matoloop")
@@ -189,6 +203,20 @@ def _public_file_actions(item: Message) -> list[dict[str, Any]]:
             }
         )
     return actions
+
+
+def _public_prepared_reply(item: Message) -> dict[str, Any] | None:
+    if item.role != "tool" or not isinstance(item.provider_data, dict):
+        return None
+    runtime_data = item.provider_data.get("_matoloop")
+    value = runtime_data.get("preparedReply") if isinstance(runtime_data, dict) else None
+    try:
+        reply = _PreparedReply.model_validate(value)
+    except (ValidationError, ValueError):
+        return None
+    if len({option.id for option in reply.options}) != len(reply.options):
+        return None
+    return reply.model_dump(mode="json")
 
 
 def session_payload(
@@ -387,6 +415,7 @@ def message_payload(
         "warnings": _public_warnings(item),
         "research": _public_research_payload(item),
         "fileActions": _public_file_actions(item),
+        "preparedReply": _public_prepared_reply(item),
         **(
             {"runId": run_id, "agentProfileId": agent_profile_id}
             if item.role == "assistant"

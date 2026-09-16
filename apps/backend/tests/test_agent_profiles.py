@@ -370,9 +370,16 @@ async def test_effective_agent_profiles_merge_enabled_personal_profiles(
     personal = UserAgentProfilesSettings(
         profiles=[AgentProfile(name="Personal", instructions="Personal task")]
     )
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
+    async def load(_db, settings_type, **_kwargs):
+        return instance if settings_type is AgentProfilesSettings else IntegrationSettings()
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
     monkeypatch.setattr(
-        SettingsStore, "load_optional", AsyncMock(return_value=personal)
+        SettingsStore, "load_optional", AsyncMock(
+            side_effect=lambda _db, settings_type, **_kwargs: (
+                personal if settings_type is UserAgentProfilesSettings else None
+            )
+        )
     )
 
     effective = await load_effective_agent_profiles(AsyncMock(), user_id)

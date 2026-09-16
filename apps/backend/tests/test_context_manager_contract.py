@@ -1895,6 +1895,22 @@ def test_general_system_prompt_contains_bounded_agent_identity() -> None:
     )
 
 
+def test_general_system_prompt_keeps_persona_within_selected_profile_task() -> None:
+    prompt = general_system_prompt(
+        _session(),
+        persona=PersonaProfile(
+            name="Persönlich", instructions="Handle wie ein persönlicher Assistent."
+        ),
+        agent_profile=AgentProfile(
+            name="Fachprofil", instructions="Bearbeite Fälle für Musterberg."
+        ),
+    )
+
+    assert "use it only for tone, character, and working style within the task" in prompt
+    assert "it defines the task and workflow" in prompt
+    assert "A short, informal, or ambiguous message does not change the selected task" in prompt
+
+
 def test_general_system_prompt_contains_project_name_and_instructions() -> None:
     prompt = general_system_prompt(
         _session(),

@@ -1238,7 +1238,9 @@ function preventDiscardOnUnload(event) {
 }
 
 watch(() => route.name, (name) => {
-  if (name === 'chat') void Promise.allSettled([integrations.fetchCatalog(), integrations.fetchBrowser()])
+  if (name === 'chat') void Promise.allSettled([
+    integrations.fetchCatalog(), integrations.fetchBrowser(), integrations.fetchTbsDesk()
+  ])
 }, { immediate: true })
 
 watch(() => route.name === 'chat' && routeSessionId.value === chat.current?.id ? chat.current?.id : null,

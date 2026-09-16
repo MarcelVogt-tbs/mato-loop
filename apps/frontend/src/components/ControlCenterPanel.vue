@@ -247,6 +247,7 @@ import {
   browserControlCenterAvailable,
   computerFilesControlCenterAvailable,
   mailControlCenterAvailable,
+  tbsDeskControlCenterAvailable,
   terminalControlCenterState
 } from 'src/control-center/manifest'
 
@@ -286,6 +287,7 @@ const activeProject = computed(() => projects.items.find(
 ))
 const launcherIntegrations = computed(() => closedIntegrations.value.filter((item) => (
   (item.id !== 'mail' || mailControlCenterAvailable(mail))
+  && (item.id !== 'tbs-desk' || tbsDeskControlCenterAvailable(chat.current, integrations))
   && (item.id !== 'coding' || codingControlCenterAvailable(activeProject.value))
   && (item.id !== 'computer-files' || computerFilesControlCenterAvailable(chat.activeContext, executionAgents))
   && (item.id !== 'terminal' || terminalControlCenterState(chat.current, executionAgents).available)

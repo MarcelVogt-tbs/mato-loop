@@ -1693,6 +1693,22 @@ def test_message_payload_validates_file_actions_and_derives_download_url() -> No
     assert "downloadUrl" not in str(message.provider_data)
 
 
+def test_message_payload_validates_prepared_replies() -> None:
+    prepared_reply = {
+        "markdown": "[Kunde 123](#reply-customer-123)",
+        "options": [{"id": "customer-123", "content": "Verwende ERP-Kunde 123."}],
+    }
+    message = Message(
+        id=uuid4(), session_id=uuid4(), role="tool", content="{}",
+        provider_data={"_matoloop": {"preparedReply": prepared_reply}},
+    )
+
+    assert message_payload(message)["preparedReply"] == prepared_reply
+
+    message.provider_data["_matoloop"]["preparedReply"]["options"][0]["id"] = "../invalid"
+    assert message_payload(message)["preparedReply"] is None
+
+
 def test_message_payload_keeps_session_file_action_url_exact() -> None:
     session_id = uuid4()
     stored_action = {

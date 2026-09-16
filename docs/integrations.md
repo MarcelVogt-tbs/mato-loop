@@ -11,6 +11,7 @@ An adapter can:
 - contribute a new tool with a stable name, Pydantic input model, and host handler,
 - add values to an explicitly extensible host configuration field of an existing tool,
 - provide a static host-controlled prompt fragment for a tool that is actually offered.
+- contribute a protected, non-persisted agent profile while its effective integration is enabled.
 
 Every contributed tool declares its host-controlled group, German UI metadata, and security actions. A configurable action requires a host-side authorization factory that creates typed permission requests from validated arguments. Integration configuration and remote responses cannot provide groups, capabilities, resource matchers, or authorization behavior. MCP discovery may provide only validated tool schemas and untrusted display metadata; MatoLoop supplies the group, capability, resource key, handler, and authorization behavior.
 
@@ -129,6 +130,14 @@ MatoLoop composes Mealie with CalDAV through the normal agent tool loop rather t
 OpenCode is a personal-only backend coding integration. One instance stores a canonical HTTP or HTTPS base URL, username, discovered server root and version, and an optional encrypted Basic Auth password. The client ignores proxy environment variables, rejects redirects and cross-origin targets, bounds responses and SSE events, and maps upstream failures to controlled errors. Every use probes the server and rejects a changed root. Browser and model contracts expose only relative project, workspace, and file identities.
 
 A MatoLoop project may connect one OpenCode project and workspace from the Control Center. The binding may change or disconnect until the first plan is saved; changing it clears model selection, model variants, and queue pause state. Separate live-discovered models drive read-only analysis and plan execution. Each model may advertise opaque variant names; MatoLoop exposes only those names, stores separate optional analysis and execution selections, and omits `variant` from the OpenCode request when the model default is selected. OpenCode analysis returns repository findings; the MatoLoop agent authors and persists the canonical Markdown plan. Plan creation snapshots the configured analysis model and variant, while enqueueing snapshots the exact plan plus the execution model and variant before processing records serially in FIFO order. Existing remote activity pauses execution, remote permission requests require an explicit response, cancellation is best effort, and uncertain post-dispatch outcomes are persisted without automatic retry. The Control Center provides binding management, model and variant selection, read-only files and status, plans, queue state, cancellation, and permission decisions; it has no editor, terminal, Git, download, reorder, or retry surface.
+
+## tbs.Desk
+
+tbs.Desk is a personal-only support integration. It stores an HTTP or HTTPS base URL and username as configuration and the password as an encrypted owner-scoped credential. Requests authenticate with a short-lived bearer token, ignore proxy environment variables, reject redirects, bound response bodies, and expose only controlled errors.
+
+Customer lookup uses the tbs.Desk ERP search when the initial message contains a customer hint; otherwise it checks the active call first. Results are persisted in the session and shown as a normal Markdown table with host-validated prepared-reply links. Selecting a customer sends a separate user message without consuming the current composer draft or its attachments. The backend accepts only ERP customer numbers from the current persisted result set. Ticket searches use the selected ERP customer number, and ticket details are released only after a customer-scoped filter confirms ownership.
+
+Each enabled account contributes a transient protected **Support-Assistent** profile bound only to that integration. The profile disappears when the account is disabled, deleted, or administratively unavailable. Customer selection is persisted as bounded session state before ticket tools become usable. Ticket search always injects the selected customer server-side, ticket reads verify the returned customer ID, and persisted state contains summaries but never ticket bodies.
 
 ## Git via Shell
 

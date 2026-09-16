@@ -120,7 +120,7 @@ async def _load_scoped(
 
 def _profile_payload(
     profile: AgentProfile,
-    scope: SettingsApiScope,
+    scope: Literal["instance", "personal", "integration"],
     instance_identity: AgentIdentitySettings,
     personal_identity: UserAgentIdentitySettings | None,
 ) -> dict:
@@ -128,7 +128,8 @@ def _profile_payload(
     return {
         **profile.model_dump(mode="json", by_alias=True),
         "scope": scope,
-        "protected": profile.id in BUILTIN_AGENT_PROFILE_IDS,
+        "protected": profile.id in BUILTIN_AGENT_PROFILE_IDS or not profile.editable,
+        "editable": profile.editable,
         "resolvedPersonaId": str(resolved.id),
         "resolvedPersonaName": resolved.name,
     }
@@ -158,7 +159,9 @@ async def _response(
     effective_profiles = [
         _profile_payload(
             profile,
-            "personal" if profile.owner_id == user.id else "instance",
+            "integration" if profile.integration_id is not None else (
+                "personal" if profile.owner_id == user.id else "instance"
+            ),
             instance_identity,
             personal_identity,
         )

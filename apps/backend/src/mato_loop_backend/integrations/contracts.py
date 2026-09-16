@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from mato_loop_backend.agent.tool_contracts import ToolAction
-from mato_loop_backend.settings.models import IntegrationInstance
+from mato_loop_backend.settings.models import AgentProfile, IntegrationInstance
 
 ToolHandler = Callable[[Any, Any], Awaitable[Any]]
 
@@ -87,6 +87,7 @@ class IntegrationContributions:
     tools: tuple[ToolContribution, ...] = ()
     tool_options: tuple[ToolOptionContribution, ...] = ()
     prompt_fragments: tuple[str, ...] = ()
+    agent_profiles: tuple[AgentProfile, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +195,7 @@ class IntegrationAdapterDefinition:
             tools=(*contributions.tools, *tools),
             tool_options=contributions.tool_options,
             prompt_fragments=contributions.prompt_fragments,
+            agent_profiles=contributions.agent_profiles,
         )
 
     async def resources(

@@ -379,6 +379,24 @@ describe('chat transcript', () => {
     expect(messages[1].activeDurationMs).toBe(1_000)
   })
 
+  it('keeps the newest prepared reply with its assistant turn', () => {
+    const preparedReply = {
+      markdown: '[Kunde 123](#reply-customer-123)',
+      options: [{ id: 'customer-123', content: 'Verwende ERP-Kunde 123.' }]
+    }
+    const transcript = buildChatTranscript([
+      { id: 'user', role: 'user', content: 'Muster' },
+      {
+        id: 'tool-call', role: 'assistant', content: '',
+        toolCalls: [{ id: 'call', name: 'tbs_desk_select_customer', arguments: {} }]
+      },
+      { id: 'result', role: 'tool', toolCallId: 'call', content: '{}', preparedReply },
+      { id: 'final', role: 'assistant', content: 'Bitte auswählen.', toolCalls: [] }
+    ])
+
+    expect(transcript.messages[1].preparedReply).toEqual(preparedReply)
+  })
+
   it('starts a new assistant turn for delivered automation messages', () => {
     const transcript = buildChatTranscript([
       { id: 'user-1', role: 'user', content: 'Erinnere mich später' },

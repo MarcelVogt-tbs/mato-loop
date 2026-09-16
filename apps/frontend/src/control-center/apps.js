@@ -6,6 +6,7 @@ import FileViewerApp from 'components/FileViewerApp.vue'
 import FileViewerFooter from 'components/FileViewerFooter.vue'
 import NotificationCenterApp from 'components/NotificationCenterApp.vue'
 import MailApp from 'components/MailApp.vue'
+import TbsDeskApp from 'components/TbsDeskApp.vue'
 import CodingApp from 'components/CodingApp.vue'
 import SessionApp from 'components/SessionApp.vue'
 import SessionFooter from 'components/SessionFooter.vue'
@@ -25,6 +26,7 @@ const components = {
   'computer-files': ComputerFileExplorerPanel,
   'file-viewer': FileViewerApp,
   mail: MailApp,
+  'tbs-desk': TbsDeskApp,
   coding: CodingApp,
   terminal: TerminalApp,
   browser: BrowserApp,

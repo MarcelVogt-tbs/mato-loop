@@ -97,6 +97,22 @@ describe('chat message queue', () => {
     expect(chat.queuedSendReady).toBe(false)
   })
 
+  it('queues a prepared answer without consuming the current draft or attachments', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.running = true
+    chat.setDraft('Mein angefangener Text')
+    chat.attachmentDrafts.sessionMessages['session-1'] = [attachment()]
+
+    await chat.send('Verwende ERP-Kunde 123 – Acme.', { preserveDraft: true })
+
+    expect(chat.activeQueuedMessages[0].content).toBe('Verwende ERP-Kunde 123 – Acme.')
+    expect(chat.activeQueuedMessages[0].attachments).toEqual([])
+    expect(chat.activeDraft).toBe('Mein angefangener Text')
+    expect(chat.activeAttachmentDraft).toHaveLength(1)
+    expect(global.URL.revokeObjectURL).not.toHaveBeenCalled()
+  })
+
   it('preserves voice markers through IndexedDB, failed sends, retry and restore', async () => {
     const chat = useChatStore()
     activeSession(chat)

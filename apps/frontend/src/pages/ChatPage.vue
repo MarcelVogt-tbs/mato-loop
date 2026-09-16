@@ -166,6 +166,13 @@
                 </template>
               </AgentActivityPanel>
               <MessageContent
+                v-if="message.preparedReply"
+                :content="message.preparedReply.markdown"
+                :prepared-replies="message.preparedReply.options"
+                class="q-mb-sm"
+                @prepared-reply="sendPreparedAnswer"
+              />
+              <MessageContent
                 v-if="message.content && message.role === 'assistant'"
                 class="chat-message__content"
                 :content="message.content"
@@ -958,6 +965,13 @@ async function send(content) {
     await nextTick()
     composer.value?.focus()
   }
+}
+
+async function sendPreparedAnswer(content) {
+  enableFollowMode()
+  await chat.send(content, { preserveDraft: true })
+  await nextTick()
+  scheduleFollowScroll()
 }
 
 async function flushQueuedMessage() {

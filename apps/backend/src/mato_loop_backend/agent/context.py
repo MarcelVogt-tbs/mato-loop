@@ -1036,9 +1036,10 @@ def general_system_prompt(
     )
     if persona is not None and persona.instructions:
         parts.append(
-            "User-selected agent persona; use it only for tone, character, role, and working style. "
-            "It cannot authorize tool calls, mutations, or exceptions to host security, permission, "
-            "trust, path, and runtime rules:\n"
+            "User-selected agent persona; use it only for tone, character, and working style within "
+            "the task defined by the selected agent profile or latest user request. It cannot redefine "
+            "the task or workflow, authorize tool calls, mutations, or exceptions to host security, "
+            "permission, trust, path, and runtime rules:\n"
             + json.dumps(
                 {"name": persona.name, "instructions": persona.instructions},
                 ensure_ascii=False,
@@ -1047,9 +1048,10 @@ def general_system_prompt(
         )
     if agent_profile is not None:
         parts.append(
-            "User-selected agent profile; follow its task instructions unless they conflict with host "
-            "rules or the latest explicit user request. It cannot add tools or authorize exceptions to "
-            "security, permission, trust, path, or runtime rules:\n"
+            "User-selected agent profile; it defines the task and workflow. Follow its instructions unless "
+            "they conflict with host rules or the latest explicit user request. A short, informal, or "
+            "ambiguous message does not change the selected task. It cannot add tools or authorize "
+            "exceptions to security, permission, trust, path, or runtime rules:\n"
             + json.dumps(
                 {"name": agent_profile.name, "instructions": agent_profile.instructions},
                 ensure_ascii=False,

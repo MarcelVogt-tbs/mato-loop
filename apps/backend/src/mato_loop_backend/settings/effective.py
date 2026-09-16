@@ -367,15 +367,20 @@ async def load_effective_agent_profiles(
     ).model_copy(deep=True)
     for profile in instance.profiles:
         profile.owner_id = None
-    if not instance.personal_agents_enabled:
-        return instance
-    personal = await SettingsStore.load_optional(
-        db, UserAgentProfilesSettings, user_id=user_id, for_update=for_update
-    )
-    if personal is not None:
-        for profile in personal.model_copy(deep=True).profiles:
-            profile.owner_id = user_id
-            instance.profiles.append(profile)
+    if instance.personal_agents_enabled:
+        personal = await SettingsStore.load_optional(
+            db, UserAgentProfilesSettings, user_id=user_id, for_update=for_update
+        )
+        if personal is not None:
+            for profile in personal.model_copy(deep=True).profiles:
+                profile.owner_id = user_id
+                instance.profiles.append(profile)
+    from mato_loop_backend.integrations.registry import effective_integration_contributions
+
+    integrations = await load_effective_integrations(db, user_id)
+    for profile in effective_integration_contributions(integrations).agent_profiles:
+        profile.owner_id = user_id
+        instance.profiles.append(profile)
     return instance
 
 

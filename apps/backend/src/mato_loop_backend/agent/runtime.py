@@ -4043,6 +4043,7 @@ class AgentRuntime:
                                 "runId": str(run.id),
                                 "toolName": call.name,
                                 **({"errorCode": metadata["errorCode"]} if isinstance(metadata.get("errorCode"), str) else {}),
+                                **({"preparedReply": metadata["preparedReply"]} if isinstance(metadata.get("preparedReply"), dict) else {}),
                                 "fileOutputsPending": not ephemeral_output or bool(tool_attachments or tool_file_actions),
                                 "fileActions": [
                                         {

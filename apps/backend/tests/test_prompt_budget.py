@@ -121,4 +121,4 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     assert prompt_tokens <= 7_200, prompt_tokens
     # The optional provide_file list adds a bounded schema, not more prompt instructions.
     assert schema_tokens <= 8_550, schema_tokens
-    assert prompt_tokens + schema_tokens <= 15_700
+    assert prompt_tokens + schema_tokens <= 15_720

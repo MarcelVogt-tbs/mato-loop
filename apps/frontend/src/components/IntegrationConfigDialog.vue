@@ -151,7 +151,7 @@
               </div>
             </q-banner>
             <q-input
-              v-if="form.integration_type === 'calendar'"
+              v-if="['calendar', 'support'].includes(form.integration_type)"
               v-model="form.username"
               outlined
               label="Benutzername"
@@ -159,7 +159,7 @@
               :rules="[requiredRule]"
             />
             <q-input
-              v-if="form.integration_type === 'calendar'"
+              v-if="['calendar', 'support'].includes(form.integration_type)"
               v-model="form.password"
               outlined
               type="password"
@@ -273,6 +273,7 @@ const allIntegrationTypes = [
   { label: 'Websuche', value: 'search' },
   { label: 'Kalender & Aufgaben', value: 'calendar' },
   { label: 'Mail', value: 'mail' },
+  { label: 'Support', value: 'support' },
   { label: 'Wissensdatenbank', value: 'knowledge' },
   { label: 'Rezepte & Essensplanung', value: 'recipes' },
   { label: '3D-Modellierung', value: 'openscad' },
@@ -283,6 +284,7 @@ const PROVIDER_DEFAULTS = {
   search: { provider: 'searxng', label: 'SearXNG', placeholder: 'https://search.example.com' },
   calendar: { provider: 'caldav', label: 'CalDAV', placeholder: 'https://calendar.example.com' },
   mail: { provider: 'imap_smtp', label: 'IMAP/SMTP', placeholder: '' },
+  support: { provider: 'tbs-desk', label: 'tbs.Desk', placeholder: 'http://192.168.1.30:9000' },
   knowledge: { provider: 'bookstack', label: 'BookStack', placeholder: 'https://wiki.example.com' },
   recipes: { provider: 'mealie', label: 'Mealie', placeholder: 'http://mealie.example.com' },
   openscad: { provider: 'openscad', label: 'OpenSCAD', placeholder: '' },
@@ -303,8 +305,8 @@ const baseUrlLabel = computed(
 const baseUrlPlaceholder = computed(
   () => (PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).placeholder
 )
-const requiresHttps = computed(() => !['search', 'recipes', 'coding'].includes(form.integration_type))
-const dialogIcon = computed(() => ({ coding: 'code', mail: 'mail', openscad: 'view_in_ar', browser: 'web' })[form.integration_type] || 'extension')
+const requiresHttps = computed(() => !['search', 'recipes', 'coding', 'support'].includes(form.integration_type))
+const dialogIcon = computed(() => ({ coding: 'code', mail: 'mail', support: 'confirmation_number', openscad: 'view_in_ar', browser: 'web' })[form.integration_type] || 'extension')
 const securityOptions = [
   { label: 'TLS', value: 'tls' },
   { label: 'STARTTLS', value: 'starttls' }
@@ -501,6 +503,20 @@ async function save() {
       }
       if (props.integration) await integrations.updateOpenCode(props.integration.id, payload)
       else await integrations.createOpenCode(payload)
+      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
+      close()
+      return
+    }
+    if (form.integration_type === 'support') {
+      const payload = {
+        name: form.name.trim(),
+        baseUrl: form.base_url.trim(),
+        username: form.username.trim(),
+        password: form.password,
+        enabled: form.enabled
+      }
+      if (props.integration) await integrations.updateTbsDesk(props.integration.id, payload)
+      else await integrations.createTbsDesk(payload)
       $q.notify({ type: 'positive', message: 'Integration gespeichert' })
       close()
       return

@@ -19,6 +19,7 @@ from mato_loop_backend.integrations.mcp import MCP_ADAPTER
 from mato_loop_backend.integrations.mealie import MEALIE_ADAPTER
 from mato_loop_backend.integrations.opencode import OPENCODE_ADAPTER
 from mato_loop_backend.integrations.openscad import OPENSCAD_ADAPTER
+from mato_loop_backend.integrations.tbs_desk import TBS_DESK_ADAPTER
 from mato_loop_backend.settings.models import (
     IntegrationAdapterAvailability,
     IntegrationInstance,
@@ -72,6 +73,7 @@ _ADAPTERS = {
     ("coding", "opencode"): OPENCODE_ADAPTER,
     ("browser", "browser"): BROWSER_ADAPTER,
     ("mcp", "mcp_streamable_http"): MCP_ADAPTER,
+    ("support", "tbs-desk"): TBS_DESK_ADAPTER,
 }
 
 
@@ -167,6 +169,7 @@ def effective_integration_contributions(
     tools = []
     options = []
     prompt_fragments = []
+    agent_profiles = []
     shared_instances: dict[tuple[str, str], list[IntegrationInstance]] = {}
     for instance in settings.instances:
         if (
@@ -200,6 +203,10 @@ def effective_integration_contributions(
         )
         options.extend(contribution.tool_options)
         prompt_fragments.extend(contribution.prompt_fragments)
+        agent_profiles.extend(
+            profile.model_copy(update={"integration_id": instance.id})
+            for profile in contribution.agent_profiles
+        )
     for adapter_key, instances in shared_instances.items():
         adapter = _ADAPTERS[adapter_key]
         integration_ids = tuple(str(instance.id) for instance in instances)
@@ -207,8 +214,25 @@ def effective_integration_contributions(
             replace(tool, integration_ids=integration_ids)
             for tool in adapter.shared_tools
         )
+    duplicate_profile_names = {
+        profile.name for profile in agent_profiles
+        if sum(item.name == profile.name for item in agent_profiles) > 1
+    }
+    names = {str(item.id): item.name for item in settings.instances}
+    duplicate_account_names = {
+        name for name in names.values() if sum(item == name for item in names.values()) > 1
+    }
     return IntegrationContributions(
         tools=tuple(tools),
         tool_options=tuple(options),
         prompt_fragments=tuple(prompt_fragments),
+        agent_profiles=tuple(
+            profile.model_copy(update={"name": (
+                f"{profile.name} ({names[str(profile.integration_id)]}, "
+                f"{str(profile.integration_id)[:8]})"
+                if names[str(profile.integration_id)] in duplicate_account_names
+                else f"{profile.name} ({names[str(profile.integration_id)]})"
+            )}) if profile.name in duplicate_profile_names else profile
+            for profile in agent_profiles
+        ),
     )

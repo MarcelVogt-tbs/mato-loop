@@ -310,7 +310,7 @@ async def test_personal_policy_read_exposes_no_integration_configuration(
 
     assert result == {
         "enabled": True,
-        "allowedAdapterTypes": ["browser", "caldav", "imap_smtp", "opencode"],
+        "allowedAdapterTypes": ["browser", "caldav", "imap_smtp", "opencode", "tbs-desk"],
     }
 
 

@@ -316,6 +316,7 @@ const showInstances = computed(() => !auth.isAdmin || section.value === 'instanc
 const searchProviders = computed(() => integrations.search.providers)
 const calendarAccounts = computed(() => integrations.calendar.accounts)
 const mailAccounts = computed(() => integrations.mail.accounts)
+const tbsDeskAccounts = computed(() => integrations.tbsDesk.accounts)
 const knowledgeBases = computed(() => integrations.knowledge.bases)
 const recipeAccounts = computed(() => integrations.recipes.accounts)
 const openScadInstances = computed(() => integrations.openscad.instances)
@@ -332,6 +333,7 @@ const configuredIntegrations = computed(
     ...searchProviders.value,
     ...calendarAccounts.value,
     ...mailAccounts.value,
+    ...(integrations.scope === 'personal' ? tbsDeskAccounts.value : []),
     ...knowledgeBases.value,
     ...recipeAccounts.value,
     ...openScadInstances.value,
@@ -411,7 +413,7 @@ function openEditDialog(integration) {
 
 function providerLabel(providerType) {
   return {
-    searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', bookstack: 'BookStack', mealie: 'Mealie', openscad: 'OpenSCAD', opencode: 'OpenCode', browser: 'Chromium'
+    searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', 'tbs-desk': 'tbs.Desk', bookstack: 'BookStack', mealie: 'Mealie', openscad: 'OpenSCAD', opencode: 'OpenCode', browser: 'Chromium'
   }[providerType] || providerType
 }
 
@@ -420,6 +422,7 @@ function typeLabel(integrationType) {
     search: 'Websuche',
     calendar: 'Kalender & Aufgaben',
     mail: 'E-Mail',
+    support: 'Support',
     knowledge: 'Wissensdatenbank',
     recipes: 'Rezepte & Essensplanung',
     openscad: '3D-Modellierung',
@@ -430,7 +433,7 @@ function typeLabel(integrationType) {
 
 function typeIcon(integrationType) {
   return {
-    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', knowledge: 'menu_book', recipes: 'restaurant_menu', openscad: 'view_in_ar', coding: 'code', browser: 'web'
+    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', support: 'confirmation_number', knowledge: 'menu_book', recipes: 'restaurant_menu', openscad: 'view_in_ar', coding: 'code', browser: 'web'
   }[integrationType] || 'extension'
 }
 
@@ -460,6 +463,7 @@ async function testIntegration(integration) {
     let result
     if (integration.integrationType === 'calendar') result = await integrations.testCalendar(integration.id)
     else if (integration.integrationType === 'mail') result = await integrations.testMail(integration.id)
+    else if (integration.integrationType === 'support') result = await integrations.testTbsDesk(integration.id)
     else if (integration.integrationType === 'knowledge') result = await integrations.testKnowledge(integration.id)
     else if (integration.integrationType === 'recipes') result = await integrations.testRecipes(integration.id)
     else if (integration.integrationType === 'openscad') result = await integrations.testOpenScad(integration.id)
@@ -496,6 +500,7 @@ async function removeIntegration(integration) {
   try {
     if (integration.integrationType === 'calendar') await integrations.removeCalendar(integration.id)
     else if (integration.integrationType === 'mail') await integrations.removeMail(integration.id)
+    else if (integration.integrationType === 'support') await integrations.removeTbsDesk(integration.id)
     else if (integration.integrationType === 'knowledge') await integrations.removeKnowledge(integration.id)
     else if (integration.integrationType === 'recipes') await integrations.removeRecipes(integration.id)
     else if (integration.integrationType === 'openscad') await integrations.removeOpenScad(integration.id)

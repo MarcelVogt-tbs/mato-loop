@@ -1524,7 +1524,7 @@ export const useChatStore = defineStore('chat', {
         this.historyActionPending = false
       }
     },
-    async send(content) {
+    async send(content, { preserveDraft = false } = {}) {
       if (this.outboxSaving || this.historyActionPending || this.sessionSettingsPending) return null
       this.outboxSaving = true
       const submitImmediately = !this.running
@@ -1540,7 +1540,7 @@ export const useChatStore = defineStore('chat', {
       if (this.outboxLoadPromise) await this.outboxLoadPromise
       let entry
       try {
-        entry = await this.queueMessage(content)
+        entry = await this.queueMessage(content, { preserveDraft })
       } finally {
         this.outboxSaving = false
       }
@@ -1558,12 +1558,12 @@ export const useChatStore = defineStore('chat', {
       }
       return this.drainOutbox()
     },
-    async queueMessage(content) {
+    async queueMessage(content, { preserveDraft = false } = {}) {
       const ownerUserId = this.draftOwnerUserId
       const loadVersion = this.outboxLoadVersion
       if (!ownerUserId) return null
       const text = String(content || '').trim()
-      const attachments = [...this.activeAttachmentDraft]
+      const attachments = preserveDraft ? [] : [...this.activeAttachmentDraft]
       if (!text && !attachments.length) return null
       const sessionId = this.current?.id || null
       const entry = {
@@ -1601,10 +1601,12 @@ export const useChatStore = defineStore('chat', {
       const key = queueKeyForEntry(entry)
       if (!this.queuedMessages[key]) this.queuedMessages[key] = []
       this.queuedMessages[key].push(entry)
-      this.clearAttachmentDraft(sessionId)
-      if (sessionId) delete this.drafts.sessionMessages[sessionId]
-      else this.drafts.newSession.message = ''
-      this.persistDrafts()
+      if (!preserveDraft) {
+        this.clearAttachmentDraft(sessionId)
+        if (sessionId) delete this.drafts.sessionMessages[sessionId]
+        else this.drafts.newSession.message = ''
+        this.persistDrafts()
+      }
       return entry
     },
     async removeQueuedMessage(id, key = this.activeQueueKey) {

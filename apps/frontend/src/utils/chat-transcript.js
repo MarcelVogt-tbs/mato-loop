@@ -224,6 +224,9 @@ export function buildChatTranscript(
       .filter((entry) => entry.type === 'reasoning')
       .map((entry) => entry.reasoning)
     const carrier = assistantSection.find((message) => message.agentProfileId) || assistantSection[0]
+    carrier.preparedReply = [...workEntries].reverse().find((entry) => (
+      entry.type === 'tool' && entry.result?.preparedReply
+    ))?.result.preparedReply || null
     const finalCreatedAt = reversedSection.find((message) => message.createdAt)?.createdAt || null
     const activeDurationMs = reversedSection.find((message) => (
       Number.isInteger(message.activeDurationMs) && message.activeDurationMs >= 0

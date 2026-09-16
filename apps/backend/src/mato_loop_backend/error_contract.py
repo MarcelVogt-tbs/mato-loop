@@ -241,6 +241,9 @@ _MESSAGES = {
         "reference from an earlier tool result."
     ),
     "integration.unavailable": "The integration is unavailable.",
+    "tbsDesk.customerNotFound": "No matching support customer was found.",
+    "tbsDesk.customerRequired": "Select a support customer before working with tickets.",
+    "tbsDesk.ticketCustomerMismatch": "The ticket does not belong to the selected customer.",
     "attachment.invalidVideo": "The video file is invalid or unsupported.",
     "provider.disabled": "The model provider is disabled.",
     "provider.configurationChanged": "The model provider configuration changed.",

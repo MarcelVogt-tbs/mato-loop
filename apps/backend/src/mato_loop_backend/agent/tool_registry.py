@@ -55,6 +55,7 @@ from mato_loop_backend.integrations.registry import (
     installed_integration_tools,
     integration_adapter,
 )
+from mato_loop_backend.integrations.tbs_desk_client import TbsDeskError
 from mato_loop_backend.models import ChatSession
 from mato_loop_backend.providers.base import ProviderError, ToolCall
 from mato_loop_backend.providers.media import available_media_capabilities
@@ -1409,6 +1410,7 @@ class ToolRegistry:
             MailError,
             RootFileError,
             SearchIntegrationError,
+            TbsDeskError,
             WebFetchError,
         ) as exc:
             return ToolResult.error(

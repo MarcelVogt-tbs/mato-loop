@@ -30,6 +30,11 @@ const emptyMail = () => ({
   accounts: []
 })
 
+const emptyTbsDesk = () => ({
+  configured: false,
+  accounts: []
+})
+
 const emptyKnowledge = () => ({
   configured: false,
   bases: []
@@ -79,6 +84,7 @@ function clearIntegrations(store) {
   store.search = emptySearch()
   store.calendar = emptyCalendar()
   store.mail = emptyMail()
+  store.tbsDesk = emptyTbsDesk()
   store.knowledge = emptyKnowledge()
   store.recipes = emptyRecipes()
   store.openscad = emptyOpenScad()
@@ -100,6 +106,7 @@ export const useIntegrationStore = defineStore('integrations', {
     search: emptySearch(),
     calendar: emptyCalendar(),
     mail: emptyMail(),
+    tbsDesk: emptyTbsDesk(),
     knowledge: emptyKnowledge(),
     recipes: emptyRecipes(),
     openscad: emptyOpenScad(),
@@ -193,7 +200,7 @@ export const useIntegrationStore = defineStore('integrations', {
           this.fetchKnowledge(),
           this.fetchRecipes(),
           this.fetchOpenScad(),
-          ...(context.scope === 'personal' ? [this.fetchCoding(), this.fetchBrowser()] : [])
+          ...(context.scope === 'personal' ? [this.fetchCoding(), this.fetchBrowser(), this.fetchTbsDesk()] : [])
         ])
       } catch (error) {
         if (contextIsCurrent(this, context)) this.loadFailed = true
@@ -310,6 +317,49 @@ export const useIntegrationStore = defineStore('integrations', {
     async testMail(id) {
       const scope = this.scope
       return (await api.post(`/integrations/mail/accounts/${id}/test`, null, scopeConfig(scope))).data
+    },
+    async fetchTbsDesk() {
+      const context = scopeContext(this)
+      const loadVersion = (this.loadVersions.tbsDesk || 0) + 1
+      this.loadVersions.tbsDesk = loadVersion
+      this.pendingLoads += 1
+      this.loading = true
+      this.loadFailed = false
+      try {
+        const { data } = await api.get('/integrations/support/tbs-desk')
+        if (!contextIsCurrent(this, context) || this.loadVersions.tbsDesk !== loadVersion) return
+        this.tbsDesk = data
+        this.loaded = true
+        return data
+      } catch (error) {
+        if (contextIsCurrent(this, context) && this.loadVersions.tbsDesk === loadVersion) this.loadFailed = true
+        throw error
+      } finally {
+        if (contextIsCurrent(this, context)) {
+          this.pendingLoads = Math.max(0, this.pendingLoads - 1)
+          this.loading = this.pendingLoads > 0
+        }
+      }
+    },
+    async createTbsDesk(payload) {
+      const context = scopeContext(this)
+      await api.post('/integrations/support/tbs-desk', payload)
+      if (contextIsCurrent(this, context)) await this.fetchTbsDesk()
+    },
+    async updateTbsDesk(id, payload) {
+      const request = { ...payload }
+      if (request.password === '') delete request.password
+      const context = scopeContext(this)
+      await api.put(`/integrations/support/tbs-desk/${id}`, request)
+      if (contextIsCurrent(this, context)) await this.fetchTbsDesk()
+    },
+    async removeTbsDesk(id) {
+      const context = scopeContext(this)
+      await api.delete(`/integrations/support/tbs-desk/${id}`)
+      if (contextIsCurrent(this, context)) await this.fetchTbsDesk()
+    },
+    async testTbsDesk(id) {
+      return (await api.post(`/integrations/support/tbs-desk/${id}/test`)).data
     },
     fetchKnowledge() {
       return this.fetchResource('knowledge', '/integrations/knowledge')
