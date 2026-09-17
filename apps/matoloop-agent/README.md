@@ -47,6 +47,12 @@ From a MatoLoop checkout, run the interactive installer as a normal user:
 ./scripts/install-matoloop-agent.sh
 ```
 
+Or copy the instance-specific command from **Einstellungen > Computer**:
+
+```bash
+curl -fsSL https://mato.example/api/execution-agents/install.sh | sh -s -- --instance-url https://mato.example
+```
+
 The bootstrap installs pinned, private `uv` and Python runtimes below
 `~/.local/share/matoloop-agent`; it offers to install missing Debian/Ubuntu system packages and
 never changes shell profiles. From a

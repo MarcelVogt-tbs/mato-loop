@@ -39,6 +39,16 @@ def test_liveness() -> None:
     assert response.json()["status"] == "ok"
 
 
+def test_agent_installer_is_publicly_available() -> None:
+    with TestClient(app) as client:
+        response = client.get("/api/execution-agents/install.sh")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/x-shellscript")
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.text.startswith("#!/usr/bin/env sh\n")
+
+
 def test_validation_errors_use_stable_codes() -> None:
     with TestClient(app) as client:
         response = client.post(

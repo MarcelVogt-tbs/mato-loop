@@ -10,6 +10,20 @@
       <q-btn color="primary" unelevated no-caps icon="add" label="Computer hinzufügen" @click="openCreate" />
     </header>
 
+    <q-card flat class="app-surface q-mb-md">
+      <q-card-section>
+        <div class="text-subtitle2">Agent installieren</div>
+        <div class="text-body2 app-muted q-mb-sm">
+          Auf dem Zielcomputer als normaler Benutzer ausführen. Git-Zugriff auf den MatoLoop-Quellcode wird benötigt.
+        </div>
+        <q-input :model-value="installerCommand" readonly outlined dense label="Installationsbefehl">
+          <template #append>
+            <q-btn flat round dense icon="content_copy" aria-label="Installationsbefehl kopieren" @click="copy(installerCommand, 'Installationsbefehl')" />
+          </template>
+        </q-input>
+      </q-card-section>
+    </q-card>
+
     <q-banner v-if="agents.loadFailed" rounded class="app-surface-tonal q-mb-md">
       Die Computer konnten nicht geladen werden.
       <template #action>
@@ -232,6 +246,7 @@ const pairingAgent = ref(null)
 const pairingResult = ref(null)
 const pairingDurationSeconds = ref(null)
 const saving = ref(false)
+const installerCommand = `curl -fsSL ${window.location.origin}/api/execution-agents/install.sh | sh -s -- --instance-url ${window.location.origin}`
 const operationLabel = (operation) => operationLabels[operation] || operation
 const pairingDurationOptions = computed(() => pairingDurationChoices.filter((option) => (
   option.value <= (agents.pairingPolicy?.maximumDurationSeconds || 0)

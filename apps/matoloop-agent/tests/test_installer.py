@@ -63,6 +63,16 @@ class InstallerTests(unittest.TestCase):
             self.assertIn("Usage:", result.stdout)
             self.assertEqual(list(Path(temporary).iterdir()), [])
 
+    def test_bootstrap_help_works_from_a_pipe(self) -> None:
+        result = subprocess.run(
+            ["sh", "-s", "--", "--help"],
+            input=INSTALLER_PATH.with_name("install-matoloop-agent.sh").read_text(),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertIn("Usage:", result.stdout)
+
     def test_backend_url_validation_and_conversion(self) -> None:
         self.assertEqual(
             installer.backend_url("https://mato.example/base/"),

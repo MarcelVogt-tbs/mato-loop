@@ -28,6 +28,7 @@ COPY apps/backend/pyproject.toml apps/backend/uv.lock apps/backend/README.md ./
 COPY apps/backend/src ./src
 COPY apps/backend/alembic ./alembic
 COPY apps/backend/alembic.ini ./alembic.ini
+COPY scripts/install-matoloop-agent.sh ./scripts/install-matoloop-agent.sh
 RUN uv sync --frozen --no-dev
 COPY --from=frontend /build/frontend/dist/pwa /app/static
 COPY --from=documentation /build/site /app/static/docs

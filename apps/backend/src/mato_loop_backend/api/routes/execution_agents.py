@@ -17,11 +17,13 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
+from mato_loop_backend.config import PROJECT_ROOT
 from mato_loop_backend.db.session import AsyncSessionFactory, get_db_session
 from mato_loop_backend.execution import (
     ExecutionAgentError,
@@ -38,6 +40,15 @@ from mato_loop_backend.settings import SettingsStore, UserPreferences
 router = APIRouter(prefix="/execution-agents")
 PAIRING_DURATION_DEFAULT_SECONDS = 1800
 PAIRING_DURATION_MAXIMUM_SECONDS = 86400
+
+
+@router.get("/install.sh", include_in_schema=False)
+async def download_installer() -> FileResponse:
+    return FileResponse(
+        PROJECT_ROOT / "scripts/install-matoloop-agent.sh",
+        media_type="text/x-shellscript",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 def _camel(value: str) -> str:
