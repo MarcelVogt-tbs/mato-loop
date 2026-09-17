@@ -11,6 +11,7 @@ from xml.etree import ElementTree
 import httpx
 from defusedxml import ElementTree as DefusedElementTree
 from defusedxml.common import DefusedXmlException
+from icalendar import Alarm as ICalendarAlarm
 from icalendar import Calendar as ICalendar
 from icalendar import Event as ICalendarEvent
 from icalendar import Todo as ICalendarTodo
@@ -56,6 +57,7 @@ class CalDavEventDraft:
     end: date | datetime
     description: str | None = None
     location: str | None = None
+    reminders_minutes_before: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,9 +71,38 @@ class CalDavEvent:
     all_day: bool
     description: str | None = None
     location: str | None = None
+    reminders_minutes_before: tuple[int, ...] = ()
     recurring: bool = False
     scheduled: bool = False
     mutation_safe: bool = True
+
+
+def _event_reminders(component: ICalendarEvent) -> tuple[tuple[int, ...], bool]:
+    reminders = []
+    for alarm in component.subcomponents:
+        trigger = alarm.get("trigger")
+        value = getattr(trigger, "dt", None)
+        if (
+            alarm.name != "VALARM"
+            or str(alarm.get("action", "")).upper() != "DISPLAY"
+            or str(alarm.get("description", "")) != str(component.get("summary", ""))
+            or not isinstance(value, timedelta)
+            or value > timedelta(0)
+            or value % timedelta(minutes=1)
+            or getattr(trigger, "params", {})
+            or alarm.subcomponents
+            or {str(key).upper() for key in alarm.keys()}
+            > {"ACTION", "TRIGGER", "DESCRIPTION"}
+        ):
+            return (), False
+        reminders.append(int(-value.total_seconds() // 60))
+    if (
+        len(reminders) > 10
+        or len(reminders) != len(set(reminders))
+        or any(minutes > 525_600 for minutes in reminders)
+    ):
+        return (), False
+    return tuple(reminders), True
 
 
 @dataclass(frozen=True, slots=True)
@@ -511,6 +542,7 @@ class CalDavClient:
                         end_value = (
                             end_value.astimezone(UTC) if end_value is not None else None
                         )
+                    reminders, alarms_safe = _event_reminders(component)
                     events.append(
                         CalDavEvent(
                             uid=uid,
@@ -530,13 +562,14 @@ class CalDavClient:
                                 if component.get("location") is not None
                                 else None
                             ),
+                            reminders_minutes_before=reminders,
                             recurring=multiple
                             or component.get("rrule") is not None
                             or component.get("recurrence-id") is not None,
                             scheduled=component.get("organizer") is not None
                             or component.get("attendee") is not None,
                             mutation_safe=(
-                                not component.subcomponents
+                                alarms_safe
                                 and {str(key).upper() for key in component.keys()}
                                 <= {
                                     "UID",
@@ -742,6 +775,12 @@ class CalDavClient:
             event.add("description", draft.description)
         if draft.location is not None:
             event.add("location", draft.location)
+        for minutes in draft.reminders_minutes_before:
+            alarm = ICalendarAlarm()
+            alarm.add("action", "DISPLAY")
+            alarm.add("trigger", -timedelta(minutes=minutes))
+            alarm.add("description", draft.summary)
+            event.add_component(alarm)
         calendar.add_component(event)
         return calendar.to_ical()
 
@@ -923,6 +962,7 @@ class CalDavClient:
             all_day=isinstance(draft.start, date) and not isinstance(draft.start, datetime),
             description=draft.description,
             location=draft.location,
+            reminders_minutes_before=draft.reminders_minutes_before,
         )
 
     @staticmethod

@@ -5104,7 +5104,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "create_automation",
-            "Create if asked. Same task uses one automation. Reminders set deliver_to_current_session=true. Use cron+timezone or offset run_at; valid_until is cron-only.",
+            "Create if asked. Same task uses one automation. Chat reminders set deliver_to_current_session=true; calendar event reminders use the calendar event tools. Use cron+timezone or offset run_at; valid_until is cron-only.",
             CreateAutomationArguments,
             _create_automation,
             group="automations",

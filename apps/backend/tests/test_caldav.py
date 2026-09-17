@@ -853,6 +853,7 @@ async def test_create_uses_a_stable_host_generated_idempotency_key(monkeypatch) 
         integration_id=account.id,
         calendar_key=key,
         summary="Planung",
+        reminders_minutes_before=[1440, 60],
         timing=caldav_module.TimedEventTiming(
             type="timed",
             start=datetime(2026, 8, 7, 20, tzinfo=UTC),
@@ -863,6 +864,7 @@ async def test_create_uses_a_stable_host_generated_idempotency_key(monkeypatch) 
     result = await caldav_module.calendar_create_event(arguments, context)
 
     assert result.is_error is False
+    assert client.create_event.await_args.args[1].reminders_minutes_before == (1440, 60)
     assert client.create_event.await_args.args[2] == uuid5(
         assistant_message_id, "calendar_create_event:call-1"
     )
@@ -1062,6 +1064,7 @@ async def test_update_token_is_binding_scoped_and_preserves_omitted_fields(
         all_day=True,
         description="Beschreibung",
         location="Büro",
+        reminders_minutes_before=(60,),
     )
     token = caldav_module._token(event, account.id, revision, key)
     client = AsyncMock()
@@ -1096,6 +1099,7 @@ async def test_update_token_is_binding_scoped_and_preserves_omitted_fields(
         calendar_key=key,
         event_token=token,
         description=None,
+        reminders_minutes_before=[1440, 60],
     )
 
     result = await calendar_update_event(arguments, context)
@@ -1104,6 +1108,7 @@ async def test_update_token_is_binding_scoped_and_preserves_omitted_fields(
     assert draft.summary == "Alt"
     assert draft.description is None
     assert draft.location == "Büro"
+    assert draft.reminders_minutes_before == (1440, 60)
     payload = json.loads(result.content)
     assert payload["contentIsUntrusted"] is True
     assert payload["event"]["integrationId"] == str(account.id)
@@ -1114,6 +1119,13 @@ async def test_update_token_is_binding_scoped_and_preserves_omitted_fields(
 
     decrypted = caldav_module.CredentialCipher().decrypt(token.encode("ascii"))
     assert decrypted["version"] == 2
+    decrypted.pop("reminders_minutes_before")
+    existing_v2_token = caldav_module.CredentialCipher().encrypt(decrypted).decode("ascii")
+    existing_v2 = await calendar_update_event(
+        arguments.model_copy(update={"event_token": existing_v2_token}), context
+    )
+    assert existing_v2.is_error is False
+
     decrypted.pop("version")
     legacy_token = caldav_module.CredentialCipher().encrypt(decrypted).decode("ascii")
     legacy = await calendar_update_event(

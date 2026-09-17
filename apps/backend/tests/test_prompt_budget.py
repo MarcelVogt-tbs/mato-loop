@@ -119,6 +119,6 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     build_skill = next(schema for schema in schemas if schema["name"] == "build_skill")
     assert set(build_skill["parameters"]["properties"]) == {"brief", "name_hint"}
     assert prompt_tokens <= 7_200, prompt_tokens
-    # The optional provide_file list adds a bounded schema, not more prompt instructions.
-    assert schema_tokens <= 8_550, schema_tokens
-    assert prompt_tokens + schema_tokens <= 15_720
+    # Bounded file-list and calendar-reminder fields add schema, not prompt instructions.
+    assert schema_tokens <= 8_630, schema_tokens
+    assert prompt_tokens + schema_tokens <= 15_830

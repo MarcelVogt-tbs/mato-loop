@@ -153,6 +153,16 @@ DTSTART;TZID=Europe/Berlin:20260806T090000
 DTEND;TZID=Europe/Berlin:20260806T100000
 SUMMARY:Standup
 LOCATION:Room 1
+BEGIN:VALARM
+ACTION:DISPLAY
+TRIGGER:-P1D
+DESCRIPTION:Standup
+END:VALARM
+BEGIN:VALARM
+ACTION:DISPLAY
+TRIGGER:-PT1H
+DESCRIPTION:Standup
+END:VALARM
 END:VEVENT
 END:VCALENDAR
 """
@@ -204,6 +214,8 @@ END:VCALENDAR
     assert events[0].start == datetime(2026, 8, 6, 7, tzinfo=UTC)
     assert events[0].etag == '"timed-etag"'
     assert events[0].all_day is False
+    assert events[0].reminders_minutes_before == (1440, 60)
+    assert events[0].mutation_safe is True
     assert events[1].start == date(2026, 8, 7)
     assert events[1].end == date(2026, 8, 8)
     assert events[1].all_day is True
@@ -222,6 +234,7 @@ async def test_conditional_writes_use_deterministic_uid_and_href() -> None:
         summary="Planning",
         start=datetime(2026, 8, 6, 9, tzinfo=timezone(timedelta(hours=2))),
         end=datetime(2026, 8, 6, 10, tzinfo=timezone(timedelta(hours=2))),
+        reminders_minutes_before=(1440, 60),
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = CalDavClient(
@@ -237,8 +250,12 @@ async def test_conditional_writes_use_deterministic_uid_and_href() -> None:
     assert b"DTSTART:20260806T070000Z" in requests[0].content
     assert b"DTEND:20260806T080000Z" in requests[0].content
     assert b"TZID" not in requests[0].content
+    assert requests[0].content.count(b"BEGIN:VALARM") == 2
+    assert b"TRIGGER:-P1D" in requests[0].content
+    assert b"TRIGGER:-PT1H" in requests[0].content
     assert b"DTSTART:20260806T070000Z" in requests[1].content
     assert created.start == datetime(2026, 8, 6, 7, tzinfo=UTC)
+    assert created.reminders_minutes_before == (1440, 60)
     assert updated.end == datetime(2026, 8, 6, 8, tzinfo=UTC)
     assert requests[1].headers["if-match"] == '"created"'
     assert requests[2].headers["if-match"] == '"updated"'

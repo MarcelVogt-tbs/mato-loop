@@ -183,12 +183,23 @@ EventTiming = Annotated[
     ),
 ]
 
+ReminderMinutes = Annotated[int, Field(ge=0, le=525_600)]
+
+
+def _validate_reminders(value: list[int]) -> list[int]:
+    if len(value) != len(set(value)):
+        raise ValueError("reminders must be unique")
+    return value
+
 
 class CalendarCreateEventArguments(CalendarResourceArguments):
     summary: str = Field(min_length=1, max_length=500)
     description: str | None = Field(default=None, max_length=10_000)
     location: str | None = Field(default=None, max_length=1_000)
     timing: EventTiming
+    reminders_minutes_before: list[ReminderMinutes] = Field(default_factory=list, max_length=10)
+
+    _unique_reminders = field_validator("reminders_minutes_before")(_validate_reminders)
 
 
 class CalendarEventArguments(CalendarResourceArguments):
@@ -209,11 +220,14 @@ class CalendarUpdateEventArguments(CalendarEventArguments):
     description: str | None = Field(default=None, max_length=10_000)
     location: str | None = Field(default=None, max_length=1_000)
     timing: EventTiming | None = None
+    reminders_minutes_before: list[ReminderMinutes] = Field(default_factory=list, max_length=10)
+
+    _unique_reminders = field_validator("reminders_minutes_before")(_validate_reminders)
 
     @model_validator(mode="after")
     def require_patch(self) -> CalendarUpdateEventArguments:
         fields = self.model_fields_set.intersection(
-            {"summary", "description", "location", "timing"}
+            {"summary", "description", "location", "timing", "reminders_minutes_before"}
         )
         if not fields:
             raise ValueError("at least one event field is required")
@@ -332,6 +346,7 @@ class _EventToken(BaseModel):
     timing: EventTiming | None
     description: str | None = Field(max_length=10_000)
     location: str | None = Field(max_length=1_000)
+    reminders_minutes_before: list[ReminderMinutes] = Field(default_factory=list, max_length=10)
     recurring: bool
     scheduled: bool
     mutation_safe: bool
@@ -596,6 +611,7 @@ def _draft(
     summary: str,
     description: str | None,
     location: str | None,
+    reminders_minutes_before: list[int],
 ) -> CalDavEventDraft:
     return CalDavEventDraft(
         summary=summary,
@@ -603,6 +619,7 @@ def _draft(
         end=timing.end,
         description=description,
         location=location,
+        reminders_minutes_before=tuple(reminders_minutes_before),
     )
 
 
@@ -619,6 +636,7 @@ def _token(event: CalDavEvent, integration_id: UUID, revision: str, key: str) ->
         timing=_timing(event),
         description=_bounded(event.description, 10_000),
         location=_bounded(event.location, 1_000),
+        reminders_minutes_before=list(event.reminders_minutes_before),
         recurring=event.recurring,
         scheduled=event.scheduled,
         mutation_safe=event.mutation_safe,
@@ -655,6 +673,7 @@ def _event_from_token(
         all_day=isinstance(timing, AllDayEventTiming),
         description=payload.description,
         location=payload.location,
+        reminders_minutes_before=tuple(payload.reminders_minutes_before),
         recurring=payload.recurring,
         scheduled=payload.scheduled,
         mutation_safe=payload.mutation_safe,
@@ -805,6 +824,7 @@ def _event_payload(
         "summary": _bounded(event.summary, 500),
         "description": _bounded(event.description, 10_000),
         "location": _bounded(event.location, 1_000),
+        "remindersMinutesBefore": list(event.reminders_minutes_before),
         "timing": timing.model_dump(mode="json") if timing is not None else None,
         "localTiming": local_timing,
         "recurring": event.recurring,
@@ -1016,6 +1036,7 @@ async def calendar_create_event(
                     arguments.summary,
                     arguments.description,
                     arguments.location,
+                    arguments.reminders_minutes_before,
                 ),
                 uuid5(
                     context.assistant_message_id or context.run_id,
@@ -1065,6 +1086,9 @@ async def calendar_update_event(
                     arguments.location
                     if "location" in arguments.model_fields_set
                     else token.location,
+                    arguments.reminders_minutes_before
+                    if "reminders_minutes_before" in arguments.model_fields_set
+                    else token.reminders_minutes_before,
                 ),
             )
         return _result(
@@ -1428,6 +1452,10 @@ def _create_permission(arguments: CalendarCreateEventArguments, context: Any) ->
         summary += f' Ort: "{_display_text(arguments.location)}".'
     if arguments.description:
         summary += f' Beschreibung: "{_display_text(arguments.description, 240)}".'
+    if arguments.reminders_minutes_before:
+        summary += " Erinnerungen: " + ", ".join(
+            f"{minutes} Minuten vorher" for minutes in arguments.reminders_minutes_before
+        ) + "."
     return _permission(
         "calendar.write",
         _operation_key("create", arguments),
@@ -1461,6 +1489,17 @@ def _update_permission(arguments: CalendarUpdateEventArguments, context: Any) ->
                 f'Beschreibung auf "{_display_text(arguments.description, 240)}" ändern'
                 if arguments.description
                 else "Beschreibung entfernen"
+            )
+        if "reminders_minutes_before" in arguments.model_fields_set:
+            changes.append(
+                "Erinnerungen entfernen"
+                if not arguments.reminders_minutes_before
+                else "Erinnerungen "
+                + ", ".join(
+                    f"{minutes} Minuten vorher"
+                    for minutes in arguments.reminders_minutes_before
+                )
+                + " setzen"
             )
         summary = f"Der Agent möchte {_event_reference(event)} ändern: {'; '.join(changes)}."
     return _permission(
@@ -1873,8 +1912,8 @@ CALDAV_SHARED_TOOLS = (
     ToolContribution(
         name="calendar_create_event",
         description=(
-            "Create one calendar event. Only summary and timing are required; location and description "
-            "are optional. Timed events require start and end; all-day end is exclusive."
+            "Create one event. Requires summary and timing; optional location, description, and "
+            "reminders_minutes_before. Timed events require start and end; all-day end is exclusive."
         ),
         arguments_model=CalendarCreateEventArguments,
         handler=calendar_create_event,
@@ -1889,8 +1928,8 @@ CALDAV_SHARED_TOOLS = (
     ToolContribution(
         name="calendar_update_event",
         description=(
-            "Update one returned calendar event at least one field. Timed events require start and end; "
-            "all-day end is exclusive."
+            "Update one returned event. reminders_minutes_before replaces reminders; an empty list "
+            "removes them. Timed events require start and end; all-day end is exclusive."
         ),
         arguments_model=CalendarUpdateEventArguments,
         handler=calendar_update_event,

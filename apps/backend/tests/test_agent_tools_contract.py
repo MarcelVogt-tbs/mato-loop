@@ -1161,7 +1161,10 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     assert definitions["run_automation"].actions[0].mutates
     assert definitions["delete_automation"].actions[0].mutates
     assert "Same task uses one automation" in definitions["create_automation"].description
-    assert "Reminders set deliver_to_current_session=true" in definitions[
+    assert "Chat reminders set deliver_to_current_session=true" in definitions[
+        "create_automation"
+    ].description
+    assert "calendar event reminders use the calendar event tools" in definitions[
         "create_automation"
     ].description
     assert "cron+timezone or offset run_at" in definitions["create_automation"].description

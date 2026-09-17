@@ -473,9 +473,9 @@ def _tool_prompt_fragments(tools: dict[str, BoundTool]) -> tuple[str, ...]:
         "calendar_delete_event",
     } & tools.keys():
         fragments.append(
-            "For event mutations, copy eventToken, integrationId, and calendarKey from one returned "
-            "event. A mutation succeeds only with a confirming event or deleted=true. Present localTiming "
-            "exactly; otherwise convert canonical timestamps once to the system-prompt timezone."
+            "For mutations, copy eventToken, integrationId, and calendarKey from a returned event. A "
+            "mutation succeeds only with confirming event or deleted=true. Use localTiming exactly; "
+            "otherwise convert timestamps to the prompt timezone."
         )
     if {"tasks_update", "tasks_set_completed", "tasks_delete"} & tools.keys():
         fragments.append(
