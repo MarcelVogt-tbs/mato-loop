@@ -238,6 +238,24 @@ export function toolFileActions(result) {
   })
 }
 
+export function toolOpenFileActions(tool, result) {
+  const actions = toolFileActions(result)
+  if (tool?.name !== 'provide_file') return actions
+  for (const attachment of result?.attachments || []) {
+    const target = managedSessionFileTarget(attachment, attachment?.fileRootId)
+    if (!target) continue
+    actions.push({
+      operation: 'provide',
+      root: 'session',
+      ...target
+    })
+  }
+  return [...new Map(actions.map((action) => [
+    `${action.rootIdentity || action.executionAgentId}:${action.path}`,
+    action
+  ])).values()]
+}
+
 export function supportedAttachments(attachments) {
   if (!Array.isArray(attachments)) return []
   return attachments.flatMap((attachment) => {

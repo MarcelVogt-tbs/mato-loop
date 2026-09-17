@@ -8,6 +8,29 @@ import {
 } from '../src/utils/chat-transcript'
 
 describe('chat transcript', () => {
+  it('exposes validated file actions on the final assistant response', () => {
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    const path = 'Support-Meeting-Protokoll.md'
+    const attachment = {
+      fileId: '550e8400-e29b-41d4-a716-446655440001', fileRevision: 1,
+      fileRootId: sessionId, filePath: path, filename: path, sizeBytes: 42
+    }
+    const transcript = buildChatTranscript([
+      { id: 'user', role: 'user', content: 'Erstelle die Datei' },
+      {
+        id: 'assistant-tool', role: 'assistant', content: '',
+        toolCalls: [{ id: 'call', name: 'provide_file', arguments: { path } }]
+      },
+      { id: 'result', role: 'tool', toolCallId: 'call', content: '{}', attachments: [attachment] },
+      { id: 'assistant-final', role: 'assistant', content: `Hier ist **${path}**.` }
+    ])
+
+    expect(transcript.messages.at(-1).fileActions).toEqual([{
+      operation: 'provide', root: 'session', rootIdentity: sessionId,
+      path, filename: path, sizeBytes: 42, sessionId, fileRevision: 1
+    }])
+  })
+
   it('offers retry only for the current backend-approved failed response', () => {
     const error = {
       id: 'error-1', role: 'assistant', kind: 'runtime_error', retryAvailable: true

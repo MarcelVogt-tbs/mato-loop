@@ -11,6 +11,7 @@ import {
   supportedAttachments,
   toolFileActions,
   toolFileAttachment,
+  toolOpenFileActions,
   toolOutputAttachments,
   deduplicateFileOutputAttachments,
   videoMimeTypeSupported
@@ -68,6 +69,25 @@ describe('persisted attachments', () => {
       ...result,
       content: result.content.replace('large.zip",', 'other.zip",')
     })).toBeNull()
+  })
+
+  it('turns a persisted provided file into an open action', () => {
+    const attachment = {
+      fileId: '550e8400-e29b-41d4-a716-446655440005',
+      fileRevision: 1,
+      fileRootId: rootId,
+      filePath: 'report.md',
+      filename: 'report.md',
+      sizeBytes: 42
+    }
+
+    expect(toolOpenFileActions({ name: 'provide_file' }, { attachments: [attachment] }))
+      .toEqual([{
+        operation: 'provide', root: 'session', rootIdentity: rootId,
+        path: 'report.md', filename: 'report.md', sizeBytes: 42,
+        sessionId: rootId, fileRevision: 1
+      }])
+    expect(toolOpenFileActions({ name: 'read' }, { attachments: [attachment] })).toEqual([])
   })
 
   it.each([

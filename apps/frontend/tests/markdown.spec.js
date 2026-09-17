@@ -28,6 +28,17 @@ function renderedDom(markdown, options) {
 }
 
 describe('assistant markdown rendering', () => {
+  it('links a matching generated filename to its file action', () => {
+    const action = { filename: 'Support-Meeting-Protokoll.md', path: 'Support-Meeting-Protokoll.md' }
+    const { root } = renderedDom('**Support-Meeting-Protokoll.md**', { fileActions: [action] })
+    const link = root.querySelector('a')
+
+    expect(link?.getAttribute('href')).toBe('#')
+    expect(link?.dataset.markdownFile).toBe('0')
+    expect(renderedDom('[Website](https://example.com)', { fileActions: [action] }).root.querySelector('a')?.href)
+      .toBe('https://example.com/')
+  })
+
   it('blocks all markdown images in static file previews', () => {
     const { root, externalImages } = renderedDom('![Extern](https://example.com/image.png)', {
       allowImages: false,

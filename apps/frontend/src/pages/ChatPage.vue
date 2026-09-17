@@ -176,9 +176,11 @@
                 v-if="message.content && message.role === 'assistant'"
                 class="chat-message__content"
                 :content="message.content"
+                :file-actions="message.fileActions"
                 :research-sources="message.research?.linkedSources || []"
                 :streaming="message.streaming"
                 :trusted-image-origins="trustedImageOrigins"
+                @open-file="openToolFile"
                 @rendered="handleMessageRendered"
                 @trust-image-origin="trustImageOrigin"
               />

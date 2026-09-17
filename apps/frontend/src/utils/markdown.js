@@ -19,7 +19,7 @@ const ALLOWED_TAGS = [
 const ALLOWED_ATTR = [
   'accent', 'accentunder', 'alt', 'aria-hidden', 'aria-label', 'aria-live', 'checked',
   'class', 'columnalign', 'columnlines', 'columnspacing', 'd', 'data-markdown-code', 'data-markdown-image',
-  'data-markdown-mermaid',
+  'data-markdown-file', 'data-markdown-mermaid',
   'decoding', 'disabled', 'display', 'displaystyle', 'encoding', 'fence', 'height', 'hidden',
   'href', 'loading', 'lspace', 'mathbackground', 'mathcolor', 'mathvariant', 'maxsize',
   'minsize', 'movablelimits', 'preserveaspectratio', 'referrerpolicy', 'rel', 'role',
@@ -291,6 +291,14 @@ function configureRenderRules() {
 
   markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
     const token = tokens[index]
+    const filename = token.markup === 'linkify' ? tokens[index + 1]?.content : null
+    const fileIndex = env.fileActions.findIndex((action) => action.filename === filename)
+    if (fileIndex >= 0) {
+      token.attrSet('href', '#')
+      token.attrSet('data-markdown-file', String(fileIndex))
+      token.attrSet('class', 'chat-markdown__link')
+      return self.renderToken(tokens, index, options)
+    }
     const href = safeMarkdownLinkUrl(token.attrGet('href'))
     if (href) {
       token.attrSet('href', href)
@@ -369,6 +377,7 @@ export function renderMarkdown(
   content,
   {
     allowImages = true,
+    fileActions = [],
     imageStates = {},
     interactive = true,
     researchSources = [],
@@ -385,6 +394,7 @@ export function renderMarkdown(
   const env = {
     codeBlocks: [],
     externalImages: [],
+    fileActions,
     mermaidBlocks: [],
     allowImages,
     imageStates,

@@ -1,4 +1,5 @@
 import { runWarningEntries } from 'src/utils/agent-activity'
+import { toolOpenFileActions } from 'src/utils/attachments'
 
 export function retryAvailableForMessage(message, messages = [], running = false) {
   return message?.kind === 'runtime_error'
@@ -246,6 +247,10 @@ export function buildChatTranscript(
         completedAt: currentTurn ? null : finalCreatedAt
       }
     }
+    const response = finalAnswer || carrier
+    response.fileActions = workEntries.flatMap((entry) => (
+      entry.type === 'tool' ? toolOpenFileActions(entry.tool, entry.result) : []
+    ))
     const trustLevels = assistantSection.map((message) => message.trustLevel)
     const effectiveTrust = trustLevels.includes('private')
       ? 'private'

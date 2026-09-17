@@ -49,6 +49,10 @@ const props = defineProps({
     default: true
   },
   forceLight: Boolean,
+  fileActions: {
+    type: Array,
+    default: () => []
+  },
   streaming: Boolean,
   researchSources: {
     type: Array,
@@ -63,7 +67,7 @@ const props = defineProps({
     default: () => []
   }
 })
-const emit = defineEmits(['prepared-reply', 'rendered', 'trust-image-origin'])
+const emit = defineEmits(['open-file', 'prepared-reply', 'rendered', 'trust-image-origin'])
 const $q = useQuasar()
 const contentRoot = ref(null)
 const rendered = ref({ codeBlocks: [], html: '', externalImages: [], mermaidBlocks: [] })
@@ -85,6 +89,7 @@ function renderContent() {
   const version = ++renderVersion
   rendered.value = renderMarkdown(props.content, {
     allowImages: props.allowImages,
+    fileActions: props.fileActions,
     imageStates: imageStates.value,
     interactive: props.interactive,
     researchSources: props.researchSources,
@@ -204,6 +209,16 @@ function syncImageVerifications() {
 }
 
 async function handleClick(event) {
+  const fileLink = event.target.closest?.('[data-markdown-file]')
+  if (fileLink && event.currentTarget.contains(fileLink)) {
+    const action = props.fileActions[Number(fileLink.dataset.markdownFile)]
+    if (action) {
+      event.preventDefault()
+      emit('open-file', action)
+      return
+    }
+  }
+
   const replyLink = event.target.closest?.('a[href^="#reply-"]')
   if (replyLink && event.currentTarget.contains(replyLink)) {
     const id = replyLink.getAttribute('href').slice('#reply-'.length)
