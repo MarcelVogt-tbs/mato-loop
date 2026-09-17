@@ -259,6 +259,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_input_fence_failure_is_not_acknowledged(self):
         worker = BrowserWorker(self.root)
+        worker.desktop = True
         worker.environment = {"DISPLAY": ":private", "XAUTHORITY": "/private/Xauthority"}
         process = SimpleNamespace(
             returncode=0,
@@ -455,21 +456,21 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         (root / "binding").symlink_to("/etc/passwd")
         with self.assertRaises(OSError):
             self.manager.storage(self.owner_id)
-        with patch.dict(os.environ, {"MATOLOOP_AGENT_CONTAINER": "0"}):
-            native = BrowserManager(self.agent.config, self.agent.terminal)
-            self.assertEqual(native.installation, self.root.parent / "tools" / "browser")
-            self.assertEqual(native.environment()[0]["MATOLOOP_AGENT_CONTAINER"], "0")
-            native_agent = MatoLoopAgent(self.agent.config, "not-for-browser")
-            self.assertIn("integration.browser.execute", native_agent.hello().operations)
-            self.assertNotIn("integration.browser.view", native_agent.hello().operations)
-        with patch.dict(os.environ, {"MATOLOOP_AGENT_CONTAINER": "1"}):
-            container = BrowserManager(self.agent.config, self.agent.terminal)
-            self.assertEqual(container.installation, CONTAINER_INSTALLATION)
-            self.assertEqual(container.environment()[0]["MATOLOOP_AGENT_CONTAINER"], "1")
-            container_agent = MatoLoopAgent(self.agent.config, "not-for-browser")
-            self.assertIn("integration.browser.view", container_agent.hello().operations)
         user = SimpleNamespace(pw_name="matoloop-browser", pw_uid=10001, pw_gid=10001)
         with patch("os.getuid", return_value=0), patch("pwd.getpwnam", return_value=user):
+            with patch.dict(os.environ, {"MATOLOOP_AGENT_CONTAINER": "0"}):
+                native = BrowserManager(self.agent.config, self.agent.terminal)
+                self.assertEqual(native.installation, self.root.parent / "tools" / "browser")
+                self.assertEqual(native.environment()[0]["MATOLOOP_AGENT_CONTAINER"], "0")
+                native_agent = MatoLoopAgent(self.agent.config, "not-for-browser")
+                self.assertIn("integration.browser.execute", native_agent.hello().operations)
+                self.assertNotIn("integration.browser.view", native_agent.hello().operations)
+            with patch.dict(os.environ, {"MATOLOOP_AGENT_CONTAINER": "1"}):
+                container = BrowserManager(self.agent.config, self.agent.terminal)
+                self.assertEqual(container.installation, CONTAINER_INSTALLATION)
+                self.assertEqual(container.environment()[0]["MATOLOOP_AGENT_CONTAINER"], "1")
+                container_agent = MatoLoopAgent(self.agent.config, "not-for-browser")
+                self.assertIn("integration.browser.view", container_agent.hello().operations)
             environment, options = self.manager.environment()
         self.assertNotIn("MATOLOOP_AGENT_PAIRING_TOKEN", environment)
         self.assertNotIn("MATOLOOP_AGENT_BACKEND_URL", environment)

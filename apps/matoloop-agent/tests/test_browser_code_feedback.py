@@ -246,6 +246,7 @@ class BrowserCodeFeedbackTests(unittest.IsolatedAsyncioTestCase):
         self.worker._settle.assert_not_awaited()
 
     async def test_tab_creation_close_and_late_failure_preserve_steps(self):
+        self.worker.desktop = True
         result = await self.execute("newtab", url="https://example.test")
         create = "page = await page.context.new_page()"
         navigate = (
