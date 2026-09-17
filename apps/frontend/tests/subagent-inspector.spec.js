@@ -574,6 +574,7 @@ describe('subagent inspector navigation and presentation', () => {
     await router.push('/')
     const running = ref(true)
     const activity = ref({ phase: 'processing_tool', toolCallId: 'search' })
+    const approvals = ref([])
     const messages = ref([
       { id: 'user', role: 'user', content: 'Bitte prüfen' },
       { id: 'old', role: 'assistant', content: 'Älterer Schritt', toolCalls: [] },
@@ -585,7 +586,7 @@ describe('subagent inspector navigation and presentation', () => {
         ]
       }
     ])
-    const history = computed(() => buildChatTranscript(messages.value, [], {
+    const history = computed(() => buildChatTranscript(messages.value, approvals.value, {
       running: running.value,
       toolExecutionActive: activity.value.phase === 'processing_tool',
       activeToolCallId: activity.value.toolCallId
@@ -630,6 +631,20 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.querySelector('.work-history__header')).toBeNull()
     expect(root.textContent).toContain(intro)
 
+    messages.value.push({
+      id: 'write', role: 'assistant', content: '',
+      toolCalls: [{ id: 'write', name: 'write_file', arguments: { path: 'result.txt', content: 'ok' } }]
+    })
+    approvals.value.push({
+      id: 'approval', title: 'Datei schreiben?', riskLevel: 'medium', resourceType: 'path',
+      resourceScope: '/result.txt', availableDecisions: ['allow_once', 'deny'], details: { toolCallId: 'write' }
+    })
+    activity.value = { phase: 'waiting_approval', toolCallId: 'write' }
+    await nextTick()
+    expect(root.textContent).toContain(intro)
+    expect(root.textContent).toContain('Datei schreiben?')
+
+    approvals.value = []
     activity.value = { phase: 'streaming' }
     await nextTick()
     expect(root.textContent).not.toContain(intro)

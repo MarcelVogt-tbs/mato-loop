@@ -179,8 +179,12 @@ const entries = computed(() => groupWorkHistoryEntries(enrichedEntries.value, cu
 const currentEntries = computed(() => {
   const current = presentation.value.entry
   if (!current) return []
+  const latestCommentary = current.tool?.id
+    ? enrichedEntries.value.findLast((entry) => entry.type === 'commentary' && entry.toolCallIds?.length)
+    : null
   return enrichedEntries.value.filter((entry) => entry.key === current.key || (
-    entry.type === 'commentary' && current.tool?.id && entry.toolCallIds?.includes(current.tool.id)
+    entry.type === 'commentary' && current.tool?.id
+      && (entry === latestCommentary || entry.toolCallIds?.includes(current.tool.id))
   ))
 })
 const showPreview = computed(() => !historyExpanded.value && currentEntries.value.length > 0)
