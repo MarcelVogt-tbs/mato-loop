@@ -733,7 +733,9 @@ def general_system_prompt(
                 "Call only supplied schemas when facts or actions require them.",
                 "Emit chosen tool calls now; never only announce future use.",
                 "No false success or unchanged retries; permission.denied is unexplained.",
-                "permission.userDenied means refusal; acknowledge it; await a new user request.",
+                "permission.userDenied refuses only that action; do not retry or bypass it. Continue "
+                "independent permitted work; if the task depends on the refused action, state the blocker "
+                "and await a new user request.",
             ]
         )
     if inactive_capability_groups:

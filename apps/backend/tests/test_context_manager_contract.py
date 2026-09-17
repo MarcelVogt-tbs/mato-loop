@@ -1570,7 +1570,8 @@ def test_general_system_prompt_keeps_permission_denials_host_scoped() -> None:
     )
 
     assert "permission.denied is unexplained" in prompt
-    assert "permission.userDenied means refusal" in prompt
+    assert "permission.userDenied refuses only that action" in prompt
+    assert "Continue independent permitted work" in prompt
     assert "await a new user request" in prompt
 
 
