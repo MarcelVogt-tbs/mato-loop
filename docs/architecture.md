@@ -246,7 +246,7 @@ System prompt and tool schemas are derived from the same effective tool set for 
 
 For models identified by discovery metadata as llama.cpp, the provider transport removes `maxLength` and `maxItems` from a schema copy because llama.cpp expands those bounds into size-limited grammar repetitions. The original schemas remain authoritative for host validation.
 
-Model-family-specific Build prompt injection is not used. Workflow behavior comes from resolved profile instructions plus generic host security, tool, todo, and delegation contracts.
+Workflow behavior comes from resolved profile instructions plus generic host security, tool, todo, and delegation contracts. The non-delegated Build profile additionally applies a small model-family-specific reliability instruction where required.
 
 Every ordinary model request receives the complete policy-filtered effective tool set in canonical registry order. Keeping schemas stable favors provider prompt-cache reuse and avoids hiding a needed capability from follow-up requests. Required search, skill activation, memory mutation, source review, exhausted budgets, permission, trust, ownership, path, and execution-operation rules may still narrow or remove schemas when enforcement requires it. Provider adapters transport only the resulting schemas and never select or execute tools. Static host and tool contracts precede live computer state, active skills, memory references, counters, and time to preserve the longest safe provider-neutral cache prefix.
 

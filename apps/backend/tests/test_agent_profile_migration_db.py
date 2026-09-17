@@ -194,7 +194,7 @@ async def _read_database(url: str, ids):
     }
 
 
-def test_agent_profile_downgrade_resets_representative_data(request, monkeypatch) -> None:
+def test_agent_profile_migration_resets_representative_data(request, monkeypatch) -> None:
     if not request.config.getoption("--profile-migration-db"):
         pytest.skip("requires the development PostgreSQL database")
 
@@ -212,9 +212,23 @@ def test_agent_profile_downgrade_resets_representative_data(request, monkeypatch
     alembic_config.set_main_option("script_location", str(backend_dir / "alembic"))
 
     try:
-        command.upgrade(alembic_config, "head")
+        command.upgrade(alembic_config, "012558511db3")
         ids = asyncio.run(_seed_database(test_url))
-        command.downgrade(alembic_config, "5091a36c7c5f")
+        command.upgrade(alembic_config, "head")
+        result = asyncio.run(_read_database(test_url, ids))
+
+        assert result["global_names"] == []
+        assert result["personal_profiles"] == []
+        assert result["session_profile_id"] == GENERAL_PROFILE_ID
+        assert result["integration_session_profile_id"] == result["integration_profile_id"]
+        assert result["queued_profile_id"] == GENERAL_PROFILE_ID
+        assert result["completed_profile_id"] == result["custom_profile_id"]
+        assert result["grant_profiles"] == {
+            GENERAL_PROFILE_ID,
+            result["integration_profile_id"],
+        }
+
+        command.downgrade(alembic_config, "012558511db3")
         result = asyncio.run(_read_database(test_url, ids))
 
         assert result["global_names"] == ["Allgemein", "Plan", "Build"]

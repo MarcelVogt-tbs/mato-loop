@@ -249,6 +249,7 @@ SOURCE_FILES = (
     "src/mato_loop_backend/agent/tool_arguments.py",
     "src/mato_loop_backend/agent/tool_registry.py",
     "src/mato_loop_backend/agent/media_prompt_profiles.py",
+    "src/mato_loop_backend/agent/model_prompt_profiles.py",
     "src/mato_loop_backend/agent/runtime.py",
     "src/mato_loop_backend/agent/title_generation.py",
     "src/mato_loop_backend/agent/tools.py",
