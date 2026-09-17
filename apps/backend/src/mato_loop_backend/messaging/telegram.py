@@ -76,7 +76,7 @@ from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 from mato_loop_backend.settings import (
-    DEFAULT_AGENT_PROFILE_ID,
+    GENERAL_PROFILE_ID,
     InstanceLimits,
     SettingsStore,
     load_effective_ai,
@@ -580,7 +580,7 @@ async def _new_session(
         title="Neue Session",
         title_generation_status=TitleGenerationStatus.PENDING.value,
         model_config_id=ai.default_model_id,
-        agent_profile_id=DEFAULT_AGENT_PROFILE_ID,
+        agent_profile_id=GENERAL_PROFILE_ID,
     )
     db.add(item)
     await db.flush()

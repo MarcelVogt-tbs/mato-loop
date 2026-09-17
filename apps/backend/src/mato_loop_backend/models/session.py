@@ -25,7 +25,7 @@ from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mato_loop_backend.db.base import Base
-from mato_loop_backend.settings.models import DEFAULT_AGENT_PROFILE_ID, TrustLevel
+from mato_loop_backend.settings.models import GENERAL_PROFILE_ID, TrustLevel
 
 if TYPE_CHECKING:
     from mato_loop_backend.models.project import Project
@@ -137,8 +137,8 @@ class ChatSession(Base):
     model_config_id: Mapped[UUID | None] = mapped_column(nullable=True)
     agent_profile_id: Mapped[UUID] = mapped_column(
         nullable=False,
-        default=DEFAULT_AGENT_PROFILE_ID,
-        server_default=text(f"'{DEFAULT_AGENT_PROFILE_ID}'::uuid"),
+        default=GENERAL_PROFILE_ID,
+        server_default=text(f"'{GENERAL_PROFILE_ID}'::uuid"),
     )
     reasoning_effort: Mapped[str | None] = mapped_column(String(20), nullable=True)
     memory_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="full")

@@ -73,7 +73,6 @@ from mato_loop_backend.agent.runtime_memory import (
     _session_bootstrap_requested,
 )
 from mato_loop_backend.agent.subagents import (
-    DELEGATING_PROFILES,
     apply_delegation_ceiling,
     ceiling_settings,
     delegation_snapshot,
@@ -81,6 +80,7 @@ from mato_loop_backend.agent.subagents import (
     permission_origin,
     provenance,
     run_tasks,
+    session_write_paths_ceiling,
 )
 from mato_loop_backend.agent.title_generation import (
     TITLE_SYSTEM_PROMPT,
@@ -2153,7 +2153,7 @@ class AgentRuntime:
                     effective_toolset = effective_toolset.without("browser_request_control")
                 if ceiling is not None:
                     effective_toolset = effective_toolset.only(*ceiling["toolNames"]).without("task")
-                elif agent_profile_id not in DELEGATING_PROFILES:
+                elif _active_agent_profile is None or not _active_agent_profile.delegation_enabled:
                     effective_toolset = effective_toolset.without("task")
                 if delegated:
                     effective_toolset = effective_toolset.without(
@@ -5004,6 +5004,14 @@ class AgentRuntime:
         integration_settings = filter_agent_profile_integrations(
             integration_settings, _profile, allowed_ids=integration_ceiling_ids(ceiling)
         )
+        session_write_paths = getattr(_profile, "session_write_paths", None)
+        ceiling_paths = session_write_paths_ceiling(ceiling)
+        if ceiling_paths is not None:
+            session_write_paths = (
+                ceiling_paths
+                if session_write_paths is None
+                else sorted(set(session_write_paths) & set(ceiling_paths))
+            )
         policy = _tool_policy(tool_settings, integration_settings, request)
         if ceiling is not None:
             ceiling_policy = _tool_policy(
@@ -5022,6 +5030,7 @@ class AgentRuntime:
             policy,
             agent_profile_id=agent_profile_id,
             trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
+            session_write_paths=session_write_paths,
             **permission_namespace,
         )
         browser_approval_key = None
@@ -5103,6 +5112,14 @@ class AgentRuntime:
         integration_settings = filter_agent_profile_integrations(
             integration_settings, _profile, allowed_ids=integration_ceiling_ids(ceiling)
         )
+        session_write_paths = getattr(_profile, "session_write_paths", None)
+        ceiling_paths = session_write_paths_ceiling(ceiling)
+        if ceiling_paths is not None:
+            session_write_paths = (
+                ceiling_paths
+                if session_write_paths is None
+                else sorted(set(session_write_paths) & set(ceiling_paths))
+            )
         current_policy = _tool_policy(tool_settings, integration_settings, request)
         if ceiling is not None:
             ceiling_policy = _tool_policy(
@@ -5118,6 +5135,7 @@ class AgentRuntime:
             current_policy,
             agent_profile_id=agent_profile_id,
             trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
+            session_write_paths=session_write_paths,
             **permission_namespace,
         )
         if current_decision != PermissionDecision.DENY and browser_approval_key is not None:

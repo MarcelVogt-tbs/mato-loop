@@ -19,7 +19,6 @@ from mato_loop_backend.integrations import (
 )
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
 from mato_loop_backend.settings import (
-    PLAN_AGENT_PROFILE_ID,
     ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
@@ -1264,6 +1263,7 @@ class PermissionPolicy:
         agent_profile_id: UUID | None = None,
         trust_level: TrustLevel | None = None,
         permission_session_id: UUID | None = None,
+        session_write_paths: list[str] | None = None,
     ) -> PermissionDecision:
         grant_session_id = permission_session_id or chat_session.id
         if grant_session_id != chat_session.id:
@@ -1544,12 +1544,11 @@ class PermissionPolicy:
                 return PermissionDecision.DENY
             if request.capability == "filesystem.delete":
                 policy = ToolExecutionPolicy.ASK
-            if (
-                agent_profile_id == PLAN_AGENT_PROFILE_ID
-                and request.capability == "session.files.write"
+            if session_write_paths is not None and root == FileRoot.SESSION and (
+                request.capability in {"session.files.write", "filesystem.delete"}
                 and (
-                    root != FileRoot.SESSION
-                    or path != PurePosixPath("plan.md")
+                    str(path) not in session_write_paths
+                    or request.action_kind in {"create_directory", "copy_path", "move_path"}
                 )
             ):
                 policy = ToolExecutionPolicy.DISABLED

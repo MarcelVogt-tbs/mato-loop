@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent.context import (
     _SHORTENED_TOOL_OUTPUT,
     MAX_ATTACHMENT_EXCERPT_CHARACTERS,
-    PLAN_PROGRESS_CONTRACT,
     ContextError,
     ContextManager,
     SummaryResult,
@@ -44,10 +43,11 @@ from mato_loop_backend.settings import (
     PersonaProfile,
     SkillDefinition,
     TrustLevel,
+    build_profile,
+    plan_profile,
 )
 from mato_loop_backend.settings.models import (
-    BUILD_AGENT_PROFILE_ID,
-    PLAN_AGENT_PROFILE_ID,
+    BUILD_PROFILE_ID,
     LlmProviderConfig,
     ModelConfig,
 )
@@ -1552,15 +1552,15 @@ def test_general_system_prompt_requires_supported_factual_claims() -> None:
     assert "otherwise omit the claim" in prompt
 
 
-def test_builtin_plan_uses_host_progress_contract_with_or_without_todo_tool() -> None:
-    plan = AgentProfile(id=PLAN_AGENT_PROFILE_ID, name="Plan", instructions="Plan work.")
+def test_builtin_plan_instructions_are_not_duplicated_by_host_prompt() -> None:
+    plan = plan_profile()
     offered = general_system_prompt(
         _session(), agent_profile=plan, offered_tool_names=frozenset({"todo_write"})
     )
     unavailable = general_system_prompt(_session(), agent_profile=plan)
 
-    assert PLAN_PROGRESS_CONTRACT in offered
-    assert PLAN_PROGRESS_CONTRACT in unavailable
+    assert offered.count(plan.instructions) == 1
+    assert unavailable.count(plan.instructions) == 1
     assert "Update only when scope changes" in offered
 
 
@@ -2930,20 +2930,15 @@ async def test_failed_projection_does_not_commit_new_summary() -> None:
 def test_task_general_profiles_keep_main_plan_artifact_and_child_permissions() -> None:
     session = _session()
     tools = frozenset({"write_file", "read", "glob", "task"})
-    plan = AgentProfile(id=PLAN_AGENT_PROFILE_ID, name="Plan", instructions="Analyze and plan.")
-    build = AgentProfile(id=BUILD_AGENT_PROFILE_ID, name="Build", instructions="Complete the task.")
+    plan = plan_profile()
+    build = build_profile()
     main = general_system_prompt(session, agent_profile=plan, offered_tool_names=tools)
     child = general_system_prompt(session, agent_profile=plan, delegated=True)
     work = general_system_prompt(session, agent_profile=build, offered_tool_names=tools)
 
-    assert main.count(PLAN_PROGRESS_CONTRACT) == 1
+    assert main.count(plan.instructions) == 1
     assert "root=files path=plan.md" in main
-    assert "expectedSha256" in main
-    assert "answer informational requests directly" in main
-    assert "Glob before reading because it may not exist" in main
-    assert "create it with write_file" in main
-    assert PLAN_PROGRESS_CONTRACT not in child
-    assert "root=files path=plan.md" not in child
+    assert plan.instructions not in child
     assert "do not inherit the parent transcript" in child
     assert "Respond in English" in child
     assert "Respond in the user's language" not in child
@@ -2951,18 +2946,17 @@ def test_task_general_profiles_keep_main_plan_artifact_and_child_permissions() -
     assert "acceptance criteria" in work
     assert "write each task prompt in English" in work
     assert "overlapping writes" in work
-    assert work.count(PLAN_PROGRESS_CONTRACT) == 1
+    assert work.count(build.instructions) == 1
     assert "root=files path=plan.md" in work
-    assert "asked to implement the current session plan" in work
     assert "Read AGENTS.md before repository work" in work
     assert "skip unrelated tasks" in work
-    assert "checks actually performed, and remaining gaps" in work
+    assert "actual results, checks, and remaining gaps" in work
     assert "Verify code with tests and other claims with suitable evidence" in work
 
 
-def test_host_coding_workflow_applies_to_old_stored_profile_without_replacing_it() -> None:
+def test_custom_profile_instructions_have_no_id_based_host_workflow() -> None:
     stored = AgentProfile(
-        id=BUILD_AGENT_PROFILE_ID,
+        id=BUILD_PROFILE_ID,
         name="Build",
         instructions="Keep this exact stored workflow and repeat every check.",
     )
@@ -2970,14 +2964,8 @@ def test_host_coding_workflow_applies_to_old_stored_profile_without_replacing_it
     prompt = general_system_prompt(_session(), agent_profile=stored)
 
     assert stored.instructions in prompt
-    assert prompt.index(stored.instructions) < prompt.index(PLAN_PROGRESS_CONTRACT)
-    assert prompt.count(PLAN_PROGRESS_CONTRACT) == 1
-
-
-def test_plan_progress_contract_prioritizes_scanable_execution_details() -> None:
-    assert "quick to scan and sufficient to implement" in PLAN_PROGRESS_CONTRACT
-    assert "Reference existing requirements instead of repeating them" in PLAN_PROGRESS_CONTRACT
-    assert "risks and open decisions only" in PLAN_PROGRESS_CONTRACT
+    assert "Plan workflow:" not in prompt
+    assert "Build workflow:" not in prompt
 
 
 def test_question_contract_allows_follow_up_for_new_required_decisions() -> None:

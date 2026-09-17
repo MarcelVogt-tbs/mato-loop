@@ -30,8 +30,8 @@ from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import AiSettings, SettingsStore, ToolSettings
 from mato_loop_backend.settings.models import (
-    BUILD_AGENT_PROFILE_ID,
-    PLAN_AGENT_PROFILE_ID,
+    BUILD_PROFILE_ID,
+    PLAN_PROFILE_ID,
     LlmProviderConfig,
     ModelConfig,
     ToolExecutionPolicy,
@@ -119,7 +119,7 @@ async def _events(run_id, event_type, count=1):
                 pytest.fail(f"Run failed before {event_type}: {event}")
 
 
-@pytest.mark.parametrize("profile_id", [PLAN_AGENT_PROFILE_ID, BUILD_AGENT_PROFILE_ID], ids=["plan", "build"])
+@pytest.mark.parametrize("profile_id", [PLAN_PROFILE_ID, BUILD_PROFILE_ID], ids=["plan", "build"])
 @pytest.mark.parametrize("cancel", [False, True], ids=["approve", "cancel"])
 async def test_native_delegation_pipeline(native_database, monkeypatch, profile_id, cancel):
     fixture = native_database
@@ -305,7 +305,7 @@ async def test_webfetch_dispatch_cannot_bypass_spawn_ask_after_live_auto(native_
     async with fixture.factory() as db:
         await SettingsStore.save(db, ToolSettings(public_permissions={"policies": {"network.fetch": "ask"}}))
         parent = ChatSession(id=parent_id, user_id=fixture.user.id, title="Ceiling regression",
-                             title_generation_status="skipped", agent_profile_id=BUILD_AGENT_PROFILE_ID,
+                             title_generation_status="skipped", agent_profile_id=BUILD_PROFILE_ID,
                              model_config_id=fixture.model.id, memory_mode="disabled")
         db.add(parent)
         await db.flush()

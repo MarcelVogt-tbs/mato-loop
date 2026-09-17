@@ -107,7 +107,7 @@ async def setup(
     )
     if (await db.scalar(select(func.count(UserAccount.id)))) != 0:
         raise ApiError(status.HTTP_409_CONFLICT, "auth.setupCompleted")
-    # Historical migrations seed profiles; only first-time setup installs current defaults.
+    # Create the instance document; shipped profiles remain code-owned.
     await SettingsStore.save(db, AgentProfilesSettings())
     user = UserAccount(
         username=username,

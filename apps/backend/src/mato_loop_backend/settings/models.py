@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from pathlib import PurePosixPath
 from typing import Annotated, Any, ClassVar, Literal, Self
 from unicodedata import category as unicode_category
 from uuid import UUID, uuid4
@@ -12,8 +13,10 @@ from pydantic import (
     ConfigDict,
     Field,
     PrivateAttr,
+    SerializationInfo,
     StrictBool,
     computed_field,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -98,16 +101,16 @@ class ToolExecutionPolicy(StrEnum):
     AUTO = "auto"
 
 
-DEFAULT_AGENT_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000001")
+GENERAL_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000001")
 DEFAULT_PERSONA_ID = UUID("00000000-0000-4000-8000-000000000002")
-PLAN_AGENT_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000003")
-BUILD_AGENT_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000004")
-BUILTIN_AGENT_PROFILE_NAMES = {
-    DEFAULT_AGENT_PROFILE_ID: "Allgemein",
-    PLAN_AGENT_PROFILE_ID: "Plan",
-    BUILD_AGENT_PROFILE_ID: "Build",
+PLAN_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000003")
+BUILD_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000004")
+CORE_PROFILE_NAMES = {
+    GENERAL_PROFILE_ID: "Allgemein",
+    PLAN_PROFILE_ID: "Plan",
+    BUILD_PROFILE_ID: "Build",
 }
-BUILTIN_AGENT_PROFILE_IDS = frozenset(BUILTIN_AGENT_PROFILE_NAMES)
+CORE_PROFILE_IDS = frozenset(CORE_PROFILE_NAMES)
 WEATHER_SKILL_ID = UUID("00000000-0000-4000-8000-000000000101")
 
 ProfileToolCallLimit = Annotated[int, Field(strict=True, gt=0)] | None
@@ -185,28 +188,11 @@ class AgentProfile(BaseModel):
     public_permissions: AgentProfilePermissions = Field(
         default_factory=AgentProfilePermissions
     )
+    delegation_enabled: StrictBool = False
+    session_write_paths: list[str] | None = None
     owner_id: UUID | None = Field(default=None, exclude=True)
     integration_id: UUID | None = Field(default=None, exclude=True)
     editable: bool = Field(default=True, exclude=True)
-
-    @model_validator(mode="before")
-    @classmethod
-    def profile_defaults(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        values = dict(value)
-        coding = str(values.get("id")) in {
-            str(PLAN_AGENT_PROFILE_ID), str(BUILD_AGENT_PROFILE_ID)
-        }
-        for snake, camel, default in (
-            ("answer_display", "answerDisplay", "timeline" if coding else "compact"),
-            ("max_tool_calls", "maxToolCalls", None if coding else 25),
-            ("todo_enabled", "todoEnabled", coding),
-            ("integrations_enabled_by_default", "integrationsEnabledByDefault", not coding),
-        ):
-            if snake not in values and camel not in values:
-                values[snake] = default
-        return values
 
     _validate_availability = field_validator("integration_availability")(
         validate_integration_availability
@@ -222,17 +208,132 @@ class AgentProfile(BaseModel):
             raise ValueError(f"{info.field_name} must not be blank")
         return cleaned
 
+    @field_validator("session_write_paths")
+    @classmethod
+    def validate_session_write_paths(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        for path in value:
+            normalized = PurePosixPath(path)
+            if (
+                not path
+                or "\\" in path
+                or path.endswith("/")
+                or normalized.is_absolute()
+                or str(normalized) != path
+                or any(part in {".", ".."} for part in normalized.parts)
+                or any(character in path for character in "*?[]{}")
+            ):
+                raise ValueError("session write paths must be normalized relative POSIX file paths")
+        return value
 
-def default_agent_profile() -> AgentProfile:
+
+class AgentProfileOverrides(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=lambda value: _camel_case(value),
+        populate_by_name=True,
+        extra="forbid",
+    )
+
+    persona_id: UUID | None = None
+    instructions: str | None = Field(default=None, max_length=16_000)
+    answer_display: Literal["timeline", "compact"] | None = None
+    max_tool_calls: ProfileToolCallLimit = None
+    todo_enabled: StrictBool | None = None
+    integrations_enabled_by_default: StrictBool | None = None
+    integration_availability: dict[str, StrictBool] | None = None
+    private_permissions: AgentProfilePermissions | None = None
+    public_permissions: AgentProfilePermissions | None = None
+    delegation_enabled: StrictBool | None = None
+    session_write_paths: list[str] | None = None
+
+    _validate_availability = field_validator("integration_availability")(
+        lambda value: validate_integration_availability(value) if value is not None else value
+    )
+    _validate_paths = field_validator("session_write_paths")(
+        lambda value: AgentProfile.validate_session_write_paths(value)
+    )
+
+    @model_validator(mode="after")
+    def reject_null_non_nullable_fields(self) -> Self:
+        nullable = {"persona_id", "max_tool_calls", "session_write_paths"}
+        if any(
+            field in self.model_fields_set and getattr(self, field) is None
+            for field in type(self).model_fields
+            if field not in nullable
+        ):
+            raise ValueError("only nullable profile fields accept null overrides")
+        return self
+
+    @field_validator("instructions", mode="before")
+    @classmethod
+    def normalize_instructions(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        value = value.strip()
+        if not value:
+            raise ValueError("instructions must not be blank")
+        return value
+
+
+class CustomAgentProfile(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=lambda value: _camel_case(value),
+        populate_by_name=True,
+        extra="forbid",
+    )
+
+    id: UUID = Field(default_factory=uuid4)
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(max_length=500)
+    base_profile_id: UUID
+    overrides: AgentProfileOverrides
+
+    @field_validator("name", "description", mode="before")
+    @classmethod
+    def normalize_text(cls, value: Any, info: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if info.field_name == "name" and not cleaned:
+            raise ValueError("name must not be blank")
+        return cleaned
+
+    @field_serializer("overrides")
+    def serialize_overrides(
+        self, value: AgentProfileOverrides, info: SerializationInfo
+    ) -> dict[str, Any]:
+        return value.model_dump(
+            mode=info.mode, by_alias=info.by_alias, exclude_unset=True
+        )
+
+
+def resolve_agent_profile(
+    profile: CustomAgentProfile, base: AgentProfile, owner_id: UUID | None
+) -> AgentProfile:
+    values = base.model_dump()
+    values.update(profile.overrides.model_dump(exclude_unset=True))
+    values.update(
+        id=profile.id,
+        name=profile.name,
+        description=profile.description,
+        owner_id=owner_id,
+    )
+    return AgentProfile.model_validate(values)
+
+
+def general_profile() -> AgentProfile:
     return AgentProfile(
-        id=DEFAULT_AGENT_PROFILE_ID,
-        name=BUILTIN_AGENT_PROFILE_NAMES[DEFAULT_AGENT_PROFILE_ID],
+        id=GENERAL_PROFILE_ID,
+        name=CORE_PROFILE_NAMES[GENERAL_PROFILE_ID],
         description="Standardagent für Sessions ohne ausgewähltes Profil.",
         instructions="Follow the user's request and the selected persona.",
+        delegation_enabled=False,
+        session_write_paths=None,
     )
 
 
-def plan_agent_profile() -> AgentProfile:
+def plan_profile() -> AgentProfile:
     policies = {
         "filesystem.read": ToolExecutionPolicy.AUTO,
         "filesystem.write": ToolExecutionPolicy.DISABLED,
@@ -242,35 +343,44 @@ def plan_agent_profile() -> AgentProfile:
         "shell.write": ToolExecutionPolicy.DISABLED,
     }
     return AgentProfile(
-        id=PLAN_AGENT_PROFILE_ID,
-        name=BUILTIN_AGENT_PROFILE_NAMES[PLAN_AGENT_PROFILE_ID],
+        id=PLAN_PROFILE_ID,
+        name=CORE_PROFILE_NAMES[PLAN_PROFILE_ID],
         description=(
             "Plant ohne erkannte Schreibaktionen. Liest im Arbeitsverzeichnis automatisch, "
             "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
         ),
         instructions=(
-            "Answer informational questions directly without inspecting, creating, or updating the "
-            "canonical plan. Selecting Plan mode alone does not require a plan artifact. For requests "
-            "that call for planning or preparing changes, understand the request and relevant context. "
-            "Prefer the simplest "
+            "At the start of each task, assess whether a persistent plan would help. Inspect relevant "
+            "context first if needed. Use root=files path=plan.md when continuity, handoff, material "
+            "decisions, uncertain scope, or growing work makes persistence useful. Handle simple, clear "
+            "tasks directly. Follow explicit user instructions and reuse an existing plan only when "
+            "continuing its work. Do not read or update an existing plan for an unrelated simple request. "
+            "Investigate and prepare work using read-only computer actions. When using a plan, keep it "
+            "quick to scan with the recommended approach, affected areas, implementation steps, "
+            "verification, and one short Progress section. Reference existing requirements instead of "
+            "repeating them. Do not implement the plan or run its tests. Prefer the simplest "
             "approach that fully meets the request: reuse existing code and conventions, then "
             "standard-library or native features, then installed dependencies. Add abstractions, "
             "dependencies, configuration, or extension points only when current requirements justify "
             "them. Ask grouped questions about missing user decisions that materially affect scope, "
             "architecture, or acceptance; incorporate the answers and ask again when they reveal new "
             "required decisions. Decide ordinary implementation details and state material assumptions. "
-            "Produce a plan that is quick to scan and sufficient to implement. Include only the "
-            "recommended approach, affected files, implementation steps, and verification. Reference "
-            "existing requirements instead of repeating them. Include risks and open decisions only "
+            "Include risks and open decisions only "
             "when they affect implementation. Do not finish by merely listing blocking questions. Do not "
             "modify computer files or run commands classified as writes."
         ),
+        answer_display="timeline",
+        max_tool_calls=None,
+        todo_enabled=True,
+        integrations_enabled_by_default=False,
         private_permissions=AgentProfilePermissions(policies=policies),
         public_permissions=AgentProfilePermissions(policies=policies),
+        delegation_enabled=True,
+        session_write_paths=["plan.md"],
     )
 
 
-def build_agent_profile() -> AgentProfile:
+def build_profile() -> AgentProfile:
     policies = {
         "filesystem.read": ToolExecutionPolicy.AUTO,
         "filesystem.write": ToolExecutionPolicy.AUTO,
@@ -279,14 +389,20 @@ def build_agent_profile() -> AgentProfile:
         "shell.write": ToolExecutionPolicy.AUTO,
     }
     return AgentProfile(
-        id=BUILD_AGENT_PROFILE_ID,
-        name=BUILTIN_AGENT_PROFILE_NAMES[BUILD_AGENT_PROFILE_ID],
+        id=BUILD_PROFILE_ID,
+        name=CORE_PROFILE_NAMES[BUILD_PROFILE_ID],
         description=(
             "Liest, ändert und löscht im Arbeitsverzeichnis automatisch und führt Shell-Befehle aus, "
             "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
         ),
         instructions=(
-            "Carry out the exact current or delegated task; keep an analysis-only task read-only. "
+            "At the start of each task, assess whether a persistent plan would help. Inspect relevant "
+            "context first if needed. Use root=files path=plan.md when continuity, handoff, material "
+            "decisions, uncertain scope, or growing work makes persistence useful. Handle simple, clear "
+            "tasks directly. Follow explicit user instructions and reuse an existing plan only when "
+            "continuing its work. Do not read or update an existing plan for an unrelated simple request. "
+            "If a plan is used, update only its short Progress section with actual results, checks, and "
+            "remaining gaps. Carry out the exact current task; keep an analysis-only task read-only. "
             "Understand the relevant context before changing it. Prefer the simplest solution that "
             "fully meets the request: reuse existing code and conventions, then standard-library or "
             "native features, then installed dependencies. Add abstractions, dependencies, configuration, "
@@ -297,13 +413,19 @@ def build_agent_profile() -> AgentProfile:
             "that materially blocks the work; decide ordinary implementation details from the project. "
             "Verify the result appropriately and report the outcome, checks, and remaining blockers concisely."
         ),
+        answer_display="timeline",
+        max_tool_calls=None,
+        todo_enabled=True,
+        integrations_enabled_by_default=False,
         private_permissions=AgentProfilePermissions(policies=policies),
         public_permissions=AgentProfilePermissions(policies=policies),
+        delegation_enabled=True,
+        session_write_paths=None,
     )
 
 
-def default_agent_profiles() -> list[AgentProfile]:
-    return [default_agent_profile(), plan_agent_profile(), build_agent_profile()]
+def core_profiles() -> list[AgentProfile]:
+    return [general_profile(), plan_profile(), build_profile()]
 
 
 def cap_agent_profile_policy(
@@ -822,16 +944,14 @@ class AgentProfilesSettings(SettingsDocument):
     settings_key = "agent-profiles"
 
     personal_agents_enabled: bool = True
-    profiles: list[AgentProfile] = Field(
-        default_factory=default_agent_profiles, max_length=102
-    )
+    profiles: list[CustomAgentProfile] = Field(default_factory=list, max_length=99)
 
 
 class UserAgentProfilesSettings(SettingsDocument):
     settings_key = "agent-profiles"
     settings_scope = SettingsScope.USER
 
-    profiles: list[AgentProfile] = Field(default_factory=list, max_length=20)
+    profiles: list[CustomAgentProfile] = Field(default_factory=list, max_length=20)
 
 
 class GeneralSettings(SettingsDocument):

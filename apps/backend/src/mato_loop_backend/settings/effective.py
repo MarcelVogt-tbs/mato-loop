@@ -1,4 +1,5 @@
 from collections.abc import Collection
+from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import select
@@ -6,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.models import ExecutionAgent
 from mato_loop_backend.settings.models import (
-    DEFAULT_AGENT_PROFILE_ID,
     DEFAULT_SKILLS,
+    GENERAL_PROFILE_ID,
     AgentIdentitySettings,
     AgentProfile,
     AgentProfilePermissions,
@@ -28,6 +29,7 @@ from mato_loop_backend.settings.models import (
     UserAiSettings,
     UserIntegrationSettings,
     UserToolSettings,
+    resolve_agent_profile,
 )
 from mato_loop_backend.settings.store import SettingsStore
 
@@ -359,29 +361,54 @@ class AgentProfileUnavailable(Exception):
     pass
 
 
+def shipped_profiles() -> list[AgentProfile]:
+    from mato_loop_backend.settings.models import core_profiles
+
+    return core_profiles()
+
+
+@dataclass
+class EffectiveAgentProfiles:
+    personal_agents_enabled: bool
+    profiles: list[AgentProfile]
+
+
 async def load_effective_agent_profiles(
     db: AsyncSession, user_id: UUID, *, for_update: bool = False
-) -> AgentProfilesSettings:
-    instance = (
-        await SettingsStore.load(db, AgentProfilesSettings, for_update=for_update)
-    ).model_copy(deep=True)
-    for profile in instance.profiles:
-        profile.owner_id = None
+) -> EffectiveAgentProfiles:
+    from mato_loop_backend.integrations.registry import effective_integration_contributions
+
+    instance = await SettingsStore.load(
+        db, AgentProfilesSettings, for_update=for_update
+    )
+    shipped = shipped_profiles()
+    bases = {profile.id: profile for profile in shipped}
+    effective = EffectiveAgentProfiles(
+        personal_agents_enabled=instance.personal_agents_enabled,
+        profiles=[
+            *shipped,
+            *(
+                resolve_agent_profile(profile, bases[profile.base_profile_id], None)
+                for profile in instance.profiles
+                if profile.base_profile_id in bases
+            ),
+        ],
+    )
     if instance.personal_agents_enabled:
         personal = await SettingsStore.load_optional(
             db, UserAgentProfilesSettings, user_id=user_id, for_update=for_update
         )
         if personal is not None:
-            for profile in personal.model_copy(deep=True).profiles:
-                profile.owner_id = user_id
-                instance.profiles.append(profile)
-    from mato_loop_backend.integrations.registry import effective_integration_contributions
-
+            effective.profiles.extend(
+                resolve_agent_profile(profile, bases[profile.base_profile_id], user_id)
+                for profile in personal.profiles
+                if profile.base_profile_id in bases
+            )
     integrations = await load_effective_integrations(db, user_id)
     for profile in effective_integration_contributions(integrations).agent_profiles:
         profile.owner_id = user_id
-        instance.profiles.append(profile)
-    return instance
+        effective.profiles.append(profile)
+    return effective
 
 
 async def load_effective_skills(
@@ -415,7 +442,7 @@ async def load_agent_profile(
     *,
     for_update: bool = False,
 ) -> AgentProfile:
-    profile_id = profile_id or DEFAULT_AGENT_PROFILE_ID
+    profile_id = profile_id or GENERAL_PROFILE_ID
     settings = await load_effective_agent_profiles(db, user_id, for_update=for_update)
     profile = next((item for item in settings.profiles if item.id == profile_id), None)
     if profile is None:

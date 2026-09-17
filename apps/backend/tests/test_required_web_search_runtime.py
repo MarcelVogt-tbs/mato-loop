@@ -46,7 +46,7 @@ from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
-    DEFAULT_AGENT_PROFILE_ID,
+    GENERAL_PROFILE_ID,
     AgentIdentitySettings,
     AgentProfilesSettings,
     AgentRuntimeSettings,
@@ -406,7 +406,7 @@ async def test_child_reuses_context_and_only_inherited_computer_files(
     monkeypatch, computer,
 ):
     from mato_loop_backend.agent.subagents import permission_snapshot
-    from mato_loop_backend.settings.models import plan_agent_profile
+    from mato_loop_backend.settings.models import plan_profile
 
     execution_agent_id = uuid4() if computer else None
     db, run, requests, projections, _events = await _runtime_setup(
@@ -421,7 +421,7 @@ async def test_child_reuses_context_and_only_inherited_computer_files(
     session.memory_mode = "full"
     run.trust_level = "public"
     run.input_message_id = uuid4()
-    profile = plan_agent_profile()
+    profile = plan_profile()
     run.agent_profile_id = session.agent_profile_id = profile.id
     settings = ToolSettings()
     settings._agent_permissions = profile.public_permissions
@@ -2119,7 +2119,7 @@ async def test_required_search_transitions_to_the_shared_streaming_loop(monkeypa
             ),
         ],
     )
-    run.agent_profile_id = DEFAULT_AGENT_PROFILE_ID
+    run.agent_profile_id = GENERAL_PROFILE_ID
 
     await AgentRuntime._execute_loop(db, run)
 

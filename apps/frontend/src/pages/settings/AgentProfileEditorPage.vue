@@ -14,7 +14,7 @@
       <q-toolbar-title>
         <div class="row items-center q-gutter-sm">
           <div class="text-h6 text-weight-bold">
-            {{ isCreate ? 'Agent erstellen' : (editingAgent?.name || 'Agent bearbeiten') }}
+            {{ isCreate ? 'Profil erstellen' : (isProtected ? `${editingAgent?.name || 'Profil'} ansehen` : (editingAgent?.name || 'Profil bearbeiten')) }}
           </div>
           <q-badge v-if="dirty" color="warning" text-color="black" label="Ungespeichert" />
         </div>
@@ -30,6 +30,7 @@
           @update:model-value="switchScope"
         />
         <q-btn
+          v-if="!isProtected"
           class="col-auto"
           unelevated
           no-caps
@@ -50,6 +51,11 @@
       Persönliche Agenten wurden für diese Instanz deaktiviert.
     </q-banner>
 
+    <q-banner v-if="isProtected" rounded class="app-surface-tonal q-mb-md">
+      <template #avatar><q-icon name="visibility" color="primary" /></template>
+      Dieses mitgelieferte Basisprofil ist schreibgeschützt.
+    </q-banner>
+
     <q-banner v-if="loadFailed" rounded class="bg-negative text-white q-mb-md">
       <template #avatar><q-icon name="error_outline" /></template>
       {{ notFound ? 'Das Agentenprofil wurde nicht gefunden.' : 'Das Agentenprofil konnte nicht geladen werden.' }}
@@ -63,7 +69,7 @@
       v-if="!loadFailed"
       ref="formRef"
       :class="{ disabled: blocked }"
-      :inert="blocked"
+      :inert="blocked ? '' : null"
       @submit.prevent="saveAgent"
     >
       <q-tabs
@@ -113,7 +119,37 @@
                 autogrow
                 type="textarea"
                 label="Beschreibung"
+                :disable="isProtected"
               />
+              <q-select
+                v-if="!isProtected"
+                v-model="form.baseProfileId"
+                class="q-mt-md"
+                outlined
+                emit-value
+                map-options
+                label="Basisprofil"
+                :options="baseProfileOptions"
+                :disable="isProtected"
+                @update:model-value="applyInheritedValues"
+              />
+              <div v-if="!isProtected" class="text-caption app-muted q-mt-xs">
+                Nicht angepasste Einstellungen werden vom Basisprofil übernommen.
+              </div>
+              <div class="row items-center justify-between q-mt-md">
+                <div class="text-weight-medium">Antwortdarstellung</div>
+                <q-btn-toggle
+                  v-if="!isProtected"
+                  :model-value="ownership.answerDisplay ? 'own' : 'inherit'"
+                  unelevated
+                  no-caps
+                  role="group"
+                  toggle-color="primary"
+                  :options="inheritOptions"
+                  aria-label="Antwortdarstellung übernehmen oder anpassen"
+                  @update:model-value="setOwnership('answerDisplay', $event)"
+                />
+              </div>
               <q-select
                 v-model="form.answerDisplay"
                 class="q-mt-md"
@@ -124,11 +160,27 @@
                 :options="answerDisplayOptions"
                 :hint="answerDisplayOptions.find((option) => option.value === form.answerDisplay)?.hint"
                 persistent-hint
+                :disable="isProtected || !ownership.answerDisplay"
               />
+              <div class="row items-center justify-between q-mt-md">
+                <div class="text-weight-medium">Session-Aufgaben</div>
+                <q-btn-toggle
+                  v-if="!isProtected"
+                  :model-value="ownership.todoEnabled ? 'own' : 'inherit'"
+                  unelevated
+                  no-caps
+                  role="group"
+                  toggle-color="primary"
+                  :options="inheritOptions"
+                  aria-label="Session-Aufgaben übernehmen oder anpassen"
+                  @update:model-value="setOwnership('todoEnabled', $event)"
+                />
+              </div>
               <q-toggle
                 v-model="form.todoEnabled"
                 class="q-mt-md"
                 label="Session-Aufgaben verwenden"
+                :disable="isProtected || !ownership.todoEnabled"
               />
               <div class="text-caption app-muted">
                 Erlaubt dem Agenten, eine Aufgabenliste für längere Arbeiten zu führen.
@@ -138,10 +190,24 @@
 
           <q-card flat class="app-surface q-mb-md">
             <q-card-section>
-              <div class="text-subtitle1 text-weight-bold">Tool-Aufrufe pro Lauf</div>
+              <div class="row items-center justify-between">
+                <div class="text-subtitle1 text-weight-bold">Tool-Aufrufe pro Lauf</div>
+                <q-btn-toggle
+                  v-if="!isProtected"
+                  :model-value="ownership.maxToolCalls ? 'own' : 'inherit'"
+                  unelevated
+                  no-caps
+                  role="group"
+                  toggle-color="primary"
+                  :options="inheritOptions"
+                  aria-label="Tool-Limit übernehmen oder anpassen"
+                  @update:model-value="setOwnership('maxToolCalls', $event)"
+                />
+              </div>
               <q-toggle
                 :model-value="form.maxToolCalls === null"
                 label="Unbegrenzt"
+                :disable="isProtected || !ownership.maxToolCalls"
                 @update:model-value="form.maxToolCalls = $event ? null : 25"
               />
               <q-input
@@ -154,6 +220,7 @@
                 label="Maximale Tool-Aufrufe"
                 :rules="[toolLimitRule]"
                 lazy-rules
+                :disable="isProtected || !ownership.maxToolCalls"
               />
               <q-banner rounded class="app-surface-tonal q-mt-sm">
                 <template #avatar><q-icon name="warning_amber" color="warning" /></template>
@@ -165,7 +232,20 @@
 
           <q-card flat class="app-surface q-mb-md">
             <q-card-section>
-              <div class="text-subtitle1 text-weight-bold">Persona</div>
+              <div class="row items-center justify-between">
+                <div class="text-subtitle1 text-weight-bold">Persona</div>
+                <q-btn-toggle
+                  v-if="!isProtected"
+                  :model-value="ownership.personaId ? 'own' : 'inherit'"
+                  unelevated
+                  no-caps
+                  role="group"
+                  toggle-color="primary"
+                  :options="inheritOptions"
+                  aria-label="Persona übernehmen oder anpassen"
+                  @update:model-value="setOwnership('personaId', $event)"
+                />
+              </div>
               <div class="text-caption app-muted">Wiederverwendbares Verhalten und Charakter dieses Agenten.</div>
             </q-card-section>
             <q-separator />
@@ -179,8 +259,10 @@
                 label="Persona"
                 :options="personaOptions"
                 hint="Ohne Auswahl gilt die Standard-Persona dieses Bereichs."
+                :disable="isProtected || !ownership.personaId"
               />
               <q-btn
+                v-if="!isProtected"
                 flat
                 no-caps
                 color="primary"
@@ -194,7 +276,20 @@
 
           <q-card flat class="app-surface">
             <q-card-section>
-              <div class="text-subtitle1 text-weight-bold">Aufgaben-Prompt</div>
+              <div class="row items-center justify-between">
+                <div class="text-subtitle1 text-weight-bold">Aufgaben-Prompt</div>
+                <q-btn-toggle
+                  v-if="!isProtected"
+                  :model-value="ownership.instructions ? 'own' : 'inherit'"
+                  unelevated
+                  no-caps
+                  role="group"
+                  toggle-color="primary"
+                  :options="inheritOptions"
+                  aria-label="Aufgaben-Prompt übernehmen oder anpassen"
+                  @update:model-value="setOwnership('instructions', $event)"
+                />
+              </div>
               <div class="text-caption app-muted">Konkrete Aufgaben, Vorgehen und gewünschte Ergebnisse dieses Agenten.</div>
             </q-card-section>
             <q-separator />
@@ -208,7 +303,80 @@
                 label="Aufgabenanweisungen"
                 :rules="[requiredRule]"
                 lazy-rules
+                :disable="isProtected || !ownership.instructions"
               />
+            </q-card-section>
+          </q-card>
+
+          <q-card flat class="app-surface q-mt-md">
+            <q-card-section>
+              <div class="text-subtitle1 text-weight-bold">Technische Ausführung</div>
+              <div class="text-caption app-muted">Delegation und Schreibzugriff innerhalb der Session.</div>
+            </q-card-section>
+            <q-separator />
+            <q-card-section>
+              <div class="row items-center justify-between">
+                <div class="text-weight-medium">Aufgaben delegieren</div>
+                <q-btn-toggle
+                  v-if="!isProtected"
+                  :model-value="ownership.delegationEnabled ? 'own' : 'inherit'"
+                  unelevated
+                  no-caps
+                  role="group"
+                  toggle-color="primary"
+                  :options="inheritOptions"
+                  aria-label="Delegation übernehmen oder anpassen"
+                  @update:model-value="setOwnership('delegationEnabled', $event)"
+                />
+              </div>
+              <q-toggle
+                v-model="form.delegationEnabled"
+                label="Delegation an Unteragenten erlauben"
+                :disable="isProtected || !ownership.delegationEnabled"
+              />
+              <div class="text-caption app-muted">Erlaubt diesem Agenten, selbstständige Unteraufgaben ausführen zu lassen.</div>
+
+              <div class="row items-center justify-between q-mt-lg">
+                <div class="text-weight-medium">Schreibbare Session-Pfade</div>
+                <q-btn-toggle
+                  v-if="!isProtected"
+                  :model-value="ownership.sessionWritePaths ? 'own' : 'inherit'"
+                  unelevated
+                  no-caps
+                  role="group"
+                  toggle-color="primary"
+                  :options="inheritOptions"
+                  aria-label="Session-Schreibpfade übernehmen oder anpassen"
+                  @update:model-value="setOwnership('sessionWritePaths', $event)"
+                />
+              </div>
+              <q-select
+                v-model="form.sessionWriteMode"
+                class="q-mt-sm"
+                outlined
+                emit-value
+                map-options
+                label="Schreibzugriff"
+                :options="sessionWriteModeOptions"
+                :disable="isProtected || !ownership.sessionWritePaths"
+              />
+              <q-input
+                v-if="form.sessionWriteMode === 'paths'"
+                v-model="form.sessionWritePathsText"
+                class="q-mt-md"
+                outlined
+                type="textarea"
+                autogrow
+                label="Relative Session-Pfade"
+                hint="Ein exakter relativer POSIX-Pfad pro Zeile, zum Beispiel plan.md oder ausgabe/bericht.md."
+                persistent-hint
+                :disable="isProtected || !ownership.sessionWritePaths"
+                :rules="[sessionWritePathsRule]"
+                lazy-rules
+              />
+              <div class="text-caption app-muted q-mt-xs">
+                Unbeschränkt erlaubt alle Session-Pfade. „Alles verweigern“ erlaubt keinen Schreibpfad.
+              </div>
             </q-card-section>
           </q-card>
         </q-tab-panel>
@@ -221,8 +389,27 @@
 
           <q-banner rounded class="app-surface-tonal q-mb-md">
             <template #avatar><q-icon name="privacy_tip" color="primary" /></template>
-            Vererbte Werte folgen den wirksamen Tool- und Integrationsstandards. Private und öffentliche Richtlinien werden unabhängig gespeichert.
+            Nicht angepasste Berechtigungsblöcke kommen vom Basisprofil. Innerhalb eigener Blöcke folgt „Erben“ den wirksamen Tool- und Integrationsstandards.
           </q-banner>
+
+          <q-card flat class="app-surface q-mb-md">
+            <q-card-section>
+              <div v-for="audience in audiences" :key="audience.value" class="row items-center justify-between q-py-xs">
+                <div class="text-weight-medium">{{ audience.label }}</div>
+                <q-btn-toggle
+                  v-if="!isProtected"
+                  :model-value="ownership[permissionField(audience.value)] ? 'own' : 'inherit'"
+                  unelevated
+                  no-caps
+                  role="group"
+                  toggle-color="primary"
+                  :options="inheritOptions"
+                  :aria-label="`${audience.label} Berechtigungen übernehmen oder anpassen`"
+                  @update:model-value="setOwnership(permissionField(audience.value), $event)"
+                />
+              </div>
+            </q-card-section>
+          </q-card>
 
           <q-card
             v-for="group in permissionGroups"
@@ -261,7 +448,7 @@
                       map-options
                       :label="audience.label"
                       :options="policyOptions(baselinePolicy(audience.value, action.capability), action.allowedPolicies)"
-                      :disable="action.available === false"
+                      :disable="isProtected || action.available === false || !ownership[permissionField(audience.value)]"
                       :hint="`Wirksam: ${policyLabel(effectiveGlobalPolicy(audience.value, action.capability))}`"
                       :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                       persistent-hint
@@ -277,9 +464,24 @@
         <q-tab-panel name="integrations" class="q-pa-none">
           <q-card flat class="app-surface q-mb-md">
             <q-card-section>
+              <div class="row items-center justify-between q-mb-sm">
+                <div class="text-subtitle1 text-weight-bold">Integrationen standardmäßig aktivieren</div>
+                <q-btn-toggle
+                  v-if="!isProtected"
+                  :model-value="ownership.integrationsEnabledByDefault ? 'own' : 'inherit'"
+                  unelevated
+                  no-caps
+                  role="group"
+                  toggle-color="primary"
+                  :options="inheritOptions"
+                  aria-label="Integrationsstandard übernehmen oder anpassen"
+                  @update:model-value="setOwnership('integrationsEnabledByDefault', $event)"
+                />
+              </div>
               <q-toggle
                 v-model="form.integrationsEnabledByDefault"
                 label="Integrationen standardmäßig aktivieren"
+                :disable="isProtected || !ownership.integrationsEnabledByDefault"
               />
               <div class="text-body2 app-muted">
                 {{ form.integrationsEnabledByDefault
@@ -291,7 +493,20 @@
           </q-card>
           <q-card flat class="app-surface">
             <q-card-section>
-              <div class="text-subtitle1 text-weight-bold">Integrationen und Ressourcen</div>
+              <div class="row items-center justify-between">
+                <div class="text-subtitle1 text-weight-bold">Integrationsauswahl</div>
+                <q-btn-toggle
+                  v-if="!isProtected"
+                  :model-value="ownership.integrationAvailability ? 'own' : 'inherit'"
+                  unelevated
+                  no-caps
+                  role="group"
+                  toggle-color="primary"
+                  :options="inheritOptions"
+                  aria-label="Integrationsauswahl übernehmen oder anpassen"
+                  @update:model-value="setOwnership('integrationAvailability', $event)"
+                />
+              </div>
               <div class="text-caption app-muted">
                 Optional von Integrations- und Ressourcenstandards abweichen. Ressourcen werden erst beim Öffnen einer Integration geladen.
               </div>
@@ -321,6 +536,7 @@
                     :hint="integrationHint(integration)"
                     :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                     persistent-hint
+                    :disable="isProtected || !ownership.integrationAvailability"
                     @update:model-value="setIntegrationAvailability(integration.id, $event)"
                   />
                   <div v-if="!integration.supportsPolicies" class="text-caption app-muted q-mt-sm">
@@ -352,8 +568,8 @@
                             emit-value
                             map-options
                             :label="audience.label"
-                            :disable="!integrationAvailable(integration)"
                             :options="policyOptions(inheritedIntegrationPolicy(audience.value, integration.id, action), action.allowedPolicies)"
+                            :disable="isProtected || !ownership[permissionField(audience.value)] || !integrationAvailable(integration)"
                             :hint="`Wirksam: ${policyLabel(effectiveIntegrationPolicy(audience.value, integration.id, action.capability))}`"
                             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                             persistent-hint
@@ -395,8 +611,8 @@
                               emit-value
                               map-options
                               :label="audience.label"
-                              :disable="!integrationAvailable(integration) || resource.hardUnavailableCapabilities.includes(action.capability)"
                               :options="policyOptions(inheritedResourcePolicy(audience.value, integration.id, resource, action.capability), action.allowedPolicies)"
+                              :disable="isProtected || !ownership[permissionField(audience.value)] || !integrationAvailable(integration) || resource.hardUnavailableCapabilities.includes(action.capability)"
                               :hint="resourcePolicyHint(audience.value, integration.id, resource, action.capability)"
                               :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                               persistent-hint
@@ -418,6 +634,7 @@
       <div class="row justify-end q-gutter-sm q-py-md">
         <q-btn flat no-caps label="Zurück" :disable="agents.saving" :to="{ name: 'settings-agents', query: { scope } }" />
         <q-btn
+          v-if="!isProtected"
           unelevated
           no-caps
           type="submit"
@@ -464,6 +681,7 @@ const emptyPermissions = () => ({ policies: {}, integrationPolicies: {}, resourc
 const form = reactive({
   name: '',
   description: '',
+  baseProfileId: null,
   personaId: null,
   instructions: '',
   answerDisplay: 'compact',
@@ -472,7 +690,23 @@ const form = reactive({
   integrationsEnabledByDefault: true,
   integrationAvailability: {},
   publicPermissions: emptyPermissions(),
-  privatePermissions: emptyPermissions()
+  privatePermissions: emptyPermissions(),
+  delegationEnabled: false,
+  sessionWriteMode: 'unrestricted',
+  sessionWritePathsText: ''
+})
+const ownership = reactive({
+  personaId: false,
+  instructions: false,
+  answerDisplay: false,
+  maxToolCalls: false,
+  todoEnabled: false,
+  integrationsEnabledByDefault: false,
+  integrationAvailability: false,
+  publicPermissions: false,
+  privatePermissions: false,
+  delegationEnabled: false,
+  sessionWritePaths: false
 })
 const audiences = [
   { label: 'Private Modelle', value: 'private' },
@@ -482,7 +716,24 @@ const answerDisplayOptions = [
   { label: 'Ablauf', value: 'timeline', hint: 'Zeigt alle Arbeitsschritte direkt in zeitlicher Reihenfolge.' },
   { label: 'Kompakt', value: 'compact', hint: 'Zeigt die aktuelle Aktivität sofort und den bisherigen Verlauf auf Wunsch.' }
 ]
+const inheritOptions = [
+  { label: 'Erben', value: 'inherit' },
+  { label: 'Eigener Wert', value: 'own' }
+]
+const sessionWriteModeOptions = [
+  { label: 'Unbeschränkt', value: 'unrestricted' },
+  { label: 'Alles verweigern', value: 'denied' },
+  { label: 'Nur angegebene Pfade', value: 'paths' }
+]
 const scope = computed(() => resolveSettingsScope(route.query.scope, auth.isAdmin))
+const baseProfiles = computed(() => agents.agents.filter((agent) => (
+  agent.protected && agent.scope !== 'integration'
+)))
+const baseProfileOptions = computed(() => baseProfiles.value.map((agent) => ({
+  label: agent.name,
+  value: agent.id
+})))
+const baseProfile = computed(() => baseProfiles.value.find((agent) => agent.id === form.baseProfileId) || null)
 const personaOptions = computed(() => [
   { label: 'Standard-Persona', value: null },
   ...agents.personas
@@ -498,7 +749,7 @@ const clone = (value) => JSON.parse(JSON.stringify(value))
 const isCreate = computed(() => route.name === 'settings-agent-create')
 const isProtected = computed(() => editingAgent.value?.protected === true)
 const blocked = computed(() => scope.value === 'personal' && !agents.personalAgentsEnabled)
-const dirty = computed(() => Boolean(savedPayload.value) && JSON.stringify(requestPayload()) !== savedPayload.value)
+const dirty = computed(() => !isProtected.value && Boolean(savedPayload.value) && JSON.stringify(requestPayload()) !== savedPayload.value)
 const integrationAvailabilityOptions = computed(() => [
   { label: `Standard (${form.integrationsEnabledByDefault ? 'Aktiv' : 'Deaktiviert'})`, value: 'inherit' },
   { label: 'Aktiv', value: true },
@@ -536,6 +787,13 @@ const permissionGroups = computed(() => {
 
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtfeld'
 const toolLimitRule = (value) => (Number.isSafeInteger(value) && value > 0) || 'Eine positive ganze Zahl eingeben.'
+const sessionWritePaths = () => form.sessionWritePathsText.split('\n').map((path) => path.trim()).filter(Boolean)
+const sessionWritePathsRule = () => form.sessionWriteMode !== 'paths' || (
+  sessionWritePaths().length > 0 && sessionWritePaths().every((path) => (
+    !path.startsWith('/') && !path.endsWith('/') && !path.includes('\\') && !path.includes('//')
+    && !path.split('/').some((part) => part === '.' || part === '..') && !/[*?[\]{}]/.test(path)
+  ))
+) || 'Mindestens einen normalisierten relativen POSIX-Pfad eingeben.'
 const permissionField = (audience) => `${audience}Permissions`
 const permissions = (audience) => form[permissionField(audience)]
 const policyLabel = (policy) => policyLabels[policy] || policy
@@ -580,25 +838,32 @@ function setIntegrationAvailability(integrationId, value) {
 }
 
 function requestPayload() {
+  const overrides = {}
+  for (const field of ['personaId', 'answerDisplay', 'maxToolCalls', 'todoEnabled', 'delegationEnabled']) {
+    if (ownership[field]) overrides[field] = form[field]
+  }
+  if (ownership.instructions) overrides.instructions = form.instructions.trim()
+  if (ownership.integrationsEnabledByDefault) overrides.integrationsEnabledByDefault = form.integrationsEnabledByDefault
+  if (ownership.integrationAvailability) overrides.integrationAvailability = clone(form.integrationAvailability)
+  for (const field of ['publicPermissions', 'privatePermissions']) {
+    if (ownership[field]) overrides[field] = clone(form[field])
+  }
+  if (ownership.sessionWritePaths) {
+    overrides.sessionWritePaths = form.sessionWriteMode === 'unrestricted'
+      ? null
+      : form.sessionWriteMode === 'denied' ? [] : sessionWritePaths()
+  }
   return {
     name: form.name.trim(),
     description: form.description.trim(),
-    personaId: form.personaId,
-    instructions: form.instructions.trim(),
-    answerDisplay: form.answerDisplay,
-    maxToolCalls: form.maxToolCalls,
-    todoEnabled: form.todoEnabled,
-    integrationsEnabledByDefault: form.integrationsEnabledByDefault,
-    integrationAvailability: clone(form.integrationAvailability),
-    publicPermissions: clone(form.publicPermissions),
-    privatePermissions: clone(form.privatePermissions)
+    baseProfileId: form.baseProfileId,
+    overrides
   }
 }
 
-function assignForm(agent = null) {
+function assignValues(agent) {
+  const writePaths = agent?.sessionWritePaths
   Object.assign(form, {
-    name: agent?.name || '',
-    description: agent?.description || '',
     personaId: agent?.personaId || null,
     instructions: agent?.instructions || '',
     answerDisplay: agent?.answerDisplay === 'timeline' ? 'timeline' : 'compact',
@@ -607,8 +872,48 @@ function assignForm(agent = null) {
     integrationsEnabledByDefault: agent?.integrationsEnabledByDefault ?? true,
     integrationAvailability: clone(agent?.integrationAvailability || {}),
     publicPermissions: clone(agent?.publicPermissions || emptyPermissions()),
-    privatePermissions: clone(agent?.privatePermissions || emptyPermissions())
+    privatePermissions: clone(agent?.privatePermissions || emptyPermissions()),
+    delegationEnabled: agent?.delegationEnabled ?? false,
+    sessionWriteMode: writePaths === null || writePaths === undefined
+      ? 'unrestricted'
+      : writePaths.length ? 'paths' : 'denied',
+    sessionWritePathsText: Array.isArray(writePaths) ? writePaths.join('\n') : ''
   })
+}
+
+function applyInheritedValues() {
+  const base = baseProfile.value
+  if (!base) return
+  const current = Object.fromEntries(Object.keys(ownership).filter((field) => ownership[field]).map((field) => [field, clone(
+    field === 'sessionWritePaths'
+        ? { sessionWriteMode: form.sessionWriteMode, sessionWritePathsText: form.sessionWritePathsText }
+        : form[field]
+  )]))
+  assignValues(base)
+  for (const [field, value] of Object.entries(current)) {
+    if (field === 'sessionWritePaths') Object.assign(form, value)
+    else form[field] = value
+  }
+}
+
+function setOwnership(field, value) {
+  ownership[field] = value === 'own'
+  if (!ownership[field]) applyInheritedValues()
+}
+
+function assignForm(agent = null) {
+  const baseId = agent?.protected ? null : (agent?.baseProfileId || agents.defaultAgentProfileId)
+  Object.assign(ownership, Object.fromEntries(Object.keys(ownership).map((field) => [field, false])))
+  const overrides = agent?.overrides || {}
+  for (const field of Object.keys(ownership)) {
+    ownership[field] = Object.hasOwn(overrides, field)
+  }
+  Object.assign(form, {
+    name: agent?.protected ? agent.name : (agent?.name || ''),
+    description: agent?.protected ? agent.description : (agent?.description || ''),
+    baseProfileId: baseId
+  })
+  assignValues(agent || baseProfiles.value.find((profile) => profile.id === baseId))
   savedPayload.value = JSON.stringify(requestPayload())
 }
 
@@ -731,10 +1036,11 @@ async function load() {
     await agents.fetchAgents(scope.value)
     if (isCreate.value) {
       editingAgent.value = null
-      const template = agents.byId(String(route.query.copyFrom || ''))
-      const allowedTemplate = template && (scope.value === 'personal' || template.scope === 'instance')
-      assignForm(allowedTemplate ? template : null)
-      if (allowedTemplate) form.name = `Kopie von ${template.name}`.slice(0, 80)
+      if (!baseProfiles.value.some((profile) => profile.id === agents.defaultAgentProfileId)) {
+        loadFailed.value = true
+        return
+      }
+      assignForm()
       return
     }
     const agent = agents.byId(String(route.params.agentId || ''))
@@ -751,14 +1057,15 @@ async function load() {
 }
 
 async function saveAgent() {
-  if (agents.loading || loadFailed.value || !dirty.value) return
-  const invalidLimit = form.maxToolCalls !== null && toolLimitRule(form.maxToolCalls) !== true
-  if (!form.name.trim() || !form.instructions.trim() || invalidLimit) {
+  if (isProtected.value || agents.loading || agents.saving || loadFailed.value || !dirty.value) return
+  const invalidLimit = ownership.maxToolCalls && form.maxToolCalls !== null && toolLimitRule(form.maxToolCalls) !== true
+  const invalidPaths = ownership.sessionWritePaths && sessionWritePathsRule() !== true
+  if (!form.name.trim() || (ownership.instructions && !form.instructions.trim()) || invalidLimit || invalidPaths) {
     section.value = 'profile'
     await nextTick()
   }
   if (!await formRef.value?.validate()) return
-  if (invalidLimit) return
+  if (invalidLimit || invalidPaths) return
   const creating = isCreate.value
   try {
     const saved = editingAgent.value

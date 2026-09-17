@@ -50,7 +50,6 @@ from mato_loop_backend.models import (
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
-    PLAN_AGENT_PROFILE_ID,
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
@@ -214,7 +213,7 @@ async def test_managed_read_reuses_saved_filesystem_grant(tmp_path) -> None:
     ) == PermissionDecision.DENY
 
 
-async def test_plan_profile_only_auto_writes_its_canonical_plan(tmp_path) -> None:
+async def test_profile_session_write_paths_restrict_actual_permission(tmp_path) -> None:
     session = _session()
     root_files = _root_files(tmp_path, session)
     db = _db_with_grants()
@@ -235,7 +234,7 @@ async def test_plan_profile_only_auto_writes_its_canonical_plan(tmp_path) -> Non
         expected,
         root_files,
         ToolExecutionPolicy.AUTO,
-        agent_profile_id=PLAN_AGENT_PROFILE_ID,
+        session_write_paths=["plan.md"],
     ) == PermissionDecision.ALLOW
     assert await PermissionPolicy.evaluate(
         db,
@@ -243,8 +242,30 @@ async def test_plan_profile_only_auto_writes_its_canonical_plan(tmp_path) -> Non
         other,
         root_files,
         ToolExecutionPolicy.AUTO,
-        agent_profile_id=PLAN_AGENT_PROFILE_ID,
+        session_write_paths=["plan.md"],
     ) == PermissionDecision.DENY
+    assert await PermissionPolicy.evaluate(
+        db, session, expected, root_files, ToolExecutionPolicy.AUTO,
+        session_write_paths=[],
+    ) == PermissionDecision.DENY
+    assert await PermissionPolicy.evaluate(
+        db, session, other, root_files, ToolExecutionPolicy.AUTO,
+        session_write_paths=None,
+    ) == PermissionDecision.ALLOW
+    delete_other = _path_request(
+        root_files, "notes.md", capability="filesystem.delete"
+    )
+    create_plan_directory = replace(expected, action_kind="create_directory")
+    copy_to_plan = replace(expected, action_kind="copy_path")
+    assert await PermissionPolicy.evaluate(
+        db, session, delete_other, root_files, ToolExecutionPolicy.AUTO,
+        session_write_paths=["plan.md"],
+    ) == PermissionDecision.DENY
+    for request in (create_plan_directory, copy_to_plan):
+        assert await PermissionPolicy.evaluate(
+            db, session, request, root_files, ToolExecutionPolicy.AUTO,
+            session_write_paths=["plan.md"],
+        ) == PermissionDecision.DENY
 
 
 @pytest.mark.parametrize("trust_level", list(TrustLevel))

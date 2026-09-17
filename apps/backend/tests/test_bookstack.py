@@ -71,9 +71,11 @@ from mato_loop_backend.integrations.webfetch import DownloadedFile, WebFetchErro
 from mato_loop_backend.models import ChatSession
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
+    GENERAL_PROFILE_ID,
     AgentProfile,
     AgentProfilePermissions,
     AgentProfilesSettings,
+    CustomAgentProfile,
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
@@ -1317,7 +1319,13 @@ async def test_aggregate_books_recheck_resource_policies_after_pending_approval(
         if model is ToolSettings:
             return tools.model_copy(deep=True)
         if model is AgentProfilesSettings:
-            return AgentProfilesSettings(profiles=[profile.model_copy(deep=True)])
+            return AgentProfilesSettings(profiles=[CustomAgentProfile(
+                id=profile.id, name=profile.name, description="",
+                baseProfileId=GENERAL_PROFILE_ID,
+                overrides=profile.model_dump(
+                    exclude={"id", "name", "description", "owner_id"}
+                ),
+            )])
         return model()
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))

@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,13 +18,13 @@ from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.models import ChatSession, PermissionGrant, UserAccount
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
-    BUILTIN_AGENT_PROFILE_IDS,
-    BUILTIN_AGENT_PROFILE_NAMES,
-    DEFAULT_AGENT_PROFILE_ID,
+    GENERAL_PROFILE_ID,
     AgentIdentitySettings,
     AgentProfile,
+    AgentProfileOverrides,
     AgentProfilePermissions,
     AgentProfilesSettings,
+    CustomAgentProfile,
     IntegrationSettings,
     SettingsStore,
     ToolExecutionPolicy,
@@ -36,10 +36,7 @@ from mato_loop_backend.settings import (
     load_effective_integrations,
     load_effective_tools,
     resolve_agent_persona,
-)
-from mato_loop_backend.settings.models import (
-    ProfileToolCallLimit,
-    validate_integration_availability,
+    shipped_profiles,
 )
 
 router = APIRouter(prefix="/agent-profiles", dependencies=[Depends(require_user)])
@@ -58,26 +55,11 @@ class AgentProfileRequest(BaseModel):
     )
 
     name: str = Field(min_length=1, max_length=80)
-    description: str = Field(default="", max_length=500)
-    persona_id: UUID | None = None
-    instructions: str = Field(min_length=1, max_length=16_000)
-    answer_display: Literal["timeline", "compact"] = "compact"
-    max_tool_calls: ProfileToolCallLimit = 25
-    todo_enabled: StrictBool = False
-    integrations_enabled_by_default: StrictBool = True
-    integration_availability: dict[str, StrictBool] = Field(default_factory=dict)
+    description: str = Field(max_length=500)
+    base_profile_id: UUID
+    overrides: AgentProfileOverrides
 
-    _validate_availability = field_validator("integration_availability")(
-        validate_integration_availability
-    )
-    private_permissions: AgentProfilePermissions = Field(
-        default_factory=AgentProfilePermissions
-    )
-    public_permissions: AgentProfilePermissions = Field(
-        default_factory=AgentProfilePermissions
-    )
-
-    @field_validator("name", "description", "instructions", mode="before")
+    @field_validator("name", "description", mode="before")
     @classmethod
     def strip_text(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
@@ -123,13 +105,20 @@ def _profile_payload(
     scope: Literal["instance", "personal", "integration"],
     instance_identity: AgentIdentitySettings,
     personal_identity: UserAgentIdentitySettings | None,
+    stored: CustomAgentProfile | None = None,
 ) -> dict:
     resolved = resolve_agent_persona(instance_identity, personal_identity, profile)
     return {
         **profile.model_dump(mode="json", by_alias=True),
         "scope": scope,
-        "protected": profile.id in BUILTIN_AGENT_PROFILE_IDS or not profile.editable,
+        "protected": stored is None or not profile.editable,
         "editable": profile.editable,
+        "baseProfileId": str(stored.base_profile_id) if stored is not None else None,
+        **(
+            {"overrides": stored.overrides.model_dump(mode="json", by_alias=True, exclude_unset=True)}
+            if stored is not None
+            else {}
+        ),
         "resolvedPersonaId": str(resolved.id),
         "resolvedPersonaName": resolved.name,
     }
@@ -142,6 +131,17 @@ async def _response(
     scope: SettingsApiScope | None = None,
 ) -> dict:
     effective = await load_effective_agent_profiles(db, user.id)
+    instance_profiles = await SettingsStore.load(db, AgentProfilesSettings)
+    personal_profiles = await SettingsStore.load_optional(
+        db, UserAgentProfilesSettings, user_id=user.id
+    )
+    stored = {
+        profile.id: profile
+        for profile in [
+            *instance_profiles.profiles,
+            *(personal_profiles.profiles if personal_profiles is not None else []),
+        ]
+    }
     instance_identity = await SettingsStore.load(db, AgentIdentitySettings)
     personal_identity = await SettingsStore.load_optional(
         db, UserAgentIdentitySettings, user_id=user.id
@@ -164,6 +164,7 @@ async def _response(
             ),
             instance_identity,
             personal_identity,
+            stored.get(profile.id),
         )
         for profile in effective.profiles
     ]
@@ -171,7 +172,7 @@ async def _response(
     private_tools = tools.model_copy(deep=True).select_trust(TrustLevel.PRIVATE)
     groups = tool_registry.catalog(public_tools, IntegrationSettings())
     return {
-        "defaultAgentProfileId": str(DEFAULT_AGENT_PROFILE_ID),
+        "defaultAgentProfileId": str(GENERAL_PROFILE_ID),
         "personalAgentsEnabled": effective.personal_agents_enabled,
         "groups": groups,
         "publicGroups": groups,
@@ -227,14 +228,17 @@ async def _response(
             if settings is None or scope is None
             else [
                 _profile_payload(
-                    profile.model_copy(
-                        update={"owner_id": user.id if scope == "personal" else None}
-                    ),
+                    profile,
                     scope,
                     instance_identity,
                     personal_identity,
+                    stored.get(profile.id),
                 )
-                for profile in settings.profiles
+                for profile in effective.profiles
+                if (
+                    (scope == "instance" and profile.owner_id is None)
+                    or (scope == "personal" and profile.owner_id == user.id)
+                )
             ]
         ),
     }
@@ -336,16 +340,14 @@ async def _profile_from_request(
     payload: AgentProfileRequest,
     *,
     profile_id: UUID | None = None,
-    existing: AgentProfile | None = None,
-) -> AgentProfile:
-    persona_id = (
-        existing.persona_id
-        if existing is not None and "persona_id" not in payload.model_fields_set
-        else payload.persona_id
-    )
-    if persona_id is not None and (
-        existing is None or persona_id != existing.persona_id
-    ):
+    existing: CustomAgentProfile | None = None,
+) -> CustomAgentProfile:
+    bases = {profile.id: profile for profile in shipped_profiles()}
+    if payload.base_profile_id not in bases:
+        raise ApiError(422, "validation.invalidChoice", field="baseProfileId")
+    overrides = payload.overrides
+    persona_id = overrides.persona_id
+    if "persona_id" in overrides.model_fields_set and persona_id is not None:
         identity = await SettingsStore.load(
             db, AgentIdentitySettings, for_update=owner_id is not None
         )
@@ -378,40 +380,43 @@ async def _profile_from_request(
     allowed = _catalog_policies(tool_registry.catalog(tools, IntegrationSettings()))
     integration_allowed = _catalog_integration_policies(groups)
     integration_ids = {str(item.id) for item in integrations.instances}
-    for integration_id, enabled in payload.integration_availability.items():
+    integration_availability = overrides.integration_availability or {}
+    existing_availability = (
+        existing.overrides.integration_availability or {} if existing is not None else {}
+    )
+    for integration_id, enabled in integration_availability.items():
         if integration_id not in integration_ids and (
             existing is None
-            or existing.integration_availability.get(integration_id) is not enabled
+            or existing_availability.get(integration_id) is not enabled
         ):
             raise ApiError(422, "validation.invalidChoice", field="integrationAvailability")
-    _validate_permissions(
-        payload.private_permissions,
-        allowed,
-        integration_allowed,
-        integration_ids,
-        "privatePermissions",
-        existing.private_permissions if existing is not None else None,
-    )
-    _validate_permissions(
-        payload.public_permissions,
-        allowed,
-        integration_allowed,
-        integration_ids,
-        "publicPermissions",
-        existing.public_permissions if existing is not None else None,
-    )
-    values = payload.model_dump()
-    values["persona_id"] = persona_id
-    for field in (
-        "answer_display", "max_tool_calls", "todo_enabled", "integrations_enabled_by_default",
-        "integration_availability",
+    for field, api_field in (
+        ("private_permissions", "privatePermissions"),
+        ("public_permissions", "publicPermissions"),
     ):
-        if field not in payload.model_fields_set:
-            if existing is not None:
-                values[field] = getattr(existing, field)
-            else:
-                values.pop(field)
-    return AgentProfile(id=profile_id or uuid4(), **values)
+        permissions = getattr(overrides, field)
+        if field not in overrides.model_fields_set or permissions is None:
+            continue
+        existing_permissions = (
+            getattr(existing.overrides, field)
+            if existing is not None and field in existing.overrides.model_fields_set
+            else None
+        )
+        _validate_permissions(
+            permissions,
+            allowed,
+            integration_allowed,
+            integration_ids,
+            api_field,
+            existing_permissions,
+        )
+    return CustomAgentProfile(
+        id=profile_id or uuid4(),
+        name=payload.name,
+        description=payload.description,
+        base_profile_id=payload.base_profile_id,
+        overrides=overrides,
+    )
 
 
 def _ensure_unique_name(
@@ -423,11 +428,11 @@ def _ensure_unique_name(
     folded = name.strip().casefold()
     reserved_id = next(
         (
-            profile_id
-            for profile_id, builtin_name in BUILTIN_AGENT_PROFILE_NAMES.items()
-            if builtin_name.casefold() == folded
+            profile.id
+            for profile in shipped_profiles()
+            if profile.name.casefold() == folded
         ),
-        DEFAULT_AGENT_PROFILE_ID if folded == "default" else None,
+        None,
     )
     if reserved_id is not None and exclude_id != reserved_id:
         raise ApiError(409, "agentProfile.defaultProtected")
@@ -500,7 +505,7 @@ async def create_agent_profile(
     settings, owner_id = await _load_scoped(db, scope, user, for_update=True)
     profile = await _profile_from_request(db, user, owner_id, payload)
     _ensure_unique_name(settings, profile.name)
-    limit = 20 if owner_id is not None else 102
+    limit = 20 if owner_id is not None else 99
     if len(settings.profiles) >= limit:
         raise ApiError(409, "agentProfile.limitReached")
     settings.profiles.append(profile)
@@ -520,6 +525,8 @@ async def update_agent_profile(
     scope: SettingsApiScope = "personal",
 ) -> dict:
     settings, owner_id = await _load_scoped(db, scope, user, for_update=True)
+    if profile_id in {profile.id for profile in shipped_profiles()}:
+        raise ApiError(409, "agentProfile.defaultProtected")
     index = next(
         (
             index
@@ -530,9 +537,6 @@ async def update_agent_profile(
     )
     if index is None:
         raise ApiError(404, "agentProfile.notFound")
-    builtin_name = BUILTIN_AGENT_PROFILE_NAMES.get(profile_id)
-    if builtin_name is not None and payload.name != builtin_name:
-        raise ApiError(409, "agentProfile.defaultProtected", field="name")
     replacement = await _profile_from_request(
         db,
         user,
@@ -556,11 +560,11 @@ async def delete_agent_profile(
     scope: SettingsApiScope = "personal",
 ) -> None:
     settings, owner_id = await _load_scoped(db, scope, user, for_update=True)
+    if profile_id in {profile.id for profile in shipped_profiles()}:
+        raise ApiError(409, "agentProfile.defaultProtected")
     profile = next((item for item in settings.profiles if item.id == profile_id), None)
     if profile is None:
         raise ApiError(404, "agentProfile.notFound")
-    if profile_id in BUILTIN_AGENT_PROFILE_IDS:
-        raise ApiError(409, "agentProfile.defaultProtected")
     sessions = list(
         (
             await db.scalars(
@@ -579,7 +583,7 @@ async def delete_agent_profile(
             delete(PermissionGrant).where(PermissionGrant.session_id.in_(session_ids))
         )
         for session in sessions:
-            session.agent_profile_id = DEFAULT_AGENT_PROFILE_ID
+            session.agent_profile_id = GENERAL_PROFILE_ID
     settings.profiles.remove(profile)
     await SettingsStore.save(db, settings, user_id=owner_id)
     await db.commit()

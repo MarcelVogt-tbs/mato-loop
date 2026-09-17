@@ -49,7 +49,12 @@ from mato_loop_backend.settings import (
     ToolSettings,
     TrustLevel,
 )
-from mato_loop_backend.settings.models import BUILD_AGENT_PROFILE_ID, LlmProviderConfig, ModelConfig
+from mato_loop_backend.settings.models import (
+    BUILD_PROFILE_ID,
+    LlmProviderConfig,
+    ModelConfig,
+    build_profile,
+)
 from mato_loop_backend.workspace import RootFileService
 
 
@@ -189,13 +194,14 @@ def test_canonical_plan_needs_no_runtime_directory(tmp_path) -> None:
 
 @pytest.fixture
 def delegated_runtime(monkeypatch):
+    profile = build_profile()
     session = ChatSession(id=uuid4(), user_id=uuid4(), title="Main", reasoning_effort="high",
-                          agent_profile_id=BUILD_AGENT_PROFILE_ID, web_search_policy="required")
+                           agent_profile_id=BUILD_PROFILE_ID, web_search_policy="required")
     user = Message(id=uuid4(), session_id=session.id, role="user", content="Work",
                    provider_data={"_matoloop": {"activeFile": {"dirty": True, "path": "/work/code.py"}}})
     parent = AgentRun(
         id=uuid4(), session_id=session.id, input_message_id=user.id, status="running",
-        model_config_id=uuid4(), model_name="Model", agent_profile_id=BUILD_AGENT_PROFILE_ID,
+        model_config_id=uuid4(), model_name="Model", agent_profile_id=BUILD_PROFILE_ID,
         trust_level="public", pseudonymization_enabled=True, execution_agent_id=uuid4(),
         execution_agent_revision=3, current_directory_snapshot="/work", execution_operations=["shell.run"],
     )
@@ -232,7 +238,12 @@ def delegated_runtime(monkeypatch):
     db = factory()
     db.scalar.return_value = 0
     monkeypatch.setattr(subagents, "AsyncSessionFactory", factory)
-    monkeypatch.setattr(subagents, "load_agent_profile_tools", AsyncMock(return_value=(ToolSettings().select_trust(TrustLevel.PUBLIC), None)))
+    current_tools = ToolSettings().select_trust(TrustLevel.PUBLIC)
+    current_tools._agent_profile = profile
+    monkeypatch.setattr(
+        subagents, "load_agent_profile_tools",
+        AsyncMock(return_value=(current_tools, profile)),
+    )
     monkeypatch.setattr(subagents, "load_effective_integrations", AsyncMock(return_value=runtime_module.IntegrationSettings()))
     monkeypatch.setattr(runtime_module, "AsyncSessionFactory", factory)
     monkeypatch.setattr(SessionStorage, "provision", Mock())
@@ -244,10 +255,12 @@ def delegated_runtime(monkeypatch):
         monkeypatch.setattr(AgentRuntime, name, AsyncMock())
 
     async def delegate(max_tool_calls=None, *, tool_settings=None, integration_settings=None, tool_names=None):
+        selected_tools = tool_settings or ToolSettings().select_trust(TrustLevel.PUBLIC)
+        selected_tools._agent_profile = profile
         return await subagents.run_tasks(
             AgentRuntime, db, parent, session,
             TaskArguments(tasks=[{"description": f"Task {i}", "prompt": f"Translate text {i}"} for i in range(2)]),
-            tool_call_id="task-1", tool_settings=tool_settings or ToolSettings().select_trust(TrustLevel.PUBLIC),
+            tool_call_id="task-1", tool_settings=selected_tools,
             tool_names=tool_names or {"task", "question", "write_file", "web_search"},
             integration_settings=integration_settings,
             max_tool_calls=max_tool_calls,
@@ -324,6 +337,7 @@ async def test_delegation_intersects_live_spawn_scope_and_both_permission_ceilin
     offered_integrations = IntegrationSettings(instances=accounts[:2])
     live_integrations = IntegrationSettings(instances=accounts)
     profile = AgentProfile(name="Build", instructions="Follow the task.", integrationsEnabledByDefault=True,
+                           delegationEnabled=True,
                            integrationAvailability={str(accounts[0].id): False})
     offered_tools = ToolSettings(public_permissions={
         "policies": {"session.files.write": "ask", "network.fetch": "auto", "calendar.read": "auto"},
@@ -567,7 +581,7 @@ async def test_delegated_waits_keep_parent_active_and_expire_on_cancel(monkeypat
 async def test_child_authorization_uses_main_grants_child_roots_and_snapshot(monkeypatch):
     parent = ChatSession(id=uuid4(), user_id=uuid4())
     child = ChatSession(id=uuid4(), user_id=parent.user_id, parent_session_id=parent.id,
-                        agent_profile_id=BUILD_AGENT_PROFILE_ID)
+                        agent_profile_id=BUILD_PROFILE_ID)
     run = AgentRun(id=uuid4(), session_id=child.id, input_message_id=uuid4(), trust_level="public")
     settings = ToolSettings(public_permissions={"policies": {"network.fetch": "ask"}}).select_trust(TrustLevel.PUBLIC)
     message = Message(id=run.input_message_id, provider_data={"_matoloop": {

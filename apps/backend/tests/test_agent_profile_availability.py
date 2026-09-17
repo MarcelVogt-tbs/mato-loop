@@ -23,60 +23,27 @@ from mato_loop_backend.settings.effective import (
     load_agent_profile_tools,
 )
 from mato_loop_backend.settings.models import (
-    BUILD_AGENT_PROFILE_ID,
-    DEFAULT_AGENT_PROFILE_ID,
-    PLAN_AGENT_PROFILE_ID,
+    GENERAL_PROFILE_ID,
     AgentProfile,
+    AgentProfileOverrides,
     AgentProfilesSettings,
+    CustomAgentProfile,
     IntegrationInstance,
     IntegrationSettings,
     ToolSettings,
     TrustLevel,
     UserIntegrationSettings,
+    build_profile,
+    general_profile,
+    plan_profile,
 )
 from mato_loop_backend.settings.store import SettingsStore
 
 
-@pytest.mark.parametrize("by_alias", [False, True])
-@pytest.mark.parametrize(
-    "profile_id,limit,enabled,answer_display,todo_enabled",
-    [
-        (DEFAULT_AGENT_PROFILE_ID, 25, True, "compact", False),
-        (PLAN_AGENT_PROFILE_ID, None, False, "timeline", True),
-        (BUILD_AGENT_PROFILE_ID, None, False, "timeline", True),
-        (uuid4(), 25, True, "compact", False),
-    ],
-)
-def test_profile_defaults_backfill_only_missing_fields(
-    by_alias, profile_id, limit, enabled, answer_display, todo_enabled
-):
-    old = AgentProfile(id=profile_id, name="Renamed", instructions="Custom task").model_dump(
-        mode="json", by_alias=by_alias
-    )
-    keys = (
-        ("answerDisplay", "maxToolCalls", "todoEnabled", "integrationsEnabledByDefault")
-        if by_alias
-        else ("answer_display", "max_tool_calls", "todo_enabled", "integrations_enabled_by_default")
-    )
-    for key in keys:
-        old.pop(key)
-    loaded = AgentProfile.model_validate(old)
-    assert loaded.answer_display == answer_display
-    assert loaded.max_tool_calls == limit
-    assert loaded.todo_enabled is todo_enabled
-    assert loaded.integrations_enabled_by_default is enabled
-    dumped = loaded.model_dump(mode="json", by_alias=by_alias)
-    assert {key: value for key, value in dumped.items() if key not in keys} == old
-    old.update(dict(zip(keys, ["compact", None, False, False], strict=True)))
-    assert AgentProfile.model_validate(old).model_dump(mode="json", by_alias=by_alias) == old
-    old.update(dict(zip(keys, ["timeline", 9, True, True], strict=True)))
-    assert AgentProfile.model_validate(old).model_dump(mode="json", by_alias=by_alias) == old
-
-
 @pytest.mark.parametrize("profile,enabled", [
-    (AgentProfile(id=DEFAULT_AGENT_PROFILE_ID, name="Allgemein", instructions="Task"), False),
-    (AgentProfile(id=PLAN_AGENT_PROFILE_ID, name="Plan", instructions="Task"), True),
-    (AgentProfile(id=BUILD_AGENT_PROFILE_ID, name="Build", instructions="Task"), True),
+    (general_profile(), False),
+    (plan_profile(), True),
+    (build_profile(), True),
     (AgentProfile(name="Custom", instructions="Task"), False),
 ])
 def test_todo_tool_follows_profile_availability(profile, enabled):
@@ -88,21 +55,27 @@ def test_todo_tool_follows_profile_availability(profile, enabled):
     assert ("todo_write" in effective.tools) is enabled
 
 
-@pytest.mark.parametrize("model", [AgentProfile, AgentProfileRequest])
+@pytest.mark.parametrize("model", [AgentProfile, AgentProfileOverrides])
 @pytest.mark.parametrize("value", [None, "cards", 1])
 def test_answer_display_rejects_invalid_explicit_values(model, value):
+    values = {"answerDisplay": value}
+    if model is AgentProfile:
+        values.update(name="Agent", instructions="Task")
     with pytest.raises(ValidationError):
-        model(name="Agent", instructions="Task", answerDisplay=value)
+        model(**values)
 
 
-@pytest.mark.parametrize("model", [AgentProfile, AgentProfileRequest])
+@pytest.mark.parametrize("model", [AgentProfile, AgentProfileOverrides])
 @pytest.mark.parametrize("value", [0, -1, True, False, 1.0, "25"])
 def test_profile_limit_requires_a_positive_strict_integer(model, value):
+    values = {"maxToolCalls": value}
+    if model is AgentProfile:
+        values.update(name="Agent", instructions="Task")
     with pytest.raises(ValidationError):
-        model(name="Agent", instructions="Task", maxToolCalls=value)
+        model(**values)
 
 
-@pytest.mark.parametrize("model", [AgentProfile, AgentProfileRequest])
+@pytest.mark.parametrize("model", [AgentProfile, AgentProfileOverrides])
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -114,8 +87,11 @@ def test_profile_limit_requires_a_positive_strict_integer(model, value):
     ],
 )
 def test_profile_availability_requires_canonical_ids_and_strict_booleans(model, overrides):
+    values = {"integrationAvailability": overrides}
+    if model is AgentProfile:
+        values.update(name="Agent", instructions="Task")
     with pytest.raises(ValidationError):
-        model(name="Agent", instructions="Task", integrationAvailability=overrides)
+        model(**values)
 
 
 def account(kind="calendar", adapter="caldav", **values):
@@ -145,7 +121,15 @@ def mock_settings(monkeypatch, integrations, profile, *, personal=None):
         if model is IntegrationSettings:
             return integrations.model_copy(deep=True)
         if model is AgentProfilesSettings:
-            return AgentProfilesSettings(profiles=[profile.model_copy(deep=True)])
+            return AgentProfilesSettings(profiles=[CustomAgentProfile(
+                id=profile.id,
+                name=profile.name,
+                description=profile.description,
+                baseProfileId=GENERAL_PROFILE_ID,
+                overrides=profile.model_dump(
+                    exclude={"id", "name", "description", "owner_id"}
+                ),
+            )])
         return model()
 
     async def optional(_db, model, **_kwargs):
@@ -166,16 +150,25 @@ async def test_profile_update_preserves_omitted_new_fields_and_unchanged_stale_i
     )
     mock_settings(monkeypatch, IntegrationSettings(), profile)
     user = UserAccount(id=uuid4(), username="admin", password_hash="hash", is_admin=True)
-    for data in ({}, {"integrationAvailability": {stale_id: False}}):
+    existing = CustomAgentProfile(
+        id=profile.id, name=profile.name, description="",
+        baseProfileId=GENERAL_PROFILE_ID,
+        overrides={"maxToolCalls": None, "integrationsEnabledByDefault": False,
+                   "integrationAvailability": {stale_id: False}},
+    )
+    for overrides in ({}, {"integrationAvailability": {stale_id: False}}):
         result = await _profile_from_request(
             AsyncMock(),
             user,
             None,
-            AgentProfileRequest(name="Agent", instructions="Task", **data),
+            AgentProfileRequest(
+                name="Agent", description="", baseProfileId=GENERAL_PROFILE_ID,
+                overrides=overrides,
+            ),
             profile_id=profile.id,
-            existing=profile,
+            existing=existing,
         )
-        assert result.model_dump() == profile.model_dump()
+        assert result.overrides.model_dump(exclude_unset=True, by_alias=True) == overrides
     for overrides in ({stale_id: True}, {str(uuid4()): False}):
         with pytest.raises(ApiError, match="validation.invalidChoice"):
             await _profile_from_request(
@@ -183,9 +176,10 @@ async def test_profile_update_preserves_omitted_new_fields_and_unchanged_stale_i
                 user,
                 None,
                 AgentProfileRequest(
-                    name="Agent", instructions="Task", integrationAvailability=overrides
+                    name="Agent", description="", baseProfileId=GENERAL_PROFILE_ID,
+                    overrides={"integrationAvailability": overrides},
                 ),
-                existing=profile,
+                existing=existing,
             )
     result = await _profile_from_request(
         AsyncMock(),
@@ -193,16 +187,16 @@ async def test_profile_update_preserves_omitted_new_fields_and_unchanged_stale_i
         None,
         AgentProfileRequest(
             name="Agent",
-            instructions="Task",
-            maxToolCalls=None,
-            integrationsEnabledByDefault=True,
-            integrationAvailability={},
+            description="",
+            baseProfileId=GENERAL_PROFILE_ID,
+            overrides={"maxToolCalls": None, "integrationsEnabledByDefault": True,
+                       "integrationAvailability": {}},
         ),
-        existing=profile.model_copy(update={"max_tool_calls": 8}),
+        existing=existing,
     )
-    assert result.max_tool_calls is None
-    assert result.integrations_enabled_by_default is True
-    assert result.integration_availability == {}
+    assert result.overrides.max_tool_calls is None
+    assert result.overrides.integrations_enabled_by_default is True
+    assert result.overrides.integration_availability == {}
 
 
 async def test_profile_scope_validation_and_listing_include_option_only_integrations(monkeypatch):
@@ -217,12 +211,13 @@ async def test_profile_scope_validation_and_listing_include_option_only_integrat
     )
     user = UserAccount(id=uuid4(), username="admin", password_hash="hash", is_admin=True)
     request = AgentProfileRequest(
-        name="Agent", instructions="Task", integrationAvailability={str(coding.id): True}
+        name="Agent", description="", baseProfileId=GENERAL_PROFILE_ID,
+        overrides={"integrationAvailability": {str(coding.id): True}},
     )
     with pytest.raises(ApiError, match="validation.invalidChoice"):
         await _profile_from_request(AsyncMock(), user, None, request)
     result = await _profile_from_request(AsyncMock(), user, user.id, request)
-    assert result.integration_availability == {str(coding.id): True}
+    assert result.overrides.integration_availability == {str(coding.id): True}
     instance_result = await _response(AsyncMock(), user, scope="instance")
     personal_result = await _response(AsyncMock(), user, scope="personal")
     assert [item["id"] for item in instance_result["integrations"]] == [str(search.id)]

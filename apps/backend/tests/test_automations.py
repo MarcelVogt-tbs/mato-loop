@@ -34,7 +34,7 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.notifications import NotificationService
 from mato_loop_backend.security import require_user
-from mato_loop_backend.settings import DEFAULT_AGENT_PROFILE_ID
+from mato_loop_backend.settings import GENERAL_PROFILE_ID
 
 
 def test_cron_uses_debian_dst_semantics_and_rejects_six_fields() -> None:
@@ -435,7 +435,7 @@ async def test_create_flushes_execution_session_before_automation(monkeypatch, m
         ("flush", None),
     ]
     assert automation.execution_session_id is not None
-    assert added[0].agent_profile_id == DEFAULT_AGENT_PROFILE_ID
+    assert added[0].agent_profile_id == GENERAL_PROFILE_ID
     assert len(automation.schedules) == (0 if manual else 1)
 
 
@@ -518,7 +518,7 @@ def test_runtime_snapshot_contains_only_validated_session_binding() -> None:
 
 def test_copy_runtime_includes_agent_profile() -> None:
     source = ChatSession(agent_profile_id=uuid4())
-    target = ChatSession(agent_profile_id=DEFAULT_AGENT_PROFILE_ID)
+    target = ChatSession(agent_profile_id=GENERAL_PROFILE_ID)
 
     copy_runtime(source, target)
 

@@ -31,7 +31,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.notifications import NotificationDraft, NotificationService
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 from mato_loop_backend.settings import (
-    DEFAULT_AGENT_PROFILE_ID,
+    GENERAL_PROFILE_ID,
     SkillDefinition,
     load_effective_ai,
     load_effective_skills,
@@ -357,7 +357,7 @@ class AutomationService:
             title_generation_status="skipped",
             memory_mode="full",
             web_search_policy="available",
-            agent_profile_id=DEFAULT_AGENT_PROFILE_ID,
+            agent_profile_id=GENERAL_PROFILE_ID,
         )
         if source is not None:
             copy_runtime(source, execution_session)

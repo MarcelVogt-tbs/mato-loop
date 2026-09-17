@@ -11,6 +11,11 @@ _load_optional = SettingsStore.load_optional
 def pytest_addoption(parser):
     parser.addoption("--subagent-db", action="store_true", help="Run native session PostgreSQL integration tests")
     parser.addoption("--memory-db", action="store_true", help="Run memory approval PostgreSQL integration tests")
+    parser.addoption(
+        "--profile-migration-db",
+        action="store_true",
+        help="Run the agent profile migration against a temporary PostgreSQL database",
+    )
 
 
 @pytest.fixture(autouse=True)

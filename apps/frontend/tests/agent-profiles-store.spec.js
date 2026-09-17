@@ -51,13 +51,16 @@ describe('agent profiles store', () => {
     const payload = {
       name: 'Recherche',
       description: 'Prüft Quellen',
-      personaId: 'persona-1',
-      instructions: 'Arbeite sorgfältig.',
-      maxToolCalls: null,
-      integrationsEnabledByDefault: false,
-      integrationAvailability: { 'integration-1': false, 'integration-2': true },
-      publicPermissions: { policies: { 'network.search': 'auto' } },
-      privatePermissions: { policies: { 'network.search': 'ask' } }
+      baseProfileId: 'builtin-1',
+      overrides: {
+        personaId: 'persona-1',
+        instructions: 'Arbeite sorgfältig.',
+        maxToolCalls: null,
+        integrationsEnabledByDefault: false,
+        integrationAvailability: { 'integration-1': false, 'integration-2': true },
+        publicPermissions: { policies: { 'network.search': 'auto' } },
+        privatePermissions: { policies: { 'network.search': 'ask' } }
+      }
     }
     api.post.mockResolvedValue({ data: { agentProfileId: 'global-1' } })
     api.put.mockResolvedValue({ data: {} })
@@ -72,9 +75,8 @@ describe('agent profiles store', () => {
     await store.createAgent(payload)
     await store.updateAgent('global-1', { ...payload, name: 'Analyse' })
     expect(store.byId('global-1')).toMatchObject({
-      maxToolCalls: null,
-      integrationsEnabledByDefault: false,
-      integrationAvailability: payload.integrationAvailability
+      baseProfileId: 'builtin-1',
+      overrides: payload.overrides
     })
     store.defaultAgentProfileId = 'default-1'
     chat.current = { id: 'session-1', agentProfileId: 'global-1' }

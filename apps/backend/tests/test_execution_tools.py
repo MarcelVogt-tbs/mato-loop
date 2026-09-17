@@ -63,8 +63,8 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
-    build_agent_profile,
-    plan_agent_profile,
+    build_profile,
+    plan_profile,
 )
 from mato_loop_backend.workspace import RootFileService, SessionStorage
 
@@ -707,7 +707,7 @@ async def test_disabled_shell_zone_is_a_hard_boundary(tmp_path) -> None:
     assert statement.get_execution_options()["populate_existing"] is True
 
 
-@pytest.mark.parametrize("profile_factory", [plan_agent_profile, build_agent_profile])
+@pytest.mark.parametrize("profile_factory", [plan_profile, build_profile])
 @pytest.mark.parametrize("capability", ["filesystem.read", "shell.read"])
 @pytest.mark.parametrize(
     ("path", "filesystem_policy", "expected"),
@@ -751,7 +751,7 @@ async def test_coding_profile_auto_reads_keep_path_boundaries(
     ) == expected
 
 
-@pytest.mark.parametrize("profile_factory", [plan_agent_profile, build_agent_profile, None])
+@pytest.mark.parametrize("profile_factory", [plan_profile, build_profile, None])
 @pytest.mark.parametrize("trust", [TrustLevel.PUBLIC, TrustLevel.PRIVATE])
 @pytest.mark.parametrize("classification", ["read", "write"])
 @pytest.mark.parametrize(
@@ -801,7 +801,7 @@ async def test_shell_policy_covers_incomplete_analysis(
         settings, IntegrationSettings(), request,
         snapshot=permission_snapshot(settings, {"shell_run"}),
     )
-    if profile_factory == plan_agent_profile and classification == "write":
+    if profile_factory == plan_profile and classification == "write":
         assert policy == ToolExecutionPolicy.DISABLED
         expected = PermissionDecision.DENY
     elif profile_factory is None and (classification == "write" or trust == TrustLevel.PUBLIC):
@@ -1067,7 +1067,7 @@ async def test_shell_timeout_does_not_bypass_permission_or_inspection_revision(t
     assert context.ask_handler.await_count == 1
 
 
-@pytest.mark.parametrize("profile_factory", [plan_agent_profile, build_agent_profile, None])
+@pytest.mark.parametrize("profile_factory", [plan_profile, build_profile, None])
 @pytest.mark.parametrize("trust", [TrustLevel.PUBLIC, TrustLevel.PRIVATE])
 @pytest.mark.parametrize("classification", ["read", "write"])
 @pytest.mark.parametrize("analysis_complete", [False, True])
@@ -1118,7 +1118,7 @@ async def test_shell_metadata_only_paths_preserve_profile_and_trust_policies(
         )
     expected_policy = (
         ToolExecutionPolicy.DISABLED
-        if profile_factory == plan_agent_profile and classification == "write"
+        if profile_factory == plan_profile and classification == "write"
         else ToolExecutionPolicy.ASK
         if profile is None and (classification == "write" or trust == TrustLevel.PUBLIC)
         else ToolExecutionPolicy.AUTO

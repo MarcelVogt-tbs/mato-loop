@@ -24,20 +24,13 @@ from mato_loop_backend.settings import (
     load_effective_integrations,
 )
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
-from mato_loop_backend.settings.models import (
-    BUILD_AGENT_PROFILE_ID,
-    PLAN_AGENT_PROFILE_ID,
-    AgentProfilePermissions,
-)
+from mato_loop_backend.settings.models import AgentProfilePermissions
 
 if TYPE_CHECKING:
     from mato_loop_backend.agent.runtime import AgentRuntime
 
 MAX_CHILDREN = 8
 MAX_RESULT_CHARACTERS = 12_000
-DELEGATING_PROFILES = frozenset({PLAN_AGENT_PROFILE_ID, BUILD_AGENT_PROFILE_ID})
-
-
 def permission_snapshot(
     settings: ToolSettings, tool_names: set[str],
     integration_settings: IntegrationSettings | None = None,
@@ -55,6 +48,13 @@ def permission_snapshot(
         "agentPermissions": (
             settings._agent_permissions.model_dump(mode="json")
             if settings._agent_permissions is not None else None
+        ),
+        "delegationEnabled": bool(
+            settings._agent_profile and settings._agent_profile.delegation_enabled
+        ),
+        "sessionWritePaths": (
+            settings._agent_profile.session_write_paths
+            if settings._agent_profile is not None else None
         ),
         "shellPrefixes": settings.shell_prefixes.model_dump(mode="json"),
         "toolNames": sorted(tool_names - {"task"}),
@@ -88,6 +88,16 @@ def integration_ceiling_ids(snapshot: dict[str, Any] | None) -> list[str] | None
     if not isinstance(ids, (list, dict)):
         return []
     return [value for value in ids if isinstance(value, str)]
+
+
+def session_write_paths_ceiling(snapshot: dict[str, Any] | None) -> list[str] | None:
+    restrictions = []
+    while snapshot is not None:
+        paths = snapshot.get("sessionWritePaths")
+        if paths is not None:
+            restrictions.append(set(paths) if isinstance(paths, list) else set())
+        snapshot = snapshot.get("offeredCeiling")
+    return sorted(set.intersection(*restrictions)) if restrictions else None
 
 
 def ceiling_settings(snapshot: dict[str, Any], trust: TrustLevel) -> ToolSettings:
@@ -167,8 +177,9 @@ async def run_tasks(
     max_tool_calls: int | None,
 ) -> ToolResult:
     if session.parent_session_id is not None or (
-        parent.agent_profile_id or session.agent_profile_id
-    ) not in DELEGATING_PROFILES:
+        tool_settings._agent_profile is None
+        or not tool_settings._agent_profile.delegation_enabled
+    ):
         return ToolResult.error("tool.unavailable")
     count = await db.scalar(
         select(func.count()).select_from(ChatSession).where(
@@ -198,6 +209,8 @@ async def run_tasks(
                 TrustLevel(parent.trust_level),
             )
             if not current_tools.tool_availability.get("task", True):
+                raise AgentProfileUnavailable
+            if profile is None or not profile.delegation_enabled:
                 raise AgentProfileUnavailable
             current_integrations = filter_agent_profile_integrations(
                 await load_effective_integrations(child_db, session.user_id), profile,

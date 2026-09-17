@@ -28,9 +28,9 @@ from mato_loop_backend.settings import (
     TrustLevel,
     UserToolSettings,
     WebFetchSettings,
-    build_agent_profile,
-    default_agent_profiles,
-    plan_agent_profile,
+    build_profile,
+    core_profiles,
+    plan_profile,
 )
 
 
@@ -236,7 +236,7 @@ def test_agent_profile_missing_capability_inherits_live_default() -> None:
 
 @pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
 def test_plan_profile_disables_computer_changes(trust: TrustLevel) -> None:
-    profile = plan_agent_profile()
+    profile = plan_profile()
     settings = ToolSettings().select_trust(trust)
     settings._agent_permissions = (
         profile.private_permissions
@@ -261,7 +261,7 @@ def test_plan_profile_disables_computer_changes(trust: TrustLevel) -> None:
 
 @pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
 def test_only_coding_profiles_default_to_automatic_public_computer_reads(trust) -> None:
-    for profile in default_agent_profiles():
+    for profile in core_profiles():
         settings = ToolSettings().select_trust(trust)
         settings._agent_permissions = (
             profile.private_permissions if trust == TrustLevel.PRIVATE else profile.public_permissions
@@ -283,7 +283,7 @@ def test_only_coding_profiles_default_to_automatic_public_computer_reads(trust) 
 
 @pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
 def test_build_profile_defaults_to_auto_writes_and_preserves_overrides(trust: TrustLevel) -> None:
-    profile = build_agent_profile()
+    profile = build_profile()
     settings = ToolSettings().select_trust(trust)
     settings._agent_permissions = (
         profile.private_permissions

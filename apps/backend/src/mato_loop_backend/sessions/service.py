@@ -56,7 +56,7 @@ from mato_loop_backend.session_storage import (
     SessionStorageError,
 )
 from mato_loop_backend.settings import (
-    DEFAULT_AGENT_PROFILE_ID,
+    GENERAL_PROFILE_ID,
     AgentProfileUnavailable,
     AiSettings,
     effective_model_trust,
@@ -157,7 +157,7 @@ def provider_for_session(ai: AiSettings, model):
 async def validate_agent_profile(
     db: AsyncSession, user_id: UUID, profile_id: UUID | None
 ) -> None:
-    if profile_id in {None, DEFAULT_AGENT_PROFILE_ID}:
+    if profile_id in {None, GENERAL_PROFILE_ID}:
         return
     try:
         await load_agent_profile(db, user_id, profile_id, for_update=True)
@@ -1243,7 +1243,7 @@ async def update_session(
             await db.delete(grant)
     if (
         "agent_profile_id" in fields
-        and (payload.agent_profile_id or DEFAULT_AGENT_PROFILE_ID)
+        and (payload.agent_profile_id or GENERAL_PROFILE_ID)
         != item.agent_profile_id
     ) or ("model_id" in fields and payload.model_id != item.model_config_id):
         await db.execute(
@@ -1272,7 +1272,7 @@ async def update_session(
             raise SessionServiceError(409, "session.modelToolsUnavailable")
         item.model_config_id = payload.model_id
     if "agent_profile_id" in fields:
-        agent_profile_id = payload.agent_profile_id or DEFAULT_AGENT_PROFILE_ID
+        agent_profile_id = payload.agent_profile_id or GENERAL_PROFILE_ID
         await validate_agent_profile(db, user.id, agent_profile_id)
         item.agent_profile_id = agent_profile_id
     if "reasoning_effort" in fields:
