@@ -144,6 +144,8 @@ async def _handle_control(viewer: BrowserTerminalConnection, raw: object) -> boo
             return True
         await connection.check_access()
         if isinstance(message, _InputMessage):
+            if connection.attached:
+                raise ValueError("terminal.alreadyAttached")
             try:
                 decoded = base64.b64decode(message.data, validate=True)
             except (binascii.Error, ValueError) as exc:

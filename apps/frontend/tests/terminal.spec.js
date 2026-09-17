@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useTerminalStore } from '../src/stores/terminal'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { TERMINAL_OPERATIONS, terminalControlCenterState } from '../src/control-center/manifest'
-import { FakeWebSocket, sharedDraft } from './terminal-websocket'
+import { FakeWebSocket } from './terminal-websocket'
 
 const { api, notifyError } = vi.hoisted(() => ({ api: { patch: vi.fn() }, notifyError: vi.fn() }))
 vi.mock('src/boot/axios', () => ({ api }))
@@ -38,10 +38,15 @@ describe('shared terminal', () => {
     agent.connected = true
     agent.operations = ['terminal.open', 'terminal.read', 'terminal.write', 'terminal.resize', 'terminal.close', 'terminal.run']
     expect(terminalControlCenterState(context, agents).reason).toBe('unsupported')
-    expect(TERMINAL_OPERATIONS).toContain('terminal.shared.inspect')
+    expect(TERMINAL_OPERATIONS).toEqual([
+      'terminal.read', 'terminal.write', 'terminal.resize', 'terminal.close',
+      'terminal.shared.open', 'terminal.shared.status', 'terminal.shared.acquire',
+      'terminal.shared.release', 'terminal.shared.prepare', 'terminal.shared.execute',
+      'terminal.shared.cancel'
+    ])
   })
 
-  it('waits for acquisition and snapshot before input, resuming authoritative pending state', () => {
+  it('waits for acquisition and snapshot before enabling controls', () => {
     const store = useTerminalStore()
     store.connect({ sessionId: 'session-1', agentId: 'agent-1' })
     const socket = FakeWebSocket.instances.at(-1)
@@ -55,21 +60,19 @@ describe('shared terminal', () => {
     expect(store.status).toBe('syncing')
     store.input('\r')
     expect(socket.send).not.toHaveBeenCalled()
-    const pending = { approvalId: 'approval-1', ...sharedDraft }
-    socket.snapshot({ attached: true, busy: true, state: 'editing', activeToolCallId: 'tool-1',
-      pending, currentDirectory: '/home/user/terminal', personalData: btoa('retained'), rows: 40, columns: 120 })
-    expect(store).toMatchObject({ ready: true, restored: true, inputEnabled: true, attached: true,
-      busy: true, runtimeState: 'editing', pending, activeToolCallId: 'tool-1',
+    socket.snapshot({ attached: true, busy: true, state: 'running', activeToolCallId: 'tool-1',
+      currentDirectory: '/home/user/terminal', personalData: btoa('retained'), rows: 40, columns: 120 })
+    expect(store).toMatchObject({ ready: true, restored: true, controlsEnabled: true, inputEnabled: false,
+      attached: true, busy: true, runtimeState: 'running', activeToolCallId: 'tool-1',
       currentDirectory: '/home/user/terminal', buffer: 'retained', rows: 40, columns: 120 })
     expect(socket.send).not.toHaveBeenCalled()
     socket.output(' live')
     expect(store.buffer).toBe('retained live')
   })
 
-  it.each(['idle', 'busy', 'editing', 'checking', 'running'])('forwards all human bytes in %s without frontend decisions', (state) => {
-    const { store, socket } = connectedStore({ attached: true, busy: state !== 'idle', state,
-      pending: { approvalId: 'approval-1', ...sharedDraft } })
-    const input = 'ä\x1b[D\x7f\r\n\x03\x1b[200~paste\r\x1b[201~'
+  it.each(['idle', 'busy', 'running'])('forwards raw manual bytes in %s', (state) => {
+    const { store, socket } = connectedStore({ busy: state !== 'idle', state })
+    const input = 'ä\t\x1b[A\x7f\r\n\x03\x1b[200~paste\r\x1b[201~'
     store.input(input)
     const messages = socket.send.mock.calls.map(([data]) => JSON.parse(data))
     expect(messages.map((message) => message.type)).toEqual(['input'])
@@ -90,9 +93,13 @@ describe('shared terminal', () => {
     expect(socket.send).toHaveBeenCalledOnce()
   })
 
-  it('changes attachment only on matching status and never clears or reconstructs output', () => {
+  it('changes ownership only on matching status and enforces busy command boundaries', () => {
     const { store, socket } = connectedStore({ personalData: btoa('user and agent\r\n') })
     const revision = store.bufferRevision
+    socket.state({ busy: true })
+    store.attach()
+    expect(socket.send).not.toHaveBeenCalled()
+    socket.state({ busy: false })
     store.attach()
     store.attach()
     expect(socket.send).toHaveBeenCalledTimes(1)
@@ -102,6 +109,11 @@ describe('shared terminal', () => {
     expect(store.submitting).toBe('attach')
     socket.state({ attached: true })
     expect(store.submitting).toBeNull()
+    expect(store.inputEnabled).toBe(false)
+    socket.state({ activeToolCallId: 'tool-1', busy: true })
+    store.detach()
+    expect(socket.send).toHaveBeenCalledTimes(1)
+    socket.state({ activeToolCallId: null, busy: false })
     store.detach()
     store.detach()
     expect(socket.send).toHaveBeenCalledTimes(2)
@@ -126,8 +138,8 @@ describe('shared terminal', () => {
     expect(notifyError).toHaveBeenCalledWith({ error: { code: 'terminal.unavailable' } }, expect.any(String))
   })
 
-  it('resizes one PTY and retries dimensions that could not be sent while suspended', () => {
-    const { store, socket } = connectedStore()
+  it('resizes while attached and retries dimensions that could not be sent while suspended', () => {
+    const { store, socket } = connectedStore({ attached: true })
     store.resize(120, 40)
     store.resize(120, 40)
     expect(socket.send).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ type: 'resize', columns: 120, rows: 40 }))

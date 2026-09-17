@@ -312,6 +312,9 @@ class TerminalManager:
             raise AgentError("request.invalid", "Terminal input is too large")
         if entry.shared is not None:
             async with entry.shared.lock:
+                if entry.shared.state in {"agent", "running"}:
+                    raise AgentError("terminal.busy", "Terminal is owned by the agent")
+                entry.shared.prompt = None
                 return await self._write(entry, data)
         return await self._write(entry, data)
 

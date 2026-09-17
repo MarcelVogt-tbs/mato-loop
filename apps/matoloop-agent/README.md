@@ -1,11 +1,10 @@
 # MatoLoop Agent
 
-The optional [managed shared Bash terminal](SHARED_TERMINAL.md) uses a native
-Readline integration for editable, revision-bound agent proposals in a real
-persistent shell. Shared and isolated inspection use the same heuristic: commands
-without a recognized write remain `shell.read`, even when analysis is incomplete.
-The mutable shared shell is trusted; this is not a sandbox guarantee. Isolated
-command execution remains unchanged.
+The optional [managed shared Bash terminal](SHARED_TERMINAL.md) gives the user and
+agent exclusive turns in one real persistent shell. Shared and isolated inspection
+use the same heuristic: commands without a recognized write remain `shell.read`,
+even when analysis is incomplete. The shared shell is trusted; this is not a
+sandbox guarantee. Isolated command execution remains unchanged.
 
 Standalone agent with a portable connection and dispatch core. The current Linux platform adapter provides bounded filesystem, process, POSIX terminal, transfer, OpenSCAD, browser, credential-storage, and session-cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
 

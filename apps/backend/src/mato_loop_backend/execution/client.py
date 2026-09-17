@@ -297,22 +297,15 @@ class ExecutionClientError(Exception):
 class SharedTerminalStatus(ExecutionResult):
     terminal_id: UUID = Field(strict=False)
     current_directory: str
-    state: Literal["idle", "busy", "editing", "checking", "running", "closed"]
-    context_revision: int = Field(ge=0)
+    state: Literal["human", "agent", "running", "closed"]
     command_id: UUID | None = Field(strict=False)
-    command: str | None = Field(max_length=256 * 1024)
-    revision: int = Field(ge=0)
-    submitted: bool
-    cancelled: bool
 
     _validate_path = field_validator("current_directory")(_absolute_path)
 
 
-class SharedInspectResult(ExecutionResult):
+class SharedPrepareResult(ExecutionResult):
     command: str = Field(min_length=1, max_length=256 * 1024)
     current_directory: str
-    revision: int = Field(ge=0)
-    context_revision: int = Field(ge=0)
     inspection: ShellInspectResult
 
     _validate_path = field_validator("current_directory")(_absolute_path)
@@ -579,7 +572,7 @@ __all__ = [
     "ExecutionClientError",
     "ProcessResult",
     "SharedProcessResult",
-    "SharedInspectResult",
+    "SharedPrepareResult",
     "SharedTerminalStatus",
     "ShellInspectResult",
     "SystemInfoResult",

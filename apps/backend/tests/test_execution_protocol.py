@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from mato_loop_backend.execution.client import (
     ExecutionClient,
     ExecutionClientError,
-    SharedInspectResult,
+    SharedPrepareResult,
     SharedProcessResult,
     ShellCommand,
     ShellInspectResult,
@@ -209,8 +209,9 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "terminal.run",
         "terminal.shared.open",
         "terminal.shared.status",
-        "terminal.shared.stage",
-        "terminal.shared.inspect",
+        "terminal.shared.acquire",
+        "terminal.shared.release",
+        "terminal.shared.prepare",
         "terminal.shared.execute",
         "terminal.shared.cancel",
     }
@@ -320,15 +321,17 @@ async def test_generation_pinned_client_never_dispatches_to_replacement(monkeypa
 @pytest.mark.parametrize("classification", ["read", "write"])
 @pytest.mark.parametrize("complete", [False, True])
 @pytest.mark.parametrize("prefix", [None, ["pwd"]])
-def test_shared_inspector_preserves_ordinary_inspection(classification, complete, prefix):
+def test_shared_prepare_preserves_exact_command_and_ordinary_inspection(classification, complete, prefix):
     data = {
-        "command": "pwd", "currentDirectory": "/home/user", "revision": 1, "contextRevision": 1,
+        "command": "pwd", "currentDirectory": "/home/user",
         "inspection": {"targets": [{"kind": "toolchain_metadata", "path": "/usr/bin/python3"}],
                        "commands": [{"tokens": ["pwd"], "prefix": prefix, "classification": classification}],
                        "classification": classification, "readOnly": classification == "read",
                        "analysisComplete": complete, "inspectionRevision": "a" * 64},
     }
-    inspection = SharedInspectResult.model_validate(data).inspection
+    prepared = SharedPrepareResult.model_validate(data)
+    inspection = prepared.inspection
+    assert prepared.command == "pwd"
     assert inspection.classification == classification
     assert inspection.analysis_complete == complete
     assert inspection.commands[0].prefix == prefix
@@ -336,10 +339,10 @@ def test_shared_inspector_preserves_ordinary_inspection(classification, complete
 
 
 @pytest.mark.parametrize("command", ["pwd\0", "\u00e4" * (256 * 1024)])
-def test_shared_inspector_keeps_command_validation(command):
+def test_shared_prepare_keeps_command_validation(command):
     with pytest.raises(ValidationError):
-        SharedInspectResult.model_validate({
-            "command": command, "currentDirectory": "/home/user", "revision": 1, "contextRevision": 1,
+        SharedPrepareResult.model_validate({
+            "command": command, "currentDirectory": "/home/user",
             "inspection": {"targets": [], "commands": [], "classification": "read", "readOnly": True,
                            "analysisComplete": False, "inspectionRevision": "a" * 64},
         })

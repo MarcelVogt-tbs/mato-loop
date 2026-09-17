@@ -111,7 +111,6 @@ class PermissionRequest:
     )
     # Derived from the current shell inspection, never from approval payloads or grants.
     shell_metadata_paths: frozenset[str] = frozenset()
-    shared_command_id: UUID | None = None
     session_grants: tuple[SessionGrantScope, ...] = ()
 
     @property

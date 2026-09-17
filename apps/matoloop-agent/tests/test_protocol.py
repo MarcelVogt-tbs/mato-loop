@@ -181,11 +181,19 @@ class ProtocolTests(unittest.TestCase):
             "terminal.shared.open", {"rows": 24, "columns": 80, "terminalId": AGENT_ID}
         )
         self.assertEqual(shared.terminal_id, AGENT_ID)
-        inspected = arguments(
-            "terminal.shared.inspect", {"terminalId": AGENT_ID, "commandId": REQUEST_ID}
+        prepared = arguments(
+            "terminal.shared.prepare",
+            {"terminalId": AGENT_ID, "commandId": REQUEST_ID, "command": "pwd"},
         )
-        self.assertTrue(inspected.freeze)
-        self.assertFalse(arguments("terminal.shared.status", {"terminalId": AGENT_ID}).redisplay)
+        self.assertEqual(prepared.command, "pwd")
+        self.assertEqual(
+            arguments("terminal.shared.acquire", {"terminalId": AGENT_ID}).terminal_id,
+            AGENT_ID,
+        )
+        self.assertEqual(
+            arguments("terminal.shared.release", {"terminalId": AGENT_ID}).terminal_id,
+            AGENT_ID,
+        )
         read = arguments(
             "terminal.read",
             {"terminalId": AGENT_ID, "maxBytes": 65_536, "waitSeconds": 30},
@@ -199,10 +207,10 @@ class ProtocolTests(unittest.TestCase):
 
         invalid = [
             ("terminal.shared.open", {"rows": 24, "columns": 80, "terminalId": "invalid"}),
-            ("terminal.shared.status", {"terminalId": AGENT_ID, "redisplay": 1}),
+            ("terminal.shared.status", {"terminalId": AGENT_ID, "redisplay": True}),
             (
-                "terminal.shared.inspect",
-                {"terminalId": AGENT_ID, "commandId": REQUEST_ID, "freeze": "false"},
+                "terminal.shared.prepare",
+                {"terminalId": AGENT_ID, "commandId": REQUEST_ID, "command": ""},
             ),
             ("terminal.open", {"rows": 0, "columns": 80}),
             ("terminal.read", {"terminalId": AGENT_ID, "maxBytes": 65_537}),

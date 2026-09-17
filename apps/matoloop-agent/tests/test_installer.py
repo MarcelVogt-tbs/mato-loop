@@ -153,7 +153,6 @@ class InstallerTests(unittest.TestCase):
             with (
                 patch.dict(os.environ, environment),
                 patch.object(installer, "check_linux"),
-                patch.object(installer, "try_build_shared_terminal"),
                 patch.object(installer, "sync_environment", side_effect=fake_sync),
                 patch.object(installer, "run"),
             ):
@@ -178,7 +177,6 @@ class InstallerTests(unittest.TestCase):
             with (
                 patch.dict(os.environ, environment),
                 patch.object(installer, "check_linux"),
-                patch.object(installer, "try_build_shared_terminal"),
                 patch.object(installer, "sync_environment", side_effect=fake_sync),
                 patch.object(installer, "run", side_effect=fail_start),
             ):

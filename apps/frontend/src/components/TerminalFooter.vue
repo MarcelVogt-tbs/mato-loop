@@ -9,14 +9,17 @@
       <q-toggle
         class="col-auto"
         :model-value="terminal.attached"
-        :disable="connectionDisabled"
+        :disable="attachmentDisabled"
         color="primary"
         dense
         label="Agent verbinden"
         @update:model-value="toggleAttachment"
       >
-        <q-tooltip>Agent-Befehle verwenden diese Shell. Die geltenden Freigaben bleiben unverändert.</q-tooltip>
+        <q-tooltip>Der Agent übernimmt das Terminal exklusiv. Die geltenden Freigaben bleiben unverändert.</q-tooltip>
       </q-toggle>
+    </div>
+    <div v-if="runtimeStatus" class="text-caption app-muted" role="status" aria-live="polite">
+      {{ runtimeStatus }}
     </div>
   </div>
 </template>
@@ -33,8 +36,17 @@ const chat = useChatStore()
 const executionAgents = useExecutionAgentStore()
 const terminal = useTerminalStore()
 const agent = computed(() => executionAgents.byId(chat.current?.preferredExecutionAgentId))
-const connectionDisabled = computed(() => !terminal.inputEnabled
-  || (terminal.attached && Boolean(terminal.activeToolCallId || terminal.pending)))
+const attachmentDisabled = computed(() => !terminal.controlsEnabled || Boolean(terminal.submitting)
+  || (terminal.attached ? Boolean(terminal.activeToolCallId) : terminal.busy))
+const runtimeStatus = computed(() => {
+  if (!terminal.ready) return 'Terminal nicht verbunden.'
+  if (terminal.submitting === 'attach') return 'Agent-Verbindung wird angefordert.'
+  if (terminal.submitting === 'detach') return 'Manuelle Übernahme wird angefordert.'
+  if (terminal.attached) return terminal.activeToolCallId
+    ? 'Der Agent führt einen Befehl aus.'
+    : 'Agent verbunden.'
+  return terminal.busy ? 'Ein manueller Befehl läuft.' : 'Manuelle Steuerung'
+})
 
 function toggleAttachment(attached) {
   if (attached) terminal.attach()

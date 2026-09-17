@@ -310,7 +310,6 @@ export const useSubagentStore = defineStore('subagents', () => {
         activity.value.phase = status
       })
     }
-    on('approval.updated', (payload) => useApprovalStore().update(payload.approval))
     for (const name of ['approval.resolved', 'approval.expired', 'question.answered', 'question.rejected', 'question.expired']) {
       on(name, () => {
         if (name.startsWith('approval.')) void useApprovalStore().fetchPending().catch(() => {})

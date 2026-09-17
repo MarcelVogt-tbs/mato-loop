@@ -87,14 +87,11 @@ const unavailableMessage = computed(() => {
 const runtimeStatus = computed(() => {
   if (!terminal.ready) return 'Terminal wird verbunden.'
   if (terminal.suspended) return 'Terminal vorübergehend ausgesetzt.'
-  return ({
-    idle: terminal.busy ? 'Die Shell ist beschäftigt.' : '',
-    busy: 'Die Shell ist beschäftigt.',
-    editing: 'Agent-Befehl direkt im Terminal bearbeiten. Enter erlaubt ihn einmalig, Strg+C verwirft die Anfrage.',
-    checking: 'Befehl wird geprüft. Strg+C verwirft die Anfrage.',
-    running: 'Befehl läuft. Strg+C unterbricht den Vordergrundprozess.',
-    closed: 'Die Shell wurde beendet.'
-  })[terminal.runtimeState] ?? 'Terminalzustand wird geladen.'
+  if (terminal.runtimeState === 'closed') return 'Die Shell wurde beendet.'
+  if (terminal.attached) return terminal.activeToolCallId
+    ? 'Der Agent führt einen Befehl aus. Manuelle Eingaben sind gesperrt.'
+    : 'Agent verbunden. Manuelle Eingaben sind gesperrt.'
+  return terminal.busy ? 'Ein manueller Befehl läuft.' : ''
 })
 
 let xterm

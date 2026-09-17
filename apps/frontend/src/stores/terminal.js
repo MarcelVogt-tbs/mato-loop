@@ -33,7 +33,6 @@ export const useTerminalStore = defineStore('terminal', {
     busy: false,
     runtimeState: 'closed',
     suspended: false,
-    pending: null,
     activeToolCallId: null,
     currentDirectory: null,
     buffer: '',
@@ -46,8 +45,11 @@ export const useTerminalStore = defineStore('terminal', {
   }),
   getters: {
     ready: (state) => state.status === 'open',
-    inputEnabled: (state) => state.status === 'open' && !state.suspended && state.runtimeState !== 'closed',
-    removalBlocked: (state) => Boolean(state.busy || state.pending || state.submitting)
+    controlsEnabled: (state) => state.status === 'open' && !state.suspended && state.runtimeState !== 'closed',
+    inputEnabled() {
+      return this.controlsEnabled && !this.attached
+    },
+    removalBlocked: (state) => Boolean(state.busy || state.submitting)
   },
   actions: {
     connect({ sessionId, agentId }) {
@@ -139,7 +141,6 @@ export const useTerminalStore = defineStore('terminal', {
       this.busy = message.busy === true
       this.runtimeState = message.state
       this.suspended = message.suspended === true
-      this.pending = message.pending ?? null
       this.activeToolCallId = message.activeToolCallId ?? null
       this.currentDirectory = message.currentDirectory ?? null
       if ((this.submitting === 'attach' && this.attached) || (this.submitting === 'detach' && !this.attached)) {
@@ -157,30 +158,30 @@ export const useTerminalStore = defineStore('terminal', {
       this.truncated ||= next.length > MAX_BUFFER_LENGTH
       this.buffer = next.slice(-MAX_BUFFER_LENGTH)
     },
-    send(message) {
-      if (!this.inputEnabled || this.socket?.readyState !== 1) return false
+    sendControl(message) {
+      if (!this.controlsEnabled || this.socket?.readyState !== 1) return false
       this.socket.send(JSON.stringify(message))
       return true
     },
     attach() {
-      if (!this.sessionId || this.attached || this.submitting || !this.send({
+      if (!this.sessionId || this.attached || this.busy || this.submitting || !this.sendControl({
         type: 'attach', sessionId: this.sessionId
       })) return
       this.submitting = 'attach'
     },
     detach() {
-      if (!this.attached || this.activeToolCallId || this.pending || this.submitting || !this.send({ type: 'detach' })) return
+      if (!this.attached || this.activeToolCallId || this.submitting || !this.sendControl({ type: 'detach' })) return
       this.submitting = 'detach'
     },
     input(data) {
       if (!this.inputEnabled) return
-      for (const encoded of encodedInputChunks(data)) this.send({ type: 'input', data: encoded })
+      for (const encoded of encodedInputChunks(data)) this.sendControl({ type: 'input', data: encoded })
     },
     resize(columns, rows, force = false) {
       if (!Number.isInteger(columns) || !Number.isInteger(rows) || columns < 1 || rows < 1
         || columns > 1000 || rows > 1000) return
       if (!force && this.columns === columns && this.rows === rows) return
-      if (this.send({ type: 'resize', columns, rows })) {
+      if (this.sendControl({ type: 'resize', columns, rows })) {
         this.columns = columns
         this.rows = rows
       }

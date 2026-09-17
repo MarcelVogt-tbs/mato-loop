@@ -2364,10 +2364,6 @@ export const useChatStore = defineStore('chat', {
         this.setSessionRunStatus(sessionId, 'waiting_approval')
         useApprovalStore().add(approval)
       })
-      source.addEventListener('approval.updated', (event) => {
-        if (this.eventSource !== source) return
-        useApprovalStore().update(JSON.parse(event.data).approval)
-      })
       source.addEventListener('approval.resolved', (event) => {
         if (this.eventSource !== source) return
         if (JSON.parse(event.data).subagentSessionId) {

@@ -54,8 +54,9 @@ export const TERMINAL_OPERATIONS = Object.freeze([
   'terminal.close',
   'terminal.shared.open',
   'terminal.shared.status',
-  'terminal.shared.stage',
-  'terminal.shared.inspect',
+  'terminal.shared.acquire',
+  'terminal.shared.release',
+  'terminal.shared.prepare',
   'terminal.shared.execute',
   'terminal.shared.cancel'
 ])

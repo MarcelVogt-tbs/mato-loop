@@ -10,7 +10,7 @@ import { useChatStore } from 'stores/chat'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useControlCenterStore } from 'stores/control-center'
 import { TERMINAL_OPERATIONS } from '../src/control-center/manifest'
-import { FakeWebSocket, sharedDraft } from './terminal-websocket'
+import { FakeWebSocket } from './terminal-websocket'
 
 vi.hoisted(() => {
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
@@ -79,9 +79,22 @@ async function flushOutput() {
 
 async function mountTerminal() {
   app = createApp({ render: () => h('div', [h(TerminalApp), h(TerminalFooter)]) })
-  for (const name of ['QIcon', 'QBanner', 'QInput', 'QToggle', 'QTooltip', 'QSpinnerDots']) {
+  for (const name of ['QIcon', 'QBanner', 'QInput', 'QTooltip', 'QSpinnerDots']) {
     app.component(name, { render() { return h('div', this.$slots.default?.()) } })
   }
+  app.component('QToggle', {
+    props: ['modelValue', 'disable', 'label'],
+    emits: ['update:modelValue'],
+    render() {
+      return h('button', {
+        role: 'switch',
+        'aria-checked': String(this.modelValue),
+        'aria-disabled': String(this.disable),
+        disabled: this.disable,
+        onClick: () => this.$emit('update:modelValue', !this.modelValue)
+      }, this.label)
+    }
+  })
   app.component('QBtn', {
     props: ['label', 'disable'],
     render() { return h('button', { disabled: this.disable }, this.label) }
@@ -190,7 +203,7 @@ it('reconnects A-B-A while mounted, replaces replay atomically and releases on u
     await flushOutput()
     expect(lines(3)).toEqual(['resumed', 'live', ''])
     expect(store).toMatchObject({ sessionId, status: 'open', attached: true, runtimeState: 'running', busy: true })
-    expect(xterm.options.disableStdin).toBe(false)
+    expect(xterm.options.disableStdin).toBe(true)
   }
   app.unmount()
   app = null
@@ -298,31 +311,44 @@ it('waits for persisted tab creation and resumes after a failed optimistic remov
   expect(store.attached).toBe(true)
 })
 
-it('keeps native pending editing enabled and forwards Enter and Ctrl+C without stopping the run', async () => {
+it('keeps manual history and tab bytes raw, then disables input while agent-owned', async () => {
   useChatStore().running = true
   useChatStore().current.currentDirectory = '/session/workspace'
-  socket.state({ attached: true, busy: true, state: 'editing', currentDirectory: '/terminal/cwd',
-    pending: { approvalId: 'approval-1', ...sharedDraft } })
+  socket.state({ attached: false, busy: false, state: 'idle', currentDirectory: '/terminal/cwd' })
   await mountTerminal()
-  expect(root.querySelector('[role="dialog"]')).toBeNull()
-  expect(root.querySelector('[aria-label="Vorgeschlagenen Befehl bearbeiten"]')).toBeNull()
-  expect(root.textContent).not.toMatch(/Agent-Modus|Schreibgeschützt|Automatisch|Bestätigen|letzten Befehls/)
-  expect(root.textContent).not.toContain('Terminal-Ordner:')
-  expect(root.textContent).not.toContain('/session/workspace')
   expect(xterm.options.disableStdin).toBe(false)
   socket.send.mockClear()
-  xterm.input('edit\r', true)
-  xterm.input('\x03', true)
+  xterm.input('\t\x1b[A', true)
   expect(socket.send.mock.calls.map(([data]) => JSON.parse(data))).toEqual([
-    { type: 'input', data: btoa('edit\r') }, { type: 'input', data: btoa('\x03') }
+    { type: 'input', data: btoa('\t\x1b[A') }
   ])
-  expect(useChatStore().stop).not.toHaveBeenCalled()
-  expect(root.textContent).not.toContain('Agent stoppen')
-  socket.state({ suspended: true })
+  socket.state({ attached: true, busy: true, state: 'running', activeToolCallId: 'tool-1' })
   await nextTick()
   expect(xterm.options.disableStdin).toBe(true)
-  expect(root.textContent).toContain('vorübergehend ausgesetzt')
+  expect(root.textContent).toContain('Manuelle Eingaben sind gesperrt')
+  expect(root.textContent).not.toMatch(/bearbeiten|geprüft|Strg\+C/)
   socket.send.mockClear()
   xterm.input('\r\x03', true)
   expect(socket.send).not.toHaveBeenCalled()
+})
+
+it('uses the attachment toggle for both directions and blocks it during an agent command', async () => {
+  socket.state({ attached: true, busy: true, state: 'running', activeToolCallId: 'tool-1' })
+  await mountTerminal()
+  const toggle = root.querySelector('[role="switch"]')
+  expect(root.textContent).toContain('Der Agent führt einen Befehl aus.')
+  expect(toggle.getAttribute('aria-checked')).toBe('true')
+  expect(toggle.getAttribute('aria-disabled')).toBe('true')
+  expect(root.textContent).not.toContain('Manuell übernehmen')
+  socket.state({ busy: false, state: 'idle', activeToolCallId: null })
+  await nextTick()
+  expect(toggle.getAttribute('aria-disabled')).not.toBe('true')
+  toggle.click()
+  expect(JSON.parse(socket.send.mock.calls.at(-1)[0])).toEqual({ type: 'detach' })
+  expect(store.attached).toBe(true)
+  await nextTick()
+  expect(root.textContent).toContain('Manuelle Übernahme wird angefordert.')
+  socket.state({ attached: false })
+  await nextTick()
+  expect(root.textContent).toContain('Manuelle Steuerung')
 })

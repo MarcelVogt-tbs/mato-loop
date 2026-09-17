@@ -2,19 +2,17 @@ from __future__ import annotations
 
 import array
 import asyncio
+import base64
 import codecs
 import hashlib
 import json
 import os
-import shlex
 import shutil
 import signal
 import socket
-import struct
 import tempfile
 import time
 from contextlib import suppress
-from pathlib import Path
 from uuid import uuid4
 
 from . import terminal as terminal_support
@@ -29,22 +27,14 @@ if PTY_AVAILABLE:
 SHARED_OPERATIONS = {
     "terminal.shared.open",
     "terminal.shared.status",
-    "terminal.shared.stage",
-    "terminal.shared.inspect",
+    "terminal.shared.acquire",
+    "terminal.shared.release",
+    "terminal.shared.prepare",
     "terminal.shared.execute",
     "terminal.shared.cancel",
 }
-MAX_FRAME = 512 * 1024
-
-
-def native_library() -> Path | None:
-    for path in (
-        Path(__file__).with_name("native") / "shared.so",
-        Path("/usr/local/lib/matoloop-agent/shared.so"),
-    ):
-        if path.is_file():
-            return path
-    return None
+TRIGGER = b"\x1b[777;777~"
+MAX_COMMAND_BYTES = 256 * 1024
 
 
 class SharedTerminals:
@@ -53,11 +43,10 @@ class SharedTerminals:
         self.bash = (
             shutil.which("bash", path=EXECUTION_PATH) if terminal_support.PTY_AVAILABLE else None
         )
-        self.library = native_library()
 
     @property
     def available(self) -> bool:
-        return self.bash is not None and self.library is not None
+        return self.bash is not None
 
     def get(self, terminal_id: str) -> SharedTerminal:
         shared = self.terminal._get(terminal_id).shared
@@ -75,37 +64,75 @@ class SharedTerminals:
             if existing.shared is None or existing.shared.open_dimensions != (rows, columns):
                 raise AgentError("terminal.exists", "Terminal identifier is already in use")
             await existing.shared.ready.wait()
-            if (
-                manager._terminals.get(terminal_id) is not existing
-                or existing.shared.state["state"] == "closed"
-            ):
+            if existing.shared.state == "closed":
                 raise AgentError("terminal.closed", "Shared terminal is closed")
             return {"terminalId": terminal_id}
         if len(manager._terminals) + len(manager._runs) >= MAX_TERMINALS:
             raise AgentError("terminal.limitReached", "Too many terminals are open")
+
         parent, child = socket.socketpair()
         parent.setblocking(False)
         entry = None
         try:
             with tempfile.NamedTemporaryFile(mode="w", prefix="matoloop-bash-") as rc:
+                fd = child.fileno()
                 rc.write(
-                    f"enable -f {shlex.quote(str(self.library))} ml_shared || exit 125\n"
-                    f"builtin ml_shared init {child.fileno()} || exit 125\n"
-                    "set -o emacs; set +H\n"
-                    "PS1='\\u@\\h:\\w\\$ '; PS2='> '\n"
-                    "__ml_prompt() { local result=$?; set +H; "
-                    'builtin ml_shared prompt "$result"; }\n'
-                    "readonly -f __ml_prompt\n"
-                    "PROMPT_COMMAND=__ml_prompt; readonly PROMPT_COMMAND\n"
+                    f"readonly __ml_fd={fd}\n"
+                    "__ml_prompt() { builtin printf 'P\\tprimary\\n' >&$__ml_fd; }\n"
+                    "__ml_secondary() { builtin printf 'P\\tsecondary\\n' >&$__ml_fd; }\n"
+                    "__ml_control() {\n"
+                    "  local __ml_req __ml_op __ml_arg __ml_expiry __ml_now __ml_code __ml_cwd\n"
+                    "  local __ml_trap\n"
+                    "  while IFS=$'\\t' read -r __ml_req __ml_op "
+                    "__ml_expiry __ml_arg <&$__ml_fd; do\n"
+                    "    __ml_now=${EPOCHSECONDS:-0}\n"
+                    "    if [[ $__ml_op == acquire && $__ml_expiry -ge $__ml_now ]]; "
+                    "then break; fi\n"
+                    "    builtin printf '%s\\tbusy\\n' \"$__ml_req\" >&$__ml_fd\n"
+                    "  done\n"
+                    "  [[ $__ml_op == acquire ]] || return\n"
+                    "  if [[ -n $READLINE_LINE ]]; then\n"
+                    "    builtin printf '%s\\tbusy\\n' \"$__ml_req\" >&$__ml_fd; return\n"
+                    "  fi\n"
+                    "  __ml_cwd=$(builtin pwd -P | base64 -w0)\n"
+                    '  builtin printf \'%s\\tok\\t%s\\n\' "$__ml_req" "$__ml_cwd" >&$__ml_fd\n'
+                    "  while IFS=$'\\t' read -r __ml_req __ml_op __ml_arg <&$__ml_fd; do\n"
+                    "    case $__ml_op in\n"
+                    "      execute)\n"
+                    "        __ml_cwd=$(builtin pwd -P | base64 -w0)\n"
+                    "        builtin printf '%s\\tstarted\\t%s\\n' "
+                    '"$__ml_req" "$__ml_cwd" >&$__ml_fd\n'
+                    "        __ml_trap=$(trap -p INT); trap ':' INT\n"
+                    '        eval -- "$(builtin printf %s "$__ml_arg" | base64 -d)"\n'
+                    "        __ml_code=$?\n"
+                    '        if [[ $__ml_trap ]]; then eval "$__ml_trap"; else trap - INT; fi\n'
+                    "        __ml_cwd=$(builtin pwd -P | base64 -w0)\n"
+                    "        builtin printf '%s\\tdone\\t%s\\t%s\\n' "
+                    '"$__ml_req" "$__ml_code" "$__ml_cwd" >&$__ml_fd\n'
+                    "        ;;\n"
+                    "      release)\n"
+                    "        builtin printf '%s\\tok\\n' \"$__ml_req\" >&$__ml_fd\n"
+                    "        READLINE_LINE=; READLINE_POINT=0; return;;\n"
+                    "      *) builtin printf '%s\\tinvalid\\n' \"$__ml_req\" >&$__ml_fd;;\n"
+                    "    esac\n"
+                    "  done\n"
+                    "}\n"
+                    "readonly -f __ml_prompt __ml_secondary __ml_control\n"
+                    "bind -x '\"\\e[777;777~\":__ml_control'\n"
+                    "set +H\n"
+                    "PS1='\\u@\\h:\\w\\$ '; PS2='$(__ml_secondary)> '\n"
+                    "PROMPT_COMMAND=__ml_prompt\n"
                 )
                 rc.flush()
                 environment = {
                     "HOME": manager.home,
                     "SHELL": self.bash,
                     "PATH": EXECUTION_PATH,
-                    "TERM": "xterm-256color",
-                    "LANG": "C.UTF-8",
-                    "INPUTRC": "/dev/null",
+                    "TERM": os.environ.get("TERM", "xterm-256color"),
+                    "COLORTERM": os.environ.get("COLORTERM", "truecolor"),
+                    "LANG": os.environ.get("LANG", "C.UTF-8"),
+                    "USER": os.environ.get("USER", "matoloop"),
+                    "LOGNAME": os.environ.get("LOGNAME", "matoloop"),
                 }
                 entry = manager._spawn(
                     terminal_id,
@@ -114,12 +141,12 @@ class SharedTerminals:
                     rows,
                     columns,
                     environment,
-                    (child.fileno(),),
+                    (fd,),
                 )
                 child.close()
                 shared = SharedTerminal(manager, entry, parent, (rows, columns))
                 entry.shared = shared
-                manager._terminals[entry.terminal_id] = entry
+                manager._terminals[terminal_id] = entry
                 entry.reader_task = asyncio.create_task(manager._buffer_output(entry))
                 try:
                     async with asyncio.timeout(3):
@@ -128,19 +155,17 @@ class SharedTerminals:
                     raise AgentError(
                         "operation.unsupported", "Managed Bash did not initialize"
                     ) from exc
-                if manager._terminals.get(terminal_id) is not entry:
-                    raise AgentError("terminal.closed", "Shared terminal was closed while opening")
-                if shared.state["state"] == "closed":
-                    raise AgentError("operation.unsupported", "Managed Bash could not be loaded")
+                if shared.state == "closed":
+                    raise AgentError("operation.unsupported", "Managed Bash could not initialize")
         except BaseException:
             if entry is not None and manager._terminals.get(terminal_id) is entry:
-                await manager.close(entry.terminal_id)
+                await manager.close(terminal_id)
             else:
                 parent.close()
             raise
         finally:
             child.close()
-        return {"terminalId": entry.terminal_id}
+        return {"terminalId": terminal_id}
 
 
 class SharedTerminal:
@@ -149,20 +174,14 @@ class SharedTerminal:
         self.open_dimensions = open_dimensions
         self.lock = asyncio.Lock()
         self.ready = asyncio.Event()
-        self.state = {
-            "terminalId": entry.terminal_id,
-            "currentDirectory": manager.home,
-            "state": "busy",
-            "contextRevision": 0,
-            "commandId": None,
-            "command": None,
-            "revision": 0,
-            "submitted": False,
-            "cancelled": False,
-        }
+        self.state = "human"
+        self.prompt = None
+        self.command_id = None
+        self.command = None
+        self.inspection = None
         self.waiters = {}
+        self.completions = {}
         self.reader = asyncio.create_task(self._read_control())
-        self.inspected = None
         self.capture = None
         self.capture_start = 0
         self.capture_end = None
@@ -170,7 +189,21 @@ class SharedTerminal:
         self.truncated = False
         self.completed = asyncio.Event()
         self.exit_code = None
-        self.executing = False
+        self.cancelled = False
+
+    def _cwd(self):
+        try:
+            return os.readlink(f"/proc/{self.entry.pid}/cwd")
+        except OSError:
+            return self.manager.home
+
+    def _status(self):
+        return {
+            "terminalId": self.entry.terminal_id,
+            "currentDirectory": self._cwd(),
+            "state": self.state,
+            "commandId": self.command_id,
+        }
 
     def _boundary(self):
         pending = array.array("i", [0])
@@ -197,283 +230,199 @@ class SharedTerminal:
         try:
             while chunk := await asyncio.get_running_loop().sock_recv(self.control, 65536):
                 buffer.extend(chunk)
-                while len(buffer) >= 4:
-                    size = struct.unpack("!I", buffer[:4])[0]
-                    if size > MAX_FRAME:
-                        raise ValueError("Control frame exceeds limit")
-                    if len(buffer) < size + 4:
-                        break
-                    fields = bytes(buffer[4 : 4 + size]).decode().split("\0")
-                    del buffer[: 4 + size]
-                    if len(fields) != 12 or fields[-1]:
-                        raise ValueError("Invalid control frame")
-                    (
-                        request,
-                        error,
-                        state,
-                        cwd,
-                        context,
-                        cid,
-                        command,
-                        revision,
-                        submitted,
-                        cancelled,
-                        exit_code,
-                        _,
-                    ) = fields
-                    self.state = {
-                        "terminalId": self.entry.terminal_id,
-                        "currentDirectory": cwd,
-                        "state": state,
-                        "contextRevision": int(context),
-                        "commandId": cid or None,
-                        "command": command if cid else None,
-                        "revision": int(revision),
-                        "submitted": submitted == "1",
-                        "cancelled": cancelled == "1",
-                    }
-                    if state == "idle":
+                while b"\n" in buffer:
+                    raw, _, rest = buffer.partition(b"\n")
+                    buffer[:] = rest
+                    fields = raw.decode("ascii").split("\t")
+                    if fields[:1] == ["P"] and len(fields) == 2:
+                        self.prompt = fields[1]
                         self.ready.set()
-                    if self.executing and self.capture_end is None and exit_code:
-                        self.exit_code = int(exit_code)
+                        continue
+                    if len(fields) < 2:
+                        raise ValueError("Invalid Bash control response")
+                    request, result = fields[:2]
+                    if result == "done":
+                        self.exit_code = 130 if self.cancelled else int(fields[2])
                         self.capture_end = self._boundary()
+                        self.state = "agent"
                         if self.received >= self.capture_end:
                             self.completed.set()
+                        completion = self.completions.get(request)
+                        if completion is not None and not completion.done():
+                            completion.set_result(None)
+                        continue
                     waiter = self.waiters.get(request)
                     if waiter is not None and not waiter.done():
-                        if error:
+                        if result in {"busy", "invalid"}:
                             waiter.set_exception(
-                                AgentError(error, "Shared terminal request rejected")
+                                AgentError("terminal.busy", "Bash control request was rejected")
                             )
                         else:
-                            waiter.set_result(dict(self.state))
-        except (OSError, ValueError):
+                            waiter.set_result(fields[2:])
+        except (OSError, UnicodeError, ValueError):
             pass
         finally:
             self.control.close()
-            self.state = {**self.state, "state": "closed"}
+            self.state = "closed"
             self.ready.set()
-            if self.executing and self.capture_end is None:
+            if self.capture_end is None:
                 self.capture_end = self._boundary()
-            if self.capture_end is None or self.received >= self.capture_end:
-                self.completed.set()
-            for waiter in self.waiters.values():
+            self.completed.set()
+            for waiter in (*self.waiters.values(), *self.completions.values()):
                 if not waiter.done():
                     waiter.set_exception(
                         AgentError("terminal.closed", "Bash control channel closed")
                     )
 
-    async def _rpc(self, operation, command_id="", command="", expected=None):
-        if self.state["state"] == "closed":
+    async def _send(self, operation, argument="", *, trigger=False):
+        if self.state == "closed":
             raise AgentError("terminal.closed", "Shared terminal is closed")
-        request_id = str(uuid4())
-        expected = expected or self.state
-        fields = [
-            request_id,
-            operation,
-            command_id,
-            command,
-            str(expected["revision"]),
-            str(expected["contextRevision"]),
-            str(time.monotonic() + 0.8),
-        ]
-        if any("\0" in value for value in fields):
-            raise AgentError("request.invalid", "Shared command contains a NUL byte")
-        packet = ("\0".join(fields) + "\0").encode()
-        if len(packet) > MAX_FRAME - 4:
-            raise AgentError("request.invalid", "Shared command exceeds control limit")
+        request = str(uuid4())
+        expiry = str(int(time.time()) + 2) if operation == "acquire" else ""
+        line = f"{request}\t{operation}\t{expiry}\t{argument}\n".encode("ascii")
         waiter = asyncio.get_running_loop().create_future()
-        self.waiters[request_id] = waiter
+        self.waiters[request] = waiter
         try:
+            await asyncio.get_running_loop().sock_sendall(self.control, line)
+            if trigger:
+                await self.manager._write(self.entry, TRIGGER)
             async with asyncio.timeout(1):
-                await asyncio.get_running_loop().sock_sendall(
-                    self.control, struct.pack("!I", len(packet)) + packet
-                )
-                return await waiter
+                return request, await waiter
         except TimeoutError as exc:
-            # Expired frames are rejected in Bash, even if it returns to Readline later.
-            if operation == "execute":
-                raise
-            raise AgentError("terminal.busy", "Bash is not servicing primary Readline") from exc
+            raise AgentError("terminal.busy", "Bash did not accept control") from exc
         except OSError as exc:
             raise AgentError("terminal.closed", "Shared terminal is closed") from exc
         finally:
-            self.waiters.pop(request_id, None)
+            self.waiters.pop(request, None)
 
-    async def status(self, *, redisplay: bool = False):
+    async def status(self):
+        return self._status()
+
+    async def acquire(self):
         async with self.lock:
-            if self.state["state"] == "closed":
-                return dict(self.state)
-            try:
-                return await self._rpc("redisplay" if redisplay else "status")
-            except AgentError as exc:
-                if exc.code != "terminal.busy":
-                    raise
-                # No Readline callback exists in a foreground program. Never turn
-                # a missing response into idle readiness or inject terminal input.
-                result = {**self.state, "state": "running" if self.executing else "busy"}
-                with suppress(OSError):
-                    result["currentDirectory"] = os.readlink(f"/proc/{self.entry.pid}/cwd")
-                return result
+            if self.state != "human":
+                raise AgentError("terminal.busy", "Terminal is not under human control")
+            if self.prompt != "primary" or os.tcgetpgrp(self.entry.fd) != self.entry.pid:
+                raise AgentError("terminal.busy", "Bash is not at its primary prompt")
+            await self._send("acquire", trigger=True)
+            self.state = "agent"
+            self.prompt = None
+            return self._status()
 
-    async def stage(self, command_id, command):
-        if not command or len(command.encode()) > 256 * 1024 or "\0" in command:
-            raise AgentError("request.invalid", "Invalid shared command")
-        _parse_shell(command)
+    async def release(self):
         async with self.lock:
-            if self.executing:
-                raise AgentError("terminal.busy", "A shared command is still executing")
-            status = await self._rpc("status")
-            self.manager.process.filesystem.resolve_directory(status["currentDirectory"])
-            result = await self._rpc("stage", command_id, command, status)
-            self.inspected = None
-            return result
+            if self.state != "agent":
+                raise AgentError("terminal.busy", "Terminal is not owned by the agent")
+            await self._send("release")
+            self.command_id = self.command = self.inspection = None
+            self.state = "human"
+            self.prompt = "primary"
+            return self._status()
 
-    def _inspection(self, snapshot):
-        inspection = self.manager.process.inspect_shell(
-            snapshot["command"], snapshot["currentDirectory"]
-        )
-        binding = {
-            key: snapshot[key]
-            for key in (
-                "terminalId",
-                "commandId",
-                "command",
-                "currentDirectory",
-                "revision",
-                "contextRevision",
-            )
-        }
+    def _inspect(self, command, cwd):
+        inspection = self.manager.process.inspect_shell(command, cwd)
         inspection["inspectionRevision"] = hashlib.sha256(
-            json.dumps({**binding, "inspection": inspection}, sort_keys=True).encode()
+            json.dumps(
+                {
+                    "terminalId": self.entry.terminal_id,
+                    "commandId": self.command_id,
+                    "command": command,
+                    "currentDirectory": cwd,
+                    "inspection": inspection,
+                },
+                sort_keys=True,
+            ).encode()
         ).hexdigest()
         return inspection
 
-    async def inspect(self, command_id, *, freeze: bool = True):
+    async def prepare(self, command_id, command):
+        if not command or len(command.encode()) > MAX_COMMAND_BYTES or "\0" in command:
+            raise AgentError("request.invalid", "Invalid shared command")
+        _parse_shell(command)
         async with self.lock:
-            snapshot = await self._rpc("inspect" if freeze else "snapshot", command_id)
-        inspection = await asyncio.to_thread(self._inspection, snapshot)
+            if self.state != "agent":
+                raise AgentError("terminal.busy", "Terminal is not owned by the agent")
+            if self.command_id is not None and self.command_id != command_id:
+                raise AgentError("terminal.busy", "Another command is already prepared")
+            if self.command_id == command_id and self.command != command:
+                raise AgentError("terminal.stale", "Prepared command is immutable")
+            cwd = self._cwd()
+            self.manager.process.filesystem.resolve_directory(cwd)
+            self.command_id, self.command = command_id, command
+        inspection = await asyncio.to_thread(self._inspect, command, cwd)
         async with self.lock:
-            current = await self._rpc("status")
-            if any(
-                current[key] != snapshot[key]
-                for key in (
-                    "commandId",
-                    "command",
-                    "revision",
-                    "contextRevision",
-                    "state",
-                    "cancelled",
-                )
-            ):
-                raise AgentError("terminal.stale", "Proposal changed during inspection")
-            self.inspected = {**snapshot, "inspection": inspection}
-            return {
-                key: self.inspected[key]
-                for key in (
-                    "command",
-                    "currentDirectory",
-                    "revision",
-                    "contextRevision",
-                    "inspection",
-                )
-            }
+            if self.command_id != command_id or self.command != command or self.state != "agent":
+                raise AgentError("terminal.stale", "Prepared command changed during inspection")
+            self.inspection = inspection
+            return {"command": command, "currentDirectory": cwd, "inspection": inspection}
 
     def interrupt(self):
         if self.entry.fd >= 0:
             with suppress(ProcessLookupError, OSError):
-                os.killpg(os.tcgetpgrp(self.entry.fd), signal.SIGINT)
-
-    async def _recover(self):
-        if not self.completed.is_set():
-            if self.capture_end is None:
-                self.interrupt()
-            with suppress(TimeoutError):
-                await asyncio.wait_for(self.completed.wait(), 1)
-            if not self.completed.is_set() and self.capture_end is None:
-                await self.manager._terminate(self.entry)
+                group = os.tcgetpgrp(self.entry.fd)
+                os.killpg(
+                    group,
+                    signal.SIGINT if group == self.entry.pid else signal.SIGTERM,
+                )
 
     async def cancel(self, command_id):
         async with self.lock:
-            if self.state["commandId"] != command_id:
-                raise AgentError("terminal.stale", "Proposal is no longer current")
-            if self.executing:
-                if self.capture_end is None:
-                    self.interrupt()
-            elif not self.state["cancelled"]:
-                await self._rpc("cancel", command_id)
+            if self.command_id != command_id:
+                raise AgentError("terminal.stale", "Command is no longer current")
+            if self.state == "running":
+                self.cancelled = True
+                self.interrupt()
+            else:
+                self.command_id = self.command = self.inspection = None
             return {}
 
-    async def execute(
-        self,
-        command_id,
-        command,
-        expected_revision,
-        expected_context_revision,
-        expected_inspection_revision,
-        timeout,
-        stream,
-    ):
+    async def execute(self, command_id, expected_inspection_revision, timeout, stream):
         timeout = self.manager.process.execution_timeout(timeout)
         started = time.monotonic()
         async with self.lock:
-            expected = self.inspected
             if (
-                self.executing
-                or expected is None
-                or expected["commandId"] != command_id
-                or command != expected["command"]
-                or expected_revision != expected["revision"]
-                or expected_context_revision != expected["contextRevision"]
-                or expected_inspection_revision != expected["inspection"]["inspectionRevision"]
+                self.state != "agent"
+                or self.command_id != command_id
+                or self.command is None
+                or self.inspection is None
+                or self.inspection["inspectionRevision"] != expected_inspection_revision
             ):
-                raise AgentError("terminal.stale", "Approval does not match inspected proposal")
-        fresh = await asyncio.to_thread(self._inspection, expected)
-        if fresh["inspectionRevision"] != expected_inspection_revision:
-            raise AgentError("terminal.stale", "Inspection targets changed")
-        async with self.lock:
-            if self.executing or self.inspected is not expected:
-                raise AgentError("terminal.stale", "Another proposal replaced the approval")
+                raise AgentError("terminal.stale", "Execution does not match prepared command")
+            fresh = await asyncio.to_thread(self._inspect, self.command, self._cwd())
+            if fresh["inspectionRevision"] != expected_inspection_revision:
+                raise AgentError("terminal.stale", "Inspection targets changed")
             self.capture = bytearray()
             self.capture_start, self.capture_end = self._boundary(), None
             self.truncated = False
             self.exit_code = None
+            self.cancelled = False
             self.completed.clear()
-            self.executing = True
+            encoded = base64.b64encode(self.command.encode()).decode("ascii")
+            self.state = "running"
             try:
-                await self._rpc("execute", command_id, command, expected)
-            except TimeoutError:
-                # Acceptance may have occurred but its acknowledgement was lost.
-                # Close the shell and report an unknown outcome, never a retryable busy.
+                request, _ = await self._send("execute", encoded)
+            except AgentError:
                 await self.manager._terminate(self.entry)
                 self.exit_code = None
-            except AgentError as exc:
-                if exc.code == "terminal.closed":
-                    await self.manager._terminate(self.entry)
-                    self.exit_code = None
-                else:
-                    self.executing = False
-                    self.capture = None
-                    raise
-            except BaseException:
-                await self.manager._terminate(self.entry)
-                self.executing = False
-                self.capture = None
-                raise
-        sent = 0
-        emitted = 0
+                self.completed.set()
+                request = None
+            if request is not None:
+                completion = asyncio.get_running_loop().create_future()
+                self.completions[request] = completion
+
+        sent = emitted = 0
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         timed_out = False
 
         async def emit(text):
             nonlocal emitted
-            encoded = text.encode("utf-8")
+            encoded_text = text.encode()
             remaining = self.manager.max_output - emitted
-            if len(encoded) > remaining:
-                text = encoded[:remaining].decode("utf-8", errors="ignore")
-                encoded = text.encode("utf-8")
+            if len(encoded_text) > remaining:
+                text = encoded_text[:remaining].decode(errors="ignore")
+                encoded_text = text.encode()
                 self.truncated = True
-            emitted += len(encoded)
+            emitted += len(encoded_text)
             if text and stream:
                 await stream("stdout", text)
 
@@ -482,25 +431,37 @@ class SharedTerminal:
                 async with asyncio.timeout(timeout):
                     while not self.completed.is_set():
                         if len(self.capture) > sent:
-                            text = decoder.decode(bytes(self.capture[sent : sent + 16384]))
-                            sent += min(16384, len(self.capture) - sent)
-                            await emit(text)
+                            chunk = bytes(self.capture[sent : sent + 16384])
+                            sent += len(chunk)
+                            await emit(decoder.decode(chunk))
                         await asyncio.sleep(0.01)
             except TimeoutError:
                 timed_out = True
-                await self._recover()
+                self.cancelled = True
+                self.interrupt()
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(self.completed.wait(), 1)
+                if not self.completed.is_set():
+                    await self.manager._terminate(self.entry)
             except BaseException:
-                await self._recover()
+                self.cancelled = True
+                self.interrupt()
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(self.completed.wait(), 1)
+                if not self.completed.is_set():
+                    await self.manager._terminate(self.entry)
                 raise
-            while sent < len(self.capture):
-                text = decoder.decode(bytes(self.capture[sent : sent + 16384]))
-                sent += min(16384, len(self.capture) - sent)
-                await emit(text)
-            text = decoder.decode(b"", final=True)
-            await emit(text)
+            while self.capture is not None and sent < len(self.capture):
+                chunk = bytes(self.capture[sent : sent + 16384])
+                sent += len(chunk)
+                await emit(decoder.decode(chunk))
+            await emit(decoder.decode(b"", final=True))
         finally:
-            self.executing = False
+            if request is not None:
+                self.completions.pop(request, None)
             self.capture = None
+            if self.state == "agent":
+                self.command_id = self.command = self.inspection = None
         return {
             "exitCode": self.exit_code,
             "timedOut": timed_out,
@@ -516,8 +477,3 @@ class SharedTerminal:
         self.reader.cancel()
         await asyncio.gather(self.reader, return_exceptions=True)
         self.completed.set()
-        if self.entry.fd >= 0:
-            with suppress(OSError):
-                group = os.tcgetpgrp(self.entry.fd)
-                if group != self.entry.pid:
-                    os.killpg(group, signal.SIGKILL)

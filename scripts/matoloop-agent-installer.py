@@ -17,11 +17,6 @@ from urllib.parse import urlsplit
 SOURCE_URL = "https://git.devmato.net/devmato/MatoLoop.git"
 SYSTEM_PACKAGES = (
     "bash",
-    "gcc",
-    "libc6-dev",
-    "bash-builtins",
-    "libreadline-dev",
-    "openscad",
     "ripgrep",
 )
 
@@ -267,24 +262,6 @@ def sync_environment(layout: dict[str, Path], source: Path, destination: Path) -
         fail("uv did not install the MatoLoop Agent executable")
 
 
-def try_build_shared_terminal(source: Path) -> None:
-    project = source / "apps/matoloop-agent"
-    output = project / "src/matoloop_agent/native/shared.so"
-    output.unlink(missing_ok=True)
-    if not all(shutil.which(command) for command in ("sh", "gcc")):
-        return
-    temporary = output.with_suffix(".so.tmp")
-    temporary.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        run("sh", project / "build-native.sh", temporary, stdout=subprocess.DEVNULL)
-        temporary.replace(output)
-    except subprocess.CalledProcessError:
-        temporary.unlink(missing_ok=True)
-        print(
-            "Shared terminal prerequisites are unavailable; continuing without it.", file=sys.stderr
-        )
-
-
 def copy_source(source: Path, destination: Path, *, keep_git: bool) -> None:
     ignored = [".venv", "__pycache__", ".pytest_cache", ".ruff_cache"]
     if not keep_git:
@@ -429,7 +406,6 @@ def install(arguments: argparse.Namespace) -> None:
     atexit.register(cleanup_staging)
     copy_source(source, staged_source, keep_git=managed)
     active_source = staged_source
-    try_build_shared_terminal(active_source)
     layout["venvs"].mkdir(exist_ok=True)
     new_venv = layout["venvs"] / secrets.token_hex(8)
     cleanup_paths.append(new_venv)

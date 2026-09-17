@@ -35,8 +35,9 @@ VALIDITY_INTERVAL = 2
 VALIDITY_GRACE = 30
 TERMINAL_OPERATIONS = frozenset({
     "terminal.read", "terminal.write", "terminal.resize", "terminal.close",
-    "terminal.shared.open", "terminal.shared.status", "terminal.shared.stage",
-    "terminal.shared.inspect", "terminal.shared.execute", "terminal.shared.cancel",
+    "terminal.shared.open", "terminal.shared.status", "terminal.shared.acquire",
+    "terminal.shared.release", "terminal.shared.prepare", "terminal.shared.execute",
+    "terminal.shared.cancel",
 })
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,6 @@ class TerminalRuntime:
     attached: bool = False
     active_tool_call_id: str | None = None
     command_id: UUID | None = None
-    pending: dict[str, Any] | None = None
     command_task: asyncio.Task | None = None
     task: asyncio.Task | None = None
     opening_task: asyncio.Task | None = None
@@ -157,14 +157,13 @@ class TerminalRuntime:
         return {
             "terminalId": self.terminal_id,
             "attached": self.attached,
-            "busy": self.command_id is not None or (native is not None and native.state != "idle"),
+            "busy": self.command_id is not None or (native is not None and native.state == "running"),
             "state": "closed" if self.closed else
             "running" if self.command_task is not None and not self.command_task.done() else
             native.state if native else "busy",
             "activeToolCallId": self.active_tool_call_id,
             "currentDirectory": native.current_directory if native else self.client.current_directory,
             "suspended": self.suspended_since is not None,
-            "pending": self.pending,
         }
 
     async def send_json(self, payload: dict[str, Any]) -> None:
@@ -182,9 +181,9 @@ class TerminalRuntime:
     async def send_status(self) -> None:
         await self.send_json({"type": "terminal.status", **self.status()})
 
-    async def refresh_status(self, *, redisplay: bool = False) -> SharedTerminalStatus:
+    async def refresh_status(self) -> SharedTerminalStatus:
         result = await self.client.request(
-            "terminal.shared.status", {"terminalId": self.terminal_id, "redisplay": redisplay},
+            "terminal.shared.status", {"terminalId": self.terminal_id},
             SharedTerminalStatus, timeout=2,
         )
         if str(result.terminal_id) != self.terminal_id:
@@ -436,13 +435,6 @@ class TerminalCoordinator:
                 task.cancel()
             if tasks:
                 await asyncio.wait(tasks, timeout=2)
-            # Process cleanup must precede database audit, which may be unavailable.
-            if runtime.command_id is not None:
-                from mato_loop_backend.agent.shared_shell import cancel_pending
-
-                with suppress(Exception):
-                    async with asyncio.timeout(3):
-                        await cancel_pending(runtime.command_id)
         finally:
             runtime.viewer = None
             runtime.attached = False
@@ -469,13 +461,23 @@ class TerminalCoordinator:
     async def attach(self, runtime: TerminalRuntime) -> None:
         if runtime.closed:
             raise ValueError("terminal.disconnected")
+        await runtime.client.request(
+            "terminal.shared.acquire", {"terminalId": runtime.terminal_id},
+            TerminalControlResult, timeout=3,
+        )
         runtime.attached = True
+        await runtime.refresh_status()
         await runtime.send_status()
 
     async def detach(self, runtime: TerminalRuntime) -> None:
         if runtime.command_id is not None:
             raise ValueError("terminal.commandActive")
+        await runtime.client.request(
+            "terminal.shared.release", {"terminalId": runtime.terminal_id},
+            TerminalControlResult, timeout=3,
+        )
         runtime.attached = False
+        await runtime.refresh_status()
         await runtime.send_status()
 
 

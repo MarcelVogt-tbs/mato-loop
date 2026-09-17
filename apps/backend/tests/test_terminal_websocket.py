@@ -83,8 +83,7 @@ def env(monkeypatch):
                 return TerminalOpenResult(terminal_id=arguments["terminalId"])
             if operation == "terminal.shared.status":
                 return SharedTerminalStatus(terminal_id=arguments["terminalId"], current_directory="/home/user",
-                                            state="idle", context_revision=1, command_id=None, command=None,
-                                            revision=0, submitted=False, cancelled=False)
+                                            state="human", command_id=None)
             if operation == "terminal.read":
                 await asyncio.Event().wait()
             return TerminalControlResult()
@@ -122,7 +121,7 @@ async def test_resume_keeps_output_and_partial_input_without_clearing_screen(env
         assert snapshot["attached"] is attached
         assert base64.b64decode(snapshot["personalData"]) == history
         assert all(
-            not arguments.get("redisplay", False)
+            arguments == {"terminalId": first.runtime.terminal_id}
             for operation, arguments in env.calls if operation == "terminal.shared.status"
         )
     finally:
@@ -184,7 +183,9 @@ def test_actual_websocket_resume_takeover_and_native_input(env):
                     event = second.receive_json()
                 assert event == {"type": "terminal.replaced", "reason": "replaced"}
                 second.send_json({"type": "close"})
+                third.send_json({"type": "resize", "rows": 30, "columns": 100})
                 third.send_json({"type": "input", "data": "eA=="})
+                assert third.receive_json()["error"]["code"] == "terminal.alreadyAttached"
                 third.send_json({"type": "detach"})
                 assert third.receive_json()["attached"] is False
                 third.send_json({"type": "mode", "mode": "auto"})
@@ -194,7 +195,12 @@ def test_actual_websocket_resume_takeover_and_native_input(env):
         client.portal.call(env.coordinator.shutdown)
     assert sum(op == "terminal.shared.open" for op, _ in env.calls) == 1
     assert sum(op == "terminal.close" for op, _ in env.calls) == 1
-    assert ("terminal.write", {"terminalId": opened["terminalId"], "data": "eA=="}) in env.calls
+    assert not any(op == "terminal.write" for op, _ in env.calls)
+    assert ("terminal.resize", {
+        "terminalId": opened["terminalId"], "rows": 30, "columns": 100,
+    }) in env.calls
+    assert sum(op == "terminal.shared.acquire" for op, _ in env.calls) == 1
+    assert sum(op == "terminal.shared.release" for op, _ in env.calls) == 1
 
 
 @pytest.mark.parametrize("invalid", ["login", "expiry", "inactive", "session", "tab", "agent", "generation"])

@@ -2,7 +2,6 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 RUN apt-get update \
     && apt-get install --no-install-recommends -y git openscad ripgrep xauth xvfb x11-xserver-utils x11-utils openbox x11vnc xclip \
-        gcc libc6-dev bash-builtins libreadline-dev \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data /workspace /opt/matoloop-agent/venv /opt/matoloop-agent/uv-cache \
     && mv /usr/local/bin/uv /usr/local/bin/uv-real
@@ -17,10 +16,6 @@ RUN uv venv /tmp/browser-build \
     && rm -rf /tmp/browser-build /var/lib/apt/lists/*
 COPY config.json /usr/share/matoloop-agent/config.json
 COPY --chmod=755 docker/entrypoint /usr/local/bin/matoloop-agent-entrypoint
-COPY build-native.sh /tmp/build-native.sh
-COPY src/matoloop_agent/native/shared.c /tmp/src/matoloop_agent/native/shared.c
-RUN mkdir -p /usr/local/lib/matoloop-agent \
-    && sh /tmp/build-native.sh /usr/local/lib/matoloop-agent/shared.so
 ENV RUFF_CACHE_DIR=/root/.cache/ruff \
     MATOLOOP_AGENT_CONFIG=/data/config.json
 

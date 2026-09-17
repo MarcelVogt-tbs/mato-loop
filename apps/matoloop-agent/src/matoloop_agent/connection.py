@@ -39,11 +39,12 @@ from .protocol import (
     Request,
     ResolveDirectoryArguments,
     Response,
+    SharedAcquireArguments,
     SharedCancelArguments,
     SharedExecuteArguments,
-    SharedInspectArguments,
     SharedOpenArguments,
-    SharedStageArguments,
+    SharedPrepareArguments,
+    SharedReleaseArguments,
     SharedStatusArguments,
     ShellArguments,
     ShellInspectArguments,
@@ -339,26 +340,21 @@ class MatoLoopAgent:
                 arguments.rows, arguments.columns, terminal_id=arguments.terminal_id
             )
         if isinstance(arguments, SharedStatusArguments):
-            return await self.shared_terminal.get(arguments.terminal_id).status(
-                redisplay=arguments.redisplay
-            )
+            return await self.shared_terminal.get(arguments.terminal_id).status()
+        if isinstance(arguments, SharedAcquireArguments):
+            return await self.shared_terminal.get(arguments.terminal_id).acquire()
+        if isinstance(arguments, SharedReleaseArguments):
+            return await self.shared_terminal.get(arguments.terminal_id).release()
         if isinstance(arguments, SharedExecuteArguments):
             return await self.shared_terminal.get(arguments.terminal_id).execute(
                 arguments.command_id,
-                arguments.command,
-                arguments.expected_revision,
-                arguments.expected_context_revision,
                 arguments.expected_inspection_revision,
                 arguments.timeout_seconds,
                 stream,
             )
-        if isinstance(arguments, SharedStageArguments):
-            return await self.shared_terminal.get(arguments.terminal_id).stage(
+        if isinstance(arguments, SharedPrepareArguments):
+            return await self.shared_terminal.get(arguments.terminal_id).prepare(
                 arguments.command_id, arguments.command
-            )
-        if isinstance(arguments, SharedInspectArguments):
-            return await self.shared_terminal.get(arguments.terminal_id).inspect(
-                arguments.command_id, freeze=arguments.freeze
             )
         if isinstance(arguments, SharedCancelArguments):
             return await self.shared_terminal.get(arguments.terminal_id).cancel(

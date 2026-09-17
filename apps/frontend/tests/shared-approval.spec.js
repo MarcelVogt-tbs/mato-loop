@@ -6,7 +6,6 @@ import { Quasar, QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QChe
 import ApprovalCard from '../src/components/ApprovalCard.vue'
 import { useApprovalStore } from '../src/stores/approvals'
 import { api } from 'src/boot/axios'
-import { sharedDraft } from './terminal-websocket'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn() } }))
@@ -19,23 +18,26 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-it.each(['read', 'write'])('displays the exact read-only shared review and actual %s classification and grants', async (classification) => {
+it.each(['read', 'write'])('displays historical terminal approval data generically with %s classification', async (classification) => {
   const pinia = createPinia()
   setActivePinia(pinia)
   const approvals = useApprovalStore()
   api.post.mockResolvedValue({ data: {} })
+  const command = 'printf reviewed'
+  const currentDirectory = '/home/user/terminal'
   const approval = {
     id: 'shared', sessionId: 'session-1', requestType: 'agent_action', actionKind: 'shell_run',
     title: 'Befehl ausführen?', summary: 'Befehl prüfen', riskLevel: classification === 'read' ? 'low' : 'high',
-    capability: `shell.${classification}`, resourceType: 'shell_command', resourceDisplay: sharedDraft.currentDirectory,
+    capability: `shell.${classification}`, resourceType: 'shell_command', resourceDisplay: currentDirectory,
     availableDecisions: ['allow_once', 'allow_session', 'deny'],
     payload: {
-      sharedDraft,
+      sharedDraft: { command, currentDirectory, inspectionRevision: 'legacy-revision' },
       shellClassification: classification,
       shellAnalysisComplete: true,
       shellPrefixes: [['ls', '-l']],
       displayItems: [
-        { label: 'Shell-Befehl', value: sharedDraft.command, format: 'code' },
+        { label: 'Shell-Befehl', value: command, format: 'code' },
+        { label: 'Terminal-Ordner', value: currentDirectory, format: 'code' },
         { label: 'Für diese Session', value: ['Alle passenden lesenden Datei- und Shell-Aktionen: /extern und Unterordner'], format: 'list' }
       ]
     },
@@ -48,8 +50,8 @@ it.each(['read', 'write'])('displays the exact read-only shared review and actua
   app.use(pinia).use(Quasar, { components: { QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QSelect, QSeparator, QSpace, QToggle, QTooltip } })
   app.mount(root)
   await nextTick()
-  expect(root.querySelector('.tool-call__details').textContent).toBe(sharedDraft.command)
-  expect(root.textContent).toContain(sharedDraft.currentDirectory)
+  expect(root.querySelector('.tool-call__details').textContent).toBe(command)
+  expect(root.textContent).toContain(currentDirectory)
   expect(root.textContent).toContain('Alle passenden lesenden Datei- und Shell-Aktionen: /extern und Unterordner')
   expect(root.querySelector('textarea, [contenteditable="true"]')).toBeNull()
   expect(root.textContent).toContain(classification === 'read' ? 'Keine Schreibaktion erkannt' : 'Als schreibend eingestuft')
@@ -57,13 +59,6 @@ it.each(['read', 'write'])('displays the exact read-only shared review and actua
   expect(root.textContent).toContain('Erkannte Befehlspräfixe')
   expect(root.textContent).not.toContain('Session-Präfixe')
   expect(root.textContent).toContain('ls -l')
-  const changed = { ...approval, payload: { ...approval.payload, sharedDraft: {
-    ...sharedDraft, command: 'printf edited', currentDirectory: '/new/terminal/cwd', inspectionRevision: 'inspection-new'
-  } } }
-  approvals.update(changed)
-  await nextTick()
-  expect(root.querySelector('.tool-call__details').textContent).toBe('printf edited')
-  expect(root.textContent).toContain('/new/terminal/cwd')
   expect(api.post).not.toHaveBeenCalled()
   root.querySelector('.q-checkbox').click()
   await nextTick()
@@ -72,6 +67,6 @@ it.each(['read', 'write'])('displays the exact read-only shared review and actua
   allow.click()
   await nextTick()
   expect(api.post).toHaveBeenCalledWith('/approvals/shared/decisions', {
-    decision: 'allow_session', expected_revision: 'inspection-new'
+    decision: 'allow_session'
   })
 })

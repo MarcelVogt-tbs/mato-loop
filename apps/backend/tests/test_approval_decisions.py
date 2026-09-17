@@ -326,6 +326,39 @@ async def test_idempotent_retry_rejects_a_different_decision() -> None:
     db.commit.assert_not_awaited()
 
 
+async def test_legacy_shared_draft_decision_expires_without_executing(monkeypatch) -> None:
+    approval = _approval()
+    approval.payload = {"sharedDraft": {"command": "rm old.txt"}}
+    db = AsyncMock(spec=AsyncSession)
+    claim = Mock(return_value=True)
+    resolve = Mock(return_value=True)
+    monkeypatch.setattr(AgentRuntime, "claim_approval_resolution", claim)
+    monkeypatch.setattr(AgentRuntime, "resolve_approval", resolve)
+
+    with pytest.raises(ApprovalDecisionError, match="approval.runInactive"):
+        await decide_agent_action(db, approval, "allow_once")
+
+    assert approval.status == "expired"
+    assert approval.resolved_at is not None
+    db.commit.assert_awaited_once()
+    resolve.assert_called_once_with(approval.id, ApprovalResolution("deny"))
+
+
+async def test_resolved_legacy_shared_draft_remains_idempotently_readable() -> None:
+    approval = _approval()
+    approval.payload = {"sharedDraft": {"command": "old"}}
+    approval.status = "denied"
+    approval.decision = "deny"
+    db = AsyncMock(spec=AsyncSession)
+
+    result = await decide_agent_action(
+        db, approval, "deny", idempotent_same_decision=True,
+    )
+
+    assert result == {"status": "denied", "decision": "deny"}
+    db.commit.assert_not_awaited()
+
+
 async def test_http_retry_of_matching_decision_remains_non_idempotent() -> None:
     approval = _approval()
     approval.status = "denied"

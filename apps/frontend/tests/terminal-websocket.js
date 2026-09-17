@@ -27,7 +27,7 @@ export class FakeWebSocket {
   snapshot(state = {}, restored = true) {
     this.runtimeState = {
       terminalId: 'pty-1', attached: false, busy: false, state: 'idle', activeToolCallId: null,
-      currentDirectory: '/home/user', suspended: false, pending: null, ...state
+      currentDirectory: '/home/user', suspended: false, ...state
     }
     this.message({ type: 'terminal.opened', restored, ...this.runtimeState })
     this.message({
@@ -44,10 +44,4 @@ export class FakeWebSocket {
   output(data) {
     this.binary(new TextEncoder().encode(data))
   }
-}
-
-export const sharedDraft = {
-  terminalId: 'pty-1', commandId: 'command-1', command: 'printf reviewed',
-  currentDirectory: '/home/user/terminal', revision: 2, contextRevision: 4,
-  inspectionRevision: 'inspection-2', readOnly: true
 }
