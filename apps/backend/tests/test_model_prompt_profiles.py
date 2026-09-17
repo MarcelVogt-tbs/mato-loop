@@ -5,7 +5,14 @@ import pytest
 from mato_loop_backend.agent.context import general_system_prompt
 from mato_loop_backend.agent.model_prompt_profiles import build_model_instructions
 from mato_loop_backend.models import ChatSession
-from mato_loop_backend.settings import build_profile, general_profile, plan_profile
+from mato_loop_backend.settings import (
+    AgentProfileOverrides,
+    CustomAgentProfile,
+    build_profile,
+    general_profile,
+    plan_profile,
+    resolve_agent_profile,
+)
 
 
 @pytest.mark.parametrize(
@@ -44,3 +51,25 @@ def test_prompt_scope_and_model_switch(profile, delegated, expected):
     )
 
     assert (build_model_instructions("Qwen3.8-27B") in prompt) is expected
+
+
+def test_custom_profile_inherits_build_model_instructions():
+    profile = resolve_agent_profile(
+        CustomAgentProfile(
+            name="Custom Build",
+            description="",
+            base_profile_id=build_profile().id,
+            overrides=AgentProfileOverrides(),
+        ),
+        build_profile(),
+        None,
+    )
+
+    prompt = general_system_prompt(
+        ChatSession(id=uuid4()),
+        model_id="Qwen3.8-27B",
+        agent_profile=profile,
+        include_local_time=False,
+    )
+
+    assert build_model_instructions("Qwen3.8-27B") in prompt

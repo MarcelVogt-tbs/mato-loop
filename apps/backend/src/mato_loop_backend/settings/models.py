@@ -190,6 +190,7 @@ class AgentProfile(BaseModel):
     )
     delegation_enabled: StrictBool = False
     session_write_paths: list[str] | None = None
+    base_profile_id: UUID | None = Field(default=None, exclude=True)
     owner_id: UUID | None = Field(default=None, exclude=True)
     integration_id: UUID | None = Field(default=None, exclude=True)
     editable: bool = Field(default=True, exclude=True)
@@ -317,6 +318,7 @@ def resolve_agent_profile(
         id=profile.id,
         name=profile.name,
         description=profile.description,
+        base_profile_id=profile.base_profile_id,
         owner_id=owner_id,
     )
     return AgentProfile.model_validate(values)

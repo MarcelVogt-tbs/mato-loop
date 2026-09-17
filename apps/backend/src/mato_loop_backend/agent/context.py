@@ -1034,7 +1034,7 @@ def general_system_prompt(
                 ensure_ascii=False,
             )
         )
-        if agent_profile.id == BUILD_PROFILE_ID:
+        if (agent_profile.base_profile_id or agent_profile.id) == BUILD_PROFILE_ID:
             if model_instructions := build_model_instructions(model_id):
                 parts.append(model_instructions)
     if user_profile is not None and any(value is not None for value in user_profile.values()):
