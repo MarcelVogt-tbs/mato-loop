@@ -233,6 +233,12 @@ async def run(page):
         self.page.url = "about:blank#new"
         self.assertNotEqual(normal[1], (await self.worker._inspect(self.page, guard=False))[1])
 
+        small = await self.worker._inspect(
+            self.page, browser_id=self.args["browserId"], guard=False
+        )
+        self.assertEqual(small[0], "- button")
+        self.assertIsNone(small[2])
+
         full = "- button first\n" + "- button second " + "x" * 32_768
         self.page.aria_snapshot.return_value = full
         truncated = await self.worker._inspect(
@@ -284,7 +290,6 @@ async def run(page):
             self.page,
             browser_id=self.args["browserId"],
             guard=False,
-            force_file=True,
         )
 
     @unittest.skipUnless(

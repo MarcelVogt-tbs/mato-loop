@@ -1560,7 +1560,7 @@ class BrowserWorker:
                 async with asyncio.timeout_at(observation_deadline):
                     settle_outcome = await self._settle(page, strict=False)
                     text, result_data, snapshot = await self._inspect(
-                        page, browser_id=args.browser_id, guard=False, force_file=True
+                        page, browser_id=args.browser_id, guard=False
                     )
                     if settle_outcome is not None:
                         result_data["settled"] = False
