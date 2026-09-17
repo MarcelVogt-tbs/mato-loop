@@ -23,6 +23,7 @@ from mato_loop_backend.models.agent import (
     QuestionRequest,
 )
 from mato_loop_backend.models.notification import Notification, WebPushSubscription
+from mato_loop_backend.models.mail import MailSendOperation
 from mato_loop_backend.models.messaging import MessagingEndpoint, MessagingInbox, MessagingOutbox
 from mato_loop_backend.models.memory import (
     MemoryAudience,
@@ -52,6 +53,7 @@ __all__ = [
     "Credential",
     "ExecutionAgent",
     "LoginSession",
+    "MailSendOperation",
     "MemoryAudience",
     "MemoryCategory",
     "MemoryRecord",

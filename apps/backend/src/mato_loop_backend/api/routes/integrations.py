@@ -495,6 +495,14 @@ def _access_payload(
     if not resource_actions:
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
     capabilities = {action.capability for action in resource_actions}
+    actions_by_capability = {
+        action.capability: action for action in resource_actions
+    }
+
+    def supported_policy(action, policy: ToolExecutionPolicy) -> ToolExecutionPolicy:
+        if policy == ToolExecutionPolicy.AUTO and policy not in action.allowed_policies:
+            return ToolExecutionPolicy.ASK
+        return policy
 
     def applicable_capabilities(resource: IntegrationResource) -> set[str]:
         return (
@@ -507,23 +515,31 @@ def _access_payload(
         {
             "capability": action.capability,
             "label": action.label,
-            "allowedPolicies": [policy.value for policy in ToolExecutionPolicy],
-            "globalPolicy": resolve_tool_execution_policy(
-                tools,
-                action.capability,
-                action.default_policy,
-            ).policy.value,
+            "allowedPolicies": [policy.value for policy in action.allowed_policies],
+            "globalPolicy": supported_policy(
+                action,
+                resolve_tool_execution_policy(
+                    tools,
+                    action.capability,
+                    action.default_policy,
+                ).policy,
+            ).value,
             "integrationPolicy": (
-                integration_policies[action.capability].value
+                supported_policy(
+                    action, integration_policies[action.capability]
+                ).value
                 if action.capability in integration_policies
                 else None
             ),
-            "effectiveIntegrationPolicy": resolve_tool_execution_policy(
-                tools,
-                action.capability,
-                action.default_policy,
-                integration_id=instance.id,
-            ).policy.value,
+            "effectiveIntegrationPolicy": supported_policy(
+                action,
+                resolve_tool_execution_policy(
+                    tools,
+                    action.capability,
+                    action.default_policy,
+                    integration_id=instance.id,
+                ).policy,
+            ).value,
         }
         for action in resource_actions
     ]
@@ -540,23 +556,29 @@ def _access_payload(
                 ),
                 "applicableCapabilities": sorted(applicable_capabilities(resource)),
                 "policies": {
-                    capability: policy.value
+                    capability: supported_policy(
+                        actions_by_capability[capability],
+                        policy,
+                    ).value
                     for capability, policy in resource_policies.get(
                         resource.key, {}
                     ).items()
                     if capability in applicable_capabilities(resource)
                 },
                 "effectivePolicies": {
-                    action.capability: resolve_tool_execution_policy(
-                        tools,
-                        action.capability,
-                        action.default_policy,
-                        integration_id=instance.id,
-                        resource_key=resource.key,
-                        hard_unavailable_capabilities=(
-                            resource.hard_unavailable_capabilities
-                        ),
-                    ).policy.value
+                    action.capability: supported_policy(
+                        action,
+                        resolve_tool_execution_policy(
+                            tools,
+                            action.capability,
+                            action.default_policy,
+                            integration_id=instance.id,
+                            resource_key=resource.key,
+                            hard_unavailable_capabilities=(
+                                resource.hard_unavailable_capabilities
+                            ),
+                        ).policy,
+                    ).value
                     for action in resource_actions
                     if action.capability in applicable_capabilities(resource)
                 },
@@ -1620,6 +1642,9 @@ async def update_integration_access(
     resource_keys = {resource.key for resource in resources}
     resources_by_key = {resource.key: resource for resource in resources}
     capabilities = {action.capability for action in resource_actions}
+    actions_by_capability = {
+        action.capability: action for action in resource_actions
+    }
     if set(payload.resources) - resource_keys:
         raise ApiError(422, "validation.invalidChoice", field="resources")
     if any(set(policies) - capabilities for policies in payload.resources.values()):
@@ -1634,6 +1659,17 @@ async def update_integration_access(
         raise ApiError(422, "validation.invalidChoice", field="resources")
     if payload.policies is not None and set(payload.policies) - capabilities:
         raise ApiError(422, "validation.invalidChoice", field="policies")
+    if payload.policies is not None and any(
+        policy not in actions_by_capability[capability].allowed_policies
+        for capability, policy in payload.policies.items()
+    ):
+        raise ApiError(422, "validation.invalidChoice", field="policies")
+    if any(
+        policy not in actions_by_capability[capability].allowed_policies
+        for policies in payload.resources.values()
+        for capability, policy in policies.items()
+    ):
+        raise ApiError(422, "validation.invalidChoice", field="resources")
     default_resource_changed = "default_resource_key" in payload.model_fields_set
     default_task_list_changed = "default_task_list_key" in payload.model_fields_set
     if (default_resource_changed or default_task_list_changed) and (

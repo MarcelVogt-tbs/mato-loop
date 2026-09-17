@@ -10,6 +10,7 @@ class ToolAction:
     default_policy: ToolExecutionPolicy
     configurable: bool = True
     mutates: bool = False
+    allowed_policies: tuple[ToolExecutionPolicy, ...] = tuple(ToolExecutionPolicy)
 
 
 @dataclass(frozen=True, slots=True)

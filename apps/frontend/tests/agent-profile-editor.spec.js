@@ -127,3 +127,11 @@ it('validates finite limits even when another tab is open and preserves edits af
   expect(api.put).toHaveBeenLastCalledWith('/agent-profiles/agent', expect.objectContaining({ maxToolCalls: 7 }), expect.anything())
   expect(page.dirty).toBe(false)
 })
+
+it('limits profile policy options to the action metadata', async () => {
+  const page = await mountEditor()
+
+  expect(page.policyOptions('ask', ['disabled', 'ask']).map(({ value }) => value)).toEqual([
+    'inherit', 'disabled', 'ask'
+  ])
+})

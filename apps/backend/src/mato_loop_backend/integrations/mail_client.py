@@ -28,6 +28,13 @@ _LIST_RE = re.compile(rb"^\(([^)]*)\)\s+(?:\"(?:\\.|[^\"])*\"|NIL)\s+(.+)$")
 _UID_RE = re.compile(rb"\bUID\s+(\d+)\b")
 _SIZE_RE = re.compile(rb"\bRFC822\.SIZE\s+(\d+)\b")
 _APPEND_UID_RE = re.compile(rb"\bAPPENDUID\s+(\d+)\s+(\d+)\b")
+_DRAFT_HEADERS = ("From", "To", "Cc", "Bcc", "Subject")
+_UNSAFE_DRAFT_TYPES = {
+    "multipart/signed",
+    "multipart/encrypted",
+    "application/pkcs7-mime",
+    "application/x-pkcs7-mime",
+}
 
 
 class MailError(RuntimeError):
@@ -76,6 +83,8 @@ class ParsedMessage:
     body: str
     body_format: Literal["text", "html"]
     attachments: tuple[Attachment, ...]
+    body_truncated: bool
+    attachments_truncated: bool
     raw: bytes
 
 
@@ -120,6 +129,11 @@ def _modified_utf7_encode(value: str) -> str:
     return "".join(chunks)
 
 
+def _imap_mailbox(value: str) -> str:
+    encoded = _modified_utf7_encode(value)
+    return '"' + encoded.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _unquote(value: bytes) -> str:
     if value.startswith(b'"') and value.endswith(b'"'):
         value = value[1:-1].replace(b"\\\"", b'"').replace(b"\\\\", b"\\")
@@ -130,13 +144,16 @@ def _header(value: object, limit: int = 2_000) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
-def _addresses(message: Message, *headers: str) -> tuple[str, ...]:
+def _addresses(
+    message: Message, *headers: str, limit: int | None = 100
+) -> tuple[str, ...]:
     values = [str(value) for name in headers for value in message.get_all(name, [])]
-    return tuple(
+    addresses = tuple(
         address[:320]
         for _display, address in getaddresses(values)
         if address and "\r" not in address and "\n" not in address
-    )[:100]
+    )
+    return addresses if limit is None else addresses[:limit]
 
 
 def _date(message: Message) -> datetime | None:
@@ -204,10 +221,13 @@ def parse_message(raw: bytes, locator: MessageLocator) -> ParsedMessage:
     plain_body = ""
     html_body = ""
     attachments: list[Attachment] = []
+    attachment_count = 0
+    body_truncated = False
     for path, part in _part_items(message):
         filename = _header(part.get_filename(), 500)
         disposition = part.get_content_disposition()
         if filename or disposition == "attachment":
+            attachment_count += 1
             if len(attachments) < MAX_ATTACHMENTS:
                 data = _payload_bytes(part)
                 attachments.append(
@@ -225,6 +245,7 @@ def parse_message(raw: bytes, locator: MessageLocator) -> ParsedMessage:
             except (LookupError, TypeError, UnicodeError, ValueError):
                 content = ""
             if isinstance(content, str):
+                body_truncated = body_truncated or len(content) > MAX_BODY_CHARS
                 if part.get_content_type() == "text/plain" and not plain_body:
                     plain_body = content[:MAX_BODY_CHARS]
                 elif part.get_content_type() == "text/html" and not html_body:
@@ -243,6 +264,8 @@ def parse_message(raw: bytes, locator: MessageLocator) -> ParsedMessage:
         body=body,
         body_format="text",
         attachments=tuple(attachments),
+        body_truncated=body_truncated,
+        attachments_truncated=attachment_count > MAX_ATTACHMENTS,
         raw=raw,
     )
 
@@ -258,6 +281,80 @@ def attachment_bytes(raw: bytes, part_path: str) -> tuple[bytes, str, str]:
                 part.get_content_type()[:200],
             )
     raise MailError("mail.notFound")
+
+
+def _draft_body_part(message: Message) -> Message:
+    if any(part.get_content_type() in _UNSAFE_DRAFT_TYPES for part in message.walk()):
+        raise MailError("mail.invalidMessage")
+    if not message.is_multipart():
+        candidates = [message]
+    elif message.get_content_type() == "multipart/mixed":
+        candidates = [
+            part
+            for part in message.iter_parts()
+            if not part.get_filename() and part.get_content_disposition() != "attachment"
+        ]
+    else:
+        raise MailError("mail.invalidMessage")
+    if (
+        len(candidates) != 1
+        or candidates[0].is_multipart()
+        or candidates[0].get_content_type() != "text/plain"
+    ):
+        raise MailError("mail.invalidMessage")
+    part = candidates[0]
+    content = part.get_content()
+    if not isinstance(content, str) or len(content) > MAX_BODY_CHARS:
+        raise MailError("mail.invalidMessage")
+    return part
+
+
+def _patch_draft(
+    raw: bytes, replacement: bytes, replace_attachments: bool = False
+) -> bytes:
+    try:
+        message = BytesParser(policy=policy.default).parsebytes(raw)
+        changes = BytesParser(policy=policy.default).parsebytes(replacement)
+        body = _draft_body_part(changes).get_content()
+        _draft_body_part(message)
+    except MailError:
+        raise
+    except Exception as exc:
+        raise MailError("mail.invalidMessage") from exc
+    if not isinstance(body, str):
+        raise MailError("mail.invalidMessage")
+    if len(_addresses(changes, "To", "Cc", "Bcc", limit=None)) > 100:
+        raise MailError("mail.invalidMessage")
+    if sum(
+        bool(part.get_filename() or part.get_content_disposition() == "attachment")
+        for part in message.walk()
+    ) > MAX_ATTACHMENTS:
+        raise MailError("mail.invalidMessage")
+    if replace_attachments:
+        preserved = {
+            name.casefold()
+            for name in (*_DRAFT_HEADERS, "MIME-Version", "Content-Type", "Content-Transfer-Encoding")
+        }
+        for name in dict(message.raw_items()):
+            if name.casefold() not in preserved:
+                while changes.get(name) is not None:
+                    del changes[name]
+                for value in message.get_all(name, []):
+                    changes[name] = value
+        patched = changes.as_bytes(policy=policy.SMTP)
+        if len(patched) > MAX_MESSAGE_BYTES:
+            raise MailError("mail.responseTooLarge")
+        return patched
+    for name in _DRAFT_HEADERS:
+        while message.get(name) is not None:
+            del message[name]
+        for value in changes.get_all(name, []):
+            message[name] = value
+    _draft_body_part(message).set_content(body)
+    patched = message.as_bytes(policy=policy.SMTP)
+    if len(patched) > MAX_MESSAGE_BYTES:
+        raise MailError("mail.responseTooLarge")
+    return patched
 
 
 class MailClient:
@@ -372,7 +469,7 @@ class MailClient:
 
     @classmethod
     def _select(cls, client: imaplib.IMAP4, mailbox: str, *, readonly: bool) -> int:
-        status, _data = client.select(_modified_utf7_encode(mailbox), readonly=readonly)
+        status, _data = client.select(_imap_mailbox(mailbox), readonly=readonly)
         cls._ok(status, "mail.notFound")
         return cls._uidvalidity(client)
 
@@ -430,7 +527,7 @@ class MailClient:
             if query:
                 escaped = query.replace("\\", "\\\\").replace('"', '\\"')
                 status, values = client.uid(
-                    "SEARCH", "UTF-8", "TEXT", f'"{escaped}"'.encode()
+                    "SEARCH", "CHARSET", "UTF-8", "TEXT", f'"{escaped}"'.encode()
                 )
             else:
                 status, values = client.uid("SEARCH", None, "ALL")
@@ -545,7 +642,7 @@ class MailClient:
         }
         if "MOVE" in capabilities and trash and trash != locator.mailbox:
             status, _data = client.uid(
-                "MOVE", str(locator.uid), _modified_utf7_encode(trash)
+                "MOVE", str(locator.uid), _imap_mailbox(trash)
             )
             cls._ok(status, "mail.notFound")
             return
@@ -572,7 +669,7 @@ class MailClient:
     @classmethod
     def _append(cls, client: imaplib.IMAP4, mailbox: str, raw: bytes) -> MessageLocator:
         status, data = client.append(
-            _modified_utf7_encode(mailbox), "(\\Draft)", None, raw
+            _imap_mailbox(mailbox), "(\\Draft)", None, raw
         )
         cls._ok(status)
         combined = b" ".join(value for value in data or [] if isinstance(value, bytes))
@@ -599,7 +696,9 @@ class MailClient:
             raise MailError("mail.responseTooLarge")
         return await self._run(self._create_draft_sync, mailbox, raw, mutation=True)
 
-    def _update_draft_sync(self, locator: MessageLocator, raw: bytes) -> MessageLocator:
+    def _update_draft_sync(
+        self, locator: MessageLocator, raw: bytes, replace_attachments: bool
+    ) -> MessageLocator:
         with self._imap() as client:
             if not self._mailbox_has_flag(client, locator.mailbox, "\\drafts"):
                 raise MailError("mail.permissionDenied")
@@ -613,14 +712,43 @@ class MailClient:
             }
             if "UIDPLUS" not in capabilities:
                 raise MailError("mail.operationUnsupported")
-            replacement = self._append(client, locator.mailbox, raw)
+            status, data = client.uid(
+                "FETCH", str(locator.uid), "(UID RFC822.SIZE BODY.PEEK[])"
+            )
+            self._ok(status, "mail.notFound")
+            metadata, existing = self._fetch_literal(data)
+            uid_match = _UID_RE.search(metadata)
+            size_match = _SIZE_RE.search(metadata)
+            if uid_match is None or int(uid_match.group(1)) != locator.uid:
+                raise MailError("mail.notFound")
+            if size_match is None:
+                raise MailError("mail.invalidResponse")
+            if int(size_match.group(1)) > MAX_MESSAGE_BYTES or len(existing) > MAX_MESSAGE_BYTES:
+                raise MailError("mail.responseTooLarge")
+            replacement = self._append(
+                client,
+                locator.mailbox,
+                _patch_draft(existing, raw, replace_attachments),
+            )
             self._safe_delete(client, locator, trash=None)
             return replacement
 
-    async def update_draft(self, locator: MessageLocator, raw: bytes) -> MessageLocator:
+    async def update_draft(
+        self,
+        locator: MessageLocator,
+        raw: bytes,
+        *,
+        replace_attachments: bool = False,
+    ) -> MessageLocator:
         if len(raw) > MAX_MESSAGE_BYTES:
             raise MailError("mail.responseTooLarge")
-        return await self._run(self._update_draft_sync, locator, raw, mutation=True)
+        return await self._run(
+            self._update_draft_sync,
+            locator,
+            raw,
+            replace_attachments,
+            mutation=True,
+        )
 
     def _delete_draft_sync(self, locator: MessageLocator) -> None:
         with self._imap() as client:
@@ -644,8 +772,8 @@ class MailClient:
         while message.get("From") is not None:
             del message["From"]
         message["From"] = self.from_address
-        recipients = _addresses(message, "To", "Cc", "Bcc")
-        if not recipients:
+        recipients = _addresses(message, "To", "Cc", "Bcc", limit=None)
+        if not recipients or len(recipients) > 100:
             raise MailError("mail.invalidMessage")
         with self._smtp() as client:
             refused = client.send_message(
@@ -659,7 +787,7 @@ class MailClient:
             mailbox = self._special_mailbox(client, "\\sent")
             if mailbox is None:
                 return
-            status, _data = client.append(_modified_utf7_encode(mailbox), None, None, raw)
+            status, _data = client.append(_imap_mailbox(mailbox), None, None, raw)
             self._ok(status)
 
     async def send(self, raw: bytes) -> None:
@@ -704,6 +832,7 @@ def build_message(
     subject: str,
     body: str,
     attachments: tuple[tuple[str, str, bytes], ...] = (),
+    message_id: str | None = None,
 ) -> bytes:
     message = EmailMessage(policy=policy.SMTP)
     message["From"] = from_address
@@ -712,8 +841,12 @@ def build_message(
         message["Cc"] = ", ".join(cc)
     if bcc:
         message["Bcc"] = ", ".join(bcc)
+    if len(_addresses(message, "To", "Cc", "Bcc", limit=None)) > 100:
+        raise MailError("mail.invalidMessage")
     message["Date"] = formatdate(localtime=True)
-    message["Message-ID"] = make_msgid(domain=from_address.rpartition("@")[2])
+    message["Message-ID"] = message_id or make_msgid(
+        domain=from_address.rpartition("@")[2]
+    )
     message["Subject"] = subject
     message.set_content(body)
     for filename, content_type, data in attachments:

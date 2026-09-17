@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.permissions import PermissionDecision
 from mato_loop_backend.agent.tools import ToolContext, ToolRegistry
 from mato_loop_backend.api.request_body_limit import _request_limit
 from mato_loop_backend.api.routes.integrations import (
@@ -99,7 +100,7 @@ def mail_binding():
 
 
 @pytest.mark.parametrize("part", [None, "2.1"])
-def test_mail_read_scopes_use_stable_private_locator_identity(mail_binding, part) -> None:
+async def test_mail_read_scopes_use_stable_private_locator_identity(mail_binding, part) -> None:
     class AttachmentArguments(MailIntegrationArguments):
         attachment_token: str
         limit: int = 50
@@ -111,18 +112,18 @@ def test_mail_read_scopes_use_stable_private_locator_identity(mail_binding, part
     model = AttachmentArguments if part else MailTokenArguments
     operation = "mail_get_attachment" if part else "mail_get_message"
 
-    def permission(token, **changes):
+    async def permission(token, **changes):
         arguments = model(integration_id=account.id, **{field: token}, **changes)
         before = arguments.model_dump()
-        request = _permission("mail.read", operation, arguments, context)[0]
+        request = (await _permission("mail.read", operation, arguments, context))[0]
         assert arguments.model_dump() == before
         return request
 
     first = token_for(account.id, revision, locator, part=part)
     second = token_for(account.id, revision, locator, part=part)
     assert first != second
-    request = permission(first)
-    assert request == permission(second)
+    request = await permission(first)
+    assert request == await permission(second)
     assert request.available_decisions == ("allow_once", "allow_session", "deny")
     assert request.use_integration_policy
     assert request.policy_integration_id == account.id
@@ -135,7 +136,7 @@ def test_mail_read_scopes_use_stable_private_locator_identity(mail_binding, part
         assert private not in repr(request)
     if part:
         assert part not in repr(request)
-        assert permission(first, limit=10).resource_scope != request.resource_scope
+        assert (await permission(first, limit=10)).resource_scope != request.resource_scope
 
     variants = [
         (MessageLocator("Confidential/Other", locator.uidvalidity, locator.uid), part),
@@ -147,15 +148,15 @@ def test_mail_read_scopes_use_stable_private_locator_identity(mail_binding, part
     scopes = {request.resource_scope}
     for other_locator, other_part in variants:
         token = token_for(account.id, revision, other_locator, part=other_part)
-        scopes.add(permission(token).resource_scope)
+        scopes.add((await permission(token)).resource_scope)
     assert len(scopes) == len(variants) + 1
     arguments = model(integration_id=account.id, **{field: first})
-    assert _permission("mail.read", "other_read", arguments, context)[0].resource_scope not in scopes
+    assert (await _permission("mail.read", "other_read", arguments, context))[0].resource_scope not in scopes
 
 
 @pytest.mark.parametrize("field", ["message_token", "attachment_token"])
 @pytest.mark.parametrize("invalid", ["malformed", "payload", "integration", "revision", "part"])
-def test_mail_read_rejects_invalid_tokens_before_permission_request(
+async def test_mail_read_rejects_invalid_tokens_before_permission_request(
     mail_binding, monkeypatch, field, invalid
 ) -> None:
     class AttachmentArguments(MailIntegrationArguments):
@@ -186,7 +187,7 @@ def test_mail_read_rejects_invalid_tokens_before_permission_request(
     model = AttachmentArguments if field == "attachment_token" else MailTokenArguments
     arguments = model(integration_id=account.id, **{field: token})
     with pytest.raises(MailError) as error:
-        _permission("mail.read", "mail_get_message", arguments, context)
+        await _permission("mail.read", "mail_get_message", arguments, context)
     assert error.value.code == "integration.staleReference"
     permission.assert_not_called()
     formatted = "".join(traceback.format_exception(error.value))
@@ -248,7 +249,7 @@ async def test_mail_registry_rejects_invalid_tokens_without_approval_or_executio
         assert private not in repr(result)
 
 
-def test_mail_search_scopes_preserve_query_arguments(mail_binding) -> None:
+async def test_mail_search_scopes_preserve_query_arguments(mail_binding) -> None:
     account, context = mail_binding
     arguments = MailSearchArguments(
         integration_id=account.id, mailbox="Confidential/Payroll", query="salary", limit=50
@@ -256,7 +257,7 @@ def test_mail_search_scopes_preserve_query_arguments(mail_binding) -> None:
     scopes = set()
     for changes in ({}, {"mailbox": "Other"}, {"query": "bonus"}, {"limit": 10}):
         selected = arguments.model_copy(update=changes)
-        request = _permission("mail.read", "mail_search", selected, context)[0]
+        request = (await _permission("mail.read", "mail_search", selected, context))[0]
         digest = hashlib.sha256(
             selected.model_dump_json(exclude={"integration_id"}).encode()
         ).hexdigest()[:24]
@@ -267,30 +268,26 @@ def test_mail_search_scopes_preserve_query_arguments(mail_binding) -> None:
     assert len(scopes) == 4
 
 
-@pytest.mark.parametrize(
-    "operation",
-    ["mail_update_draft", "mail_delete_draft", "mail_send_draft", "mail_delete_message"],
-)
-def test_mail_mutations_offer_account_scoped_write_grants(mail_binding, operation) -> None:
+async def test_mail_draft_updates_offer_account_scoped_write_grants(mail_binding) -> None:
     account, context = mail_binding
+    operation = "mail_update_draft"
     tool = next(tool for tool in MAIL_ADAPTER.shared_tools if tool.name == operation)
     scopes = set()
     for _ in range(2):
         token = token_for(account.id, binding_revision(account), MessageLocator("INBOX", 17, 42))
         arguments = tool.arguments_model(integration_id=account.id, message_token=token)
-        request = tool.authorization_factory(arguments, context)[0]
-        digest = hashlib.sha256(
-            arguments.model_dump_json(exclude={"integration_id"}).encode()
-        ).hexdigest()[:24]
-        assert json.loads(request.resource_scope)["operationKey"] == f"{operation}:{digest}"
+        request = (await tool.authorization_factory(arguments, context))[0]
+        assert json.loads(request.resource_scope)["operationKey"].startswith(
+            f"{operation}:"
+        )
         assert request.available_decisions == ("allow_once", "allow_session", "deny")
         assert request.effective_session_grants[0].access == "write"
         assert request.effective_session_grants[0].resource_type == "integration_resource"
         scopes.add(request.resource_scope)
-    assert len(scopes) == 2
+    assert len(scopes) == 1
 
 
-def test_mail_config_and_adapter_allow_only_encrypted_transports_and_account_policies() -> None:
+async def test_mail_config_and_adapter_allow_only_encrypted_transports_and_account_policies() -> None:
     with pytest.raises(ValidationError):
         MailConfig.model_validate(_account().config | {"imap_security": "plain"})
     with pytest.raises(ValidationError):
@@ -311,8 +308,8 @@ def test_mail_config_and_adapter_allow_only_encrypted_transports_and_account_pol
         tool.releases_private_data == (tool.name in read_tools)
         for tool in MAIL_ADAPTER.shared_tools
     )
-    delete_draft = next(tool for tool in MAIL_ADAPTER.shared_tools if tool.name == "mail_delete_draft")
-    assert delete_draft.actions[0].capability == "mail.delete"
+    send_message = next(tool for tool in MAIL_ADAPTER.shared_tools if tool.name == "mail_send_message")
+    assert send_message.actions[0].capability == "mail.send"
     account = _account()
     context = SimpleNamespace(
         bound_options={
@@ -321,10 +318,84 @@ def test_mail_config_and_adapter_allow_only_encrypted_transports_and_account_pol
         },
         integration_settings=IntegrationSettings(instances=[account]),
     )
-    request = delete_draft.authorization_factory(
-        MailTokenArguments(integration_id=account.id, message_token="opaque"), context
-    )[0]
-    assert request.available_decisions == ("allow_once", "allow_session", "deny")
+    request = (await send_message.authorization_factory(
+        MailSendMessageArguments(
+            integration_id=account.id,
+            to=("other@example.com",),
+            bcc=("hidden@example.com",),
+            subject="Private subject",
+            body="Reviewed body",
+        ),
+        context,
+    ))[0]
+    assert request.available_decisions == ("allow_once", "deny")
+    assert request.force_ask
+    assert [(item.label, item.value) for item in request.display_items] == [
+        ("An", ("other@example.com",)),
+        ("Bcc", ("hidden@example.com",)),
+        ("Betreff", "Private subject"),
+        ("Nachricht", "Reviewed body"),
+    ]
+
+
+async def test_disabled_mail_mutation_does_not_read_remote_message(
+    mail_binding, monkeypatch
+) -> None:
+    account, context = mail_binding
+    context.ask_handler = AsyncMock(return_value=PermissionDecision.DENY)
+    selected_client = AsyncMock(
+        side_effect=AssertionError("disabled mail actions must not access IMAP")
+    )
+    monkeypatch.setattr(
+        "mato_loop_backend.integrations.mail._selected_client", selected_client
+    )
+    arguments = MailTokenArguments(
+        integration_id=account.id,
+        message_token=token_for(
+            account.id,
+            binding_revision(account),
+            MessageLocator("Drafts", 17, 42),
+        ),
+    )
+
+    request = (await _permission(
+        "mail.send", "mail_send_draft", arguments, context
+    ))[0]
+
+    assert request.display_items == ()
+    context.ask_handler.assert_awaited_once_with(request, check_only=True)
+    selected_client.assert_not_awaited()
+
+
+async def test_mail_send_rejects_incomplete_approval_preview(
+    mail_binding, monkeypatch
+) -> None:
+    account, context = mail_binding
+    context.ask_handler = AsyncMock(return_value=PermissionDecision.ASK)
+    locator = MessageLocator("Drafts", 17, 42)
+    message = parse_message(
+        build_message(
+            from_address="user@example.com",
+            to=("recipient@example.com",),
+            subject="Large draft",
+            body="x" * 100_001,
+        ),
+        locator,
+    )
+    client = SimpleNamespace(get_message=AsyncMock(return_value=message))
+    monkeypatch.setattr(
+        "mato_loop_backend.integrations.mail._selected_client",
+        AsyncMock(return_value=(client, account, binding_revision(account))),
+    )
+    arguments = MailTokenArguments(
+        integration_id=account.id,
+        message_token=token_for(account.id, binding_revision(account), locator),
+    )
+
+    with pytest.raises(MailError) as error:
+        await _permission("mail.send", "mail_send_draft", arguments, context)
+
+    assert error.value.code == "mail.responseTooLarge"
 
 
 def test_mail_drafts_allow_missing_recipients_but_sending_does_not() -> None:

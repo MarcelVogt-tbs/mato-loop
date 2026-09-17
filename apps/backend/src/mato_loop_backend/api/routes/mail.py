@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import PurePath
 from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, Query, UploadFile, status
 from fastapi.responses import Response
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +25,14 @@ from mato_loop_backend.integrations.mail import (
     message_payload,
     token_for,
 )
-from mato_loop_backend.integrations.mail_client import MailError, build_message
+from mato_loop_backend.integrations.mail_client import (
+    MailError,
+    MessageLocator,
+    attachment_bytes,
+    build_message,
+    parse_message,
+)
+from mato_loop_backend.integrations.mail_send import send_once, send_status
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import load_credential, read_credential, require_user
 from mato_loop_backend.settings import (
@@ -143,6 +151,8 @@ async def _raw_message(
     subject: str,
     body: str,
     attachments: list[UploadFile] | None,
+    retained_attachments: tuple[tuple[str, str, bytes], ...] = (),
+    message_id: str | None = None,
 ) -> bytes:
     try:
         compose = MailComposeArguments(
@@ -155,6 +165,13 @@ async def _raw_message(
         )
     except ValidationError as exc:
         raise ApiError(422, "validation.invalid") from exc
+    uploaded = await _attachments(attachments, limits)
+    combined = (*retained_attachments, *uploaded)
+    if (
+        len(combined) > limits.max_attachments_per_message
+        or sum(len(item[2]) for item in combined) > limits.max_message_upload_bytes
+    ):
+        raise ApiError(413, "attachment.tooLarge")
     return build_message(
         from_address=MailConfig.model_validate(account.config).from_address,
         to=compose.to,
@@ -162,8 +179,38 @@ async def _raw_message(
         bcc=compose.bcc,
         subject=compose.subject,
         body=compose.body,
-        attachments=await _attachments(attachments, limits),
+        attachments=combined,
+        message_id=message_id,
     )
+
+
+async def _retained_attachments(
+    client,
+    tokens: list[str] | None,
+    integration_id: UUID,
+    revision: str,
+    locator: MessageLocator,
+    limits: InstanceLimits,
+) -> tuple[tuple[str, str, bytes], ...]:
+    if not tokens:
+        return ()
+    if len(tokens) > limits.max_attachments_per_message:
+        raise ApiError(413, "attachment.tooLarge")
+    message = await client.get_message(locator)
+    result = []
+    total = 0
+    for token in tokens:
+        retained_locator, part = locator_from_token(
+            token, integration_id, revision, require_part=True
+        )
+        if retained_locator != locator or part is None:
+            raise ValueError("retained attachment binding mismatch")
+        data, filename, content_type = attachment_bytes(message.raw, part)
+        total += len(data)
+        if len(data) > limits.max_upload_bytes or total > limits.max_message_upload_bytes:
+            raise ApiError(413, "attachment.tooLarge")
+        result.append((filename, content_type, data))
+    return tuple(result)
 
 
 @router.get("/accounts")
@@ -314,33 +361,59 @@ async def update_draft(
     cc: Annotated[list[str] | None, Form()] = None,
     bcc: Annotated[list[str] | None, Form()] = None,
     attachments: Annotated[list[UploadFile] | None, File()] = None,
+    retained_attachment_tokens: Annotated[
+        list[str] | None, Form(alias="retainedAttachmentToken")
+    ] = None,
+    replace_attachments: Annotated[bool, Form(alias="replaceAttachments")] = False,
 ) -> dict:
     account, client, revision = await _account(db, user, integration_id)
     limits = await SettingsStore.load(db, InstanceLimits)
     try:
         locator, _part = locator_from_token(message_token, integration_id, revision)
+        replace_attachments = replace_attachments or bool(attachments)
+        retained = (
+            await _retained_attachments(
+                client,
+                retained_attachment_tokens,
+                integration_id,
+                revision,
+                locator,
+                limits,
+            )
+            if replace_attachments
+            else ()
+        )
+        raw = await _raw_message(
+            account,
+            limits,
+            to=to,
+            cc=cc,
+            bcc=bcc,
+            subject=subject,
+            body=body,
+            attachments=attachments,
+            retained_attachments=retained,
+        )
         replacement = await client.update_draft(
             locator,
-            await _raw_message(
-                account,
-                limits,
-                to=to,
-                cc=cc,
-                bcc=bcc,
-                subject=subject,
-                body=body,
-                attachments=attachments,
-            ),
+            raw,
+            replace_attachments=replace_attachments,
         )
     except ValueError as exc:
         raise ApiError(409, "integration.staleReference") from exc
     except MailError as exc:
         raise _api_error(exc) from exc
-    return {
+    result = {
         "messageToken": token_for(integration_id, revision, replacement),
         "mailbox": replacement.mailbox,
         "isDraft": True,
     }
+    if replace_attachments:
+        result["message"] = {
+            **message_payload(parse_message(raw, replacement), integration_id, revision),
+            "isDraft": True,
+        }
+    return result
 
 
 @router.delete(
@@ -369,11 +442,86 @@ async def send_draft(
     message_token: str,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=200)
+    ],
+    to: Annotated[list[str] | None, Form()] = None,
+    subject: Annotated[str | None, Form(max_length=1_000)] = None,
+    body: Annotated[str | None, Form(max_length=100_000)] = None,
+    cc: Annotated[list[str] | None, Form()] = None,
+    bcc: Annotated[list[str] | None, Form()] = None,
+    attachments: Annotated[list[UploadFile] | None, File()] = None,
+    retained_attachment_tokens: Annotated[
+        list[str] | None, Form(alias="retainedAttachmentToken")
+    ] = None,
 ) -> dict[str, bool]:
-    _instance, client, revision = await _account(db, user, integration_id)
+    account, client, revision = await _account(db, user, integration_id)
     try:
         locator, _part = locator_from_token(message_token, integration_id, revision)
-        await client.send_draft(locator)
+        draft_reference = f"{locator.mailbox}\0{locator.uidvalidity}\0{locator.uid}"
+        if await send_status(
+            user.id,
+            integration_id,
+            idempotency_key,
+            draft_reference=draft_reference,
+        ) == "sent":
+            try:
+                await client.delete_draft(locator)
+            except MailError:
+                pass
+            return {"sent": True}
+        compose_requested = any(
+            value is not None
+            for value in (
+                to,
+                subject,
+                body,
+                cc,
+                bcc,
+                attachments,
+                retained_attachment_tokens,
+            )
+        )
+        if compose_requested:
+            if not any((to, cc, bcc)):
+                raise ApiError(422, "validation.invalid")
+            limits = await SettingsStore.load(db, InstanceLimits)
+            retained = await _retained_attachments(
+                client,
+                retained_attachment_tokens,
+                integration_id,
+                revision,
+                locator,
+                limits,
+            )
+            raw = await _raw_message(
+                account,
+                limits,
+                to=to,
+                cc=cc,
+                bcc=bcc,
+                subject=subject or "",
+                body=body or "",
+                attachments=attachments,
+                retained_attachments=retained,
+                message_id=(
+                    f"<{hashlib.sha256(idempotency_key.encode()).hexdigest()}@mato-loop.local>"
+                ),
+            )
+        else:
+            raw = (await client.get_message(locator)).raw
+        await send_once(
+            user_id=user.id,
+            integration_id=integration_id,
+            idempotency_key=idempotency_key,
+            raw=raw,
+            client=client,
+            draft_reference=draft_reference,
+        )
+        try:
+            await client.delete_draft(locator)
+        except MailError:
+            pass
     except ValueError as exc:
         raise ApiError(409, "integration.staleReference") from exc
     except MailError as exc:
@@ -387,6 +535,9 @@ async def send_message(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
     to: Annotated[list[str], Form()],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=200)
+    ],
     subject: Annotated[str, Form(max_length=1_000)] = "",
     body: Annotated[str, Form(max_length=100_000)] = "",
     cc: Annotated[list[str] | None, Form()] = None,
@@ -396,8 +547,12 @@ async def send_message(
     account, client, _revision = await _account(db, user, integration_id)
     limits = await SettingsStore.load(db, InstanceLimits)
     try:
-        await client.send(
-            await _raw_message(
+        await send_once(
+            user_id=user.id,
+            integration_id=integration_id,
+            idempotency_key=idempotency_key,
+            client=client,
+            raw=await _raw_message(
                 account,
                 limits,
                 to=to,
@@ -406,7 +561,10 @@ async def send_message(
                 subject=subject,
                 body=body,
                 attachments=attachments,
-            )
+                message_id=(
+                    f"<{hashlib.sha256(idempotency_key.encode()).hexdigest()}@mato-loop.local>"
+                ),
+            ),
         )
     except MailError as exc:
         raise _api_error(exc) from exc

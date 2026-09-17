@@ -367,16 +367,19 @@ it.each(['private', 'public'])('resolves browser.instances on the generic access
   vi.spyOn(integrations, 'fetchCatalog').mockResolvedValue(integrations.catalog)
   vi.spyOn(integrations, 'fetchAll').mockResolvedValue()
   api.get.mockResolvedValueOnce({ data: { resources: [], actions: [
-    { capability: 'browser.read', label: 'Browser lesen', globalPolicy: 'auto', integrationPolicy: null, effectiveIntegrationPolicy: 'auto' },
-    { capability: 'browser.write', label: 'Browser steuern', globalPolicy: 'auto', integrationPolicy: 'ask', effectiveIntegrationPolicy: 'ask' }
+    { capability: 'browser.read', label: 'Browser lesen', allowedPolicies: ['disabled', 'ask'], globalPolicy: 'ask', integrationPolicy: null, effectiveIntegrationPolicy: 'ask' },
+    { capability: 'browser.write', label: 'Browser steuern', allowedPolicies: ['disabled', 'ask'], globalPolicy: 'ask', integrationPolicy: 'ask', effectiveIntegrationPolicy: 'ask' }
   ] } })
   await mount({ render: () => h(RouterView) }, { path: '/settings/integrations/browser-1/access?scope=personal' })
   await vi.waitFor(() => expect(root.textContent).toContain('Browser lesen'))
   expect(root.textContent).toContain('Zugriff für Browser')
-  expect(root.textContent).toContain('Wirksam: Automatisch')
+  expect(root.textContent).not.toContain('Automatisch')
   expect(root.textContent).toContain('Wirksam: Nachfragen')
   expect(root.querySelector('form').classList.contains('disabled')).toBe(false)
   expect(root.querySelectorAll('[role="combobox"]')).toHaveLength(2)
+  root.querySelector('[role="combobox"]').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-menu')).not.toBeNull())
+  expect(menuItem('Automatisch')).toBeUndefined()
   expect(api.get).toHaveBeenCalledExactlyOnceWith('/integrations/browser-1/access', { params: { scope: 'personal', trust } })
   expect(FakeWebSocket.instances).toHaveLength(0)
 })

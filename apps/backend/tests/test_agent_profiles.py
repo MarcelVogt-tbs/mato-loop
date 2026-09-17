@@ -459,7 +459,7 @@ def test_agent_profile_catalog_maps_shared_tools_to_every_integration() -> None:
                             {
                                 "capability": "calendar.read",
                                 "configurable": True,
-                                "allowedPolicies": ["disabled", "ask", "auto"],
+                                "allowedPolicies": ["disabled", "ask"],
                             }
                         ],
                     }
@@ -469,7 +469,21 @@ def test_agent_profile_catalog_maps_shared_tools_to_every_integration() -> None:
     )
 
     assert set(result) == {first, second}
-    assert result[first]["calendar.read"] == set(ToolExecutionPolicy)
+    assert result[first]["calendar.read"] == {
+        ToolExecutionPolicy.DISABLED,
+        ToolExecutionPolicy.ASK,
+    }
+
+    with pytest.raises(ApiError):
+        _validate_permissions(
+            AgentProfilePermissions(
+                integration_policies={first: {"calendar.read": "auto"}}
+            ),
+            {},
+            result,
+            {first, second},
+            "privatePermissions",
+        )
 
 
 def test_agent_profile_request_rejects_blank_trimmed_text() -> None:

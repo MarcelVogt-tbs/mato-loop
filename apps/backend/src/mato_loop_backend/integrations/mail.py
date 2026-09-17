@@ -22,6 +22,7 @@ from mato_loop_backend.integrations.mail_client import (
     ParsedMessage,
     build_message,
 )
+from mato_loop_backend.integrations.mail_send import send_once, send_status
 from mato_loop_backend.models import Credential
 from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
@@ -38,12 +39,14 @@ _SEND = ToolAction(
     "E-Mails senden",
     ToolExecutionPolicy.ASK,
     mutates=True,
+    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
 )
 _DELETE = ToolAction(
     "mail.delete",
     "E-Mails löschen",
     ToolExecutionPolicy.ASK,
     mutates=True,
+    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
 )
 
 
@@ -318,6 +321,8 @@ def message_payload(
             )
             for attachment in message.attachments
         ],
+        "bodyTruncated": message.body_truncated,
+        "attachmentsTruncated": message.attachments_truncated,
     }
 
 
@@ -489,6 +494,11 @@ async def mail_delete_draft(arguments: MailTokenArguments, context: Any):
         locator, _part = locator_from_token(
             arguments.message_token, arguments.integration_id, revision
         )
+        expected = context.bound_options.get("mail_approved_raw_hash")
+        if expected is not None:
+            message = await client.get_message(locator)
+            if hashlib.sha256(message.raw).hexdigest() != expected:
+                raise MailError("mail.staleReference")
         await client.delete_draft(locator)
         return _result({"deleted": True})
     except ValueError:
@@ -504,10 +514,38 @@ async def mail_send_draft(arguments: MailTokenArguments, context: Any):
         client, _instance, revision = await _selected_client(
             arguments.integration_id, context
         )
+        key = f"agent:{context.run_id}:{context.tool_call.id}"
         locator, _part = locator_from_token(
             arguments.message_token, arguments.integration_id, revision
         )
-        await client.send_draft(locator)
+        draft_reference = f"{locator.mailbox}\0{locator.uidvalidity}\0{locator.uid}"
+        if await send_status(
+            context.session.user_id,
+            arguments.integration_id,
+            key,
+            draft_reference=draft_reference,
+        ) == "sent":
+            try:
+                await client.delete_draft(locator)
+            except MailError:
+                pass
+            return _result({"sent": True})
+        message = await client.get_message(locator)
+        expected = context.bound_options.get("mail_approved_raw_hash")
+        if expected is not None and hashlib.sha256(message.raw).hexdigest() != expected:
+            raise MailError("mail.staleReference")
+        await send_once(
+            user_id=context.session.user_id,
+            integration_id=arguments.integration_id,
+            idempotency_key=key,
+            raw=message.raw,
+            client=client,
+            draft_reference=draft_reference,
+        )
+        try:
+            await client.delete_draft(locator)
+        except MailError:
+            pass
         return _result({"sent": True})
     except ValueError:
         from mato_loop_backend.agent.tools import ToolResult
@@ -522,7 +560,23 @@ async def mail_send_message(arguments: MailSendMessageArguments, context: Any):
         client, instance, _revision = await _selected_client(
             arguments.integration_id, context
         )
-        await client.send(_raw(arguments, instance))
+        key = f"agent:{context.run_id}:{context.tool_call.id}"
+        raw = build_message(
+            from_address=MailConfig.model_validate(instance.config).from_address,
+            to=arguments.to,
+            cc=arguments.cc,
+            bcc=arguments.bcc,
+            subject=arguments.subject,
+            body=arguments.body,
+            message_id=f"<{hashlib.sha256(key.encode()).hexdigest()}@mato-loop.local>",
+        )
+        await send_once(
+            user_id=context.session.user_id,
+            integration_id=arguments.integration_id,
+            idempotency_key=key,
+            raw=raw,
+            client=client,
+        )
         return _result({"sent": True})
     except MailError as exc:
         return _error(exc)
@@ -536,6 +590,11 @@ async def _delete(arguments: MailTokenArguments, context: Any):
         locator, _part = locator_from_token(
             arguments.message_token, arguments.integration_id, revision
         )
+        expected = context.bound_options.get("mail_approved_raw_hash")
+        if expected is not None:
+            message = await client.get_message(locator)
+            if hashlib.sha256(message.raw).hexdigest() != expected:
+                raise MailError("mail.staleReference")
         await client.delete_message(locator)
         return _result({"deleted": True})
     except ValueError:
@@ -550,33 +609,39 @@ async def mail_delete_message(arguments: MailTokenArguments, context: Any):
     return await _delete(arguments, context)
 
 
-def _permission(capability: str, operation: str, arguments: Any, context: Any):
-    from mato_loop_backend.agent.permissions import integration_operation_permission
+async def _permission(capability: str, operation: str, arguments: Any, context: Any):
+    from dataclasses import replace
+
+    from mato_loop_backend.agent.permissions import (
+        PermissionDecision,
+        PermissionDisplayItem,
+        integration_operation_permission,
+    )
 
     instance, revision = _binding(context, arguments.integration_id)
     serialized = arguments.model_dump_json(exclude={"integration_id"})
-    if capability == "mail.read":
-        identity = arguments.model_dump(mode="json", exclude={"integration_id"})
-        for field in ("message_token", "attachment_token"):
-            if field not in identity:
-                continue
-            try:
-                locator, part = locator_from_token(
-                    identity[field],
-                    arguments.integration_id,
-                    revision,
-                    require_part=field == "attachment_token",
-                )
-            except ValueError:
-                raise MailError("integration.staleReference") from None
-            # Hash the stable locator, never the randomized ciphertext or plaintext scope.
-            identity[field] = {
-                "mailbox": locator.mailbox,
-                "uidvalidity": locator.uidvalidity,
-                "uid": locator.uid,
-                "part": part,
-            }
-            serialized = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    identity = arguments.model_dump(mode="json", exclude={"integration_id"})
+    locator = None
+    for field in ("message_token", "attachment_token"):
+        if field not in identity:
+            continue
+        try:
+            locator, part = locator_from_token(
+                identity[field],
+                arguments.integration_id,
+                revision,
+                require_part=field == "attachment_token",
+            )
+        except ValueError:
+            raise MailError("integration.staleReference") from None
+        # Hash the stable locator, never the randomized ciphertext or plaintext scope.
+        identity[field] = {
+            "mailbox": locator.mailbox,
+            "uidvalidity": locator.uidvalidity,
+            "uid": locator.uid,
+            "part": part,
+        }
+        serialized = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(serialized.encode()).hexdigest()[:24]
     labels = {
         "mail.read": ("E-Mails lesen?", "Der Agent möchte E-Mail-Daten lesen."),
@@ -588,19 +653,81 @@ def _permission(capability: str, operation: str, arguments: Any, context: Any):
         "mail.delete": ("E-Mail löschen?", "Der Agent möchte eine E-Mail löschen."),
     }
     title, summary = labels[capability]
-    return (
-        integration_operation_permission(
-            capability=capability,
-            integration_id=arguments.integration_id,
-            binding_revision=revision,
-            operation_key=f"{operation}:{digest}",
-            title=title,
-            summary=summary,
-            resource_display=instance.name,
-            action_kind=operation,
-            risk_level="high" if capability in {"mail.send", "mail.delete"} else "medium",
-        ),
+    request = integration_operation_permission(
+        capability=capability,
+        integration_id=arguments.integration_id,
+        binding_revision=revision,
+        operation_key=f"{operation}:{digest}",
+        title=title,
+        summary=summary,
+        resource_display=instance.name,
+        action_kind=operation,
+        risk_level="high" if capability in {"mail.send", "mail.delete"} else "medium",
+        force_ask=capability in {"mail.send", "mail.delete"},
+        available_decisions=("allow_once", "deny")
+        if capability in {"mail.send", "mail.delete"}
+        else ("allow_once", "allow_session", "deny"),
     )
+    if (
+        capability in {"mail.send", "mail.delete"}
+        and hasattr(context, "ask_handler")
+        and await context.ask_handler(request, check_only=True)
+        == PermissionDecision.DENY
+    ):
+        return (request,)
+    display_items = ()
+    if capability == "mail.send":
+        if locator is not None:
+            client, _instance, _revision = await _selected_client(
+                arguments.integration_id, context
+            )
+            message = await client.get_message(locator)
+            if message.body_truncated or message.attachments_truncated:
+                raise MailError("mail.responseTooLarge")
+            context.bound_options["mail_approved_raw_hash"] = hashlib.sha256(
+                message.raw
+            ).hexdigest()
+            values = {
+                "An": message.summary.recipients,
+                "Cc": message.cc,
+                "Bcc": message.bcc,
+                "Betreff": message.summary.subject,
+                "Nachricht": message.body,
+                "Anhänge": tuple(item.filename for item in message.attachments),
+            }
+        else:
+            values = {
+                "An": arguments.to,
+                "Cc": arguments.cc,
+                "Bcc": arguments.bcc,
+                "Betreff": arguments.subject,
+                "Nachricht": arguments.body,
+            }
+        display_items = tuple(
+            PermissionDisplayItem(
+                label,
+                value,
+                "list" if isinstance(value, tuple) else "text",
+            )
+            for label, value in values.items()
+            if value
+        )
+    elif capability == "mail.delete" and locator is not None:
+        client, _instance, _revision = await _selected_client(
+            arguments.integration_id, context
+        )
+        message = await client.get_message(locator)
+        context.bound_options["mail_approved_raw_hash"] = hashlib.sha256(
+            message.raw
+        ).hexdigest()
+        display_items = (
+            PermissionDisplayItem("Ordner", locator.mailbox),
+            PermissionDisplayItem(
+                "Betreff", message.summary.subject or "(Kein Betreff)"
+            ),
+            PermissionDisplayItem("Von", message.summary.sender),
+        )
+    return (replace(request, display_items=display_items),)
 
 
 def _accounts_permission(_arguments: Any, _context: Any):
@@ -711,7 +838,7 @@ MAIL_SHARED_TOOLS = (
     ),
     _tool(
         "mail_send_draft",
-        "Send a previously returned email draft exactly once.",
+        "Send a previously returned email draft without automatic retries.",
         MailTokenArguments,
         mail_send_draft,
         _SEND,
@@ -719,7 +846,7 @@ MAIL_SHARED_TOOLS = (
     ),
     _tool(
         "mail_send_message",
-        "Send one new plain-text email exactly once.",
+        "Send one new plain-text email without automatic retries.",
         MailSendMessageArguments,
         mail_send_message,
         _SEND,

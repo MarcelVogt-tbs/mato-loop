@@ -342,7 +342,10 @@ async def _resource_handler(_arguments, _context) -> ToolResult:
     return ToolResult.json({"ok": True})
 
 
-def _resource_adapter(monkeypatch) -> None:
+def _resource_adapter(
+    monkeypatch,
+    allowed_policies: tuple[ToolExecutionPolicy, ...] = tuple(ToolExecutionPolicy),
+) -> None:
     async def load_resources(_instance, _credential):
         return (
             IntegrationResource(
@@ -358,7 +361,12 @@ def _resource_adapter(monkeypatch) -> None:
         )
 
     current = integration_registry._ADAPTERS[("search", "searxng")]
-    action = ToolAction("network.search", "Suchen", ToolExecutionPolicy.AUTO)
+    action = ToolAction(
+        "network.search",
+        "Suchen",
+        ToolExecutionPolicy.AUTO,
+        allowed_policies=allowed_policies,
+    )
 
     def contributions(instance):
         base = current.contributions(instance)
@@ -397,6 +405,25 @@ def _resource_adapter(monkeypatch) -> None:
             resource_actions=(action,),
             resource_loader=load_resources,
         ),
+    )
+
+
+def test_mail_send_and_delete_policy_metadata_disallows_auto() -> None:
+    adapter = integration_registry._ADAPTERS[("mail", "imap_smtp")]
+
+    actions = {
+        action.capability: action.allowed_policies
+        for action in adapter.resource_actions
+    }
+    assert actions["mail.send"] == actions["mail.delete"] == (
+        ToolExecutionPolicy.DISABLED,
+        ToolExecutionPolicy.ASK,
+    )
+    assert all(
+        action.allowed_policies == actions[action.capability]
+        for tool in adapter.shared_tools
+        for action in tool.actions
+        if action.capability in {"mail.send", "mail.delete"}
     )
 
 
@@ -622,6 +649,68 @@ async def test_integration_access_reports_integration_policy_and_hard_limits(
     assert result["resources"][0]["effectivePolicies"] == {
         "network.search": "disabled"
     }
+
+
+async def test_integration_access_enforces_action_policies_and_normalizes_legacy_auto(
+    monkeypatch,
+) -> None:
+    _resource_adapter(
+        monkeypatch,
+        (ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
+    )
+    integration = _searxng()
+    integrations = IntegrationSettings(instances=[integration])
+    tools = ToolSettings.model_validate(
+        {
+            "publicPermissions": {
+                "policies": {"network.search": "auto"},
+                "integrationPolicies": {
+                    str(integration.id): {"network.search": "auto"}
+                },
+                "resourcePolicies": {
+                    str(integration.id): {
+                        "calendar:work": {"network.search": "auto"}
+                    }
+                },
+            },
+        }
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else tools
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    db = AsyncMock(spec=AsyncSession)
+
+    result = await get_integration_access(integration.id, db, "public")
+
+    assert result["actions"][0] == {
+        "capability": "network.search",
+        "label": "Suchen",
+        "allowedPolicies": ["disabled", "ask"],
+        "globalPolicy": "ask",
+        "integrationPolicy": "ask",
+        "effectiveIntegrationPolicy": "ask",
+    }
+    assert result["resources"][1]["policies"] == {"network.search": "ask"}
+    assert result["resources"][1]["effectivePolicies"] == {"network.search": "ask"}
+
+    for payload, field in (
+        ({"policies": {"network.search": "auto"}}, "policies"),
+        (
+            {"resources": {"calendar:work": {"network.search": "auto"}}},
+            "resources",
+        ),
+    ):
+        with pytest.raises(ApiError) as exc_info:
+            await update_integration_access(
+                integration.id,
+                IntegrationAccessRequest.model_validate(payload),
+                db,
+                "public",
+            )
+        assert exc_info.value.code == "validation.invalidChoice"
+        assert exc_info.value.field == field
 
 
 @pytest.mark.parametrize(

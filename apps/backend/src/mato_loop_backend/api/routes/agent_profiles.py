@@ -247,7 +247,10 @@ def _catalog_policies(groups: list[dict]) -> dict[str, set[ToolExecutionPolicy]]
             for action in tool["actions"]:
                 if not action["configurable"]:
                     continue
-                modes = set(ToolExecutionPolicy)
+                modes = {
+                    ToolExecutionPolicy(policy)
+                    for policy in action["allowedPolicies"]
+                }
                 allowed.setdefault(action["capability"], modes).intersection_update(
                     modes
                 )
@@ -269,7 +272,10 @@ def _catalog_integration_policies(
                 for action in tool["actions"]:
                     if not action["configurable"]:
                         continue
-                    modes = set(ToolExecutionPolicy)
+                    modes = {
+                        ToolExecutionPolicy(policy)
+                        for policy in action["allowedPolicies"]
+                    }
                     allowed.setdefault(
                         action["capability"], modes
                     ).intersection_update(modes)
@@ -299,7 +305,13 @@ def _validate_permissions(
     for entry in entries(permissions):
         integration_id, resource_key, capability, policy = entry
         if entry in existing_entries:
-            continue
+            scoped_allowed = (
+                allowed
+                if integration_id is None
+                else integration_allowed.get(integration_id, {})
+            )
+            if capability not in scoped_allowed or policy not in scoped_allowed[capability]:
+                continue
         if integration_id is not None:
             try:
                 canonical_id = str(UUID(integration_id))

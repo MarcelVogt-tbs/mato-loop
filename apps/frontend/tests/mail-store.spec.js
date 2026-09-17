@@ -79,19 +79,49 @@ describe('mail store', () => {
     expect(store.detail).toBeNull()
   })
 
-  it('sends multipart mail with repeated recipients and files', async () => {
+  it('sends multipart mail with retained attachments and an idempotency key', async () => {
     api.post.mockResolvedValue({ data: { status: 'sent' } })
     const store = useMailStore()
     const file = new File(['hello'], 'hello.txt', { type: 'text/plain' })
 
     await store.sendMessage('mail-1', {
       to: ['a@example.com', 'b@example.com'], cc: [], bcc: [], subject: 'Hallo',
-      body: 'Text', files: [file]
-    })
+      body: 'Text', files: [file],
+      existingAttachments: [{ token: 'attachment-1' }, { token: 'attachment-2' }]
+    }, 'send-key')
 
-    const [path, data] = api.post.mock.calls[0]
+    const [path, data, config] = api.post.mock.calls[0]
     expect(path).toBe('/mail/accounts/mail-1/messages/send')
     expect(data.getAll('to')).toEqual(['a@example.com', 'b@example.com'])
+    expect(data.getAll('retainedAttachmentToken')).toEqual(['attachment-1', 'attachment-2'])
     expect(data.get('attachments').name).toBe('hello.txt')
+    expect(config).toEqual({ headers: { 'Idempotency-Key': 'send-key' } })
+    expect(api.get).not.toHaveBeenCalled()
+  })
+
+  it('sends a draft with an idempotency key', async () => {
+    api.post.mockResolvedValue({ data: { status: 'sent' } })
+    const store = useMailStore()
+
+    await store.sendDraft('mail-1', 'draft/1', {
+      to: ['recipient@example.com'], subject: 'Hallo', body: 'Text'
+    }, 'draft-key')
+
+    const [path, data, config] = api.post.mock.calls[0]
+    expect(path).toBe('/mail/accounts/mail-1/drafts/draft%2F1/send')
+    expect(data.getAll('to')).toEqual(['recipient@example.com'])
+    expect(data.get('subject')).toBe('Hallo')
+    expect(config).toEqual({ headers: { 'Idempotency-Key': 'draft-key' } })
+  })
+
+  it('explicitly replaces attachments when updating a draft', async () => {
+    api.put.mockResolvedValue({ data: { messageToken: 'draft-2' } })
+    const store = useMailStore()
+
+    await store.saveDraft('mail-1', 'draft-1', {
+      existingAttachments: [], files: [], subject: '', body: ''
+    })
+
+    expect(api.put.mock.calls[0][1].get('replaceAttachments')).toBe('true')
   })
 })

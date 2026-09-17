@@ -971,7 +971,7 @@ class ToolRegistry:
                     .value,
                     "configurable": action.configurable,
                     "allowedPolicies": [
-                        policy.value for policy in ToolExecutionPolicy
+                        policy.value for policy in action.allowed_policies
                     ],
                     "available": True,
                 }

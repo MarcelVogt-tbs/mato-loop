@@ -30,26 +30,18 @@ function normalizeMessage(message) {
   }
 }
 
-async function multipart(payload, accountId) {
+function multipart(payload, replaceAttachments = false) {
   const data = new FormData()
   for (const field of ['to', 'cc', 'bcc']) {
     for (const value of payload[field] || []) data.append(field, value)
   }
   data.append('subject', payload.subject || '')
   data.append('body', payload.body || '')
-  const files = [...(payload.files || [])]
   for (const attachment of payload.existingAttachments || []) {
-    const response = await api.get(
-      `/mail/accounts/${accountId}/attachments/${encodeURIComponent(attachment.token)}`,
-      { responseType: 'blob' }
-    )
-    files.push(new File(
-      [response.data],
-      attachment.filename || attachment.name || 'attachment',
-      { type: response.headers?.['content-type'] || attachment.contentType || 'application/octet-stream' }
-    ))
+    data.append('retainedAttachmentToken', attachment.token)
   }
-  for (const file of files) data.append('attachments', file, file.name)
+  for (const file of payload.files || []) data.append('attachments', file, file.name)
+  if (replaceAttachments) data.append('replaceAttachments', 'true')
   return data
 }
 
@@ -173,7 +165,7 @@ export const useMailStore = defineStore('mail', {
     },
     async saveDraft(accountId, token, payload) {
       const path = `/mail/accounts/${accountId}/drafts${token ? `/${encodeURIComponent(token)}` : ''}`
-      const body = await multipart(payload, accountId)
+      const body = multipart(payload, Boolean(token))
       const { data } = token
         ? await api.put(path, body)
         : await api.post(path, body)
@@ -185,13 +177,21 @@ export const useMailStore = defineStore('mail', {
       await api.delete(`/mail/accounts/${accountId}/drafts/${encodeURIComponent(token)}`)
       this.removeConfirmed(token)
     },
-    async sendDraft(accountId, token) {
-      const { data } = await api.post(`/mail/accounts/${accountId}/drafts/${encodeURIComponent(token)}/send`)
+    async sendDraft(accountId, token, payload, idempotencyKey) {
+      const { data } = await api.post(
+        `/mail/accounts/${accountId}/drafts/${encodeURIComponent(token)}/send`,
+        multipart(payload),
+        { headers: { 'Idempotency-Key': idempotencyKey } }
+      )
       this.removeConfirmed(token)
       return data
     },
-    async sendMessage(accountId, payload) {
-      return (await api.post(`/mail/accounts/${accountId}/messages/send`, await multipart(payload, accountId))).data
+    async sendMessage(accountId, payload, idempotencyKey) {
+      return (await api.post(
+        `/mail/accounts/${accountId}/messages/send`,
+        multipart(payload),
+        { headers: { 'Idempotency-Key': idempotencyKey } }
+      )).data
     },
     async deleteMessage(accountId, token) {
       await api.delete(`/mail/accounts/${accountId}/messages/${encodeURIComponent(token)}`)

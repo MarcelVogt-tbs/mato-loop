@@ -188,14 +188,17 @@
         <q-separator />
         <q-form class="col column no-wrap" @submit.prevent="sendCompose">
           <q-card-section class="col scroll q-gutter-md">
-             <q-input v-model="compose.to" outlined label="An" hint="Mehrere Adressen mit Komma trennen." />
+            <q-banner v-if="compose.sendPayload" rounded class="bg-warning text-dark">
+              Der Versandstatus ist unklar. Ein erneuter Versuch verwendet unverändert dieselbe E-Mail.
+            </q-banner>
+             <q-input v-model="compose.to" outlined label="An" hint="Mehrere Adressen mit Komma trennen." :disable="Boolean(compose.sendPayload)" />
             <div class="row q-col-gutter-sm">
-              <q-input v-model="compose.cc" outlined label="Cc" class="col-12 col-sm-6" />
-              <q-input v-model="compose.bcc" outlined label="Bcc" class="col-12 col-sm-6" />
+              <q-input v-model="compose.cc" outlined label="Cc" class="col-12 col-sm-6" :disable="Boolean(compose.sendPayload)" />
+              <q-input v-model="compose.bcc" outlined label="Bcc" class="col-12 col-sm-6" :disable="Boolean(compose.sendPayload)" />
             </div>
-            <q-input v-model="compose.subject" outlined label="Betreff" />
-            <q-input v-model="compose.body" outlined type="textarea" autogrow label="Nachricht" />
-            <q-file v-model="compose.files" outlined multiple use-chips append clearable label="Anhänge hinzufügen">
+            <q-input v-model="compose.subject" outlined label="Betreff" :disable="Boolean(compose.sendPayload)" />
+            <q-input v-model="compose.body" outlined type="textarea" autogrow label="Nachricht" :disable="Boolean(compose.sendPayload)" />
+            <q-file v-model="compose.files" outlined multiple use-chips append clearable label="Anhänge hinzufügen" :disable="Boolean(compose.sendPayload)">
               <template #prepend><q-icon name="attach_file" /></template>
             </q-file>
             <q-list v-if="compose.existingAttachments.length" bordered separator class="rounded-borders">
@@ -205,7 +208,7 @@
                 <q-item-section side>
                   <div class="row no-wrap">
                     <q-btn flat round dense icon="download" :href="attachmentUrl(attachment.token)" download aria-label="Anhang herunterladen" />
-                    <q-btn flat round dense icon="close" aria-label="Anhang aus Entwurf entfernen" @click="removeExistingAttachment(attachment.token)" />
+                    <q-btn flat round dense icon="close" aria-label="Anhang aus Entwurf entfernen" :disable="Boolean(compose.sendPayload)" @click="removeExistingAttachment(attachment.token)" />
                   </div>
                 </q-item-section>
               </q-item>
@@ -213,10 +216,10 @@
           </q-card-section>
           <q-separator />
           <q-card-actions class="q-pa-md">
-            <q-btn v-if="compose.token" flat no-caps color="negative" label="Entwurf löschen" :disable="composeSaving" @click="deleteComposeDraft" />
+            <q-btn v-if="compose.token" flat no-caps color="negative" label="Entwurf löschen" :disable="Boolean(composeSaving) || Boolean(compose.sendPayload)" @click="deleteComposeDraft" />
             <q-space />
-            <q-btn flat no-caps label="Als Entwurf speichern" :loading="composeSaving === 'draft'" :disable="Boolean(composeSaving)" @click="saveComposeDraft" />
-            <q-btn unelevated no-caps type="submit" color="primary" icon="send" label="Senden" :loading="composeSaving === 'send'" :disable="Boolean(composeSaving)" />
+            <q-btn flat no-caps label="Als Entwurf speichern" :loading="composeSaving === 'draft'" :disable="Boolean(composeSaving) || Boolean(compose.sendPayload)" @click="saveComposeDraft" />
+            <q-btn unelevated no-caps type="submit" color="primary" icon="send" :label="compose.sendPayload ? 'Erneut senden' : 'Senden'" :loading="composeSaving === 'send'" :disable="Boolean(composeSaving)" />
           </q-card-actions>
         </q-form>
       </q-card>
@@ -230,6 +233,7 @@ import { useQuasar } from 'quasar'
 import AppStateMessage from 'components/AppStateMessage.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
+import { randomUuid } from 'src/utils/random-id'
 import { useMailStore } from 'stores/mail'
 
 defineOptions({ name: 'MailApp' })
@@ -252,7 +256,10 @@ const mobileDetail = computed(() => $q.screen.lt.md && Boolean(selectedToken.val
 const plainBody = computed(() => mail.detail?.text || mail.detail?.bodyText || mail.detail?.body?.content || (typeof mail.detail?.body === 'string' ? mail.detail.body : ''))
 
 function emptyCompose() {
-  return { token: null, to: '', cc: '', bcc: '', subject: '', body: '', files: [], existingAttachments: [] }
+  return {
+    token: null, to: '', cc: '', bcc: '', subject: '', body: '', files: [], existingAttachments: [],
+    idempotencyKey: randomUuid(), sendPayload: null
+  }
 }
 
 function addresses(value) {
@@ -356,6 +363,13 @@ function backToList() {
 }
 
 function openCompose(draft = null) {
+  if (draft?.bodyTruncated || draft?.attachmentsTruncated) {
+    $q.notify({
+      type: 'warning',
+      message: 'Dieser Entwurf ist zu groß, um ihn ohne Datenverlust zu bearbeiten.'
+    })
+    return
+  }
   Object.assign(compose, emptyCompose(), draft ? {
     token: draft.token,
     to: recipients(draft.to), cc: recipients(draft.cc), bcc: recipients(draft.bcc),
@@ -397,12 +411,14 @@ async function sendCompose() {
   }
   composeSaving.value = 'send'
   try {
+    const payload = compose.sendPayload || composePayload()
+    compose.sendPayload = payload
     if (compose.token) {
-      const draft = await mail.saveDraft(selectedAccountId.value, compose.token, composePayload())
-      compose.token = draft.token
-      await mail.sendDraft(selectedAccountId.value, compose.token)
+      await mail.sendDraft(
+        selectedAccountId.value, compose.token, payload, compose.idempotencyKey
+      )
     } else {
-      await mail.sendMessage(selectedAccountId.value, composePayload())
+      await mail.sendMessage(selectedAccountId.value, payload, compose.idempotencyKey)
     }
     composeOpen.value = false
     $q.notify({ type: 'positive', message: 'E-Mail gesendet' })

@@ -278,6 +278,7 @@ def integration_operation_permission(
     action_kind: str = "integration_operation",
     risk_level: str = "medium",
     display_items: tuple[PermissionDisplayItem, ...] = (),
+    force_ask: bool = False,
     available_decisions: tuple[str, ...] = (
         "allow_once",
         "allow_session",
@@ -303,6 +304,7 @@ def integration_operation_permission(
         policy_integration_id=integration_id if use_integration_policy else None,
         policy_resource_key=resource_key,
         display_items=display_items,
+        force_ask=force_ask,
         available_decisions=available_decisions,
         session_grants=(
             SessionGrantScope(
@@ -1562,6 +1564,8 @@ class PermissionPolicy:
 
         if policy == ToolExecutionPolicy.DISABLED:
             return PermissionDecision.DENY
+        if request.force_ask:
+            return PermissionDecision.ASK
         if policy == ToolExecutionPolicy.AUTO:
             return PermissionDecision.ALLOW
 

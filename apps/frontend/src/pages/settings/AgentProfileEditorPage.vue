@@ -260,7 +260,7 @@
                       emit-value
                       map-options
                       :label="audience.label"
-                      :options="policyOptions(baselinePolicy(audience.value, action.capability))"
+                      :options="policyOptions(baselinePolicy(audience.value, action.capability), action.allowedPolicies)"
                       :disable="action.available === false"
                       :hint="`Wirksam: ${policyLabel(effectiveGlobalPolicy(audience.value, action.capability))}`"
                       :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
@@ -353,7 +353,7 @@
                             map-options
                             :label="audience.label"
                             :disable="!integrationAvailable(integration)"
-                            :options="policyOptions(inheritedIntegrationPolicy(audience.value, integration.id, action))"
+                            :options="policyOptions(inheritedIntegrationPolicy(audience.value, integration.id, action), action.allowedPolicies)"
                             :hint="`Wirksam: ${policyLabel(effectiveIntegrationPolicy(audience.value, integration.id, action.capability))}`"
                             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                             persistent-hint
@@ -396,7 +396,7 @@
                               map-options
                               :label="audience.label"
                               :disable="!integrationAvailable(integration) || resource.hardUnavailableCapabilities.includes(action.capability)"
-                              :options="policyOptions(inheritedResourcePolicy(audience.value, integration.id, resource, action.capability))"
+                              :options="policyOptions(inheritedResourcePolicy(audience.value, integration.id, resource, action.capability), action.allowedPolicies)"
                               :hint="resourcePolicyHint(audience.value, integration.id, resource, action.capability)"
                               :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                               persistent-hint
@@ -667,10 +667,10 @@ function inheritedResourcePolicy(audience, integrationId, resource, capability) 
     || baselinePolicy(audience, capability)
 }
 
-function policyOptions(inherited) {
+function policyOptions(inherited, allowedPolicies = ['disabled', 'ask', 'auto']) {
   return [
     { label: `Erben: ${policyLabel(inherited)}`, value: 'inherit' },
-    ...['disabled', 'ask', 'auto'].map((value) => ({ label: policyLabel(value), value }))
+    ...allowedPolicies.map((value) => ({ label: policyLabel(value), value }))
   ]
 }
 
