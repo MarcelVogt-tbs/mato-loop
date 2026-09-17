@@ -2375,6 +2375,44 @@ async def test_failed_mutation_allows_an_honest_negative_final_response(monkeypa
     assert [event.get("delta") for event in events].count("Die Datei konnte nicht erstellt werden.") == 1
 
 
+async def test_final_response_streams_after_failed_webfetch(monkeypatch) -> None:
+    answer = "Die Website war nicht erreichbar."
+    db, run, _requests, _projections, events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(
+                tool_calls=[
+                    ToolCall(
+                        "fetch-failed",
+                        "webfetch",
+                        {"url": "https://example.test/missing"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            ProviderResult(content=answer, finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+        tool_result=ToolResult.error(
+            "webfetch.requestFailed", params={"statusCode": 404}
+        ),
+    )
+    complete = ProviderService.complete
+
+    async def assert_streaming(_db, **kwargs):
+        result = await complete(_db, **kwargs)
+        if result.content == answer:
+            assert any(event.get("delta") == answer for event in events)
+        return result
+
+    monkeypatch.setattr(ProviderService, "complete", staticmethod(assert_streaming))
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert _assistant_messages(db)[-1].content == answer
+    assert [event.get("delta") for event in events].count(answer) == 1
+
+
 async def test_user_denial_skips_the_remaining_tool_batch(monkeypatch) -> None:
     db, run, _requests, _projections, _events = await _runtime_setup(
         monkeypatch,

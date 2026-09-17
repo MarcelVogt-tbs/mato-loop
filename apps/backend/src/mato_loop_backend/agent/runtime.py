@@ -2474,7 +2474,6 @@ class AgentRuntime:
                 search_pending
                 or memory_write_pending
                 or openscad_render_pending
-                or bool(failed_tool_call_signatures)
             )
             visible_response.reset()
             provider_started_at = time.monotonic()
