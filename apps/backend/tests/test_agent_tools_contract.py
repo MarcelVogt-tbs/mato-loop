@@ -4517,6 +4517,7 @@ async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch
             mime_type="image/png",
             filename="diagram.png",
             category="downloaded",
+            presentation="internal",
         ),
     )
 
@@ -4574,6 +4575,7 @@ async def test_webfetch_returns_pdf_text_and_selected_page_images(
             image.mime_type,
             image.filename,
             category="downloaded",
+            presentation="internal",
             metadata={"pageNumber": image.page_number},
         )
         for image in images

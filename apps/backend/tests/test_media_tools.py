@@ -688,6 +688,7 @@ async def test_auto_media_tool_returns_typed_attachment(tmp_path, monkeypatch) -
     assert result.is_error is False
     assert result.attachments[0].kind == "audio"
     assert result.attachments[0].filename == "speech.wav"
+    assert result.attachments[0].presentation == "result"
     tool_context.ask_handler.assert_not_awaited()
     generate.assert_awaited_once()
     assert generate.await_args.kwargs["timeout"] == 125

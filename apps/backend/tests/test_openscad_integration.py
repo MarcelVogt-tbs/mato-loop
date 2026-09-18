@@ -564,6 +564,10 @@ async def test_render_tool_returns_preview_and_geometry_metadata(
         "model.off",
         "model-views.png",
     ]
+    assert [attachment.presentation for attachment in result.attachments] == [
+        "internal",
+        "internal",
+    ]
     assert json.loads(result.content)["geometryMetadata"] == {
         "triangleCount": 1,
         "bounds": {
@@ -635,6 +639,7 @@ async def test_render_tool_returns_generated_attachments(
     assert len(result.attachments) == 2
     assert result.attachments[0].mime_type == "model/vnd.off"
     assert result.attachments[1].mime_type == "image/png"
+    assert all(attachment.presentation == "internal" for attachment in result.attachments)
 
 
 async def test_render_tool_exposes_only_controlled_syntax_diagnostics(

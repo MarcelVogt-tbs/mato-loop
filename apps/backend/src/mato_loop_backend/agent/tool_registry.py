@@ -145,6 +145,7 @@ class ToolAttachment:
     filename: str
     kind: Literal["image", "audio", "file"] = "image"
     category: Literal["generated", "downloaded"] = "generated"
+    presentation: Literal["result", "internal"] = "result"
     duration_ms: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     file_root_id: UUID | None = None
@@ -165,6 +166,7 @@ class ToolFileAction:
     size_bytes: int
     execution_agent_id: str | None = None
     current_directory: str | None = None
+    presentation: Literal["result", "internal"] = "result"
 
 
 @dataclass(slots=True)

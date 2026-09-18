@@ -1957,6 +1957,7 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
                     "path": "/home/user/project/report.txt",
                     "filename": "report.txt",
                     "sizeBytes": 7,
+                    "presentation": "result",
                     "executionAgentId": execution_agent_id,
                     "currentDirectory": "/home/user/project",
                 }

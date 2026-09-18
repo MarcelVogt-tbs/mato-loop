@@ -633,6 +633,7 @@ async def test_screenshot_is_a_model_image_not_base64_text(browser_case):
     assert not result.is_error
     assert result.attachments[0].data == image
     assert result.attachments[0].kind == "image"
+    assert result.attachments[0].presentation == "internal"
     assert result.attachments[0].ephemeral
     assert "screenshot" not in result.content
     assert case.context.ask_handler.await_args.args[0].capability == "browser.read"

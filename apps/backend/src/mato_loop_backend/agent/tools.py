@@ -1890,6 +1890,7 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
             mime_type=image.mime_type,
             filename=image.filename,
             category="downloaded",
+            presentation="internal",
             metadata=(
                 {"pageNumber": image.page_number}
                 if image.page_number is not None

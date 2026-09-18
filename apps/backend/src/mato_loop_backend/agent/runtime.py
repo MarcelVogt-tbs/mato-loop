@@ -4055,6 +4055,7 @@ class AgentRuntime:
                                             "path": action.path,
                                             "filename": action.filename,
                                             "sizeBytes": action.size_bytes,
+                                            "presentation": action.presentation,
                                             **(
                                                 {
                                                     "executionAgentId": action.execution_agent_id,
@@ -4092,7 +4093,10 @@ class AgentRuntime:
                                 position=position,
                                 category=attachment.category,
                                 mime_type=attachment.mime_type,
-                                metadata=attachment.metadata,
+                                metadata={
+                                    **attachment.metadata,
+                                    "toolOutputPresentation": attachment.presentation,
+                                },
                             )
                         else:
                             await attachment_service.create_attachment(
@@ -4103,7 +4107,10 @@ class AgentRuntime:
                                 kind=attachment.kind,
                                 filename=attachment.filename,
                                 position=position,
-                                metadata=attachment.metadata,
+                                metadata={
+                                    **attachment.metadata,
+                                    "toolOutputPresentation": attachment.presentation,
+                                },
                                 category=attachment.category,
                                 purpose="artifact",
                                 source_file_root_id=attachment.file_root_id,

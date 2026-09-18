@@ -52,6 +52,7 @@
           :expanded-details="expandedDetails"
           :trusted-image-origins="trustedImageOrigins"
           :read-only="readOnly"
+          :show-output="historyExpanded"
           show-supplementary
           @open-approval-draft="emit('open-approval-draft', $event)"
           @open-file="emit('open-file', $event)"
@@ -62,6 +63,18 @@
           @trust-image-origin="emit('trust-image-origin', $event)"
         />
       </div>
+    </div>
+    <div v-if="!historyExpanded && outputEntries.length" class="work-history__persistent-outputs">
+      <AgentActivityEntry
+        v-for="entry in outputEntries"
+        :key="entry.key"
+        :entry="entry"
+        :expanded-details="expandedDetails"
+        :read-only="readOnly"
+        output-only
+        show-output
+        @open-file="emit('open-file', $event)"
+      />
     </div>
     <SessionTodoStrip
       v-if="todos.length"
@@ -175,6 +188,9 @@ const enrichedEntries = computed(() => {
     output: outputsByKey.get(entry.key)
   } : entry)
 })
+const outputEntries = computed(() => enrichedEntries.value.filter((entry) => (
+  entry.type === 'tool' && (entry.output.attachments.length || entry.output.fileActions.length)
+)))
 const entries = computed(() => groupWorkHistoryEntries(enrichedEntries.value, currentEntries.value.at(-1)))
 const currentEntries = computed(() => {
   const current = presentation.value.entry

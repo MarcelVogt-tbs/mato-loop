@@ -36,6 +36,38 @@ afterEach(() => {
 })
 
 describe('subagent inspector navigation and presentation', () => {
+  it('keeps tool output visible when work history is collapsed', async () => {
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      render: () => h(AgentActivityPanel, {
+        history: {
+          entries: [
+            {
+              key: 'image', type: 'tool',
+              tool: { id: 'image', name: 'generate_image', arguments: { prompt: 'Tiger' } },
+              result: { attachments: [{ id: 'tiger', kind: 'image', presentation: 'result', filename: 'tiger.png', mimeType: 'image/png' }] }
+            },
+            {
+              key: 'research', type: 'tool',
+              tool: { id: 'research', name: 'webfetch', arguments: { url: 'https://example.com' } },
+              result: { attachments: [{ id: 'reference', kind: 'image', presentation: 'internal', filename: 'reference.png', mimeType: 'image/png' }] }
+            }
+          ]
+        }
+      })
+    })
+    app.use(createPinia()).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.querySelector('.work-history__timeline')).toBeNull()
+    expect(root.querySelectorAll('.work-history__outputs')).toHaveLength(1)
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    expect(root.querySelector('.work-history__timeline')).not.toBeNull()
+    expect(root.querySelectorAll('.work-history__outputs')).toHaveLength(1)
+  })
+
   it.each(['tool', 'reasoning', 'context-summary'])('opens %s details independently of history and preserves them during regrouping', async (type) => {
     const detail = 'Vollständiger verständlicher Detailinhalt. '.repeat(5)
     const entry = ref(type === 'tool'

@@ -272,6 +272,7 @@ def _safe_metadata(metadata: dict | None) -> dict:
             "sourceAttachmentIds",
             "sourceSha256",
             "targetTrustLevel",
+            "toolOutputPresentation",
             "voiceMessage",
         }:
             continue
@@ -1147,7 +1148,9 @@ class AttachmentService:
                         height=None,
                         duration_ms=None,
                     )
-                    metadata = {}
+                    metadata = {
+                        "toolOutputPresentation": metadata["toolOutputPresentation"]
+                    } if "toolOutputPresentation" in metadata else {}
                 if metadata.get("companionFileRevision") is None and metadata.get(
                     "companionFileId"
                 ):

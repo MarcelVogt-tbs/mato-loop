@@ -148,6 +148,7 @@ async def test_provided_published_identity_survives_rename_and_old_path_reuse(tm
         filename="notes.txt",
         position=0,
         category="downloaded",
+        metadata={"toolOutputPresentation": "internal", "pageNumber": 1},
     )
     public.rename_path("session", "notes.txt", "renamed.txt")
     public.write_file("session", "notes.txt", "unrelated replacement")
@@ -162,6 +163,7 @@ async def test_provided_published_identity_survives_rename_and_old_path_reuse(tm
     assert attachment.file_id == original.file_id
     assert attachment.file_path == "renamed.txt"
     assert attachment.file_revision == 2
+    assert attachment.metadata_json == {"toolOutputPresentation": "internal"}
     assert service.read_source(attachment, session.id) == b"updated original"
     assert public.open_file("session", "notes.txt").read() == b"unrelated replacement"
 

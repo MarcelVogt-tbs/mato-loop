@@ -1693,6 +1693,74 @@ def test_message_payload_validates_file_actions_and_derives_download_url() -> No
     assert "downloadUrl" not in str(message.provider_data)
 
 
+def test_message_payload_hides_internal_file_actions() -> None:
+    session_id = uuid4()
+    message = Message(
+        id=uuid4(), session_id=session_id, role="tool", content="{}",
+        provider_data={"_matoloop": {"fileActions": [{
+            "operation": "write", "root": "session", "rootIdentity": str(session_id),
+            "path": "research.txt", "filename": "research.txt", "sizeBytes": 7,
+            "presentation": "internal",
+        }]}},
+    )
+
+    assert message_payload(message)["fileActions"] == []
+
+
+def test_message_payload_classifies_tool_attachments_for_presentation() -> None:
+    session_id = uuid4()
+    attachments = [
+        MessageAttachment(
+            id=uuid4(), kind="image", mime_type="image/png", size_bytes=7,
+            file_id=uuid4(), file_root_id=session_id, file_revision=1,
+            file_path="result.png", filename="result.png",
+            metadata_json={"toolOutputPresentation": "internal", "pageNumber": 1},
+        ),
+        MessageAttachment(
+            id=uuid4(), kind="file", mime_type="application/pdf", size_bytes=7,
+            file_id=uuid4(), file_root_id=session_id, file_revision=1,
+            file_path="result.pdf", filename="result.pdf", metadata_json={},
+        ),
+    ]
+    message = Message(
+        id=uuid4(), session_id=session_id, role="tool", content="{}",
+        provider_data={"_matoloop": {"toolName": "webfetch"}},
+        attachments=attachments,
+    )
+
+    payload = message_payload(message)
+
+    assert [item["presentation"] for item in payload["attachments"]] == ["internal", "result"]
+    assert payload["attachments"][0]["metadata"] == {"pageNumber": 1}
+    assert "toolOutputPresentation" not in str(payload)
+
+
+def test_message_payload_leaves_unknown_legacy_tool_attachment_unclassified() -> None:
+    session_id = uuid4()
+    message = Message(
+        id=uuid4(),
+        session_id=session_id,
+        role="tool",
+        content="{}",
+        attachments=[
+            MessageAttachment(
+                id=uuid4(),
+                kind="image",
+                mime_type="image/png",
+                size_bytes=7,
+                file_id=uuid4(),
+                file_root_id=session_id,
+                file_revision=1,
+                file_path="browser.png",
+                filename="browser.png",
+                metadata_json={},
+            )
+        ],
+    )
+
+    assert message_payload(message)["attachments"][0]["presentation"] is None
+
+
 def test_message_payload_validates_prepared_replies() -> None:
     prepared_reply = {
         "markdown": "[Kunde 123](#reply-customer-123)",
@@ -1964,6 +2032,7 @@ def test_message_payload_contains_public_attachment_metadata_only() -> None:
             "kind": "image",
             "category": "generated",
             "purpose": "artifact",
+            "presentation": "result",
             "processingStatus": "ready",
             "mimeType": "image/png",
             "sizeBytes": 123,

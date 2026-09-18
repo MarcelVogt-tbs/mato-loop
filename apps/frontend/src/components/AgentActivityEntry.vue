@@ -33,6 +33,7 @@
         :expanded-details="expandedDetails"
         :trusted-image-origins="trustedImageOrigins"
         :read-only="readOnly"
+        :show-output="showOutput"
         :show-supplementary="showSupplementary"
         @open-approval-draft="emit('open-approval-draft', $event)"
         @open-file="emit('open-file', $event)"
@@ -45,7 +46,7 @@
     </div>
   </div>
   <div
-    v-else-if="['tool', 'reasoning', 'context-summary'].includes(entry.type)"
+    v-else-if="!outputOnly && ['tool', 'reasoning', 'context-summary'].includes(entry.type)"
     :class="isTool ? 'work-history__tool' : hasDetails ? 'work-history__reasoning' : 'work-history__reasoning-static'"
   >
     <q-item
@@ -146,50 +147,50 @@
         class="work-history__attention"
         @open-approval-draft="emit('open-approval-draft', $event)"
       />
-      <div
-        v-if="entry.output?.attachments.length || entry.output?.fileActions.length"
-        class="work-history__outputs"
-      >
-        <div class="tool-call__section-label">Ausgaben</div>
-        <MessageAttachments
-          v-if="entry.output.attachments.length"
-          :attachments="entry.output.attachments"
-          @open-file="emit('open-file', $event)"
-        />
-        <div v-if="entry.output.fileActions.length" class="work-history__file-outputs">
-          <div
-            v-for="action in entry.output.fileActions"
-            :key="`${action.rootIdentity || action.executionAgentId}:${action.path}`"
-            class="work-history__file-output app-surface"
+    </template>
+    <div
+      v-if="showOutput && (entry.output?.attachments.length || entry.output?.fileActions.length)"
+      class="work-history__outputs"
+    >
+      <div class="tool-call__section-label">Ausgaben</div>
+      <MessageAttachments
+        v-if="entry.output.attachments.length"
+        :attachments="entry.output.attachments"
+        @open-file="emit('open-file', $event)"
+      />
+      <div v-if="entry.output.fileActions.length" class="work-history__file-outputs">
+        <div
+          v-for="action in entry.output.fileActions"
+          :key="`${action.rootIdentity || action.executionAgentId}:${action.path}`"
+          class="work-history__file-output app-surface"
+        >
+          <q-icon name="draft" color="primary" size="24px" />
+          <span class="col ellipsis text-weight-medium">{{ action.filename }}</span>
+          <q-btn
+            v-if="!readOnly"
+            flat
+            round
+            dense
+            icon="visibility"
+            :aria-label="`${action.filename} ansehen`"
+            @click="emit('open-file', action)"
           >
-            <q-icon name="draft" color="primary" size="24px" />
-            <span class="col ellipsis text-weight-medium">{{ action.filename }}</span>
-            <q-btn
-              v-if="!readOnly"
-              flat
-              round
-              dense
-              icon="visibility"
-              :aria-label="`${action.filename} ansehen`"
-              @click="emit('open-file', action)"
-            >
-              <q-tooltip>Datei ansehen</q-tooltip>
-            </q-btn>
-            <q-btn
-              flat
-              round
-              dense
-              icon="download"
-              :href="action.downloadUrl"
-              :download="action.filename"
-              :aria-label="`${action.filename} herunterladen`"
-            >
-              <q-tooltip>Datei herunterladen</q-tooltip>
-            </q-btn>
-          </div>
+            <q-tooltip>Datei ansehen</q-tooltip>
+          </q-btn>
+          <q-btn
+            flat
+            round
+            dense
+            icon="download"
+            :href="action.downloadUrl"
+            :download="action.filename"
+            :aria-label="`${action.filename} herunterladen`"
+          >
+            <q-tooltip>Datei herunterladen</q-tooltip>
+          </q-btn>
         </div>
       </div>
-    </template>
+    </div>
   </div>
 </template>
 
@@ -208,6 +209,8 @@ const props = defineProps({
   expandedDetails: { type: Set, required: true },
   trustedImageOrigins: { type: Array, default: () => [] },
   readOnly: Boolean,
+  outputOnly: Boolean,
+  showOutput: Boolean,
   showSupplementary: Boolean
 })
 const emit = defineEmits(['open-approval-draft', 'open-file', 'rendered', 'resize-start', 'resized', 'trust-image-origin', 'toggle-details'])

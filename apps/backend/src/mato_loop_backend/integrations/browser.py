@@ -805,7 +805,14 @@ async def execute_browser(arguments: BrowserActionArguments | _BrowserArguments,
             raise ExecutionClientError("executionAgent.protocolError")
         validate_image(data, "image/png")
         attachments.append(
-            ToolAttachment(data, "image/png", "browser.png", kind="image", ephemeral=True)
+            ToolAttachment(
+                data,
+                "image/png",
+                "browser.png",
+                kind="image",
+                presentation="internal",
+                ephemeral=True,
+            )
         )
     error_code = next((
         part.error_code for part in (result.batch, result.script, result.playwright_code)

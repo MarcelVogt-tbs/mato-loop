@@ -335,53 +335,29 @@ describe('persisted attachments', () => {
     expect(attachmentIcon(attachments[5])).toBe('folder_zip')
   })
 
-  it('hides browser screenshots only from the visible tool output', () => {
+  it('hides only tool attachments marked as internal output', () => {
     const attachments = [
-      { id: 'screenshot', kind: 'image', mimeType: 'image/png', filename: 'browser.png', url },
-      { id: 'renamed', kind: 'image', mimeType: 'image/png', filename: 'page.png', url },
-      { id: 'file', kind: 'file', mimeType: 'application/pdf', url }
+      { id: 'internal-image', kind: 'image', presentation: 'internal', mimeType: 'image/png', url },
+      { id: 'result-image', kind: 'image', presentation: 'result', mimeType: 'image/png', url },
+      { id: 'legacy-file', kind: 'file', mimeType: 'application/pdf', url }
     ]
     const original = structuredClone(attachments)
 
-    expect(toolOutputAttachments({ name: 'browser' }, attachments))
-      .toEqual([expect.objectContaining({ id: 'file' })])
-    expect(toolOutputAttachments({ name: 'browser_take_screenshot' }, attachments))
-      .toEqual([expect.objectContaining({ id: 'file' })])
-    expect(toolOutputAttachments({ name: 'other_tool' }, attachments)).toHaveLength(3)
+    expect(toolOutputAttachments({ name: 'webfetch' }, attachments).map((attachment) => attachment.id))
+      .toEqual(['result-image', 'legacy-file'])
     expect(supportedAttachments(attachments)).toHaveLength(3)
     expect(attachments).toEqual(original)
   })
 
-  it('hides OpenSCAD previews only from the visible tool output', () => {
+  it('keeps tool-specific filtering for unclassified legacy attachments', () => {
     const attachments = [
-      { id: 'model', kind: 'file', mimeType: 'model/stl', url },
-      { id: 'off', kind: 'file', mimeType: 'model/vnd.off', filename: 'preview.off', url },
-      { id: 'preview', kind: 'image', mimeType: 'image/png', url }
+      { id: 'image', kind: 'image', mimeType: 'image/png', url },
+      { id: 'file', kind: 'file', mimeType: 'application/pdf', url }
     ]
 
-    expect(toolOutputAttachments({ name: 'render_openscad' }, attachments))
-      .toEqual([expect.objectContaining({ id: 'model' })])
-    expect(toolOutputAttachments({ name: 'other_tool' }, attachments)).toHaveLength(3)
-    expect(attachments).toHaveLength(3)
-  })
-
-  it('hides images fetched for agent inspection from visible tool output', () => {
-    const attachments = [
-      { id: 'image', kind: 'image', category: 'downloaded', mimeType: 'image/jpeg', url },
-      {
-        id: 'page',
-        kind: 'image',
-        category: 'downloaded',
-        mimeType: 'image/jpeg',
-        metadata: { pageNumber: 1 },
-        url
-      },
-      { id: 'file', kind: 'file', category: 'downloaded', mimeType: 'application/pdf', url }
-    ]
-
-    expect(toolOutputAttachments({ name: 'webfetch' }, attachments))
-      .toEqual([expect.objectContaining({ id: 'file' })])
-    expect(toolOutputAttachments({ name: 'other_tool' }, attachments)).toHaveLength(3)
+    expect(toolOutputAttachments({ name: 'webfetch' }, attachments).map((attachment) => attachment.id))
+      .toEqual(['file'])
+    expect(toolOutputAttachments({ name: 'other_tool' }, attachments)).toHaveLength(2)
   })
 
   it('only enables the audio player when the browser accepts the MIME type', () => {

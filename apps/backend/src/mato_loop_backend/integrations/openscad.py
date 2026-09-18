@@ -800,6 +800,7 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
                 rendered.artifact.content_type,
                 rendered.artifact.filename,
                 kind="file",
+                presentation="internal" if arguments.output == "preview" else "result",
             ),
             *(
                 (
@@ -808,6 +809,7 @@ async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
                         "image/png",
                         f"{PurePosixPath(rendered.artifact.filename).stem}-views.png",
                         kind="image",
+                        presentation="internal",
                     ),
                 )
                 if contact_sheet is not None

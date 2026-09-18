@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlencode
 from uuid import UUID
 
@@ -26,6 +26,7 @@ from mato_loop_backend.models import (
     ContextSummary,
     MemoryMode,
     Message,
+    MessageAttachment,
     WebSearchPolicy,
 )
 from mato_loop_backend.workspace import RootFileError, RootFileService
@@ -45,6 +46,7 @@ class _StoredFileAction(BaseModel):
     path: str = Field(min_length=1, max_length=4_096)
     filename: str = Field(min_length=1, max_length=1_000)
     size_bytes: int = Field(alias="sizeBytes", ge=0)
+    presentation: Literal["result", "internal"] = "result"
     execution_agent_id: str | None = Field(
         default=None, alias="executionAgentId", min_length=1, max_length=36
     )
@@ -180,6 +182,8 @@ def _public_file_actions(item: Message) -> list[dict[str, Any]]:
             action = _StoredFileAction.model_validate(raw_action)
         except (RootFileError, ValidationError, ValueError):
             continue
+        if action.presentation == "internal":
+            continue
         scope = "session" if action.root == "session" else "filesystem"
         query = {
             "path": action.path,
@@ -198,7 +202,9 @@ def _public_file_actions(item: Message) -> list[dict[str, Any]]:
             )
         actions.append(
             {
-                **action.model_dump(mode="json", by_alias=True, exclude_none=True),
+                **action.model_dump(
+                    mode="json", by_alias=True, exclude_none=True, exclude={"presentation"}
+                ),
                 "downloadUrl": "/api/workspace/files/download?" + urlencode(query),
             }
         )
@@ -217,6 +223,32 @@ def _public_prepared_reply(item: Message) -> dict[str, Any] | None:
     if len({option.id for option in reply.options}) != len(reply.options):
         return None
     return reply.model_dump(mode="json")
+
+
+def _attachment_presentation(
+    item: Message, attachment: MessageAttachment
+) -> Literal["result", "internal"] | None:
+    value = (attachment.metadata_json or {}).get("toolOutputPresentation")
+    if value in {"result", "internal"}:
+        return value
+    if item.role != "tool":
+        return "result"
+    runtime_data = (item.provider_data or {}).get("_matoloop", {})
+    tool_name = runtime_data.get("toolName") if isinstance(runtime_data, dict) else None
+    if not tool_name:
+        return None
+    if (
+        tool_name in {"browser", "browser_take_screenshot", "webfetch"}
+        and attachment.kind == "image"
+    ):
+        return "internal"
+    if tool_name == "render_openscad" and (
+        attachment.kind == "image"
+        or attachment.mime_type == "model/vnd.off"
+        or str(attachment.filename or "").lower().endswith(".off")
+    ):
+        return "internal"
+    return "result"
 
 
 def session_payload(
@@ -449,6 +481,7 @@ def message_payload(
                 "kind": attachment.kind,
                 "category": attachment.category,
                 "purpose": attachment.purpose,
+                "presentation": _attachment_presentation(item, attachment),
                 "processingStatus": attachment.processing_status,
                 "mimeType": attachment.mime_type,
                 "sizeBytes": attachment.size_bytes,
@@ -456,7 +489,10 @@ def message_payload(
                 "width": attachment.width,
                 "height": attachment.height,
                 "durationMs": attachment.duration_ms,
-                "metadata": attachment.metadata_json or {},
+                "metadata": {
+                    key: value for key, value in (attachment.metadata_json or {}).items()
+                    if key != "toolOutputPresentation"
+                },
                 "fileRootId": str(attachment.file_root_id) if attachment.file_root_id else None,
                 "fileId": str(attachment.file_id) if attachment.file_id else None,
                 "fileRevision": attachment.file_revision,

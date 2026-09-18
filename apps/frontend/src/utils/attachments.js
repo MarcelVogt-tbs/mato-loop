@@ -187,7 +187,7 @@ export function deduplicateFileOutputAttachments(attachments, fileActions) {
 export function toolFileActions(result) {
   if (!Array.isArray(result?.fileActions)) return []
   return result.fileActions.flatMap((action) => {
-    if (!action || typeof action !== 'object') return []
+    if (!action || typeof action !== 'object' || action.presentation === 'internal') return []
     if (action.intent === 'draft' || action.draftId || action.draftOperation) return []
     const safeUrl = safeFileDownloadUrl(action.downloadUrl)
     const size = Number(action.sizeBytes)
@@ -287,18 +287,18 @@ export function supportedAttachments(attachments) {
 }
 
 export function toolOutputAttachments(tool, attachments) {
-  const supported = supportedAttachments(attachments)
-  if (tool?.name === 'browser' || tool?.name === 'browser_take_screenshot') {
-    return supported.filter((attachment) => attachment.kind !== 'image')
-  }
-  if (tool?.name === 'render_openscad') {
-    return supported.filter((attachment) => attachment.kind !== 'image'
-      && attachment.mimeType !== 'model/vnd.off' && !/\.off$/i.test(attachment.filename || ''))
-  }
-  if (tool?.name === 'webfetch') {
-    return supported.filter((attachment) => attachment.kind !== 'image')
-  }
-  return supported
+  return supportedAttachments(attachments).filter((attachment) => {
+    if (attachment.presentation === 'internal') return false
+    if (attachment.presentation === 'result') return true
+    if (['browser', 'browser_take_screenshot', 'webfetch'].includes(tool?.name)) {
+      return attachment.kind !== 'image'
+    }
+    if (tool?.name === 'render_openscad') {
+      return attachment.kind !== 'image'
+        && attachment.mimeType !== 'model/vnd.off' && !/\.off$/i.test(attachment.filename || '')
+    }
+    return true
+  })
 }
 
 export function audioMimeTypeSupported(value) {
