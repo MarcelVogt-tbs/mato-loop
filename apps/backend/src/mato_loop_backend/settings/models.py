@@ -340,7 +340,7 @@ def plan_profile() -> AgentProfile:
         "filesystem.read": ToolExecutionPolicy.AUTO,
         "filesystem.write": ToolExecutionPolicy.DISABLED,
         "filesystem.delete": ToolExecutionPolicy.DISABLED,
-        "session.files.write": ToolExecutionPolicy.AUTO,
+        "session.files.write": ToolExecutionPolicy.DISABLED,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.DISABLED,
     }
@@ -352,15 +352,11 @@ def plan_profile() -> AgentProfile:
             "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
         ),
         instructions=(
-            "At the start of each task, assess whether a persistent plan would help. Inspect relevant "
-            "context first if needed. Use root=files path=plan.md when continuity, handoff, material "
-            "decisions, uncertain scope, or growing work makes persistence useful. Handle simple, clear "
-            "tasks directly. Follow explicit user instructions and reuse an existing plan only when "
-            "continuing its work. Do not read or update an existing plan for an unrelated simple request. "
-            "Investigate and prepare work using read-only computer actions. When using a plan, keep it "
-            "quick to scan with the recommended approach, affected areas, implementation steps, "
-            "verification, and one short Progress section. Reference existing requirements instead of "
-            "repeating them. Do not implement the plan or run its tests. Prefer the simplest "
+            "Analyze the user's request and relevant evidence using read-only computer actions. Return "
+            "the plan directly in the conversation and scale its detail to the task. Include the recommended "
+            "approach, affected areas, implementation steps, and verification only when useful. Reference "
+            "existing requirements instead of repeating them. Follow explicit user instructions. Do not "
+            "implement the plan or run its tests. Prefer the simplest "
             "approach that fully meets the request: reuse existing code and conventions, then "
             "standard-library or native features, then installed dependencies. Add abstractions, "
             "dependencies, configuration, or extension points only when current requirements justify "
@@ -378,7 +374,7 @@ def plan_profile() -> AgentProfile:
         private_permissions=AgentProfilePermissions(policies=policies),
         public_permissions=AgentProfilePermissions(policies=policies),
         delegation_enabled=True,
-        session_write_paths=["plan.md"],
+        session_write_paths=[],
     )
 
 
@@ -398,19 +394,14 @@ def build_profile() -> AgentProfile:
             "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
         ),
         instructions=(
-            "At the start of each task, assess whether a persistent plan would help. Inspect relevant "
-            "context first if needed. Use root=files path=plan.md when continuity, handoff, material "
-            "decisions, uncertain scope, or growing work makes persistence useful. Handle simple, clear "
-            "tasks directly. Follow explicit user instructions and reuse an existing plan only when "
-            "continuing its work. Do not read or update an existing plan for an unrelated simple request. "
-            "If a plan is used, update only its short Progress section with actual results, checks, and "
-            "remaining gaps. Carry out the exact current task; keep an analysis-only task read-only. "
+            "Carry out the exact current task; keep an analysis-only task read-only. "
             "Understand the relevant context before changing it. Prefer the simplest solution that "
             "fully meets the request: reuse existing code and conventions, then standard-library or "
             "native features, then installed dependencies. Add abstractions, dependencies, configuration, "
             "or extension points only when current requirements justify them. Fix root causes, preserve "
-            "required validation and security, and avoid unrelated refactors. For a request to implement "
-            "the current session plan, read that plan and apply newer user instructions over it. Continue "
+            "required validation and security, and avoid unrelated refactors. When the user asks to implement "
+            "a plan discussed earlier in the conversation, apply newer user instructions over it. A profile "
+            "switch alone does not authorize implementation. Continue "
             "through coherent steps without waiting for another prompt. Ask only for a missing user decision "
             "that materially blocks the work; decide ordinary implementation details from the project. "
             "Verify the result appropriately and report the outcome, checks, and remaining blockers concisely."

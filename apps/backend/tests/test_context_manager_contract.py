@@ -1561,6 +1561,8 @@ def test_builtin_plan_instructions_are_not_duplicated_by_host_prompt() -> None:
 
     assert offered.count(plan.instructions) == 1
     assert unavailable.count(plan.instructions) == 1
+    assert "materially helps track complex or multi-part work" in offered
+    assert "not a fixed step or tool-call count" in offered
     assert "Update only when scope changes" in offered
 
 
@@ -1857,6 +1859,8 @@ def test_compaction_prompt_preserves_opaque_values_verbatim() -> None:
     assert "Preserve attribution and relevant uncertainty" in prompt
     assert "Copy every relevant path, ID, filename, and other opaque value verbatim" in prompt
     assert "produce a complete replacement" in prompt
+    assert "Preserve the current plan, later user corrections" in prompt
+    assert "distinguishing planned work from completed and verified work" in prompt
 
 
 def test_general_system_prompt_requires_verified_external_images() -> None:
@@ -2927,7 +2931,7 @@ async def test_failed_projection_does_not_commit_new_summary() -> None:
     db.commit.assert_not_awaited()
 
 
-def test_task_general_profiles_keep_main_plan_artifact_and_child_permissions() -> None:
+def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions() -> None:
     session = _session()
     tools = frozenset({"write_file", "read", "glob", "task"})
     plan = plan_profile()
@@ -2937,7 +2941,8 @@ def test_task_general_profiles_keep_main_plan_artifact_and_child_permissions() -
     work = general_system_prompt(session, agent_profile=build, offered_tool_names=tools)
 
     assert main.count(plan.instructions) == 1
-    assert "root=files path=plan.md" in main
+    assert "plan directly in the conversation" in main
+    assert "plan.md" not in main
     assert plan.instructions not in child
     assert "do not inherit the parent transcript" in child
     assert "Respond in English" in child
@@ -2947,10 +2952,10 @@ def test_task_general_profiles_keep_main_plan_artifact_and_child_permissions() -
     assert "write each task prompt in English" in work
     assert "overlapping writes" in work
     assert work.count(build.instructions) == 1
-    assert "root=files path=plan.md" in work
+    assert "plan discussed earlier in the conversation" in work
+    assert "plan.md" not in work
     assert "Read AGENTS.md before repository work" in work
     assert "skip unrelated tasks" in work
-    assert "actual results, checks, and remaining gaps" in work
     assert "Verify code with tests and other claims with suitable evidence" in work
 
 

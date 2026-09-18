@@ -262,7 +262,7 @@ def test_plan_profile_disables_computer_changes(trust: TrustLevel) -> None:
         )
     assert (
         resolve_tool_execution_policy(settings, "session.files.write").policy
-        == ToolExecutionPolicy.AUTO
+        == ToolExecutionPolicy.DISABLED
     )
 
 

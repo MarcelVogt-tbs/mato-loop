@@ -64,7 +64,7 @@ def test_builtin_agent_profile_defaults() -> None:
         "filesystem.read": ToolExecutionPolicy.AUTO,
         "filesystem.write": ToolExecutionPolicy.DISABLED,
         "filesystem.delete": ToolExecutionPolicy.DISABLED,
-        "session.files.write": ToolExecutionPolicy.AUTO,
+        "session.files.write": ToolExecutionPolicy.DISABLED,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.DISABLED,
     }
@@ -85,15 +85,16 @@ def test_builtin_agent_profile_defaults() -> None:
     assert default.delegation_enabled is False
     assert default.session_write_paths is None
     assert plan.delegation_enabled is True
-    assert plan.session_write_paths == ["plan.md"]
+    assert plan.session_write_paths == []
     assert build.delegation_enabled is True
     assert build.session_write_paths is None
-    assert "Handle simple, clear tasks directly" in plan.instructions
-    assert "Do not read or update an existing plan for an unrelated simple request" in plan.instructions
+    assert "Return the plan directly in the conversation" in plan.instructions
     assert "Do not implement" in plan.instructions
-    assert "Progress" in build.instructions
     assert "keep an analysis-only task read-only" in build.instructions
-    assert "read that plan and apply newer user instructions" in build.instructions
+    assert "plan discussed earlier in the conversation" in build.instructions
+    assert "profile switch alone does not authorize implementation" in build.instructions
+    assert "plan.md" not in plan.instructions
+    assert "plan.md" not in build.instructions
 
 
 def test_custom_profile_stores_only_sparse_typed_overrides() -> None:
@@ -176,7 +177,7 @@ def test_agent_profile_payload_marks_only_builtins_as_protected() -> None:
     assert builtin_payload["baseProfileId"] is None
     assert "overrides" not in builtin_payload
     assert builtin_payload["delegationEnabled"] is True
-    assert builtin_payload["sessionWritePaths"] == ["plan.md"]
+    assert builtin_payload["sessionWritePaths"] == []
     custom = CustomAgentProfile(
         name="Custom", description="", baseProfileId=GENERAL_PROFILE_ID,
         overrides={"todoEnabled": False, "sessionWritePaths": []},

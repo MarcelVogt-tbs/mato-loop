@@ -81,7 +81,7 @@ it('starts a profile from Allgemein without copying fields or honoring copyFrom'
     todoEnabled: true, integrationsEnabledByDefault: false, integrationAvailability: {},
     privatePermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} },
     publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} },
-    delegationEnabled: true, sessionWritePaths: ['plan.md'], baseProfileId: null
+    delegationEnabled: true, sessionWritePaths: [], baseProfileId: null
   }
   const integration = {
     ...plan, id: 'support', scope: 'integration', name: 'Support-Assistent'

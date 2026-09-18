@@ -440,7 +440,7 @@ async def test_child_reuses_context_and_only_inherited_computer_files(
     await AgentRuntime._execute_loop(db, run)
     tools = {tool["name"] for tool in requests[0]["tools"]}
     assert tools == {"question", "web_search"} | (
-        {"read", "write_file"} if computer else set()
+        {"read"} if computer else set()
     )
     for tool in requests[0]["tools"]:
         root = tool["parameters"].get("properties", {}).get("root")

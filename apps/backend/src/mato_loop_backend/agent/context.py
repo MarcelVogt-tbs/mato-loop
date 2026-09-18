@@ -125,6 +125,8 @@ def compaction_messages(source: str) -> list[dict[str, str]]:
         "with their source session and message IDs; references alone do not replace those facts. "
         "Preserve goals, confirmed facts, decisions, constraints, open questions, tool names, call IDs, "
         "numeric results, failures, approvals, and exact retrieval references for omitted content. "
+        "Preserve the current plan, later user corrections, open decisions, and remaining steps, while "
+        "distinguishing planned work from completed and verified work. "
         "A successful call is not proof that the task succeeded. Do not infer omitted results. "
         "Preserve exact user-message timestamps relevant to actions, decisions, deadlines, "
         "or relative dates. Copy every relevant path, ID, filename, and other opaque value verbatim. "
@@ -746,8 +748,8 @@ def general_system_prompt(
         )
     if "todo_write" in offered_tool_names:
         parts.append(
-            "For work needing at least three tool-executed steps, call todo_write before the first work "
-            "tool; also use it when the user asks for a checklist. Skip simple questions and single-step "
+            "Use todo_write when a checklist materially helps track complex or multi-part work, or when the "
+            "user asks for one. Decide from the task, not a fixed step or tool-call count. Skip it for simple "
             "work. Keep items concise. Update only when scope changes, work is blocked, or before the final "
             "answer. The latest request overrides an old checklist. Complete an item only after its work and "
             "required checks. Planning is not implementation; leave blocked work unfinished and explain why."
