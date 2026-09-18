@@ -781,17 +781,12 @@ class WebSearchToolSettings(BaseModel):
 
 
 class MediaToolSettings(BaseModel):
-    policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK
     timeout_seconds: int = Field(
         default=300,
         ge=10,
         le=3_600,
         validation_alias=AliasChoices("timeout_seconds", "timeoutSeconds"),
     )
-
-
-class PolicyToolSettings(BaseModel):
-    policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK
 
 
 class ShellPrefixSettings(BaseModel):
@@ -886,7 +881,7 @@ class ToolSettingsBase(SettingsDocument):
         validation_alias=AliasChoices("generate_image", "generateImage"),
     )
     edit_image: MediaToolSettings = Field(
-        default_factory=lambda: MediaToolSettings(policy=ToolExecutionPolicy.ASK),
+        default_factory=MediaToolSettings,
         validation_alias=AliasChoices("edit_image", "editImage"),
     )
     generate_speech: MediaToolSettings = Field(
@@ -902,14 +897,8 @@ class ToolSettingsBase(SettingsDocument):
         validation_alias=AliasChoices("transcribe_audio", "transcribeAudio"),
     )
     analyze_video: MediaToolSettings = Field(
-        default_factory=lambda: MediaToolSettings(
-            policy=ToolExecutionPolicy.ASK, timeout_seconds=1_800
-        ),
+        default_factory=lambda: MediaToolSettings(timeout_seconds=1_800),
         validation_alias=AliasChoices("analyze_video", "analyzeVideo"),
-    )
-    update_agent_identity: PolicyToolSettings = Field(
-        default_factory=PolicyToolSettings,
-        validation_alias=AliasChoices("update_agent_identity", "updateAgentIdentity"),
     )
 
     @property

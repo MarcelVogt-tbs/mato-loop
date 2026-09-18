@@ -52,10 +52,12 @@ _READ = ToolAction(
     "calendar.read",
     "Kalender lesen",
     ToolExecutionPolicy.AUTO,
+    ToolExecutionPolicy.ASK,
 )
 _WRITE = ToolAction(
     "calendar.write",
     "Kalender ändern",
+    ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
     mutates=True,
 )
@@ -63,22 +65,26 @@ _DELETE = ToolAction(
     "calendar.delete",
     "Kalendereinträge löschen",
     ToolExecutionPolicy.ASK,
+    ToolExecutionPolicy.ASK,
     mutates=True,
 )
 _TASKS_READ = ToolAction(
     "tasks.read",
     "Aufgaben lesen",
     ToolExecutionPolicy.AUTO,
+    ToolExecutionPolicy.ASK,
 )
 _TASKS_WRITE = ToolAction(
     "tasks.write",
     "Aufgaben ändern",
+    ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
     mutates=True,
 )
 _TASKS_DELETE = ToolAction(
     "tasks.delete",
     "Aufgaben löschen",
+    ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
     mutates=True,
 )

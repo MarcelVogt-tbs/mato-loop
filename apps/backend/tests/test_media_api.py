@@ -45,9 +45,9 @@ def upload() -> UploadFile:
     )
 
 
-async def test_direct_transcription_obeys_policy_and_returns_text(monkeypatch) -> None:
+async def test_direct_transcription_uses_timeout_and_returns_text(monkeypatch) -> None:
     settings = ToolSettings.model_validate(
-        {"transcribeAudio": {"policy": "ask", "timeoutSeconds": 175}}
+        {"transcribeAudio": {"timeoutSeconds": 175}}
     )
     monkeypatch.setattr(
         SettingsStore,
@@ -69,7 +69,7 @@ async def test_direct_transcription_obeys_policy_and_returns_text(monkeypatch) -
 
 async def test_direct_transcription_returns_structured_timeout(monkeypatch) -> None:
     settings = ToolSettings.model_validate(
-        {"transcribeAudio": {"policy": "auto", "timeoutSeconds": 480}}
+        {"transcribeAudio": {"timeoutSeconds": 480}}
     )
     monkeypatch.setattr(
         SettingsStore,

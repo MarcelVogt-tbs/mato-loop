@@ -200,13 +200,15 @@ def test_adapter_is_a_standalone_shared_tool_definition() -> None:
         "meal_plan.delete",
     }
     assert all(
-        action.default_policy == ToolExecutionPolicy.AUTO
+        action.private_default_policy == ToolExecutionPolicy.AUTO
+        and action.public_default_policy == ToolExecutionPolicy.ASK
         for action in actions.values()
         if not action.mutates
     )
     assert actions["meal_plan.write"].mutates is True
     assert actions["meal_plan.delete"].mutates is True
-    assert actions["meal_plan.delete"].default_policy == ToolExecutionPolicy.ASK
+    assert actions["meal_plan.delete"].private_default_policy == ToolExecutionPolicy.ASK
+    assert actions["meal_plan.delete"].public_default_policy == ToolExecutionPolicy.ASK
 
 
 @pytest.mark.parametrize(

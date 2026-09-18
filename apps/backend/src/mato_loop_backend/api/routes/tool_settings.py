@@ -5,15 +5,13 @@ from fastapi import APIRouter, Depends
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.tools import tool_execution_policy, tool_registry
+from mato_loop_backend.agent.tools import tool_registry
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
     IntegrationSettings,
-    MediaToolSettings,
-    PolicyToolSettings,
     SettingsStore,
     ShellPrefixSettings,
     ToolExecutionPolicy,
@@ -27,6 +25,17 @@ from mato_loop_backend.settings.effective import personal_tool_settings_snapshot
 
 router = APIRouter(prefix="/tools", dependencies=[Depends(require_user)])
 SettingsApiScope = Literal["instance", "personal"]
+
+
+class MediaTimeoutRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    timeout_seconds: int = Field(
+        default=300,
+        ge=10,
+        le=3_600,
+        validation_alias=AliasChoices("timeoutSeconds", "timeout_seconds"),
+    )
 
 
 async def _load_scoped_tools(
@@ -66,27 +75,23 @@ class ToolSettingsRequest(BaseModel):
     shell_prefixes: ShellPrefixSettings | None = Field(
         default=None, validation_alias=AliasChoices("shellPrefixes", "shell_prefixes")
     )
-    generate_image: MediaToolSettings | None = Field(
+    generate_image: MediaTimeoutRequest | None = Field(
         default=None, validation_alias=AliasChoices("generateImage", "generate_image")
     )
-    edit_image: MediaToolSettings | None = Field(
+    edit_image: MediaTimeoutRequest | None = Field(
         default=None, validation_alias=AliasChoices("editImage", "edit_image")
     )
-    generate_speech: MediaToolSettings | None = Field(
+    generate_speech: MediaTimeoutRequest | None = Field(
         default=None, validation_alias=AliasChoices("generateSpeech", "generate_speech")
     )
-    generate_audio: MediaToolSettings | None = Field(
+    generate_audio: MediaTimeoutRequest | None = Field(
         default=None, validation_alias=AliasChoices("generateAudio", "generate_audio")
     )
-    transcribe_audio: MediaToolSettings | None = Field(
+    transcribe_audio: MediaTimeoutRequest | None = Field(
         default=None, validation_alias=AliasChoices("transcribeAudio", "transcribe_audio")
     )
-    analyze_video: MediaToolSettings | None = Field(
+    analyze_video: MediaTimeoutRequest | None = Field(
         default=None, validation_alias=AliasChoices("analyzeVideo", "analyze_video")
-    )
-    update_agent_identity: PolicyToolSettings | None = Field(
-        default=None,
-        validation_alias=AliasChoices("updateAgentIdentity", "update_agent_identity"),
     )
 
 
@@ -129,47 +134,22 @@ def tool_settings_payload(
             "publicAddressesOnly": settings.web_fetch.public_addresses_only,
         },
         "generateImage": {
-            "policy": tool_execution_policy(
-                settings, "media.generate.image", settings.generate_image.policy
-            ).value,
             "timeoutSeconds": settings.generate_image.timeout_seconds,
         },
         "editImage": {
-            "policy": tool_execution_policy(
-                settings, "media.edit.image", settings.edit_image.policy
-            ).value,
             "timeoutSeconds": settings.edit_image.timeout_seconds,
         },
         "generateSpeech": {
-            "policy": tool_execution_policy(
-                settings, "media.generate.speech", settings.generate_speech.policy
-            ).value,
             "timeoutSeconds": settings.generate_speech.timeout_seconds,
         },
         "generateAudio": {
-            "policy": tool_execution_policy(
-                settings, "media.generate.audio", settings.generate_audio.policy
-            ).value,
             "timeoutSeconds": settings.generate_audio.timeout_seconds,
         },
         "transcribeAudio": {
-            "policy": tool_execution_policy(
-                settings, "media.transcribe.audio", settings.transcribe_audio.policy
-            ).value,
             "timeoutSeconds": settings.transcribe_audio.timeout_seconds,
         },
         "analyzeVideo": {
-            "policy": tool_execution_policy(
-                settings, "media.analyze.video", settings.analyze_video.policy
-            ).value,
             "timeoutSeconds": settings.analyze_video.timeout_seconds,
-        },
-        "updateAgentIdentity": {
-            "policy": tool_execution_policy(
-                settings,
-                "settings.agent_identity.update",
-                settings.update_agent_identity.policy,
-            ).value,
         },
     }
 
@@ -276,21 +256,17 @@ async def update_tool_settings(
     settings.select_trust(trust)
     if payload.shell_prefixes is not None:
         settings.shell_prefixes = payload.shell_prefixes
-    policy_fields = {
-        "media.generate.image": "generate_image",
-        "media.edit.image": "edit_image",
-        "media.generate.speech": "generate_speech",
-        "media.generate.audio": "generate_audio",
-        "media.transcribe.audio": "transcribe_audio",
-        "media.analyze.video": "analyze_video",
-        "settings.agent_identity.update": "update_agent_identity",
-    }
-    for capability, field_name in policy_fields.items():
+    for field_name in (
+        "generate_image",
+        "edit_image",
+        "generate_speech",
+        "generate_audio",
+        "transcribe_audio",
+        "analyze_video",
+    ):
         value = getattr(payload, field_name)
         if value is not None:
-            settings.permissions.policies[capability] = value.policy
-            if isinstance(value, MediaToolSettings):
-                getattr(settings, field_name).timeout_seconds = value.timeout_seconds
+            getattr(settings, field_name).timeout_seconds = value.timeout_seconds
     if payload.policies is not None:
         groups = tool_registry.catalog(settings, IntegrationSettings())
         configurable = {

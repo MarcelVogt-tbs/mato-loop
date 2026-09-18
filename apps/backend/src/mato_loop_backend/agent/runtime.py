@@ -405,7 +405,8 @@ def _tool_policy(
             request.capability,
             (
                 ToolExecutionPolicy(snapshot["integrationDefaults"].get(str(integration_id), {}).get(request.capability, "disabled"))
-                if snapshot is not None else action.default_policy
+                if snapshot is not None
+                else action.default_policy_for(tool_settings.trust_level)
             ),
             integration_id=integration_id,
             resource_key=resource_key,
@@ -418,7 +419,10 @@ def _tool_policy(
         request.capability,
         (
             ToolExecutionPolicy(snapshot["actionDefaults"].get(request.capability, "disabled"))
-            if snapshot is not None else tool_registry.action_default(request.capability, integration_settings)
+            if snapshot is not None
+            else tool_registry.action_default(
+                request.capability, tool_settings.trust_level, integration_settings
+            )
         ),
         resource_key=resource_key,
     ).policy

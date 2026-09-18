@@ -394,7 +394,7 @@ def _actions_enabled(
         if policy_resolver(
             tool_settings,
             action.capability,
-            action.default_policy,
+            action.default_policy_for(tool_settings.trust_level),
             integration_id=integration_id,
             resource_key=definition.policy_resource_key,
             include_scoped=True,
@@ -968,7 +968,7 @@ class ToolRegistry:
                     "policy": self._policy_resolver(
                         tool_settings,
                         action.capability,
-                        action.default_policy,
+                        action.default_policy_for(tool_settings.trust_level),
                     )
                     .value,
                     "configurable": action.configurable,
@@ -1013,7 +1013,10 @@ class ToolRegistry:
         ]
 
     def action_default(
-        self, capability: str, integration_settings: IntegrationSettings | None = None
+        self,
+        capability: str,
+        trust_level: TrustLevel,
+        integration_settings: IntegrationSettings | None = None,
     ) -> ToolExecutionPolicy:
         definitions = (
             {
@@ -1023,15 +1026,19 @@ class ToolRegistry:
             if integration_settings is not None
             else {**self._definitions, **self._operation_definitions}
         )
-        defaults = {
-            action.default_policy
+        default_pairs = {
+            (action.private_default_policy, action.public_default_policy)
             for definition in definitions.values()
             for action in definition.actions
             if action.capability == capability
         }
-        if len(defaults) > 1:
+        if len(default_pairs) > 1:
             raise ValueError(f"conflicting defaults for capability: {capability}")
-        return next(iter(defaults), ToolExecutionPolicy.ASK)
+        private, public = next(
+            iter(default_pairs),
+            (ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK),
+        )
+        return private if trust_level == TrustLevel.PRIVATE else public
 
     def integration_resource_actions(
         self, instance: IntegrationInstance
@@ -1327,7 +1334,10 @@ class ToolRegistry:
                             context.tool_settings,
                             request.capability,
                             next(
-                                action.default_policy for action in definition.actions
+                                action.default_policy_for(
+                                    context.tool_settings.trust_level
+                                )
+                                for action in definition.actions
                                 if action.capability == request.capability
                             ),
                             integration_id=request.policy_integration_id,

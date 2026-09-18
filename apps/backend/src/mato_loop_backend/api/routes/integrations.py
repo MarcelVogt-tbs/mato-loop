@@ -564,7 +564,7 @@ def _access_payload(
                 resolve_tool_execution_policy(
                     tools,
                     action.capability,
-                    action.default_policy,
+                    action.default_policy_for(tools.trust_level),
                 ).policy,
             ).value,
             "integrationPolicy": (
@@ -579,7 +579,7 @@ def _access_payload(
                 resolve_tool_execution_policy(
                     tools,
                     action.capability,
-                    action.default_policy,
+                    action.default_policy_for(tools.trust_level),
                     integration_id=instance.id,
                 ).policy,
             ).value,
@@ -614,7 +614,7 @@ def _access_payload(
                         resolve_tool_execution_policy(
                             tools,
                             action.capability,
-                            action.default_policy,
+                            action.default_policy_for(tools.trust_level),
                             integration_id=instance.id,
                             resource_key=resource.key,
                             hard_unavailable_capabilities=(

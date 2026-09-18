@@ -143,13 +143,20 @@ def test_root_specific_read_and_transfer_availability(
 @pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
 @pytest.mark.parametrize(
     "capability",
-    ["session.files.read", "session.files.write", "network.fetch", "network.search", "skills.load"],
+    [
+        "session.files.read",
+        "session.files.write",
+        "network.fetch",
+        "network.search",
+        "skills.load",
+        "media.generate.image",
+    ],
 )
 def test_auto_defaults_and_saved_policies(
     trust: TrustLevel, capability: str
 ) -> None:
     settings = ToolSettings().select_trust(trust)
-    default = tool_registry.action_default(capability)
+    default = tool_registry.action_default(capability, trust)
 
     assert default == ToolExecutionPolicy.AUTO
     assert resolve_tool_execution_policy(settings, capability, default).policy == default
@@ -273,11 +280,11 @@ def test_only_coding_profiles_default_to_automatic_public_computer_reads(trust) 
                 else ToolExecutionPolicy.AUTO
             )
             assert resolve_tool_execution_policy(
-                settings, capability, tool_registry.action_default(capability)
+                settings, capability, tool_registry.action_default(capability, trust)
             ).policy == expected
             settings._agent_permissions.policies[capability] = ToolExecutionPolicy.ASK
             assert resolve_tool_execution_policy(
-                settings, capability, tool_registry.action_default(capability)
+                settings, capability, tool_registry.action_default(capability, trust)
             ).policy == ToolExecutionPolicy.ASK
 
 
@@ -459,7 +466,6 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
             "generateAudio",
             "transcribeAudio",
             "analyzeVideo",
-            "updateAgentIdentity",
         )
     } == {
         "webFetch": {
@@ -470,13 +476,12 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
             "maxResponseMiB": 64,
             "publicAddressesOnly": True,
         },
-        "generateImage": {"policy": "ask", "timeoutSeconds": 300},
-        "editImage": {"policy": "ask", "timeoutSeconds": 300},
-        "generateSpeech": {"policy": "ask", "timeoutSeconds": 300},
-        "generateAudio": {"policy": "ask", "timeoutSeconds": 300},
-        "transcribeAudio": {"policy": "ask", "timeoutSeconds": 300},
-        "analyzeVideo": {"policy": "ask", "timeoutSeconds": 1800},
-        "updateAgentIdentity": {"policy": "ask"},
+        "generateImage": {"timeoutSeconds": 300},
+        "editImage": {"timeoutSeconds": 300},
+        "generateSpeech": {"timeoutSeconds": 300},
+        "generateAudio": {"timeoutSeconds": 300},
+        "transcribeAudio": {"timeoutSeconds": 300},
+        "analyzeVideo": {"timeoutSeconds": 1800},
     }
     auto_capabilities = {
         "session.files.read",
@@ -485,6 +490,7 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "network.fetch",
         "network.search",
         "skills.load",
+        "media.generate.image",
     }
     assert {
         capability
@@ -556,7 +562,7 @@ def test_tool_configuration_uses_frontend_webfetch_field_names() -> None:
 
 
 async def test_tool_availability_exposes_hard_caps(monkeypatch) -> None:
-    settings = ToolSettings(transcribe_audio={"policy": "ask"})
+    settings = ToolSettings()
     monkeypatch.setattr(
         "mato_loop_backend.api.routes.tool_settings.load_effective_tools",
         AsyncMock(return_value=settings),
@@ -635,17 +641,22 @@ async def test_put_tool_settings_saves_only_selected_branch(monkeypatch) -> None
     db = _db()
     payload = ToolSettingsRequest.model_validate(
         {
-            "policies": {"filesystem.delete": "ask"},
+            "policies": {
+                "filesystem.delete": "ask",
+                "media.generate.image": "ask",
+                "media.generate.speech": "auto",
+                "media.generate.audio": "disabled",
+                "settings.agent_identity.update": "auto",
+            },
             "shellPrefixes": {
                 "read": [["cat"]],
                 "write": [["git", "status"]],
             },
-            "generateImage": {"policy": "ask", "timeoutSeconds": 600},
-            "editImage": {"policy": "ask", "timeoutSeconds": 450},
-            "generateSpeech": {"policy": "auto", "timeoutSeconds": 120},
-            "generateAudio": {"policy": "disabled", "timeoutSeconds": 900},
-            "transcribeAudio": {"policy": "ask", "timeoutSeconds": 180},
-            "updateAgentIdentity": {"policy": "auto"},
+            "generateImage": {"timeoutSeconds": 600},
+            "editImage": {"timeoutSeconds": 450},
+            "generateSpeech": {"timeoutSeconds": 120},
+            "generateAudio": {"timeoutSeconds": 900},
+            "transcribeAudio": {"timeoutSeconds": 180},
         }
     )
 
@@ -665,20 +676,14 @@ async def test_put_tool_settings_saves_only_selected_branch(monkeypatch) -> None
         "read": [["cat"]],
         "write": [["git", "status"]],
     }
-    assert saved.generate_image.policy == "ask"
     assert saved.generate_image.timeout_seconds == 600
-    assert saved.edit_image.policy == "ask"
     assert saved.edit_image.timeout_seconds == 450
-    assert saved.generate_speech.policy == "ask"
     assert saved.generate_speech.timeout_seconds == 120
-    assert saved.generate_audio.policy == "ask"
     assert saved.generate_audio.timeout_seconds == 900
-    assert saved.transcribe_audio.policy == "ask"
     assert saved.transcribe_audio.timeout_seconds == 180
-    assert saved.update_agent_identity.policy == "ask"
-    assert saved.public_permissions.policies["filesystem.delete"] == "ask"
+    assert saved.public_permissions.policies == payload.policies
     assert saved.private_permissions.policies == {}
-    assert result["policies"]["filesystem.delete"] == "ask"
+    assert payload.policies.items() <= result["policies"].items()
     db.commit.assert_awaited_once()
 
 
@@ -687,8 +692,30 @@ def test_tool_settings_reject_invalid_media_timeout(timeout: float) -> None:
     with pytest.raises(ValidationError):
         ToolSettingsRequest.model_validate(
             {
-                "generateImage": {"policy": "ask", "timeoutSeconds": timeout},
+                "generateImage": {"timeoutSeconds": timeout},
             }
+        )
+
+
+def test_legacy_tool_policies_are_ignored_and_not_serialized() -> None:
+    settings = ToolSettings.model_validate(
+        {
+            "generateImage": {"policy": "disabled", "timeoutSeconds": 600},
+            "updateAgentIdentity": {"policy": "disabled"},
+        }
+    )
+
+    data = settings.model_dump(mode="json")
+
+    assert settings.generate_image.timeout_seconds == 600
+    assert "policy" not in data["generate_image"]
+    assert "update_agent_identity" not in data
+
+
+def test_tool_settings_request_rejects_legacy_nested_policy() -> None:
+    with pytest.raises(ValidationError):
+        ToolSettingsRequest.model_validate(
+            {"generateImage": {"policy": "ask", "timeoutSeconds": 300}}
         )
 
 

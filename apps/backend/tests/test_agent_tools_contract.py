@@ -323,6 +323,7 @@ def _shared_adapter(
         "tasks.read",
         "Aufgaben lesen",
         ToolExecutionPolicy.ASK,
+        ToolExecutionPolicy.ASK,
     )
 
     async def resources(_instance, _credential):
@@ -623,7 +624,10 @@ async def test_bound_integration_tool_rechecks_source_after_approval(
         handler=_successful_handler,
         actions=(
             ToolAction(
-                "integration.example", "Integration verwenden", ToolExecutionPolicy.ASK
+                "integration.example",
+                "Integration verwenden",
+                ToolExecutionPolicy.ASK,
+                ToolExecutionPolicy.ASK,
             ),
         ),
         integration_id=str(integration.id),
@@ -773,7 +777,9 @@ async def test_shared_tool_rejects_action_irrelevant_to_selected_resource(
 async def test_aggregate_shared_tool_binds_all_current_instances(
     tmp_path, monkeypatch
 ) -> None:
-    action = ToolAction("tasks.read", "Aufgaben lesen", ToolExecutionPolicy.ASK)
+    action = ToolAction(
+        "tasks.read", "Aufgaben lesen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK
+    )
 
     async def handler(_arguments, context):
         return ToolResult.json({"ids": list(context.bound_options["integration_ids"])})
@@ -880,8 +886,12 @@ async def test_contributed_authorization_must_cover_every_declared_action(
         arguments_model=_RequiredArguments,
         handler=_successful_handler,
         actions=(
-            ToolAction("integration.read", "Lesen", ToolExecutionPolicy.ASK),
-            ToolAction("integration.write", "Schreiben", ToolExecutionPolicy.ASK),
+            ToolAction(
+                "integration.read", "Lesen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK
+            ),
+            ToolAction(
+                "integration.write", "Schreiben", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK
+            ),
         ),
         integration_id=str(integration.id),
         authorization_factory=lambda _arguments, _context: (request,),
@@ -913,7 +923,10 @@ async def test_resource_policy_disabled_blocks_contributed_tool_effect(
         config={"base_url": "https://search.example.com"},
     )
     action = ToolAction(
-        "integration.resource.read", "Lesen", ToolExecutionPolicy.ASK
+        "integration.resource.read",
+        "Lesen",
+        ToolExecutionPolicy.ASK,
+        ToolExecutionPolicy.ASK,
     )
     request = PermissionRequest(
         capability=action.capability,
@@ -956,7 +969,7 @@ async def test_resource_policy_disabled_blocks_contributed_tool_effect(
         policy = tool_execution_policy(
             settings,
             permission.capability,
-            action.default_policy,
+            action.default_policy_for(settings.trust_level),
             integration_id=permission.policy_integration_id,
             resource_key=permission.policy_resource_key,
         )
@@ -1169,11 +1182,24 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     ].description
     assert "cron+timezone or offset run_at" in definitions["create_automation"].description
     assert "cron+timezone or offset run_at" in definitions["edit_automation"].description
-    assert tool_registry.action_default("automation.read") == ToolExecutionPolicy.AUTO
-    assert tool_registry.action_default("automation.create") == ToolExecutionPolicy.ASK
-    assert tool_registry.action_default("automation.update") == ToolExecutionPolicy.ASK
-    assert tool_registry.action_default("automation.run") == ToolExecutionPolicy.ASK
-    assert tool_registry.action_default("automation.delete") == ToolExecutionPolicy.ASK
+    assert tool_registry.action_default(
+        "automation.read", TrustLevel.PRIVATE
+    ) == ToolExecutionPolicy.AUTO
+    assert tool_registry.action_default(
+        "automation.read", TrustLevel.PUBLIC
+    ) == ToolExecutionPolicy.ASK
+    for capability in (
+        "automation.create",
+        "automation.update",
+        "automation.run",
+        "automation.delete",
+    ):
+        assert tool_registry.action_default(
+            capability, TrustLevel.PRIVATE
+        ) == ToolExecutionPolicy.ASK
+        assert tool_registry.action_default(
+            capability, TrustLevel.PUBLIC
+        ) == ToolExecutionPolicy.ASK
     for tool in catalog_tools.values():
         assert tool["actions"][0]["allowedPolicies"] == ["disabled", "ask", "auto"]
 
@@ -1796,9 +1822,7 @@ async def test_missing_workspace_returns_structured_error_without_approval(tmp_p
 
 
 async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> None:
-    tool_settings = _tool_settings(
-        {"updateAgentIdentity": {"policy": "ask"}}
-    )
+    tool_settings = _tool_settings({})
     persona = PersonaProfile(name="Direkt", instructions="Alt")
     identity = UserAgentIdentitySettings(personas=[persona])
 
@@ -1898,7 +1922,7 @@ async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) 
 async def test_update_agent_identity_rejects_changed_approved_persona(
     monkeypatch, tmp_path
 ) -> None:
-    tool_settings = _tool_settings({"updateAgentIdentity": {"policy": "ask"}})
+    tool_settings = _tool_settings({})
     first = PersonaProfile(name="Erste", instructions="Alt")
     second = PersonaProfile(name="Zweite", instructions="Alt")
     identity = UserAgentIdentitySettings(personas=[first, second])
@@ -1948,7 +1972,7 @@ async def test_update_agent_identity_rejects_changed_approved_persona(
 async def test_update_agent_identity_rejects_persona_changed_since_run_start(
     monkeypatch, tmp_path
 ) -> None:
-    tool_settings = _tool_settings({"updateAgentIdentity": {"policy": "ask"}})
+    tool_settings = _tool_settings({})
     prompted = PersonaProfile(name="Prompt", instructions="Alt")
     current = PersonaProfile(name="Aktuell", instructions="Alt")
     context = _context(
@@ -3760,7 +3784,9 @@ async def test_workspace_video_uses_execution_client_bytes(tmp_path) -> None:
     )
     context.video_analysis_target = Mock(return_value="video-model")
     context.video_analysis_handler = AsyncMock(return_value={"summary": "ok"})
-    context.tool_settings.analyze_video.policy = ToolExecutionPolicy.AUTO
+    context.tool_settings.permissions.policies["media.analyze.video"] = (
+        ToolExecutionPolicy.AUTO
+    )
     context.root_files.open_file = Mock(side_effect=AssertionError("must not read locally"))
     arguments = tool_registry._definitions["analyze_video"].validate_arguments(call.arguments)
 

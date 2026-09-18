@@ -19,7 +19,7 @@ from mato_loop_backend.integrations.mcp import (
 from mato_loop_backend.settings import ToolExecutionPolicy
 
 SONOBIN_ACTION = ToolAction(
-    "sonobin.call", "SonoBin-Funktion ausführen", ToolExecutionPolicy.ASK
+    "sonobin.call", "SonoBin-Funktion ausführen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK
 )
 
 

@@ -421,12 +421,12 @@ const TOOL_DESCRIPTIONS = {
 }
 const policyForm = reactive({
   policies: {},
-  generateImage: { policy: 'ask', timeoutSeconds: 300 },
-  editImage: { policy: 'ask', timeoutSeconds: 300 },
-  generateSpeech: { policy: 'ask', timeoutSeconds: 300 },
-  generateAudio: { policy: 'ask', timeoutSeconds: 300 },
-  transcribeAudio: { policy: 'ask', timeoutSeconds: 300 },
-  analyzeVideo: { policy: 'ask', timeoutSeconds: 1800 }
+  generateImage: { timeoutSeconds: 300 },
+  editImage: { timeoutSeconds: 300 },
+  generateSpeech: { timeoutSeconds: 300 },
+  generateAudio: { timeoutSeconds: 300 },
+  transcribeAudio: { timeoutSeconds: 300 },
+  analyzeVideo: { timeoutSeconds: 1800 }
 })
 const shellPrefixText = reactive({ read: '', write: '' })
 const configurationForm = reactive({
@@ -462,10 +462,9 @@ function policyRequestPayload() {
       write: parseShellPrefixes(shellPrefixText.write)
     }
   }
-  for (const { field, capability } of mediaTools) {
-    payload[field] = { ...policyForm[field], policy: policyForm.policies[capability] }
+  for (const { field } of mediaTools) {
+    payload[field] = { ...policyForm[field] }
   }
-  payload.updateAgentIdentity = { policy: policyForm.policies['settings.agent_identity.update'] }
   return payload
 }
 
@@ -479,11 +478,9 @@ function configurationRequestPayload() {
 
 function assignPolicyForm(settings) {
   policyForm.policies = { ...settings.policies }
-  for (const { field, capability } of mediaTools) {
+  for (const { field } of mediaTools) {
     policyForm[field] = { ...settings[field] }
-    policyForm.policies[capability] ??= settings[field].policy
   }
-  policyForm.policies['settings.agent_identity.update'] ??= settings.updateAgentIdentity.policy
   for (const classification of ['read', 'write']) {
     shellPrefixText[classification] = settings.shellPrefixes[classification]
       .map((prefix) => prefix.join(' '))

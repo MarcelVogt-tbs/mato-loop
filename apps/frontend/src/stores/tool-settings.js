@@ -1,10 +1,8 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 
-const defaultMediaPolicy = () => ({ policy: 'ask', timeoutSeconds: 300 })
-const defaultImageEditPolicy = () => ({ policy: 'ask', timeoutSeconds: 300 })
-const defaultVideoAnalysisPolicy = () => ({ policy: 'ask', timeoutSeconds: 1800 })
-const defaultAgentIdentityPolicy = () => ({ policy: 'ask' })
+const defaultMediaSettings = () => ({ timeoutSeconds: 300 })
+const defaultVideoAnalysisSettings = () => ({ timeoutSeconds: 1800 })
 const defaultShellPrefixes = () => ({ read: [], write: [] })
 const defaultConfigurationWebFetch = () => ({
   userAgent: '',
@@ -22,8 +20,7 @@ function settingsPayload(state) {
     generateSpeech: state.generateSpeech,
     generateAudio: state.generateAudio,
     transcribeAudio: state.transcribeAudio,
-    analyzeVideo: state.analyzeVideo,
-    updateAgentIdentity: state.updateAgentIdentity
+    analyzeVideo: state.analyzeVideo
   }
 }
 
@@ -40,13 +37,12 @@ export const useToolSettingsStore = defineStore('tool-settings', {
     groups: [],
     policies: {},
     shellPrefixes: defaultShellPrefixes(),
-    generateImage: defaultMediaPolicy(),
-    editImage: defaultImageEditPolicy(),
-    generateSpeech: defaultMediaPolicy(),
-    generateAudio: defaultMediaPolicy(),
-    transcribeAudio: defaultMediaPolicy(),
-    analyzeVideo: defaultVideoAnalysisPolicy(),
-    updateAgentIdentity: defaultAgentIdentityPolicy(),
+    generateImage: defaultMediaSettings(),
+    editImage: defaultMediaSettings(),
+    generateSpeech: defaultMediaSettings(),
+    generateAudio: defaultMediaSettings(),
+    transcribeAudio: defaultMediaSettings(),
+    analyzeVideo: defaultVideoAnalysisSettings(),
     transcribeAudioAvailable: true,
     toolAvailability: {},
     scope: 'instance',
@@ -143,28 +139,15 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       this.loadVersion += 1
       this.saving = true
       try {
-        const policies = { ...this.policies, ...(settings.policies || {}) }
-        for (const [field, capability] of Object.entries({
-          generateImage: 'media.generate.image',
-          editImage: 'media.edit.image',
-          generateSpeech: 'media.generate.speech',
-          generateAudio: 'media.generate.audio',
-          transcribeAudio: 'media.transcribe.audio',
-          analyzeVideo: 'media.analyze.video',
-          updateAgentIdentity: 'settings.agent_identity.update'
-        })) {
-          if (settings[field]?.policy) policies[capability] = settings[field].policy
-        }
         const payload = {
-          policies,
+          policies: { ...this.policies, ...(settings.policies || {}) },
           shellPrefixes: settings.shellPrefixes || this.shellPrefixes,
           generateImage: { ...this.generateImage, ...settings.generateImage },
           editImage: { ...this.editImage, ...settings.editImage },
           generateSpeech: { ...this.generateSpeech, ...settings.generateSpeech },
           generateAudio: { ...this.generateAudio, ...settings.generateAudio },
           transcribeAudio: { ...this.transcribeAudio, ...settings.transcribeAudio },
-          analyzeVideo: { ...this.analyzeVideo, ...settings.analyzeVideo },
-          updateAgentIdentity: { ...this.updateAgentIdentity, ...settings.updateAgentIdentity }
+          analyzeVideo: { ...this.analyzeVideo, ...settings.analyzeVideo }
         }
         const { data } = await api.put('/tools/settings', payload, branchConfig(scope, trust))
         if (this.scope !== scope || this.trust !== trust || this.saveVersion !== saveVersion) return
@@ -284,11 +267,10 @@ export const useToolSettingsStore = defineStore('tool-settings', {
         write: Array.isArray(data?.shellPrefixes?.write) ? data.shellPrefixes.write.map((item) => [...item]) : []
       }
       for (const field of ['generateImage', 'generateSpeech', 'generateAudio', 'transcribeAudio']) {
-        this[field] = { ...defaultMediaPolicy(), ...data?.[field] }
+        this[field] = { ...defaultMediaSettings(), ...data?.[field] }
       }
-      this.editImage = { ...defaultImageEditPolicy(), ...data?.editImage }
-      this.analyzeVideo = { ...defaultVideoAnalysisPolicy(), ...data?.analyzeVideo }
-      this.updateAgentIdentity = { ...defaultAgentIdentityPolicy(), ...data?.updateAgentIdentity }
+      this.editImage = { ...defaultMediaSettings(), ...data?.editImage }
+      this.analyzeVideo = { ...defaultVideoAnalysisSettings(), ...data?.analyzeVideo }
     }
   }
 })

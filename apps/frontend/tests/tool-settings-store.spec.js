@@ -24,7 +24,7 @@ const settings = (policy = 'ask') => ({
   }],
   policies: { 'network.fetch': policy },
   shellPrefixes: { read: [['cat']], write: [] },
-  transcribeAudio: { policy: 'ask', timeoutSeconds: 180 }
+  transcribeAudio: { timeoutSeconds: 180 }
 })
 
 const configuration = {
@@ -68,10 +68,12 @@ describe('tool settings store', () => {
     expect(api.put).toHaveBeenCalledWith(
       '/tools/settings',
       expect.objectContaining({
-        policies: { 'network.fetch': 'auto' }
+        policies: { 'network.fetch': 'auto' },
+        transcribeAudio: { timeoutSeconds: 180 }
       }),
       { params: { scope: 'personal', trust: 'public' } }
     )
+    expect(api.put.mock.calls[0][1]).not.toHaveProperty('updateAgentIdentity')
     expect(store.policies['network.fetch']).toBe('auto')
     expect(store.groups[0].tools[0].available).toBe(false)
   })

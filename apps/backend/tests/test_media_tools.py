@@ -131,8 +131,9 @@ def mock_settings_load(monkeypatch, tools: ToolSettings, ai: AiSettings) -> Asyn
 def test_media_schemas_follow_effective_capabilities() -> None:
     settings = ToolSettings.model_validate(
         {
-            "generateImage": {"policy": "ask"},
-            "generateSpeech": {"policy": "auto"},
+            "privatePermissions": {
+                "policies": {"media.generate.speech": "disabled"}
+            },
         }
     )
     ai = media_settings(ModelCapability.IMAGE_GENERATION)
@@ -169,10 +170,19 @@ async def test_disabled_media_tool_is_rejected_before_provider(
 ) -> None:
     call = ToolCall(id="image", name="generate_image", arguments={"prompt": "Test"})
     tool_context = context(tmp_path, call)
-    tool_context.tool_settings.generate_image.policy = ToolExecutionPolicy.DISABLED
+    tool_context.tool_settings.permissions.policies["media.generate.image"] = (
+        ToolExecutionPolicy.DISABLED
+    )
     mock_settings_load(
         monkeypatch,
-        ToolSettings(generate_image={"policy": "disabled"}),
+        ToolSettings(
+            private_permissions={
+                "policies": {"media.generate.image": "disabled"}
+            },
+            public_permissions={
+                "policies": {"media.generate.image": "disabled"}
+            },
+        ),
         media_settings(ModelCapability.IMAGE_GENERATION),
     )
     generate = AsyncMock(side_effect=AssertionError("Provider must not be called"))
@@ -197,9 +207,11 @@ async def test_media_dispatch_retains_private_spawn_ceiling_after_capability_rel
     call = ToolCall("image", "generate_image", {"prompt": "Test"})
     tool_context = context(tmp_path, call, decision=PermissionDecision.DENY)
     tool_context.model_trust_level = TrustLevel.PRIVATE
-    before = ToolSettings(generate_image={"policy": policy}).select_trust(TrustLevel.PRIVATE)
+    before = ToolSettings(
+        private_permissions={"policies": {"media.generate.image": policy}}
+    ).select_trust(TrustLevel.PRIVATE)
     snapshot = permission_snapshot(before, {"generate_image"})
-    live = ToolSettings(generate_image={"policy": "auto"})
+    live = ToolSettings()
     tool_context.tool_settings = live.model_copy(deep=True)
     tool_context.tool_settings._delegation_ceiling = snapshot
     mock_settings_load(monkeypatch, live, media_settings(ModelCapability.IMAGE_GENERATION))
@@ -235,7 +247,10 @@ async def test_video_tool_revalidation_keeps_frame_analysis_available(
 
 
 async def test_ask_denial_stops_before_media_service(tmp_path, monkeypatch) -> None:
-    settings = ToolSettings.model_validate({"generateImage": {"policy": "ask"}})
+    settings = ToolSettings(
+        private_permissions={"policies": {"media.generate.image": "ask"}},
+        public_permissions={"policies": {"media.generate.image": "ask"}},
+    )
     call = ToolCall(id="image", name="generate_image", arguments={"prompt": "Test"})
     tool_context = context(tmp_path, call, PermissionDecision.DENY)
     ai = media_settings(ModelCapability.IMAGE_GENERATION)
@@ -263,7 +278,7 @@ async def test_ask_denial_stops_before_media_service(tmp_path, monkeypatch) -> N
 async def test_generated_image_is_returned_as_an_attachment(
     tmp_path, monkeypatch
 ) -> None:
-    settings = ToolSettings.model_validate({"generateImage": {"policy": "auto"}})
+    settings = ToolSettings()
     call = ToolCall(id="image", name="generate_image", arguments={"prompt": "Test"})
     tool_context = context(tmp_path, call)
     ai = media_settings(ModelCapability.IMAGE_GENERATION)
@@ -445,7 +460,7 @@ async def test_media_tool_rejects_target_changed_after_prompt_binding(
     )
     changed = initial.model_copy(deep=True)
     changed.models[1].enabled = False
-    tools = ToolSettings.model_validate({"generateImage": {"policy": "auto"}})
+    tools = ToolSettings()
     offered = tool_registry.effective(
         IntegrationSettings(),
         tool_capabilities={"media.generate.image"},
@@ -482,7 +497,7 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
     tool_context = context(tmp_path, call)
     ai, chat = codex_edit_settings()
     tool_context.model_id = chat.id
-    tools = ToolSettings.model_validate({"editImage": {"policy": "ask"}})
+    tools = ToolSettings()
     mock_settings_load(monkeypatch, tools, ai)
     tool_context.db.get.return_value = SimpleNamespace(user_id=None)
     message = Message(
@@ -578,7 +593,6 @@ async def test_edit_image_sends_authorized_private_sources_to_public_target(
     tool_context.model_id = chat.id
     tools = ToolSettings.model_validate(
         {
-            "editImage": {"policy": "auto"},
             "publicPermissions": {
                 "policies": {"media.edit.image": "auto"}
             },
@@ -638,7 +652,10 @@ async def test_edit_image_sends_authorized_private_sources_to_public_target(
 async def test_policy_revocation_during_approval_stops_media_service(
     tmp_path, monkeypatch
 ) -> None:
-    ask_settings = ToolSettings.model_validate({"generateImage": {"policy": "ask"}})
+    ask_settings = ToolSettings(
+        private_permissions={"policies": {"media.generate.image": "ask"}},
+        public_permissions={"policies": {"media.generate.image": "ask"}},
+    )
     call = ToolCall(id="image", name="generate_image", arguments={"prompt": "Test"})
     tool_context = context(tmp_path, call)
     ai = media_settings(ModelCapability.IMAGE_GENERATION)
@@ -652,7 +669,14 @@ async def test_policy_revocation_during_approval_stops_media_service(
         return (
             ask_settings
             if tool_loads == 1
-            else ToolSettings(generate_image={"policy": "disabled"})
+            else ToolSettings(
+                private_permissions={
+                    "policies": {"media.generate.image": "disabled"}
+                },
+                public_permissions={
+                    "policies": {"media.generate.image": "disabled"}
+                },
+            )
         )
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
@@ -669,7 +693,7 @@ async def test_policy_revocation_during_approval_stops_media_service(
 async def test_auto_media_tool_returns_typed_attachment(tmp_path, monkeypatch) -> None:
     settings = ToolSettings.model_validate(
         {
-            "generateSpeech": {"policy": "auto", "timeoutSeconds": 125},
+            "generateSpeech": {"timeoutSeconds": 125},
             "publicPermissions": {
                 "policies": {"media.generate.speech": "auto"}
             },
@@ -698,7 +722,7 @@ async def test_media_timeout_is_returned_to_model_with_retry_context(
     tmp_path, monkeypatch
 ) -> None:
     settings = ToolSettings.model_validate(
-        {"generateImage": {"policy": "auto", "timeoutSeconds": 640}}
+        {"generateImage": {"timeoutSeconds": 640}}
     )
     call = ToolCall(id="image", name="generate_image", arguments={"prompt": "Test"})
     tool_context = context(tmp_path, call)
@@ -730,7 +754,10 @@ async def test_media_timeout_is_returned_to_model_with_retry_context(
 async def test_transcription_cannot_load_attachment_from_other_session(
     tmp_path, monkeypatch
 ) -> None:
-    settings = ToolSettings.model_validate({"transcribeAudio": {"policy": "auto"}})
+    settings = ToolSettings(
+        private_permissions={"policies": {"media.transcribe.audio": "auto"}},
+        public_permissions={"policies": {"media.transcribe.audio": "auto"}},
+    )
     call = ToolCall(
         id="transcribe",
         name="transcribe_audio",

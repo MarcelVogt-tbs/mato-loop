@@ -125,14 +125,26 @@ def test_shell_tool_cannot_select_execution_targets() -> None:
     assert ShellRunArguments(command="pwd").timeout is None
     assert all(item["name"] != "process_exec" for item in tools.schemas())
     assert {
-        action.capability: (action.label, action.default_policy)
+        action.capability: (
+            action.label,
+            action.private_default_policy,
+            action.public_default_policy,
+        )
         for action in tool_registry._operation_definitions["shell_run"].actions
     } == {
-        "shell.read": ("Shell ohne erkannte Schreibaktionen", ToolExecutionPolicy.AUTO),
-        "shell.write": ("Als schreibend eingestufte Shell", ToolExecutionPolicy.ASK),
+        "shell.read": (
+            "Shell ohne erkannte Schreibaktionen",
+            ToolExecutionPolicy.AUTO,
+            ToolExecutionPolicy.ASK,
+        ),
+        "shell.write": (
+            "Als schreibend eingestufte Shell",
+            ToolExecutionPolicy.ASK,
+            ToolExecutionPolicy.ASK,
+        ),
     }
     assert tool_registry.action_default(
-        "shell.read", IntegrationSettings()
+        "shell.read", TrustLevel.PRIVATE, IntegrationSettings()
     ) == ToolExecutionPolicy.AUTO
 
 

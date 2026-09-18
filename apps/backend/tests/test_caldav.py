@@ -249,7 +249,8 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
     assert discovery_permission.policy_integration_id is None
     assert json.loads(discovery_permission.resource_scope)["integrationId"] == str(first.id)
     actions = {action.capability: action for action in CALDAV_ADAPTER.resource_actions}
-    assert actions["calendar.read"].default_policy == ToolExecutionPolicy.AUTO
+    assert actions["calendar.read"].private_default_policy == ToolExecutionPolicy.AUTO
+    assert actions["calendar.read"].public_default_policy == ToolExecutionPolicy.ASK
     assert set(actions) == {
         "calendar.read",
         "calendar.write",
@@ -258,9 +259,12 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
         "tasks.write",
         "tasks.delete",
     }
-    assert actions["tasks.read"].default_policy == ToolExecutionPolicy.AUTO
-    assert actions["calendar.delete"].default_policy == ToolExecutionPolicy.ASK
-    assert actions["tasks.delete"].default_policy == ToolExecutionPolicy.ASK
+    assert actions["tasks.read"].private_default_policy == ToolExecutionPolicy.AUTO
+    assert actions["tasks.read"].public_default_policy == ToolExecutionPolicy.ASK
+    assert actions["calendar.delete"].private_default_policy == ToolExecutionPolicy.ASK
+    assert actions["calendar.delete"].public_default_policy == ToolExecutionPolicy.ASK
+    assert actions["tasks.delete"].private_default_policy == ToolExecutionPolicy.ASK
+    assert actions["tasks.delete"].public_default_policy == ToolExecutionPolicy.ASK
     create_schema = tools["calendar_create_event"].arguments_model.model_json_schema()
     assert "idempotency_key" not in create_schema["properties"]
     assert create_schema["properties"]["timing"]["discriminator"]["propertyName"] == "type"

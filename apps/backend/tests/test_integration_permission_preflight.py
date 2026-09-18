@@ -92,7 +92,13 @@ def preflight(monkeypatch):
     authorization_factory = Mock(return_value=(request,))
     handler = AsyncMock(side_effect=execute)
     loader = AsyncMock(side_effect=discover)
-    action = ToolAction("tasks.write", "Schreiben", ToolExecutionPolicy.ASK, mutates=True)
+    action = ToolAction(
+        "tasks.write",
+        "Schreiben",
+        ToolExecutionPolicy.ASK,
+        ToolExecutionPolicy.ASK,
+        mutates=True,
+    )
     contribution = ToolContribution(
         name="preflight_write",
         description="Write to one test resource.",
@@ -113,7 +119,9 @@ def preflight(monkeypatch):
             config_model=_Config,
             resource_actions=(
                 action,
-                ToolAction("tasks.read", "Lesen", ToolExecutionPolicy.ASK),
+                ToolAction(
+                    "tasks.read", "Lesen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK
+                ),
             ),
             resource_loader=loader,
             shared_tools=(contribution,),

@@ -76,16 +76,19 @@ _READ = ToolAction(
     "knowledge.read",
     "Wissensdatenbank lesen",
     ToolExecutionPolicy.AUTO,
+    ToolExecutionPolicy.ASK,
 )
 _WRITE = ToolAction(
     "knowledge.write",
     "Wissensdatenbank ändern",
+    ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
     mutates=True,
 )
 _DELETE = ToolAction(
     "knowledge.delete",
     "Wissenseinträge löschen",
+    ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
     mutates=True,
 )
@@ -398,7 +401,7 @@ def _disabled_book_keys(context: Any, instance: IntegrationInstance) -> set[str]
         resolution = resolve_tool_execution_policy(
             tool_settings,
             "knowledge.read",
-            action.default_policy,
+            action.default_policy_for(tool_settings.trust_level),
             integration_id=instance.id,
             resource_key=resource_key,
         )

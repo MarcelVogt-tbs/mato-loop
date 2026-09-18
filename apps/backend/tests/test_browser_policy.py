@@ -160,21 +160,24 @@ def test_browser_catalog_defaults_survive_central_trust_resolution(browser_polic
         "filesystem.read", "session.files.read", "filesystem.write",
     }
     for action in actions:
-        default = (
+        private_default = (
             ToolExecutionPolicy.ASK
             if action.capability in {"browser.control", "filesystem.write"}
             else ToolExecutionPolicy.AUTO
         )
-        assert action.default_policy == default
-        resolved_default = (
+        public_default = (
             ToolExecutionPolicy.ASK
-            if case.settings.trust_level == TrustLevel.PUBLIC
-            and action.capability == "filesystem.read"
-            else default
+            if action.capability in {"browser.control", "filesystem.read", "filesystem.write"}
+            else ToolExecutionPolicy.AUTO
         )
+        assert action.private_default_policy == private_default
+        assert action.public_default_policy == public_default
+        resolved_default = action.default_policy_for(case.settings.trust_level)
         for integration_id in (None, case.instance.id):
             resolution = tools_module.resolve_tool_execution_policy(
-                case.settings, action.capability, action.default_policy,
+                case.settings,
+                action.capability,
+                action.default_policy_for(case.settings.trust_level),
                 integration_id=integration_id,
             )
             assert (resolution.policy, resolution.source, resolution.reason) == (

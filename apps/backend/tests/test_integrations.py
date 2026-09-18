@@ -372,6 +372,7 @@ def _resource_adapter(
         "network.search",
         "Suchen",
         ToolExecutionPolicy.AUTO,
+        ToolExecutionPolicy.AUTO,
         allowed_policies=allowed_policies,
     )
 

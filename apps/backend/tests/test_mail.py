@@ -296,8 +296,14 @@ async def test_mail_config_and_adapter_allow_only_encrypted_transports_and_accou
     actions = {action.capability: action for action in MAIL_ADAPTER.resource_actions}
     assert MAIL_ADAPTER.resource_loader is None
     assert set(actions) == {"mail.read", "mail.drafts", "mail.send", "mail.delete"}
-    assert actions["mail.read"].default_policy == ToolExecutionPolicy.AUTO
-    assert all(action.default_policy == ToolExecutionPolicy.ASK for action in actions.values() if action.mutates)
+    assert actions["mail.read"].private_default_policy == ToolExecutionPolicy.AUTO
+    assert actions["mail.read"].public_default_policy == ToolExecutionPolicy.ASK
+    assert all(
+        action.private_default_policy == ToolExecutionPolicy.ASK
+        and action.public_default_policy == ToolExecutionPolicy.ASK
+        for action in actions.values()
+        if action.mutates
+    )
     read_tools = {
         "mail_list_accounts",
         "mail_list_folders",

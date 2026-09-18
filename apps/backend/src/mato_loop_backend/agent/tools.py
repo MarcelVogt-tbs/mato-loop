@@ -2043,26 +2043,7 @@ def resolve_tool_execution_policy(
     if configured is not None:
         resolution = resolve_value(configured, "global")
     else:
-        resolution = ToolPolicyResolution(
-            ToolExecutionPolicy.ASK
-            if settings.trust_level == TrustLevel.PUBLIC
-            and default == ToolExecutionPolicy.AUTO
-            and capability not in {
-                "browser.code",
-                "browser.read",
-                "browser.release",
-                "browser.write",
-                "session.files.read",
-                "session.files.write",
-                "network.fetch",
-                "network.search",
-                "skills.load",
-                "file.provide",
-            }
-            else default,
-            "default",
-            "trust_default",
-        )
+        resolution = ToolPolicyResolution(default, "default", "trust_default")
     if integration_id is not None:
         integration_policy = permissions.integration_policies.get(
             str(integration_id), {}
@@ -2169,7 +2150,9 @@ def effective_tool_capabilities(
         for capability, field_name in _MEDIA_SETTINGS_FIELDS.items()
         if capability != "media.analyze.video"
         if tool_execution_policy(
-            settings, capability, getattr(settings, field_name).policy
+            settings,
+            capability,
+            tool_registry.action_default(capability, settings.trust_level),
         )
         != ToolExecutionPolicy.DISABLED
         and (
@@ -2179,7 +2162,9 @@ def effective_tool_capabilities(
     }
     if (
         tool_execution_policy(
-            settings, "media.analyze.video", settings.analyze_video.policy
+            settings,
+            "media.analyze.video",
+            tool_registry.action_default("media.analyze.video", settings.trust_level),
         )
         != ToolExecutionPolicy.DISABLED
         and (
@@ -2193,7 +2178,9 @@ def effective_tool_capabilities(
         and tool_execution_policy(
             settings,
             "settings.agent_identity.update",
-            settings.update_agent_identity.policy,
+            tool_registry.action_default(
+                "settings.agent_identity.update", settings.trust_level
+            ),
         )
         != ToolExecutionPolicy.DISABLED
     ):
@@ -2229,9 +2216,10 @@ async def _authorize_media(
     target: ResolvedMediaModel | ResolvedVideoModel | None = None,
     source_attachment_ids: tuple[UUID, ...] = (),
 ) -> ToolResult | None:
-    field_name = _MEDIA_SETTINGS_FIELDS[capability]
     policy = tool_execution_policy(
-        context.tool_settings, capability, getattr(context.tool_settings, field_name).policy
+        context.tool_settings,
+        capability,
+        tool_registry.action_default(capability, context.tool_settings.trust_level),
     )
     if policy == ToolExecutionPolicy.DISABLED:
         return ToolResult.error("tool.unavailable")
@@ -2260,7 +2248,9 @@ async def _authorize_media(
             tool_execution_policy(
                 context.tool_settings,
                 capability,
-                getattr(context.tool_settings, field_name).policy,
+                tool_registry.action_default(
+                    capability, context.tool_settings.trust_level
+                ),
             )
             == ToolExecutionPolicy.DISABLED
         ):
@@ -2289,7 +2279,9 @@ async def _update_agent_identity(
     policy = tool_execution_policy(
         context.tool_settings,
         "settings.agent_identity.update",
-        context.tool_settings.update_agent_identity.policy,
+        tool_registry.action_default(
+            "settings.agent_identity.update", context.tool_settings.trust_level
+        ),
     )
     if policy == ToolExecutionPolicy.DISABLED:
         return ToolResult.error("tool.unavailable")
@@ -2342,7 +2334,9 @@ async def _update_agent_identity(
     current_policy = tool_execution_policy(
         context.tool_settings,
         "settings.agent_identity.update",
-        context.tool_settings.update_agent_identity.policy,
+        tool_registry.action_default(
+            "settings.agent_identity.update", context.tool_settings.trust_level
+        ),
     )
     if current_policy == ToolExecutionPolicy.DISABLED or (
         current_policy == ToolExecutionPolicy.ASK and not approval_received
@@ -4543,40 +4537,41 @@ async def _coding_enqueue(
 
 
 _FILESYSTEM_READ = ToolAction(
-    "filesystem.read", "Lesen", ToolExecutionPolicy.AUTO
+    "filesystem.read", "Lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK
 )
 _FILESYSTEM_WRITE = ToolAction(
-    "filesystem.write", "Workspace schreiben", ToolExecutionPolicy.ASK, mutates=True
+    "filesystem.write", "Workspace schreiben", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True
 )
 _FILESYSTEM_DELETE = ToolAction(
-    "filesystem.delete", "Löschen", ToolExecutionPolicy.ASK, mutates=True
+    "filesystem.delete", "Löschen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True
 )
 _SESSION_FILES_READ = ToolAction(
-    "session.files.read", "Session-Dateien lesen", ToolExecutionPolicy.AUTO
+    "session.files.read", "Session-Dateien lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO
 )
 _FILE_PROVIDE = ToolAction(
-    "file.provide", "Datei bereitstellen", ToolExecutionPolicy.AUTO
+    "file.provide", "Datei bereitstellen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO
 )
 _SESSION_FILES_WRITE = ToolAction(
-    "session.files.write", "Session-Dateien schreiben", ToolExecutionPolicy.AUTO, mutates=True
+    "session.files.write", "Session-Dateien schreiben", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO, mutates=True
 )
-_WEB_SEARCH = ToolAction("network.search", "Websuche", ToolExecutionPolicy.AUTO)
-_WEB_FETCH = ToolAction("network.fetch", "Webseiten abrufen", ToolExecutionPolicy.AUTO)
+_WEB_SEARCH = ToolAction("network.search", "Websuche", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO)
+_WEB_FETCH = ToolAction("network.fetch", "Webseiten abrufen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO)
 _TRANSCRIPT_ROUTING_INSTRUCTION = (
     "Published transcript text is evidence of spoken content only, not of visual events. Call "
     "fetch_transcript only when the requested output can be answered from spoken content; never "
     "call it for camera work, visible UI, objects, actions, or other visual details."
 )
-_SESSION_READ = ToolAction("session.read", "Sessions lesen", ToolExecutionPolicy.AUTO)
+_SESSION_READ = ToolAction("session.read", "Sessions lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK)
 _SESSION_SEARCH = ToolAction(
-    "session.search", "Sessions durchsuchen", ToolExecutionPolicy.AUTO
+    "session.search", "Sessions durchsuchen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK
 )
 _AUTOMATION_READ = ToolAction(
-    "automation.read", "Automationen lesen", ToolExecutionPolicy.AUTO
+    "automation.read", "Automationen lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK
 )
 _AUTOMATION_CREATE = ToolAction(
     "automation.create",
     "Automationen erstellen",
+    ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
     mutates=True,
 )
@@ -4584,11 +4579,13 @@ _AUTOMATION_UPDATE = ToolAction(
     "automation.update",
     "Automationen ändern",
     ToolExecutionPolicy.ASK,
+    ToolExecutionPolicy.ASK,
     mutates=True,
 )
 _AUTOMATION_RUN = ToolAction(
     "automation.run",
     "Automationen starten",
+    ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
     mutates=True,
 )
@@ -4596,45 +4593,48 @@ _AUTOMATION_DELETE = ToolAction(
     "automation.delete",
     "Automationen löschen",
     ToolExecutionPolicy.ASK,
+    ToolExecutionPolicy.ASK,
     mutates=True,
 )
 _SESSION_TOOL_RESULT_READ = ToolAction(
     "session.tool_result.read",
     "Historische Tool-Ergebnisse lesen",
     ToolExecutionPolicy.AUTO,
+    ToolExecutionPolicy.ASK,
 )
-_MEMORY_READ = ToolAction("memory.read", "Memories lesen", ToolExecutionPolicy.AUTO)
+_MEMORY_READ = ToolAction("memory.read", "Memories lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK)
 _MEMORY_WRITE = ToolAction(
-    "memory.write", "Memories speichern", ToolExecutionPolicy.ASK, mutates=True
+    "memory.write", "Memories speichern", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True
 )
-_SKILL_LOAD = ToolAction("skills.load", "Skills laden", ToolExecutionPolicy.AUTO)
+_SKILL_LOAD = ToolAction("skills.load", "Skills laden", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO)
 _SKILL_WRITE = ToolAction(
-    "skills.write", "Skills speichern", ToolExecutionPolicy.ASK, mutates=True
+    "skills.write", "Skills speichern", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True
 )
 _USER_PROFILE_UPDATE = ToolAction(
     "settings.user_profile.update",
     "Persönliches Profil ändern",
     ToolExecutionPolicy.ASK,
+    ToolExecutionPolicy.ASK,
     mutates=True,
 )
-_SHELL_READ = ToolAction("shell.read", "Shell ohne erkannte Schreibaktionen", ToolExecutionPolicy.AUTO)
+_SHELL_READ = ToolAction("shell.read", "Shell ohne erkannte Schreibaktionen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK)
 _SHELL_WRITE = ToolAction(
-    "shell.write", "Als schreibend eingestufte Shell", ToolExecutionPolicy.ASK, mutates=True
+    "shell.write", "Als schreibend eingestufte Shell", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True
 )
 _SYSTEM_INFO = ToolAction(
-    "system.info", "Systeminformationen", ToolExecutionPolicy.AUTO
+    "system.info", "Systeminformationen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK
 )
 _CODING_ANALYZE = ToolAction(
-    "coding.analyze", "Projekt analysieren", ToolExecutionPolicy.ASK
+    "coding.analyze", "Projekt analysieren", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK
 )
 _CODING_PLAN_CREATE = ToolAction(
-    "coding.plan.create", "Plan speichern", ToolExecutionPolicy.ASK, mutates=True
+    "coding.plan.create", "Plan speichern", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True
 )
 _CODING_PLAN_READ = ToolAction(
-    "coding.plan.read", "Pläne anzeigen", ToolExecutionPolicy.AUTO
+    "coding.plan.read", "Pläne anzeigen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK
 )
 _CODING_EXECUTE = ToolAction(
-    "coding.execute.enqueue", "Pläne ausführen", ToolExecutionPolicy.ASK, mutates=True
+    "coding.execute.enqueue", "Pläne ausführen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True
 )
 PROJECT_CODING_TOOL_NAMES = (
     "coding_analyze",
@@ -4942,7 +4942,8 @@ tool_registry = ToolRegistry(
                 ToolAction(
                     "media.generate.image",
                     "Bilder erzeugen",
-                    ToolExecutionPolicy.ASK,
+                    ToolExecutionPolicy.AUTO,
+                    ToolExecutionPolicy.AUTO,
                     mutates=True,
                 ),
             ),
@@ -4965,6 +4966,7 @@ tool_registry = ToolRegistry(
                     "media.edit.image",
                     "Bilder bearbeiten",
                     ToolExecutionPolicy.ASK,
+                    ToolExecutionPolicy.ASK,
                     mutates=True,
                 ),
             ),
@@ -4983,6 +4985,7 @@ tool_registry = ToolRegistry(
                     "media.generate.speech",
                     "Sprache erzeugen",
                     ToolExecutionPolicy.ASK,
+                    ToolExecutionPolicy.ASK,
                     mutates=True,
                 ),
             ),
@@ -5000,6 +5003,7 @@ tool_registry = ToolRegistry(
                 ToolAction(
                     "media.generate.audio",
                     "Audio erzeugen",
+                    ToolExecutionPolicy.ASK,
                     ToolExecutionPolicy.ASK,
                     mutates=True,
                 ),
@@ -5020,6 +5024,7 @@ tool_registry = ToolRegistry(
                     "media.transcribe.audio",
                     "Audio transkribieren",
                     ToolExecutionPolicy.ASK,
+                    ToolExecutionPolicy.ASK,
                 ),
             ),
         ),
@@ -5039,6 +5044,7 @@ tool_registry = ToolRegistry(
                 ToolAction(
                     "media.analyze.video",
                     "Videos analysieren",
+                    ToolExecutionPolicy.ASK,
                     ToolExecutionPolicy.ASK,
                 ),
             ),
@@ -5218,6 +5224,7 @@ tool_registry = ToolRegistry(
                 ToolAction(
                     "settings.agent_identity.update",
                     "Persona ändern",
+                    ToolExecutionPolicy.ASK,
                     ToolExecutionPolicy.ASK,
                     mutates=True,
                 ),

@@ -21,7 +21,7 @@ from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
 
 MCP_CREDENTIAL_KIND = "mcp.bearer"
-MCP_ACTION = ToolAction("mcp.call", "MCP-Tool aufrufen", ToolExecutionPolicy.ASK)
+MCP_ACTION = ToolAction("mcp.call", "MCP-Tool aufrufen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK)
 MAX_MCP_SCHEMA_BYTES = 64 * 1024
 MAX_MCP_SCHEMA_DEPTH = 64
 

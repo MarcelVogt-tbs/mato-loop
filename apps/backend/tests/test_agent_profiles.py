@@ -693,7 +693,12 @@ async def test_agent_profile_integration_metadata_lists_actions_and_resources(
         tool_registry,
         "integration_resource_actions",
         lambda _instance: (
-            ToolAction("calendar.read", "Kalender lesen", ToolExecutionPolicy.ASK),
+            ToolAction(
+                "calendar.read",
+                "Kalender lesen",
+                ToolExecutionPolicy.ASK,
+                ToolExecutionPolicy.ASK,
+            ),
         ),
     )
 

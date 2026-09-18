@@ -279,8 +279,10 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
     ):
         assert tools[name].resource_argument == "book_key"
     actions = {action.capability: action for action in BOOKSTACK_ADAPTER.resource_actions}
-    assert actions["knowledge.read"].default_policy == ToolExecutionPolicy.AUTO
-    assert actions["knowledge.delete"].default_policy == ToolExecutionPolicy.ASK
+    assert actions["knowledge.read"].private_default_policy == ToolExecutionPolicy.AUTO
+    assert actions["knowledge.read"].public_default_policy == ToolExecutionPolicy.ASK
+    assert actions["knowledge.delete"].private_default_policy == ToolExecutionPolicy.ASK
+    assert actions["knowledge.delete"].public_default_policy == ToolExecutionPolicy.ASK
 
 
 async def test_account_list_uses_only_bound_active_bookstack_snapshot() -> None:

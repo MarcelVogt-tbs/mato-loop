@@ -55,7 +55,6 @@ _BUILTIN_TOOL_FIELDS = (
     "generate_audio",
     "transcribe_audio",
     "analyze_video",
-    "update_agent_identity",
 )
 _INTEGRATION_TOOL_FIELDS = (
     "resource_labels",

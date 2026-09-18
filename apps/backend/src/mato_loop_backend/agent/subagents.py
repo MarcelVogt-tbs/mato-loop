@@ -35,7 +35,7 @@ def permission_snapshot(
     settings: ToolSettings, tool_names: set[str],
     integration_settings: IntegrationSettings | None = None,
 ) -> dict[str, Any]:
-    from mato_loop_backend.agent.tools import _MEDIA_SETTINGS_FIELDS, tool_registry
+    from mato_loop_backend.agent.tools import tool_registry
 
     integrations = integration_settings or IntegrationSettings()
     definitions = {
@@ -60,19 +60,13 @@ def permission_snapshot(
         "toolNames": sorted(tool_names - {"task"}),
         "integrationIds": sorted(str(item.id) for item in integrations.instances if item.enabled),
         "actionDefaults": {
-            **{
-                action.capability: action.default_policy.value
-                for definition in definitions.values() for action in definition.actions
-            },
-            **{
-                capability: getattr(settings, field).policy.value
-                for capability, field in _MEDIA_SETTINGS_FIELDS.items()
-            },
-            "settings.agent_identity.update": settings.update_agent_identity.policy.value,
+            action.capability: action.default_policy_for(settings.trust_level).value
+            for definition in definitions.values()
+            for action in definition.actions
         },
         "integrationDefaults": {
             str(instance.id): {
-                action.capability: action.default_policy.value
+                action.capability: action.default_policy_for(settings.trust_level).value
                 for action in tool_registry.integration_resource_actions(instance)
             }
             for instance in integrations.instances if instance.enabled
