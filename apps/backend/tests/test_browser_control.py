@@ -200,6 +200,19 @@ def test_denial_never_opens_browser(request_case):
     assert not case.coordinator.connections
 
 
+def test_request_reports_disconnected_execution_agent(request_case, monkeypatch):
+    case = request_case
+    monkeypatch.setattr(
+        control.execution_agent_connections, "generation", lambda _agent_id: None
+    )
+
+    result = case.start().result(timeout=3)
+
+    assert result.metadata["errorCode"] == "executionAgent.unavailable"
+    case.approval.assert_not_awaited()
+    assert not case.calls
+
+
 def test_request_timeout_closes_incomplete_binding(request_case, monkeypatch):
     case = request_case
     monkeypatch.setattr(control, "CONTROL_TIMEOUT", 0.01)

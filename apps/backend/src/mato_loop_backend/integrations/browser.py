@@ -912,7 +912,7 @@ _RELEASE = ToolAction("browser.release", "Browser-Steuerung freigeben", ToolExec
 BROWSER_REQUEST_CONTROL = ToolContribution(
     name="browser_request_control", label="Browser-Steuerung anfordern", icon="language",
     description=(
-        "Request permission to open the graphical browser in this chat and attach it for model control. "
+        "Request permission to open the browser in this chat and attach it for model control. "
         "This may take over the browser from another chat. Supply a short reason. "
         "Success means attachment is complete; page read, write, and code permissions remain separate."
     ),

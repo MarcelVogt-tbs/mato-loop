@@ -145,7 +145,7 @@ async def capture_control_request(reason: str, context: ToolContext) -> ControlR
         raise ExecutionClientError("tool.unavailable")
     generation = execution_agent_connections.generation(client.agent_id)
     if generation is None:
-        raise ExecutionClientError("browser.notConnected")
+        raise ExecutionClientError("executionAgent.unavailable")
     integration_id = UUID(context.bound_options["integration_id"])
     current = browser_coordinator.connections.get(client.agent_id)
     if current is not None and (current.owner_id != context.session.user_id
