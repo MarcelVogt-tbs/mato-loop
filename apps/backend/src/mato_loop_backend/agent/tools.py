@@ -4602,7 +4602,7 @@ _SESSION_TOOL_RESULT_READ = ToolAction(
     ToolExecutionPolicy.AUTO,
     ToolExecutionPolicy.ASK,
 )
-_MEMORY_READ = ToolAction("memory.read", "Memories lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK)
+_MEMORY_READ = ToolAction("memory.read", "Memories lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO)
 _MEMORY_WRITE = ToolAction(
     "memory.write", "Memories speichern", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True
 )
