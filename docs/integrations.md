@@ -37,11 +37,17 @@ An agent-bound integration is offered only when its configured agent matches the
 
 MCP is managed under its own settings menu but reuses the integration persistence and permission core. The initial client supports Streamable HTTP with no authentication or one encrypted static Bearer token. Personal MCP servers are disabled by default and require a dedicated administrator setting; MCP does not appear in the normal integration catalog.
 
+Product integrations are identified and presented by their product or service, not by their transport protocol. They use a normal catalog adapter, product-specific configuration routes, capabilities, labels, and policy defaults even when they reuse the MCP client internally. The generic MCP connector remains a separate escape hatch for servers without a dedicated MatoLoop adapter; a product must not be configured in both places as one logical integration.
+
 Creating, updating, or refreshing a server performs bounded, paginated tool discovery. MatoLoop persists at most 100 validated tools with their names, descriptions, input and optional output schemas, and standard annotations. Descriptions and annotations remain untrusted display and model data and never weaken a policy. External schema references, non-finite data, excessive nesting, oversized schemas, arguments, responses, repeated cursors, and cross-origin redirects fail closed. A failed discovery leaves the previous catalog unchanged.
 
 Every discovered tool receives a stable model-facing name and a stable hashed resource key. The host owns its handler and the `mcp.call` action. Policy resolution is the instance-wide MCP default, then the server override, then the tool override, followed by ordinary profile restrictions. The general default is configured only at instance scope; personal servers inherit it and may define server and tool overrides. All levels remain separate for private and public models.
 
 Calls use the normal effective-tool snapshot, argument validation, revision fence, approval flow, and post-approval revalidation. Changing the endpoint clears server and tool policies; catalog updates remove policies for tools that disappeared. Each call opens a short-lived MCP session, does not retry, and reports failures after dispatch as an uncertain outcome. MCP prompts, resources, sampling, elicitation, OAuth, stdio, and server-provided executable code are outside this initial contract.
+
+SonoBin is a normal `music` integration with the `sonobin` adapter. MCP Streamable HTTP is only its current transport implementation. The adapter supplies the product-specific `sonobin.call` capability, host-controlled German labels, setup guidance, and policy defaults while reusing the bounded MCP discovery, credential, schema, result, and call machinery. Creating a SonoBin integration atomically initializes both trust branches with `ask` as the integration default, `auto` for known read operations, and `ask` for known mutations. Unknown or newly added tools inherit the integration default.
+
+SonoBin requires its HTTPS `/mcp/` endpoint, a Bearer token matching `SONOBIN_MCP_BEARER_TOKEN`, an active administrator in `SONOBIN_MCP_USER`, and `SONOBIN_MCP_PUBLIC_BASE_URL`. The current SonoBin API requires provider IDs for asset identification and acquisition but does not expose provider discovery through this transport. Endpoint changes retain the normal policy cleanup behavior.
 
 ## Resource Policies
 

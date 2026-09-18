@@ -92,6 +92,12 @@
               <template #avatar><q-icon name="warning_amber" color="warning" /></template>
               HTTP überträgt Zugangsdaten unverschlüsselt. Verwende es nur in einem vertrauenswürdigen lokalen Netz.
             </q-banner>
+            <q-banner v-if="form.integration_type === 'music'" rounded class="app-surface-tonal">
+              <template #avatar><q-icon name="library_music" color="primary" /></template>
+              <div class="text-weight-medium">SonoBin verbinden</div>
+              <div class="text-caption q-mt-xs">Verwende die SonoBin-Backend-Adresse mit <code>/mcp/</code> als Endpunkt.</div>
+              <div class="text-caption">Der Token muss <code>SONOBIN_MCP_BEARER_TOKEN</code> entsprechen. Außerdem müssen <code>SONOBIN_MCP_USER</code> und <code>SONOBIN_MCP_PUBLIC_BASE_URL</code> in SonoBin konfiguriert sein.</div>
+            </q-banner>
             <div v-if="['openscad', 'browser'].includes(form.integration_type)" class="row items-start q-col-gutter-sm">
               <q-select
                 v-model="form.executionAgentId"
@@ -212,6 +218,16 @@
               :rules="isEditing ? [] : [requiredRule]"
             />
             <q-input
+              v-if="form.integration_type === 'music'"
+              v-model="form.bearerToken"
+              outlined
+              type="password"
+              :label="integration?.hasCredential ? 'Neuer Bearer-Token (optional)' : 'Bearer-Token'"
+              :hint="integration?.hasCredential ? 'Leer lassen, um den gespeicherten Token beizubehalten.' : ''"
+              lazy-rules
+              :rules="isEditing ? [] : [requiredRule]"
+            />
+            <q-input
               v-if="form.integration_type === 'knowledge'"
               v-model="form.token_secret"
               outlined
@@ -276,6 +292,7 @@ const allIntegrationTypes = [
   { label: 'Support', value: 'support' },
   { label: 'Wissensdatenbank', value: 'knowledge' },
   { label: 'Rezepte & Essensplanung', value: 'recipes' },
+  { label: 'Musikbibliothek', value: 'music' },
   { label: '3D-Modellierung', value: 'openscad' },
   { label: 'Programmierung', value: 'coding' },
   { label: 'Browser', value: 'browser' }
@@ -287,6 +304,7 @@ const PROVIDER_DEFAULTS = {
   support: { provider: 'tbs-desk', label: 'tbs.Desk', placeholder: 'http://192.168.1.30:9000' },
   knowledge: { provider: 'bookstack', label: 'BookStack', placeholder: 'https://wiki.example.com' },
   recipes: { provider: 'mealie', label: 'Mealie', placeholder: 'http://mealie.example.com' },
+  music: { provider: 'sonobin', label: 'SonoBin', placeholder: 'https://sonobin.example.com/mcp/' },
   openscad: { provider: 'openscad', label: 'OpenSCAD', placeholder: '' },
   coding: { provider: 'opencode', label: 'OpenCode', placeholder: 'http://localhost:4096' },
   browser: { provider: 'browser', label: 'Browser', placeholder: '' }
@@ -306,7 +324,7 @@ const baseUrlPlaceholder = computed(
   () => (PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).placeholder
 )
 const requiresHttps = computed(() => !['search', 'recipes', 'coding', 'support'].includes(form.integration_type))
-const dialogIcon = computed(() => ({ coding: 'code', mail: 'mail', support: 'confirmation_number', openscad: 'view_in_ar', browser: 'web' })[form.integration_type] || 'extension')
+const dialogIcon = computed(() => ({ coding: 'code', mail: 'mail', support: 'confirmation_number', music: 'library_music', openscad: 'view_in_ar', browser: 'web' })[form.integration_type] || 'extension')
 const securityOptions = [
   { label: 'TLS', value: 'tls' },
   { label: 'STARTTLS', value: 'starttls' }
@@ -348,6 +366,7 @@ function defaultForm() {
     token_id: '',
     token_secret: '',
     token: '',
+    bearerToken: '',
     executionAgentId: null,
     binaryPath: '/usr/bin/openscad',
     enabled: true
@@ -431,6 +450,9 @@ function urlRule(value) {
     const allowed = requiresHttps.value
       ? protocol === 'https:'
       : ['http:', 'https:'].includes(protocol)
+    if (form.integration_type === 'music' && !new URL(value).pathname.endsWith('/mcp/')) {
+      return 'Der SonoBin-Endpunkt muss mit /mcp/ enden.'
+    }
     return allowed || (requiresHttps.value
       ? `${label} erfordert eine HTTPS-URL.`
       : 'Bitte gib eine gültige HTTP-URL ein.')
@@ -521,6 +543,21 @@ async function save() {
       close()
       return
     }
+    if (form.integration_type === 'music') {
+      const payload = {
+        integration_type: 'music',
+        provider_type: 'sonobin',
+        name: form.name.trim(),
+        baseUrl: form.base_url.trim(),
+        bearerToken: form.bearerToken,
+        enabled: form.enabled
+      }
+      if (props.integration) await integrations.updateSonoBin(props.integration.id, payload)
+      else await integrations.createSonoBin(payload)
+      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
+      close()
+      return
+    }
     const payload = {
       integration_type: form.integration_type,
       provider_type: form.provider_type,
@@ -578,6 +615,7 @@ watch([() => props.modelValue, () => props.integration?.id], ([open]) => {
     token_id: '',
     token_secret: '',
     token: '',
+    bearerToken: '',
     executionAgentId: props.integration.executionAgentId
       || props.integration.config?.executionAgentId
       || null,

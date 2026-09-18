@@ -85,6 +85,20 @@ const recipesResponse = {
   ]
 }
 
+const musicResponse = {
+  configured: true,
+  instances: [{
+    id: 'sonobin-id',
+    name: 'SonoBin',
+    integrationType: 'music',
+    providerType: 'sonobin',
+    enabled: true,
+    hasCredential: true,
+    config: { baseUrl: 'https://sonobin.example.com/mcp/' },
+    toolCount: 28
+  }]
+}
+
 const openScadResponse = {
   configured: true,
   instances: [{
@@ -424,6 +438,49 @@ describe('integration store', () => {
     )
   })
 
+  it('manages SonoBin integrations without resending a blank token', async () => {
+    api.get.mockResolvedValue({ data: musicResponse })
+    api.post.mockResolvedValue({ data: { status: 'ok' } })
+    api.put.mockResolvedValue({ data: musicResponse })
+    api.delete.mockResolvedValue({})
+    const store = useIntegrationStore()
+    const payload = {
+      integration_type: 'music',
+      provider_type: 'sonobin',
+      name: 'SonoBin',
+      baseUrl: 'https://sonobin.example.com/mcp/',
+      bearerToken: 'secret',
+      enabled: true
+    }
+
+    await store.fetchMusic()
+    await store.createSonoBin(payload)
+    await store.updateSonoBin('sonobin-id', { ...payload, bearerToken: '' })
+    await store.testSonoBin('sonobin-id')
+    await store.removeSonoBin('sonobin-id')
+
+    expect(api.get).toHaveBeenCalledWith('/integrations/music/sonobin', { params: { scope: 'instance' } })
+    expect(api.post).toHaveBeenCalledWith('/integrations/music/sonobin', payload, { params: { scope: 'instance' } })
+    expect(api.put).toHaveBeenCalledWith(
+      '/integrations/music/sonobin/sonobin-id',
+      {
+        integration_type: 'music',
+        provider_type: 'sonobin',
+        name: 'SonoBin',
+        baseUrl: 'https://sonobin.example.com/mcp/',
+        enabled: true
+      },
+      { params: { scope: 'instance' } }
+    )
+    expect(api.post).toHaveBeenCalledWith(
+      '/integrations/music/sonobin/sonobin-id/test', null, { params: { scope: 'instance' } }
+    )
+    expect(api.delete).toHaveBeenCalledWith(
+      '/integrations/music/sonobin/sonobin-id', { params: { scope: 'instance' } }
+    )
+    expect(store.music).toEqual(musicResponse)
+  })
+
   it('loads retained personal integrations regardless of catalog availability', async () => {
     const responses = {
       '/integrations/search': searchResponse,
@@ -431,6 +488,7 @@ describe('integration store', () => {
       '/integrations/mail': { configured: false, accounts: [] },
       '/integrations/knowledge': knowledgeResponse,
       '/integrations/recipes': recipesResponse,
+      '/integrations/music/sonobin': musicResponse,
       '/integrations/openscad': openScadResponse,
       '/integrations/coding': codingResponse,
       '/integrations/browser': { configured: false, instances: [] },

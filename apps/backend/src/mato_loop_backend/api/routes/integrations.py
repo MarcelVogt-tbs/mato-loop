@@ -48,6 +48,9 @@ from mato_loop_backend.integrations.caldav_client import CalDavError
 from mato_loop_backend.integrations.contracts import IntegrationResource
 from mato_loop_backend.integrations.mail import MailConfig, client_for, mail_error_code
 from mato_loop_backend.integrations.mail_client import MailError
+from mato_loop_backend.integrations.mcp import MCP_CREDENTIAL_KIND
+from mato_loop_backend.integrations.mcp_client import McpClientError
+from mato_loop_backend.integrations.mcp_service import SonoBinIntegrationService
 from mato_loop_backend.integrations.openscad import (
     OpenScadConfig,
     OpenScadDiscoverResult,
@@ -280,6 +283,43 @@ class RecipeIntegrationCreateRequest(RecipeIntegrationRequest):
     token: str = Field(min_length=1, max_length=10_000)
 
 
+class SonoBinIntegrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    integration_type: Literal["music"] = "music"
+    provider_type: Literal["sonobin"] = "sonobin"
+    name: str = Field(min_length=1, max_length=160)
+    base_url: HttpUrl = Field(validation_alias=AliasChoices("baseUrl", "base_url"))
+    bearer_token: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=10_000,
+        validation_alias=AliasChoices("bearerToken", "bearer_token"),
+    )
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def require_sonobin_endpoint(self) -> SonoBinIntegrationRequest:
+        if (
+            self.base_url.scheme != "https"
+            or self.base_url.username is not None
+            or self.base_url.password is not None
+            or self.base_url.query is not None
+            or self.base_url.fragment is not None
+            or not self.base_url.path.endswith("/mcp/")
+        ):
+            raise ValueError("SonoBin requires an HTTPS /mcp/ endpoint")
+        return self
+
+
+class SonoBinIntegrationCreateRequest(SonoBinIntegrationRequest):
+    bearer_token: str = Field(
+        min_length=1,
+        max_length=10_000,
+        validation_alias=AliasChoices("bearerToken", "bearer_token"),
+    )
+
+
 class OpenScadIntegrationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -397,7 +437,8 @@ def _provider_payload(provider: IntegrationInstance) -> dict:
             }
             if provider.integration_type == "mail"
             else {
-                "baseUrl": provider.config.get("base_url"),
+                "baseUrl": provider.config.get("base_url")
+                or provider.config.get("endpoint"),
                 **(
                     {"username": provider.config.get("username")}
                     if "username" in provider.config
@@ -444,6 +485,8 @@ async def _integration_resources(
                 and instance.adapter_type == "bookstack"
                 and record.kind != BOOKSTACK_CREDENTIAL_KIND
             ):
+                raise ValueError("invalid integration credential kind")
+            if instance.adapter_type == "sonobin" and record.kind != MCP_CREDENTIAL_KIND:
                 raise ValueError("invalid integration credential kind")
             credential = read_credential(record)
         await db.rollback()
@@ -743,6 +786,24 @@ def recipe_settings_payload(settings: IntegrationSettingsDocument) -> dict:
         ),
         "configured": bool(accounts),
         "accounts": [_provider_payload(account) for account in accounts],
+    }
+
+
+def sonobin_settings_payload(settings: IntegrationSettingsDocument) -> dict:
+    instances = [
+        instance
+        for instance in settings.instances
+        if instance.integration_type == "music" and instance.adapter_type == "sonobin"
+    ]
+    return {
+        "configured": bool(instances),
+        "instances": [
+            {
+                **_provider_payload(instance),
+                "toolCount": len(instance.config.get("tools", [])),
+            }
+            for instance in instances
+        ],
     }
 
 
@@ -1582,6 +1643,113 @@ async def test_recipe_integration(
         await db.rollback()
         logger.warning("Mealie integration test failed with %s", type(exc).__name__)
         raise ApiError(502, "integration.unavailable") from exc
+    return {"status": "ok"}
+
+
+@router.get("/music/sonobin")
+async def get_sonobin_integrations(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
+    return sonobin_settings_payload(settings)
+
+
+@router.post("/music/sonobin", status_code=status.HTTP_201_CREATED)
+async def create_sonobin_integration(
+    payload: SonoBinIntegrationCreateRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    _settings, owner_id = await _load_scoped_integrations(
+        db, scope, user, mutation=True, adapter_type="sonobin"
+    )
+    try:
+        await SonoBinIntegrationService.create(
+            db,
+            name=payload.name,
+            endpoint=str(payload.base_url),
+            token=payload.bearer_token,
+            enabled=payload.enabled,
+            owner_id=owner_id,
+        )
+    except (McpClientError, IntegrationSettingsError) as exc:
+        await db.rollback()
+        logger.warning("SonoBin integration creation failed: %s", exc.code)
+        raise ApiError(502, exc.code) from exc
+    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
+    return sonobin_settings_payload(settings)
+
+
+@router.put("/music/sonobin/{integration_id}")
+async def update_sonobin_integration(
+    integration_id: UUID,
+    payload: SonoBinIntegrationRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    _settings, owner_id = await _load_scoped_integrations(
+        db, scope, user, mutation=True, adapter_type="sonobin"
+    )
+    try:
+        await SonoBinIntegrationService.update(
+            db,
+            integration_id,
+            name=payload.name,
+            endpoint=str(payload.base_url),
+            token=payload.bearer_token,
+            remove_token=False,
+            enabled=payload.enabled,
+            owner_id=owner_id,
+        )
+    except (McpClientError, IntegrationSettingsError) as exc:
+        await db.rollback()
+        status_code = 404 if exc.code == "mcp.notFound" else 409 if exc.code == "integration.changed" else 502
+        logger.warning("SonoBin integration update failed: %s", exc.code)
+        raise ApiError(status_code, exc.code) from exc
+    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
+    return sonobin_settings_payload(settings)
+
+
+@router.delete(
+    "/music/sonobin/{integration_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_sonobin_integration(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> None:
+    _settings, owner_id = await _load_scoped_integrations(
+        db, scope, user, mutation=True
+    )
+    try:
+        await SonoBinIntegrationService.delete(db, integration_id, owner_id=owner_id)
+    except IntegrationSettingsError as exc:
+        raise ApiError(404, exc.code) from exc
+
+
+@router.post("/music/sonobin/{integration_id}/test")
+async def test_sonobin_integration(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict[str, str]:
+    _settings, owner_id = await _load_scoped_integrations(
+        db, scope, user, adapter_type="sonobin"
+    )
+    try:
+        await SonoBinIntegrationService.test(db, integration_id, owner_id=owner_id)
+        await db.rollback()
+    except (McpClientError, IntegrationSettingsError) as exc:
+        await db.rollback()
+        status_code = 404 if exc.code == "mcp.notFound" else 502
+        logger.warning("SonoBin integration test failed: %s", exc.code)
+        raise ApiError(status_code, exc.code) from exc
     return {"status": "ok"}
 
 

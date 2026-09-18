@@ -40,9 +40,13 @@ from mato_loop_backend.integrations.mcp_client import (
     McpClientError,
     _BoundedTransport,
 )
-from mato_loop_backend.integrations.mcp_service import McpIntegrationService
+from mato_loop_backend.integrations.mcp_service import (
+    McpIntegrationService,
+    SonoBinIntegrationService,
+)
 from mato_loop_backend.integrations.registry import integration_adapters
 from mato_loop_backend.integrations.service import IntegrationSettingsError
+from mato_loop_backend.integrations.sonobin import SONOBIN, SONOBIN_ADAPTER
 from mato_loop_backend.security import require_admin, require_user
 from mato_loop_backend.settings import (
     AgentProfilePermissions,
@@ -361,6 +365,48 @@ def test_mcp_result_json_does_not_translate_file_root_values() -> None:
 def test_mcp_config_rejects_endpoint_query() -> None:
     with pytest.raises(ValueError):
         McpConfig(endpoint="https://mcp.example.test/rpc?token=secret")
+
+
+def test_sonobin_adapter_covers_the_complete_catalog() -> None:
+    automatic = {
+        "list_recordings",
+        "list_recordings_without_tracks",
+        "get_recording",
+        "list_tracks",
+        "get_track",
+        "get_asset",
+        "search_musicbrainz",
+        "get_asset_download_url",
+        "get_job",
+        "get_diagnostics_overview",
+        "list_diagnostic_entries",
+        "get_diagnostic_entry",
+    }
+    ask = {
+        "create_manual_candidate",
+        "update_manual_candidate",
+        "add_musicbrainz_candidate",
+        "identify_asset",
+        "create_track",
+        "set_track_candidate",
+        "set_preferred_asset",
+        "set_asset_source_candidate",
+        "move_asset",
+        "acquire_recording_asset",
+        "cancel_job",
+        "delete_candidate",
+        "delete_track",
+        "delete_asset",
+        "delete_recording",
+        "merge_recordings",
+    }
+
+    assert set(SONOBIN.tools) == automatic | ask
+    assert {
+        name for name, tool in SONOBIN.tools.items()
+        if tool.policy == ToolExecutionPolicy.AUTO
+    } == automatic
+    assert all(tool.label for tool in SONOBIN.tools.values())
 
 
 @pytest.mark.parametrize(
@@ -917,7 +963,64 @@ async def test_create_encrypts_bearer_outside_persisted_config(monkeypatch) -> N
     assert store.await_args.kwargs["payload"] == {"token": "secret"}
 
 
-def test_mcp_servers_are_available_only_from_dedicated_catalog_route(monkeypatch) -> None:
+async def test_sonobin_create_initializes_both_trust_branches(monkeypatch) -> None:
+    integrations = IntegrationSettings()
+    tools = ToolSettings()
+
+    async def load(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else tools
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    monkeypatch.setattr(
+        service_module,
+        "store_credential",
+        AsyncMock(return_value=SimpleNamespace(id=uuid4())),
+    )
+    monkeypatch.setattr(
+        McpClient,
+        "discover_tools",
+        AsyncMock(
+            return_value=[
+                {"name": "list_recordings", "input_schema": {"type": "object"}},
+                {"name": "delete_recording", "input_schema": {"type": "object"}},
+                {"name": "future_tool", "input_schema": {"type": "object"}},
+            ]
+        ),
+    )
+    db = AsyncMock()
+
+    instance = await SonoBinIntegrationService.create(
+        db,
+        name="SonoBin",
+        endpoint="https://sonobin.example.test/mcp/",
+        token="secret",
+        enabled=True,
+        owner_id=None,
+    )
+
+    assert (instance.integration_type, instance.adapter_type) == ("music", "sonobin")
+    integration_id = str(instance.id)
+    for permissions in (tools.private_permissions, tools.public_permissions):
+        assert permissions.integration_policies[integration_id] == {
+            "sonobin.call": ToolExecutionPolicy.ASK
+        }
+        assert permissions.resource_policies[integration_id] == {
+            mcp_resource_key("list_recordings"): {
+                "sonobin.call": ToolExecutionPolicy.AUTO
+            },
+            mcp_resource_key("delete_recording"): {
+                "sonobin.call": ToolExecutionPolicy.ASK
+            },
+        }
+    assert mcp_resource_key("future_tool") not in tools.resource_labels[integration_id]
+    contributions = SONOBIN_ADAPTER.contributions(instance).tools
+    assert contributions[0].label == "Aufnahmen auflisten"
+    assert contributions[2].label == "future_tool"
+    db.commit.assert_awaited_once()
+
+
+def test_generic_mcp_servers_are_available_only_from_dedicated_route(monkeypatch) -> None:
     instance = IntegrationInstance(
         name="Server",
         integration_type="mcp",
@@ -948,6 +1051,7 @@ def test_mcp_servers_are_available_only_from_dedicated_catalog_route(monkeypatch
     assert response.status_code == 200
     assert response.json()["servers"][0]["tools"][0]["name"] == "lookup"
     assert all(adapter.adapter_type != "mcp_streamable_http" for adapter in integration_adapters())
+    assert any(adapter.adapter_type == "sonobin" for adapter in integration_adapters())
 
 
 async def test_mcp_access_updates_global_server_and_tool_policies_atomically(

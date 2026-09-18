@@ -19,6 +19,7 @@ from mato_loop_backend.integrations.mcp import MCP_ADAPTER
 from mato_loop_backend.integrations.mealie import MEALIE_ADAPTER
 from mato_loop_backend.integrations.opencode import OPENCODE_ADAPTER
 from mato_loop_backend.integrations.openscad import OPENSCAD_ADAPTER
+from mato_loop_backend.integrations.sonobin import SONOBIN_ADAPTER
 from mato_loop_backend.integrations.tbs_desk import TBS_DESK_ADAPTER
 from mato_loop_backend.settings.models import (
     IntegrationAdapterAvailability,
@@ -73,6 +74,7 @@ _ADAPTERS = {
     ("coding", "opencode"): OPENCODE_ADAPTER,
     ("browser", "browser"): BROWSER_ADAPTER,
     ("mcp", "mcp_streamable_http"): MCP_ADAPTER,
+    ("music", "sonobin"): SONOBIN_ADAPTER,
     ("support", "tbs-desk"): TBS_DESK_ADAPTER,
 }
 

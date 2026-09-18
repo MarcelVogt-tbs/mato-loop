@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from jsonschema.exceptions import SchemaError
@@ -153,7 +154,16 @@ async def _credential(context: Any, instance: IntegrationInstance) -> str | None
     return token
 
 
-def _tool(instance: IntegrationInstance, item: McpCatalogTool) -> ToolContribution:
+def mcp_tool_contribution(
+    instance: IntegrationInstance,
+    item: McpCatalogTool,
+    *,
+    action: ToolAction = MCP_ACTION,
+    label: str | None = None,
+    icon: str = "hub",
+    approval_title: str = "MCP-Tool aufrufen?",
+    approval_summary: str = "Der Agent möchte ein Tool dieses MCP-Servers aufrufen.",
+) -> ToolContribution:
     resource_key = mcp_resource_key(item.name)
 
     async def call(arguments: dict[str, Any], context: Any) -> Any:
@@ -194,14 +204,14 @@ def _tool(instance: IntegrationInstance, item: McpCatalogTool) -> ToolContributi
         )
         return (
             integration_operation_permission(
-                capability=MCP_ACTION.capability,
+                capability=action.capability,
                 integration_id=instance.id,
                 binding_revision=binding_revision,
                 operation_key=f"call:{hashlib.sha256(item.name.encode()).hexdigest()[:16]}",
                 resource_key=resource_key,
-                resource_display=f'{item.name} · MCP-Server "{instance.name}"',
-                title="MCP-Tool aufrufen?",
-                summary="Der Agent möchte ein Tool dieses MCP-Servers aufrufen.",
+                resource_display=f'{label or item.name} · "{instance.name}"',
+                title=approval_title,
+                summary=approval_summary,
             ),
         )
 
@@ -212,9 +222,9 @@ def _tool(instance: IntegrationInstance, item: McpCatalogTool) -> ToolContributi
         arguments_schema=item.input_schema,
         handler=call,
         group="integrations",
-        label=item.title or item.name,
-        icon="hub",
-        actions=(MCP_ACTION,),
+        label=label or item.title or item.name,
+        icon=icon,
+        actions=(action,),
         integration_id=str(instance.id),
         policy_resource_key=resource_key,
         authorization_factory=authorize,
@@ -222,19 +232,58 @@ def _tool(instance: IntegrationInstance, item: McpCatalogTool) -> ToolContributi
     )
 
 
-def _contributions(instance: IntegrationInstance) -> IntegrationContributions:
+def mcp_contributions(
+    instance: IntegrationInstance,
+    *,
+    action: ToolAction = MCP_ACTION,
+    labels: Mapping[str, str] | None = None,
+    icon: str = "hub",
+    approval_title: str = "MCP-Tool aufrufen?",
+    approval_summary: str = "Der Agent möchte ein Tool dieses MCP-Servers aufrufen.",
+) -> IntegrationContributions:
     config = McpConfig.model_validate(instance.config)
-    return IntegrationContributions(tools=tuple(_tool(instance, item) for item in config.tools))
+    labels = labels or {}
+    return IntegrationContributions(
+        tools=tuple(
+            mcp_tool_contribution(
+                instance,
+                item,
+                action=action,
+                label=labels.get(item.name),
+                icon=icon,
+                approval_title=approval_title,
+                approval_summary=approval_summary,
+            )
+            for item in config.tools
+        )
+    )
+
+
+async def mcp_resources(
+    instance: IntegrationInstance,
+    _credential: dict[str, Any] | None,
+    *,
+    labels: Mapping[str, str] | None = None,
+) -> tuple[IntegrationResource, ...]:
+    config = McpConfig.model_validate(instance.config)
+    labels = labels or {}
+    return tuple(
+        IntegrationResource(
+            key=mcp_resource_key(tool.name),
+            label=labels.get(tool.name, tool.name[:160]),
+        )
+        for tool in config.tools
+    )
+
+
+def _contributions(instance: IntegrationInstance) -> IntegrationContributions:
+    return mcp_contributions(instance)
 
 
 async def _resources(
-    instance: IntegrationInstance, _credential: dict[str, Any] | None
+    instance: IntegrationInstance, credential: dict[str, Any] | None
 ) -> tuple[IntegrationResource, ...]:
-    config = McpConfig.model_validate(instance.config)
-    return tuple(
-        IntegrationResource(key=mcp_resource_key(tool.name), label=tool.name[:160])
-        for tool in config.tools
-    )
+    return await mcp_resources(instance, credential)
 
 
 MCP_ADAPTER = IntegrationAdapterDefinition(

@@ -57,6 +57,7 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Adjust generated migrations manually for renames, data migrations, extensions, and other operations Alembic cannot detect safely; do not create fully handwritten revision files.
 - Additive settings fields require Pydantic defaults.
 - Do not bind the agent core to provider-specific SDK types.
+- Model product integrations as normal product/service adapters; keep protocols such as MCP as reusable transport details. Generic connectors remain separate fallbacks and must not expose product profiles.
 - Log technical errors server-side without exposing secrets or tokens.
 
 ## Providers and Agent

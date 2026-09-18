@@ -319,6 +319,7 @@ const mailAccounts = computed(() => integrations.mail.accounts)
 const tbsDeskAccounts = computed(() => integrations.tbsDesk.accounts)
 const knowledgeBases = computed(() => integrations.knowledge.bases)
 const recipeAccounts = computed(() => integrations.recipes.accounts)
+const musicInstances = computed(() => integrations.music.instances)
 const openScadInstances = computed(() => integrations.openscad.instances)
 const codingInstances = computed(() => integrations.coding.instances)
 const searchProviderOptions = computed(() => integrations.search.providerOptions.map((provider) => ({
@@ -336,6 +337,7 @@ const configuredIntegrations = computed(
     ...(integrations.scope === 'personal' ? tbsDeskAccounts.value : []),
     ...knowledgeBases.value,
     ...recipeAccounts.value,
+    ...musicInstances.value,
     ...openScadInstances.value,
     ...codingInstances.value,
     ...(integrations.scope === 'personal' ? integrations.browser.instances.map((item) => ({ ...item, integrationType: 'browser', providerType: 'browser' })) : [])
@@ -413,7 +415,7 @@ function openEditDialog(integration) {
 
 function providerLabel(providerType) {
   return {
-    searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', 'tbs-desk': 'tbs.Desk', bookstack: 'BookStack', mealie: 'Mealie', openscad: 'OpenSCAD', opencode: 'OpenCode', browser: 'Chromium'
+    searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', 'tbs-desk': 'tbs.Desk', bookstack: 'BookStack', mealie: 'Mealie', sonobin: 'SonoBin', openscad: 'OpenSCAD', opencode: 'OpenCode', browser: 'Chromium'
   }[providerType] || providerType
 }
 
@@ -425,6 +427,7 @@ function typeLabel(integrationType) {
     support: 'Support',
     knowledge: 'Wissensdatenbank',
     recipes: 'Rezepte & Essensplanung',
+    music: 'Musikbibliothek',
     openscad: '3D-Modellierung',
     coding: 'Programmierung',
     browser: 'Browser'
@@ -433,7 +436,7 @@ function typeLabel(integrationType) {
 
 function typeIcon(integrationType) {
   return {
-    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', support: 'confirmation_number', knowledge: 'menu_book', recipes: 'restaurant_menu', openscad: 'view_in_ar', coding: 'code', browser: 'web'
+    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', support: 'confirmation_number', knowledge: 'menu_book', recipes: 'restaurant_menu', music: 'library_music', openscad: 'view_in_ar', coding: 'code', browser: 'web'
   }[integrationType] || 'extension'
 }
 
@@ -466,6 +469,7 @@ async function testIntegration(integration) {
     else if (integration.integrationType === 'support') result = await integrations.testTbsDesk(integration.id)
     else if (integration.integrationType === 'knowledge') result = await integrations.testKnowledge(integration.id)
     else if (integration.integrationType === 'recipes') result = await integrations.testRecipes(integration.id)
+    else if (integration.integrationType === 'music') result = await integrations.testSonoBin(integration.id)
     else if (integration.integrationType === 'openscad') result = await integrations.testOpenScad(integration.id)
     else if (integration.integrationType === 'coding') result = await integrations.testOpenCode(integration.id)
     else if (integration.integrationType === 'browser') {
@@ -503,6 +507,7 @@ async function removeIntegration(integration) {
     else if (integration.integrationType === 'support') await integrations.removeTbsDesk(integration.id)
     else if (integration.integrationType === 'knowledge') await integrations.removeKnowledge(integration.id)
     else if (integration.integrationType === 'recipes') await integrations.removeRecipes(integration.id)
+    else if (integration.integrationType === 'music') await integrations.removeSonoBin(integration.id)
     else if (integration.integrationType === 'openscad') await integrations.removeOpenScad(integration.id)
     else if (integration.integrationType === 'coding') await integrations.removeOpenCode(integration.id)
     else if (integration.integrationType === 'browser') await integrations.removeBrowser(integration.id)

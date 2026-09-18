@@ -20,6 +20,7 @@ from mato_loop_backend.integrations.service import (
     _load_tools,
     _save_settings,
 )
+from mato_loop_backend.integrations.sonobin import SONOBIN, SonoBinConfig
 from mato_loop_backend.security import (
     delete_credential,
     load_credential,
@@ -30,20 +31,59 @@ from mato_loop_backend.settings import IntegrationInstance
 
 
 class McpIntegrationService:
-    @staticmethod
-    def _require_secure_token_endpoint(endpoint: str, token: str | None) -> None:
-        if token is not None and urlsplit(endpoint).scheme.lower() != "https":
-            raise IntegrationSettingsError("mcp.configurationInvalid")
+    integration_type = "mcp"
+    adapter_type = "mcp_streamable_http"
+    config_model = McpConfig
+    capability = "mcp.call"
+    defaults = None
+    token_required = False
 
-    @staticmethod
-    def _find(settings: IntegrationSettingsDocument, integration_id: UUID) -> IntegrationInstance | None:
+    @classmethod
+    def _apply_defaults(cls, tools, instance: IntegrationInstance) -> None:
+        if cls.defaults is None:
+            return
+        config = cls.config_model.model_validate(instance.config)
+        integration_id = str(instance.id)
+        labels = {}
+        resource_policies = {}
+        for item in config.tools:
+            default = cls.defaults.tools.get(item.name)
+            if default is None:
+                continue
+            resource_key = mcp_resource_key(item.name)
+            labels[resource_key] = default.label
+            resource_policies[resource_key] = {cls.capability: default.policy}
+        for permissions in (tools.private_permissions, tools.public_permissions):
+            permissions.integration_policies[integration_id] = {
+                cls.capability: cls.defaults.server_policy
+            }
+            if resource_policies:
+                permissions.resource_policies[integration_id] = {
+                    key: dict(value) for key, value in resource_policies.items()
+                }
+        if labels:
+            tools.resource_labels[integration_id] = labels
+
+    @classmethod
+    def _require_secure_token_endpoint(cls, endpoint: str, token: str | None) -> None:
+        if (token is not None and urlsplit(endpoint).scheme.lower() != "https") or (
+            cls.token_required and not token
+        ):
+            raise IntegrationSettingsError("mcp.configurationInvalid")
+        try:
+            cls.config_model(endpoint=endpoint)
+        except ValueError as exc:
+            raise IntegrationSettingsError("mcp.configurationInvalid") from exc
+
+    @classmethod
+    def _find(cls, settings: IntegrationSettingsDocument, integration_id: UUID) -> IntegrationInstance | None:
         return next(
             (
                 item
                 for item in settings.instances
                 if item.id == integration_id
-                and item.integration_type == "mcp"
-                and item.adapter_type == "mcp_streamable_http"
+                and item.integration_type == cls.integration_type
+                and item.adapter_type == cls.adapter_type
             ),
             None,
         )
@@ -104,11 +144,11 @@ class McpIntegrationService:
                     tools.resource_labels.pop(key, None)
         return changed
 
-    @staticmethod
-    async def _discover(endpoint: str, token: str | None) -> list[dict]:
+    @classmethod
+    async def _discover(cls, endpoint: str, token: str | None) -> list[dict]:
         tools = await McpClient(endpoint, token).discover_tools()
         try:
-            return McpConfig(endpoint=endpoint, tools=tools).model_dump(mode="json")["tools"]
+            return cls.config_model(endpoint=endpoint, tools=tools).model_dump(mode="json")["tools"]
         except ValueError as exc:
             raise McpClientError("mcp.invalidResponse") from exc
 
@@ -128,8 +168,8 @@ class McpIntegrationService:
         settings = await _load_integrations(db, owner_id, for_update=True)
         instance = IntegrationInstance(
             name=name,
-            integration_type="mcp",
-            adapter_type="mcp_streamable_http",
+            integration_type=cls.integration_type,
+            adapter_type=cls.adapter_type,
             enabled=enabled,
             config={"endpoint": endpoint, "tools": tools},
         )
@@ -145,6 +185,10 @@ class McpIntegrationService:
             )
             instance.credential_id = credential.id
         settings.instances.append(instance)
+        if cls.defaults is not None:
+            tool_settings = await _load_tools(db, owner_id, for_update=True)
+            cls._apply_defaults(tool_settings, instance)
+            await _save_settings(db, tool_settings, owner_id)
         await _save_settings(db, settings, owner_id)
         await db.commit()
         return instance
@@ -180,11 +224,14 @@ class McpIntegrationService:
             raise IntegrationSettingsError("mcp.notFound")
         if instance.model_dump(mode="json") != revision:
             raise IntegrationSettingsError("integration.changed")
-        endpoint_changed = str(McpConfig.model_validate(instance.config).endpoint) != endpoint
+        endpoint_changed = str(cls.config_model.model_validate(instance.config).endpoint) != endpoint
         old_credential_id = instance.credential_id
         instance.name = name
         instance.enabled = enabled
-        instance.config = {"endpoint": endpoint, "tools": tools}
+        instance.config = {
+            "endpoint": endpoint,
+            "tools": tools,
+        }
         validate_integration(instance)
         if token is not None:
             credential = await store_credential(
@@ -225,7 +272,7 @@ class McpIntegrationService:
         if current is None:
             raise IntegrationSettingsError("mcp.notFound")
         current.owner_id = owner_id
-        config = McpConfig.model_validate(current.config)
+        config = cls.config_model.model_validate(current.config)
         token = await cls._token(db, current)
         cls._require_secure_token_endpoint(str(config.endpoint), token)
         tools = await cls._discover(str(config.endpoint), token)
@@ -265,3 +312,26 @@ class McpIntegrationService:
             await _save_settings(db, tools, owner_id)
         await _save_settings(db, settings, owner_id)
         await db.commit()
+
+    @classmethod
+    async def test(
+        cls, db: AsyncSession, integration_id: UUID, *, owner_id: UUID | None
+    ) -> None:
+        settings = await _load_integrations(db, owner_id)
+        instance = cls._find(settings, integration_id)
+        if instance is None:
+            raise IntegrationSettingsError("mcp.notFound")
+        instance.owner_id = owner_id
+        config = cls.config_model.model_validate(instance.config)
+        token = await cls._token(db, instance)
+        cls._require_secure_token_endpoint(str(config.endpoint), token)
+        await cls._discover(str(config.endpoint), token)
+
+
+class SonoBinIntegrationService(McpIntegrationService):
+    integration_type = "music"
+    adapter_type = "sonobin"
+    config_model = SonoBinConfig
+    capability = "sonobin.call"
+    defaults = SONOBIN
+    token_required = True

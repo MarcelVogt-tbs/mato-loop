@@ -45,6 +45,11 @@ const emptyRecipes = () => ({
   accounts: []
 })
 
+const emptyMusic = () => ({
+  configured: false,
+  instances: []
+})
+
 const emptyOpenScad = () => ({
   configured: false,
   instances: []
@@ -87,6 +92,7 @@ function clearIntegrations(store) {
   store.tbsDesk = emptyTbsDesk()
   store.knowledge = emptyKnowledge()
   store.recipes = emptyRecipes()
+  store.music = emptyMusic()
   store.openscad = emptyOpenScad()
   store.coding = emptyCoding()
   store.browser = { configured: false, instances: [] }
@@ -109,6 +115,7 @@ export const useIntegrationStore = defineStore('integrations', {
     tbsDesk: emptyTbsDesk(),
     knowledge: emptyKnowledge(),
     recipes: emptyRecipes(),
+    music: emptyMusic(),
     openscad: emptyOpenScad(),
     coding: emptyCoding(),
     browser: { configured: false, instances: [] },
@@ -199,6 +206,7 @@ export const useIntegrationStore = defineStore('integrations', {
           this.fetchMail(),
           this.fetchKnowledge(),
           this.fetchRecipes(),
+          this.fetchMusic(),
           this.fetchOpenScad(),
           ...(context.scope === 'personal' ? [this.fetchCoding(), this.fetchBrowser(), this.fetchTbsDesk()] : [])
         ])
@@ -415,6 +423,32 @@ export const useIntegrationStore = defineStore('integrations', {
     async testRecipes(id) {
       const scope = this.scope
       return (await api.post(`/integrations/recipes/accounts/${id}/test`, null, scopeConfig(scope))).data
+    },
+    fetchMusic() {
+      return this.fetchResource('music', '/integrations/music/sonobin')
+    },
+    async createSonoBin(payload) {
+      const context = scopeContext(this)
+      await api.post('/integrations/music/sonobin', payload, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchMusic()
+    },
+    async updateSonoBin(id, payload) {
+      const request = { ...payload }
+      if (!request.bearerToken) delete request.bearerToken
+      const context = scopeContext(this)
+      await api.put(`/integrations/music/sonobin/${id}`, request, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchMusic()
+    },
+    async removeSonoBin(id) {
+      const context = scopeContext(this)
+      await api.delete(`/integrations/music/sonobin/${id}`, scopeConfig(context.scope))
+      if (!contextIsCurrent(this, context)) return
+      clearAccess(this, id)
+      await this.fetchMusic()
+    },
+    async testSonoBin(id) {
+      const scope = this.scope
+      return (await api.post(`/integrations/music/sonobin/${id}/test`, null, scopeConfig(scope))).data
     },
     fetchOpenScad() {
       return this.fetchResource('openscad', '/integrations/openscad')
