@@ -69,8 +69,8 @@
 
         <q-banner v-if="oneTime" rounded class="app-surface-tonal q-mt-sm">
           <template #avatar><q-icon name="lock_clock" color="primary" /></template>
-          Diese Antwort wird nicht gespeichert. Sie wird nur für die aktuelle Agent-Anfrage bereitgestellt
-          und nach der Verwendung oder beim Ende der Anfrage verworfen.
+          Diese Antwort wird standardmäßig nur einmal verwendet. Du kannst sie stattdessen flüchtig für diese
+          Session merken lassen; sie wird nicht dauerhaft gespeichert.
         </q-banner>
 
         <q-banner v-else-if="saveProposal" rounded class="app-surface-tonal q-mt-sm">
@@ -149,21 +149,34 @@
           </div>
         </div>
 
-        <q-input
-          v-else-if="['free_text', 'value', 'password'].includes(current.type)"
-          ref="freeTextInput"
-          :model-value="currentAnswers[0] || ''"
-          outlined
-          :autogrow="current.type === 'free_text'"
-          :type="current.type === 'password' ? 'password' : current.type === 'value' ? 'text' : 'textarea'"
-          class="q-mt-md"
-          :placeholder="current.placeholder || 'Antwort eingeben'"
-          :maxlength="20000"
-          :autocomplete="current.type === 'password' ? 'new-password' : current.type === 'value' ? 'off' : undefined"
-          :disable="busy"
-          :aria-labelledby="questionLabelId"
-          @update:model-value="setFreeText"
-        />
+        <template v-else-if="['free_text', 'value', 'password'].includes(current.type)">
+          <q-input
+            ref="freeTextInput"
+            :model-value="currentAnswers[0] || ''"
+            outlined
+            :autogrow="current.type === 'free_text'"
+            :type="current.type === 'password' ? 'password' : current.type === 'value' ? 'text' : 'textarea'"
+            class="q-mt-md"
+            :placeholder="current.placeholder || 'Antwort eingeben'"
+            :maxlength="20000"
+            :autocomplete="current.type === 'password' ? 'new-password' : current.type === 'value' ? 'off' : undefined"
+            :disable="busy"
+            :aria-labelledby="questionLabelId"
+            @update:model-value="setFreeText"
+          />
+          <template v-if="oneTime">
+            <q-checkbox
+              v-model="draft.rememberForSession[current.id]"
+              color="primary"
+              label="Für diese Session merken"
+              :disable="busy"
+              class="q-mt-sm"
+            />
+            <div class="text-caption app-muted q-ml-sm">
+              Wird beim Löschen der Session oder beim Backend-Neustart verworfen.
+            </div>
+          </template>
+        </template>
       </template>
     </q-card-section>
 
@@ -233,6 +246,9 @@ const saveProposal = computed(() => {
     : null
 })
 const last = computed(() => draft.index === props.request.questions.length - 1)
+const rememberedQuestionIds = computed(() => props.request.questions
+  .filter((item) => item.one_time === true && draft.rememberForSession[item.id] === true)
+  .map((item) => item.id))
 const rejecting = ref(false)
 const ownSubmission = computed(() => questions.submittingId === props.request.id)
 const busy = computed(() => questions.submittingId !== null || props.stopping)
@@ -273,7 +289,7 @@ async function next() {
     return
   }
   try {
-    await questions.answer(props.request.id, draft.answers)
+    await questions.answer(props.request.id, draft.answers, rememberedQuestionIds.value)
   } catch {
     // Axios already displayed the API error.
   } finally {

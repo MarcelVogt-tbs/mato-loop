@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
@@ -211,6 +212,7 @@ class ChatHistoryService:
         async def commit_and_purge() -> None:
             await db.delete(session)
             await db.commit()
+            session_secrets.clear_session(session.id)
             try:
                 await asyncio.to_thread(storage.purge_trashed, trashed)
             except BaseException:

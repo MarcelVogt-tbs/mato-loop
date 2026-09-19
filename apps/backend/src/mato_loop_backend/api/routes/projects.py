@@ -14,6 +14,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent import AgentRuntime
+from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.automations import ACTIVE_STATUSES, automation_impact_token
 from mato_loop_backend.db.session import get_db_session
@@ -627,9 +628,11 @@ async def delete_project(
         except BaseException:
             await restore_and_rollback()
         else:
+            session_secrets.clear_sessions(storage_session_ids)
             await purge_storage()
         raise
     except BaseException:
         await restore_and_rollback()
         raise
+    session_secrets.clear_sessions(storage_session_ids)
     await purge_storage()

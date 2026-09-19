@@ -28,6 +28,7 @@ from mato_loop_backend.agent.permissions import (
     PermissionRequest,
 )
 from mato_loop_backend.agent.tool_arguments import (
+    ProtectedQuestionResolution,
     QuestionRequestArguments,
     TaskArguments,
 )
@@ -95,7 +96,9 @@ SkillDraftHandler = Callable[
 ]
 QuestionHandler = Callable[
     [QuestionRequestArguments],
-    Awaitable[dict[str, list[str]] | Literal["rejected"] | None],
+    Awaitable[
+        dict[str, list[str]] | ProtectedQuestionResolution | Literal["rejected"] | None
+    ],
 ]
 VideoAnalysisHandler = Callable[
     [bytes, TrustLevel, str | None, VideoAnalysisMode, str | None],
@@ -297,7 +300,12 @@ class ToolContext:
 
     async def ask_user(
         self, questions: QuestionRequestArguments
-    ) -> dict[str, list[str]] | Literal["rejected"] | None:
+    ) -> (
+        dict[str, list[str]]
+        | ProtectedQuestionResolution
+        | Literal["rejected"]
+        | None
+    ):
         if self.question_handler is None:
             return None
         return await self.question_handler(questions)

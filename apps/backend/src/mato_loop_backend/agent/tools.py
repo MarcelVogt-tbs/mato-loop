@@ -55,6 +55,7 @@ from mato_loop_backend.agent.permissions import (
     web_search_permission,
     webfetch_permission,
 )
+from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.agent.tool_arguments import (
     QR_CODE_MAX_CONTENT_BYTES as QR_CODE_MAX_CONTENT_BYTES,
 )
@@ -92,6 +93,7 @@ from mato_loop_backend.agent.tool_arguments import (
     MovePathArguments,
     ProtectedQuestionArguments,
     ProtectedQuestionItem,
+    ProtectedQuestionResolution,
     ProvideFileArguments,
     QuestionArguments,
     ReadArguments,
@@ -1806,11 +1808,16 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
             for reference in arguments.environment.values()
             if isinstance(reference, str)
         ):
-            secret_id = UUID(reference.removeprefix("run-secret:"))
-            value = context.one_time_secrets.get(secret_id)
+            if reference.startswith("run-secret:"):
+                secret_id = UUID(reference.removeprefix("run-secret:"))
+                value = context.one_time_secrets.get(secret_id)
+                if value is not None:
+                    one_time_ids[reference] = secret_id
+            else:
+                secret_id = UUID(reference.removeprefix("session-secret:"))
+                value = session_secrets.resolve(context.session.id, secret_id)
             if value is None:
                 return ToolResult.error("secret.valueRefUnavailable")
-            one_time_ids[reference] = secret_id
             values[reference] = value
         environment = {
             name: values[reference]
@@ -4463,11 +4470,21 @@ async def _secret_input(
         return ToolResult.error("question.expired")
     if answers == "rejected":
         return ToolResult.error("question.rejected")
+    assert isinstance(answers, ProtectedQuestionResolution)
+    remembered = {
+        item.name: answers.answers[item.name][0]
+        for item in arguments.inputs
+        if item.name in answers.remember_for_session
+    }
+    session_environment = session_secrets.put(context.session.id, remembered)
     environment = {}
     for item in arguments.inputs:
-        secret_id = uuid4()
-        context.one_time_secrets[secret_id] = answers[item.name][0]
-        environment[item.name] = f"run-secret:{secret_id}"
+        if item.name in session_environment:
+            environment[item.name] = session_environment[item.name]
+        else:
+            secret_id = uuid4()
+            context.one_time_secrets[secret_id] = answers.answers[item.name][0]
+            environment[item.name] = f"run-secret:{secret_id}"
     return ToolResult.json({"environment": environment})
 
 
@@ -5546,10 +5563,10 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "secret_input",
-            "Ask once for all missing task-only credentials, including usernames. Values are not saved or "
-            "returned. Call alone, then pass the returned environment unchanged to one shell_run. Set masked "
-            "false only for values the user may see while typing. Use variable_write only for explicitly "
-            "requested durable storage.",
+            "Ask once for all missing credentials, including usernames. Values are not returned. The user may "
+            "keep selected fields temporarily for this session; other references work for one shell_run. Call "
+            "alone, then pass the returned environment unchanged to shell_run. Set masked false only for values "
+            "the user may see while typing. Use variable_write only for explicitly requested durable storage.",
             SecretInputArguments,
             _secret_input,
             required_operation="shell.run",

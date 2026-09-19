@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.memory.dreaming import DreamingService
@@ -394,10 +395,12 @@ async def delete_user(
             await db.rollback()
             await restore_storage()
         else:
+            session_secrets.clear_sessions([session_id for session_id, _ in sessions])
             await purge_storage()
         raise
     except BaseException:
         await db.rollback()
         await restore_storage()
         raise
+    session_secrets.clear_sessions([session_id for session_id, _ in sessions])
     await purge_storage()

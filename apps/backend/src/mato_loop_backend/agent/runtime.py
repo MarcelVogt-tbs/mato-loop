@@ -72,6 +72,7 @@ from mato_loop_backend.agent.runtime_memory import (
     _recent_episode_overview_requested,
     _session_bootstrap_requested,
 )
+from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.agent.subagents import (
     apply_delegation_ceiling,
     ceiling_settings,
@@ -95,7 +96,10 @@ from mato_loop_backend.agent.title_generation import (
     initial_session_title as _initial_session_title,
 )
 from mato_loop_backend.agent.todos import session_todos, todo_context
-from mato_loop_backend.agent.tool_arguments import QuestionRequestArguments
+from mato_loop_backend.agent.tool_arguments import (
+    ProtectedQuestionResolution,
+    QuestionRequestArguments,
+)
 from mato_loop_backend.agent.tool_display import tool_display
 from mato_loop_backend.agent.tools import (
     PROJECT_CODING_TOOL_NAMES,
@@ -2355,6 +2359,7 @@ class AgentRuntime:
                     else None
                 ),
                 current_directory=run.current_directory_snapshot,
+                session_environment=session_secrets.references(chat_session.id),
             )
             schemas = effective_toolset.schemas() if effective_toolset else []
             if delegated:
@@ -5529,7 +5534,12 @@ class AgentRuntime:
         chat_session: ChatSession,
         call: ToolCall,
         questions: QuestionRequestArguments,
-    ) -> dict[str, list[str]] | Literal["rejected"] | None:
+    ) -> (
+        dict[str, list[str]]
+        | ProtectedQuestionResolution
+        | Literal["rejected"]
+        | None
+    ):
         origin = await permission_origin(db, chat_session)
         request = QuestionRequest(
             session_id=origin.id,

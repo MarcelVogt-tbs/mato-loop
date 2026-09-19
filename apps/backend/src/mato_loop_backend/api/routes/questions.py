@@ -31,6 +31,9 @@ class QuestionAnswerRequest(BaseModel):
         str,
         Annotated[list[Annotated[str, Field(max_length=20_000)]], Field(max_length=13)],
     ] = Field(max_length=5)
+    remember_for_session: list[
+        Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,79}$")]
+    ] = Field(default_factory=list, max_length=5)
 
 
 @router.get("/pending")
@@ -88,7 +91,12 @@ async def answer_question(
     if session is None or session.user_id != user.id:
         raise ApiError(404, "question.notFound")
     try:
-        return await answer_question_decision(db, request, payload.answers)
+        return await answer_question_decision(
+            db,
+            request,
+            payload.answers,
+            remember_for_session=payload.remember_for_session,
+        )
     except QuestionDecisionError as exc:
         raise ApiError(exc.status_code, exc.code, field=exc.field) from exc
 

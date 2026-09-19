@@ -1660,6 +1660,19 @@ def test_secret_input_prompt_routes_all_credentials_before_probing() -> None:
     assert "returned environment unchanged to shell_run" in prompt
 
 
+def test_session_environment_prompt_exposes_only_references() -> None:
+    reference = "session-secret:123e4567-e89b-42d3-a456-426614174000"
+    prompt = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset({"shell_run"}),
+        session_environment={"API_TOKEN": reference},
+    )
+
+    assert '"API_TOKEN": "' + reference + '"' in prompt
+    assert "Reuse these exact name/reference pairs" in prompt
+    assert "exact-secret" not in prompt
+
+
 def test_active_skill_instructions_preserve_host_precedence() -> None:
     skill = SkillDefinition(
         name="Quellenpruefung",

@@ -182,9 +182,11 @@ async def lifespan(_app: FastAPI):
         await EpisodeIndexScheduler.stop()
         await CodingScheduler.stop()
         await TelegramScheduler.stop()
+        from mato_loop_backend.agent.session_secrets import session_secrets
         from mato_loop_backend.execution.browsers import browser_coordinator
 
         await asyncio.gather(terminal_coordinator.shutdown(), browser_coordinator.shutdown(), AgentRuntime.shutdown())
+        session_secrets.clear_all()
         await embedding_client.close()
         await engine.dispose()
 

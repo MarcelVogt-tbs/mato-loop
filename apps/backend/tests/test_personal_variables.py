@@ -96,6 +96,10 @@ def test_shell_environment_accepts_references_but_rejects_host_names() -> None:
     assert ShellRunArguments(
         command="env", environment={"API_TOKEN": reference}
     ).environment == {"API_TOKEN": reference}
+    session_reference = f"session-secret:{uuid4()}"
+    assert ShellRunArguments(
+        command="env", environment={"API_TOKEN": session_reference}
+    ).environment == {"API_TOKEN": session_reference}
 
     for name in ("PATH", "LD_PRELOAD", "GIT_CONFIG_COUNT"):
         with pytest.raises(ValidationError):

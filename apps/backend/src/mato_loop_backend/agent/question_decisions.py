@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.tool_arguments import (
     ProtectedQuestionArguments,
+    ProtectedQuestionResolution,
     QuestionArguments,
     validate_protected_question_answers,
     validate_question_answers,
@@ -41,6 +42,7 @@ async def answer_question(
     answers: dict[str, list[str]],
     *,
     idempotent_same_result: bool = False,
+    remember_for_session: list[str] | None = None,
 ) -> dict[str, str]:
     protected = bool(
         request.questions
@@ -76,6 +78,16 @@ async def answer_question(
             422, "question.invalidAnswer", field="answers"
         ) from exc
 
+    remembered = frozenset(remember_for_session or ())
+    if remembered and (
+        not isinstance(questions, ProtectedQuestionArguments)
+        or not questions.questions[0].one_time
+        or not remembered <= {question.id for question in questions.questions}
+    ):
+        raise QuestionDecisionError(
+            422, "question.invalidAnswer", field="remember_for_session"
+        )
+
     if not AgentRuntime.claim_question_resolution(request.id):
         request.status = "expired"
         await db.commit()
@@ -88,6 +100,9 @@ async def answer_question(
     durable_protected = False
     if isinstance(questions, ProtectedQuestionArguments):
         if questions.questions[0].one_time:
+            resolved_answers = ProtectedQuestionResolution(
+                validated_answers, remembered
+            )
             persisted_answers = {
                 question.id: ["received"] for question in questions.questions
             }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -203,6 +204,12 @@ class ProtectedQuestionArguments(ToolArguments):
 QuestionRequestArguments = QuestionArguments | ProtectedQuestionArguments
 
 
+@dataclass(frozen=True, slots=True)
+class ProtectedQuestionResolution:
+    answers: dict[str, list[str]]
+    remember_for_session: frozenset[str] = frozenset()
+
+
 def validate_protected_question_answers(
     questions: ProtectedQuestionArguments, answers: dict[str, list[str]]
 ) -> dict[str, list[str]]:
@@ -386,7 +393,7 @@ class ShellRunArguments(ToolArguments):
         | Annotated[
             str,
             Field(
-                pattern=r"^run-secret:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                pattern=r"^(?:run|session)-secret:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
             ),
         ],
     ] = Field(default_factory=dict, max_length=32)

@@ -24,8 +24,12 @@ from mato_loop_backend.agent.permissions import (
     shell_prefix_allowed,
 )
 from mato_loop_backend.agent.runtime import _tool_policy
+from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.agent.subagents import permission_snapshot
-from mato_loop_backend.agent.tool_arguments import ShellRunArguments
+from mato_loop_backend.agent.tool_arguments import (
+    ProtectedQuestionResolution,
+    ShellRunArguments,
+)
 from mato_loop_backend.agent.tool_registry import ToolContext, ToolResult
 from mato_loop_backend.agent.tools import (
     _execution_path,
@@ -1024,7 +1028,7 @@ async def test_shell_resolves_variable_reference_only_for_process_transport(
     assert context.ask_handler.await_args_list[1].args[0].capability == "secrets.access"
 
 
-async def test_one_time_secret_reference_is_consumed_by_first_process(
+async def test_secret_references_keep_only_selected_fields_for_session(
     tmp_path,
 ) -> None:
     client = FakeExecutionClient(
@@ -1079,23 +1083,24 @@ async def test_one_time_secret_reference_is_consumed_by_first_process(
         client,
     )
     context.question_handler = AsyncMock(
-        return_value={
-            "SSH_USERNAME": ["  exact user  "],
-            "SSH_PASSWORD": ["  exact secret  "],
-        }
+        return_value=ProtectedQuestionResolution(
+            {
+                "SSH_USERNAME": ["  exact user  "],
+                "SSH_PASSWORD": ["  exact secret  "],
+            },
+            frozenset({"SSH_USERNAME"}),
+        )
     )
 
     secret_result = await _tools(client.operations).execute(context.tool_call, context)
 
     environment = json.loads(secret_result.content)["environment"]
     assert set(environment) == {"SSH_USERNAME", "SSH_PASSWORD"}
-    assert all(value.startswith("run-secret:") for value in environment.values())
+    assert environment["SSH_USERNAME"].startswith("session-secret:")
+    assert environment["SSH_PASSWORD"].startswith("run-secret:")
     assert "exact user" not in secret_result.content
     assert "exact secret" not in secret_result.content
-    assert list(context.one_time_secrets.values()) == [
-        "  exact user  ",
-        "  exact secret  ",
-    ]
+    assert list(context.one_time_secrets.values()) == ["  exact secret  "]
     shell_call = ToolCall(
         "shell", "shell_run", {"command": "env", "environment": environment}
     )
@@ -1111,12 +1116,32 @@ async def test_one_time_secret_reference_is_consumed_by_first_process(
     }
     assert len(context.ask_handler.await_args_list) == 1
 
-    second_result = await _tools(client.operations).execute(shell_call, context)
+    username_call = ToolCall(
+        "shell-again",
+        "shell_run",
+        {
+            "command": "env",
+            "environment": {"SSH_USERNAME": environment["SSH_USERNAME"]},
+        },
+    )
+    context.tool_call = username_call
+    second_result = await _tools(client.operations).execute(username_call, context)
 
-    assert second_result.is_error
-    assert json.loads(second_result.content)["error"]["code"] == (
+    assert not second_result.is_error
+    assert client.requests[-1][1]["environment"] == {
+        "SSH_USERNAME": "  exact user  "
+    }
+
+    other_context = _context(tmp_path, username_call, client)
+    isolated_result = await _tools(client.operations).execute(
+        username_call, other_context
+    )
+
+    assert isolated_result.is_error
+    assert json.loads(isolated_result.content)["error"]["code"] == (
         "secret.valueRefUnavailable"
     )
+    session_secrets.clear_session(context.session.id)
 
 
 @pytest.mark.parametrize("classification", ["read", "write"])

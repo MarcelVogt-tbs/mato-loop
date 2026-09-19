@@ -679,6 +679,7 @@ def general_system_prompt(
     execution_agent_connected: bool = False,
     execution_agent_system_info: SystemInfo | None = None,
     current_directory: str | None = None,
+    session_environment: dict[str, str] | None = None,
     delegated: bool = False,
 ) -> str:
     identity = agent_identity or AgentIdentitySettings()
@@ -754,6 +755,14 @@ def general_system_prompt(
             "secret_input, not question, once with all currently missing authentication values. Use "
             "masked=false for visible identifiers and masked=true for secrets. Pass its returned environment "
             "unchanged to shell_run."
+        )
+    if session_environment and "shell_run" in offered_tool_names:
+        parts.append(
+            "Temporary environment references available in this session: "
+            + json.dumps(session_environment, ensure_ascii=True, sort_keys=True)
+            + ". Reuse these exact name/reference pairs through shell_run.environment instead of asking "
+            "for them again. Values are hidden, unavailable to other sessions, and lost when this session "
+            "is deleted or the backend restarts."
         )
     if "todo_write" in offered_tool_names:
         parts.append(

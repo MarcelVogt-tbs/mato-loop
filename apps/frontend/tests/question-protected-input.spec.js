@@ -48,6 +48,7 @@ it('masks password questions, submits exact values, and clears failed drafts', a
 
   expect(root.textContent).toContain('Secret „GITHUB_TOKEN“')
   expect(root.textContent).toContain('Erst „Antworten senden“ erlaubt genau diesen Speichervorgang.')
+  expect(root.textContent).not.toContain('Für diese Session merken')
   const input = root.querySelector('input[type="password"]')
   expect(input.autocomplete).toBe('new-password')
   input.value = '  exact secret  '
@@ -98,16 +99,19 @@ it('submits visible and masked one-time credentials together and clears both', a
   app.mount(root)
   await nextTick()
 
-  expect(root.textContent).toContain('Diese Antwort wird nicht gespeichert.')
-  expect(root.textContent).not.toContain('dauerhaft')
+  expect(root.textContent).toContain('standardmäßig nur einmal verwendet')
+  expect(root.textContent).toContain('Für diese Session merken')
+  expect(root.textContent).toContain('nicht dauerhaft gespeichert')
   const username = root.querySelector('input[type="text"]')
   expect(username.autocomplete).toBe('off')
   username.value = '  viktor  '
   username.dispatchEvent(new Event('input', { bubbles: true }))
+  root.querySelector('input[type="checkbox"]').click()
   ;[...root.querySelectorAll('button')].find((button) => button.textContent.includes('Weiter')).click()
   await nextTick()
 
   const password = root.querySelector('input[type="password"]')
+  expect(root.querySelector('input[type="checkbox"]').checked).toBe(false)
   expect(password.autocomplete).toBe('new-password')
   password.value = '  exact secret  '
   password.dispatchEvent(new Event('input', { bubbles: true }))
@@ -117,10 +121,12 @@ it('submits visible and masked one-time credentials together and clears both', a
     answers: {
       SSH_USERNAME: ['  viktor  '],
       SSH_PASSWORD: ['  exact secret  ']
-    }
+    },
+    remember_for_session: ['SSH_USERNAME']
   }))
   await vi.waitFor(() => expect(password.value).toBe(''))
   ;[...root.querySelectorAll('button')].find((button) => button.textContent.includes('Zurück')).click()
   await nextTick()
   expect(root.querySelector('input[type="text"]').value).toBe('')
+  expect(root.querySelector('input[type="checkbox"]').checked).toBe(true)
 })

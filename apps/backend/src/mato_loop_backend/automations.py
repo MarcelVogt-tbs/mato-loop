@@ -633,6 +633,9 @@ class AutomationService:
                     trashed,
                 )
             raise
+        from mato_loop_backend.agent.session_secrets import session_secrets
+
+        session_secrets.clear_session(execution_session_id)
         await asyncio.to_thread(storage.purge_trashed, trashed)
 
     @staticmethod

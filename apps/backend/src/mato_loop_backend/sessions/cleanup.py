@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.models import ChatSession
 from mato_loop_backend.session_storage import SessionStorage
 
@@ -83,6 +84,7 @@ async def deleting_child_sessions(
                     logger.exception("Could not restore child session storage")
         raise
     else:
+        session_secrets.clear_sessions([child_id for child_id, _ in children])
         for _, _, tree in trashed:
             try:
                 await asyncio.to_thread(storage.purge_trashed, tree)

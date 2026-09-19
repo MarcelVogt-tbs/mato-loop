@@ -57,15 +57,19 @@ export const useQuestionStore = defineStore('questions', {
           answers: Object.fromEntries(request.questions.map((question) => [question.id, []])),
           custom: {},
           customOn: {},
+          rememberForSession: {},
           minimized: false
         }
       }
       return this.drafts[request.id]
     },
-    async answer(id, answers) {
+    async answer(id, answers, rememberForSession = []) {
       this.submittingId = id
       try {
-        await api.post(`/questions/${id}/answers`, { answers })
+        await api.post(`/questions/${id}/answers`, {
+          answers,
+          ...(rememberForSession.length ? { remember_for_session: rememberForSession } : {})
+        })
         this.revision += 1
         this.pending = this.pending.filter((item) => item.id !== id)
         delete this.drafts[id]

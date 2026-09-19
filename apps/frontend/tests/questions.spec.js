@@ -26,6 +26,20 @@ describe('agent questions', () => {
     expect(questions.pending).toEqual([])
   })
 
+  it('submits selected fields for temporary session reuse', async () => {
+    api.post.mockResolvedValue({ data: { status: 'answered' } })
+    const questions = useQuestionStore()
+    questions.add({ id: 'question-1', sessionId: 'session-1' })
+    const answers = { SSH_USERNAME: ['viktor'], SSH_PASSWORD: ['secret'] }
+
+    await questions.answer('question-1', answers, ['SSH_USERNAME'])
+
+    expect(api.post).toHaveBeenCalledWith('/questions/question-1/answers', {
+      answers,
+      remember_for_session: ['SSH_USERNAME']
+    })
+  })
+
   it('ignores malformed pending responses', async () => {
     api.get.mockResolvedValue({ data: {} })
     const questions = useQuestionStore()

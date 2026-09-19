@@ -27,6 +27,7 @@ from mato_loop_backend.agent import AgentRuntime
 from mato_loop_backend.agent.permissions import execution_directory_scope
 from mato_loop_backend.agent.run_timing import run_timing_payload
 from mato_loop_backend.agent.runtime import AgentRunError
+from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.agent.todos import session_todos
 from mato_loop_backend.attachments import AttachmentInput
 from mato_loop_backend.automations import automation_impact_token
@@ -1852,10 +1853,12 @@ async def delete_session(
             await db.rollback()
             await restore_tree()
         else:
+            session_secrets.clear_sessions(storage_session_ids)
             await purge_tree()
         raise
     except BaseException:
         await db.rollback()
         await restore_tree()
         raise
+    session_secrets.clear_sessions(storage_session_ids)
     await purge_tree()

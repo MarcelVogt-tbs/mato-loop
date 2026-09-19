@@ -17,7 +17,10 @@ from mato_loop_backend.agent.question_decisions import (
     reject_question as reject_question_decision,
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.agent.tool_arguments import ProtectedQuestionArguments
+from mato_loop_backend.agent.tool_arguments import (
+    ProtectedQuestionArguments,
+    ProtectedQuestionResolution,
+)
 from mato_loop_backend.agent.tools import (
     QuestionArguments,
     ToolContext,
@@ -349,6 +352,7 @@ async def test_one_time_secret_is_delivered_but_never_persisted(monkeypatch) -> 
             "SSH_USERNAME": ["  exact user  "],
             "SSH_PASSWORD": ["  exact secret  "],
         },
+        remember_for_session=["SSH_USERNAME"],
     )
 
     assert request.answers == {
@@ -361,10 +365,13 @@ async def test_one_time_secret_is_delivered_but_never_persisted(monkeypatch) -> 
     db.commit.assert_awaited_once()
     resolve.assert_called_once_with(
         request.id,
-        {
-            "SSH_USERNAME": ["  exact user  "],
-            "SSH_PASSWORD": ["  exact secret  "],
-        },
+        ProtectedQuestionResolution(
+            {
+                "SSH_USERNAME": ["  exact user  "],
+                "SSH_PASSWORD": ["  exact secret  "],
+            },
+            frozenset({"SSH_USERNAME"}),
+        ),
     )
     assert result == {"status": "answered"}
 
