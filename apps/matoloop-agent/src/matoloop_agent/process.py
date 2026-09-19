@@ -437,6 +437,56 @@ def _docker_exec_payload(
     return arguments[1:], host_files
 
 
+def _docker_run_host_paths(arguments: list[str]) -> list[str] | None:
+    value_options = {"--mount", "--volume", "-v", "--workdir", "-w"}
+    flags = {
+        "--detach",
+        "-d",
+        "--init",
+        "--interactive",
+        "-i",
+        "--read-only",
+        "--rm",
+        "--tty",
+        "-t",
+    }
+    host_paths = []
+    while arguments:
+        argument = arguments[0]
+        if argument == "--":
+            return host_paths if len(arguments) > 1 else None
+        if not argument.startswith("-"):
+            return host_paths
+        while len(argument) > 2 and argument[:2] in flags and argument[2] not in "=-":
+            argument = "-" + argument[2:]
+        option, separator, value = argument.partition("=")
+        if option in value_options:
+            if not separator:
+                if len(arguments) < 2:
+                    return None
+                value = arguments[1]
+                arguments = arguments[1:]
+            if option in {"--volume", "-v"}:
+                parts = value.split(":")
+                if len(parts) not in {1, 2, 3} or not all(parts):
+                    return None
+                if len(parts) > 1 and parts[0].startswith(("/", "./", "../")):
+                    host_paths.append(parts[0])
+            elif option == "--mount":
+                fields = dict(field.split("=", 1) for field in value.split(",") if "=" in field)
+                if fields.get("type") == "bind":
+                    source = fields.get("source") or fields.get("src")
+                    if not source:
+                        return None
+                    host_paths.append(source)
+        elif option in flags and (not separator or value in {"true", "false"}):
+            pass
+        else:
+            return None
+        arguments = arguments[1:]
+    return None
+
+
 def _container_command_writes(tokens: list[str], depth: int) -> bool:
     # ponytail: bound wrapper nesting; unfamiliar shell forms keep the former write class.
     if depth > 8 or not tokens or any(c in tokens[0] for c in "$`*?[]{}~"):
@@ -1256,6 +1306,13 @@ class ProcessRunner:
                 if payload is not None:
                     for path in payload[1]:
                         add(path, "input", access="read", must_exist=True)
+                    tokens = tokens[: len(tokens) - len(remaining)]
+            elif docker is not None and docker[0] == ["docker", "run"]:
+                remaining = docker[1]
+                host_paths = _docker_run_host_paths(remaining)
+                if host_paths is not None:
+                    for path in host_paths:
+                        add(path, "path", access=target_access, must_exist=False)
                     tokens = tokens[: len(tokens) - len(remaining)]
             metadata_paths = set()
             installed_ls = (

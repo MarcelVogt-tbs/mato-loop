@@ -530,6 +530,27 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                     "write",
                 )
 
+    def test_docker_run_checks_bind_source_but_not_container_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frontend = root / "apps/frontend"
+            frontend.mkdir(parents=True)
+            config = configuration(root)
+            runner = ProcessRunner(config, Filesystem(config))
+            command = (
+                f"docker run --rm -v {frontend}:/workspace -w /workspace node:20-slim "
+                "sh -lc 'corepack enable && yarn install --immutable && yarn lint && yarn build'"
+            )
+
+            inspected = runner.inspect_shell(command, str(root))
+
+            self.assertTrue(inspected["analysisComplete"])
+            self.assertEqual(inspected["classification"], "write")
+            self.assertEqual(
+                [(target["path"], target["access"]) for target in inspected["targets"]],
+                [(str(frontend), "write")],
+            )
+
     def test_docker_exec_preserves_outer_files_and_redirects(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
