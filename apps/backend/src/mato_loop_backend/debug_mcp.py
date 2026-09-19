@@ -373,7 +373,16 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
                 await load_effective_integrations(db, user_id), profile
             )
             groups = tool_registry.catalog(tools, integrations)
-        return {"trustLevel": trust.value, "groups": groups, "basis": "current"}
+        return {
+            "trustLevel": trust.value,
+            "groups": groups,
+            "scopedPolicies": tools.permissions.model_dump(mode="json", by_alias=True),
+            "policyBasis": (
+                "Group actions show the effective base policy. Apply the matching integration "
+                "and resource overrides from scopedPolicies for a concrete tool call."
+            ),
+            "basis": "current",
+        }
 
     @server.tool(annotations=READ_ONLY)
     @_safe_tool
@@ -430,14 +439,13 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
             if message is None:
                 return _not_found()
             attributions = await session_service.message_attributions(db, [message])
-        payload = _compact_message(
-            message_payload(
-                message,
-                attribution=attributions.get(message.id),
-                attribution_resolved=True,
-            )
+        payload = message_payload(
+            message,
+            attribution=attributions.get(message.id),
+            attribution_resolved=True,
         )
         content = payload["content"]
+        payload = _compact_message(payload)
         payload["content"] = content[offset : offset + limit]
         payload["contentLength"] = len(content)
         payload["nextOffset"] = offset + limit if offset + limit < len(content) else None

@@ -31,6 +31,18 @@ def _bounded_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def diagnostic_access_active(db: Any, user_id: UUID) -> bool:
+    enabled = await db.scalar(
+        select(UserAccount.id).where(
+            UserAccount.id == user_id,
+            UserAccount.is_active.is_(True),
+            UserAccount.is_admin.is_(True),
+            UserAccount.debug_token_hash.is_not(None),
+        )
+    )
+    return isinstance(enabled, UUID)
+
+
 async def record_diagnostic_event(
     user_id: UUID,
     event_type: str,
@@ -45,15 +57,7 @@ async def record_diagnostic_event(
     """Persist bounded diagnostics only while the owner's debug access is active."""
     try:
         async with AsyncSessionFactory() as db:
-            enabled = await db.scalar(
-                select(UserAccount.id).where(
-                    UserAccount.id == user_id,
-                    UserAccount.is_active.is_(True),
-                    UserAccount.is_admin.is_(True),
-                    UserAccount.debug_token_hash.is_not(None),
-                )
-            )
-            if enabled is None:
+            if not await diagnostic_access_active(db, user_id):
                 return
             if run_id is not None:
                 run_session_id = await db.scalar(

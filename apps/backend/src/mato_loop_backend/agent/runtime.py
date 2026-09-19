@@ -126,7 +126,10 @@ from mato_loop_backend.attachments import (
 )
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
-from mato_loop_backend.diagnostics import schedule_diagnostic_event
+from mato_loop_backend.diagnostics import (
+    diagnostic_access_active,
+    schedule_diagnostic_event,
+)
 from mato_loop_backend.error_contract import ErrorDescriptor, describe_error, error_payload
 from mato_loop_backend.events import run_events
 from mato_loop_backend.execution import (
@@ -1298,7 +1301,9 @@ class AgentRuntime:
                 diagnostic_owner = await db.scalar(
                     select(ChatSession.user_id).where(ChatSession.id == session_id)
                 )
-                diagnostics_active = isinstance(diagnostic_owner, UUID)
+                diagnostics_active = isinstance(
+                    diagnostic_owner, UUID
+                ) and await diagnostic_access_active(db, diagnostic_owner)
                 run._diagnostics_active = diagnostics_active
                 if run.agent_profile_id is None:
                     session = await db.get(ChatSession, session_id)
@@ -2654,12 +2659,16 @@ class AgentRuntime:
                 modelRequest=model_request,
             )
 
+            diagnostics_active = await diagnostic_access_active(db, chat_session.user_id)
+            run._diagnostics_active = diagnostics_active
+
             async def on_provider_retry(
                 attempt: int,
                 total: int,
                 status_code: int | None,
                 error_code: str,
                 model_request: int = model_request,
+                diagnostics_active: bool = diagnostics_active,
             ) -> None:
                 logger.info(
                     "Agent run %s retrying provider request (attempt %s/%s, status %s, code %s)",

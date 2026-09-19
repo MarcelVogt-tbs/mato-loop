@@ -1,7 +1,7 @@
 """add debug access diagnostics
 
 Revision ID: 1e71efcc90a5
-Revises: 012558511db3
+Revises: cf00a2d4dd0e
 Create Date: 2026-09-19 11:48:00.600773
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision: str = '1e71efcc90a5'
-down_revision: Union[str, None] = '012558511db3'
+down_revision: Union[str, None] = 'cf00a2d4dd0e'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
