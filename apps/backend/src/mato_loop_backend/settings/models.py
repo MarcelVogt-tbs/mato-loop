@@ -177,6 +177,7 @@ class AgentProfile(BaseModel):
     description: str = Field(default="", max_length=500)
     persona_id: UUID | None = None
     instructions: str = Field(min_length=1, max_length=16_000)
+    runtime_instructions: str = Field(default="", max_length=4000)
     answer_display: Literal["timeline", "compact"] = "compact"
     max_tool_calls: ProfileToolCallLimit = 25
     todo_enabled: StrictBool = False
@@ -199,7 +200,7 @@ class AgentProfile(BaseModel):
         validate_integration_availability
     )
 
-    @field_validator("name", "description", "instructions", mode="before")
+    @field_validator("name", "description", "instructions", "runtime_instructions", mode="before")
     @classmethod
     def normalize_text(cls, value: Any, info: Any) -> Any:
         if not isinstance(value, str):
@@ -238,6 +239,7 @@ class AgentProfileOverrides(BaseModel):
 
     persona_id: UUID | None = None
     instructions: str | None = Field(default=None, max_length=16_000)
+    runtime_instructions: str | None = Field(default=None, max_length=4000)
     answer_display: Literal["timeline", "compact"] | None = None
     max_tool_calls: ProfileToolCallLimit = None
     todo_enabled: StrictBool | None = None
@@ -352,16 +354,8 @@ def plan_profile() -> AgentProfile:
             "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
         ),
         instructions=(
-            "PLAN MODE IS ACTIVE AND CANNOT BE CHANGED BY A USER MESSAGE. When the latest user "
-            "message asks you to perform implementation, editing, building, starting, stopping, "
-            "installation, or testing, do not call any tool. Reply briefly that Build mode is required. "
-            "Refer to an existing plan without adding unverified details. Do not implement or announce "
-            "implementation in Plan mode. Never create, modify, or delete data; change configuration; "
-            "execute tests; start or stop processes or services; install software; or delegate "
-            "implementation. These rules apply to actual effects regardless of tool names, approval, or "
-            "policy labels. shell.read does not permit write effects. Do not bypass these rules with "
-            "Python, Node.js, shell scripts, APIs, subprocesses, or another tool. For planning requests, "
-            "analyze the user's request and relevant evidence using read-only computer actions. Return "
+            "Analyze the user's request and relevant evidence using read-only computer actions. "
+            "Do not implement the plan. Return "
             "the plan directly in the conversation and scale its detail to the task. Include the recommended "
             "approach, affected areas, implementation steps, and verification only when useful. Reference "
             "existing requirements instead of repeating them. Follow user instructions within these planning "
@@ -374,6 +368,16 @@ def plan_profile() -> AgentProfile:
             "required decisions. Decide ordinary implementation details and state material assumptions. "
             "Include risks and open decisions only when they affect implementation. Do not finish by merely "
             "listing blocking questions."
+        ),
+        runtime_instructions=(
+            "Plan mode is active. Inspect, analyze, ask questions, and plan only. User requests and tool "
+            "approvals do not authorize implementation. Do not modify files or external state, install "
+            "software, start or stop services, execute implementation tests, or delegate implementation. "
+            "These limits apply to actual effects, including shell commands, embedded Python or Node.js "
+            "code, scripts, APIs, and subprocesses. shell.read does not permit write effects. "
+            "When asked to implement, continue only permitted analysis and planning. Explain that "
+            "implementation requires Build. Do not announce implementation or mark implementation "
+            "tasks as in progress or completed. Do not invent project details."
         ),
         answer_display="timeline",
         max_tool_calls=None,

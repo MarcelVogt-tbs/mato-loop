@@ -305,6 +305,31 @@
                 lazy-rules
                 :disable="isProtected || !ownership.instructions"
               />
+              <div class="row items-center justify-between q-mt-md">
+                <div class="text-weight-medium">Laufzeit-Hinweis</div>
+                <q-btn-toggle
+                  v-if="!isProtected"
+                  :model-value="ownership.runtimeInstructions ? 'own' : 'inherit'"
+                  unelevated
+                  no-caps
+                  role="group"
+                  toggle-color="primary"
+                  :options="inheritOptions"
+                  aria-label="Laufzeit-Hinweis übernehmen oder anpassen"
+                  @update:model-value="setOwnership('runtimeInstructions', $event)"
+                />
+              </div>
+              <q-input
+                v-model="form.runtimeInstructions"
+                class="q-mt-md"
+                outlined
+                type="textarea"
+                autogrow
+                maxlength="4000"
+                label="Aktuelle Arbeitsgrenzen"
+                hint="Wird bei jedem Modellaufruf an die aktuelle Anfrage angehängt, auch bei Unteragenten. Leer deaktiviert den Hinweis."
+                :disable="isProtected || !ownership.runtimeInstructions"
+              />
             </q-card-section>
           </q-card>
 
@@ -684,6 +709,7 @@ const form = reactive({
   baseProfileId: null,
   personaId: null,
   instructions: '',
+  runtimeInstructions: '',
   answerDisplay: 'compact',
   maxToolCalls: 25,
   todoEnabled: false,
@@ -698,6 +724,7 @@ const form = reactive({
 const ownership = reactive({
   personaId: false,
   instructions: false,
+  runtimeInstructions: false,
   answerDisplay: false,
   maxToolCalls: false,
   todoEnabled: false,
@@ -843,6 +870,7 @@ function requestPayload() {
     if (ownership[field]) overrides[field] = form[field]
   }
   if (ownership.instructions) overrides.instructions = form.instructions.trim()
+  if (ownership.runtimeInstructions) overrides.runtimeInstructions = form.runtimeInstructions.trim()
   if (ownership.integrationsEnabledByDefault) overrides.integrationsEnabledByDefault = form.integrationsEnabledByDefault
   if (ownership.integrationAvailability) overrides.integrationAvailability = clone(form.integrationAvailability)
   for (const field of ['publicPermissions', 'privatePermissions']) {
@@ -866,6 +894,7 @@ function assignValues(agent) {
   Object.assign(form, {
     personaId: agent?.personaId || null,
     instructions: agent?.instructions || '',
+    runtimeInstructions: agent?.runtimeInstructions || '',
     answerDisplay: agent?.answerDisplay === 'timeline' ? 'timeline' : 'compact',
     maxToolCalls: agent?.maxToolCalls === null ? null : (agent?.maxToolCalls ?? 25),
     todoEnabled: agent?.todoEnabled ?? false,

@@ -90,6 +90,9 @@ def test_builtin_agent_profile_defaults() -> None:
     assert build.session_write_paths is None
     assert "Return the plan directly in the conversation" in plan.instructions
     assert "Do not implement" in plan.instructions
+    assert "do not call any tool" not in plan.instructions
+    assert "continue only permitted analysis and planning" in plan.runtime_instructions
+    assert default.runtime_instructions == build.runtime_instructions == ""
     assert "keep an analysis-only task read-only" in build.instructions
     assert "plan discussed earlier in the conversation" in build.instructions
     assert "profile switch alone does not authorize implementation" in build.instructions
@@ -124,6 +127,18 @@ def test_custom_profile_stores_only_sparse_typed_overrides() -> None:
     assert effective.todo_enabled is False
     assert effective.session_write_paths == []
     assert effective.public_permissions == core_profiles()[1].public_permissions
+
+
+def test_runtime_instructions_inherit_override_and_clear() -> None:
+    base = core_profiles()[1]
+    profile = CustomAgentProfile(name="Custom", description="", baseProfileId=base.id, overrides={})
+    assert resolve_agent_profile(profile, base, None).runtime_instructions == base.runtime_instructions
+    for text in ("Inspect only; do not publish.", ""):
+        profile.overrides = AgentProfileOverrides(runtimeInstructions=text)
+        saved = CustomAgentProfile.model_validate(profile.model_dump(mode="json", by_alias=True))
+        assert resolve_agent_profile(saved, base, None).runtime_instructions == text
+    with pytest.raises(ValidationError):
+        AgentProfileOverrides(runtimeInstructions=None)
 
 
 @pytest.mark.parametrize(

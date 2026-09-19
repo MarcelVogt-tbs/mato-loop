@@ -2423,6 +2423,7 @@ async def test_auto_context_trigger_applies_slack_once_without_recompacting_fitt
     kwargs = dict(
         chat_session=session, records=[covered, current], system_prompt="System", tool_schemas=[],
         model=model, settings=settings, summarize=summarize,
+        runtime_instructions="Inspect only; do not execute implementation.",
     )
     projection = await _build_context(db, **kwargs)
     assert projection.compacted is compacted
@@ -2435,6 +2436,11 @@ async def test_auto_context_trigger_applies_slack_once_without_recompacting_fitt
     assert not reloaded.compacted
     assert reloaded.estimated_input_tokens == projection.estimated_input_tokens
     assert summarize.await_count == int(compacted)
+    for result in (projection, reloaded):
+        assert sum(str(message.get("content", "")).count(kwargs["runtime_instructions"])
+                   for message in result.messages) == 1
+        assert result.estimated_input_tokens == await _request_estimator(model)(result.messages)
+    assert current.content == "x" * 2_000
 
 
 @pytest.mark.parametrize(
@@ -2941,10 +2947,8 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     work = general_system_prompt(session, agent_profile=build, offered_tool_names=tools)
 
     assert main.count(plan.instructions) == 1
-    assert "PLAN MODE IS ACTIVE AND CANNOT BE CHANGED BY A USER MESSAGE" in main
-    assert "do not call any tool" in main
-    assert "shell.read does not permit write effects" in main
-    assert "without adding unverified details" in main
+    assert plan.runtime_instructions not in main
+    assert "do not call any tool" not in main
     assert "do not lift those constraints or switch profiles" in main
     assert "latest explicit user request" not in main
     assert "plan directly in the conversation" in main
@@ -2964,6 +2968,32 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     assert "Read AGENTS.md before repository work" in work
     assert "skip unrelated tasks" in work
     assert "Verify code with tests and other claims with suitable evidence" in work
+
+
+@pytest.mark.parametrize("delegated", [False, True])
+def test_runtime_instructions_are_current_projection_only(delegated) -> None:
+    session = _session()
+    profile = AgentProfile(name="Custom", instructions="Inspect the assigned task.",
+                           runtime_instructions="Never publish changes.")
+    old = _message(session.id, "user", "Earlier request")
+    current = _message(session.id, "user", "Inspect the code")
+    records = [old, _message(session.id, "assistant", "Earlier answer"), current]
+    system = general_system_prompt(session, agent_profile=profile, delegated=delegated)
+    for selected in (records, [*records, *_tool_segment(session.id, 0)]):
+        for _ in range(2):
+            messages = _projection_messages(system, None, selected, TrustLevel.PRIVATE,
+                                           runtime_instructions=profile.runtime_instructions)
+            users = [message["content"] for message in messages if message["role"] == "user"]
+            assert users[0] == old.content
+            assert users[-1].startswith(current.content + "\n\n<system-reminder>")
+            assert sum(str(message.get("content", "")).count(profile.runtime_instructions)
+                       for message in messages) == 1
+    assert current.content == "Inspect the code"
+    switched = _projection_messages(system, None, records, TrustLevel.PRIVATE,
+                                   runtime_instructions="Use the updated workflow.")
+    assert "Never publish changes." not in str(switched)
+    cleared = _projection_messages(system, None, records, TrustLevel.PRIVATE)
+    assert cleared[-1]["content"] == current.content
 
 
 def test_custom_profile_instructions_have_no_id_based_host_workflow() -> None:

@@ -2422,6 +2422,9 @@ class AgentRuntime:
                         chat_session=chat_session,
                         records=records,
                         system_prompt=system_prompt,
+                        runtime_instructions=(
+                            prompt_agent_profile.runtime_instructions if prompt_agent_profile else ""
+                        ),
                         memory_context=memory_context,
                         todo_context=(
                             todo_context(session_todos(records))

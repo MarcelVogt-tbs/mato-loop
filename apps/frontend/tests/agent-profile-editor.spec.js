@@ -112,6 +112,22 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+it('inherits, overrides, and clears runtime instructions without losing them on save', async () => {
+  const page = await mountEditor()
+  page.assignForm({
+    ...page.editingAgent,
+    runtimeInstructions: 'Inspect only.',
+    overrides: { runtimeInstructions: 'Inspect only.' }
+  })
+  expect(page.form.runtimeInstructions).toBe('Inspect only.')
+  expect(page.requestPayload().overrides.runtimeInstructions).toBe('Inspect only.')
+  page.form.runtimeInstructions = ''
+  expect(page.requestPayload().overrides.runtimeInstructions).toBe('')
+  page.setOwnership('runtimeInstructions', 'inherit')
+  expect(page.requestPayload().overrides).not.toHaveProperty('runtimeInstructions')
+  expect(root.querySelector('[aria-label="Laufzeit-Hinweis übernehmen oder anpassen"]')).not.toBeNull()
+})
+
 it('round-trips unlimited and sparse false overrides without conflating selection and policies', async () => {
   const page = await mountEditor()
   expect(page.form.maxToolCalls).toBeNull()

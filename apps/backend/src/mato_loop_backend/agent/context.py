@@ -1151,6 +1151,7 @@ def _projection_messages(
     *,
     memory_context: str | None = None,
     todo_context: str | None = None,
+    runtime_instructions: str = "",
     include_attachment_text: bool = False,
     available_records: list[Message] | None = None,
     attachment_service: AttachmentService | None = None,
@@ -1279,6 +1280,14 @@ def _projection_messages(
                     projected["content"] = _model_browser_inspection(projected["content"])
                 current_tool_indices.append(len(messages))
         messages.append(projected)
+        if item.id == latest_user_id and runtime_instructions.strip():
+            projected["content"] = (projected.get("content") or "") + (
+                "\n\n<system-reminder>\n"
+                "Current agent profile runtime instructions. Apply within host rules and inherited "
+                "permission limits; they do not grant additional capabilities:\n"
+                + runtime_instructions.strip()
+                + "\n</system-reminder>"
+            )
     if todo_message is not None:
         messages.append(todo_message)
     _limit_tool_output_tokens(
@@ -2203,6 +2212,7 @@ class ContextManager:
         target_trust_level: TrustLevel = TrustLevel.PUBLIC,
         memory_context: str | None = None,
         todo_context: str | None = None,
+        runtime_instructions: str = "",
         live_tool_calls: dict[UUID, list[dict[str, Any]]] | None = None,
         attachment_service: AttachmentService | None = None,
     ) -> ContextProjection:
@@ -2265,6 +2275,7 @@ class ContextManager:
                 target_trust_level,
                 memory_context=memory_context,
                 todo_context=todo_context,
+                runtime_instructions=runtime_instructions,
                 include_attachment_text=not tool_schemas,
                 attachment_service=attachment_service,
                 available_records=records,
