@@ -57,7 +57,9 @@ export const useQuestionStore = defineStore('questions', {
           answers: Object.fromEntries(request.questions.map((question) => [question.id, []])),
           custom: {},
           customOn: {},
-          rememberForSession: {},
+          rememberForSession: Object.fromEntries(
+            request.questions.filter((question) => question.one_time === true).map((question) => [question.id, false])
+          ),
           minimized: false
         }
       }

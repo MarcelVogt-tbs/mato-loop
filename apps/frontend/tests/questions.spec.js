@@ -90,7 +90,7 @@ describe('agent questions', () => {
       id: 'question-1',
       questions: [
         { id: 'format', type: 'single_choice' },
-        { id: 'note', type: 'free_text' }
+        { id: 'note', type: 'free_text', one_time: true }
       ]
     }
     const draft = questions.ensureDraft(request)
@@ -99,7 +99,8 @@ describe('agent questions', () => {
 
     expect(questions.ensureDraft(request)).toMatchObject({
       index: 1,
-      answers: { format: ['Kurz'], note: [] }
+      answers: { format: ['Kurz'], note: [] },
+      rememberForSession: { note: false }
     })
   })
 

@@ -106,12 +106,14 @@ it('submits visible and masked one-time credentials together and clears both', a
   expect(username.autocomplete).toBe('off')
   username.value = '  viktor  '
   username.dispatchEvent(new Event('input', { bubbles: true }))
-  root.querySelector('input[type="checkbox"]').click()
+  const remember = root.querySelector('[role="checkbox"]')
+  expect(remember.getAttribute('aria-checked')).toBe('false')
+  remember.click()
   ;[...root.querySelectorAll('button')].find((button) => button.textContent.includes('Weiter')).click()
   await nextTick()
 
   const password = root.querySelector('input[type="password"]')
-  expect(root.querySelector('input[type="checkbox"]').checked).toBe(false)
+  expect(root.querySelector('[role="checkbox"]').getAttribute('aria-checked')).toBe('false')
   expect(password.autocomplete).toBe('new-password')
   password.value = '  exact secret  '
   password.dispatchEvent(new Event('input', { bubbles: true }))
@@ -128,5 +130,5 @@ it('submits visible and masked one-time credentials together and clears both', a
   ;[...root.querySelectorAll('button')].find((button) => button.textContent.includes('Zurück')).click()
   await nextTick()
   expect(root.querySelector('input[type="text"]').value).toBe('')
-  expect(root.querySelector('input[type="checkbox"]').checked).toBe(true)
+  expect(root.querySelector('[role="checkbox"]').getAttribute('aria-checked')).toBe('true')
 })
