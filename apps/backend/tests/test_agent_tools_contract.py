@@ -4152,9 +4152,9 @@ async def test_webfetch_applies_the_effective_policy(
     payload = json.loads(result.content)
     assert payload == {
         "sourceId": payload["sourceId"],
-        "url": "https://example.com/page?REDACTED",
+        "url": "https://example.com/page?token=secret",
         "kind": "webfetch",
-        "citationEligible": False,
+        "citationEligible": True,
         "title": "Example page",
         "statusCode": 200,
         "contentType": "text/plain",
@@ -4167,9 +4167,9 @@ async def test_webfetch_applies_the_effective_policy(
         "sources": [
             {
                 "sourceId": payload["sourceId"],
-                "url": "https://example.com/page?REDACTED",
+                "url": "https://example.com/page?token=secret",
                 "kind": "webfetch",
-                "citationEligible": False,
+                "citationEligible": True,
                 "title": "Example page",
             }
         ]
@@ -4184,7 +4184,7 @@ async def test_webfetch_applies_the_effective_policy(
         request = context.ask_handler.await_args.args[0]
         assert request.capability == "network.fetch"
         assert request.resource_type == "url"
-        assert "secret" not in request.summary
+        assert "https://example.com/page?token=secret" in request.summary
 
 
 @pytest.mark.parametrize(
@@ -4435,7 +4435,7 @@ async def test_webfetch_rejects_changed_bound_settings(tmp_path, monkeypatch) ->
         ("application/json", '{"title":"A & B <value>","items":[1,2]}\n', "text"),
     ],
 )
-async def test_webfetch_source_ids_distinguish_redacted_query_values(
+async def test_webfetch_sources_preserve_distinct_query_values(
     tmp_path, monkeypatch, content_type, content, output_format,
 ) -> None:
     async def fake_fetch(url, **_kwargs):
@@ -4468,11 +4468,10 @@ async def test_webfetch_source_ids_distinguish_redacted_query_values(
 
     payloads = [json.loads(result.content) for result in results]
     assert payloads[0]["sourceId"] != payloads[1]["sourceId"]
-    assert payloads[0]["citationEligible"] is False
-    assert payloads[1]["citationEligible"] is False
-    assert payloads[0]["url"] == payloads[1]["url"] == (
-        "https://example.com/product?REDACTED"
-    )
+    assert payloads[0]["citationEligible"] is True
+    assert payloads[1]["citationEligible"] is True
+    assert payloads[0]["url"] == "https://example.com/product?variant=first"
+    assert payloads[1]["url"] == "https://example.com/product?variant=second"
     for payload in payloads:
         assert payload["content"] == content
         assert payload["contentType"] == content_type

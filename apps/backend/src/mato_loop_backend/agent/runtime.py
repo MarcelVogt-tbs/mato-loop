@@ -147,9 +147,9 @@ from mato_loop_backend.integrations import (
     SearchIntegrationError,
     TranscriptError,
     WebFetchError,
+    canonicalize_url,
     canonicalize_youtube_video_url,
     effective_execution_integration_settings,
-    sanitize_url_for_display,
     search_available,
 )
 from mato_loop_backend.memory import policy as memory_policy
@@ -593,7 +593,7 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
         safe.get("url"), str
     ):
         try:
-            safe["url"] = sanitize_url_for_display(safe["url"])
+            safe["url"] = canonicalize_url(safe["url"])
         except WebFetchError:
             safe["url"] = "[Invalid URL]"
     instructions = safe.get("instructions")

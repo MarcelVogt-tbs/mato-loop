@@ -60,7 +60,6 @@ from mato_loop_backend.integrations.webfetch import (
     fetch_web,
     normalize_source_title,
     request_web_bytes,
-    sanitize_url_for_display,
 )
 from mato_loop_backend.integrations.youtube_transcript import (
     TranscriptError,
@@ -122,5 +121,4 @@ __all__ = [
     "load_caldav_resources",
     "request_web_bytes",
     "open_code_client",
-    "sanitize_url_for_display",
 ]

@@ -23,7 +23,6 @@ from mato_loop_backend.integrations import (
     canonicalize_url,
     fetch_web,
     request_web_bytes,
-    sanitize_url_for_display,
     webfetch,
 )
 
@@ -115,13 +114,10 @@ async def test_rejects_invalid_urls(url: str, code: str) -> None:
     assert await _error_code(fetch_web(url)) == code
 
 
-def test_canonicalizes_urls_and_redacts_query_values_for_display() -> None:
+def test_canonicalizes_urls_with_query_values() -> None:
     url = "HTTPS://ExAmPle.com/path?token=very-secret&empty=#fragment"
 
     assert canonicalize_url(url) == "https://example.com/path?token=very-secret&empty="
-    displayed = sanitize_url_for_display(url)
-    assert displayed == "https://example.com/path?REDACTED"
-    assert "very-secret" not in displayed
 
 
 async def test_authorization_runs_after_normalization_and_resolution(monkeypatch) -> None:

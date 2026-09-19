@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.integrations import (
     canonicalize_url,
     canonicalize_youtube_video_url,
-    sanitize_url_for_display,
 )
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
 from mato_loop_backend.settings import (
@@ -708,8 +707,8 @@ def webfetch_permission(url: str) -> PermissionRequest:
         action_kind="webfetch",
         risk_level="medium",
         title="Webseite abrufen?",
-        summary=f"Der Agent möchte {sanitize_url_for_display(canonical_url)} abrufen.",
-        resource_display=sanitize_url_for_display(canonical_url),
+        summary=f"Der Agent möchte {canonical_url} abrufen.",
+        resource_display=canonical_url,
     )
 
 

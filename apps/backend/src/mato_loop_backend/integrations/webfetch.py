@@ -289,13 +289,6 @@ def canonicalize_url(value: str) -> str:
     return str(url)
 
 
-def sanitize_url_for_display(value: str) -> str:
-    url, _, _ = _parse_url(canonicalize_url(value))
-    if url.query_string:
-        url = url.with_query("REDACTED")
-    return str(url)
-
-
 def normalize_source_title(value: object, *, max_length: int = 300) -> str | None:
     if not isinstance(value, str):
         return None

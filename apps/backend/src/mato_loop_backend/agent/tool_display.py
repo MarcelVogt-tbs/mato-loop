@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from mato_loop_backend.integrations import WebFetchError, sanitize_url_for_display
+from mato_loop_backend.integrations.webfetch import WebFetchError, canonicalize_url
 
 TOOL_GROUPS = (
     {"id": "filesystem", "label": "Dateisystem", "icon": "folder", "emoji": "📁"},
@@ -149,7 +149,7 @@ def _summary(tool_name: str, arguments: dict[str, Any]) -> str | None:
         url = arguments.get("url")
         if isinstance(url, str):
             try:
-                value = sanitize_url_for_display(url)
+                value = canonicalize_url(url)
             except (ValueError, WebFetchError):
                 pass
     elif tool_name in {"web_search", "session_search", "mail_search", "recipes_search"}:

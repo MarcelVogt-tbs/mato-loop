@@ -1231,8 +1231,7 @@ def test_message_payload_enriches_legacy_tool_calls_without_trusting_invalid_dis
     display = message_payload(message)["toolCalls"][0]["toolDisplay"]
     assert display["label"] == "Website aufrufen"
     assert display["icon"] == "language"
-    assert display["summary"] == "https://example.org/path?REDACTED"
-    assert "secret" not in str(display)
+    assert display["summary"] == "https://example.org/path?token=secret"
 
 
 def test_assistant_message_and_run_payload_expose_attribution() -> None:

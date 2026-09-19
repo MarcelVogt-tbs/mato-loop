@@ -64,7 +64,7 @@ def test_tool_activity_labels_are_short_and_specific() -> None:
     assert run_activity_label("processing_tool", tool="unknown") == "Tool ausführen"
 
 
-def test_tool_display_groups_labels_summaries_and_redacts_unlisted_arguments() -> None:
+def test_tool_display_groups_labels_summaries_and_omits_unlisted_arguments() -> None:
     definition = SimpleNamespace(group="integrations", label="Browser-Navigation")
     navigate = tool_display(
         "browser_navigate",
@@ -76,12 +76,12 @@ def test_tool_display_groups_labels_summaries_and_redacts_unlisted_arguments() -
 
     assert navigate == {
         "group": "web", "groupLabel": "Web", "icon": "language", "emoji": "🌐",
-        "label": "Website aufrufen", "summary": "https://example.org/path?REDACTED",
+        "label": "Website aufrufen", "summary": "https://example.org/path?token=secret",
     }
     assert tabs["icon"] == navigate["icon"]
     assert tabs["label"] == "Browser-Tab schließen"
     assert len(search["summary"]) == 140
-    assert "secret" not in str((navigate, search))
+    assert "prompt" not in str((navigate, search))
     assert tool_display("private_custom_action", {})["label"] == "Tool ausführen"
 
 

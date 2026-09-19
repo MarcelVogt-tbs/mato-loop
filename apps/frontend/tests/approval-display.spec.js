@@ -196,11 +196,11 @@ describe('approval display', () => {
     }
     expect(approvalResource(approval)).toEqual({
       label: 'Webadresse',
-      value: 'https://example.com/report?…'
+      value: 'https://example.com/report?token=secret'
     })
     expect(permissionGrantDisplay(approval)).toEqual({
       label: 'Webseite abrufen · Exakte URL',
-      value: 'https://example.com/report?…',
+      value: 'https://example.com/report?token=secret',
       icon: 'language'
     })
 
@@ -210,15 +210,14 @@ describe('approval display', () => {
       resourceDisplay: 'https://example.com/report?REDACTED'
     })).toEqual({
       label: 'Webseite abrufen · Exakte URL',
-      value: 'https://example.com/report?… · aaaaaaaa',
+      value: 'https://example.com/report?REDACTED · aaaaaaaa',
       icon: 'language'
     })
   })
 
-  it('redacts URL query values from technical details', () => {
+  it('preserves URL query values in technical details', () => {
     const formatted = technicalDetailsDisplay({ url: 'https://example.com/page?token=secret' }).text
-    expect(formatted).toContain('https://example.com/page?…')
-    expect(formatted).not.toContain('secret')
+    expect(formatted).toContain('https://example.com/page?token=secret')
   })
 
   it('describes integration operations and private-data grants', () => {

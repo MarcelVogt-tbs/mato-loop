@@ -236,19 +236,19 @@ describe('tool display', () => {
     })
   })
 
-  it('identifies webfetch exactly and hides sensitive URL parameters', () => {
+  it('identifies webfetch exactly and preserves URL parameters', () => {
     expect(toolIdentity('webfetch')).toEqual({ label: 'Webseite abrufen', icon: 'language' })
     expect(toolSummary({
       name: 'webfetch',
       arguments: { url: 'https://user:secret@example.com/private?token=secret' }
-    })).toBe('https://example.com/private?…')
+    })).toBe('https://example.com/private?token=secret')
   })
 
-  it('uses a safe URL summary for historical browser navigation', () => {
+  it('uses a URL summary without embedded credentials for historical browser navigation', () => {
     expect(toolSummary({
       name: 'browser_navigate',
       arguments: { url: 'https://user:secret@example.com/private?token=secret' }
-    })).toBe('https://example.com/private?…')
+    })).toBe('https://example.com/private?token=secret')
   })
 
   it('summarizes calendar, task and session resources without exposing tokens', () => {

@@ -213,7 +213,6 @@ from mato_loop_backend.integrations import (
     fetch_web,
     fetch_youtube_transcript,
     normalize_source_title,
-    sanitize_url_for_display,
     search_web,
 )
 from mato_loop_backend.integrations.registry import (
@@ -1990,12 +1989,11 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
             "webfetch.emptyResponse", params={"statusCode": result.status_code}
         )
     canonical_source_url = canonicalize_url(result.final_url)
-    source_url = sanitize_url_for_display(canonical_source_url)
     source = {
         "sourceId": evidence_source_id(canonical_source_url),
-        "url": source_url,
+        "url": canonical_source_url,
         "kind": "webfetch",
-        "citationEligible": canonical_source_url == source_url,
+        "citationEligible": True,
     }
     title = normalize_source_title(result.title)
     if title is not None:

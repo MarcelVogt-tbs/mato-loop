@@ -39,7 +39,6 @@ from mato_loop_backend.agent.tools import (
     resolve_tool_execution_policy,
     tool_registry,
 )
-from mato_loop_backend.integrations import canonicalize_url
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
@@ -1531,7 +1530,7 @@ async def test_session_search_and_session_read_grants_remain_separate(tmp_path) 
     ) == PermissionDecision.ALLOW
 
 
-def test_webfetch_permission_hashes_the_full_canonical_url_and_redacts_summary() -> None:
+def test_webfetch_permission_hashes_and_displays_the_full_canonical_url() -> None:
     first = webfetch_permission("HTTPS://Example.com/path?token=secret#fragment")
     equivalent = webfetch_permission("https://example.com/path?token=secret")
     other_query = webfetch_permission("https://example.com/path?token=other")
@@ -1541,10 +1540,8 @@ def test_webfetch_permission_hashes_the_full_canonical_url_and_redacts_summary()
     assert first.resource_scope == equivalent.resource_scope
     assert first.resource_scope != other_query.resource_scope
     assert len(first.resource_scope) == 64
-    assert "?REDACTED" in first.summary
-    assert "secret" not in first.summary
-    assert first.resource_display == "https://example.com/path?REDACTED"
-    assert canonicalize_url("https://example.com/path?token=secret") not in first.summary
+    assert "https://example.com/path?token=secret" in first.summary
+    assert first.resource_display == "https://example.com/path?token=secret"
 
 
 def test_transcript_permission_normalizes_equivalent_video_urls() -> None:

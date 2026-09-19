@@ -5,8 +5,8 @@ import {
 } from '../src/utils/webfetch'
 
 describe('webfetch display', () => {
-  it('removes credentials and query values from displayed URLs', () => {
+  it('removes credentials while preserving query values', () => {
     expect(cleanUrlForDisplay('https://user:secret@example.com/a?token=secret#part'))
-      .toBe('https://example.com/a?…')
+      .toBe('https://example.com/a?token=secret')
   })
 })

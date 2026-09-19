@@ -1224,13 +1224,13 @@ def test_public_reasoning_payload_preserves_long_content() -> None:
     assert "truncated" not in payload
 
 
-def test_webfetch_url_query_is_redacted_before_persistence() -> None:
+def test_webfetch_url_query_is_preserved_before_persistence() -> None:
     arguments = _safe_tool_arguments(
         "webfetch", {"url": "https://example.com/page?token=secret", "format": "text"}
     )
 
     assert arguments == {
-        "url": "https://example.com/page?REDACTED",
+        "url": "https://example.com/page?token=secret",
         "format": "text",
     }
 
@@ -1353,7 +1353,7 @@ def test_responses_replay_write_file_content_is_fully_redacted() -> None:
     assert '"redacted": true' in persisted
 
 
-def test_responses_replay_webfetch_arguments_are_redacted() -> None:
+def test_responses_replay_webfetch_arguments_preserve_query_values() -> None:
     call = ToolCall(
         id="call-1",
         name="webfetch",
@@ -1374,7 +1374,9 @@ def test_responses_replay_webfetch_arguments_are_redacted() -> None:
         [call],
     )
 
-    assert "secret" not in result["responses_output_items"][0]["arguments"]
+    assert result["responses_output_items"][0]["arguments"] == (
+        '{"url": "https://example.com/page?token=secret"}'
+    )
 
 
 def test_responses_replay_mutation_tokens_are_redacted() -> None:
@@ -1435,7 +1437,7 @@ def test_agent_identity_instructions_are_redacted_and_reprojected_as_text() -> N
     assert "were truncated" in projected[0]["arguments"]["instructions"]
 
 
-def test_object_responses_replay_webfetch_arguments_are_redacted() -> None:
+def test_object_responses_replay_webfetch_arguments_preserve_query_values() -> None:
     result = _safe_provider_data(
         {
             "responses_output_items": [
@@ -1451,7 +1453,7 @@ def test_object_responses_replay_webfetch_arguments_are_redacted() -> None:
     )
 
     assert result["responses_output_items"][0]["arguments"] == (
-        '{"url": "https://example.com/?REDACTED"}'
+        '{"url": "https://example.com/?secret"}'
     )
 
 

@@ -138,7 +138,7 @@ A permission consists of a capability and typed resource matcher. Security decis
 - Project-session file grants match the exact canonical project ID, target session ID, and relative path. Repeated reads and pagination reuse them under `ask`; each evaluation rechecks current ownership, project membership, and target-session eligibility. They do not authorize another path or a subtree.
 - Personal-profile update grants bind the owner and resolved data audience (`private_models`, `public_models`, or `both_models`) in addition to the normal session, agent-profile, and executing-model trust binding. They cover profile updates for that audience, not only the fields displayed in the first request. Legacy owner-only UUID grants do not authorize a new audience-bound request.
 - Session-search matchers represent browse and search as one collection resource. A grant to read one session does not allow either discovery operation.
-- URL matchers use the SHA-256 hash of the complete canonical URL. Display metadata is persisted separately without query values.
+- URL matchers use the SHA-256 hash of the complete canonical URL. Display metadata separately persists that complete canonical URL, including query values.
 - Persisted matchers deserialize losslessly to the same typed matcher.
 - Approval display title, summary, and risk are metadata, not matching inputs.
 - Integration session grants compare the integration UUID, canonical binding-revision hash, and host-generated stable resource key. Operation keys and arguments remain one-time approval inputs and are never reusable grant identity; remote labels and URLs are display-only.
