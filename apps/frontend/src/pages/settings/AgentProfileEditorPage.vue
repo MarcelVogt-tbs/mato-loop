@@ -14,7 +14,7 @@
       <q-toolbar-title>
         <div class="row items-center q-gutter-sm">
           <div class="text-h6 text-weight-bold">
-            {{ isCreate ? 'Profil erstellen' : (isProtected ? `${editingAgent?.name || 'Profil'} ansehen` : (editingAgent?.name || 'Profil bearbeiten')) }}
+            {{ isCreate ? 'Profil erstellen' : (accessProtected ? `${editingAgent?.name || 'Profil'} ansehen` : (editingAgent?.name || 'Profil bearbeiten')) }}
           </div>
           <q-badge v-if="dirty" color="warning" text-color="black" label="Ungespeichert" />
         </div>
@@ -30,7 +30,7 @@
           @update:model-value="switchScope"
         />
         <q-btn
-          v-if="!isProtected"
+          v-if="!accessProtected"
           class="col-auto"
           unelevated
           no-caps
@@ -53,7 +53,7 @@
 
     <q-banner v-if="isProtected" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="visibility" color="primary" /></template>
-      Dieses mitgelieferte Basisprofil ist schreibgeschützt.
+      {{ accessProtected ? 'Dieses Profil ist schreibgeschützt.' : 'Die Profildefinition ist geschützt. Berechtigungen und Integrationen können angepasst werden.' }}
     </q-banner>
 
     <q-banner v-if="loadFailed" rounded class="bg-negative text-white q-mb-md">
@@ -414,27 +414,8 @@
 
           <q-banner rounded class="app-surface-tonal q-mb-md">
             <template #avatar><q-icon name="privacy_tip" color="primary" /></template>
-            Nicht angepasste Berechtigungsblöcke kommen vom Basisprofil. Innerhalb eigener Blöcke folgt „Erben“ den wirksamen Tool- und Integrationsstandards.
+            „Erben“ übernimmt jede einzelne Berechtigung vom Basisprofil. Ohne Profilvorgabe gelten die wirksamen Tool- und Integrationsstandards.
           </q-banner>
-
-          <q-card flat class="app-surface q-mb-md">
-            <q-card-section>
-              <div v-for="audience in audiences" :key="audience.value" class="row items-center justify-between q-py-xs">
-                <div class="text-weight-medium">{{ audience.label }}</div>
-                <q-btn-toggle
-                  v-if="!isProtected"
-                  :model-value="ownership[permissionField(audience.value)] ? 'own' : 'inherit'"
-                  unelevated
-                  no-caps
-                  role="group"
-                  toggle-color="primary"
-                  :options="inheritOptions"
-                  :aria-label="`${audience.label} Berechtigungen übernehmen oder anpassen`"
-                  @update:model-value="setOwnership(permissionField(audience.value), $event)"
-                />
-              </div>
-            </q-card-section>
-          </q-card>
 
           <q-card
             v-for="group in permissionGroups"
@@ -473,7 +454,7 @@
                       map-options
                       :label="audience.label"
                       :options="policyOptions(baselinePolicy(audience.value, action.capability), action.allowedPolicies)"
-                      :disable="isProtected || action.available === false || !ownership[permissionField(audience.value)]"
+                      :disable="accessProtected || action.available === false"
                       :hint="`Wirksam: ${policyLabel(effectiveGlobalPolicy(audience.value, action.capability))}`"
                       :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                       persistent-hint
@@ -489,48 +470,28 @@
         <q-tab-panel name="integrations" class="q-pa-none">
           <q-card flat class="app-surface q-mb-md">
             <q-card-section>
-              <div class="row items-center justify-between q-mb-sm">
-                <div class="text-subtitle1 text-weight-bold">Integrationen standardmäßig aktivieren</div>
-                <q-btn-toggle
-                  v-if="!isProtected"
-                  :model-value="ownership.integrationsEnabledByDefault ? 'own' : 'inherit'"
-                  unelevated
-                  no-caps
-                  role="group"
-                  toggle-color="primary"
-                  :options="inheritOptions"
-                  aria-label="Integrationsstandard übernehmen oder anpassen"
-                  @update:model-value="setOwnership('integrationsEnabledByDefault', $event)"
-                />
-              </div>
-              <q-toggle
-                v-model="form.integrationsEnabledByDefault"
-                label="Integrationen standardmäßig aktivieren"
-                :disable="isProtected || !ownership.integrationsEnabledByDefault"
+              <q-select
+                v-model="integrationDefault"
+                outlined
+                emit-value
+                map-options
+                label="Integrationen standardmäßig"
+                :options="[
+                  { label: `Erben (${baseProfile?.integrationsEnabledByDefault ? 'Aktiv' : 'Deaktiviert'})`, value: 'inherit' },
+                  { label: 'Aktiv', value: true },
+                  { label: 'Deaktiviert', value: false }
+                ]"
+                :disable="accessProtected"
+                :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                hint="Gilt auch für neue Integrationen. Einzelne Einstellungen haben Vorrang."
+                persistent-hint
               />
-              <div class="text-body2 app-muted">
-                {{ form.integrationsEnabledByDefault
-                  ? 'Auch künftig konfigurierte Integrationen sind für dieses Profil verfügbar.'
-                  : 'Nur ausdrücklich aktivierte Integrationen sind für dieses Profil verfügbar.' }}
-                Einzelne Abweichungen bleiben beim Umschalten erhalten. Die Auswahl erteilt keine Berechtigungen.
-              </div>
             </q-card-section>
           </q-card>
           <q-card flat class="app-surface">
             <q-card-section>
               <div class="row items-center justify-between">
                 <div class="text-subtitle1 text-weight-bold">Integrationsauswahl</div>
-                <q-btn-toggle
-                  v-if="!isProtected"
-                  :model-value="ownership.integrationAvailability ? 'own' : 'inherit'"
-                  unelevated
-                  no-caps
-                  role="group"
-                  toggle-color="primary"
-                  :options="inheritOptions"
-                  aria-label="Integrationsauswahl übernehmen oder anpassen"
-                  @update:model-value="setOwnership('integrationAvailability', $event)"
-                />
               </div>
               <div class="text-caption app-muted">
                 Optional von Integrations- und Ressourcenstandards abweichen. Ressourcen werden erst beim Öffnen einer Integration geladen.
@@ -557,11 +518,11 @@
                     emit-value
                     map-options
                     :label="`Verfügbarkeit: ${integration.name}`"
-                    :options="integrationAvailabilityOptions"
+                    :options="integrationAvailabilityOptions(integration.id)"
                     :hint="integrationHint(integration)"
                     :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                     persistent-hint
-                    :disable="isProtected || !ownership.integrationAvailability"
+                    :disable="accessProtected || !integration.enabled || integration.available === false"
                     @update:model-value="setIntegrationAvailability(integration.id, $event)"
                   />
                   <div v-if="!integration.supportsPolicies" class="text-caption app-muted q-mt-sm">
@@ -594,7 +555,7 @@
                             map-options
                             :label="audience.label"
                             :options="policyOptions(inheritedIntegrationPolicy(audience.value, integration.id, action), action.allowedPolicies)"
-                            :disable="isProtected || !ownership[permissionField(audience.value)] || !integrationAvailable(integration)"
+                            :disable="accessProtected || action.available === false || !integrationAvailable(integration)"
                             :hint="`Wirksam: ${policyLabel(effectiveIntegrationPolicy(audience.value, integration.id, action.capability))}`"
                             :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                             persistent-hint
@@ -637,7 +598,7 @@
                               map-options
                               :label="audience.label"
                               :options="policyOptions(inheritedResourcePolicy(audience.value, integration.id, resource, action.capability), action.allowedPolicies)"
-                              :disable="isProtected || !ownership[permissionField(audience.value)] || !integrationAvailable(integration) || resource.hardUnavailableCapabilities.includes(action.capability)"
+                              :disable="accessProtected || action.available === false || !integrationAvailable(integration) || resource.hardUnavailableCapabilities.includes(action.capability)"
                               :hint="resourcePolicyHint(audience.value, integration.id, resource, action.capability)"
                               :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                               persistent-hint
@@ -659,7 +620,7 @@
       <div class="row justify-end q-gutter-sm q-py-md">
         <q-btn flat no-caps label="Zurück" :disable="agents.saving" :to="{ name: 'settings-agents', query: { scope } }" />
         <q-btn
-          v-if="!isProtected"
+          v-if="!accessProtected"
           unelevated
           no-caps
           type="submit"
@@ -729,9 +690,6 @@ const ownership = reactive({
   maxToolCalls: false,
   todoEnabled: false,
   integrationsEnabledByDefault: false,
-  integrationAvailability: false,
-  publicPermissions: false,
-  privatePermissions: false,
   delegationEnabled: false,
   sessionWritePaths: false
 })
@@ -760,7 +718,16 @@ const baseProfileOptions = computed(() => baseProfiles.value.map((agent) => ({
   label: agent.name,
   value: agent.id
 })))
-const baseProfile = computed(() => baseProfiles.value.find((agent) => agent.id === form.baseProfileId) || null)
+const baseProfile = computed(() => editingAgent.value?.accessBaseline || baseProfiles.value.find((agent) => agent.id === form.baseProfileId) || null)
+const integrationDefault = computed({
+  get: () => ownership.integrationsEnabledByDefault ? form.integrationsEnabledByDefault : 'inherit',
+  set(value) {
+    ownership.integrationsEnabledByDefault = value !== 'inherit'
+    form.integrationsEnabledByDefault = value === 'inherit'
+      ? baseProfile.value?.integrationsEnabledByDefault ?? true
+      : value
+  }
+})
 const personaOptions = computed(() => [
   { label: 'Standard-Persona', value: null },
   ...agents.personas
@@ -775,13 +742,14 @@ const policyLabels = { disabled: 'Deaktiviert', ask: 'Nachfragen', auto: 'Automa
 const clone = (value) => JSON.parse(JSON.stringify(value))
 const isCreate = computed(() => route.name === 'settings-agent-create')
 const isProtected = computed(() => editingAgent.value?.protected === true)
+const accessProtected = computed(() => isProtected.value && !editingAgent.value?.accessEditable)
 const blocked = computed(() => scope.value === 'personal' && !agents.personalAgentsEnabled)
-const dirty = computed(() => !isProtected.value && Boolean(savedPayload.value) && JSON.stringify(requestPayload()) !== savedPayload.value)
-const integrationAvailabilityOptions = computed(() => [
-  { label: `Standard (${form.integrationsEnabledByDefault ? 'Aktiv' : 'Deaktiviert'})`, value: 'inherit' },
+const dirty = computed(() => !accessProtected.value && Boolean(savedPayload.value) && JSON.stringify(requestPayload()) !== savedPayload.value)
+const integrationAvailabilityOptions = (id) => [
+  { label: `Erben (${(baseProfile.value?.integrationAvailability?.[id] ?? form.integrationsEnabledByDefault) ? 'Aktiv' : 'Deaktiviert'})`, value: 'inherit' },
   { label: 'Aktiv', value: true },
   { label: 'Deaktiviert', value: false }
-])
+]
 const baselineActions = computed(() => Object.fromEntries(audiences.map(({ value }) => [
   value,
   Object.fromEntries((agents.groupsByTrust[value] || []).flatMap((group) => (
@@ -849,7 +817,7 @@ function audienceResource(audience, integrationId, resourceKey) {
 
 function integrationAvailable(integration) {
   return Boolean(integration?.enabled && integration.available !== false
-    && (form.integrationAvailability[integration.id] ?? form.integrationsEnabledByDefault))
+    && (form.integrationAvailability[integration.id] ?? baseProfile.value?.integrationAvailability?.[integration.id] ?? form.integrationsEnabledByDefault))
 }
 
 function integrationHint(integration) {
@@ -872,9 +840,9 @@ function requestPayload() {
   if (ownership.instructions) overrides.instructions = form.instructions.trim()
   if (ownership.runtimeInstructions) overrides.runtimeInstructions = form.runtimeInstructions.trim()
   if (ownership.integrationsEnabledByDefault) overrides.integrationsEnabledByDefault = form.integrationsEnabledByDefault
-  if (ownership.integrationAvailability) overrides.integrationAvailability = clone(form.integrationAvailability)
+  if (Object.keys(form.integrationAvailability).length) overrides.integrationAvailability = clone(form.integrationAvailability)
   for (const field of ['publicPermissions', 'privatePermissions']) {
-    if (ownership[field]) overrides[field] = clone(form[field])
+    if (Object.values(form[field]).some((entries) => Object.keys(entries).length)) overrides[field] = clone(form[field])
   }
   if (ownership.sessionWritePaths) {
     overrides.sessionWritePaths = form.sessionWriteMode === 'unrestricted'
@@ -899,9 +867,6 @@ function assignValues(agent) {
     maxToolCalls: agent?.maxToolCalls === null ? null : (agent?.maxToolCalls ?? 25),
     todoEnabled: agent?.todoEnabled ?? false,
     integrationsEnabledByDefault: agent?.integrationsEnabledByDefault ?? true,
-    integrationAvailability: clone(agent?.integrationAvailability || {}),
-    publicPermissions: clone(agent?.publicPermissions || emptyPermissions()),
-    privatePermissions: clone(agent?.privatePermissions || emptyPermissions()),
     delegationEnabled: agent?.delegationEnabled ?? false,
     sessionWriteMode: writePaths === null || writePaths === undefined
       ? 'unrestricted'
@@ -940,6 +905,9 @@ function assignForm(agent = null) {
   Object.assign(form, {
     name: agent?.protected ? agent.name : (agent?.name || ''),
     description: agent?.protected ? agent.description : (agent?.description || ''),
+    integrationAvailability: clone(overrides.integrationAvailability || {}),
+    publicPermissions: { ...emptyPermissions(), ...clone(overrides.publicPermissions || {}) },
+    privatePermissions: { ...emptyPermissions(), ...clone(overrides.privatePermissions || {}) },
     baseProfileId: baseId
   })
   assignValues(agent || baseProfiles.value.find((profile) => profile.id === baseId))
@@ -959,7 +927,8 @@ function resourcePolicy(audience, integrationId, resourceKey, capability) {
 }
 
 function baselinePolicy(audience, capability) {
-  return baselineActions.value[audience]?.[capability]?.policy || 'disabled'
+  return baseProfile.value?.[permissionField(audience)]?.policies?.[capability]
+    || baselineActions.value[audience]?.[capability]?.policy || 'disabled'
 }
 
 function effectiveGlobalPolicy(audience, capability) {
@@ -973,17 +942,24 @@ function effectiveIntegrationPolicy(audience, integrationId, capability) {
   const action = audienceAction(audience, integrationId, capability)
   const configured = integrationPolicy(audience, integrationId, capability)
   if (configured !== 'inherit') return configured
+  const inherited = baseProfile.value?.[permissionField(audience)]?.integrationPolicies?.[integrationId]?.[capability]
+  if (inherited) return inherited
   const global = globalPolicy(audience, capability)
   if (global !== 'inherit') return global
+  const baseGlobal = baseProfile.value?.[permissionField(audience)]?.policies?.[capability]
+  if (baseGlobal) return baseGlobal
   return action?.effectiveIntegrationPolicy
     || baselinePolicy(audience, capability)
 }
 
 function inheritedIntegrationPolicy(audience, integrationId, action) {
   const branchAction = audienceAction(audience, integrationId, action.capability) || action
+  const base = baseProfile.value?.[permissionField(audience)]
+  const inherited = base?.integrationPolicies?.[integrationId]?.[action.capability]
+  if (inherited) return inherited
   const global = globalPolicy(audience, action.capability)
   return global === 'inherit'
-    ? branchAction.effectiveIntegrationPolicy
+    ? base?.policies?.[action.capability] || branchAction.effectiveIntegrationPolicy
       || baselinePolicy(audience, action.capability)
     : global
 }
@@ -992,10 +968,15 @@ function inheritedResourcePolicy(audience, integrationId, resource, capability) 
   const action = audienceAction(audience, integrationId, capability)
   const branchResource = audienceResource(audience, integrationId, resource.key) || resource
   if (resource.hardUnavailableCapabilities.includes(capability)) return 'disabled'
+  const base = baseProfile.value?.[permissionField(audience)]
+  const inherited = base?.resourcePolicies?.[integrationId]?.[resource.key]?.[capability]
+  if (inherited) return inherited
   const integration = integrationPolicy(audience, integrationId, capability)
   if (integration !== 'inherit') return integration
+  if (base?.integrationPolicies?.[integrationId]?.[capability]) return base.integrationPolicies[integrationId][capability]
   const global = globalPolicy(audience, capability)
   if (global !== 'inherit') return global
+  if (base?.policies?.[capability]) return base.policies[capability]
   return branchResource.effectivePolicies?.[capability]
     || action?.effectiveIntegrationPolicy
     || baselinePolicy(audience, capability)
@@ -1086,7 +1067,7 @@ async function load() {
 }
 
 async function saveAgent() {
-  if (isProtected.value || agents.loading || agents.saving || loadFailed.value || !dirty.value) return
+  if (accessProtected.value || agents.loading || agents.saving || loadFailed.value || !dirty.value) return
   const invalidLimit = ownership.maxToolCalls && form.maxToolCalls !== null && toolLimitRule(form.maxToolCalls) !== true
   const invalidPaths = ownership.sessionWritePaths && sessionWritePathsRule() !== true
   if (!form.name.trim() || (ownership.instructions && !form.instructions.trim()) || invalidLimit || invalidPaths) {

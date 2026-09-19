@@ -494,6 +494,95 @@ async def test_effective_agent_profiles_merge_enabled_personal_profiles(
     assert effective.profiles[4].todo_enabled is False
 
 
+async def test_builtin_access_inherits_per_entry_and_respects_scope(monkeypatch) -> None:
+    from mato_loop_backend.settings.models import AgentProfileAccessOverrides
+
+    integration_id = str(uuid4())
+    child = CustomAgentProfile(name="Child", description="", baseProfileId=PLAN_PROFILE_ID,
+        overrides={"privatePermissions": {"policies": {"shell.read": "ask"}}})
+    instance = AgentProfilesSettings(profiles=[child], builtin_access_overrides={PLAN_PROFILE_ID:
+        AgentProfileAccessOverrides(integrationAvailability={integration_id: True},
+            privatePermissions={"policies": {"filesystem.read": "ask"},
+                "integrationPolicies": {integration_id: {"browser.read": "auto", "browser.write": "ask"}},
+                "resourcePolicies": {integration_id: {"page": {"browser.read": "ask"}}}})})
+    personal = UserAgentProfilesSettings(profiles=[CustomAgentProfile(
+        name="Personal", description="", baseProfileId=PLAN_PROFILE_ID,
+        overrides={"integrationAvailability": {integration_id: False}, "privatePermissions": {
+            "policies": {"shell.read": "ask"},
+            "integrationPolicies": {integration_id: {"browser.read": "disabled"}}}},
+    )])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda db, kind, **kw:
+        instance if kind is AgentProfilesSettings else IntegrationSettings()))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=lambda db, kind, **kw:
+        personal if kind is UserAgentProfilesSettings else None))
+
+    async def get(include_personal=True):
+        return (await load_effective_agent_profiles(AsyncMock(), uuid4(), include_personal=include_personal)).profiles[-1]
+
+    effective = await get()
+    assert effective.integration_availability[integration_id] is False
+    assert effective.private_permissions.policies["filesystem.write"] == ToolExecutionPolicy.DISABLED
+    assert effective.private_permissions.policies["filesystem.read"] == ToolExecutionPolicy.ASK
+    assert effective.private_permissions.policies["shell.read"] == ToolExecutionPolicy.ASK
+    assert effective.private_permissions.integration_policies[integration_id] == {
+        "browser.read": ToolExecutionPolicy.DISABLED, "browser.write": ToolExecutionPolicy.ASK}
+    assert effective.private_permissions.resource_policies[integration_id]["page"]["browser.read"] == ToolExecutionPolicy.ASK
+    assert (await get(False)).integration_availability[integration_id] is True
+    instance.builtin_access_overrides[PLAN_PROFILE_ID].private_permissions.policies["filesystem.read"] = ToolExecutionPolicy.AUTO
+    assert (await get()).private_permissions.policies["filesystem.read"] == ToolExecutionPolicy.AUTO
+
+
+def test_builtin_access_documents_are_sparse_and_restrict_fields() -> None:
+    from mato_loop_backend.settings.models import AgentProfileAccessOverrides
+
+    original = AgentProfilesSettings(builtin_access_overrides={PLAN_PROFILE_ID:
+        AgentProfileAccessOverrides(integrationsEnabledByDefault=False)})
+    restored = AgentProfilesSettings.model_validate(original.model_dump(mode="json", by_alias=True))
+    override = restored.builtin_access_overrides[PLAN_PROFILE_ID]
+    assert override.model_fields_set == {"integrations_enabled_by_default"}
+    assert override.integrations_enabled_by_default is False
+    assert "builtin_access_overrides" not in UserAgentProfilesSettings.model_fields
+    with pytest.raises(ValidationError):
+        AgentProfilesSettings(builtin_access_overrides={uuid4(): {}})
+    for field in ("instructions", "runtimeInstructions", "personaId", "delegationEnabled"):
+        with pytest.raises(ValidationError):
+            AgentProfileAccessOverrides.model_validate({field: "changed"})
+    with pytest.raises(ValidationError):
+        AgentProfileAccessOverrides(publicPermissions=None)
+
+
+async def test_builtin_access_update_validates_and_can_reset(monkeypatch) -> None:
+    from mato_loop_backend.api.routes.agent_profiles import update_builtin_access
+    from mato_loop_backend.settings.models import AgentProfileAccessOverrides
+
+    settings = AgentProfilesSettings()
+    user = UserAccount(id=uuid4(), username="admin", password_hash="hash", is_admin=True)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda db, kind, **kw:
+        settings if kind is AgentProfilesSettings else kind()))
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+    monkeypatch.setattr("mato_loop_backend.api.routes.agent_profiles._response", AsyncMock(return_value={}))
+    db = AsyncMock()
+    await update_builtin_access(PLAN_PROFILE_ID, AgentProfileAccessOverrides(
+        privatePermissions={"policies": {"filesystem.read": "ask"}}), user, db, scope="instance")
+    assert settings.builtin_access_overrides[PLAN_PROFILE_ID].private_permissions.policies["filesystem.read"] == ToolExecutionPolicy.ASK
+    with pytest.raises(ApiError):
+        await update_builtin_access(PLAN_PROFILE_ID, AgentProfileAccessOverrides(
+            integrationAvailability={str(uuid4()): True}), user, db, scope="instance")
+    with pytest.raises(ApiError):
+        await update_builtin_access(PLAN_PROFILE_ID, AgentProfileAccessOverrides(
+            privatePermissions={"policies": {"unknown.action": "auto"}}), user, db, scope="instance")
+    await update_builtin_access(PLAN_PROFILE_ID, AgentProfileAccessOverrides(), user, db, scope="instance")
+    assert not settings.builtin_access_overrides
+    assert save.await_count == 2
+    user.is_admin = False
+    with pytest.raises(ApiError, match="auth.adminRequired"):
+        await update_builtin_access(PLAN_PROFILE_ID, AgentProfileAccessOverrides(), user, db, scope="instance")
+    settings.personal_agents_enabled = False
+    with pytest.raises(ApiError, match="agentProfile.defaultProtected"):
+        await update_builtin_access(PLAN_PROFILE_ID, AgentProfileAccessOverrides(), user, db, scope="personal")
+
+
 async def test_integration_profiles_remain_available_when_personal_profiles_are_disabled(
     monkeypatch,
 ) -> None:

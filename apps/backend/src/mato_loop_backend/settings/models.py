@@ -18,6 +18,7 @@ from pydantic import (
     computed_field,
     field_serializer,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -163,6 +164,49 @@ class AgentProfilePermissions(BaseModel):
     resource_policies: dict[
         str, dict[str, dict[str, ToolExecutionPolicy]]
     ] = Field(default_factory=dict)
+
+    def merged(self, override: AgentProfilePermissions, *, include_policies: bool = True) -> AgentProfilePermissions:
+        data = self.model_dump()
+        if include_policies:
+            data["policies"].update(override.policies)
+        for integration_id, policies in override.integration_policies.items():
+            data["integration_policies"].setdefault(integration_id, {}).update(policies)
+        for integration_id, resources in override.resource_policies.items():
+            target = data["resource_policies"].setdefault(integration_id, {})
+            for resource_key, policies in resources.items():
+                target.setdefault(resource_key, {}).update(policies)
+        return AgentProfilePermissions.model_validate(data)
+
+
+class AgentProfileAccessOverrides(BaseModel):
+    model_config = ConfigDict(alias_generator=lambda value: _camel_case(value), populate_by_name=True, extra="forbid")
+
+    integrations_enabled_by_default: StrictBool | None = None
+    integration_availability: dict[str, StrictBool] | None = None
+    private_permissions: AgentProfilePermissions | None = None
+    public_permissions: AgentProfilePermissions | None = None
+
+    _validate_availability = field_validator("integration_availability")(
+        lambda value: validate_integration_availability(value) if value is not None else value
+    )
+
+    @model_validator(mode="after")
+    def reject_null_overrides(self) -> Self:
+        if any(getattr(self, field) is None for field in self.model_fields_set):
+            raise ValueError("access overrides must not be null")
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize_sparse(self, handler, info):
+        data = handler(self)
+        keys = {_camel_case(field) if info.by_alias else field for field in self.model_fields_set}
+        return {key: value for key, value in data.items() if key in keys}
+
+
+def validate_builtin_access_overrides(value: dict[UUID, AgentProfileAccessOverrides]) -> dict[UUID, AgentProfileAccessOverrides]:
+    if value.keys() - CORE_PROFILE_NAMES.keys():
+        raise ValueError("access overrides require a built-in profile")
+    return value
 
 
 class AgentProfile(BaseModel):
@@ -314,8 +358,7 @@ class CustomAgentProfile(BaseModel):
 def resolve_agent_profile(
     profile: CustomAgentProfile, base: AgentProfile, owner_id: UUID | None
 ) -> AgentProfile:
-    values = base.model_dump()
-    values.update(profile.overrides.model_dump(exclude_unset=True))
+    values = apply_profile_overrides(base, profile.overrides).model_dump()
     values.update(
         id=profile.id,
         name=profile.name,
@@ -323,6 +366,19 @@ def resolve_agent_profile(
         base_profile_id=profile.base_profile_id,
         owner_id=owner_id,
     )
+    return AgentProfile.model_validate(values)
+
+
+def apply_profile_overrides(
+    base: AgentProfile, overrides: AgentProfileOverrides | AgentProfileAccessOverrides,
+) -> AgentProfile:
+    values = base.model_dump()
+    values.update(overrides.model_dump(exclude_unset=True))
+    if "integration_availability" in overrides.model_fields_set:
+        values["integration_availability"] = {**base.integration_availability, **overrides.integration_availability}
+    for field in ("private_permissions", "public_permissions"):
+        if field in overrides.model_fields_set:
+            values[field] = getattr(base, field).merged(getattr(overrides, field)).model_dump()
     return AgentProfile.model_validate(values)
 
 
@@ -939,6 +995,9 @@ class AgentProfilesSettings(SettingsDocument):
 
     personal_agents_enabled: bool = True
     profiles: list[CustomAgentProfile] = Field(default_factory=list, max_length=99)
+    builtin_access_overrides: dict[UUID, AgentProfileAccessOverrides] = Field(default_factory=dict)
+
+    _validate_builtin_access = field_validator("builtin_access_overrides")(validate_builtin_access_overrides)
 
 
 class UserAgentProfilesSettings(SettingsDocument):

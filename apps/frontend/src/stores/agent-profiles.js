@@ -114,7 +114,8 @@ export const useAgentProfileStore = defineStore('agent-profiles', {
       const scope = this.scope
       this.saving = true
       try {
-        await api.put(`/agent-profiles/${id}`, payload, scopeConfig(scope))
+        const accessOnly = this.byId(id)?.accessEditable
+        await api.put(`/agent-profiles/${id}${accessOnly ? '/access' : ''}`, accessOnly ? payload.overrides : payload, scopeConfig(scope))
         await this.fetchAgents(scope)
         return this.byId(id)
       } finally {

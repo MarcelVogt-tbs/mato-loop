@@ -77,11 +77,11 @@
                 flat
                 round
                 dense
-                :icon="agent.protected ? 'visibility' : 'edit'"
-                :aria-label="`${agent.name} ${agent.protected ? 'ansehen' : 'bearbeiten'}`"
+                :icon="agent.protected && !agent.accessEditable ? 'visibility' : 'edit'"
+                :aria-label="`${agent.name} ${agent.protected && !agent.accessEditable ? 'ansehen' : 'bearbeiten'}`"
                 :disable="personalBlocked"
                 :to="{ name: 'settings-agent-edit', params: { agentId: agent.id }, query: { scope: agents.scope } }"
-              ><q-tooltip>{{ agent.protected ? 'Ansehen' : 'Bearbeiten' }}</q-tooltip></q-btn>
+              ><q-tooltip>{{ agent.protected && !agent.accessEditable ? 'Ansehen' : 'Bearbeiten' }}</q-tooltip></q-btn>
               <q-btn
                 flat
                 round

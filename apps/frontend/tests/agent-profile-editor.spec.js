@@ -227,8 +227,66 @@ it('keeps integration default and selection overrides independent', async () => 
   const page = await mountEditor('/agents/sparse?scope=personal', [sparse])
 
   expect(page.ownership.integrationsEnabledByDefault).toBe(false)
-  expect(page.ownership.integrationAvailability).toBe(true)
   expect(page.requestPayload().overrides).toEqual({ integrationAvailability: { [first]: false } })
+  expect(page.integrationDefault).toBe('inherit')
+  for (const value of [false, true]) {
+    page.integrationDefault = value
+    expect(page.requestPayload().overrides).toEqual({
+      integrationsEnabledByDefault: value,
+      integrationAvailability: { [first]: false }
+    })
+  }
+  page.integrationDefault = 'inherit'
+  expect(page.form.integrationsEnabledByDefault).toBe(true)
+  expect(page.requestPayload().overrides).toEqual({ integrationAvailability: { [first]: false } })
+})
+
+it('edits built-in access while keeping profile instructions protected and overrides sparse', async () => {
+  const builtin = {
+    id: 'build', name: 'Build', description: '', scope: 'instance', protected: true, accessEditable: true,
+    instructions: 'Implement.', integrationsEnabledByDefault: false,
+    integrationAvailability: { [first]: true },
+    privatePermissions: { policies: { 'filesystem.write': 'auto' }, integrationPolicies: {}, resourcePolicies: {} },
+    accessBaseline: { integrationsEnabledByDefault: false, integrationAvailability: { [first]: true },
+      privatePermissions: { policies: { 'filesystem.write': 'auto' }, integrationPolicies: {}, resourcePolicies: {} } },
+    overrides: {}
+  }
+  const page = await mountEditor('/agents/build?scope=instance', [builtin])
+  expect(page.isProtected).toBe(true)
+  expect(page.accessProtected).toBe(false)
+  expect(page.requestPayload().overrides).toEqual({})
+  expect(page.integrationAvailable({ id: first, enabled: true })).toBe(true)
+  page.setGlobalPolicy('private', 'filesystem.read', 'ask')
+  expect(page.effectiveGlobalPolicy('private', 'filesystem.write')).toBe('auto')
+  expect(page.requestPayload().overrides.privatePermissions.policies).toEqual({ 'filesystem.read': 'ask' })
+  page.setIntegrationAvailability(first, false)
+  expect(page.integrationAvailable({ id: first, enabled: true })).toBe(false)
+  page.setIntegrationAvailability(first, 'inherit')
+  expect(page.integrationAvailable({ id: first, enabled: true })).toBe(true)
+  expect(page.dirty).toBe(true)
+  await page.saveAgent()
+  expect(api.put).toHaveBeenCalledWith('/agent-profiles/build/access', expect.objectContaining({
+    privatePermissions: { policies: { 'filesystem.read': 'ask' }, integrationPolicies: {}, resourcePolicies: {} }
+  }), { params: { scope: 'instance' } })
+  page.setGlobalPolicy('private', 'filesystem.read', 'inherit')
+  expect(page.requestPayload().overrides).not.toHaveProperty('privatePermissions')
+  expect(page.requestPayload().overrides).not.toHaveProperty('integrationAvailability')
+  page.setIntegrationPolicy('public', first, 'browser.read', 'ask')
+  page.setResourcePolicy('public', first, 'page', 'browser.read', 'disabled')
+  page.applyInheritedValues()
+  expect(page.requestPayload().overrides.publicPermissions).toMatchObject({
+    integrationPolicies: { [first]: { 'browser.read': 'ask' } },
+    resourcePolicies: { [first]: { page: { 'browser.read': 'disabled' } } }
+  })
+  page.setIntegrationPolicy('public', first, 'browser.read', 'inherit')
+  page.setResourcePolicy('public', first, 'page', 'browser.read', 'inherit')
+  expect(page.requestPayload().overrides).not.toHaveProperty('publicPermissions')
+  page.section = 'permissions'
+  await nextTick()
+  expect(root.textContent).not.toContain('Private Modelle Berechtigungen übernehmen oder anpassen')
+  page.section = 'integrations'
+  await nextTick()
+  expect(root.querySelector('[aria-label="Integrationsauswahl übernehmen oder anpassen"]')).toBeNull()
 })
 
 it('shows shipped profiles read-only without a save action', async () => {

@@ -47,6 +47,18 @@ describe('agent profiles store', () => {
     expect(store.scopedAgents).toEqual([agents[1]])
   })
 
+  it('lists built-ins only in instance scope and personal profiles only after creation', () => {
+    const store = useAgentProfileStore()
+    const builtin = { id: 'build', scope: 'instance', protected: true, accessEditable: true }
+    store.agents = [builtin]
+    expect(store.scopedAgents).toEqual([])
+    const personal = { id: 'custom', scope: 'personal' }
+    store.agents.push(personal)
+    expect(store.scopedAgents).toEqual([personal])
+    store.selectScope('instance')
+    expect(store.scopedAgents).toEqual([builtin])
+  })
+
   it('uses standard global and personal REST paths for CRUD', async () => {
     const payload = {
       name: 'Recherche',

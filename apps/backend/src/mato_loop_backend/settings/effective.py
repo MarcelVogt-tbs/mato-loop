@@ -273,16 +273,7 @@ def _merge_permissions(
     *,
     include_policies: bool = True,
 ) -> AgentProfilePermissions:
-    data = baseline.model_dump()
-    if include_policies:
-        data["policies"].update(override.policies)
-    for integration_id, policies in override.integration_policies.items():
-        data["integration_policies"].setdefault(integration_id, {}).update(policies)
-    for integration_id, resources in override.resource_policies.items():
-        target = data["resource_policies"].setdefault(integration_id, {})
-        for resource_key, policies in resources.items():
-            target.setdefault(resource_key, {}).update(policies)
-    return AgentProfilePermissions.model_validate(data)
+    return baseline.merged(override, include_policies=include_policies)
 
 
 async def load_effective_tools(
@@ -373,14 +364,24 @@ class EffectiveAgentProfiles:
 
 
 async def load_effective_agent_profiles(
-    db: AsyncSession, user_id: UUID, *, for_update: bool = False
+    db: AsyncSession, user_id: UUID, *, for_update: bool = False, include_personal: bool = True
 ) -> EffectiveAgentProfiles:
     from mato_loop_backend.integrations.registry import effective_integration_contributions
+    from mato_loop_backend.settings.models import apply_profile_overrides
 
     instance = await SettingsStore.load(
         db, AgentProfilesSettings, for_update=for_update
     )
     shipped = shipped_profiles()
+    personal = (
+        await SettingsStore.load_optional(db, UserAgentProfilesSettings, user_id=user_id, for_update=for_update)
+        if include_personal and instance.personal_agents_enabled else None
+    )
+    shipped = [
+        apply_profile_overrides(profile, instance.builtin_access_overrides[profile.id])
+        if profile.id in instance.builtin_access_overrides else profile
+        for profile in shipped
+    ]
     bases = {profile.id: profile for profile in shipped}
     effective = EffectiveAgentProfiles(
         personal_agents_enabled=instance.personal_agents_enabled,
@@ -393,16 +394,12 @@ async def load_effective_agent_profiles(
             ),
         ],
     )
-    if instance.personal_agents_enabled:
-        personal = await SettingsStore.load_optional(
-            db, UserAgentProfilesSettings, user_id=user_id, for_update=for_update
+    if personal is not None:
+        effective.profiles.extend(
+            resolve_agent_profile(profile, bases[profile.base_profile_id], user_id)
+            for profile in personal.profiles
+            if profile.base_profile_id in bases
         )
-        if personal is not None:
-            effective.profiles.extend(
-                resolve_agent_profile(profile, bases[profile.base_profile_id], user_id)
-                for profile in personal.profiles
-                if profile.base_profile_id in bases
-            )
     integrations = await load_effective_integrations(db, user_id)
     for profile in effective_integration_contributions(integrations).agent_profiles:
         profile.owner_id = user_id
