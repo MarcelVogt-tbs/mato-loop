@@ -3,14 +3,30 @@ set -euo pipefail
 export PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 umask 077
 
+check_tool() {
+    if path=$(command -v "$1" 2>/dev/null); then
+        printf '  [ok] %s: %s\n' "$1" "$path"
+    else
+        printf '  [missing] %s\n' "$1"
+    fi
+}
+
 if [ "${MATOLOOP_AGENT_CONTAINER:-0}" = 1 ]; then
     printf '%s\n' 'Browser components are included in the container.'
+    printf '%s\n' 'Checking browser desktop tools.'
+    for tool in Xvfb xrandr xprop openbox x11vnc xclip; do
+        check_tool "$tool"
+    done
     command -v Xvfb xrandr xprop openbox x11vnc xclip >/dev/null
 elif [ "$(uname -s)" != Linux ]; then
     printf '%s\n' 'Browser setup is not supported on this system yet.'
     exit 1
 else
     printf '%s\n' 'The matching Chromium version will be installed in the Agent directory.'
+    printf '%s\n' 'Checking browser setup tools.'
+    for tool in bash apt-get dpkg-query; do
+        check_tool "$tool"
+    done
     printf '%s\n' 'Checking browser system dependencies.'
     if "${MATOLOOP_BROWSER_EXECUTABLE}" -m matoloop_agent browser-install; then
         exit 0

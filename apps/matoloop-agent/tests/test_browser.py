@@ -35,6 +35,7 @@ from matoloop_agent.browser_contracts import (
     BrowserResizeArguments,
     BrowserResizeResult,
     BrowserSetupReadArguments,
+    BrowserSetupResizeArguments,
     BrowserStatusArguments,
 )
 from matoloop_agent.browser_worker import OPENBOX_CONFIG, BrowserWorker, launch_error_code, serve
@@ -488,6 +489,8 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             Path(__file__).resolve().parents[1] / "src" / "matoloop_agent" / "browser-setup.sh"
         ).read_text()
         self.assertIn("playwright install-deps chromium", script)
+        self.assertIn('check_tool "$tool"', script)
+        self.assertIn("[missing]", script)
         self.assertLess(script.index("browser-install; then"), script.index("Install missing"))
         self.assertIn("&& [ -t 0 ]", script)
         self.assertNotIn("Browser-Einrichtung", script)
@@ -844,6 +847,8 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         result = await self.manager.setup_io("setupread", args)
         self.assertEqual(result["offset"], 2_000_000)
         self.assertEqual(base64.b64decode(result["data"]), b"last")
+        resize = BrowserSetupResizeArguments(setupId=entry.terminal_id, rows=30, columns=100)
+        self.assertEqual(await self.manager.setup_io("setupresize", resize), {"ok": True})
 
     async def test_binary_relay_reconnects_without_closing_runtime(self):
         seen = []

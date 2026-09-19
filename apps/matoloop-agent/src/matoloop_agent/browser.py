@@ -422,7 +422,11 @@ class BrowserManager:
             await self.terminal._write(entry, base64.b64decode(args.data, validate=True))
             return {"ok": True}
         if action == "setupresize":
-            self.terminal._resize(entry, args.rows, args.columns)
+            try:
+                self.terminal._resize(entry, args.rows, args.columns)
+            except AgentError as exc:
+                if exc.code != "terminal.closed":
+                    raise
             return {"ok": True}
         async with entry.condition:
             if args.offset >= self.setup_offset and not entry.eof and args.wait_seconds:
@@ -727,6 +731,7 @@ async def finish_setup() -> int:
         environment, options = manager.environment()
         environment["HOME"] = str(root)
         if not manager.container:
+            print("Installing the matching Chromium version.", flush=True)
             manager.directory(manager.installation.parent, 0o711 if options else 0o700, os.getuid())
             if not manager.installation.exists():
                 manager.installation.mkdir(mode=0o700)
@@ -738,15 +743,17 @@ async def finish_setup() -> int:
                 env=environment,
                 cwd="/",
                 **options,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
             )
             if await process.wait() != 0:
                 raise AgentError("browser.setupFailed", "Managed browser installation failed")
+            print("Chromium installation completed.", flush=True)
+        print("Starting the browser runtime check.", flush=True)
         await manager.spawn(root)
         status = BrowserStatus.model_validate(await manager.rpc("start", probe=True))
         if status.state != "ready":
             raise AgentError(status.error_code or "browser.notReady", "Browser probe failed")
+        print(f"Chromium: {status.browser_version}", flush=True)
+        print(f"Playwright: {status.playwright_version}", flush=True)
         print("Browser is ready.", flush=True)
         return 0
     except Exception:
