@@ -38,6 +38,8 @@ export const useTerminalStore = defineStore('terminal', {
     buffer: '',
     truncated: false,
     bufferRevision: 0,
+    output: '',
+    outputRevision: 0,
     submitting: null,
     rows: null,
     columns: null,
@@ -154,9 +156,9 @@ export const useTerminalStore = defineStore('terminal', {
     },
     appendOutput(output) {
       if (!output) return
-      const next = this.buffer + output
-      this.truncated ||= next.length > MAX_BUFFER_LENGTH
-      this.buffer = next.slice(-MAX_BUFFER_LENGTH)
+      this.buffer = (this.buffer + output).slice(-MAX_BUFFER_LENGTH)
+      this.output = output
+      this.outputRevision += 1
     },
     sendControl(message) {
       if (!this.controlsEnabled || this.socket?.readyState !== 1) return false
@@ -195,10 +197,12 @@ export const useTerminalStore = defineStore('terminal', {
       if (socket !== this.socket) return
       const generation = this.generation + 1
       const bufferRevision = this.bufferRevision + 1
+      const outputRevision = this.outputRevision + 1
       const replacedContexts = this.replacedContexts
       this.$reset()
       this.generation = generation
       this.bufferRevision = bufferRevision
+      this.outputRevision = outputRevision
       this.replacedContexts = replacedContexts
       socket?.close()
     }

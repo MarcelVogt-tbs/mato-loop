@@ -112,7 +112,7 @@ function initializeTerminal() {
     fontSize: 14,
     minimumContrastRatio: 4.5,
     screenReaderMode: true,
-    scrollback: 5000,
+    scrollback: 50000,
     theme: { background: '#111318', foreground: '#f1f3f5', cursor: '#f1f3f5' }
   })
   fitAddon = new FitAddon()
@@ -162,16 +162,15 @@ function reconnect() {
 }
 
 watch(
-  () => [terminal.buffer, terminal.bufferRevision],
-  ([value, revision], [previous, previousRevision]) => {
+  () => [terminal.bufferRevision, terminal.outputRevision],
+  ([bufferRevision, outputRevision], [previousBufferRevision, previousOutputRevision]) => {
     if (!xterm) return
-    if (revision === previousRevision && value.startsWith(previous)) xterm.write(value.slice(previous.length))
-    else {
+    if (bufferRevision !== previousBufferRevision) {
       xterm.reset()
-      replayBuffer(value)
-    }
+      replayBuffer(terminal.buffer)
+    } else if (outputRevision !== previousOutputRevision) xterm.write(terminal.output)
   },
-  { flush: 'post' }
+  { flush: 'sync' }
 )
 watch(() => terminal.inputEnabled, (enabled) => {
   if (xterm) {

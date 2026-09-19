@@ -160,6 +160,13 @@ describe('shared terminal', () => {
     expect(store.truncated).toBe(true)
   })
 
+  it('bounds replay data without reporting lost live scrollback', () => {
+    const { store } = connectedStore()
+    store.appendOutput('x'.repeat(512 * 1024 + 1))
+    expect(store.buffer).toHaveLength(512 * 1024)
+    expect(store.truncated).toBe(false)
+  })
+
   it('chunks large multibyte input within the wire limit', () => {
     const { store, socket } = connectedStore()
     const input = `${'a'.repeat(65_535)}€`

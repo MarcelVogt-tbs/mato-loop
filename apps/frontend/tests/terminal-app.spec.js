@@ -128,6 +128,7 @@ it.each([false, true])('renders raw shared PTY output with attached=%s without d
   await flushOutput()
   expect(lines(19)).toEqual([...output, 'red'])
   store.buffer = 'replacement\r\nreplayed'
+  store.bufferRevision += 1
   await flushOutput()
   expect(lines(2)).toEqual(['replacement', 'replayed'])
   expect(writes.every(({ convertEol }) => !convertEol)).toBe(true)
@@ -142,6 +143,7 @@ it('preserves personal PTY LF, CRLF, CR and ANSI cursor semantics', async () => 
   await flushOutput()
   expect(lines(4)[3]).toBe('   end')
   store.buffer = 'reset\nreplay'
+  store.bufferRevision += 1
   await flushOutput()
   expect(lines(2)).toEqual(['reset', '     replay'])
   expect(writes.every(({ convertEol }) => !convertEol)).toBe(true)
@@ -154,6 +156,7 @@ it('replays terminal queries without sending historical responses into the shell
     .map(([data]) => JSON.parse(data)).filter((message) => message.type === 'input')
   expect(inputs()).toEqual([])
   store.buffer = 'replayed\x1b[6n'
+  store.bufferRevision += 1
   await flushOutput()
   expect(inputs()).toEqual([])
   socket.output('\x1b[6n')
@@ -180,6 +183,19 @@ it('does not reset, redraw or switch buffers on attach and detach', async () => 
   ])
   expect(reset).not.toHaveBeenCalled()
   expect(xterm.options.convertEol).toBe(false)
+})
+
+it('keeps streaming across the bounded replay buffer without resetting the terminal', async () => {
+  await mountTerminal()
+  const reset = vi.spyOn(Terminal.prototype, 'reset')
+  store.buffer = 'x'.repeat(512 * 1024)
+  writes.length = 0
+  store.appendOutput('live output')
+  await flushOutput()
+  expect(writes.filter(({ data }) => data)).toEqual([{ data: 'live output', convertEol: false }])
+  expect(reset).not.toHaveBeenCalled()
+  expect(store.truncated).toBe(false)
+  expect(xterm.options.scrollback).toBe(50000)
 })
 
 it('reconnects A-B-A while mounted, replaces replay atomically and releases on unmount', async () => {
