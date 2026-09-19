@@ -1490,12 +1490,15 @@ class ProcessRunner:
         return [os.fspath(self.shell), "-c", command], inspection
 
     @staticmethod
-    def execution_environment(home: str, inspection: dict | None) -> dict[str, str]:
+    def execution_environment(
+        home: str, inspection: dict | None, environment: dict[str, str] | None = None
+    ) -> dict[str, str]:
         return {
             "HOME": home,
             "PWD": home,
             "LANG": os.environ.get("LANG", "C.UTF-8"),
             "PATH": EXECUTION_PATH,
+            **(environment or {}),
         }
 
     def execution_timeout(self, timeout: float | None) -> float:
@@ -1520,6 +1523,7 @@ class ProcessRunner:
         timeout: float | None,
         stream: StreamCallback,
         expected_inspection_revision: str | None = None,
+        environment: dict[str, str] | None = None,
     ) -> dict:
         timeout = self.execution_timeout(timeout)
         argv, inspection = self.execution_argv(
@@ -1531,12 +1535,14 @@ class ProcessRunner:
         started = time.monotonic()
         try:
             # Procfs is only for descriptor-bound startup, never a logical HOME or PWD.
-            environment = self.execution_environment(current_directory, inspection)
+            process_environment = self.execution_environment(
+                current_directory, inspection, environment
+            )
             self.validate_executable(argv[0])
             process = await asyncio.create_subprocess_exec(
                 *argv,
                 cwd=cwd,
-                env=environment,
+                env=process_environment,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

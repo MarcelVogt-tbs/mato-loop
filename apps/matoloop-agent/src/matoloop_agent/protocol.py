@@ -11,6 +11,39 @@ PROTOCOL_VERSION = 1
 UUID_PATTERN = (
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
 )
+PROTECTED_ENVIRONMENT_NAMES = {
+    "BASHOPTS",
+    "BASH_ENV",
+    "CDPATH",
+    "CLASSPATH",
+    "ENV",
+    "GLOBIGNORE",
+    "HOME",
+    "IFS",
+    "JAVA_TOOL_OPTIONS",
+    "LANG",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "LOGNAME",
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "PATH",
+    "PERL5LIB",
+    "PERL5OPT",
+    "PS4",
+    "PWD",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "RUBYLIB",
+    "RUBYOPT",
+    "SHELL",
+    "SHELLOPTS",
+    "USER",
+    "ZDOTDIR",
+    "_JAVA_OPTIONS",
+}
+EnvironmentName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")]
+EnvironmentValue = Annotated[str, Field(max_length=65_536)]
 
 
 def _absolute_path(value: str) -> str:
@@ -246,6 +279,22 @@ class ShellArguments(HostDirectoryArguments):
     expected_inspection_revision: str | None = Field(
         default=None, alias="expectedInspectionRevision", pattern=r"^[0-9a-f]{64}$"
     )
+    environment: dict[EnvironmentName, EnvironmentValue] | None = Field(default=None, max_length=32)
+
+    @field_validator("environment")
+    @classmethod
+    def bounded_unprotected_environment(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        if value is None:
+            return None
+        protected = PROTECTED_ENVIRONMENT_NAMES.intersection(value)
+        protected.update(name for name in value if name.startswith(("DYLD_", "GIT_CONFIG_")))
+        if protected:
+            raise ValueError(f"environment cannot replace {min(protected)}")
+        if any("\x00" in item or len(item.encode("utf-8")) > 65_536 for item in value.values()):
+            raise ValueError(
+                "environment values must be valid process values of at most 65536 bytes"
+            )
+        return value
 
 
 class ResolveDirectoryArguments(PathArguments):

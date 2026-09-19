@@ -5,9 +5,24 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.agent.tools import QuestionArguments, validate_question_answers
+from mato_loop_backend.agent.tool_arguments import (
+    ProtectedQuestionArguments,
+    QuestionArguments,
+    validate_protected_question_answers,
+    validate_question_answers,
+)
 from mato_loop_backend.events import run_events
-from mato_loop_backend.models import QuestionRequest
+from mato_loop_backend.models import AgentRun, ChatSession, QuestionRequest
+from mato_loop_backend.personal_variables import (
+    PersonalVariableError,
+    create_personal_variable,
+    update_personal_variable,
+)
+from mato_loop_backend.settings import (
+    AgentProfileUnavailable,
+    ToolExecutionPolicy,
+    load_agent_profile_tools,
+)
 
 
 class QuestionDecisionError(RuntimeError):
@@ -27,9 +42,15 @@ async def answer_question(
     *,
     idempotent_same_result: bool = False,
 ) -> dict[str, str]:
+    protected = bool(
+        request.questions
+        and request.questions[0].get("type") in {"value", "password"}
+    )
     if request.status != "pending":
         if not (idempotent_same_result and request.status == "answered"):
             raise QuestionDecisionError(409, "question.alreadyAnswered")
+        if protected:
+            return {"status": "answered"}
         try:
             questions = QuestionArguments.model_validate({"questions": request.questions})
             validated_answers = validate_question_answers(questions, answers)
@@ -40,8 +61,16 @@ async def answer_question(
         raise QuestionDecisionError(409, "question.alreadyAnswered")
 
     try:
-        questions = QuestionArguments.model_validate({"questions": request.questions})
-        validated_answers = validate_question_answers(questions, answers)
+        questions = (
+            ProtectedQuestionArguments.model_validate({"questions": request.questions})
+            if protected
+            else QuestionArguments.model_validate({"questions": request.questions})
+        )
+        validated_answers = (
+            validate_protected_question_answers(questions, answers)
+            if isinstance(questions, ProtectedQuestionArguments)
+            else validate_question_answers(questions, answers)
+        )
     except ValueError as exc:
         raise QuestionDecisionError(
             422, "question.invalidAnswer", field="answers"
@@ -54,8 +83,68 @@ async def answer_question(
 
     request_id = request.id
     run_id = request.run_id
+    resolved_answers = validated_answers
+    if isinstance(questions, ProtectedQuestionArguments):
+        try:
+            question = questions.questions[0]
+            proposal = question.save_proposal
+            session = await db.get(ChatSession, request.session_id)
+            run = await db.get(AgentRun, request.run_id)
+            if session is None or run is None:
+                raise QuestionDecisionError(409, "question.runInactive")
+
+            async def policy_changed() -> None:
+                request.status = "expired"
+                request.answered_at = datetime.now(UTC)
+                await db.commit()
+                AgentRuntime.resolve_question(request_id, "rejected")
+
+            try:
+                settings, _profile = await load_agent_profile_tools(
+                    db,
+                    session.user_id,
+                    proposal.agent_profile_id,
+                    proposal.trust_level,
+                )
+            except AgentProfileUnavailable:
+                await policy_changed()
+                raise QuestionDecisionError(409, "approval.policyChanged") from None
+            from mato_loop_backend.agent.tools import resolve_tool_execution_policy
+
+            if resolve_tool_execution_policy(
+                settings, "secrets.write", ToolExecutionPolicy.ASK
+            ).policy == ToolExecutionPolicy.DISABLED or not settings.tool_availability.get(
+                "variable_write", True
+            ):
+                await policy_changed()
+                raise QuestionDecisionError(409, "approval.policyChanged")
+            if proposal.action == "create":
+                await create_personal_variable(
+                    db,
+                    session.user_id,
+                    name=proposal.name,
+                    value=validated_answers[question.id][0],
+                    secret=proposal.secret,
+                )
+            else:
+                assert proposal.variable_id is not None
+                await update_personal_variable(
+                    db,
+                    session.user_id,
+                    proposal.variable_id,
+                    name=proposal.name,
+                    value=validated_answers[question.id][0],
+                    secret=proposal.secret,
+                )
+        except PersonalVariableError as exc:
+            AgentRuntime.release_question_resolution(request_id)
+            raise QuestionDecisionError(409, exc.code, field=exc.field) from exc
+        except BaseException:
+            AgentRuntime.release_question_resolution(request_id)
+            raise
+        resolved_answers = {question.id: ["saved"]}
     request.status = "answered"
-    request.answers = validated_answers
+    request.answers = resolved_answers
     request.answered_at = datetime.now(UTC)
     try:
         await db.commit()
@@ -65,7 +154,9 @@ async def answer_question(
         finally:
             AgentRuntime.release_question_resolution(request_id)
         raise
-    if not AgentRuntime.resolve_question(request_id, validated_answers):
+    if not AgentRuntime.resolve_question(request_id, resolved_answers):
+        if isinstance(questions, ProtectedQuestionArguments):
+            return {"status": "answered"}
         request.status = "expired"
         request.answers = None
         request.answered_at = None

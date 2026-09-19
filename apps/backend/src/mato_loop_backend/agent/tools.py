@@ -40,6 +40,7 @@ from mato_loop_backend.agent.permissions import (
     memory_read_permission,
     memory_write_permission,
     path_permission,
+    personal_variables_permission,
     project_session_path_permission,
     session_browse_permission,
     session_permission,
@@ -89,6 +90,8 @@ from mato_loop_backend.agent.tool_arguments import (
     MemoryRetrieveArguments,
     MemoryWriteArguments,
     MovePathArguments,
+    ProtectedQuestionArguments,
+    ProtectedQuestionItem,
     ProvideFileArguments,
     QuestionArguments,
     ReadArguments,
@@ -106,6 +109,8 @@ from mato_loop_backend.agent.tool_arguments import (
     TranscribeAudioArguments,
     UpdateAgentIdentityArguments,
     UpdateUserProfileArguments,
+    VariableReadArguments,
+    VariableWriteArguments,
     WebFetchArguments,
     WebSearchArguments,
     WriteFileArguments,
@@ -184,6 +189,7 @@ from mato_loop_backend.execution import (
     WorkspaceStatResult,
     WorkspaceWriteResult,
 )
+from mato_loop_backend.execution.protocol import MAX_REQUEST_BYTES, RequestMessage
 from mato_loop_backend.execution.terminals import terminal_coordinator
 from mato_loop_backend.file_archives import (
     MAX_EXPORT_BYTES,
@@ -223,6 +229,13 @@ from mato_loop_backend.models import (
     Message,
     MessageAttachment,
     Project,
+)
+from mato_loop_backend.personal_variables import (
+    get_personal_variable,
+    get_personal_variable_by_name,
+    list_personal_variables,
+    personal_variable_payload,
+    personal_variable_value,
 )
 from mato_loop_backend.project_coding import ProjectCodingError, ProjectCodingService
 from mato_loop_backend.providers.base import MAX_PROVIDER_IMAGE_BYTES
@@ -1652,25 +1665,49 @@ async def _run_process(
     *,
     requested_arguments: dict[str, Any],
     executed_arguments: dict[str, Any],
+    redacted_values: tuple[str, ...] = (),
 ) -> ToolResult:
     output = {"stdout": "", "stderr": ""}
 
     async def publish(event: Any) -> None:
         output[event.event] += event.data
-        await run_events.publish(
-            context.run_id,
-            {
-                "type": "process.output",
-                "toolCallId": context.tool_call.id,
-                "output": dict(output),
-            },
-        )
+        if not redacted_values:
+            await run_events.publish(
+                context.run_id,
+                {
+                    "type": "process.output",
+                    "toolCallId": context.tool_call.id,
+                    "output": dict(output),
+                },
+            )
 
     client = _workspace_client(context)
     result = await client.request(
         operation, arguments, ProcessResult, timeout=3_610, on_event=publish,
     )
     assert isinstance(result, ProcessResult)
+    truncated = result.stdout_truncated or result.stderr_truncated
+    safe_output = dict(output)
+    if redacted_values:
+        if truncated:
+            safe_output = {
+                key: "[redacted]" if value else "" for key, value in output.items()
+            }
+        else:
+            for secret in sorted(set(redacted_values), key=len, reverse=True):
+                if secret:
+                    safe_output = {
+                        key: value.replace(secret, "[redacted]")
+                        for key, value in safe_output.items()
+                    }
+        await run_events.publish(
+            context.run_id,
+            {
+                "type": "process.output",
+                "toolCallId": context.tool_call.id,
+                "output": safe_output,
+            },
+        )
     tool_result = ToolResult.json(
         {
             **result.model_dump(by_alias=True),
@@ -1678,8 +1715,8 @@ async def _run_process(
             "executedArguments": executed_arguments,
             "userEdited": requested_arguments != executed_arguments,
             "output": {
-                **output,
-                "truncated": result.stdout_truncated or result.stderr_truncated,
+                **safe_output,
+                "truncated": truncated,
             },
         }
     )
@@ -1701,10 +1738,14 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         agent_id=client.agent_id,
     )
     if terminal is not None:
+        if arguments.environment:
+            return ToolResult.error("variable.sharedTerminalUnsupported")
         from mato_loop_backend.agent.shared_shell import run_shared_shell
 
         return await run_shared_shell(context, arguments, terminal)
-    requested = arguments.model_dump(exclude_none=True)
+    requested = arguments.model_dump(
+        mode="json", exclude_none=True, exclude_defaults=True
+    )
     executed = requested
     inspection = await client.request(
         "shell.inspect",
@@ -1712,22 +1753,71 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         ShellInspectResult,
     )
     assert isinstance(inspection, ShellInspectResult)
+    if arguments.environment:
+        inspection = inspection.model_copy(
+            update={
+                "analysis_complete": False,
+                "classification": "write",
+                "read_only": False,
+            }
+        )
     permission = shell_command_permission(
         client.agent_id, client.current_directory, executed["command"], inspection,
     )
     if not await _allow(context, permission):
         return ToolResult.error("permission.denied")
+    environment: dict[str, str] = {}
+    if arguments.environment:
+        variables = []
+        for variable_id in dict.fromkeys(arguments.environment.values()):
+            variable = await get_personal_variable(
+                context.db, context.session.user_id, variable_id
+            )
+            if variable is None:
+                return ToolResult.error("personalVariable.notFound")
+            variables.append(variable)
+        if not await _allow(
+            context,
+            personal_variables_permission(
+                context.session.user_id,
+                names=tuple(variable.label for variable in variables),
+            ),
+        ):
+            return ToolResult.error("permission.denied")
+        values = {}
+        for variable in variables:
+            current = await get_personal_variable(
+                context.db,
+                context.session.user_id,
+                variable.id,
+                populate_existing=True,
+            )
+            if current is None:
+                return ToolResult.error("personalVariable.notFound")
+            values[variable.id] = personal_variable_value(current)
+        environment = {
+            name: values[variable_id]
+            for name, variable_id in arguments.environment.items()
+        }
+    process_arguments = {
+        "command": executed["command"],
+        "currentDirectory": client.current_directory,
+        "timeoutSeconds": arguments.timeout,
+        "expectedInspectionRevision": inspection.inspection_revision,
+        **({"environment": environment} if environment else {}),
+    }
+    request = RequestMessage(
+        id=uuid4(), operation="shell.run", arguments=process_arguments
+    )
+    if len(request.model_dump_json(by_alias=True).encode()) > MAX_REQUEST_BYTES:
+        return ToolResult.error("executionAgent.requestTooLarge")
     return await _run_process(
         context,
         "shell.run",
-        {
-            "command": executed["command"],
-            "currentDirectory": client.current_directory,
-            "timeoutSeconds": arguments.timeout,
-            "expectedInspectionRevision": inspection.inspection_revision,
-        },
+        process_arguments,
         requested_arguments=requested,
         executed_arguments=executed,
+        redacted_values=tuple(environment.values()),
     )
 
 
@@ -4304,6 +4394,90 @@ async def _question(arguments: QuestionArguments, context: ToolContext) -> ToolR
     )
 
 
+async def _variable_read(
+    arguments: VariableReadArguments, context: ToolContext
+) -> ToolResult:
+    if not await _allow(
+        context, personal_variables_permission(context.session.user_id)
+    ):
+        return ToolResult.error("permission.denied")
+    if arguments.name is not None:
+        variable = await get_personal_variable_by_name(
+            context.db, context.session.user_id, arguments.name
+        )
+        if variable is None:
+            return ToolResult.error("personalVariable.notFound")
+        variables = [variable]
+    else:
+        variables = await list_personal_variables(context.db, context.session.user_id)
+    return ToolResult.json(
+        {
+            "variables": [
+                {
+                    **personal_variable_payload(variable),
+                    "valueRef": str(variable.id),
+                }
+                for variable in variables
+            ]
+        }
+    )
+
+
+async def _variable_write(
+    arguments: VariableWriteArguments, context: ToolContext
+) -> ToolResult:
+    context.tool_settings = await _profile_tool_settings(context)
+    if tool_execution_policy(
+        context.tool_settings, "secrets.write", ToolExecutionPolicy.ASK
+    ) == ToolExecutionPolicy.DISABLED or not context.tool_settings.tool_availability.get(
+        "variable_write", True
+    ):
+        return ToolResult.error("tool.unavailable")
+    action = "update" if arguments.variable_id is not None else "create"
+    if arguments.variable_id is not None:
+        variable = await get_personal_variable(
+            context.db, context.session.user_id, arguments.variable_id
+        )
+        if variable is None:
+            return ToolResult.error("personalVariable.notFound")
+    questions = ProtectedQuestionArguments(
+        questions=[
+            ProtectedQuestionItem(
+                id="value",
+                header="Secret" if arguments.secret else "Variable",
+                question=f"Welcher Wert soll als {arguments.name} gespeichert werden?",
+                type="password" if arguments.secret else "value",
+                save_proposal={
+                    "name": arguments.name,
+                    "secret": arguments.secret,
+                    "action": action,
+                    "variable_id": arguments.variable_id,
+                    "agent_profile_id": context.agent_profile_id,
+                    "trust_level": context.model_trust_level,
+                },
+            )
+        ]
+    )
+    answers = await context.ask_user(questions)
+    if answers is None:
+        return ToolResult.error("question.expired")
+    if answers == "rejected":
+        return ToolResult.error("question.rejected")
+    saved = await get_personal_variable_by_name(
+        context.db, context.session.user_id, arguments.name
+    )
+    if saved is None:
+        return ToolResult.error("personalVariable.notFound")
+    return ToolResult.json(
+        {
+            "saved": True,
+            "name": arguments.name,
+            "secret": arguments.secret,
+            "valueRef": str(saved.id),
+        }
+    )
+
+
 async def _task(arguments: TaskArguments, context: ToolContext) -> ToolResult:
     if context.task_handler is None:
         return ToolResult.error("tool.unavailable")
@@ -4613,6 +4787,19 @@ _SKILL_WRITE = ToolAction(
 _USER_PROFILE_UPDATE = ToolAction(
     "settings.user_profile.update",
     "Persönliches Profil ändern",
+    ToolExecutionPolicy.ASK,
+    ToolExecutionPolicy.ASK,
+    mutates=True,
+)
+_SECRETS_ACCESS = ToolAction(
+    "secrets.access",
+    "Variablen und Secrets verwenden",
+    ToolExecutionPolicy.ASK,
+    ToolExecutionPolicy.ASK,
+)
+_SECRETS_WRITE = ToolAction(
+    "secrets.write",
+    "Variablen und Secrets speichern",
     ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
     mutates=True,
@@ -5209,6 +5396,29 @@ tool_registry = ToolRegistry(
             label="Skill bearbeiten",
             icon="edit_note",
             actions=(_SKILL_WRITE,),
+        ),
+        ToolDefinition(
+            "variable_read",
+            "List personal variables or read one by name. Secret values are never returned; use valueRef "
+            "with shell_run.environment to provide a value directly to an isolated process.",
+            VariableReadArguments,
+            _variable_read,
+            group="agent",
+            label="Variable lesen",
+            icon="key",
+            actions=(_SECRETS_ACCESS,),
+            releases_private_data=True,
+        ),
+        ToolDefinition(
+            "variable_write",
+            "Ask the user for one value and save it as a personal variable or secret. Never request the "
+            "value in tool arguments. Include variable_id only when updating an exact existing variable.",
+            VariableWriteArguments,
+            _variable_write,
+            group="agent",
+            label="Variable speichern",
+            icon="password",
+            actions=(_SECRETS_WRITE,),
         ),
         ToolDefinition(
             "update_agent_identity",

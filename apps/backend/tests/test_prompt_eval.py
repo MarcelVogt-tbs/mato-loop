@@ -147,7 +147,7 @@ def test_every_builtin_tool_is_expected_by_a_live_case() -> None:
     }
 
     # todo_write is covered by dedicated deterministic tests and a separate model evaluation.
-    separately_evaluated = {"todo_write"}
+    separately_evaluated = {"todo_write", "variable_read", "variable_write"}
     assert set(tool_registry._definitions) - set(PROJECT_CODING_TOOL_NAMES) - separately_evaluated <= covered
 
 
@@ -339,7 +339,7 @@ def test_agent_web_routing_cases_offer_real_production_schemas() -> None:
 
         assert set(by_name) == {"web_search", "webfetch", "shell_run"}
         properties = by_name["shell_run"]["parameters"]["properties"]
-        assert set(properties) == {"command", "timeout"}
+        assert set(properties) == {"command", "environment", "timeout"}
         assert properties["timeout"]["default"] is None
         assert properties["timeout"]["anyOf"] == [
             {"exclusiveMinimum": 0, "maximum": 3600, "type": "number"},

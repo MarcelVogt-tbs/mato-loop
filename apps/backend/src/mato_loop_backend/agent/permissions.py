@@ -61,7 +61,7 @@ _READ_CAPABILITIES = frozenset({
     "media.analyze.video", "media.transcribe.audio",
     "mealie.accounts.read", "memory.read", "network.fetch", "network.search",
     "recipes.read", "session.files.read", "session.read", "session.search",
-    "session.tool_result.read",
+    "session.tool_result.read", "secrets.access",
     "skills.load", "system.info", "tasks.read", "calendar.read",
 })
 _WRITE_CAPABILITIES = frozenset({
@@ -75,6 +75,7 @@ _WRITE_CAPABILITIES = frozenset({
     "media.generate.speech",
     "session.files.write", "settings.agent_identity.update",
     "settings.user_profile.update", "skills.write", "tasks.delete", "tasks.write",
+    "secrets.write",
 })
 
 
@@ -865,6 +866,32 @@ def user_profile_permission(
     )
 
 
+def personal_variables_permission(
+    user_id: UUID,
+    *,
+    write: bool = False,
+    names: tuple[str, ...] = (),
+) -> PermissionRequest:
+    return PermissionRequest(
+        capability="secrets.write" if write else "secrets.access",
+        resource_type="personal_variable_collection",
+        resource_scope=str(user_id),
+        resource_display="Eigene Variablen und Secrets",
+        action_kind="personal_variable_write" if write else "personal_variable_access",
+        risk_level="high" if write else "medium",
+        title="Variable speichern erlauben?" if write else "Variablenzugriff erlauben?",
+        summary=(
+            "Der Agent möchte eine persönliche Variable speichern."
+            if write
+            else "Der Agent möchte persönliche Variablen für diese Aktion verwenden."
+        ),
+        display_items=(
+            (PermissionDisplayItem("Variablen", names, "list"),) if names else ()
+        ),
+        use_integration_policy=False,
+    )
+
+
 def _user_profile_scope(resource_scope: str) -> tuple[UUID, str] | None:
     try:
         value = json.loads(resource_scope)
@@ -1300,6 +1327,17 @@ class PermissionPolicy:
             ):
                 return PermissionDecision.DENY
 
+        if request.resource_type == "personal_variable_collection":
+            try:
+                owner_id = UUID(request.resource_scope)
+            except ValueError:
+                return PermissionDecision.DENY
+            if owner_id != chat_session.user_id or request.capability not in {
+                "secrets.access",
+                "secrets.write",
+            }:
+                return PermissionDecision.DENY
+
         if request.resource_type in {"automation_collection", "automation"}:
             scope = (
                 _automation_collection_scope(request.resource_scope)
@@ -1658,6 +1696,11 @@ class PermissionPolicy:
                 _user_profile_scope(request.resource_scope) is not None
                 and request.resource_scope == grant.resource_scope
             )
+        if request.resource_type == "personal_variable_collection":
+            try:
+                return UUID(request.resource_scope) == UUID(grant.resource_scope)
+            except ValueError:
+                return False
         if request.resource_type == "url":
             return request.resource_scope == grant.resource_scope
         if request.resource_type == "shell_command":

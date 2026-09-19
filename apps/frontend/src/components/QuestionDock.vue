@@ -67,8 +67,14 @@
           Wähle eine Antwort aus.
         </div>
 
+        <q-banner v-if="saveProposal" rounded class="app-surface-tonal q-mt-sm">
+          <template #avatar><q-icon :name="current.type === 'password' ? 'lock' : 'save'" color="primary" /></template>
+          Diese Antwort soll einmalig als {{ current.type === 'password' ? 'Secret' : 'Variable' }} „{{ saveProposal.name }}“ gespeichert werden.
+          Erst „Antworten senden“ erlaubt genau diesen Speichervorgang.
+        </q-banner>
+
         <div
-          v-if="current.type !== 'free_text'"
+          v-if="['single_choice', 'multiple_choice'].includes(current.type)"
           ref="optionsElement"
           class="question-dock__options q-mt-sm"
           :role="current.type === 'single_choice' ? 'radiogroup' : 'group'"
@@ -138,15 +144,16 @@
         </div>
 
         <q-input
-          v-else
+          v-else-if="['free_text', 'value', 'password'].includes(current.type)"
           ref="freeTextInput"
           :model-value="currentAnswers[0] || ''"
           outlined
-          autogrow
-          type="textarea"
+          :autogrow="current.type === 'free_text'"
+          :type="current.type === 'password' ? 'password' : current.type === 'value' ? 'text' : 'textarea'"
           class="q-mt-md"
           :placeholder="current.placeholder || 'Antwort eingeben'"
           :maxlength="20000"
+          :autocomplete="current.type === 'free_text' ? undefined : 'new-password'"
           :disable="busy"
           :aria-labelledby="questionLabelId"
           @update:model-value="setFreeText"
@@ -212,6 +219,12 @@ const currentAnswers = computed(() => draft.answers[current.value.id] || [])
 const currentOptions = computed(() => new Set((current.value.options || []).map((option) => option.label)))
 const customText = computed(() => draft.custom[current.value.id] || '')
 const customSelected = computed(() => draft.customOn[current.value.id] === true)
+const saveProposal = computed(() => {
+  const proposal = current.value.save_proposal
+  return proposal && typeof proposal === 'object' && typeof proposal.name === 'string' && proposal.name
+    ? proposal
+    : null
+})
 const last = computed(() => draft.index === props.request.questions.length - 1)
 const rejecting = ref(false)
 const ownSubmission = computed(() => questions.submittingId === props.request.id)
@@ -241,6 +254,12 @@ function back() {
   jump(draft.index - 1)
 }
 
+function clearProtectedAnswer() {
+  if (current.value.type === 'value' || current.value.type === 'password') {
+    draft.answers[current.value.id] = []
+  }
+}
+
 async function next() {
   if (!last.value) {
     jump(draft.index + 1)
@@ -250,6 +269,8 @@ async function next() {
     await questions.answer(props.request.id, draft.answers)
   } catch {
     // Axios already displayed the API error.
+  } finally {
+    clearProtectedAnswer()
   }
 }
 
@@ -260,6 +281,7 @@ async function reject() {
   } catch {
     // Axios already displayed the API error.
   } finally {
+    clearProtectedAnswer()
     rejecting.value = false
   }
 }

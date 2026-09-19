@@ -16,7 +16,7 @@ from pydantic_core import PydanticCustomError
 
 from mato_loop_backend.automations import next_run_at
 from mato_loop_backend.models import MemoryCategory
-from mato_loop_backend.settings.models import normalize_agent_display_name
+from mato_loop_backend.settings.models import TrustLevel, normalize_agent_display_name
 
 QR_CODE_MAX_CONTENT_BYTES = 2_000
 
@@ -148,6 +148,54 @@ class QuestionArguments(ToolArguments):
         for question in self.questions:
             _validate_question_answer(question, question.default_answers)
         return self
+
+
+class PersonalVariableSaveProposal(ToolArguments):
+    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,119}$")
+    secret: bool
+    action: Literal["create", "update"]
+    variable_id: UUID | None = None
+    agent_profile_id: UUID | None = None
+    trust_level: TrustLevel
+
+    @model_validator(mode="after")
+    def target_matches_action(self) -> PersonalVariableSaveProposal:
+        if (self.action == "update") != (self.variable_id is not None):
+            raise ValueError("update requires variable_id")
+        return self
+
+
+class ProtectedQuestionItem(QuestionBase):
+    type: Literal["value", "password"]
+    save_proposal: PersonalVariableSaveProposal
+
+    @model_validator(mode="after")
+    def type_matches_proposal(self) -> ProtectedQuestionItem:
+        if self.default_answers:
+            raise ValueError("protected questions cannot have defaults")
+        if (self.type == "password") != self.save_proposal.secret:
+            raise ValueError("question type must match secret setting")
+        return self
+
+
+class ProtectedQuestionArguments(ToolArguments):
+    questions: list[ProtectedQuestionItem] = Field(min_length=1, max_length=1)
+
+
+QuestionRequestArguments = QuestionArguments | ProtectedQuestionArguments
+
+
+def validate_protected_question_answers(
+    questions: ProtectedQuestionArguments, answers: dict[str, list[str]]
+) -> dict[str, list[str]]:
+    question = questions.questions[0]
+    answer = answers.get(question.id)
+    if set(answers) != {question.id} or not isinstance(answer, list) or len(answer) != 1:
+        raise ValueError("protected question requires exactly one answer")
+    value = answer[0]
+    if not isinstance(value, str) or not value or len(value) > 20_000:
+        raise ValueError("protected answer is invalid")
+    return {question.id: [value]}
 
 
 def _validate_question_answer(question: QuestionItem, answer: list[str]) -> list[str]:
@@ -305,10 +353,67 @@ class MovePathArguments(CopyPathArguments):
 
 class ShellRunArguments(ToolArguments):
     command: str = Field(min_length=1, max_length=256 * 1024)
+    environment: dict[
+        Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")], UUID
+    ] = Field(default_factory=dict, max_length=32)
     timeout: float | None = Field(
         default=None, strict=True, gt=0, le=3600,
         description="Time limit in seconds. Null uses the agent default; the local agent maximum applies.",
     )
+
+    @field_validator("environment")
+    @classmethod
+    def environment_must_not_replace_host_identity(
+        cls, value: dict[str, UUID]
+    ) -> dict[str, UUID]:
+        protected = {
+            "BASHOPTS",
+            "BASH_ENV",
+            "CDPATH",
+            "CLASSPATH",
+            "ENV",
+            "GLOBIGNORE",
+            "HOME",
+            "IFS",
+            "JAVA_TOOL_OPTIONS",
+            "LANG",
+            "LD_LIBRARY_PATH",
+            "LD_PRELOAD",
+            "LOGNAME",
+            "NODE_OPTIONS",
+            "NODE_PATH",
+            "PATH",
+            "PERL5LIB",
+            "PERL5OPT",
+            "PS4",
+            "PWD",
+            "PYTHONHOME",
+            "PYTHONPATH",
+            "RUBYLIB",
+            "RUBYOPT",
+            "SHELL",
+            "SHELLOPTS",
+            "USER",
+            "ZDOTDIR",
+            "_JAVA_OPTIONS",
+        }
+        if protected.intersection(value) or any(
+            name.startswith(("DYLD_", "GIT_CONFIG_")) for name in value
+        ):
+            raise ValueError("environment contains a protected name")
+        return value
+
+
+class VariableReadArguments(ToolArguments):
+    name: str | None = Field(
+        default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,119}$"
+    )
+
+
+class VariableWriteArguments(ToolArguments):
+    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,119}$")
+    secret: bool
+    variable_id: UUID | None = None
 
 
 class SystemInfoArguments(ToolArguments):

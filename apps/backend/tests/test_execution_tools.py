@@ -2,12 +2,14 @@ import hashlib
 import json
 from dataclasses import replace
 from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
+from mato_loop_backend.agent import tools as tools_module
 from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionDisplayItem,
@@ -57,7 +59,7 @@ from mato_loop_backend.execution.transfers import (
     TransferError,
     TransferTicketStore,
 )
-from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
+from mato_loop_backend.models import ChatSession, Credential, ExecutionAgent, PermissionGrant
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
     IntegrationSettings,
@@ -122,7 +124,11 @@ def _tools(operations):
 def test_shell_tool_cannot_select_execution_targets() -> None:
     tools = _tools({"shell.run"})
     shell = next(item for item in tools.schemas() if item["name"] == "shell_run")
-    assert set(shell["parameters"]["properties"]) == {"command", "timeout"}
+    assert set(shell["parameters"]["properties"]) == {
+        "command",
+        "environment",
+        "timeout",
+    }
     assert ShellRunArguments(command="pwd").timeout is None
     assert all(item["name"] != "process_exec" for item in tools.schemas())
     assert {
@@ -939,6 +945,80 @@ async def test_shell_dispatches_with_inspection_classification(
     assert PermissionPolicy.grant_matches(grant, request, context.root_files)
 
 
+async def test_shell_resolves_variable_reference_only_for_process_transport(
+    tmp_path, monkeypatch
+) -> None:
+    reference = uuid4()
+    call = ToolCall(
+        "shell",
+        "shell_run",
+        {"command": "env", "environment": {"API_TOKEN": str(reference)}},
+    )
+    client = FakeExecutionClient(
+        {
+            "shell.inspect": ShellInspectResult(
+                targets=[],
+                analysis_complete=True,
+                classification="read",
+                read_only=True,
+                commands=[
+                    {
+                        "tokens": ["env"],
+                        "prefix": ["env"],
+                        "classification": "read",
+                    }
+                ],
+                inspection_revision="a" * 64,
+            ),
+            "shell.run": ProcessResult(
+                exit_code=0,
+                timed_out=False,
+                duration_ms=1,
+                stdout_bytes=0,
+                stderr_bytes=0,
+                stdout_truncated=False,
+                stderr_truncated=False,
+            ),
+        },
+        {"shell.inspect", "shell.run"},
+    )
+    request = client.request
+
+    async def request_with_output(operation, arguments, result_model, **kwargs):
+        if operation == "shell.run":
+            await kwargs["on_event"](
+                SimpleNamespace(event="stdout", data="token=host-secret\n")
+            )
+        return await request(operation, arguments, result_model, **kwargs)
+
+    client.request = request_with_output
+    context = _context(tmp_path, call, client)
+    variable = Credential(
+        id=reference,
+        user_id=context.session.user_id,
+        kind="personal_variable",
+        label="TOKEN",
+        encrypted_payload=b"encrypted",
+        metadata_json={"secret": True},
+    )
+    monkeypatch.setattr(
+        tools_module, "get_personal_variable", AsyncMock(return_value=variable)
+    )
+    monkeypatch.setattr(
+        tools_module, "personal_variable_value", lambda _variable: "host-secret"
+    )
+
+    result = await _tools(client.operations).execute(call, context)
+
+    assert not result.is_error
+    assert client.requests[-1][1]["environment"] == {"API_TOKEN": "host-secret"}
+    assert "host-secret" not in result.content
+    assert "token=[redacted]" in result.content
+    assert str(reference) in result.content
+    assert context.ask_handler.await_args_list[0].args[0].capability == "shell.write"
+    assert context.ask_handler.await_args_list[1].args[0].capability == "secrets.access"
+
+
 @pytest.mark.parametrize("classification", ["read", "write"])
 @pytest.mark.parametrize("analysis_complete", [False, True])
 async def test_shell_copy_separates_classification_and_completeness(
@@ -1014,7 +1094,32 @@ async def test_attached_shell_routes_to_shared_runtime_without_isolated_transpor
     assert client.requests == []
     run.assert_awaited_once()
     assert run.await_args.args[0] is context and run.await_args.args[2] is terminal
-    assert run.await_args.args[1].model_dump(exclude_none=True) == requested
+    assert run.await_args.args[1].model_dump(
+        exclude_none=True, exclude_defaults=True
+    ) == requested
+
+
+async def test_attached_shell_rejects_personal_variable_environment(
+    tmp_path, monkeypatch
+) -> None:
+    call = ToolCall(
+        "shell",
+        "shell_run",
+        {"command": "env", "environment": {"TOKEN": str(uuid4())}},
+    )
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, call, client)
+    monkeypatch.setattr(
+        terminal_coordinator, "attached_for", lambda **_kwargs: object()
+    )
+
+    result = await _tools(client.operations).execute(call, context)
+
+    assert result.is_error
+    assert json.loads(result.content)["error"]["code"] == (
+        "variable.sharedTerminalUnsupported"
+    )
+    assert client.requests == []
 
 
 @pytest.mark.parametrize("timeout", [0, -1, 3600.1, float("inf"), float("nan"), True, "60"])

@@ -146,6 +146,12 @@ export function approvalResource(approval, sessions = []) {
   if (approval?.resourceType === 'user_profile') {
     return { label: 'Persönliches Profil', value: approval?.resourceDisplay || 'Eigenes persönliches Profil' }
   }
+  if (approval?.resourceType === 'personal_variable') {
+    return { label: 'Persönliche Variable', value: approval?.resourceDisplay ? `„${approval.resourceDisplay}“` : 'Ausgewählte Variable' }
+  }
+  if (approval?.resourceType === 'personal_variable_collection') {
+    return { label: 'Variablen & Secrets', value: 'Eigene Variablen und Secrets' }
+  }
   if (approval?.resourceType === 'skill') {
     return { label: 'Skill', value: approval?.resourceDisplay ? `„${approval.resourceDisplay}“` : scope }
   }
@@ -261,6 +267,8 @@ export function permissionGrantDisplay(grant, sessions = []) {
     'memory.read': { label: 'Memories lesen', icon: 'psychology' },
     'memory.write': { label: 'Memory speichern', icon: 'save' },
     'settings.user_profile.update': { label: 'Persönliches Profil ändern', icon: 'manage_accounts' },
+    'secrets.access': { label: 'Variablen und Secrets verwenden', icon: 'key' },
+    'secrets.write': { label: 'Variable oder Secret speichern', icon: 'save' },
     'skills.write': { label: 'Skills erstellen', icon: 'auto_awesome' },
     'automation.read': { label: 'Automationen anzeigen', icon: 'schedule' },
     'automation.create': { label: 'Automation erstellen', icon: 'add_task' },

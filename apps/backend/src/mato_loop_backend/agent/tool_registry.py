@@ -27,7 +27,10 @@ from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionRequest,
 )
-from mato_loop_backend.agent.tool_arguments import QuestionArguments, TaskArguments
+from mato_loop_backend.agent.tool_arguments import (
+    QuestionRequestArguments,
+    TaskArguments,
+)
 from mato_loop_backend.agent.tool_contracts import ToolAction
 from mato_loop_backend.agent.tool_display import TOOL_GROUPS
 from mato_loop_backend.agent.tool_references import (
@@ -91,7 +94,8 @@ SkillDraftHandler = Callable[
     [str, str | None, SkillDefinition | None], Awaitable[SkillDraft]
 ]
 QuestionHandler = Callable[
-    [QuestionArguments], Awaitable[dict[str, list[str]] | Literal["rejected"] | None]
+    [QuestionRequestArguments],
+    Awaitable[dict[str, list[str]] | Literal["rejected"] | None],
 ]
 VideoAnalysisHandler = Callable[
     [bytes, TrustLevel, str | None, VideoAnalysisMode, str | None],
@@ -291,7 +295,7 @@ class ToolContext:
         return decision
 
     async def ask_user(
-        self, questions: QuestionArguments
+        self, questions: QuestionRequestArguments
     ) -> dict[str, list[str]] | Literal["rejected"] | None:
         if self.question_handler is None:
             return None

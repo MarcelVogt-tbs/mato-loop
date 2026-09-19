@@ -348,6 +348,31 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((root / "app.txt").read_text(), "new")
             self.assertEqual(result["sha256"], hashlib.sha256(b"new").hexdigest())
 
+    async def test_dispatch_forwards_shell_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            agent = MatoLoopAgent(
+                configuration(Path(temporary), shellExecutable=Path("/bin/sh")), "secret"
+            )
+            agent.process.exec = AsyncMock(return_value={})
+            await agent.dispatch(
+                Request.model_validate(
+                    {
+                        "type": "request",
+                        "id": REQUEST_ID,
+                        "operation": "shell.run",
+                        "arguments": {
+                            "currentDirectory": temporary,
+                            "command": "true",
+                            "environment": {"CUSTOM_VALUE": "explicit"},
+                        },
+                    }
+                )
+            )
+            self.assertEqual(
+                agent.process.exec.await_args.kwargs["environment"],
+                {"CUSTOM_VALUE": "explicit"},
+            )
+
     async def test_connection_retry_reloads_rotated_access_key(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             agent = MatoLoopAgent(configuration(Path(temporary)), "old-key")

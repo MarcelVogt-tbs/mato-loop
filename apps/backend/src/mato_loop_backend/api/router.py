@@ -17,6 +17,7 @@ from mato_loop_backend.api.routes.mcp import router as mcp_router
 from mato_loop_backend.api.routes.media import router as media_router
 from mato_loop_backend.api.routes.memories import router as memories_router
 from mato_loop_backend.api.routes.notifications import router as notifications_router
+from mato_loop_backend.api.routes.personal_variables import router as personal_variables_router
 from mato_loop_backend.api.routes.project_coding import router as project_coding_router
 from mato_loop_backend.api.routes.projects import router as projects_router
 from mato_loop_backend.api.routes.providers import router as providers_router
@@ -51,6 +52,7 @@ api_router.include_router(mail_router, tags=["mail"])
 api_router.include_router(mcp_router, tags=["mcp"])
 api_router.include_router(memories_router, tags=["memories"])
 api_router.include_router(notifications_router, tags=["notifications"])
+api_router.include_router(personal_variables_router, tags=["personal-variables"])
 api_router.include_router(media_router, tags=["media"])
 api_router.include_router(search_router, tags=["search"])
 api_router.include_router(sessions_router, tags=["sessions"])

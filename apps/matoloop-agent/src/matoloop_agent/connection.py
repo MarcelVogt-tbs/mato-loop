@@ -328,6 +328,7 @@ class MatoLoopAgent:
                 timeout=arguments.timeout_seconds,
                 stream=stream,
                 expected_inspection_revision=arguments.expected_inspection_revision,
+                environment=arguments.environment,
             )
         if isinstance(arguments, ShellInspectArguments):
             return await asyncio.to_thread(

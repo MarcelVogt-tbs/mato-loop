@@ -32,6 +32,7 @@ describe('MatoLoop frontend scaffold', () => {
       'settings-mcp',
       'settings-channels',
       'settings-tools',
+      'settings-personal-variables',
       'settings-approvals',
       'settings-execution-agents',
       'settings-skills',
@@ -72,6 +73,9 @@ describe('MatoLoop frontend scaffold', () => {
     })
     expect(settingsRoutes.find((route) => route.name === 'settings-mcp')?.meta).toEqual({
       settingsLabel: 'MCP-Server', settingsIcon: 'hub'
+    })
+    expect(settingsRoutes.find((route) => route.name === 'settings-personal-variables')?.meta).toEqual({
+      settingsLabel: 'Variablen & Secrets', settingsIcon: 'key'
     })
     expect(settingsRoutes.find((route) => route.name === 'settings-approvals')?.redirect).toEqual({
       name: 'chat', query: { controlCenter: 'notifications' }

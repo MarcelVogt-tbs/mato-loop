@@ -11,6 +11,66 @@ AGENT_ID = "2ea504cc-e3c6-4e0d-aa05-080328100fe8"
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_shell_environment_is_strict_bounded_and_protects_clean_values(self) -> None:
+        request = Request(
+            type="request",
+            id=REQUEST_ID,
+            operation="shell.run",
+            arguments={
+                "command": "printenv CUSTOM_VALUE",
+                "currentDirectory": "/workspace",
+                "environment": {"CUSTOM_VALUE": "secret"},
+            },
+        )
+        self.assertEqual(validate_arguments(request).environment, {"CUSTOM_VALUE": "secret"})
+        request.arguments["environment"] = {
+            **{f"NAME_{index}": "value" for index in range(31)},
+            "MAX_VALUE": "x" * 65_536,
+        }
+        self.assertEqual(len(validate_arguments(request).environment), 32)
+
+        invalid = (
+            {"environment": [("NAME", "value")]},
+            {"environment": {f"NAME_{index}": "value" for index in range(33)}},
+            {"environment": {"9INVALID": "value"}},
+            {"environment": {"A" * 129: "value"}},
+            {"environment": {"NAME": 1}},
+            {"environment": {"NAME": "x" * 65_537}},
+            {"environment": {"NAME": "\N{EURO SIGN}" * 21_846}},
+            {"environment": {"NAME": "before\x00after"}},
+            *(
+                {"environment": {name: "replacement"}}
+                for name in (
+                    "HOME",
+                    "PATH",
+                    "BASH_ENV",
+                    "LD_PRELOAD",
+                    "GIT_CONFIG_COUNT",
+                    "DYLD_INSERT_LIBRARIES",
+                )
+            ),
+        )
+        for arguments in invalid:
+            request.arguments = {
+                "command": "true",
+                "currentDirectory": "/workspace",
+                **arguments,
+            }
+            with self.subTest(arguments=arguments), self.assertRaises(ValidationError):
+                validate_arguments(request)
+
+        request.operation = "terminal.run"
+        request.arguments = {
+            "terminalId": AGENT_ID,
+            "currentDirectory": "/workspace",
+            "rows": 24,
+            "columns": 80,
+            "command": "true",
+            "environment": {"NAME": "value"},
+        }
+        with self.assertRaises(ValidationError):
+            validate_arguments(request)
+
     def test_shell_and_terminal_timeouts_are_optional_and_bounded(self) -> None:
         for operation in ("shell.run", "terminal.run"):
             values = {"command": "pwd", "currentDirectory": "/workspace"}

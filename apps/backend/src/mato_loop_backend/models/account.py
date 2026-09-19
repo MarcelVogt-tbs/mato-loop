@@ -4,7 +4,17 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, LargeBinary, String, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    LargeBinary,
+    String,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -51,6 +61,19 @@ class LoginSession(Base):
 
 class Credential(Base):
     __tablename__ = "credentials"
+    __table_args__ = (
+        CheckConstraint(
+            "kind != 'personal_variable' OR user_id IS NOT NULL",
+            name="personal_variable_owner_required",
+        ),
+        Index(
+            "uq_credentials_personal_variable_name_ci",
+            "user_id",
+            text("lower(label)"),
+            unique=True,
+            postgresql_where=text("kind = 'personal_variable'"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     user_id: Mapped[UUID | None] = mapped_column(

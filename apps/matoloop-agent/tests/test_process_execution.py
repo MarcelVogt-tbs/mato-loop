@@ -151,6 +151,20 @@ class ProcessExecutionTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(output.count("nested-ok"), 3, output)
                     self.assertNotIn("/proc/self/fd/", output)
 
+    async def test_isolated_process_receives_only_explicit_environment_additions(self) -> None:
+        with patch.dict(os.environ, {"HOST_SECRET": "not-inherited"}):
+            result, output = await self.execute(
+                False,
+                'printf \'%s|%s\' "$CUSTOM_VALUE" "${HOST_SECRET-unset}"',
+                environment={"CUSTOM_VALUE": "explicit"},
+            )
+        self.assertEqual(result["exitCode"], 0)
+        self.assertEqual(output, "explicit|unset")
+
+        result, output = await self.execute(False, "printf '%s' \"${CUSTOM_VALUE-unset}\"")
+        self.assertEqual(result["exitCode"], 0)
+        self.assertEqual(output, "unset")
+
     async def test_timeout_default_local_cap_and_bounded_failure_output(self) -> None:
         self.assertEqual(self.runner.execution_timeout(None), 60)
         self.assertEqual(self.runner.execution_timeout(3600), 3600)

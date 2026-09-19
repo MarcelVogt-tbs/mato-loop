@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent import question_decisions as question_decisions_module
 from mato_loop_backend.agent import runtime as runtime_module
 from mato_loop_backend.agent.question_decisions import QuestionDecisionError
 from mato_loop_backend.agent.question_decisions import (
@@ -16,6 +17,7 @@ from mato_loop_backend.agent.question_decisions import (
     reject_question as reject_question_decision,
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.tool_arguments import ProtectedQuestionArguments
 from mato_loop_backend.agent.tools import (
     QuestionArguments,
     ToolContext,
@@ -29,6 +31,7 @@ from mato_loop_backend.api.routes.questions import (
 )
 from mato_loop_backend.events import run_events
 from mato_loop_backend.models import AgentRun, ChatSession, QuestionRequest, UserAccount
+from mato_loop_backend.personal_variables import PersonalVariableError
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import ToolSettings
 
@@ -237,6 +240,121 @@ async def test_answer_is_persisted_before_agent_resumes(monkeypatch) -> None:
     db.commit.assert_awaited_once()
     resolve.assert_called_once_with(request.id, resolved_answers)
     assert result == {"status": "answered"}
+
+
+async def test_protected_answer_is_saved_but_never_persisted_or_resumed(
+    monkeypatch,
+) -> None:
+    questions = ProtectedQuestionArguments.model_validate(
+        {
+            "questions": [
+                {
+                    "id": "value",
+                    "header": "Secret",
+                    "question": "Enter token",
+                    "type": "password",
+                    "save_proposal": {
+                        "name": "API_TOKEN",
+                        "secret": True,
+                        "action": "create",
+                        "trust_level": "public",
+                    },
+                }
+            ]
+        }
+    )
+    request = QuestionRequest(
+        id=uuid4(),
+        session_id=uuid4(),
+        run_id=uuid4(),
+        tool_call_id="call-1",
+        questions=questions.model_dump(mode="json")["questions"],
+        status="pending",
+    )
+    session = ChatSession(id=request.session_id, user_id=uuid4(), title="Test")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    save = AsyncMock()
+    resolve = Mock(return_value=True)
+    monkeypatch.setattr(question_decisions_module, "create_personal_variable", save)
+    monkeypatch.setattr(
+        question_decisions_module,
+        "load_agent_profile_tools",
+        AsyncMock(return_value=(ToolSettings(), None)),
+    )
+    monkeypatch.setattr(
+        AgentRuntime, "claim_question_resolution", Mock(return_value=True)
+    )
+    monkeypatch.setattr(AgentRuntime, "resolve_question", resolve)
+    monkeypatch.setattr(run_events, "publish", AsyncMock())
+
+    result = await answer_question_decision(
+        db, request, {"value": ["  exact secret  "]}
+    )
+
+    save.assert_awaited_once_with(
+        db,
+        session.user_id,
+        name="API_TOKEN",
+        value="  exact secret  ",
+        secret=True,
+    )
+    assert request.answers == {"value": ["saved"]}
+    assert "exact secret" not in json.dumps(request.answers)
+    resolve.assert_called_once_with(request.id, {"value": ["saved"]})
+    assert result == {"status": "answered"}
+
+
+async def test_protected_answer_failure_releases_resolution(monkeypatch) -> None:
+    questions = ProtectedQuestionArguments.model_validate(
+        {
+            "questions": [
+                {
+                    "id": "value",
+                    "header": "Secret",
+                    "question": "Enter token",
+                    "type": "password",
+                    "save_proposal": {
+                        "name": "API_TOKEN",
+                        "secret": True,
+                        "action": "create",
+                        "trust_level": "public",
+                    },
+                }
+            ]
+        }
+    )
+    request = QuestionRequest(
+        id=uuid4(),
+        session_id=uuid4(),
+        run_id=uuid4(),
+        tool_call_id="call-1",
+        questions=questions.model_dump(mode="json")["questions"],
+        status="pending",
+    )
+    session = ChatSession(id=request.session_id, user_id=uuid4(), title="Test")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    release = Mock()
+    monkeypatch.setattr(
+        question_decisions_module,
+        "load_agent_profile_tools",
+        AsyncMock(return_value=(ToolSettings(), None)),
+    )
+    monkeypatch.setattr(
+        question_decisions_module,
+        "create_personal_variable",
+        AsyncMock(side_effect=PersonalVariableError("personalVariable.duplicate")),
+    )
+    monkeypatch.setattr(
+        AgentRuntime, "claim_question_resolution", Mock(return_value=True)
+    )
+    monkeypatch.setattr(AgentRuntime, "release_question_resolution", release)
+
+    with pytest.raises(QuestionDecisionError, match="personalVariable.duplicate"):
+        await answer_question_decision(db, request, {"value": ["secret"]})
+
+    release.assert_called_once_with(request.id)
 
 
 async def test_rejection_is_persisted_before_agent_resumes(monkeypatch) -> None:

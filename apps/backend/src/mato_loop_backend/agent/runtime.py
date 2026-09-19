@@ -95,6 +95,7 @@ from mato_loop_backend.agent.title_generation import (
     initial_session_title as _initial_session_title,
 )
 from mato_loop_backend.agent.todos import session_todos, todo_context
+from mato_loop_backend.agent.tool_arguments import QuestionRequestArguments
 from mato_loop_backend.agent.tool_display import tool_display
 from mato_loop_backend.agent.tools import (
     PROJECT_CODING_TOOL_NAMES,
@@ -5520,7 +5521,7 @@ class AgentRuntime:
         run: AgentRun,
         chat_session: ChatSession,
         call: ToolCall,
-        questions: QuestionArguments,
+        questions: QuestionRequestArguments,
     ) -> dict[str, list[str]] | Literal["rejected"] | None:
         origin = await permission_origin(db, chat_session)
         request = QuestionRequest(
@@ -5532,7 +5533,7 @@ class AgentRuntime:
         db.add(request)
         transition_run_status(run, "waiting_input")
         await db.flush()
-        if run.input_message_id is not None:
+        if isinstance(questions, QuestionArguments) and run.input_message_id is not None:
             input_message = await db.get(Message, run.input_message_id)
             if (
                 input_message is not None

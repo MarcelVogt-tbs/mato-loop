@@ -68,6 +68,12 @@ export const settingsRoutes = [
     meta: { settingsLabel: 'Tools', settingsIcon: 'build' }
   },
   {
+    path: 'personal-variables',
+    name: 'settings-personal-variables',
+    component: () => import('pages/settings/PersonalVariablesSettingsPage.vue'),
+    meta: { settingsLabel: 'Variablen & Secrets', settingsIcon: 'key' }
+  },
+  {
     path: 'approvals',
     name: 'settings-approvals',
     redirect: { name: 'chat', query: { controlCenter: 'notifications' } }
