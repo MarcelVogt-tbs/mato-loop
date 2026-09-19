@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from mato_loop_backend.agent.permissions import (
     PermissionDecision,
+    PermissionDisplayItem,
     PermissionPolicy,
     PermissionRequest,
     SessionGrantScope,
@@ -625,6 +626,31 @@ def test_shell_session_grants_include_cwd_and_every_target_directory() -> None:
         request.resource_scope,
         replace(outside_read, access="write"),
     )
+
+
+def test_shell_permission_displays_confidential_paths() -> None:
+    request = shell_command_permission(
+        uuid4(),
+        "/work",
+        "cat .env.prod.example README.md",
+        ShellInspectResult(
+            targets=[
+                {"path": "/work/.env.prod.example", "kind": "path", "access": "read"},
+                {"path": "/work/README.md", "kind": "path", "access": "read"},
+            ],
+            analysis_complete=True,
+            classification="read",
+            read_only=True,
+            commands=[],
+            inspection_revision="a" * 64,
+        ),
+    )
+
+    assert request.display_items[-1] == PermissionDisplayItem(
+        "Besonders geschützte Pfade", ("/work/.env.prod.example",), "list"
+    )
+    assert "benötigen immer eine Freigabe" in request.summary
+    assert request.available_decisions == ("allow_once", "deny")
 
 
 def test_legacy_shell_targets_remain_one_shot_only() -> None:

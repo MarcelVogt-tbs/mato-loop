@@ -1042,6 +1042,14 @@ def shell_command_permission(
         for target in inspection.targets
         if target.kind not in metadata_kinds
     )
+    confidential_paths = tuple(dict.fromkeys(
+        path
+        for path in [current_directory, *(target.path for target in inspection.targets)]
+        if confidential_execution_path(path)
+    ))
+    display_items = (PermissionDisplayItem("Shell-Befehl", command_line, "code"),)
+    if confidential_paths:
+        display_items += (PermissionDisplayItem("Besonders geschützte Pfade", confidential_paths, "list"),)
     return PermissionRequest(
         capability=f"shell.{inspection.classification}",
         resource_type="shell_command",
@@ -1067,6 +1075,9 @@ def shell_command_permission(
         ) + (
             " Die Analyse ist unvollständig; nicht alle Befehle und Pfade konnten geprüft werden."
             if not inspection.analysis_complete else ""
+        ) + (
+            " Besonders geschützte Pfade benötigen immer eine Freigabe."
+            if confidential_paths else ""
         ),
         resource_display=current_directory,
         shell_metadata_paths=metadata_paths,
@@ -1085,13 +1096,10 @@ def shell_command_permission(
             "shellAnalysisComplete": inspection.analysis_complete,
             "shellPrefixes": prefixes,
         },
-        display_items=(PermissionDisplayItem("Shell-Befehl", command_line, "code"),),
+        display_items=display_items,
         available_decisions=(
             ("allow_once", "allow_session", "deny")
-            if reusable and not any(
-                confidential_execution_path(path)
-                for path in [current_directory, *(target.path for target in inspection.targets)]
-            )
+            if reusable and not confidential_paths
             else ("allow_once", "deny")
         ),
     )
