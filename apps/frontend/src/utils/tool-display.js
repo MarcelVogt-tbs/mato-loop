@@ -69,6 +69,7 @@ const TOOL_DISPLAY = {
   update_user_profile: { label: 'Persönliches Profil ändern', icon: 'manage_accounts' },
   variable_read: { label: 'Persönliche Variable lesen', icon: 'key' },
   variable_write: { label: 'Persönliche Variable speichern', icon: 'save' },
+  secret_input: { label: 'Secret einmalig abfragen', icon: 'password' },
   process_exec: { label: 'Prozess ausführen', icon: 'terminal' },
   'process.exec': { label: 'Prozess ausführen', icon: 'terminal' },
   shell_run: { label: 'Shell-Befehl ausführen', icon: 'terminal' },

@@ -67,9 +67,15 @@
           Wähle eine Antwort aus.
         </div>
 
-        <q-banner v-if="saveProposal" rounded class="app-surface-tonal q-mt-sm">
+        <q-banner v-if="oneTime" rounded class="app-surface-tonal q-mt-sm">
+          <template #avatar><q-icon name="lock_clock" color="primary" /></template>
+          Diese Antwort wird nicht gespeichert. Sie wird nur für die aktuelle Agent-Anfrage bereitgestellt
+          und nach der Verwendung oder beim Ende der Anfrage verworfen.
+        </q-banner>
+
+        <q-banner v-else-if="saveProposal" rounded class="app-surface-tonal q-mt-sm">
           <template #avatar><q-icon :name="current.type === 'password' ? 'lock' : 'save'" color="primary" /></template>
-          Diese Antwort soll einmalig als {{ current.type === 'password' ? 'Secret' : 'Variable' }} „{{ saveProposal.name }}“ gespeichert werden.
+          Diese Antwort wird dauerhaft als {{ current.type === 'password' ? 'Secret' : 'Variable' }} „{{ saveProposal.name }}“ gespeichert, bis du sie löschst.
           Erst „Antworten senden“ erlaubt genau diesen Speichervorgang.
         </q-banner>
 
@@ -219,6 +225,7 @@ const currentAnswers = computed(() => draft.answers[current.value.id] || [])
 const currentOptions = computed(() => new Set((current.value.options || []).map((option) => option.label)))
 const customText = computed(() => draft.custom[current.value.id] || '')
 const customSelected = computed(() => draft.customOn[current.value.id] === true)
+const oneTime = computed(() => current.value.one_time === true)
 const saveProposal = computed(() => {
   const proposal = current.value.save_proposal
   return proposal && typeof proposal === 'object' && typeof proposal.name === 'string' && proposal.name

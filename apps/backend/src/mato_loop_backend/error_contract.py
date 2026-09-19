@@ -92,6 +92,7 @@ _MESSAGES = {
     "personalVariable.notFound": "The personal variable was not found.",
     "personalVariable.valueInvalid": "The personal variable value is invalid.",
     "personalVariable.valueRequired": "A value is required for this change.",
+    "secret.valueRefUnavailable": "The one-time secret is unavailable or has already been used.",
     "variable.sharedTerminalUnsupported": "Personal variables are not supported in an attached terminal.",
     "executionAgent.notFound": "The MatoLoop Agent was not found.",
     "executionAgent.alreadyPaired": "The MatoLoop Agent is already paired.",
@@ -323,7 +324,7 @@ _MESSAGES = {
     "project.planNotFound": "The project plan was not found.",
     "question.expired": "The question expired before an answer was received.",
     "question.answerTooLarge": "The submitted answer is too large.",
-    "question.exclusiveCallRequired": "The question tool must be called without other tools in the same response.",
+    "question.exclusiveCallRequired": "Interactive input tools must be called without other tools in the same response.",
     "question.invalidAnswer": "The submitted answer does not match the question.",
     "question.placeholderNotAllowed": (
         "placeholder is only allowed for free_text. For choice questions, "

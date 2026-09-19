@@ -84,67 +84,73 @@ async def answer_question(
     request_id = request.id
     run_id = request.run_id
     resolved_answers = validated_answers
+    persisted_answers = validated_answers
     if isinstance(questions, ProtectedQuestionArguments):
-        try:
-            question = questions.questions[0]
+        question = questions.questions[0]
+        if question.one_time:
+            persisted_answers = {question.id: ["received"]}
+        else:
+            assert question.save_proposal is not None
             proposal = question.save_proposal
-            session = await db.get(ChatSession, request.session_id)
-            run = await db.get(AgentRun, request.run_id)
-            if session is None or run is None:
-                raise QuestionDecisionError(409, "question.runInactive")
-
-            async def policy_changed() -> None:
-                request.status = "expired"
-                request.answered_at = datetime.now(UTC)
-                await db.commit()
-                AgentRuntime.resolve_question(request_id, "rejected")
-
             try:
-                settings, _profile = await load_agent_profile_tools(
-                    db,
-                    session.user_id,
-                    proposal.agent_profile_id,
-                    proposal.trust_level,
-                )
-            except AgentProfileUnavailable:
-                await policy_changed()
-                raise QuestionDecisionError(409, "approval.policyChanged") from None
-            from mato_loop_backend.agent.tools import resolve_tool_execution_policy
+                session = await db.get(ChatSession, request.session_id)
+                run = await db.get(AgentRun, request.run_id)
+                if session is None or run is None:
+                    raise QuestionDecisionError(409, "question.runInactive")
 
-            if resolve_tool_execution_policy(
-                settings, "secrets.write", ToolExecutionPolicy.ASK
-            ).policy == ToolExecutionPolicy.DISABLED or not settings.tool_availability.get(
-                "variable_write", True
-            ):
-                await policy_changed()
-                raise QuestionDecisionError(409, "approval.policyChanged")
-            if proposal.action == "create":
-                await create_personal_variable(
-                    db,
-                    session.user_id,
-                    name=proposal.name,
-                    value=validated_answers[question.id][0],
-                    secret=proposal.secret,
-                )
-            else:
-                assert proposal.variable_id is not None
-                await update_personal_variable(
-                    db,
-                    session.user_id,
-                    proposal.variable_id,
-                    name=proposal.name,
-                    value=validated_answers[question.id][0],
-                    secret=proposal.secret,
-                )
-        except PersonalVariableError as exc:
-            AgentRuntime.release_question_resolution(request_id)
-            raise QuestionDecisionError(409, exc.code, field=exc.field) from exc
-        except BaseException:
-            AgentRuntime.release_question_resolution(request_id)
-            raise
-        resolved_answers = {question.id: ["saved"]}
+                async def policy_changed() -> None:
+                    request.status = "expired"
+                    request.answered_at = datetime.now(UTC)
+                    await db.commit()
+                    AgentRuntime.resolve_question(request_id, "rejected")
+
+                try:
+                    settings, _profile = await load_agent_profile_tools(
+                        db,
+                        session.user_id,
+                        proposal.agent_profile_id,
+                        proposal.trust_level,
+                    )
+                except AgentProfileUnavailable:
+                    await policy_changed()
+                    raise QuestionDecisionError(409, "approval.policyChanged") from None
+                from mato_loop_backend.agent.tools import resolve_tool_execution_policy
+
+                if resolve_tool_execution_policy(
+                    settings, "secrets.write", ToolExecutionPolicy.ASK
+                ).policy == ToolExecutionPolicy.DISABLED or not settings.tool_availability.get(
+                    "variable_write", True
+                ):
+                    await policy_changed()
+                    raise QuestionDecisionError(409, "approval.policyChanged")
+                if proposal.action == "create":
+                    await create_personal_variable(
+                        db,
+                        session.user_id,
+                        name=proposal.name,
+                        value=validated_answers[question.id][0],
+                        secret=proposal.secret,
+                    )
+                else:
+                    assert proposal.variable_id is not None
+                    await update_personal_variable(
+                        db,
+                        session.user_id,
+                        proposal.variable_id,
+                        name=proposal.name,
+                        value=validated_answers[question.id][0],
+                        secret=proposal.secret,
+                    )
+            except PersonalVariableError as exc:
+                AgentRuntime.release_question_resolution(request_id)
+                raise QuestionDecisionError(409, exc.code, field=exc.field) from exc
+            except BaseException:
+                AgentRuntime.release_question_resolution(request_id)
+                raise
+            resolved_answers = {question.id: ["saved"]}
+            persisted_answers = resolved_answers
     request.status = "answered"
-    request.answers = resolved_answers
+    request.answers = persisted_answers
     request.answered_at = datetime.now(UTC)
     try:
         await db.commit()
@@ -155,7 +161,7 @@ async def answer_question(
             AgentRuntime.release_question_resolution(request_id)
         raise
     if not AgentRuntime.resolve_question(request_id, resolved_answers):
-        if isinstance(questions, ProtectedQuestionArguments):
+        if isinstance(questions, ProtectedQuestionArguments) and not question.one_time:
             return {"status": "answered"}
         request.status = "expired"
         request.answers = None

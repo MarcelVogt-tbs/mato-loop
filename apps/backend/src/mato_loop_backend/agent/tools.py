@@ -97,6 +97,7 @@ from mato_loop_backend.agent.tool_arguments import (
     ReadArguments,
     ReadQrCodeArguments,
     RunAutomationArguments,
+    SecretInputArguments,
     SessionBrowseArguments,
     SessionFileReadArguments,
     SessionReadArguments,
@@ -1767,16 +1768,21 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
     if not await _allow(context, permission):
         return ToolResult.error("permission.denied")
     environment: dict[str, str] = {}
+    one_time_ids: dict[str, UUID] = {}
     if arguments.environment:
         variables = []
-        for variable_id in dict.fromkeys(arguments.environment.values()):
+        for variable_id in dict.fromkeys(
+            reference
+            for reference in arguments.environment.values()
+            if isinstance(reference, UUID)
+        ):
             variable = await get_personal_variable(
                 context.db, context.session.user_id, variable_id
             )
             if variable is None:
                 return ToolResult.error("personalVariable.notFound")
             variables.append(variable)
-        if not await _allow(
+        if variables and not await _allow(
             context,
             personal_variables_permission(
                 context.session.user_id,
@@ -1784,7 +1790,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
             ),
         ):
             return ToolResult.error("permission.denied")
-        values = {}
+        values: dict[UUID | str, str] = {}
         for variable in variables:
             current = await get_personal_variable(
                 context.db,
@@ -1795,9 +1801,20 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
             if current is None:
                 return ToolResult.error("personalVariable.notFound")
             values[variable.id] = personal_variable_value(current)
+        for reference in dict.fromkeys(
+            reference
+            for reference in arguments.environment.values()
+            if isinstance(reference, str)
+        ):
+            secret_id = UUID(reference.removeprefix("run-secret:"))
+            value = context.one_time_secrets.get(secret_id)
+            if value is None:
+                return ToolResult.error("secret.valueRefUnavailable")
+            one_time_ids[reference] = secret_id
+            values[reference] = value
         environment = {
-            name: values[variable_id]
-            for name, variable_id in arguments.environment.items()
+            name: values[reference]
+            for name, reference in arguments.environment.items()
         }
     process_arguments = {
         "command": executed["command"],
@@ -1811,6 +1828,8 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
     )
     if len(request.model_dump_json(by_alias=True).encode()) > MAX_REQUEST_BYTES:
         return ToolResult.error("executionAgent.requestTooLarge")
+    for secret_id in one_time_ids.values():
+        context.one_time_secrets.pop(secret_id, None)
     return await _run_process(
         context,
         "shell.run",
@@ -4423,6 +4442,31 @@ async def _variable_read(
     )
 
 
+async def _secret_input(
+    arguments: SecretInputArguments, context: ToolContext
+) -> ToolResult:
+    answers = await context.ask_user(
+        ProtectedQuestionArguments(
+            questions=[
+                ProtectedQuestionItem(
+                    id="value",
+                    header="Einmaliges Secret",
+                    question=arguments.question,
+                    type="password",
+                    one_time=True,
+                )
+            ]
+        )
+    )
+    if answers is None:
+        return ToolResult.error("question.expired")
+    if answers == "rejected":
+        return ToolResult.error("question.rejected")
+    secret_id = uuid4()
+    context.one_time_secrets[secret_id] = answers["value"][0]
+    return ToolResult.json({"valueRef": f"run-secret:{secret_id}"})
+
+
 async def _variable_write(
     arguments: VariableWriteArguments, context: ToolContext
 ) -> ToolResult:
@@ -5411,8 +5455,9 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "variable_write",
-            "Ask the user for one value and save it as a personal variable or secret. Never request the "
-            "value in tool arguments. Include variable_id only when updating an exact existing variable.",
+            "Ask for and durably save one personal variable or secret only when the user explicitly requests "
+            "storage; otherwise use secret_input. Never put the value in tool arguments. Include variable_id "
+            "only when updating an exact existing variable.",
             VariableWriteArguments,
             _variable_write,
             group="agent",
@@ -5494,6 +5539,18 @@ tool_registry = ToolRegistry(
             group="process",
             label="Verzeichnis wechseln",
             icon="drive_file_move",
+        ),
+        ToolDefinition(
+            "secret_input",
+            "Ask the user for one secret needed only by the current task. The value is not saved or returned. "
+            "Call alone, then pass valueRef to shell_run.environment for one isolated process. Never use "
+            "variable_write unless the user explicitly requested durable storage.",
+            SecretInputArguments,
+            _secret_input,
+            required_operation="shell.run",
+            group="agent",
+            label="Secret einmalig abfragen",
+            icon="password",
         ),
         ToolDefinition(
             "shell_run",

@@ -167,13 +167,20 @@ class PersonalVariableSaveProposal(ToolArguments):
 
 class ProtectedQuestionItem(QuestionBase):
     type: Literal["value", "password"]
-    save_proposal: PersonalVariableSaveProposal
+    save_proposal: PersonalVariableSaveProposal | None = None
+    one_time: bool = False
 
     @model_validator(mode="after")
     def type_matches_proposal(self) -> ProtectedQuestionItem:
         if self.default_answers:
             raise ValueError("protected questions cannot have defaults")
-        if (self.type == "password") != self.save_proposal.secret:
+        if (self.save_proposal is None) == (not self.one_time):
+            raise ValueError("protected question requires exactly one purpose")
+        if self.one_time and self.type != "password":
+            raise ValueError("one-time input must be a password")
+        if self.save_proposal is not None and (
+            (self.type == "password") != self.save_proposal.secret
+        ):
             raise ValueError("question type must match secret setting")
         return self
 
@@ -193,7 +200,12 @@ def validate_protected_question_answers(
     if set(answers) != {question.id} or not isinstance(answer, list) or len(answer) != 1:
         raise ValueError("protected question requires exactly one answer")
     value = answer[0]
-    if not isinstance(value, str) or not value or len(value) > 20_000:
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\0" in value
+        or len(value) > 20_000
+    ):
         raise ValueError("protected answer is invalid")
     return {question.id: [value]}
 
@@ -354,7 +366,14 @@ class MovePathArguments(CopyPathArguments):
 class ShellRunArguments(ToolArguments):
     command: str = Field(min_length=1, max_length=256 * 1024)
     environment: dict[
-        Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")], UUID
+        Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")],
+        UUID
+        | Annotated[
+            str,
+            Field(
+                pattern=r"^run-secret:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            ),
+        ],
     ] = Field(default_factory=dict, max_length=32)
     timeout: float | None = Field(
         default=None, strict=True, gt=0, le=3600,
@@ -364,8 +383,8 @@ class ShellRunArguments(ToolArguments):
     @field_validator("environment")
     @classmethod
     def environment_must_not_replace_host_identity(
-        cls, value: dict[str, UUID]
-    ) -> dict[str, UUID]:
+        cls, value: dict[str, UUID | str]
+    ) -> dict[str, UUID | str]:
         protected = {
             "BASHOPTS",
             "BASH_ENV",
@@ -414,6 +433,17 @@ class VariableWriteArguments(ToolArguments):
     name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,119}$")
     secret: bool
     variable_id: UUID | None = None
+
+
+class SecretInputArguments(ToolArguments):
+    question: str = Field(min_length=1, max_length=2_000)
+
+    @field_validator("question")
+    @classmethod
+    def question_must_not_be_blank(cls, value: str) -> str:
+        if not (cleaned := value.strip()):
+            raise ValueError("question must not be blank")
+        return cleaned
 
 
 class SystemInfoArguments(ToolArguments):

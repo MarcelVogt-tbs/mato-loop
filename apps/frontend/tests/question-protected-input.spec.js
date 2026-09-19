@@ -66,3 +66,29 @@ it('masks password questions, submits exact values, and clears failed drafts', a
   await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/questions/question-1/reject'))
   await vi.waitFor(() => expect(input.value).toBe(''))
 })
+
+it('marks one-time secrets as not stored', async () => {
+  const request = {
+    id: 'question-1',
+    questions: [{
+      id: 'token',
+      header: 'Token',
+      question: 'Wie lautet der Token?',
+      type: 'password',
+      one_time: true
+    }]
+  }
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ render: () => h(QuestionDock, { request, showStop: false }) })
+  app.use(createPinia()).use(Quasar, { components: {
+    QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QIcon,
+    QInput, QRadio, QSeparator, QSpace, QTooltip
+  } })
+  app.mount(root)
+  await nextTick()
+
+  expect(root.textContent).toContain('Diese Antwort wird nicht gespeichert.')
+  expect(root.textContent).not.toContain('dauerhaft')
+  expect(root.querySelector('input[type="password"]')).not.toBeNull()
+})

@@ -1616,8 +1616,11 @@ class AgentRuntime:
     ) -> None:
         # Run-local only: newest eight images / 20 MiB, never restored on restart.
         ephemeral_images: dict[tuple[UUID, int, str, int], ProviderImageInput] = {}
+        one_time_secrets: dict[UUID, str] = {}
         try:
-            await cls._execute_loop_body(db, run, visible_response, ephemeral_images)
+            await cls._execute_loop_body(
+                db, run, visible_response, ephemeral_images, one_time_secrets
+            )
         except BaseException as exc:
             # Failed provider frames can retain raw and encoded image copies in locals.
             pending = [exc]
@@ -1636,6 +1639,7 @@ class AgentRuntime:
             for image in ephemeral_images.values():
                 image.data = b""
             ephemeral_images.clear()
+            one_time_secrets.clear()
 
     @classmethod
     async def _execute_loop_body(
@@ -1644,6 +1648,7 @@ class AgentRuntime:
         run: AgentRun,
         visible_response: _VisibleResponse | None,
         ephemeral_images: dict[tuple[UUID, int, str, int], ProviderImageInput],
+        one_time_secrets: dict[UUID, str],
     ) -> None:
         visible_response = visible_response or _VisibleResponse()
         chat_session = await db.get(ChatSession, run.session_id)
@@ -3093,7 +3098,8 @@ class AgentRuntime:
             repeated_tool_call_limit_reached = False
             user_denied_batch = False
             invalid_question_batch = any(
-                call.name == "question" for call in normalized_calls
+                call.name in {"question", "secret_input"}
+                for call in normalized_calls
             ) and len(normalized_calls) != 1
             invalid_skill_load_batch = any(
                 call.name == "load_skill" for call in normalized_calls
@@ -3911,6 +3917,7 @@ class AgentRuntime:
                         approval_resolution=approval_resolution,
                         execution_client=execution_client,
                         session_read_cursors=session_read_cursors,
+                        one_time_secrets=one_time_secrets,
                         task_handler=(
                             partial(
                                 run_tasks, cls, db, run, chat_session,

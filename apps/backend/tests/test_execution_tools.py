@@ -124,6 +124,7 @@ def _tools(operations):
 def test_shell_tool_cannot_select_execution_targets() -> None:
     tools = _tools({"shell.run"})
     shell = next(item for item in tools.schemas() if item["name"] == "shell_run")
+    assert "secret_input" in tools.tools
     assert set(shell["parameters"]["properties"]) == {
         "command",
         "environment",
@@ -1017,6 +1018,71 @@ async def test_shell_resolves_variable_reference_only_for_process_transport(
     assert str(reference) in result.content
     assert context.ask_handler.await_args_list[0].args[0].capability == "shell.write"
     assert context.ask_handler.await_args_list[1].args[0].capability == "secrets.access"
+
+
+async def test_one_time_secret_reference_is_consumed_by_first_process(
+    tmp_path,
+) -> None:
+    client = FakeExecutionClient(
+        {
+            "shell.inspect": ShellInspectResult(
+                targets=[],
+                analysis_complete=True,
+                classification="read",
+                read_only=True,
+                commands=[
+                    {
+                        "tokens": ["env"],
+                        "prefix": ["env"],
+                        "classification": "read",
+                    }
+                ],
+                inspection_revision="a" * 64,
+            ),
+            "shell.run": ProcessResult(
+                exit_code=0,
+                timed_out=False,
+                duration_ms=1,
+                stdout_bytes=0,
+                stderr_bytes=0,
+                stdout_truncated=False,
+                stderr_truncated=False,
+            ),
+        },
+        {"shell.inspect", "shell.run"},
+    )
+    context = _context(
+        tmp_path,
+        ToolCall("secret", "secret_input", {"question": "Enter the token"}),
+        client,
+    )
+    context.question_handler = AsyncMock(
+        return_value={"value": ["  exact secret  "]}
+    )
+
+    secret_result = await _tools(client.operations).execute(context.tool_call, context)
+
+    value_ref = json.loads(secret_result.content)["valueRef"]
+    assert "exact secret" not in secret_result.content
+    assert list(context.one_time_secrets.values()) == ["  exact secret  "]
+    shell_call = ToolCall(
+        "shell", "shell_run", {"command": "env", "environment": {"TOKEN": value_ref}}
+    )
+    context.tool_call = shell_call
+
+    first_result = await _tools(client.operations).execute(shell_call, context)
+
+    assert not first_result.is_error
+    assert context.one_time_secrets == {}
+    assert client.requests[-1][1]["environment"] == {"TOKEN": "  exact secret  "}
+    assert len(context.ask_handler.await_args_list) == 1
+
+    second_result = await _tools(client.operations).execute(shell_call, context)
+
+    assert second_result.is_error
+    assert json.loads(second_result.content)["error"]["code"] == (
+        "secret.valueRefUnavailable"
+    )
 
 
 @pytest.mark.parametrize("classification", ["read", "write"])

@@ -305,6 +305,48 @@ async def test_protected_answer_is_saved_but_never_persisted_or_resumed(
     assert result == {"status": "answered"}
 
 
+async def test_one_time_secret_is_delivered_but_never_persisted(monkeypatch) -> None:
+    questions = ProtectedQuestionArguments.model_validate(
+        {
+            "questions": [
+                {
+                    "id": "value",
+                    "header": "Secret",
+                    "question": "Enter token",
+                    "type": "password",
+                    "one_time": True,
+                }
+            ]
+        }
+    )
+    request = QuestionRequest(
+        id=uuid4(),
+        session_id=uuid4(),
+        run_id=uuid4(),
+        tool_call_id="call-1",
+        questions=questions.model_dump(mode="json")["questions"],
+        status="pending",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    resolve = Mock(return_value=True)
+    monkeypatch.setattr(
+        AgentRuntime, "claim_question_resolution", Mock(return_value=True)
+    )
+    monkeypatch.setattr(AgentRuntime, "resolve_question", resolve)
+    monkeypatch.setattr(run_events, "publish", AsyncMock())
+
+    result = await answer_question_decision(
+        db, request, {"value": ["  exact secret  "]}
+    )
+
+    assert request.answers == {"value": ["received"]}
+    assert "exact secret" not in json.dumps(request.answers)
+    db.get.assert_not_awaited()
+    db.commit.assert_awaited_once()
+    resolve.assert_called_once_with(request.id, {"value": ["  exact secret  "]})
+    assert result == {"status": "answered"}
+
+
 async def test_protected_answer_failure_releases_resolution(monkeypatch) -> None:
     questions = ProtectedQuestionArguments.model_validate(
         {
