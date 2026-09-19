@@ -1,9 +1,3 @@
-export function formatReasoningDuration(milliseconds) {
-  if (!Number.isFinite(milliseconds) || milliseconds < 0) return null
-  if (milliseconds < 1000) return `${milliseconds} ms`
-  return `${(milliseconds / 1000).toFixed(1).replace('.0', '')} s`
-}
-
 function strongSegments(text) {
   const segments = []
   const pattern = /\*\*([^*\n]+)\*\*/g
@@ -53,7 +47,6 @@ export function reasoningHistoryPresentation(reasoning) {
     title: reasoning?.status === 'interrupted'
       ? 'Nachdenken unterbrochen'
       : 'Nachdenken',
-    summary: reasoningStatusLabel(reasoning),
-    duration: formatReasoningDuration(reasoning?.observedDurationMs)
+    summary: reasoningStatusLabel(reasoning)
   }
 }

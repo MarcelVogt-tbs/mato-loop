@@ -1,19 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  formatReasoningDuration,
   reasoningBlocks,
   reasoningHistoryPresentation,
   reasoningStatusLabel
 } from '../src/utils/reasoning-display'
 
 describe('reasoning display', () => {
-  it('formats observed durations without inventing missing values', () => {
-    expect(formatReasoningDuration(640)).toBe('640 ms')
-    expect(formatReasoningDuration(1600)).toBe('1.6 s')
-    expect(formatReasoningDuration(null)).toBeNull()
-  })
-
   it('renders adjacent Codex summary headings as safe separated blocks', () => {
     expect(reasoningBlocks({
       kind: 'summary',
@@ -53,12 +46,11 @@ describe('reasoning display', () => {
     })).toEqual({
       icon: 'psychology',
       title: 'Nachdenken',
-      summary: 'Ergebnisse prüfen',
-      duration: '1.6 s'
+      summary: 'Ergebnisse prüfen'
     })
     expect(reasoningHistoryPresentation({ kind: 'content', text: 'Öffentliche Überlegung' }, true))
-      .toEqual({ icon: 'psychology', title: 'Nachdenken', summary: null, duration: null })
+      .toEqual({ icon: 'psychology', title: 'Nachdenken', summary: null })
     expect(reasoningHistoryPresentation({ status: 'interrupted' }))
-      .toEqual({ icon: 'psychology', title: 'Nachdenken unterbrochen', summary: null, duration: null })
+      .toEqual({ icon: 'psychology', title: 'Nachdenken unterbrochen', summary: null })
   })
 })
