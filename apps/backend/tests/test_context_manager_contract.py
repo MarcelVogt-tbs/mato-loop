@@ -44,6 +44,7 @@ from mato_loop_backend.settings import (
     SkillDefinition,
     TrustLevel,
     build_profile,
+    general_profile,
     plan_profile,
 )
 from mato_loop_backend.settings.models import (
@@ -2945,6 +2946,7 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     main = general_system_prompt(session, agent_profile=plan, offered_tool_names=tools)
     child = general_system_prompt(session, agent_profile=plan, delegated=True)
     work = general_system_prompt(session, agent_profile=build, offered_tool_names=tools)
+    general = general_system_prompt(session, agent_profile=general_profile(), offered_tool_names=tools)
 
     assert main.count(plan.instructions) == 1
     assert plan.runtime_instructions not in main
@@ -2965,8 +2967,11 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     assert "do not lift those constraints or switch profiles" in work
     assert "plan discussed earlier in the conversation" in work
     assert "plan.md" not in work
-    assert "Read AGENTS.md before repository work" in work
+    assert "Read AGENTS.md before relevant repository work" in main
+    assert "Read AGENTS.md before relevant repository work" in work
+    assert "Read AGENTS.md" not in general
     assert "skip unrelated tasks" in work
+    assert "Use the supplied file tools instead of shell commands" in general
     assert "Verify code with tests and other claims with suitable evidence" in work
 
 
