@@ -126,6 +126,7 @@ from mato_loop_backend.attachments import (
 )
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
+from mato_loop_backend.diagnostics import schedule_diagnostic_event
 from mato_loop_backend.error_contract import ErrorDescriptor, describe_error, error_payload
 from mato_loop_backend.events import run_events
 from mato_loop_backend.execution import (
@@ -1294,6 +1295,11 @@ class AgentRuntime:
                 ):
                     return
                 session_id = run.session_id
+                diagnostic_owner = await db.scalar(
+                    select(ChatSession.user_id).where(ChatSession.id == session_id)
+                )
+                diagnostics_active = isinstance(diagnostic_owner, UUID)
+                run._diagnostics_active = diagnostics_active
                 if run.agent_profile_id is None:
                     session = await db.get(ChatSession, session_id)
                     if isinstance(session, ChatSession) and session.agent_profile_id is not None:
@@ -1309,6 +1315,28 @@ class AgentRuntime:
                         raise asyncio.CancelledError
                     transition_run_status(run, "running")
                     await db.commit()
+                    if diagnostics_active:
+                        schedule_diagnostic_event(
+                            diagnostic_owner,
+                            "run.started",
+                            component="agent",
+                            session_id=session_id,
+                            run_id=run.id,
+                            payload={
+                                "modelName": run.model_name,
+                                "modelConfigId": str(run.model_config_id)
+                                if run.model_config_id
+                                else None,
+                                "agentProfileId": str(run.agent_profile_id)
+                                if run.agent_profile_id
+                                else None,
+                                "trustLevel": run.trust_level,
+                                "executionAgentId": str(run.execution_agent_id)
+                                if run.execution_agent_id
+                                else None,
+                                "currentDirectory": run.current_directory_snapshot,
+                            },
+                        )
                     await run_events.publish(
                         run_id,
                         {
@@ -1332,6 +1360,15 @@ class AgentRuntime:
                     await db.commit()
                     run_completed = True
                     cls._cancellable_runs.discard(run_id)
+                    if diagnostics_active:
+                        schedule_diagnostic_event(
+                            diagnostic_owner,
+                            "run.completed",
+                            component="agent",
+                            session_id=session_id,
+                            run_id=run.id,
+                            payload=run_timing_payload(run),
+                        )
                     await run_events.publish(
                         run_id,
                         {
@@ -1394,6 +1431,22 @@ class AgentRuntime:
                             )
                         await cls._persist_run_duration(db, cancelled_run)
                         await db.commit()
+                        if diagnostics_active:
+                            schedule_diagnostic_event(
+                                diagnostic_owner,
+                                "run.cancelled" if user_cancelled else "run.failed",
+                                component="agent",
+                                session_id=session_id,
+                                run_id=run_id,
+                                payload={
+                                    "error": None
+                                    if user_cancelled
+                                    else (
+                                        restart_error
+                                        or describe_error("agent.backendRestarted")
+                                    ).payload()
+                                },
+                            )
                     if error_message is not None and restart_error is not None:
                         await run_events.publish(
                             run_id,
@@ -1501,6 +1554,18 @@ class AgentRuntime:
                             await cls._persist_run_duration(db, failed_run)
                             await db.commit()
                             failure_committed = True
+                            if diagnostics_active:
+                                schedule_diagnostic_event(
+                                    diagnostic_owner,
+                                    "run.failed",
+                                    component="agent",
+                                    session_id=session_id,
+                                    run_id=run_id,
+                                    payload={
+                                        "error": public_error.payload(),
+                                        "exceptionClass": type(exc).__name__,
+                                    },
+                                )
                     except Exception:
                         logger.exception("Could not persist failure state for agent run %s", run_id)
                     if error_message is not None:
@@ -1578,6 +1643,7 @@ class AgentRuntime:
         chat_session = await db.get(ChatSession, run.session_id)
         if chat_session is None:
             raise AgentRunError("session.notFound")
+        diagnostics_active = getattr(run, "_diagnostics_active", False) is True
         delegated = chat_session.parent_session_id is not None
         ceiling = await delegation_snapshot(db, run, chat_session)
         project = (
@@ -2610,24 +2676,78 @@ class AgentRuntime:
                     providerAttempt=attempt,
                     providerAttemptTotal=total,
                 )
+                if diagnostics_active:
+                    schedule_diagnostic_event(
+                        chat_session.user_id,
+                        "model.retry",
+                        component="provider",
+                        session_id=chat_session.id,
+                        run_id=run.id,
+                        correlation_id=f"model:{model_request}",
+                        payload={
+                            "attempt": attempt,
+                            "totalAttempts": total,
+                            "statusCode": status_code,
+                            "errorCode": error_code,
+                        },
+                    )
 
             request_messages, request_images = _project_ephemeral_images(
                 model_browser_observations(projection.messages), ephemeral_images,
                 model=model, target_trust_level=model_trust_level,
             )
-            result = await ProviderService.complete(
-                db,
-                **request_options,
-                messages=request_messages,
-                image_inputs=request_images,
-                estimated_input_tokens=projection.estimated_input_tokens,
-                reserved_output_tokens=projection.reserved_output_tokens,
-                safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
-                on_delta=on_delta,
-                on_reasoning=on_reasoning,
-                on_warning=on_warning,
-                on_retry=on_provider_retry,
-            )
+            model_correlation_id = f"model:{model_request}"
+            if diagnostics_active:
+                schedule_diagnostic_event(
+                    chat_session.user_id,
+                    "model.started",
+                    component="provider",
+                    session_id=chat_session.id,
+                    run_id=run.id,
+                    correlation_id=model_correlation_id,
+                    payload={
+                        "providerId": str(provider.id),
+                        "providerName": provider.name,
+                        "adapterType": provider.adapter_type,
+                        "modelConfigId": str(model.id),
+                        "modelId": model.model_id,
+                        "trustLevel": model_trust_level.value,
+                        "reasoningEffort": request_options["reasoning_effort"],
+                        "toolChoice": request_options["tool_choice"],
+                        "timeoutSeconds": request_options["timeout"],
+                        "estimatedInputTokens": projection.estimated_input_tokens,
+                        "reservedOutputTokens": projection.reserved_output_tokens,
+                        "imageCount": len(request_images),
+                        "messages": request_messages,
+                        "tools": schemas,
+                    },
+                )
+            try:
+                result = await ProviderService.complete(
+                    db,
+                    **request_options,
+                    messages=request_messages,
+                    image_inputs=request_images,
+                    estimated_input_tokens=projection.estimated_input_tokens,
+                    reserved_output_tokens=projection.reserved_output_tokens,
+                    safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
+                    on_delta=on_delta,
+                    on_reasoning=on_reasoning,
+                    on_warning=on_warning,
+                    on_retry=on_provider_retry,
+                )
+            except Exception as exc:
+                if diagnostics_active:
+                    schedule_diagnostic_event(
+                        chat_session.user_id,
+                        "model.failed",
+                        component="provider",
+                        session_id=chat_session.id,
+                        run_id=run.id,
+                        correlation_id=model_correlation_id,
+                        payload={"exceptionClass": type(exc).__name__},
+                    )
+                raise
             provider_duration_ms = max(
                 0, round((time.monotonic() - provider_started_at) * 1_000)
             )
@@ -2689,6 +2809,23 @@ class AgentRuntime:
                 "priorSessionEpisodes": injected_episode_count,
                 **provider_timing,
             }
+            if diagnostics_active:
+                schedule_diagnostic_event(
+                    chat_session.user_id,
+                    "model.completed",
+                    component="provider",
+                    session_id=chat_session.id,
+                    run_id=run.id,
+                    correlation_id=model_correlation_id,
+                    payload={
+                        "finishReason": result.finish_reason,
+                        "usage": result.usage,
+                        "toolCalls": [
+                            {"id": call.id, "name": call.name} for call in normalized_calls
+                        ],
+                        "performance": performance,
+                    },
+                )
             # Keep completed-generation evidence across rollback, without provider replay data.
             visible_response.generation_diagnostics = {
                 "_matoloop": {"performance": performance},
@@ -3776,7 +3913,44 @@ class AgentRuntime:
                         ),
                     )
                     assert effective_toolset is not None
-                    tool_result = await effective_toolset.execute(call, tool_context)
+                    tool_started_at = time.monotonic()
+                    if diagnostics_active:
+                        schedule_diagnostic_event(
+                            chat_session.user_id,
+                            "tool.started",
+                            component="tool",
+                            session_id=chat_session.id,
+                            run_id=run.id,
+                            correlation_id=call.id,
+                            payload={
+                                "name": call.name,
+                                "display": display,
+                                "argumentKeys": sorted(call.arguments),
+                                "executionAgentId": str(run.execution_agent_id)
+                                if run.execution_agent_id
+                                else None,
+                            },
+                        )
+                    try:
+                        tool_result = await effective_toolset.execute(call, tool_context)
+                    except Exception as exc:
+                        if diagnostics_active:
+                            schedule_diagnostic_event(
+                                chat_session.user_id,
+                                "tool.failed",
+                                component="tool",
+                                session_id=chat_session.id,
+                                run_id=run.id,
+                                correlation_id=call.id,
+                                payload={
+                                    "name": call.name,
+                                    "exceptionClass": type(exc).__name__,
+                                    "durationMs": round(
+                                        (time.monotonic() - tool_started_at) * 1_000
+                                    ),
+                                },
+                            )
+                        raise
                     if delegated:
                         for attachment in tool_result.attachments:
                             attachment.ephemeral = True
@@ -3785,6 +3959,25 @@ class AgentRuntime:
                         user_denied_batch = True
                     tool_result_content = tool_result.content
                     metadata = tool_result.metadata
+                    if diagnostics_active:
+                        schedule_diagnostic_event(
+                            chat_session.user_id,
+                            "tool.completed",
+                            component="tool",
+                            session_id=chat_session.id,
+                            run_id=run.id,
+                            correlation_id=call.id,
+                            payload={
+                                "name": call.name,
+                                "errorCode": metadata.get("errorCode"),
+                                "resultCharacters": len(tool_result_content),
+                                "attachmentCount": len(tool_result.attachments),
+                                "durationMs": round(
+                                    (time.monotonic() - tool_started_at) * 1_000
+                                ),
+                                "userDenied": tool_context.user_denied,
+                            },
+                        )
                     if metadata.get("privateIntegrationData") is True:
                         chat_session.private_integration_data_used = True
                     tool_attachments = tool_result.attachments

@@ -3,6 +3,7 @@
 
 from mato_loop_backend.models.authentication import AuthenticationProvider, UserAuthIdentity
 from mato_loop_backend.models.automation import Automation, AutomationRun, AutomationSchedule
+from mato_loop_backend.models.diagnostic import DiagnosticEvent
 from mato_loop_backend.models.execution_agent import ExecutionAgent
 from mato_loop_backend.models.project import Project
 from mato_loop_backend.models.coding import ProjectPlan, ProjectPlanExecution
@@ -51,6 +52,7 @@ __all__ = [
     "ChatSession",
     "ContextSummary",
     "Credential",
+    "DiagnosticEvent",
     "ExecutionAgent",
     "LoginSession",
     "MailSendOperation",

@@ -26,6 +26,10 @@ class UserAccount(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
+    debug_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    debug_token_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

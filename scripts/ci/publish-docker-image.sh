@@ -96,6 +96,7 @@ LABELS=(
     --label "org.opencontainers.image.created=$CREATED"
     --label "org.opencontainers.image.revision=$REVISION"
 )
+BUILD_ARGS=(--build-arg "BUILD_REVISION=$REVISION")
 if [[ -n "${GITHUB_SERVER_URL:-}" && -n "${GITHUB_REPOSITORY:-}" ]]; then
     LABELS+=(--label "org.opencontainers.image.source=$SOURCE_URL")
 fi
@@ -109,6 +110,7 @@ if [[ "$MODE" == build ]]; then
         --platform linux/amd64 \
         --file "$DOCKERFILE" \
         --tag "$LOCAL_REF" \
+        "${BUILD_ARGS[@]}" \
         "${LABELS[@]}" \
         "$CONTEXT"
     exit
@@ -203,7 +205,7 @@ if docker image inspect "$LOCAL_REF" >/dev/null 2>&1; then
     EXPECTED_VERSION="$([[ "$MODE" == release ]] && printf '%s' "${RELEASE_TAG#v}" || printf develop)"
     [[ "$LOCAL_VERSION" == "$EXPECTED_VERSION" ]] || die "Prepared image $LOCAL_REF has version label $LOCAL_VERSION, expected $EXPECTED_VERSION."
 else
-    docker build --platform linux/amd64 --file "$DOCKERFILE" --tag "$LOCAL_REF" "${LABELS[@]}" "$CONTEXT"
+    docker build --platform linux/amd64 --file "$DOCKERFILE" --tag "$LOCAL_REF" "${BUILD_ARGS[@]}" "${LABELS[@]}" "$CONTEXT"
 fi
 for tag in "${TAGS[@]}"; do
     [[ "$tag" != latest || "$PUSH_LATEST" == true ]] || continue

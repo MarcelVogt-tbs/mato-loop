@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,6 +21,8 @@ from mato_loop_backend.attachments import AttachmentService
 from mato_loop_backend.automations import AutomationScheduler, AutomationService
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
+from mato_loop_backend.debug_mcp import create_debug_mcp, debug_mcp_mount
+from mato_loop_backend.diagnostics import diagnostic_retention_loop
 from mato_loop_backend.execution.terminals import terminal_coordinator
 from mato_loop_backend.memory.dreaming import DreamingScheduler, DreamingService
 from mato_loop_backend.memory.embeddings import embedding_client
@@ -82,6 +84,14 @@ def _mount_documentation(target: FastAPI, docs_dir: Path) -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    debug_mcp_stack = AsyncExitStack()
+    try:
+        debug_mcp, debug_mcp_app = create_debug_mcp()
+        await debug_mcp_stack.enter_async_context(debug_mcp.session_manager.run())
+        debug_mcp_mount.app = debug_mcp_app
+    except Exception:
+        logger.exception("Could not start the optional debug MCP")
+        await debug_mcp_stack.aclose()
     runtime_config.secrets_dir.mkdir(parents=True, exist_ok=True)
     try:
         async with AsyncSessionFactory() as db:
@@ -155,9 +165,17 @@ async def lifespan(_app: FastAPI):
     EpisodeIndexScheduler.start()
     CodingScheduler.start()
     TelegramScheduler.start()
+    diagnostic_retention_task = asyncio.create_task(diagnostic_retention_loop())
     try:
         yield
     finally:
+        debug_mcp_mount.app = None
+        diagnostic_retention_task.cancel()
+        await asyncio.gather(diagnostic_retention_task, return_exceptions=True)
+        try:
+            await debug_mcp_stack.aclose()
+        except Exception:
+            logger.exception("Could not stop the optional debug MCP")
         await DreamingScheduler.stop()
         await AutomationScheduler.stop()
         await MemoryIndexScheduler.stop()
@@ -190,6 +208,7 @@ app.add_middleware(
 app.add_middleware(MediaRequestBodyLimitMiddleware)
 
 app.include_router(api_router, prefix="/api")
+app.mount("/api/debug", debug_mcp_mount)
 register_error_handlers(app)
 
 if runtime_config.static_dir and runtime_config.static_dir.exists():

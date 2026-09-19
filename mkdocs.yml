@@ -57,6 +57,7 @@ nav:
       - Provider und Modelle: provider-und-modelle.md
       - Tools und Integrationen: tools-und-integrationen.md
       - Betrieb und Datensicherung: betrieb-und-datensicherung.md
+      - Debug-Zugang: debug-zugang.md
   - Hilfe:
       - Häufige Fragen: haeufige-fragen.md
       - Changelog: changelog.md

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+import secrets
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, Response, status
@@ -16,7 +17,9 @@ from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import (
     create_login_session,
     hash_password,
+    hash_token,
     remove_login_session,
+    require_admin,
     require_user,
 )
 from mato_loop_backend.settings import AgentProfilesSettings, SettingsStore
@@ -154,3 +157,40 @@ async def logout(
 @router.get("/me")
 async def me(user: Annotated[UserAccount, Depends(require_user)]) -> dict[str, str | bool]:
     return _identity_payload(user)
+
+
+@router.get("/debug-token")
+async def debug_token_status(
+    user: Annotated[UserAccount, Depends(require_admin)],
+) -> dict[str, str | bool | None]:
+    return {
+        "configured": user.debug_token_hash is not None,
+        "createdAt": user.debug_token_created_at.isoformat()
+        if user.debug_token_created_at
+        else None,
+    }
+
+
+@router.post("/debug-token")
+async def create_debug_token(
+    response: Response,
+    user: Annotated[UserAccount, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, str]:
+    token = secrets.token_urlsafe(48)
+    user.debug_token_hash = hash_token(token)
+    user.debug_token_created_at = datetime.now(UTC)
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    return {"token": token, "createdAt": user.debug_token_created_at.isoformat()}
+
+
+@router.delete("/debug-token", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_debug_token(
+    user: Annotated[UserAccount, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Response:
+    user.debug_token_hash = None
+    user.debug_token_created_at = None
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

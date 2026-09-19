@@ -9,6 +9,9 @@ _CODE_PATTERN = re.compile(r"^[a-z][A-Za-z]*(?:\.[a-z][A-Za-z]*)+$")
 _GENERIC_MESSAGE = "The action failed."
 
 _MESSAGES = {
+    "debug.notFound": "The requested data was not found.",
+    "debug.queryFailed": "The debug query failed.",
+    "debug.unavailable": "The debug service is unavailable.",
     "browser.unavailable": "The browser integration is unavailable.",
     "browser.notReady": "The browser runtime is not ready.",
     "browser.busy": "This MatoLoop Agent already has a browser integration or an active browser operation.",

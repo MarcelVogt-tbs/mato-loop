@@ -16,6 +16,7 @@ def pytest_addoption(parser):
         action="store_true",
         help="Run the agent profile migration against a temporary PostgreSQL database",
     )
+    parser.addoption("--debug-db", action="store_true", help="Run debug MCP PostgreSQL integration tests")
 
 
 @pytest.fixture(autouse=True)

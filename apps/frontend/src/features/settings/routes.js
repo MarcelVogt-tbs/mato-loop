@@ -131,6 +131,12 @@ export const settingsRoutes = [
     meta: { settingsLabel: 'Benutzer', settingsIcon: 'group', requiresAdmin: true }
   },
   {
+    path: 'debug-access',
+    name: 'settings-debug-access',
+    component: () => import('pages/settings/DebugAccessSettingsPage.vue'),
+    meta: { settingsLabel: 'Debug-Zugang', settingsIcon: 'bug_report', requiresAdmin: true }
+  },
+  {
     path: 'instance-limits',
     name: 'settings-instance-limits',
     component: () => import('pages/settings/InstanceLimitsPage.vue'),

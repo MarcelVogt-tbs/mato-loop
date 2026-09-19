@@ -40,6 +40,7 @@ describe('MatoLoop frontend scaffold', () => {
       'settings-persona',
       'settings-memory',
       'settings-users',
+      'settings-debug-access',
       'settings-instance-limits'
     ])
     expect(
@@ -64,6 +65,7 @@ describe('MatoLoop frontend scaffold', () => {
     ])
     expect(routes.find((route) => route.name === 'markdown-print')?.path).toBe('/print/markdown')
     expect(settingsRoutes.find((route) => route.name === 'settings-users')?.meta.requiresAdmin).toBe(true)
+    expect(settingsRoutes.find((route) => route.name === 'settings-debug-access')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-instance-limits')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-channels')?.meta).toEqual({
       settingsLabel: 'Kanäle', settingsIcon: 'forum'

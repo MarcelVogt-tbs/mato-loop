@@ -138,6 +138,12 @@ class LinuxPlatform:
             agent_version = version("matoloop-agent")
         except Exception:
             agent_version = "0.1.0"
+        try:
+            revision = Path("/app/BUILD_REVISION").read_text(encoding="ascii").strip()
+        except OSError:
+            revision = ""
+        if len(revision) == 40 and all(character in "0123456789abcdef" for character in revision):
+            agent_version = f"{agent_version}+{revision}"
         result: dict[str, Any] = {
             "agentVersion": agent_version,
             "platform": self.platform_id[:80],

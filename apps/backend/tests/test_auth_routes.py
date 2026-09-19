@@ -11,7 +11,7 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import auth as auth_routes
 from mato_loop_backend.auth import local as local_auth
 from mato_loop_backend.models import LoginSession, UserAccount
-from mato_loop_backend.security import create_login_session, require_admin, require_user
+from mato_loop_backend.security import create_login_session, hash_token, require_admin, require_user
 from mato_loop_backend.settings import AgentProfilesSettings, SettingsStore
 
 
@@ -167,3 +167,33 @@ async def test_auth_options_exposes_only_local_provider() -> None:
     assert await auth_routes.auth_options() == {
         "providers": [{"id": "local", "type": "local", "name": "Lokales Konto"}]
     }
+
+
+async def test_debug_token_activates_diagnostics_and_is_stored_hashed(monkeypatch) -> None:
+    user = _user(admin=True)
+    db = AsyncMock(spec=AsyncSession)
+    monkeypatch.setattr(auth_routes.secrets, "token_urlsafe", lambda _size: "plain-token")
+    response = Response()
+
+    result = await auth_routes.create_debug_token(response, user, db)
+
+    assert result["token"] == "plain-token"
+    assert user.debug_token_hash == hash_token("plain-token")
+    assert user.debug_token_hash != result["token"]
+    assert result["createdAt"] == user.debug_token_created_at.isoformat()
+    assert response.headers["cache-control"] == "no-store"
+    db.commit.assert_awaited_once()
+
+
+async def test_revoke_debug_token_deactivates_diagnostics() -> None:
+    user = _user(admin=True)
+    user.debug_token_hash = "hash"
+    user.debug_token_created_at = datetime.now(UTC)
+    db = AsyncMock(spec=AsyncSession)
+
+    response = await auth_routes.revoke_debug_token(user, db)
+
+    assert response.status_code == 204
+    assert user.debug_token_hash is None
+    assert user.debug_token_created_at is None
+    db.commit.assert_awaited_once()
