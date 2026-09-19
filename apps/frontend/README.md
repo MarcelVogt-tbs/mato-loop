@@ -11,7 +11,7 @@ The frontend normally starts from the repository root as part of the development
 ./scripts/dev.sh logs frontend
 ```
 
-The Web UI is then available at `http://localhost:10020`. Installed packages live in the `frontend_node_modules` named volume; `frontend_yarn_cache` provides an additional cache mount.
+The Web UI is then available at `http://localhost:10020`. Installed packages live in the `frontend_node_modules` named volume; downloaded packages are reused from `frontend_yarn_cache`.
 
 ## Structure
 

@@ -26,6 +26,12 @@ jobs:
       - uses: https://github.com/actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
+      - name: Restore backend package cache
+        uses: https://github.com/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cache/uv
+          key: uv-backend-${{ runner.os }}-py312-0.10.9-${{ hashFiles('apps/backend/uv.lock') }}
+          restore-keys: uv-backend-${{ runner.os }}-py312-0.10.9-
       - name: Install backend dependencies
         working-directory: apps/backend
         run: |
@@ -53,8 +59,16 @@ jobs:
       - uses: https://github.com/actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
+      - name: Restore frontend package cache
+        uses: https://github.com/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ${{ runner.temp }}/yarn-cache
+          key: yarn-frontend-${{ runner.os }}-node22-4.10.3-${{ hashFiles('apps/frontend/yarn.lock') }}
+          restore-keys: yarn-frontend-${{ runner.os }}-node22-4.10.3-
       - name: Install frontend dependencies
         working-directory: apps/frontend
+        env:
+          YARN_CACHE_FOLDER: ${{ runner.temp }}/yarn-cache
         run: |
           corepack enable
           corepack prepare yarn@4.10.3 --activate
@@ -78,6 +92,12 @@ jobs:
       - uses: https://github.com/actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.13"
+      - name: Restore MatoLoop Agent package cache
+        uses: https://github.com/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cache/uv
+          key: uv-agent-${{ runner.os }}-py313-0.10.9-${{ hashFiles('apps/matoloop-agent/uv.lock') }}
+          restore-keys: uv-agent-${{ runner.os }}-py313-0.10.9-
       - name: Install MatoLoop Agent dependencies
         working-directory: apps/matoloop-agent
         run: |
@@ -120,6 +140,12 @@ jobs:
       - uses: https://github.com/actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
+      - name: Restore backend package cache
+        uses: https://github.com/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cache/uv
+          key: uv-backend-${{ runner.os }}-py312-0.10.9-${{ hashFiles('apps/backend/uv.lock') }}
+          restore-keys: uv-backend-${{ runner.os }}-py312-0.10.9-
       - name: Install migration dependencies
         working-directory: apps/backend
         run: |

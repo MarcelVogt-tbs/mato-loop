@@ -14,7 +14,7 @@ from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, tuple_
 from sqlalchemy.orm import selectinload
 from starlette.responses import JSONResponse
 
@@ -161,6 +161,14 @@ def _compact_message(payload: dict[str, Any]) -> dict[str, Any]:
             details[field] = len(json.dumps(payload[field], ensure_ascii=False))
             payload[field] = None
     payload["detailFields"] = details
+    return payload
+
+
+def _debug_approval_payload(approval: ApprovalRequest) -> dict[str, Any]:
+    payload = approval_payload(approval)
+    payload.pop("details", None)
+    payload["decision"] = approval.decision
+    payload["resolvedAt"] = approval.resolved_at.isoformat() if approval.resolved_at else None
     return payload
 
 
@@ -395,9 +403,55 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
         async with AsyncSessionFactory() as db:
             if await _owned_session(db, session_id, _user_id()) is None:
                 return _not_found()
-            messages, summaries, next_cursor = await session_service.session_message_page(
-                db, session_id, page_size=page_size, cursor=cursor
+            upper_bound = None
+            if cursor is not None:
+                upper_bound = (
+                    await db.execute(
+                        select(Message.created_at, Message.id).where(
+                            Message.id == cursor,
+                            Message.session_id == session_id,
+                        )
+                    )
+                ).one_or_none()
+                if upper_bound is None:
+                    return _not_found()
+
+            statement = select(Message).where(Message.session_id == session_id)
+            if upper_bound is not None:
+                statement = statement.where(
+                    tuple_(Message.created_at, Message.id) < upper_bound
+                )
+            page = list(
+                (
+                    await db.scalars(
+                        statement.options(selectinload(Message.attachments))
+                        .order_by(Message.created_at.desc(), Message.id.desc())
+                        .limit(page_size + 1)
+                    )
+                ).all()
             )
+            has_more = len(page) > page_size
+            messages = list(reversed(page[:page_size]))
+            summaries = []
+            if messages:
+                lower_bound = (messages[0].created_at, messages[0].id)
+                summaries_statement = select(ContextSummary).where(
+                    ContextSummary.session_id == session_id,
+                    tuple_(ContextSummary.created_at, ContextSummary.id) >= lower_bound
+                )
+                if upper_bound is not None:
+                    summaries_statement = summaries_statement.where(
+                        tuple_(ContextSummary.created_at, ContextSummary.id) < upper_bound
+                    )
+                summaries = list(
+                    (
+                        await db.scalars(
+                            summaries_statement.order_by(
+                                ContextSummary.created_at, ContextSummary.id
+                            )
+                        )
+                    ).all()
+                )
             attributions = await session_service.message_attributions(db, messages)
             return {
                 "items": [
@@ -413,7 +467,7 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
                 "contextSummaries": [
                     _compact_content(context_summary_payload(item)) for item in summaries
                 ],
-                "nextCursor": str(next_cursor) if next_cursor else None,
+                "nextCursor": str(messages[0].id) if has_more else None,
             }
 
     @server.tool(annotations=READ_ONLY)
@@ -613,7 +667,7 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
                 },
             },
             "childRuns": [run_payload(child) for child in children],
-            "approvals": [approval_payload(item) for item in approvals],
+            "approvals": [_debug_approval_payload(item) for item in approvals],
             "questions": [question_payload(item) for item in questions],
         }
 

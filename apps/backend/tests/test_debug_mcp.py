@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -16,7 +16,13 @@ from starlette.routing import Mount
 from mato_loop_backend import debug_mcp
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.diagnostics import record_diagnostic_event
-from mato_loop_backend.models import ChatSession, DiagnosticEvent, UserAccount
+from mato_loop_backend.models import (
+    ApprovalRequest,
+    ChatSession,
+    DiagnosticEvent,
+    Message,
+    UserAccount,
+)
 from mato_loop_backend.security import hash_token
 
 
@@ -83,6 +89,34 @@ def test_debug_list_content_is_bounded() -> None:
     assert payload["contentLength"] == 3_000
     assert payload["toolCalls"] is None
     assert payload["detailFields"]["toolCalls"] > 3_000
+
+
+def test_debug_approval_payload_includes_resolution_without_duplicate_details() -> None:
+    resolved_at = datetime.now(UTC)
+    approval = ApprovalRequest(
+        id=uuid4(),
+        user_id=uuid4(),
+        action_kind="shell_run",
+        risk_level="low",
+        title="Run command?",
+        summary="Command may have side effects.",
+        capability="shell.read",
+        resource_type="shell_command",
+        resource_scope="{}",
+        payload={"tool": "shell_run"},
+        available_decisions=["allow_once", "deny"],
+        status="approved",
+        decision="allow_once",
+        created_at=resolved_at - timedelta(seconds=1),
+        resolved_at=resolved_at,
+    )
+
+    payload = debug_mcp._debug_approval_payload(approval)
+
+    assert payload["decision"] == "allow_once"
+    assert payload["resolvedAt"] == resolved_at.isoformat()
+    assert payload["payload"] == {"tool": "shell_run"}
+    assert "details" not in payload
 
 
 async def test_unavailable_debug_mount_returns_controlled_error() -> None:
@@ -178,6 +212,18 @@ async def test_debug_mcp_postgres_isolates_two_admins(request) -> None:
         own = ChatSession(user_id=first.id, title="Own diagnostic session")
         foreign = ChatSession(user_id=second.id, title="Foreign diagnostic session")
         db.add_all([own, foreign])
+        await db.flush()
+        created_at = datetime.now(UTC)
+        messages = [
+            Message(
+                session_id=own.id,
+                role=role,
+                content=f"message-{index}",
+                created_at=created_at + timedelta(seconds=index),
+            )
+            for index, role in enumerate(("user", "assistant", "tool", "assistant"))
+        ]
+        db.add_all(messages)
         await db.commit()
 
     await record_diagnostic_event(
@@ -217,9 +263,30 @@ async def test_debug_mcp_postgres_isolates_two_admins(request) -> None:
                     async with ClientSession(read, write) as mcp_session:
                         await mcp_session.initialize()
                         result = await mcp_session.call_tool("list_sessions", {"limit": 100})
+                        first_page = await mcp_session.call_tool(
+                            "get_messages", {"session_id": str(own.id), "page_size": 2}
+                        )
+                        second_page = await mcp_session.call_tool(
+                            "get_messages",
+                            {
+                                "session_id": str(own.id),
+                                "page_size": 2,
+                                "cursor": first_page.structuredContent["nextCursor"],
+                            },
+                        )
         titles = {item["title"] for item in result.structuredContent["items"]}
         assert "Own diagnostic session" in titles
         assert "Foreign diagnostic session" not in titles
+        assert [item["id"] for item in first_page.structuredContent["items"]] == [
+            str(messages[2].id),
+            str(messages[3].id),
+        ]
+        assert first_page.structuredContent["nextCursor"] == str(messages[2].id)
+        assert [item["id"] for item in second_page.structuredContent["items"]] == [
+            str(messages[0].id),
+            str(messages[1].id),
+        ]
+        assert second_page.structuredContent["nextCursor"] is None
     finally:
         async with AsyncSessionFactory() as db:
             await db.execute(delete(UserAccount).where(UserAccount.id.in_([first.id, second.id])))

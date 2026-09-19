@@ -106,6 +106,7 @@ services:
       MATO_LOOP_BIND_FRONTEND_PORT: ${MATO_LOOP_BIND_FRONTEND_PORT:-10020}
       QUASAR_API_PROXY_TARGET: http://backend:${MATO_LOOP_BIND_BACKEND_PORT:-6020}
       MATO_LOOP_FRONTEND_MODE: ${MATO_LOOP_FRONTEND_MODE:-spa}
+      YARN_CACHE_FOLDER: /opt/mato-loop/yarn-cache
     volumes:
       - .:/workspace
       - frontend_node_modules:/workspace/apps/frontend/node_modules

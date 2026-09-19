@@ -37,7 +37,7 @@ usage() {
 }
 
 run_backend() {
-    compose run --rm --no-deps --volume /opt/mato-loop/backend backend sh -lc "$1"
+    compose run --rm --no-deps --env UV_LINK_MODE=copy --volume /opt/mato-loop/backend/venv backend sh -lc "$1"
 }
 
 run_frontend() {
@@ -45,7 +45,7 @@ run_frontend() {
 }
 
 run_matoloop_agent() {
-    compose run --rm --no-deps --volume /opt/matoloop-agent --entrypoint sh matoloop-agent -lc "$1"
+    compose run --rm --no-deps --env UV_LINK_MODE=copy --volume /opt/matoloop-agent/venv --entrypoint sh matoloop-agent -lc "$1"
 }
 
 check_backend() {

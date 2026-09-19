@@ -44,6 +44,8 @@ Docker socket access is effectively root access to the runner host. Pull request
 
 Forgejo Runner does not own host Docker retention. Configure image, layer, BuildKit cache, container, and volume garbage collection outside the workflows and monitor disk use. Never solve runner pressure by mounting or pruning deployment Docker storage.
 
+The workflow uses Forgejo's Actions cache for locked UV and Yarn package downloads. Cache misses only make dependency installation slower; they never skip `uv sync --frozen` or `yarn install --immutable`. Docker image builds separately reuse normal builder layers and BuildKit package-cache mounts, whose retention remains a runner-administrator responsibility.
+
 ## Forgejo Configuration
 
 Configure these repository or organization Action variables:

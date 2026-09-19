@@ -9,9 +9,10 @@ RUN yarn build
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58 AS documentation
 
+ENV UV_LINK_MODE=copy
 WORKDIR /build
 COPY apps/backend/pyproject.toml apps/backend/uv.lock apps/backend/README.md ./
-RUN uv sync --frozen --only-group docs --no-install-project
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --only-group docs --no-install-project
 COPY mkdocs.yml ./
 COPY docs/user ./docs/user
 RUN .venv/bin/mkdocs build --strict --site-dir /build/site \
@@ -19,18 +20,20 @@ RUN .venv/bin/mkdocs build --strict --site-dir /build/site \
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58
 
-ARG BUILD_REVISION=unknown
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ffmpeg poppler-utils ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+ENV UV_LINK_MODE=copy
 COPY apps/backend/pyproject.toml apps/backend/uv.lock apps/backend/README.md ./
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-project
 COPY apps/backend/src ./src
 COPY apps/backend/alembic ./alembic
 COPY apps/backend/alembic.ini ./alembic.ini
 COPY scripts/install-matoloop-agent.sh ./scripts/install-matoloop-agent.sh
-RUN uv sync --frozen --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
+ARG BUILD_REVISION=unknown
 RUN printf '%s\n' "$BUILD_REVISION" > /app/BUILD_REVISION
 COPY --from=frontend /build/frontend/dist/pwa /app/static
 COPY --from=documentation /build/site /app/static/docs

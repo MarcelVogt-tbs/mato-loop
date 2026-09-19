@@ -76,7 +76,7 @@ Individual targets can be selected with `backend`, `frontend`, or `matoloop-agen
 
 `test rag` starts PostgreSQL and Infinity, waits for their health checks, and verifies real German-English hybrid retrieval, trust filtering, and the FTS fallback. The normal test run remains infrastructure-independent.
 
-Checks and tests use temporary dependency volumes, so running them from another Git worktree does not modify the environments of the running development stack.
+Checks and tests use temporary virtual-environment volumes, so running them from another Git worktree does not modify the environments of the running development stack. Package downloads are reused from the worktree's named dependency-cache volumes.
 
 Migrations:
 
@@ -96,7 +96,7 @@ The development stack uses named volumes:
 - `embedding_cache`: reproducible Infinity model cache
 - `backend_uv_data`: Python environment and `uv` cache
 - `frontend_node_modules`: installed frontend dependencies
-- `frontend_yarn_cache`: additional frontend cache mounted at `/opt/mato-loop/yarn-cache`
+- `frontend_yarn_cache`: Yarn package cache mounted at `/opt/mato-loop/yarn-cache`
 
 Docker prefixes volume names with the Compose project name by default, for example `mato-loop_app_data`. MatoLoop Agent state and its home use the separate host bind mounts `${MATOLOOP_AGENT_DATA:-./data/matoloop-agent}` and `${MATOLOOP_AGENT_HOME:-./data/home}`. The backend and frontend repository bind mount at `/workspace` exists only for HMR and live code changes.
 
