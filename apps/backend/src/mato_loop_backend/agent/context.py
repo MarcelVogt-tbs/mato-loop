@@ -739,18 +739,21 @@ def general_system_prompt(
             )
     if "question" in offered_tool_names:
         parts.append(
-            "Missing-information contract: For missing required stable user context, call memory_retrieve "
-            "first when available; call question only if retrieval is unavailable or insufficient; never ask "
-            "in assistant text. Group all currently known required details in one call; later calls are allowed "
-            "when answers reveal new required decisions. "
+            "Missing-information contract: For missing required stable non-credential user context, call "
+            "memory_retrieve first when available; call question only if retrieval is unavailable or "
+            "insufficient; never ask in assistant text. Group all currently known required details in one "
+            "call; later calls are allowed when answers reveal new required decisions. "
             "Never ask optional details such as location or description unless mentioned or required "
             "to disambiguate. Do not call question for informational or complete requests."
         )
     if "secret_input" in offered_tool_names:
         parts.append(
-            "Credential input: Before probing authentication helpers or attempting a command that needs "
-            "missing credentials, call secret_input once with all missing values, including usernames. "
-            "Do not use question for credentials. Pass its returned environment unchanged to shell_run."
+            "Credential routing overrides the missing-information contract. Authentication identifiers such "
+            "as usernames count as credentials even when they are visible. Before probing authentication "
+            "helpers or attempting a command, if any required authentication value is missing, call "
+            "secret_input, not question, once with all currently missing authentication values. Use "
+            "masked=false for visible identifiers and masked=true for secrets. Pass its returned environment "
+            "unchanged to shell_run."
         )
     if "todo_write" in offered_tool_names:
         parts.append(
@@ -801,6 +804,12 @@ def general_system_prompt(
             ]
         )
     if execution_agent_connected and "shell_run" in offered_tool_names:
+        parts.append(
+            "Use the most suitable available tool. Prefer dedicated tools and established "
+            "command-line utilities over custom scripts. Keep shell commands direct, readable, "
+            "and limited to the requested work. Do not add preliminary checks, fallbacks, "
+            "diagnostics, or branches unless they are required for correctness."
+        )
         parts.append(
             "Tool routing: Prefer shell_run for direct API requests, custom HTTP, pagination, multiple "
             "requests, local processing, or downloads. Use webfetch when available for web pages and static "

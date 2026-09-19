@@ -1652,9 +1652,11 @@ def test_secret_input_prompt_routes_all_credentials_before_probing() -> None:
         offered_tool_names=frozenset({"question", "secret_input", "shell_run"}),
     )
 
-    assert "Before probing authentication helpers" in prompt
-    assert "all missing values, including usernames" in prompt
-    assert "Do not use question for credentials" in prompt
+    assert "stable non-credential user context" in prompt
+    assert "Credential routing overrides the missing-information contract" in prompt
+    assert "usernames count as credentials even when they are visible" in prompt
+    assert "secret_input, not question, once with all currently missing" in prompt
+    assert "masked=false for visible identifiers and masked=true for secrets" in prompt
     assert "returned environment unchanged to shell_run" in prompt
 
 
