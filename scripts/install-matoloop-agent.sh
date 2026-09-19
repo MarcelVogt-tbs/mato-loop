@@ -115,11 +115,13 @@ fi
 if [ ! -x "$UV" ]; then
     printf 'Installing private uv %s...\n' "$UV_VERSION"
     curl --proto '=https' --tlsv1.2 -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" |
-        env UV_INSTALL_DIR="$TOOLS_DIR/bin" UV_NO_MODIFY_PATH=1 sh
+        env PATH="$TOOLS_DIR/bin:$PATH" UV_UNMANAGED_INSTALL="$TOOLS_DIR/bin" sh
 fi
 
 export UV_CACHE_DIR="$INSTALL_ROOT/cache/uv"
 export UV_PYTHON_INSTALL_DIR="$TOOLS_DIR/python"
+export UV_PYTHON_INSTALL_BIN=0
+export UV_MANAGED_PYTHON=1
 "$UV" python install 3.13
 BOOTSTRAP_PYTHON=$("$UV" python find 3.13)
 

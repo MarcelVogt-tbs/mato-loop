@@ -114,6 +114,9 @@ class InstallerTests(unittest.TestCase):
             self.assertIn('exec "$INSTALL_ROOT/venv/bin/matoloop-agent" "$@"', text)
             self.assertIn("*/bin/matoloop-agent)", text)
             self.assertIn('INSTALL_ROOT=$(dirname "$(dirname "$RESOLVED_SCRIPT")")', text)
+            self.assertIn('UV_UNMANAGED_INSTALL="$TOOLS_DIR/bin"', text)
+            self.assertIn("export UV_PYTHON_INSTALL_BIN=0", text)
+            self.assertIn("export UV_MANAGED_PYTHON=1", text)
 
     def test_environment_runs_through_final_activation_link(self) -> None:
         uv = shutil.which("uv")
