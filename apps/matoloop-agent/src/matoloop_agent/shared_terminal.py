@@ -365,6 +365,15 @@ class SharedTerminal:
                     signal.SIGINT if group == self.entry.pid else signal.SIGTERM,
                 )
 
+    async def _interrupt_until_complete(self):
+        self.cancelled = True
+        deadline = time.monotonic() + 1
+        while not self.completed.is_set() and time.monotonic() < deadline:
+            self.interrupt()
+            await asyncio.sleep(0.01)
+        if not self.completed.is_set():
+            await self.manager._terminate(self.entry)
+
     async def cancel(self, command_id):
         async with self.lock:
             if self.command_id != command_id:
@@ -430,6 +439,8 @@ class SharedTerminal:
             try:
                 async with asyncio.timeout(timeout):
                     while not self.completed.is_set():
+                        if self.cancelled:
+                            self.interrupt()
                         if len(self.capture) > sent:
                             chunk = bytes(self.capture[sent : sent + 16384])
                             sent += len(chunk)
@@ -437,19 +448,9 @@ class SharedTerminal:
                         await asyncio.sleep(0.01)
             except TimeoutError:
                 timed_out = True
-                self.cancelled = True
-                self.interrupt()
-                with suppress(TimeoutError):
-                    await asyncio.wait_for(self.completed.wait(), 1)
-                if not self.completed.is_set():
-                    await self.manager._terminate(self.entry)
+                await self._interrupt_until_complete()
             except BaseException:
-                self.cancelled = True
-                self.interrupt()
-                with suppress(TimeoutError):
-                    await asyncio.wait_for(self.completed.wait(), 1)
-                if not self.completed.is_set():
-                    await self.manager._terminate(self.entry)
+                await self._interrupt_until_complete()
                 raise
             while self.capture is not None and sent < len(self.capture):
                 chunk = bytes(self.capture[sent : sent + 16384])

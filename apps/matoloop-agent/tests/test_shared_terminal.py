@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 from test_terminal import configuration, manager
@@ -124,9 +125,20 @@ class SharedTerminalTests(unittest.IsolatedAsyncioTestCase):
         async with asyncio.timeout(2):
             while (await self.shared.status())["state"] != "running":
                 await asyncio.sleep(0.01)
-        await self.shared.cancel(self.command_id)
-        result = await asyncio.wait_for(task, 3)
+        interrupts = 0
+        interrupt = self.shared.interrupt
+
+        def lose_first_interrupt():
+            nonlocal interrupts
+            interrupts += 1
+            if interrupts > 1:
+                interrupt()
+
+        with patch.object(self.shared, "interrupt", side_effect=lose_first_interrupt):
+            await self.shared.cancel(self.command_id)
+            result = await asyncio.wait_for(task, 3)
         self.assertEqual(result["exitCode"], 130)
+        self.assertGreaterEqual(interrupts, 2)
 
         self.command_id = str(uuid4())
         prepared = await self.shared.prepare(self.command_id, "sleep 30")
