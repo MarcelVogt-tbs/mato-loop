@@ -78,6 +78,23 @@ describe('projects store', () => {
     expect(store.items).toEqual([])
   })
 
+  it('sends project session defaults', async () => {
+    const defaults = {
+      defaultExecutionAgentId: 'agent-1',
+      defaultCurrentDirectory: '/srv/project'
+    }
+    api.patch.mockResolvedValue({ data: { ...project, ...defaults } })
+    const store = useProjectStore()
+
+    await store.update(project.id, project.name, project.instructions, defaults)
+
+    expect(api.patch).toHaveBeenCalledWith('/projects/project-1', {
+      name: project.name,
+      instructions: project.instructions,
+      ...defaults
+    })
+  })
+
   it('discovers, sets, and clears an OpenCode binding', async () => {
     const codingService = {
       adapterType: 'opencode',

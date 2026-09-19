@@ -950,9 +950,10 @@ async def create_session(
     content = payload.content.strip()
     if not content and not attachments:
         raise SessionServiceError(422, "validation.required", field="content")
+    project = None
     if payload.project_id is not None:
         project = await db.scalar(
-            select(Project.id)
+            select(Project)
             .where(Project.id == payload.project_id, Project.user_id == user.id)
             .with_for_update()
         )
@@ -965,11 +966,26 @@ async def create_session(
     if not model_supports_tools(ai, model_id):
         raise SessionServiceError(409, "session.modelToolsUnavailable", field="modelId")
     await validate_agent_profile(db, user.id, payload.agent_profile_id)
+    fields = payload.model_fields_set
+    agent_id = (
+        payload.preferred_execution_agent_id
+        if "preferred_execution_agent_id" in fields or project is None
+        else project.default_execution_agent_id
+    )
+    requested_directory = (
+        payload.current_directory
+        if "current_directory" in fields or project is None
+        else (
+            project.default_current_directory
+            if "preferred_execution_agent_id" not in fields
+            else None
+        )
+    )
     current_directory, directory_policy = await validate_execution_preferences(
         db,
         user.id,
-        payload.preferred_execution_agent_id,
-        payload.current_directory,
+        agent_id,
+        requested_directory,
     )
     item = ChatSession(
         id=uuid4(),
@@ -982,7 +998,7 @@ async def create_session(
         reasoning_effort=payload.reasoning_effort.value if payload.reasoning_effort else None,
         memory_mode=payload.memory_mode.value,
         web_search_policy=payload.web_search_policy.value,
-        preferred_execution_agent_id=payload.preferred_execution_agent_id,
+        preferred_execution_agent_id=agent_id,
         current_directory=current_directory,
         control_center=payload.control_center.model_dump(mode="json"),
     )
@@ -995,7 +1011,7 @@ async def create_session(
     await add_directory_grant(
         db,
         item.id,
-        payload.preferred_execution_agent_id,
+        agent_id,
         current_directory,
         directory_policy,
         item.agent_profile_id,

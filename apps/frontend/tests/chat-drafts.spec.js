@@ -508,6 +508,28 @@ describe('chat drafts', () => {
       .toMatchObject({ currentDirectory: '/home/user' })
   })
 
+  it('loads execution defaults for the selected project', async () => {
+    api.get.mockResolvedValueOnce(sessionPage()).mockResolvedValueOnce({
+      data: {
+        modelId: 'model-1',
+        preferredExecutionAgentId: 'agent-1',
+        currentDirectory: '/srv/project'
+      }
+    })
+    const chat = useChatStore()
+
+    await chat.setSessionScope('project-1')
+    await chat.fetchDefaults('project-1')
+
+    expect(api.get).toHaveBeenCalledWith('/sessions/defaults', {
+      params: { projectId: 'project-1' }
+    })
+    expect(chat.drafts.newSessions['project-1'].options).toMatchObject({
+      preferredExecutionAgentId: 'agent-1',
+      currentDirectory: '/srv/project'
+    })
+  })
+
   it('does not start a run while a persisted session setting is being saved', async () => {
     let resolvePatch
     api.patch.mockReturnValue(new Promise((resolve) => { resolvePatch = resolve }))

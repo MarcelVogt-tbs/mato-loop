@@ -36,6 +36,12 @@ class Project(Base):
     instructions: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=""
     )
+    default_execution_agent_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("execution_agents.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    default_current_directory: Mapped[str | None] = mapped_column(
+        String(4096), nullable=True
+    )
     coding_integration_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
     coding_project_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
     coding_workspace_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)

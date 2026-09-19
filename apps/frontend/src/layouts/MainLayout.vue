@@ -445,6 +445,39 @@
               maxlength="4000"
               counter
             />
+            <q-separator class="q-my-lg" />
+            <div class="text-subtitle1 text-weight-bold q-mb-sm">Session-Vorgaben</div>
+            <q-select
+              v-model="projectDefaultExecutionAgentId"
+              outlined
+              emit-value
+              map-options
+              label="Computer"
+              :options="projectExecutionAgentOptions"
+              :loading="executionAgents.loading"
+              @update:model-value="selectProjectExecutionAgent"
+            >
+              <template #option="scope">
+                <q-item v-bind="scope.itemProps">
+                  <q-item-section avatar>
+                    <q-icon :name="scope.opt.connected === false ? 'computer_off' : 'computer'" />
+                  </q-item-section>
+                  <q-item-section>
+                    <q-item-label>{{ scope.opt.label }}</q-item-label>
+                    <q-item-label caption>{{ scope.opt.caption }}</q-item-label>
+                  </q-item-section>
+                </q-item>
+              </template>
+            </q-select>
+            <q-input
+              v-model="projectDefaultCurrentDirectory"
+              outlined
+              class="q-mt-md"
+              label="Arbeitsverzeichnis"
+              maxlength="4096"
+              :disable="!projectSelectedExecutionAgent?.connected"
+              hint="Wird für neue Sessions übernommen und kann dort geändert werden."
+            />
           </q-card-section>
           <q-card-actions align="right" class="q-pa-md q-pt-none">
             <q-btn flat no-caps label="Abbrechen" :disable="projectSaving" v-close-popup />
@@ -639,7 +672,38 @@ const projectDialogMode = ref('create')
 const projectDialogTarget = ref(null)
 const projectName = ref('')
 const projectInstructions = ref('')
+const projectDefaultExecutionAgentId = ref(null)
+const projectDefaultCurrentDirectory = ref(null)
 const projectSaving = ref(false)
+const projectSelectedExecutionAgent = computed(() => (
+  executionAgents.byId(projectDefaultExecutionAgentId.value)
+))
+const projectExecutionAgentOptions = computed(() => {
+  const options = [
+    {
+      label: 'Keine Projektvorgabe',
+      value: null,
+      connected: null,
+      caption: 'Allgemeine Session-Vorgabe verwenden'
+    },
+    ...executionAgents.items.map((agent) => ({
+      label: agent.alias,
+      value: agent.id,
+      connected: agent.connected,
+      disable: !agent.connected && agent.id !== projectDefaultExecutionAgentId.value,
+      caption: agent.connected ? agent.computerName || agent.platform : 'Offline'
+    }))
+  ]
+  if (projectDefaultExecutionAgentId.value && !projectSelectedExecutionAgent.value) {
+    options.push({
+      label: 'Nicht verfügbarer Computer',
+      value: projectDefaultExecutionAgentId.value,
+      connected: false,
+      caption: 'Nicht mehr eingerichtet'
+    })
+  }
+  return options
+})
 const moveDialogOpen = ref(false)
 const moveSessionId = ref(null)
 const moveSourceProjectId = ref(null)
@@ -741,7 +805,18 @@ function openProjectDialog(mode, project = null) {
   projectDialogTarget.value = project
   projectName.value = mode === 'edit' ? project?.name || '' : ''
   projectInstructions.value = mode === 'edit' ? project?.instructions || '' : ''
+  projectDefaultExecutionAgentId.value = mode === 'edit'
+    ? project?.defaultExecutionAgentId || null
+    : null
+  projectDefaultCurrentDirectory.value = mode === 'edit'
+    ? project?.defaultCurrentDirectory || null
+    : null
+  void executionAgents.fetchAll({ suppressErrorToast: true }).catch(() => {})
   projectDialogOpen.value = true
+}
+
+function selectProjectExecutionAgent(agentId) {
+  projectDefaultCurrentDirectory.value = executionAgents.byId(agentId)?.homeDirectory || null
 }
 
 function setProjectActionMenu(id, open) {
@@ -752,17 +827,23 @@ function setProjectActionMenu(id, open) {
 async function saveProject() {
   const name = projectName.value.trim()
   const instructions = projectInstructions.value.trim()
+  const defaults = {
+    defaultExecutionAgentId: projectDefaultExecutionAgentId.value,
+    defaultCurrentDirectory: projectDefaultExecutionAgentId.value
+      ? projectDefaultCurrentDirectory.value?.trim() || null
+      : null
+  }
   if (!name) return
   projectSaving.value = true
   try {
     if (projectDialogMode.value === 'create') {
-      const project = await projects.create(name, instructions)
+      const project = await projects.create(name, instructions, defaults)
       projectDialogOpen.value = false
       $q.notify({ type: 'positive', message: 'Projekt erstellt.' })
       expandedProjects[project.id] = true
       await openNewSession(project.id)
     } else if (projectDialogTarget.value) {
-      await projects.update(projectDialogTarget.value.id, name, instructions)
+      await projects.update(projectDialogTarget.value.id, name, instructions, defaults)
       projectDialogOpen.value = false
       $q.notify({ type: 'positive', message: 'Projekt gespeichert.' })
     }
@@ -1271,7 +1352,9 @@ watch(
     } else if (previousProjectId) {
       sessionsSectionOpen.value = true
     }
-    void chat.setSessionScope(projectId).catch(() => {})
+    void chat.setSessionScope(projectId)
+      .then(() => chat.fetchDefaults(projectId))
+      .catch(() => {})
   },
   { immediate: true }
 )

@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +31,10 @@ from mato_loop_backend.models import (
 from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 from mato_loop_backend.sessions.cleanup import descendant_sessions
+from mato_loop_backend.sessions.service import (
+    SessionServiceError,
+    validate_execution_preferences,
+)
 
 router = APIRouter(prefix="/projects", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
@@ -41,6 +45,15 @@ class ProjectRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=240)
     instructions: str = Field(default="", max_length=4000)
+    default_execution_agent_id: UUID | None = Field(
+        default=None,
+        validation_alias=AliasChoices("defaultExecutionAgentId", "default_execution_agent_id"),
+    )
+    default_current_directory: str | None = Field(
+        default=None,
+        max_length=4096,
+        validation_alias=AliasChoices("defaultCurrentDirectory", "default_current_directory"),
+    )
 
     @field_validator("name", mode="before")
     @classmethod
@@ -63,6 +76,8 @@ class ProjectResponse(BaseModel):
     id: UUID
     name: str
     instructions: str
+    default_execution_agent_id: UUID | None = Field(alias="defaultExecutionAgentId")
+    default_current_directory: str | None = Field(alias="defaultCurrentDirectory")
     session_count: int = Field(alias="sessionCount")
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
@@ -80,6 +95,8 @@ def _payload(project: Project, session_count: int) -> ProjectResponse:
         id=project.id,
         name=project.name,
         instructions=project.instructions,
+        defaultExecutionAgentId=project.default_execution_agent_id,
+        defaultCurrentDirectory=project.default_current_directory,
         sessionCount=session_count,
         createdAt=project.created_at,
         updatedAt=project.updated_at,
@@ -228,10 +245,21 @@ async def create_project(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ProjectResponse:
+    try:
+        current_directory, _ = await validate_execution_preferences(
+            db,
+            user.id,
+            payload.default_execution_agent_id,
+            payload.default_current_directory,
+        )
+    except SessionServiceError as exc:
+        raise ApiError(exc.status_code, exc.code, field=exc.field, params=exc.params) from exc
     project = Project(
         user_id=user.id,
         name=payload.name,
         instructions=payload.instructions,
+        default_execution_agent_id=payload.default_execution_agent_id,
+        default_current_directory=current_directory,
     )
     db.add(project)
     await db.commit()
@@ -250,6 +278,39 @@ async def update_project(
     project.name = payload.name
     if "instructions" in payload.model_fields_set:
         project.instructions = payload.instructions
+    execution_fields = {
+        "default_execution_agent_id",
+        "default_current_directory",
+    }
+    if payload.model_fields_set & execution_fields:
+        agent_id = (
+            payload.default_execution_agent_id
+            if "default_execution_agent_id" in payload.model_fields_set
+            else project.default_execution_agent_id
+        )
+        current_directory = (
+            payload.default_current_directory
+            if "default_current_directory" in payload.model_fields_set
+            else (
+                None
+                if agent_id != project.default_execution_agent_id
+                else project.default_current_directory
+            )
+        )
+        if (
+            agent_id != project.default_execution_agent_id
+            or current_directory != project.default_current_directory
+        ):
+            try:
+                current_directory, _ = await validate_execution_preferences(
+                    db, user.id, agent_id, current_directory
+                )
+            except SessionServiceError as exc:
+                raise ApiError(
+                    exc.status_code, exc.code, field=exc.field, params=exc.params
+                ) from exc
+            project.default_execution_agent_id = agent_id
+            project.default_current_directory = current_directory
     project.updated_at = datetime.now(UTC)
     await db.commit()
     return _payload(project, session_count)

@@ -500,17 +500,24 @@ export const useChatStore = defineStore('chat', {
         }
       }
     },
-    async fetchDefaults() {
-      this.sessionDefaults = sanitizedSessionOptions({
+    async fetchDefaults(projectId = this.sessionsProjectId) {
+      const scope = sessionScopeKey(projectId)
+      const targetDraft = this.drafts.newSessions[scope] || this.drafts.newSession
+      const response = projectId
+        ? await api.get('/sessions/defaults', { params: { projectId } })
+        : await api.get('/sessions/defaults')
+      const defaults = sanitizedSessionOptions({
         ...defaultSessionOptions(),
-        ...(await api.get('/sessions/defaults')).data
+        ...response.data
       })
-      const options = this.drafts.newSession.options
+      if (sessionScopeKey(this.sessionsProjectId) === scope) this.sessionDefaults = defaults
+      const options = targetDraft.options
       if (options.modelId === null) {
-        Object.assign(options, this.sessionDefaults)
+        Object.assign(options, defaults)
       } else {
         const { data } = await api.get('/sessions/defaults', {
           params: {
+            ...(projectId ? { projectId } : {}),
             modelId: options.modelId,
             memoryMode: options.memoryMode || 'full'
           }
@@ -519,8 +526,8 @@ export const useChatStore = defineStore('chat', {
         options.memoryToolsAvailable = data.memoryToolsAvailable
         options.memoryUnavailableReason = data.memoryUnavailableReason
       }
-      if (!options.agentProfileId && this.sessionDefaults.agentProfileId) {
-        options.agentProfileId = this.sessionDefaults.agentProfileId
+      if (!options.agentProfileId && defaults.agentProfileId) {
+        options.agentProfileId = defaults.agentProfileId
       }
       this.persistDrafts()
     },
@@ -802,7 +809,7 @@ export const useChatStore = defineStore('chat', {
       if (!this.drafts.newSessions[scope]) {
         this.drafts.newSessions[scope] = {
           message: '',
-          options: sanitizedSessionOptions(this.sessionDefaults)
+          options: defaultSessionOptions()
         }
       }
       this.drafts.newSession = this.drafts.newSessions[scope]

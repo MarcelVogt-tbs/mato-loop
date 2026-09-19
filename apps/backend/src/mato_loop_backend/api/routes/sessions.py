@@ -56,6 +56,7 @@ from mato_loop_backend.models import (
     MemoryMode,
     Message,
     MessageAttachment,
+    Project,
     UserAccount,
     WebSearchPolicy,
 )
@@ -693,6 +694,7 @@ async def session_defaults(
     agent_profile_id: Annotated[
         UUID | None, Query(alias="agentProfileId")
     ] = None,
+    project_id: Annotated[UUID | None, Query(alias="projectId")] = None,
 ) -> dict:
     ai = await load_effective_ai(db, user.id)
     memory = await SettingsStore.load(db, MemorySettings, user_id=user.id)
@@ -716,6 +718,15 @@ async def session_defaults(
     )
     preferred_agent_id = preferences.default_execution_agent_id
     current_directory = None
+    if project_id is not None:
+        project = await db.scalar(
+            select(Project).where(Project.id == project_id, Project.user_id == user.id)
+        )
+        if project is None:
+            raise ApiError(404, "project.notFound", field="projectId")
+        if project.default_execution_agent_id is not None:
+            preferred_agent_id = project.default_execution_agent_id
+            current_directory = project.default_current_directory
     if preferred_agent_id is not None:
         agent = await db.scalar(
             select(ExecutionAgent).where(
@@ -724,7 +735,7 @@ async def session_defaults(
                 ExecutionAgent.revoked_at.is_(None),
             )
         )
-        if agent is not None:
+        if agent is not None and current_directory is None:
             current_directory = await _execution_home(db, agent)
     return {
         "modelId": str(selected_model_id) if selected_model_id else None,

@@ -48,8 +48,10 @@ from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
     ContextSummary,
+    ExecutionAgent,
     Message,
     MessageAttachment,
+    Project,
     TitleGenerationStatus,
     UserAccount,
 )
@@ -554,6 +556,13 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     )
     ai_settings = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
     memory_settings = MemorySettings()
+    project = Project(
+        id=uuid4(),
+        user_id=user.id,
+        name="Project",
+        default_execution_agent_id=uuid4(),
+        default_current_directory="/srv/project",
+    )
 
     async def load_settings(_db, settings_type, **_kwargs):
         if settings_type is AiSettings:
@@ -571,6 +580,11 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     start = AsyncMock(return_value=run)
     monkeypatch.setattr(SettingsStore, "load", load_settings)
     monkeypatch.setattr(AgentRuntime, "start", start)
+    validate_execution = AsyncMock(return_value=("/srv/project", None))
+    monkeypatch.setattr(
+        "mato_loop_backend.sessions.service.validate_execution_preferences",
+        validate_execution,
+    )
     storage = MagicMock()
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
     db = AsyncMock(spec=AsyncSession)
@@ -581,11 +595,12 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
         role="user",
         content="Erste Nachricht",
     )
-    db.scalar.return_value = persisted_message
+    db.scalar.side_effect = [project, persisted_message, None]
 
     result = await create_session(
         SessionCreateRequest(
             content="  Erste Nachricht  ",
+            project_id=project.id,
             reasoning_effort="low",
             control_center={
                 "tabs": [
@@ -605,7 +620,8 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     assert session.user_id == user.id
     assert session.memory_mode == "full"
     assert session.web_search_policy == "available"
-    assert session.current_directory is None
+    assert session.preferred_execution_agent_id == project.default_execution_agent_id
+    assert session.current_directory == "/srv/project"
     assert session.control_center == {
         "tabs": [
             _stored_app_tab("session"),
@@ -634,7 +650,10 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     assert result["runId"] == str(run.id)
     assert result["modelName"] == "Test"
     assert result["message"]["id"] == str(persisted_message.id)
-    storage.provision.assert_called_once_with(session.id, None)
+    validate_execution.assert_awaited_once_with(
+        db, user.id, project.default_execution_agent_id, "/srv/project"
+    )
+    storage.provision.assert_called_once_with(session.id, project.id)
 
 
 async def test_first_session_retry_returns_canonical_session_and_attachment() -> None:
@@ -773,6 +792,34 @@ async def test_session_defaults_report_effective_memory_state(monkeypatch) -> No
     assert result["memoryUnavailableReason"] == "memory.disabled"
     assert result["preferredExecutionAgentId"] is None
     assert "trustLevel" not in result
+
+
+async def test_session_defaults_use_project_execution_preferences(monkeypatch) -> None:
+    user = _user()
+    agent = ExecutionAgent(id=uuid4(), user_id=user.id, alias="Workstation")
+    project = Project(
+        id=uuid4(),
+        user_id=user.id,
+        name="Project",
+        default_execution_agent_id=agent.id,
+        default_current_directory="/srv/project",
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        if settings_type is AiSettings:
+            return AiSettings()
+        if settings_type is UserPreferences:
+            return UserPreferences()
+        return MemorySettings()
+
+    monkeypatch.setattr(SettingsStore, "load", load_settings)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [project, agent]
+
+    result = await session_defaults(user, db, project_id=project.id)
+
+    assert result["preferredExecutionAgentId"] == str(agent.id)
+    assert result["currentDirectory"] == "/srv/project"
 
 
 async def test_session_is_not_created_for_blank_first_message() -> None:
