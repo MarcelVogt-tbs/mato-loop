@@ -1,0 +1,29 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.FORGEJO_TOKEN }}
+      - name: Release develop
+        run: |
+          [[ "$GITHUB_REF" == refs/heads/develop ]] || { printf 'Release must be started from develop.\n' >&2; exit 1; }
+          git config user.name "MatoLoop Release Bot"
+          git config user.email "release-bot@matoloop.invalid"
+          git branch --force main refs/remotes/origin/main
+          ./scripts/release.sh

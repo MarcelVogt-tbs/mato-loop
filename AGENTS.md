@@ -142,9 +142,9 @@ For UI changes, verify at least desktop and mobile in light and dark mode. For A
 
 - Pull requests run complete checks and image builds without registry or release secrets and never publish artifacts.
 - Feature branch pushes run tests only. The default branch `develop` publishes mutable `develop` images and immutable `sha-<12>` image tags. `main` has no mutable publication channel.
-- Add one `Release-Note: <category>: <text>` Git trailer at the end of a non-merge commit for each noteworthy change. Supported categories are `Added`, `Changed`, `Fixed`, and `Security`; use concise English text. Multiple trailers must be contiguous in the final commit-message paragraph. Commits without a trailer are omitted from release notes.
+- Add one `Release-Note: <category>: <text>` Git trailer at the end of a non-merge commit for each noteworthy change. Supported categories are `Added`, `Changed`, `Fixed`, and `Security`; use concise English text. Multiple trailers must be contiguous in the final commit-message paragraph. Commits without a trailer are omitted from release notes. Add `Release-Bump: minor` or `Release-Bump: major` when required; releases default to a patch bump.
 - Normal commits do not change `VERSION` or package version declarations. The release script updates every version declaration together.
 - The first release may use the already synchronized `VERSION` only while no local or remote `v*` release tag exists. Every later release version must be greater.
-- Start a release explicitly from a clean, current `develop` branch with `./scripts/release.sh X.Y.Z`; the script fast-forwards release-only `main` and pushes atomically. Do not create release tags manually.
+- Start a release manually in Forgejo Actions from `develop` or from a clean, current local `develop` branch with `./scripts/release.sh`; the script selects the version, fast-forwards release-only `main`, and pushes atomically. An explicit `X.Y.Z` remains available for exceptional releases. Do not create release tags manually.
 - Release images use `vX.Y.Z`, `X.Y.Z`, and `latest`. Published artifacts currently target `linux/amd64` only.
 - CI publishes images and Forgejo releases only. It does not deploy, mutate deployment storage, or clean runner Docker storage.

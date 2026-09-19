@@ -61,11 +61,11 @@ Configure these Action secrets only for trusted `develop` and release jobs:
 | --- | --- |
 | `CONTAINER_USERNAME` | Dedicated registry publisher account |
 | `CONTAINER_PASSWORD` | Token with permission to write packages in the image namespace |
-| `FORGEJO_TOKEN` | Token with repository release write permission |
+| `FORGEJO_TOKEN` | Token with repository branch, tag, and release write permission |
 
 The release job uses the configured `FORGEJO_TOKEN`; it is not a registry credential. Pull request jobs receive none of these configured secrets. The runner registration token belongs in the runner's external configuration, not in repository variables or secrets.
 
-Use a dedicated least-privilege publisher account. The registry token needs no MatoLoop application, database, deployment-host, provider, or MatoLoop Agent credentials.
+Use a dedicated least-privilege publisher account. Allow it to update protected `develop`, `main`, and `v*` refs for releases. The registry token needs no MatoLoop application, database, deployment-host, provider, or MatoLoop Agent credentials.
 
 Protect `develop`, `main`, and `v*` tags so only trusted maintainers can modify them. Require the CI workflow for branch changes and protect reviews of `.forgejo/`, `scripts/ci/`, `scripts/release.sh`, Dockerfiles, `VERSION`, and package lockfiles. The Forgejo server URL must use HTTPS.
 
@@ -84,13 +84,22 @@ Release-Note: Security: Reject credentials in mail server URLs.
 
 The supported categories are `Added`, `Changed`, `Fixed`, and `Security`. Keep multiple trailers together in the final commit-message paragraph so Git recognizes all of them. The trailer is optional; commits without one and merge commits are omitted. CI rejects malformed trailers.
 
-Start a release explicitly from a clean, current `develop` checkout:
+Releases default to a patch version increase. Add `Release-Bump: minor` or `Release-Bump: major` to a non-merge commit when the release needs a larger increase. The highest bump since the previous release wins. For example:
 
-```bash
-./scripts/release.sh X.Y.Z
+```text
+Add mail integration
+
+Release-Note: Added: Add IMAP and SMTP integration.
+Release-Bump: minor
 ```
 
-Use the numeric version without a leading `v`. The script generates `docs/user/changelog/vX.Y.Z.md`, adds it to the changelog index, synchronizes package versions and locks, runs all checks and tests, commits on `develop`, fast-forwards `main`, creates `vX.Y.Z`, returns to `develop`, and atomically pushes both branches and the tag. CI accepts only annotated release tags whose commit is on `main`. Do not create release tags manually or publish from arbitrary commits.
+Start a release manually from the `develop` branch in Forgejo under **Actions > Release**, or from a clean, current local `develop` checkout:
+
+```bash
+./scripts/release.sh
+```
+
+The script keeps the current version for the first release and otherwise applies the highest `Release-Bump` since `main`, defaulting to patch. It generates `docs/user/changelog/vX.Y.Z.md`, adds it to the changelog index, synchronizes package versions and locks, runs all checks and tests, commits on `develop`, fast-forwards `main`, creates `vX.Y.Z`, returns to `develop`, and atomically pushes both branches and the tag. Pass an explicit numeric version without a leading `v` only for an exceptional release. CI accepts only annotated release tags whose commit is on `main`. Do not create release tags manually or publish from arbitrary commits.
 
 Normal commits do not change version declarations. The first release may use the already synchronized repository version while no local or remote `v*` tag exists; every later release must increase the version.
 

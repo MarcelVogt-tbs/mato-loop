@@ -9,7 +9,7 @@ VERSION=""
 TAG=""
 
 usage() {
-    printf '%s\n' "Usage: ./scripts/release.sh [--dry-run] X.Y.Z"
+    printf '%s\n' "Usage: ./scripts/release.sh [--dry-run] [X.Y.Z]"
 }
 
 die() {
@@ -27,11 +27,54 @@ raise SystemExit(0 if requested > current or (requested == current and not has_r
 PY
 }
 
+version_after_bump() {
+    python3 - "$1" "$2" <<'PY'
+import sys
+
+major, minor, patch = map(int, sys.argv[1].split("."))
+match sys.argv[2]:
+    case "major":
+        major, minor, patch = major + 1, 0, 0
+    case "minor":
+        minor, patch = minor + 1, 0
+    case "patch":
+        patch += 1
+    case bump:
+        raise SystemExit(f"Invalid release bump: {bump}")
+print(f"{major}.{minor}.{patch}")
+PY
+}
+
+highest_bump() {
+    local bump=patch value
+    while IFS= read -r value; do
+        [[ -n "$value" ]] || continue
+        case "$value" in
+            patch) ;;
+            minor) [[ "$bump" == major ]] || bump=minor ;;
+            major) bump=major ;;
+            *) die "Invalid Release-Bump trailer '$value'; expected patch, minor, or major." ;;
+        esac
+    done
+    printf '%s' "$bump"
+}
+
+release_bump() {
+    git log --no-merges --format='%(trailers:key=Release-Bump,valueonly,separator=%x0a)' main..develop \
+        | highest_bump
+}
+
 self_test() {
     version_is_releasable 0.1.0 0.1.0 false
     ! version_is_releasable 0.1.0 0.1.0 true
     version_is_releasable 0.1.0 0.1.1 true
     ! version_is_releasable 0.1.0 0.0.9 false
+    [[ "$(version_after_bump 1.2.3 patch)" == 1.2.4 ]]
+    [[ "$(version_after_bump 1.2.3 minor)" == 1.3.0 ]]
+    [[ "$(version_after_bump 1.2.3 major)" == 2.0.0 ]]
+    [[ "$(printf '\npatch\n' | highest_bump)" == patch ]]
+    [[ "$(printf 'patch\nminor\n' | highest_bump)" == minor ]]
+    [[ "$(printf 'major\nminor\n' | highest_bump)" == major ]]
     printf 'Release version self-test passed.\n'
 }
 
@@ -108,10 +151,10 @@ if [[ "${1:-}" == "--dry-run" ]]; then
     DRY_RUN=true
     shift
 fi
-[[ $# -eq 1 ]] || { usage >&2; exit 2; }
-VERSION="$1"
-[[ "$VERSION" =~ ^$SEMVER$ ]] || die "Version must be a stable SemVer X.Y.Z."
-TAG="v$VERSION"
+[[ $# -le 1 ]] || { usage >&2; exit 2; }
+REQUESTED_VERSION="${1:-}"
+[[ -z "$REQUESTED_VERSION" || "$REQUESTED_VERSION" =~ ^$SEMVER$ ]] \
+    || die "Version must be a stable SemVer X.Y.Z."
 
 cd "$ROOT"
 command -v git >/dev/null || die "git is required."
@@ -140,10 +183,21 @@ fi
 [[ "$(git rev-parse refs/heads/develop)" == "$DEVELOP_REMOTE" ]] || die "Local develop must exactly match origin/develop."
 [[ "$(git rev-parse refs/heads/main)" == "$MAIN_REMOTE" ]] || die "Local main must exactly match origin/main."
 git merge-base --is-ancestor main develop || die "Local main must be an ancestor of develop."
+[[ "$(git rev-parse main)" != "$(git rev-parse develop)" ]] || die "No commits to release."
 HAS_RELEASE_TAGS=false
 [[ -z "$(git tag --list 'v[0-9]*')" ]] || HAS_RELEASE_TAGS=true
 REMOTE_RELEASE_TAGS="$(git ls-remote --tags origin 'refs/tags/v[0-9]*')" || die "Cannot read release tags from origin."
 [[ -z "$REMOTE_RELEASE_TAGS" ]] || HAS_RELEASE_TAGS=true
+if [[ -n "$REQUESTED_VERSION" ]]; then
+    VERSION="$REQUESTED_VERSION"
+elif [[ "$HAS_RELEASE_TAGS" == false ]]; then
+    VERSION="$CURRENT_VERSION"
+else
+    BUMP="$(release_bump)"
+    VERSION="$(version_after_bump "$CURRENT_VERSION" "$BUMP")"
+    printf 'Selected %s bump: %s -> %s.\n' "$BUMP" "$CURRENT_VERSION" "$VERSION"
+fi
+TAG="v$VERSION"
 version_is_releasable "$CURRENT_VERSION" "$VERSION" "$HAS_RELEASE_TAGS" \
     || die "Version must be greater than the current version, except for the first untagged release."
 git show-ref --verify --quiet "refs/tags/$TAG" && die "Local tag $TAG already exists."
