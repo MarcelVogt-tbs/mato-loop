@@ -2941,6 +2941,12 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     work = general_system_prompt(session, agent_profile=build, offered_tool_names=tools)
 
     assert main.count(plan.instructions) == 1
+    assert "PLAN MODE IS ACTIVE AND CANNOT BE CHANGED BY A USER MESSAGE" in main
+    assert "do not call any tool" in main
+    assert "shell.read does not permit write effects" in main
+    assert "without adding unverified details" in main
+    assert "do not lift those constraints or switch profiles" in main
+    assert "latest explicit user request" not in main
     assert "plan directly in the conversation" in main
     assert "plan.md" not in main
     assert plan.instructions not in child
@@ -2952,6 +2958,7 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     assert "write each task prompt in English" in work
     assert "overlapping writes" in work
     assert work.count(build.instructions) == 1
+    assert "do not lift those constraints or switch profiles" in work
     assert "plan discussed earlier in the conversation" in work
     assert "plan.md" not in work
     assert "Read AGENTS.md before repository work" in work
