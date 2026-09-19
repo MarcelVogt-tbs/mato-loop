@@ -4449,12 +4449,13 @@ async def _secret_input(
         ProtectedQuestionArguments(
             questions=[
                 ProtectedQuestionItem(
-                    id="value",
-                    header="Einmaliges Secret",
-                    question=arguments.question,
-                    type="password",
+                    id=item.name,
+                    header=item.label,
+                    question=item.question,
+                    type="password" if item.masked else "value",
                     one_time=True,
                 )
+                for item in arguments.inputs
             ]
         )
     )
@@ -4462,9 +4463,12 @@ async def _secret_input(
         return ToolResult.error("question.expired")
     if answers == "rejected":
         return ToolResult.error("question.rejected")
-    secret_id = uuid4()
-    context.one_time_secrets[secret_id] = answers["value"][0]
-    return ToolResult.json({"valueRef": f"run-secret:{secret_id}"})
+    environment = {}
+    for item in arguments.inputs:
+        secret_id = uuid4()
+        context.one_time_secrets[secret_id] = answers[item.name][0]
+        environment[item.name] = f"run-secret:{secret_id}"
+    return ToolResult.json({"environment": environment})
 
 
 async def _variable_write(
@@ -5542,9 +5546,10 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "secret_input",
-            "Ask the user for one secret needed only by the current task. The value is not saved or returned. "
-            "Call alone, then pass valueRef to shell_run.environment for one isolated process. Never use "
-            "variable_write unless the user explicitly requested durable storage.",
+            "Ask once for all missing task-only credentials, including usernames. Values are not saved or "
+            "returned. Call alone, then pass the returned environment unchanged to one shell_run. Set masked "
+            "false only for values the user may see while typing. Use variable_write only for explicitly "
+            "requested durable storage.",
             SecretInputArguments,
             _secret_input,
             required_operation="shell.run",

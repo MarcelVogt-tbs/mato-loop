@@ -90,7 +90,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 38
+INVENTORY_VERSION = 39
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -864,6 +864,19 @@ CASES = (
         expected_tool_call_count=1,
         expected_question_types=("free_text", "single_choice", "multiple_choice"),
         maximum_question_count=3,
+    ),
+    PromptCase(
+        id="missing_shell_credentials_use_secret_input",
+        kind="general",
+        user=(
+            "Logge dich per SSH auf 192.168.1.32 ein. Benutzername und Passwort fehlen. "
+            "Frage beide Zugangsdaten geschützt und nur für diesen Versuch ab; speichere nichts."
+        ),
+        tools=("question", "secret_input", "shell_run"),
+        working_directory="/data/home/project",
+        expected_tool="secret_input",
+        expected_tool_call_count=1,
+        forbidden_tools=("question", "shell_run"),
     ),
     PromptCase(
         id="calendar_missing_details_uses_question",
@@ -3932,6 +3945,11 @@ _SEMANTIC_CONTRACTS = (
             "answered_calendar_questions_continue_action",
             "calendar_information_request_skips_question",
         ),
+    ),
+    ContractCoverage(
+        "tools.credential_input_routing",
+        "tools",
+        ("missing_shell_credentials_use_secret_input",),
     ),
     ContractCoverage(
         "tools.no_premature_success",

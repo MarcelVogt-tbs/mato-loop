@@ -310,9 +310,16 @@ async def test_one_time_secret_is_delivered_but_never_persisted(monkeypatch) -> 
         {
             "questions": [
                 {
-                    "id": "value",
-                    "header": "Secret",
-                    "question": "Enter token",
+                    "id": "SSH_USERNAME",
+                    "header": "Username",
+                    "question": "Enter username",
+                    "type": "value",
+                    "one_time": True,
+                },
+                {
+                    "id": "SSH_PASSWORD",
+                    "header": "Password",
+                    "question": "Enter password",
                     "type": "password",
                     "one_time": True,
                 }
@@ -336,14 +343,29 @@ async def test_one_time_secret_is_delivered_but_never_persisted(monkeypatch) -> 
     monkeypatch.setattr(run_events, "publish", AsyncMock())
 
     result = await answer_question_decision(
-        db, request, {"value": ["  exact secret  "]}
+        db,
+        request,
+        {
+            "SSH_USERNAME": ["  exact user  "],
+            "SSH_PASSWORD": ["  exact secret  "],
+        },
     )
 
-    assert request.answers == {"value": ["received"]}
+    assert request.answers == {
+        "SSH_USERNAME": ["received"],
+        "SSH_PASSWORD": ["received"],
+    }
+    assert "exact user" not in json.dumps(request.answers)
     assert "exact secret" not in json.dumps(request.answers)
     db.get.assert_not_awaited()
     db.commit.assert_awaited_once()
-    resolve.assert_called_once_with(request.id, {"value": ["  exact secret  "]})
+    resolve.assert_called_once_with(
+        request.id,
+        {
+            "SSH_USERNAME": ["  exact user  "],
+            "SSH_PASSWORD": ["  exact secret  "],
+        },
+    )
     assert result == {"status": "answered"}
 
 

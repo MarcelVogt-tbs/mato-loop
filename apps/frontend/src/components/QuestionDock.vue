@@ -159,7 +159,7 @@
           class="q-mt-md"
           :placeholder="current.placeholder || 'Antwort eingeben'"
           :maxlength="20000"
-          :autocomplete="current.type === 'free_text' ? undefined : 'new-password'"
+          :autocomplete="current.type === 'password' ? 'new-password' : current.type === 'value' ? 'off' : undefined"
           :disable="busy"
           :aria-labelledby="questionLabelId"
           @update:model-value="setFreeText"
@@ -261,9 +261,9 @@ function back() {
   jump(draft.index - 1)
 }
 
-function clearProtectedAnswer() {
-  if (current.value.type === 'value' || current.value.type === 'password') {
-    draft.answers[current.value.id] = []
+function clearProtectedAnswers() {
+  for (const item of props.request.questions) {
+    if (item.type === 'value' || item.type === 'password') draft.answers[item.id] = []
   }
 }
 
@@ -277,7 +277,7 @@ async function next() {
   } catch {
     // Axios already displayed the API error.
   } finally {
-    clearProtectedAnswer()
+    clearProtectedAnswers()
   }
 }
 
@@ -288,7 +288,7 @@ async function reject() {
   } catch {
     // Axios already displayed the API error.
   } finally {
-    clearProtectedAnswer()
+    clearProtectedAnswers()
     rejecting.value = false
   }
 }

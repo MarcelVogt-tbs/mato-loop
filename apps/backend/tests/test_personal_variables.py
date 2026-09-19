@@ -58,6 +58,39 @@ def test_protected_answers_preserve_exact_value() -> None:
     ) == {"value": ["  exact value  "]}
 
 
+def test_one_time_protected_answers_support_visible_and_masked_values() -> None:
+    questions = ProtectedQuestionArguments.model_validate(
+        {
+            "questions": [
+                {
+                    "id": "SSH_USERNAME",
+                    "header": "Username",
+                    "question": "Enter username",
+                    "type": "value",
+                    "one_time": True,
+                },
+                {
+                    "id": "SSH_PASSWORD",
+                    "header": "Password",
+                    "question": "Enter password",
+                    "type": "password",
+                    "one_time": True,
+                },
+            ]
+        }
+    )
+
+    assert validate_protected_question_answers(
+        questions,
+        {"SSH_USERNAME": [" user "], "SSH_PASSWORD": [" password "]},
+    ) == {"SSH_USERNAME": [" user "], "SSH_PASSWORD": [" password "]}
+
+    with pytest.raises(ValueError, match="one answer per item"):
+        validate_protected_question_answers(
+            questions, {"SSH_PASSWORD": [" password "]}
+        )
+
+
 def test_shell_environment_accepts_references_but_rejects_host_names() -> None:
     reference = uuid4()
     assert ShellRunArguments(

@@ -1646,6 +1646,18 @@ def test_skill_build_prompt_collects_only_relevant_missing_details() -> None:
     assert "use question once for gaps" not in without_question
 
 
+def test_secret_input_prompt_routes_all_credentials_before_probing() -> None:
+    prompt = general_system_prompt(
+        _session(),
+        offered_tool_names=frozenset({"question", "secret_input", "shell_run"}),
+    )
+
+    assert "Before probing authentication helpers" in prompt
+    assert "all missing values, including usernames" in prompt
+    assert "Do not use question for credentials" in prompt
+    assert "returned environment unchanged to shell_run" in prompt
+
+
 def test_active_skill_instructions_preserve_host_precedence() -> None:
     skill = SkillDefinition(
         name="Quellenpruefung",

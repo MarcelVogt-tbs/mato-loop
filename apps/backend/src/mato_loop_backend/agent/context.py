@@ -746,6 +746,12 @@ def general_system_prompt(
             "Never ask optional details such as location or description unless mentioned or required "
             "to disambiguate. Do not call question for informational or complete requests."
         )
+    if "secret_input" in offered_tool_names:
+        parts.append(
+            "Credential input: Before probing authentication helpers or attempting a command that needs "
+            "missing credentials, call secret_input once with all missing values, including usernames. "
+            "Do not use question for credentials. Pass its returned environment unchanged to shell_run."
+        )
     if "todo_write" in offered_tool_names:
         parts.append(
             "Use todo_write when a checklist materially helps track complex or multi-part work, or when the "

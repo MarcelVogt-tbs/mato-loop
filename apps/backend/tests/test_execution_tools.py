@@ -125,6 +125,10 @@ def test_shell_tool_cannot_select_execution_targets() -> None:
     tools = _tools({"shell.run"})
     shell = next(item for item in tools.schemas() if item["name"] == "shell_run")
     assert "secret_input" in tools.tools
+    secret_input = next(
+        item for item in tools.schemas() if item["name"] == "secret_input"
+    )
+    assert set(secret_input["parameters"]["properties"]) == {"inputs"}
     assert set(shell["parameters"]["properties"]) == {
         "command",
         "environment",
@@ -1053,20 +1057,47 @@ async def test_one_time_secret_reference_is_consumed_by_first_process(
     )
     context = _context(
         tmp_path,
-        ToolCall("secret", "secret_input", {"question": "Enter the token"}),
+        ToolCall(
+            "secret",
+            "secret_input",
+            {
+                "inputs": [
+                    {
+                        "name": "SSH_USERNAME",
+                        "label": "SSH username",
+                        "question": "Enter the username",
+                        "masked": False,
+                    },
+                    {
+                        "name": "SSH_PASSWORD",
+                        "label": "SSH password",
+                        "question": "Enter the password",
+                    },
+                ]
+            },
+        ),
         client,
     )
     context.question_handler = AsyncMock(
-        return_value={"value": ["  exact secret  "]}
+        return_value={
+            "SSH_USERNAME": ["  exact user  "],
+            "SSH_PASSWORD": ["  exact secret  "],
+        }
     )
 
     secret_result = await _tools(client.operations).execute(context.tool_call, context)
 
-    value_ref = json.loads(secret_result.content)["valueRef"]
+    environment = json.loads(secret_result.content)["environment"]
+    assert set(environment) == {"SSH_USERNAME", "SSH_PASSWORD"}
+    assert all(value.startswith("run-secret:") for value in environment.values())
+    assert "exact user" not in secret_result.content
     assert "exact secret" not in secret_result.content
-    assert list(context.one_time_secrets.values()) == ["  exact secret  "]
+    assert list(context.one_time_secrets.values()) == [
+        "  exact user  ",
+        "  exact secret  ",
+    ]
     shell_call = ToolCall(
-        "shell", "shell_run", {"command": "env", "environment": {"TOKEN": value_ref}}
+        "shell", "shell_run", {"command": "env", "environment": environment}
     )
     context.tool_call = shell_call
 
@@ -1074,7 +1105,10 @@ async def test_one_time_secret_reference_is_consumed_by_first_process(
 
     assert not first_result.is_error
     assert context.one_time_secrets == {}
-    assert client.requests[-1][1]["environment"] == {"TOKEN": "  exact secret  "}
+    assert client.requests[-1][1]["environment"] == {
+        "SSH_USERNAME": "  exact user  ",
+        "SSH_PASSWORD": "  exact secret  ",
+    }
     assert len(context.ask_handler.await_args_list) == 1
 
     second_result = await _tools(client.operations).execute(shell_call, context)

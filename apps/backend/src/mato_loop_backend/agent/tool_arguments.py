@@ -176,8 +176,6 @@ class ProtectedQuestionItem(QuestionBase):
             raise ValueError("protected questions cannot have defaults")
         if (self.save_proposal is None) == (not self.one_time):
             raise ValueError("protected question requires exactly one purpose")
-        if self.one_time and self.type != "password":
-            raise ValueError("one-time input must be a password")
         if self.save_proposal is not None and (
             (self.type == "password") != self.save_proposal.secret
         ):
@@ -186,7 +184,20 @@ class ProtectedQuestionItem(QuestionBase):
 
 
 class ProtectedQuestionArguments(ToolArguments):
-    questions: list[ProtectedQuestionItem] = Field(min_length=1, max_length=1)
+    questions: list[ProtectedQuestionItem] = Field(min_length=1, max_length=5)
+
+    @model_validator(mode="after")
+    def purposes_and_ids_are_valid(self) -> ProtectedQuestionArguments:
+        ids = [question.id for question in self.questions]
+        if len(ids) != len(set(ids)):
+            raise ValueError("question IDs must be unique")
+        if any(question.one_time for question in self.questions) and not all(
+            question.one_time for question in self.questions
+        ):
+            raise ValueError("protected question purposes cannot be mixed")
+        if not self.questions[0].one_time and len(self.questions) != 1:
+            raise ValueError("saved protected questions require exactly one item")
+        return self
 
 
 QuestionRequestArguments = QuestionArguments | ProtectedQuestionArguments
@@ -195,19 +206,23 @@ QuestionRequestArguments = QuestionArguments | ProtectedQuestionArguments
 def validate_protected_question_answers(
     questions: ProtectedQuestionArguments, answers: dict[str, list[str]]
 ) -> dict[str, list[str]]:
-    question = questions.questions[0]
-    answer = answers.get(question.id)
-    if set(answers) != {question.id} or not isinstance(answer, list) or len(answer) != 1:
-        raise ValueError("protected question requires exactly one answer")
-    value = answer[0]
-    if (
-        not isinstance(value, str)
-        or not value
-        or "\0" in value
-        or len(value) > 20_000
-    ):
-        raise ValueError("protected answer is invalid")
-    return {question.id: [value]}
+    if set(answers) != {question.id for question in questions.questions}:
+        raise ValueError("protected question requires one answer per item")
+    validated = {}
+    for question in questions.questions:
+        answer = answers.get(question.id)
+        if not isinstance(answer, list) or len(answer) != 1:
+            raise ValueError("protected question requires one answer per item")
+        value = answer[0]
+        if (
+            not isinstance(value, str)
+            or not value
+            or "\0" in value
+            or len(value) > 20_000
+        ):
+            raise ValueError("protected answer is invalid")
+        validated[question.id] = [value]
+    return validated
 
 
 def _validate_question_answer(question: QuestionItem, answer: list[str]) -> list[str]:
@@ -435,15 +450,29 @@ class VariableWriteArguments(ToolArguments):
     variable_id: UUID | None = None
 
 
-class SecretInputArguments(ToolArguments):
+class SecretInputField(ToolArguments):
+    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+    label: str = Field(min_length=1, max_length=30)
     question: str = Field(min_length=1, max_length=2_000)
+    masked: bool = True
 
-    @field_validator("question")
+    @field_validator("label", "question")
     @classmethod
-    def question_must_not_be_blank(cls, value: str) -> str:
+    def text_must_not_be_blank(cls, value: str) -> str:
         if not (cleaned := value.strip()):
-            raise ValueError("question must not be blank")
+            raise ValueError("input text must not be blank")
         return cleaned
+
+
+class SecretInputArguments(ToolArguments):
+    inputs: list[SecretInputField] = Field(min_length=1, max_length=5)
+
+    @model_validator(mode="after")
+    def names_are_unique(self) -> SecretInputArguments:
+        names = [item.name for item in self.inputs]
+        if len(names) != len(set(names)):
+            raise ValueError("input names must be unique")
+        return self
 
 
 class SystemInfoArguments(ToolArguments):

@@ -85,11 +85,15 @@ async def answer_question(
     run_id = request.run_id
     resolved_answers = validated_answers
     persisted_answers = validated_answers
+    durable_protected = False
     if isinstance(questions, ProtectedQuestionArguments):
-        question = questions.questions[0]
-        if question.one_time:
-            persisted_answers = {question.id: ["received"]}
+        if questions.questions[0].one_time:
+            persisted_answers = {
+                question.id: ["received"] for question in questions.questions
+            }
         else:
+            durable_protected = True
+            question = questions.questions[0]
             assert question.save_proposal is not None
             proposal = question.save_proposal
             try:
@@ -161,7 +165,7 @@ async def answer_question(
             AgentRuntime.release_question_resolution(request_id)
         raise
     if not AgentRuntime.resolve_question(request_id, resolved_answers):
-        if isinstance(questions, ProtectedQuestionArguments) and not question.one_time:
+        if durable_protected:
             return {"status": "answered"}
         request.status = "expired"
         request.answers = None
