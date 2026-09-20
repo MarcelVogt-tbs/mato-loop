@@ -668,6 +668,100 @@ def test_shell_permission_displays_confidential_paths() -> None:
     assert request.available_decisions == ("allow_once", "deny")
 
 
+@pytest.mark.parametrize(("command_line", "tokens", "targets"), [
+    ("cat password.txt", ["cat", "password.txt"], [
+        {"path": "/work/password.txt", "kind": "path", "access": "read"},
+    ]),
+    ("cat secrets/production.yaml", ["cat", "secrets/production.yaml"], [
+        {"path": "/work/secrets/production.yaml", "kind": "path", "access": "read"},
+    ]),
+    ("printenv API_TOKEN", ["printenv", "API_TOKEN"], []),
+    ('echo "$DB_PASSWORD"', ["echo", "$DB_PASSWORD"], []),
+    ("env", ["env"], []),
+    ("export -p", ["export", "-p"], []),
+])
+def test_shell_permission_forces_one_time_approval_for_possible_secret_output(
+    command_line, tokens, targets,
+) -> None:
+    request = shell_command_permission(
+        uuid4(),
+        "/work",
+        command_line,
+        ShellInspectResult(
+            targets=targets,
+            analysis_complete=True,
+            classification="read",
+            read_only=True,
+            commands=[{"tokens": tokens, "prefix": [tokens[0]], "classification": "read"}],
+            inspection_revision="a" * 64,
+        ),
+    )
+
+    assert request.force_ask
+    assert request.available_decisions == ("allow_once", "deny")
+    assert request.display_items[-1].label == "Mögliche Secret-Ausgabe"
+
+
+@pytest.mark.parametrize(("command_line", "tokens"), [
+    ("cat README.md", ["cat", "README.md"]),
+    ("printenv PATH", ["printenv", "PATH"]),
+    ('echo "$HOME"', ["echo", "$HOME"]),
+    ("git status", ["git", "status"]),
+])
+def test_shell_permission_does_not_flag_ordinary_output(command_line, tokens) -> None:
+    request = shell_command_permission(
+        uuid4(),
+        "/work",
+        command_line,
+        ShellInspectResult(
+            targets=[],
+            analysis_complete=True,
+            classification="read",
+            read_only=True,
+            commands=[{"tokens": tokens, "prefix": [tokens[0]], "classification": "read"}],
+            inspection_revision="a" * 64,
+        ),
+    )
+
+    assert not request.force_ask
+
+
+async def test_possible_secret_output_requires_approval_under_auto_policy(tmp_path) -> None:
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, ToolCall("shell", "shell_run", {}), client)
+    context.session.current_directory = "/work"
+    context.db.scalar.return_value = ExecutionAgent(
+        id=client.agent_id,
+        user_id=context.session.user_id,
+        home_directory="/work",
+        home_filesystem_policy="auto",
+        external_filesystem_policy="ask",
+        home_shell_enabled=True,
+        external_shell_enabled=True,
+    )
+    request = shell_command_permission(
+        client.agent_id,
+        "/work",
+        'echo "$DB_PASSWORD"',
+        ShellInspectResult(
+            targets=[],
+            analysis_complete=False,
+            classification="read",
+            read_only=True,
+            commands=[{
+                "tokens": ["echo", "$DB_PASSWORD"],
+                "classification": "read",
+            }],
+            inspection_revision="a" * 64,
+        ),
+    )
+
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session, request, context.root_files, ToolExecutionPolicy.AUTO,
+    ) == PermissionDecision.ASK
+    context.db.scalars.assert_not_awaited()
+
+
 def test_legacy_shell_targets_remain_one_shot_only() -> None:
     agent_id = uuid4()
     request = shell_command_permission(

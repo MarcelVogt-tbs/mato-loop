@@ -186,6 +186,11 @@ _INTEGRATION_OPERATION_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _INTEGRATION_RESOURCE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,499}$")
 _CONFIDENTIAL_PATH_PARTS = frozenset({".ssh", ".gnupg", ".aws", ".azure", ".kube"})
 _CONFIDENTIAL_FILENAMES = frozenset({".env", ".netrc", ".npmrc", ".pypirc"})
+_SECRET_NAME = re.compile(
+    r"(?:^|[^a-z0-9])(?:password|passwd|passphrase|secrets?|credentials?|api[_-]?key|"
+    r"private[_-]?key|(?:access[_-]?|auth[_-]?|refresh[_-]?)?tokens?)(?:[^a-z0-9]|$)",
+    re.IGNORECASE,
+)
 
 
 def confidential_execution_path(path: str) -> bool:
@@ -195,6 +200,44 @@ def confidential_execution_path(path: str) -> bool:
         or parsed.name in _CONFIDENTIAL_FILENAMES
         or parsed.name.startswith(".env.")
     )
+
+
+def _shell_may_expose_secret(
+    current_directory: str, inspection: ShellInspectResult,
+) -> bool:
+    directory = PurePosixPath(current_directory)
+    for target in inspection.targets:
+        if target.access != "read":
+            continue
+        path = PurePosixPath(target.path)
+        try:
+            parts = path.relative_to(directory).parts
+        except ValueError:
+            parts = path.parts
+        if any(_SECRET_NAME.search(part) for part in parts):
+            return True
+
+    for command in inspection.commands:
+        program, *arguments = command.tokens
+        program = PurePosixPath(program).name
+        if program == "env" and not any(
+            not argument.startswith("-") and "=" not in argument for argument in arguments
+        ):
+            return True
+        if program == "printenv" and (
+            not any(not argument.startswith("-") for argument in arguments)
+            or any(_SECRET_NAME.search(argument) for argument in arguments)
+        ):
+            return True
+        if program == "set" and not arguments:
+            return True
+        if program in {"export", "declare"} and "-p" in arguments:
+            return True
+        if program in {"echo", "printf"} and any(
+            "$" in argument and _SECRET_NAME.search(argument) for argument in arguments
+        ):
+            return True
+    return False
 
 
 def integration_operation_scope(
@@ -1073,9 +1116,15 @@ def shell_command_permission(
         for path in [current_directory, *(target.path for target in inspection.targets)]
         if confidential_execution_path(path)
     ))
+    may_expose_secret = _shell_may_expose_secret(current_directory, inspection)
     display_items = (PermissionDisplayItem("Shell-Befehl", command_line, "code"),)
     if confidential_paths:
         display_items += (PermissionDisplayItem("Besonders geschützte Pfade", confidential_paths, "list"),)
+    if may_expose_secret:
+        display_items += (PermissionDisplayItem(
+            "Mögliche Secret-Ausgabe",
+            "Der Befehl könnte Passwörter, Tokens oder andere Zugangsdaten ausgeben.",
+        ),)
     return PermissionRequest(
         capability=f"shell.{inspection.classification}",
         resource_type="shell_command",
@@ -1104,6 +1153,9 @@ def shell_command_permission(
         ) + (
             " Besonders geschützte Pfade benötigen immer eine Freigabe."
             if confidential_paths else ""
+        ) + (
+            " Eine mögliche Ausgabe von Passwörtern, Tokens oder anderen Zugangsdaten benötigt immer eine Freigabe."
+            if may_expose_secret else ""
         ),
         resource_display=current_directory,
         shell_metadata_paths=metadata_paths,
@@ -1123,9 +1175,10 @@ def shell_command_permission(
             "shellPrefixes": prefixes,
         },
         display_items=display_items,
+        force_ask=may_expose_secret,
         available_decisions=(
             ("allow_once", "allow_session", "deny")
-            if reusable and not confidential_paths
+            if reusable and not confidential_paths and not may_expose_secret
             else ("allow_once", "deny")
         ),
     )
@@ -1531,7 +1584,7 @@ class PermissionPolicy:
             confidential = any(
                 confidential_execution_path(str(path)) for path in target_paths
             )
-            if confidential:
+            if confidential or request.force_ask:
                 return PermissionDecision.ASK
             if policy == ToolExecutionPolicy.AUTO and inside_workspace:
                 return PermissionDecision.ALLOW
