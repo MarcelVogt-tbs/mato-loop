@@ -1905,6 +1905,7 @@ def test_webfetch_browser_fallback_prompt_matches_available_control() -> None:
     assert "release browser control and wait for success" in attached
     assert "wait for their reply; do not poll with browser tools" in attached
     assert "request browser control with a concrete reason" in requestable
+    assert "tool with a _reason argument" in requestable
     assert "attached browser" not in requestable
     assert "attached browser" not in unavailable
     assert "request browser control" not in unavailable

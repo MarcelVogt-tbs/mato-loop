@@ -5620,6 +5620,9 @@ tool_registry = ToolRegistry(
             icon="terminal",
             actions=(_SHELL_READ, _SHELL_WRITE),
             alternative_action_groups=(frozenset({"shell.read", "shell.write"}),),
+            permission_reason_instruction=(
+                "Explain the command's purpose and relevant effects in plain language. Keep it short and do not merely repeat the command."
+            ),
             approval_edit_fields=(
                 ApprovalEditField(("command",), "Befehl", "textarea", True, 256 * 1024),
             ),

@@ -102,7 +102,10 @@ from mato_loop_backend.agent.tool_arguments import (
     QuestionRequestArguments,
 )
 from mato_loop_backend.agent.tool_display import tool_display
-from mato_loop_backend.agent.tool_registry import ToolArgumentsEdited
+from mato_loop_backend.agent.tool_registry import (
+    PERMISSION_REASON_ARGUMENT,
+    ToolArgumentsEdited,
+)
 from mato_loop_backend.agent.tools import (
     PROJECT_CODING_TOOL_NAMES,
     QuestionArguments,
@@ -576,6 +579,7 @@ def _model_for_id(ai_settings: AiSettings, model_id: UUID | None) -> ModelConfig
 
 def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     safe = dict(arguments)
+    safe.pop(PERMISSION_REASON_ARGUMENT, None)
     for key in safe:
         if key.lower().endswith(("token", "password", "secret", "credential", "api_key")):
             safe[key] = "[Redacted]"
@@ -726,6 +730,7 @@ def _argument_edit_permission_binding(request: PermissionRequest) -> str:
 
 def _tool_call_signature(call: ToolCall) -> str:
     normalized = dict(call.arguments)
+    normalized.pop(PERMISSION_REASON_ARGUMENT, None)
     if call.name == "fetch_transcript" and isinstance(normalized.get("url"), str):
         try:
             normalized["url"] = canonicalize_youtube_video_url(normalized["url"])
@@ -5585,6 +5590,9 @@ class AgentRuntime:
                     ChatSession.session_type == "chat",
                 )
             )
+        reason = call.arguments.get(PERMISSION_REASON_ARGUMENT)
+        if not isinstance(reason, str) or not (reason := reason.strip()):
+            reason = "Vom Agent angeforderte Tool-Aktion"
         approval = ApprovalRequest(
             request_type="agent_action",
             user_id=chat_session.user_id,
@@ -5593,7 +5601,7 @@ class AgentRuntime:
             action_kind=permission.action_kind,
             risk_level=permission.risk_level,
             title=permission.title,
-            reason="Vom Agent angeforderte Tool-Aktion",
+            reason=reason,
             summary=permission.summary,
             capability=permission.capability,
             resource_type=permission.resource_type,

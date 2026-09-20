@@ -292,7 +292,7 @@ class BrowserRunCodeArguments(_BrowserPageArguments):
 
 
 class BrowserRequestControlArguments(WireModel):
-    reason: str = Field(min_length=1, max_length=1000)
+    pass
 
 
 class BrowserReleaseControlArguments(WireModel):
@@ -317,10 +317,13 @@ class BrowserUploadArguments(_BrowserPageArguments):
         )
 
 
-async def _control_authorization(arguments: BrowserRequestControlArguments, context: Any):
+async def _control_authorization(_arguments: BrowserRequestControlArguments, context: Any):
+    from mato_loop_backend.agent.tool_registry import PERMISSION_REASON_ARGUMENT
     from mato_loop_backend.execution.browser_control import capture_control_request
 
-    request = await capture_control_request(arguments.reason, context)
+    request = await capture_control_request(
+        context.tool_call.arguments[PERMISSION_REASON_ARGUMENT], context
+    )
     context.bound_options["control_request"] = request
     return (request.permission,)
 
@@ -918,12 +921,15 @@ BROWSER_REQUEST_CONTROL = ToolContribution(
     name="browser_request_control", label="Browser-Steuerung anfordern", icon="language",
     description=(
         "Request permission to open the browser in this chat and attach it for model control. "
-        "This may take over the browser from another chat. Supply a short reason. "
+        "This may take over the browser from another chat. "
         "Success means attachment is complete; page read, write, and code permissions remain separate."
     ),
     arguments_model=BrowserRequestControlArguments, handler=_request_control,
     actions=(_CONTROL,), authorization_factory=_control_authorization,
     execution_operation="integration.browser.execute", result_model=BrowserControlResult,
+    permission_reason_instruction=(
+        "State what browser-only interaction or browser-authenticated access is needed and why simpler web access is insufficient."
+    ),
 )
 BROWSER_RELEASE_CONTROL = ToolContribution(
     name="browser_release_control", label="Browser-Steuerung freigeben", icon="pan_tool",

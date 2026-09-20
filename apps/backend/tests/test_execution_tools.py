@@ -134,10 +134,12 @@ def test_shell_tool_cannot_select_execution_targets() -> None:
     )
     assert set(secret_input["parameters"]["properties"]) == {"inputs"}
     assert set(shell["parameters"]["properties"]) == {
+        "_reason",
         "command",
         "environment",
         "timeout",
     }
+    assert "command's purpose" in shell["parameters"]["properties"]["_reason"]["description"]
     assert ShellRunArguments(command="pwd").timeout is None
     assert all(item["name"] != "process_exec" for item in tools.schemas())
     assert {
@@ -159,6 +161,19 @@ def test_shell_tool_cannot_select_execution_targets() -> None:
             ToolExecutionPolicy.ASK,
         ),
     }
+
+
+async def test_model_tool_call_requires_permission_reason(tmp_path) -> None:
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
+    call = ToolCall("shell", "shell_run", {"command": "pwd"})
+    context = _context(tmp_path, call, client)
+    context.assistant_message_id = uuid4()
+
+    result = await _tools({"shell.run"}).execute(call, context)
+
+    error = json.loads(result.content)["error"]
+    assert error["code"] == "tool.invalidArguments"
+    assert error["field"] == "_reason"
     assert tool_registry.action_default(
         "shell.read", TrustLevel.PRIVATE, IntegrationSettings()
     ) == ToolExecutionPolicy.AUTO

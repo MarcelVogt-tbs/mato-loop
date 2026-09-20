@@ -12,7 +12,13 @@ from fastapi.testclient import TestClient
 from jsonschema import ValidationError as JsonSchemaValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.tool_registry import ToolDefinition, ToolRegistry, ToolResult
+from mato_loop_backend.agent.tool_registry import (
+    PERMISSION_REASON_ARGUMENT,
+    DynamicToolArgumentsError,
+    ToolDefinition,
+    ToolRegistry,
+    ToolResult,
+)
 from mato_loop_backend.agent.tools import resolve_tool_execution_policy, tool_registry
 from mato_loop_backend.api.errors import ApiError, register_error_handlers
 from mato_loop_backend.api.routes import mcp as mcp_routes
@@ -262,9 +268,16 @@ def test_mcp_contribution_has_stable_schema_and_tool_resource_policy() -> None:
     context = SimpleNamespace(bound_options={"binding_revision": "{}"})
 
     assert definition.schema()["parameters"]["required"] == ["query"]
+    assert definition.validate_arguments({
+        "query": "value", PERMISSION_REASON_ARGUMENT: "Lookup is required."
+    }) == {"query": "value"}
     assert definition.validate_arguments({"query": "value"}) == {"query": "value"}
+    with pytest.raises(DynamicToolArgumentsError):
+        definition.validate_arguments({
+            "query": "value", PERMISSION_REASON_ARGUMENT: " "
+        })
     with pytest.raises(JsonSchemaValidationError):
-        definition.validate_arguments({})
+        definition.validate_arguments({PERMISSION_REASON_ARGUMENT: "Lookup is required."})
     request = contribution.authorization_factory({}, context)[0]
     assert request.capability == "mcp.call"
     assert request.policy_resource_key == mcp_resource_key("lookup")

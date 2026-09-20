@@ -85,6 +85,8 @@ from mato_loop_backend.workspace import RootFileError, RootFileService
 
 logger = logging.getLogger("mato_loop_backend.agent.tools")
 
+PERMISSION_REASON_ARGUMENT = "_reason"
+
 
 class AskHandler(Protocol):
     def __call__(
@@ -352,18 +354,35 @@ class ToolDefinition:
     prompt_fragments: tuple[str, ...] = ()
     arguments_schema: dict[str, Any] | None = None
     approval_edit_fields: tuple[ApprovalEditField, ...] = ()
+    permission_reason_instruction: str | None = None
 
     def schema(self) -> dict[str, Any]:
         if self.arguments_schema is not None:
-            schema = deepcopy(self.arguments_schema)
-            _remove_schema_titles(schema)
-            return {"name": self.name, "description": self.description, "parameters": schema}
-        schema = self.arguments_model.model_json_schema()
+            parameters = deepcopy(self.arguments_schema)
+        else:
+            parameters = self.arguments_model.model_json_schema()
+            model_file_root_schema(parameters)
+        if self.actions:
+            parameters.setdefault("properties", {})[PERMISSION_REASON_ARGUMENT] = {
+                "type": "string",
+                **(
+                    {"description": self.permission_reason_instruction}
+                    if self.permission_reason_instruction
+                    else {}
+                ),
+            }
+        schema = parameters
         _remove_schema_titles(schema)
-        model_file_root_schema(schema)
         return {"name": self.name, "description": self.description, "parameters": schema}
 
     def validate_arguments(self, value: object) -> Any:
+        if self.actions and isinstance(value, dict):
+            value = dict(value)
+            reason = value.pop(PERMISSION_REASON_ARGUMENT, None)
+            if reason is not None and (
+                not isinstance(reason, str) or not reason.strip() or len(reason) > 500
+            ):
+                raise DynamicToolArgumentsError("permission reason is invalid")
         if self.arguments_schema is not None:
             _json_depth(value)
             try:
@@ -716,6 +735,7 @@ class ToolRegistry:
             authorization_factory=contribution.authorization_factory,
             prompt_fragments=contribution.prompt_fragments,
             approval_edit_fields=contribution.approval_edit_fields,
+            permission_reason_instruction=contribution.permission_reason_instruction,
         )
 
     def inactive_capability_groups(
@@ -1285,6 +1305,14 @@ class ToolRegistry:
         if tool.default_arguments and tool.default_arguments.keys().isdisjoint(raw_arguments):
             raw_arguments = {**tool.default_arguments, **raw_arguments}
         try:
+            if (
+                definition.actions
+                and context.assistant_message_id is not None
+                and PERMISSION_REASON_ARGUMENT not in raw_arguments
+            ):
+                return ToolResult.error(
+                    "tool.invalidArguments", field=PERMISSION_REASON_ARGUMENT
+                )
             raw_arguments = await resolve_tool_references(
                 call.name,
                 raw_arguments,

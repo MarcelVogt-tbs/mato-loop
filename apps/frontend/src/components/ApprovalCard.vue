@@ -9,6 +9,9 @@
           <q-chip v-if="!isMemoryApproval || isMemoryRemove" dense square :color="riskColor" text-color="white">{{ riskLabel }}</q-chip>
         </div>
         <div class="text-body2 app-muted q-mt-xs">{{ cardSummary }}</div>
+        <div v-if="!isMemoryApproval && approval.reason" class="text-body2 q-mt-sm">
+          <span class="text-weight-medium">Begründung des Agenten:</span> {{ approval.reason }}
+        </div>
       </div>
     </q-card-section>
 

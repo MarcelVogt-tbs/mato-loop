@@ -74,7 +74,7 @@ def request_case(monkeypatch, request):
     call = ToolCall(
         "request-call",
         "browser_request_control",
-        {"reason": "Read the requested website"},
+        {"_reason": "Read the requested website"},
     )
     context = ToolContext(
         db=Db(),

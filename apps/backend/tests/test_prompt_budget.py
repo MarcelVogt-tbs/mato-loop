@@ -117,8 +117,12 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
         schema["name"] for schema in schemas
     }
     build_skill = next(schema for schema in schemas if schema["name"] == "build_skill")
-    assert set(build_skill["parameters"]["properties"]) == {"brief", "name_hint"}
-    assert prompt_tokens <= 7_250, prompt_tokens
-    # Bounded file-list and calendar-reminder fields add schema, not prompt instructions.
-    assert schema_tokens <= 8_900, schema_tokens
-    assert prompt_tokens + schema_tokens <= 16_150, prompt_tokens + schema_tokens
+    assert set(build_skill["parameters"]["properties"]) == {
+        "_reason",
+        "brief",
+        "name_hint",
+    }
+    assert prompt_tokens <= 7_300, prompt_tokens
+    # Permission reasons add one small host field to each permission-capable tool.
+    assert schema_tokens <= 9_250, schema_tokens
+    assert prompt_tokens + schema_tokens <= 16_550, prompt_tokens + schema_tokens

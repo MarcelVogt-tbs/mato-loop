@@ -72,6 +72,7 @@ class ToolContribution:
     prompt_fragments: tuple[str, ...] = ()
     arguments_schema: dict[str, Any] | None = None
     approval_edit_fields: tuple[ApprovalEditField, ...] = ()
+    permission_reason_instruction: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -587,7 +587,11 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
             db,
             run,
             session,
-            ToolCall(id="call-1", name="session_read", arguments={}),
+            ToolCall(
+                id="call-1",
+                name="session_read",
+                arguments={"_reason": "Die andere Session enthält den benötigten Kontext."},
+            ),
             PermissionRequest(
                 capability="session.read",
                 resource_type="session",
@@ -605,7 +609,9 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
     persisted = db.add.call_args.args[0]
     assert persisted.request_type == "agent_action"
     assert persisted.user_id == session.user_id
+    assert persisted.reason == "Die andere Session enthält den benötigten Kontext."
     assert persisted.payload["resourceDisplay"] == "Ziel-Session"
+    assert "_reason" not in persisted.payload["arguments"]
     enqueue.assert_awaited_once_with(db, persisted)
     statement = db.scalar.await_args.args[0]
     assert "chat_sessions.user_id =" in str(statement)

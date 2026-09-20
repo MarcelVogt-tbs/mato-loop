@@ -760,6 +760,11 @@ def general_system_prompt(
             "Never ask optional details such as location or description unless mentioned or required "
             "to disambiguate. Do not call question for informational or complete requests."
         )
+    if offered_tool_names:
+        parts.append(
+            "For each tool with a _reason argument, include one concise sentence in the user's language "
+            "explaining why the action is needed. It is shown if approval is required."
+        )
     if "secret_input" in offered_tool_names:
         parts.append(
             "Credential routing overrides the missing-information contract. Authentication identifiers such "

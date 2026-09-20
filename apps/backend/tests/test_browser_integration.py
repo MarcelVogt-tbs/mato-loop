@@ -156,13 +156,21 @@ def test_public_browser_tools_have_narrow_static_schemas_and_no_legacy_tool():
         BROWSER_REQUEST_CONTROL, BROWSER_RELEASE_CONTROL,
     )
     upload = tools_module.ToolRegistry._contributed_definition(BROWSER_UPLOAD).schema()
-    assert set(upload["parameters"]["properties"]) == {"root", "path", "tabId", "ref", "element", "observe"}
+    assert set(upload["parameters"]["properties"]) == {
+        "_reason", "root", "path", "tabId", "ref", "element", "observe",
+    }
     assert upload["parameters"]["properties"]["root"]["enum"] == ["files", "computer"]
     assert BROWSER_UPLOAD.required_execution_operations == (
         "integration.browser.file", "integration.browser.upload",
     )
     assert set(BROWSER_DOWNLOADS.arguments_model.model_json_schema()["properties"]) == {"downloadId"}
-    assert set(BROWSER_REQUEST_CONTROL.arguments_model.model_json_schema()["properties"]) == {"reason"}
+    assert not BROWSER_REQUEST_CONTROL.arguments_model.model_json_schema()["properties"]
+    control = tools_module.ToolRegistry._contributed_definition(
+        BROWSER_REQUEST_CONTROL
+    ).schema()
+    assert "browser-only interaction" in control["parameters"]["properties"][
+        "_reason"
+    ]["description"]
     assert not BROWSER_RELEASE_CONTROL.arguments_model.model_json_schema()["properties"]
     assert set(BROWSER_TOOL_ACTIONS) == set(expected)
     for tool in BROWSER_TOOLS:

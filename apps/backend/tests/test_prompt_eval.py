@@ -271,7 +271,11 @@ def test_transcript_routing_uses_the_production_tool_contract() -> None:
         parameters = by_name["fetch_transcript"]["parameters"]
         assert parameters["required"] == ["url"]
         assert parameters["additionalProperties"] is False
-        assert set(parameters["properties"]) == {"url", "language"}
+        assert set(parameters["properties"]) == {
+            "_reason",
+            "url",
+            "language",
+        }
 
     _messages, webfetch_tools = build_case(_case("known_url_uses_webfetch"))
     assert {tool["name"] for tool in webfetch_tools} == {"web_search", "webfetch"}
@@ -347,7 +351,9 @@ def test_agent_web_routing_cases_offer_real_production_schemas() -> None:
 
         assert set(by_name) == {"web_search", "webfetch", "shell_run"}
         properties = by_name["shell_run"]["parameters"]["properties"]
-        assert set(properties) == {"command", "environment", "timeout"}
+        assert set(properties) == {
+            "_reason", "command", "environment", "timeout",
+        }
         assert properties["timeout"]["default"] is None
         assert properties["timeout"]["anyOf"] == [
             {"exclusiveMinimum": 0, "maximum": 3600, "type": "number"},

@@ -71,14 +71,30 @@ async def test_native_coding_replays_revision_errors_checks_and_diff(tmp_path, m
 '''
     diff = '+# existing user change\n-test "old" = "fixed"\n+test "fixed" = "fixed"\n'
     calls = [
-        ToolCall("read", "read", {"root": "workspace", "path": "check.sh"}),
-        ToolCall("failing-check", "shell_run", {"command": "./check.sh"}),
+        ToolCall("read", "read", {
+            "root": "workspace", "path": "check.sh",
+            "_reason": "Read the file before editing it.",
+        }),
+        ToolCall("failing-check", "shell_run", {
+            "command": "./check.sh",
+            "_reason": "Run the existing check before changing the file.",
+        }),
         ToolCall("stale-patch", "apply_patch", {
             "patch": patch, "expectedSha256": {"check.sh": "0" * 64},
+            "_reason": "Apply the fix without overwriting newer changes.",
         }),
-        ToolCall("patch", "apply_patch", {"patch": patch, "expectedSha256": {"check.sh": revision}}),
-        ToolCall("check", "shell_run", {"command": "./check.sh"}),
-        ToolCall("diff", "shell_run", {"command": "git diff -- check.sh"}),
+        ToolCall("patch", "apply_patch", {
+            "patch": patch, "expectedSha256": {"check.sh": revision},
+            "_reason": "Apply the fix to the reviewed file revision.",
+        }),
+        ToolCall("check", "shell_run", {
+            "command": "./check.sh",
+            "_reason": "Verify that the corrected check passes.",
+        }),
+        ToolCall("diff", "shell_run", {
+            "command": "git diff -- check.sh",
+            "_reason": "Review the final changes for unintended edits.",
+        }),
     ]
     dispatched = []
     step = 0

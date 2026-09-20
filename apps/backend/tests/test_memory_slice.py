@@ -855,6 +855,7 @@ async def test_memory_write_reports_duplicate_without_storing(monkeypatch, tmp_p
         id="memory",
         name="memory_write",
         arguments={
+            "_reason": "Die Erinnerung soll dauerhaft gespeichert werden.",
             "action": "create",
             "content": "Kurze Antworten",
             "category": "preference",

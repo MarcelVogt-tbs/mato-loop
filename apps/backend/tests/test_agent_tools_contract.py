@@ -3939,6 +3939,7 @@ async def test_memory_write_requires_session_permission_before_mutation(
         id="memory",
         name="memory_write",
         arguments={
+            "_reason": "Die Erinnerung soll dauerhaft gespeichert werden.",
             "action": "create",
             "content": "Der Nutzer heißt Max.",
             "category": "identity",
@@ -4167,7 +4168,11 @@ def test_fetch_transcript_schema_has_the_expected_contract() -> None:
         if item.name == "fetch_transcript"
     )
 
-    assert set(schema["parameters"]["properties"]) == {"url", "language"}
+    assert set(schema["parameters"]["properties"]) == {
+        "_reason",
+        "url",
+        "language",
+    }
     assert schema["parameters"]["required"] == ["url"]
     assert schema["parameters"]["properties"]["language"]["default"] is None
 
@@ -4184,9 +4189,17 @@ def test_skill_write_schemas_delegate_compact_briefs() -> None:
         if item.name == "edit_skill"
     )["parameters"]
 
-    assert set(build_schema["properties"]) == {"brief", "name_hint"}
+    assert set(build_schema["properties"]) == {
+        "_reason",
+        "brief",
+        "name_hint",
+    }
     assert build_schema["required"] == ["brief"]
-    assert set(edit_schema["properties"]) == {"skill_id", "brief"}
+    assert set(edit_schema["properties"]) == {
+        "_reason",
+        "skill_id",
+        "brief",
+    }
     assert edit_schema["required"] == ["skill_id", "brief"]
 
 

@@ -27,7 +27,7 @@ it.each(['read', 'write'])('displays historical terminal approval data generical
   const currentDirectory = '/home/user/terminal'
   const approval = {
     id: 'shared', sessionId: 'session-1', requestType: 'agent_action', actionKind: 'shell_run',
-    title: 'Befehl ausführen?', summary: 'Befehl prüfen', riskLevel: classification === 'read' ? 'low' : 'high',
+    title: 'Befehl ausführen?', summary: 'Befehl prüfen', reason: 'Der Befehl prüft die Projektdateien.', riskLevel: classification === 'read' ? 'low' : 'high',
     capability: `shell.${classification}`, resourceType: 'shell_command', resourceDisplay: currentDirectory,
     availableDecisions: ['allow_once', 'allow_session', 'deny'],
     payload: {
@@ -52,6 +52,7 @@ it.each(['read', 'write'])('displays historical terminal approval data generical
   await nextTick()
   expect(root.querySelector('.tool-call__details').textContent).toBe(command)
   expect(root.textContent).toContain(currentDirectory)
+  expect(root.textContent).toContain('Begründung des Agenten: Der Befehl prüft die Projektdateien.')
   expect(root.textContent).toContain('Alle passenden lesenden Datei- und Shell-Aktionen: /extern und Unterordner')
   expect(root.querySelector('textarea, [contenteditable="true"]')).toBeNull()
   expect(root.textContent).toContain(classification === 'read' ? 'Keine Schreibaktion erkannt' : 'Als schreibend eingestuft')
