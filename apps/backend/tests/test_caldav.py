@@ -282,6 +282,21 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
         "start",
         "end",
     }
+    parsed = tools["calendar_create_event"].arguments_model.model_validate(
+        {
+            "integration_id": str(first.id),
+            "calendar_key": f"calendar:{'a' * 32}",
+            "summary": "Planung",
+            "timing": json.dumps(
+                {
+                    "type": "timed",
+                    "start": "2026-08-07T14:00:00+02:00",
+                    "end": "2026-08-07T15:00:00+02:00",
+                }
+            ),
+        }
+    )
+    assert parsed.timing.type == "timed"
     assert actions["calendar.write"].mutates is True
     assert actions["calendar.delete"].mutates is True
     assert actions["tasks.write"].mutates is True

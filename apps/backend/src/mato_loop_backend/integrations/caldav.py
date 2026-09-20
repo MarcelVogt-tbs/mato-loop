@@ -9,7 +9,15 @@ from typing import Annotated, Any, Literal
 from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    field_validator,
+    model_validator,
+)
 
 from mato_loop_backend.agent.tool_contracts import ApprovalEditField, ToolAction
 from mato_loop_backend.integrations.caldav_client import (
@@ -181,12 +189,19 @@ class AllDayEventTiming(BaseModel):
         return self
 
 
+def _parse_event_timing(value: Any) -> Any:
+    return json.loads(value) if isinstance(value, str) else value
+
+
 EventTiming = Annotated[
-    TimedEventTiming | AllDayEventTiming,
-    Field(
-        discriminator="type",
-        description="type required; timed values need timezone offsets; allDay end is exclusive.",
-    ),
+    Annotated[
+        TimedEventTiming | AllDayEventTiming,
+        Field(
+            discriminator="type",
+            description="type required; timed values need timezone offsets; allDay end is exclusive.",
+        ),
+    ],
+    BeforeValidator(_parse_event_timing),
 ]
 
 ReminderMinutes = Annotated[int, Field(ge=0, le=525_600)]
