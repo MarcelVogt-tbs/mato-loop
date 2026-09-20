@@ -23,6 +23,7 @@
           @update:model-value="changeScope"
         />
         <q-btn
+          v-if="!personalBlocked"
           class="col-auto"
           unelevated
           no-caps
@@ -43,13 +44,13 @@
         : 'Persönliche Agenten stehen nur dir zur Verfügung. Instanz-Agenten bleiben zusätzlich auswählbar.' }}
     </q-banner>
 
-    <q-banner v-if="agents.loadFailed" rounded class="bg-negative text-white q-mb-md">
+    <q-banner v-if="agents.loadFailed && !personalBlocked" rounded class="bg-negative text-white q-mb-md">
       <template #avatar><q-icon name="error_outline" /></template>
       Die Agentenprofile konnten nicht geladen werden.
       <template #action><q-btn flat no-caps color="white" label="Erneut laden" @click="load" /></template>
     </q-banner>
 
-    <q-card flat class="app-surface relative-position">
+    <q-card v-if="!personalBlocked" flat class="app-surface relative-position">
       <q-card-section v-if="agents.loaded && !agents.scopedAgents.length" class="q-pa-xl">
         <AppStateMessage
           icon="smart_toy"

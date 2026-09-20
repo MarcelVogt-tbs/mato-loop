@@ -498,7 +498,12 @@ async def list_agent_profiles(
 ) -> dict:
     if scope is None:
         return await _response(db, user)
-    settings, _owner_id = await _load_scoped(db, scope, user)
+    if scope == "personal":
+        settings = await SettingsStore.load(
+            db, UserAgentProfilesSettings, user_id=user.id
+        )
+    else:
+        settings, _owner_id = await _load_scoped(db, scope, user)
     return await _response(db, user, settings, scope)
 
 

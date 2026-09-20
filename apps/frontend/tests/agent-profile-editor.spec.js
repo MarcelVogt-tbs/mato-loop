@@ -18,7 +18,7 @@ const first = '00000000-0000-4000-8000-000000000010'
 const second = '00000000-0000-4000-8000-000000000011'
 const builtinId = '00000000-0000-4000-8000-000000000001'
 
-async function mountEditor(path = '/agents/agent?scope=personal', extraAgents = []) {
+async function mountEditor(path = '/agents/agent?scope=personal', extraAgents = [], personalAgentsEnabled = true) {
   const builtin = {
     id: builtinId, scope: 'instance', protected: true, name: 'Allgemein', description: 'Standard',
     personaId: null, instructions: 'Follow the request.', answerDisplay: 'compact', maxToolCalls: 25,
@@ -44,7 +44,8 @@ async function mountEditor(path = '/agents/agent?scope=personal', extraAgents = 
   }
   api.get.mockImplementation(async () => ({ data: {
     defaultAgentProfileId: builtinId,
-    effectiveAgents: [builtin, agent, ...extraAgents], personalAgentsEnabled: true,
+    effectiveAgents: personalAgentsEnabled ? [builtin, agent, ...extraAgents] : [builtin],
+    personalAgentsEnabled,
     integrations: [
       { id: first, name: 'Kalender', enabled: true, available: true, supportsPolicies: false },
       { id: second, name: 'SearXNG', enabled: true, available: true, supportsPolicies: false }
@@ -69,7 +70,9 @@ async function mountEditor(path = '/agents/agent?scope=personal', extraAgents = 
   useAuthStore(pinia).isAdmin = true
   app.config.globalProperties.$q.notify = vi.fn()
   app.mount(root)
-  await vi.waitFor(() => expect(page?.savedPayload).toBeTruthy())
+  await vi.waitFor(() => expect(
+    personalAgentsEnabled ? page?.savedPayload : root.textContent
+  ).toBeTruthy())
   await nextTick()
   return page
 }
@@ -104,6 +107,16 @@ it('starts a profile from Allgemein without copying fields or honoring copyFrom'
   page.applyInheritedValues()
   expect(page.form).toMatchObject({ instructions: 'Eigene Aufgabe', maxToolCalls: null, delegationEnabled: true })
   expect(page.requestPayload().overrides).toEqual({ instructions: 'Eigene Aufgabe' })
+})
+
+it('shows only the disabled state for a direct personal editor link', async () => {
+  const page = await mountEditor('/agents/agent?scope=personal', [], false)
+
+  expect(page.blocked).toBe(true)
+  expect(page.loadFailed).toBe(false)
+  expect(root.textContent).toContain('Persönliche Agenten wurden für diese Instanz deaktiviert.')
+  expect(root.textContent).not.toContain('Das Agentenprofil konnte nicht geladen werden.')
+  expect(root.querySelector('form')).toBeNull()
 })
 
 afterEach(() => {

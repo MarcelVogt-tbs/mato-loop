@@ -18,6 +18,7 @@ from mato_loop_backend.api.routes.agent_profiles import (
     _validate_permissions,
     agent_profile_integration_metadata,
     delete_agent_profile,
+    list_agent_profiles,
     update_agent_profile,
 )
 from mato_loop_backend.integrations.contracts import IntegrationResource
@@ -98,6 +99,27 @@ def test_builtin_agent_profile_defaults() -> None:
     assert "profile switch alone does not authorize implementation" in build.instructions
     assert "plan.md" not in plan.instructions
     assert "plan.md" not in build.instructions
+
+
+async def test_disabled_personal_agent_profiles_remain_readable(monkeypatch) -> None:
+    user = UserAccount(id=uuid4(), username="user", password_hash="hash")
+    personal = UserAgentProfilesSettings()
+    db = AsyncMock()
+    load = AsyncMock(return_value=personal)
+    response = AsyncMock(
+        return_value={"personalAgentsEnabled": False, "agents": []}
+    )
+    scoped = AsyncMock(side_effect=AssertionError("read must not use the write gate"))
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(agent_profiles_module, "_response", response)
+    monkeypatch.setattr(agent_profiles_module, "_load_scoped", scoped)
+
+    result = await list_agent_profiles(user, db, scope="personal")
+
+    assert result == {"personalAgentsEnabled": False, "agents": []}
+    load.assert_awaited_once_with(db, UserAgentProfilesSettings, user_id=user.id)
+    response.assert_awaited_once_with(db, user, personal, "personal")
+    scoped.assert_not_awaited()
 
 
 def test_custom_profile_stores_only_sparse_typed_overrides() -> None:

@@ -56,7 +56,7 @@
       {{ accessProtected ? 'Dieses Profil ist schreibgeschützt.' : 'Die Profildefinition ist geschützt. Berechtigungen und Integrationen können angepasst werden.' }}
     </q-banner>
 
-    <q-banner v-if="loadFailed" rounded class="bg-negative text-white q-mb-md">
+    <q-banner v-if="loadFailed && !blocked" rounded class="bg-negative text-white q-mb-md">
       <template #avatar><q-icon name="error_outline" /></template>
       {{ notFound ? 'Das Agentenprofil wurde nicht gefunden.' : 'Das Agentenprofil konnte nicht geladen werden.' }}
       <template #action>
@@ -66,7 +66,7 @@
     </q-banner>
 
     <q-form
-      v-if="!loadFailed"
+      v-if="!loadFailed && !blocked"
       ref="formRef"
       :class="{ disabled: blocked }"
       :inert="blocked ? '' : null"
@@ -1305,6 +1305,7 @@ async function load() {
   agents.resetIntegrationMetadata()
   try {
     await Promise.all([agents.fetchAgents(scope.value), providers.fetchAll()])
+    if (blocked.value) return
     if (isCreate.value) {
       editingAgent.value = null
       if (!baseProfiles.value.some((profile) => profile.id === agents.defaultAgentProfileId)) {
