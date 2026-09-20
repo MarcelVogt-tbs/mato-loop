@@ -48,6 +48,7 @@ class ProjectRequest(BaseModel):
     instructions: str = Field(default="", max_length=4000)
     default_execution_agent_id: UUID | None = Field(
         default=None,
+        strict=False,
         validation_alias=AliasChoices("defaultExecutionAgentId", "default_execution_agent_id"),
     )
     default_current_directory: str | None = Field(

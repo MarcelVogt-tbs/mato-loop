@@ -97,6 +97,7 @@ vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 vi.mock('components/AccountDialog.vue', () => ({ default: { render: () => null } }))
 vi.mock('components/SearchDialog.vue', () => ({ default: { render: () => null } }))
 vi.mock('components/ControlCenterPanel.vue', () => ({ default: { render: () => null } }))
+vi.mock('components/ExecutionAgentDirectoryPickerDialog.vue', () => ({ default: { render: () => null } }))
 
 let app, root
 beforeEach(async () => {

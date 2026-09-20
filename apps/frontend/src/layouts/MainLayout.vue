@@ -477,7 +477,21 @@
               maxlength="4096"
               :disable="!projectSelectedExecutionAgent?.connected"
               hint="Wird für neue Sessions übernommen und kann dort geändert werden."
-            />
+            >
+              <template #append>
+                <q-btn
+                  flat
+                  round
+                  dense
+                  icon="folder_open"
+                  aria-label="Arbeitsverzeichnis auswählen"
+                  :disable="!projectDirectoryPickerAvailable"
+                  @click="projectDirectoryPickerOpen = true"
+                >
+                  <q-tooltip>Arbeitsverzeichnis auswählen</q-tooltip>
+                </q-btn>
+              </template>
+            </q-input>
           </q-card-section>
           <q-card-actions align="right" class="q-pa-md q-pt-none">
             <q-btn flat no-caps label="Abbrechen" :disable="projectSaving" v-close-popup />
@@ -486,6 +500,13 @@
         </q-form>
       </q-card>
     </q-dialog>
+
+    <ExecutionAgentDirectoryPickerDialog
+      v-model="projectDirectoryPickerOpen"
+      :execution-agent-id="projectDefaultExecutionAgentId"
+      :initial-path="projectDefaultCurrentDirectory || projectSelectedExecutionAgent?.homeDirectory || '/'"
+      @select="projectDefaultCurrentDirectory = $event"
+    />
 
     <q-dialog v-model="moveDialogOpen">
       <q-card class="session-rename-dialog app-surface">
@@ -563,6 +584,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import AccountDialog from 'components/AccountDialog.vue'
 import AppLogo from 'components/AppLogo.vue'
 import ControlCenterPanel from 'components/ControlCenterPanel.vue'
+import ExecutionAgentDirectoryPickerDialog from 'components/ExecutionAgentDirectoryPickerDialog.vue'
 import SearchDialog from 'components/SearchDialog.vue'
 import SidebarActionMenu from 'components/SidebarActionMenu.vue'
 import SidebarSessionList from 'components/SidebarSessionList.vue'
@@ -674,6 +696,7 @@ const projectName = ref('')
 const projectInstructions = ref('')
 const projectDefaultExecutionAgentId = ref(null)
 const projectDefaultCurrentDirectory = ref(null)
+const projectDirectoryPickerOpen = ref(false)
 const projectSaving = ref(false)
 const projectSelectedExecutionAgent = computed(() => (
   executionAgents.byId(projectDefaultExecutionAgentId.value)
@@ -704,6 +727,10 @@ const projectExecutionAgentOptions = computed(() => {
   }
   return options
 })
+const projectDirectoryPickerAvailable = computed(() => (
+  projectSelectedExecutionAgent.value?.connected === true
+  && projectSelectedExecutionAgent.value.operations?.includes('filesystem.list')
+))
 const moveDialogOpen = ref(false)
 const moveSessionId = ref(null)
 const moveSourceProjectId = ref(null)
@@ -811,11 +838,13 @@ function openProjectDialog(mode, project = null) {
   projectDefaultCurrentDirectory.value = mode === 'edit'
     ? project?.defaultCurrentDirectory || null
     : null
+  projectDirectoryPickerOpen.value = false
   void executionAgents.fetchAll({ suppressErrorToast: true }).catch(() => {})
   projectDialogOpen.value = true
 }
 
 function selectProjectExecutionAgent(agentId) {
+  projectDirectoryPickerOpen.value = false
   projectDefaultCurrentDirectory.value = executionAgents.byId(agentId)?.homeDirectory || null
 }
 

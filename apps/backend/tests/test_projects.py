@@ -82,9 +82,13 @@ def test_project_model_enforces_owner_binding_and_chat_sessions() -> None:
 
 
 def test_project_fields_are_trimmed_and_bounded() -> None:
+    agent_id = uuid4()
     request = ProjectRequest(name="  Work  ", instructions="  Use Python.  ")
     assert request.name == "Work"
     assert request.instructions == "Use Python."
+    assert ProjectRequest(
+        name="Work", defaultExecutionAgentId=str(agent_id)
+    ).default_execution_agent_id == agent_id
     with pytest.raises(ValidationError):
         ProjectRequest(name="   ")
     with pytest.raises(ValidationError):
