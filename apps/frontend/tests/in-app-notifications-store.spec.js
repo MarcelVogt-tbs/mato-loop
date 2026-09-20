@@ -194,12 +194,14 @@ describe('in-app notification store', () => {
       navigator: {
         serviceWorker: {
           getRegistration: vi.fn().mockResolvedValue({
+            active: {},
             pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) }
-          })
+          }),
+          ready: Promise.resolve(null)
         }
       }
     }
-    api.get.mockResolvedValue({ data: { enabled: true, publicKey: 'AQID' } })
+    api.get.mockResolvedValue({ data: { enabled: true, configured: true, publicKey: 'AQID' } })
     api.put.mockResolvedValue({ data: null })
     const store = useInAppNotificationStore()
 
@@ -214,10 +216,16 @@ describe('in-app notification store', () => {
     expect(store.pushSubscribed).toBe(true)
   })
 
-  it('requests permission and subscribes from the explicit enable action', async () => {
+  it('subscribes synchronously from the explicit enable action', async () => {
     const subscription = { toJSON: () => ({ endpoint: 'https://push.example/new' }) }
-    const subscribe = vi.fn().mockResolvedValue(subscription)
+    let userActivation = true
+    const subscribe = vi.fn(() => {
+      expect(userActivation).toBe(true)
+      window.Notification.permission = 'granted'
+      return Promise.resolve(subscription)
+    })
     const registration = {
+      active: {},
       pushManager: { getSubscription: vi.fn().mockResolvedValue(null), subscribe }
     }
     global.window = {
@@ -232,22 +240,45 @@ describe('in-app notification store', () => {
       navigator: {
         serviceWorker: {
           ready: Promise.resolve(registration),
-          getRegistration: vi.fn()
+          getRegistration: vi.fn().mockResolvedValue(registration)
         }
       }
     }
+    api.get.mockResolvedValue({ data: { enabled: true, configured: true, publicKey: 'AQID' } })
     api.put.mockResolvedValue({ data: null })
     const store = useInAppNotificationStore()
-    store.pushServerEnabled = true
-    store.pushPublicKey = 'AQID'
+    await store.reconcilePush()
 
-    await store.enablePush()
+    const enabling = store.enablePush()
+    userActivation = false
+    await enabling
 
-    expect(window.Notification.requestPermission).toHaveBeenCalledOnce()
+    expect(window.Notification.requestPermission).not.toHaveBeenCalled()
     expect(subscribe).toHaveBeenCalledWith({
       userVisibleOnly: true,
       applicationServerKey: new Uint8Array([1, 2, 3])
     })
     expect(store.pushSubscribed).toBe(true)
+  })
+
+  it('does not wait indefinitely for a missing service worker registration', async () => {
+    global.window = {
+      isSecureContext: true,
+      Notification: { permission: 'default' },
+      PushManager: function PushManager() {},
+      navigator: {
+        serviceWorker: {
+          getRegistration: vi.fn().mockResolvedValue(null),
+          ready: new Promise(() => {})
+        }
+      }
+    }
+    api.get.mockResolvedValue({ data: { enabled: true, configured: true, publicKey: 'AQID' } })
+    const store = useInAppNotificationStore()
+
+    await store.reconcilePush()
+
+    expect(store.pushLoaded).toBe(true)
+    expect(store.pushRegistrationReady).toBe(false)
   })
 })

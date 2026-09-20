@@ -125,6 +125,12 @@ export const settingsRoutes = [
     meta: { settingsLabel: 'Memory', settingsIcon: 'psychology' }
   },
   {
+    path: 'notifications',
+    name: 'settings-notifications',
+    component: () => import('pages/settings/NotificationSettingsPage.vue'),
+    meta: { settingsLabel: 'Benachrichtigungen', settingsIcon: 'notifications_active', requiresAdmin: true }
+  },
+  {
     path: 'users',
     name: 'settings-users',
     component: () => import('pages/settings/UserSettingsPage.vue'),

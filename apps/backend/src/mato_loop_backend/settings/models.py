@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
@@ -1091,6 +1092,26 @@ class ChannelSettings(SettingsDocument):
     settings_key = "channels"
 
     allowed_providers: set[str] = Field(default_factory=lambda: {"telegram"})
+
+
+class WebPushSettings(SettingsDocument):
+    settings_key = "web-push"
+    model_config = ConfigDict(
+        alias_generator=_camel_case,
+        populate_by_name=True,
+        extra="forbid",
+    )
+
+    enabled: bool = False
+    contact_email: Annotated[str | None, Field(default=None, max_length=254)]
+
+    @field_validator("contact_email")
+    @classmethod
+    def validate_contact_email(cls, value: str | None) -> str | None:
+        value = value.strip() if value else None
+        if value is not None and not re.fullmatch(r"[^@\s]+@[^@\s]+", value):
+            raise ValueError("invalid contact email")
+        return value
 
 
 class InstanceLimits(SettingsDocument):

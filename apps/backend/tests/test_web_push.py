@@ -12,6 +12,7 @@ from mato_loop_backend import web_push
 from mato_loop_backend.config import RuntimeConfig
 from mato_loop_backend.models import WebPushSubscription
 from mato_loop_backend.web_push import (
+    EffectiveWebPushSettings,
     VapidKeyStore,
     WebPushNotificationPayload,
     WebPushPayload,
@@ -46,31 +47,49 @@ def _config(tmp_path: Path, *, enabled: bool = True) -> RuntimeConfig:
     )
 
 
-def test_vapid_key_is_created_only_when_configured_and_remains_stable(tmp_path: Path) -> None:
-    disabled = VapidKeyStore(_config(tmp_path, enabled=False))
+def _effective() -> EffectiveWebPushSettings:
+    return EffectiveWebPushSettings(
+        enabled=True,
+        subject="mailto:admin@example.test",
+        allowed_origins=frozenset({"https://push.example.test"}),
+    )
 
-    assert disabled.public_key() is None
-    assert not disabled.path.exists()
 
-    enabled = VapidKeyStore(_config(tmp_path))
-    first = enabled.public_key()
+def test_apple_push_subdomains_are_allowed_without_arbitrary_ports() -> None:
+    config = EffectiveWebPushSettings(
+        enabled=True,
+        subject="mailto:admin@example.test",
+        allowed_origins=frozenset({"https://web.push.apple.com"}),
+        allow_apple_subdomains=True,
+    )
+
+    assert web_push._endpoint_allowed("https://example.push.apple.com/path", config)
+    assert not web_push._endpoint_allowed("https://example.push.apple.com:8443/path", config)
+    assert not web_push._endpoint_allowed("https://push.apple.com.example.test/path", config)
+
+
+def test_vapid_key_is_created_explicitly_and_remains_stable(tmp_path: Path) -> None:
+    store = VapidKeyStore(_config(tmp_path, enabled=False))
+
+    assert store.public_key() is None
+    assert not store.path.exists()
+
+    first = store.ensure_key()
     second = VapidKeyStore(_config(tmp_path)).public_key()
 
     assert first == second
     assert first is not None
     assert len(base64.urlsafe_b64decode(first + "=" * (-len(first) % 4))) == 65
-    assert enabled.path.stat().st_mode & 0o777 == 0o600
+    assert store.path.stat().st_mode & 0o777 == 0o600
 
 
-def test_invalid_vapid_configuration_does_not_create_a_key(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-    config.web_push_vapid_subject = "not-a-subject"
-    store = VapidKeyStore(config)
+def test_invalid_vapid_key_is_rejected(tmp_path: Path) -> None:
+    store = VapidKeyStore(_config(tmp_path))
+    store.path.parent.mkdir(parents=True)
+    store.path.write_text("not a key")
 
     with pytest.raises(web_push.WebPushConfigurationError):
         store.public_key()
-
-    assert not store.path.exists()
 
 
 def test_subscription_model_has_owner_cascade_and_required_uniqueness() -> None:
@@ -104,6 +123,7 @@ async def test_registration_encrypts_secrets_and_sets_owner(monkeypatch, tmp_pat
             return b"encrypted"
 
     monkeypatch.setattr(web_push, "get_runtime_config", lambda: config)
+    monkeypatch.setattr(web_push, "load_effective_web_push_settings", AsyncMock(return_value=_effective()))
     monkeypatch.setattr(VapidKeyStore, "public_key", lambda _self: "public-key")
     monkeypatch.setattr(web_push, "CredentialCipher", Cipher)
     db = AsyncMock(spec=AsyncSession)
@@ -139,6 +159,7 @@ async def test_registration_transfers_existing_endpoint_to_current_owner(
         encrypted_payload=b"old",
     )
     monkeypatch.setattr(web_push, "get_runtime_config", lambda: config)
+    monkeypatch.setattr(web_push, "load_effective_web_push_settings", AsyncMock(return_value=_effective()))
     monkeypatch.setattr(VapidKeyStore, "public_key", lambda _self: "public-key")
     monkeypatch.setattr(
         web_push,
@@ -167,7 +188,7 @@ async def test_registration_transfers_existing_endpoint_to_current_owner(
 async def test_registration_rejects_endpoint_outside_exact_allowlist(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(web_push, "get_runtime_config", lambda: _config(tmp_path))
+    monkeypatch.setattr(web_push, "load_effective_web_push_settings", AsyncMock(return_value=_effective()))
     monkeypatch.setattr(VapidKeyStore, "public_key", lambda _self: "public-key")
 
     with pytest.raises(WebPushRegistrationError):
@@ -219,7 +240,7 @@ async def test_delivery_removes_only_stale_subscriptions(
         WebPushPayload(
             notification=WebPushNotificationPayload(title="Fertig"),
         ),
-        _config(tmp_path),
+        _effective(),
         cipher,
     )
 

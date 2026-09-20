@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import stat
+from dataclasses import dataclass
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -24,9 +25,27 @@ from mato_loop_backend.config import RuntimeConfig, get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.models import UserAccount, WebPushSubscription
 from mato_loop_backend.security import CredentialCipher
+from mato_loop_backend.settings.models import WebPushSettings
+from mato_loop_backend.settings.store import SettingsStore
 
 logger = logging.getLogger(__name__)
 _DELIVERY_TIMEOUT_SECONDS = 10.0
+_STANDARD_PUSH_ORIGINS = frozenset(
+    {
+        "https://fcm.googleapis.com",
+        "https://updates.push.services.mozilla.com",
+        "https://web.push.apple.com",
+    }
+)
+
+
+@dataclass(frozen=True)
+class EffectiveWebPushSettings:
+    enabled: bool
+    subject: str | None
+    allowed_origins: frozenset[str]
+    allow_apple_subdomains: bool = False
+    legacy: bool = False
 
 
 def _origin(value: str, *, origin_only: bool = False) -> str:
@@ -58,7 +77,40 @@ def _allowed_origins(config: RuntimeConfig) -> frozenset[str]:
     )
 
 
-def _validate_subject(value: str) -> str:
+def _endpoint_allowed(endpoint: str, config: EffectiveWebPushSettings) -> bool:
+    origin = _origin(endpoint)
+    if origin in config.allowed_origins:
+        return True
+    parsed = urlsplit(endpoint)
+    host = parsed.hostname.lower() if parsed.hostname else ""
+    return (
+        config.allow_apple_subdomains
+        and parsed.port in {None, 443}
+        and host.endswith(".push.apple.com")
+    )
+
+
+async def load_effective_web_push_settings(
+    db: AsyncSession, *, for_update: bool = False
+) -> EffectiveWebPushSettings:
+    settings = await SettingsStore.load_optional(db, WebPushSettings, for_update=for_update)
+    if settings is not None:
+        return EffectiveWebPushSettings(
+            enabled=settings.enabled,
+            subject=f"mailto:{settings.contact_email}" if settings.contact_email else None,
+            allowed_origins=_STANDARD_PUSH_ORIGINS,
+            allow_apple_subdomains=True,
+        )
+    runtime = get_runtime_config()
+    return EffectiveWebPushSettings(
+        enabled=runtime.web_push_enabled,
+        subject=runtime.web_push_vapid_subject.strip() or None,
+        allowed_origins=_allowed_origins(runtime),
+        legacy=True,
+    )
+
+
+def validate_web_push_subject(value: str) -> str:
     value = value.strip()
     if re.fullmatch(r"mailto:[^@\s]+@[^@\s]+", value):
         return value
@@ -184,13 +236,10 @@ class VapidKeyStore:
         self.path = self.config.secrets_dir / "web-push-vapid.pem"
 
     def public_key(self) -> str | None:
-        if not self.config.web_push_configured:
+        if not self.path.exists():
             return None
         try:
-            if not _allowed_origins(self.config):
-                raise ValueError("Web Push origin allowlist is empty")
-            _validate_subject(self.config.web_push_vapid_subject)
-            key = self._load_or_create()
+            key = self._load()
         except (OSError, ValueError, TypeError) as exc:
             raise WebPushConfigurationError from exc
         raw = key.public_key().public_bytes(
@@ -199,7 +248,7 @@ class VapidKeyStore:
         )
         return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
-    def _load_or_create(self) -> ec.EllipticCurvePrivateKey:
+    def ensure_key(self) -> str:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
             key = ec.generate_private_key(ec.SECP256R1())
@@ -217,6 +266,12 @@ class VapidKeyStore:
             else:
                 with os.fdopen(descriptor, "wb") as target:
                     target.write(payload)
+        public_key = self.public_key()
+        if public_key is None:  # pragma: no cover - guarded by exclusive creation above
+            raise WebPushConfigurationError
+        return public_key
+
+    def _load(self) -> ec.EllipticCurvePrivateKey:
         details = self.path.lstat()
         if not stat.S_ISREG(details.st_mode):
             raise ValueError("VAPID key path is not a regular file")
@@ -247,11 +302,16 @@ class WebPushService:
         device_id: UUID,
         subscription: WebPushSubscriptionInput,
     ) -> None:
-        config = get_runtime_config()
-        if not config.web_push_configured:
+        config = await load_effective_web_push_settings(db)
+        if not config.enabled or config.subject is None or not config.allowed_origins:
             raise WebPushConfigurationError
-        VapidKeyStore(config).public_key()
-        if _origin(subscription.endpoint) not in _allowed_origins(config):
+        try:
+            validate_web_push_subject(config.subject)
+        except ValueError as exc:
+            raise WebPushConfigurationError from exc
+        if VapidKeyStore().public_key() is None:
+            raise WebPushConfigurationError
+        if not _endpoint_allowed(subscription.endpoint, config):
             raise WebPushRegistrationError
         endpoint_hash = hashlib.sha256(subscription.endpoint.encode()).hexdigest()
         encrypted = CredentialCipher().encrypt(subscription.secret_payload())
@@ -297,12 +357,16 @@ class WebPushService:
     @staticmethod
     async def deliver_after_commit(user_id: UUID, payload: WebPushPayload) -> None:
         """Best-effort delivery. Call only after the producer transaction commits."""
-        config = get_runtime_config()
-        if not config.web_push_configured:
-            return
         try:
-            VapidKeyStore(config).public_key()
             async with AsyncSessionFactory() as db:
+                config = await load_effective_web_push_settings(db)
+                if (
+                    not config.enabled
+                    or config.subject is None
+                    or not config.allowed_origins
+                    or VapidKeyStore().public_key() is None
+                ):
+                    return
                 subscriptions = list(
                     (
                         await db.scalars(
@@ -336,14 +400,14 @@ class WebPushService:
     async def _deliver_one(
         item: WebPushSubscription,
         payload: WebPushPayload,
-        config: RuntimeConfig,
+        config: EffectiveWebPushSettings,
         cipher: CredentialCipher,
         sender: _NoRedirectSession | None = None,
     ) -> None:
         try:
             subscription = cipher.decrypt(item.encrypted_payload)
             endpoint = subscription.get("endpoint")
-            if not isinstance(endpoint, str) or _origin(endpoint) not in _allowed_origins(config):
+            if not isinstance(endpoint, str) or not _endpoint_allowed(endpoint, config):
                 return
             async with asyncio.timeout(_DELIVERY_TIMEOUT_SECONDS):
                 if sender is None:
@@ -369,14 +433,14 @@ class WebPushService:
     async def _send(
         subscription: dict[str, object],
         payload: WebPushPayload,
-        config: RuntimeConfig,
+        config: EffectiveWebPushSettings,
         sender: _NoRedirectSession,
     ):
         return await webpush_async(
             subscription_info=subscription,
             data=payload.model_dump_json(exclude_none=True, by_alias=True),
-            vapid_private_key=str(VapidKeyStore(config).path),
-            vapid_claims={"sub": _validate_subject(config.web_push_vapid_subject)},
+            vapid_private_key=str(VapidKeyStore().path),
+            vapid_claims={"sub": validate_web_push_subject(config.subject or "")},
             timeout=_DELIVERY_TIMEOUT_SECONDS,
             ttl=60,
             aiohttp_session=sender,

@@ -14,6 +14,7 @@ from mato_loop_backend.settings import (
     SettingsScope,
     SettingsStore,
     ToolExecutionPolicy,
+    WebPushSettings,
 )
 from mato_loop_backend.settings.models import (
     AgentRuntimeSettings,
@@ -43,9 +44,16 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert ToolSettings().default_calendar is None
     assert ToolSettings().default_task_list is None
     assert ToolSettings().resource_labels == {}
+    assert WebPushSettings().model_dump() == {"enabled": False, "contact_email": None}
     assert InstanceLimits.settings_key == "instance-limits"
     assert InstanceLimits().max_upload_mib == 64
     assert InstanceLimits().session_quota_mib == 5_120
+
+
+def test_web_push_settings_validate_contact_email() -> None:
+    assert WebPushSettings(contact_email=" admin@example.test ").contact_email == "admin@example.test"
+    with pytest.raises(ValidationError):
+        WebPushSettings(contact_email="not-an-email")
     assert InstanceLimits().max_extracted_characters == 5_000_000
     assert ChannelSettings.settings_key == "channels"
     assert ChannelSettings().allowed_providers == {"telegram"}

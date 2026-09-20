@@ -7,6 +7,7 @@ import { applicationServerKey } from 'src/utils/web-push'
 const PAGE_SIZE = 20
 const DEVICE_ID_KEY = 'matoLoopPushDeviceId'
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+let activeServiceWorkerRegistration = null
 
 function pushSupported() {
   return typeof window !== 'undefined'
@@ -29,11 +30,11 @@ function deviceId(create = false) {
   }
 }
 
-async function serviceWorkerRegistration(wait = false) {
+async function serviceWorkerRegistration() {
   if (!pushSupported()) return null
-  return wait
-    ? window.navigator.serviceWorker.ready
-    : window.navigator.serviceWorker.getRegistration('/')
+  const registration = await window.navigator.serviceWorker.getRegistration('/')
+  activeServiceWorkerRegistration = registration?.active ? registration : null
+  return registration
 }
 
 export const useInAppNotificationStore = defineStore('in-app-notifications', {
@@ -51,8 +52,10 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
     pushSupported: pushSupported(),
     pushLoaded: false,
     pushLoadFailed: false,
+    pushConfigured: false,
     pushServerEnabled: false,
     pushPublicKey: null,
+    pushRegistrationReady: false,
     pushSubscribed: false,
     pushPermission: pushSupported() ? window.Notification.permission : 'unsupported',
     pushLoading: false,
@@ -140,14 +143,23 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
       this.pushLoadFailed = false
       try {
         const { data } = await api.get('/notifications/push/config', config)
+        this.pushConfigured = Boolean(data.configured)
         this.pushServerEnabled = Boolean(data.enabled)
         this.pushPublicKey = typeof data.publicKey === 'string' ? data.publicKey : null
         this.pushPermission = window.Notification.permission
         const registration = await serviceWorkerRegistration()
+        this.pushRegistrationReady = Boolean(activeServiceWorkerRegistration)
+        if (!registration?.active) {
+          void window.navigator.serviceWorker.ready.then((readyRegistration) => {
+            activeServiceWorkerRegistration = readyRegistration
+            this.pushRegistrationReady = true
+          }).catch(() => {})
+        }
         const subscription = await registration?.pushManager.getSubscription()
         this.pushSubscribed = Boolean(subscription)
         if (!subscription) return
-        if (!this.pushServerEnabled || this.pushPermission !== 'granted') {
+        if (!this.pushServerEnabled) return
+        if (this.pushPermission !== 'granted') {
           await subscription.unsubscribe()
           this.pushSubscribed = false
           return
@@ -166,18 +178,22 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
       }
     },
     async enablePush() {
-      if (!this.pushSupported || !this.pushServerEnabled || !this.pushPublicKey || this.pushLoading) return
+      if (
+        !this.pushSupported
+        || !this.pushServerEnabled
+        || !this.pushPublicKey
+        || !this.pushRegistrationReady
+        || !activeServiceWorkerRegistration
+        || this.pushLoading
+      ) return
       this.pushLoading = true
+      const created = !this.pushSubscribed
       try {
-        this.pushPermission = await window.Notification.requestPermission()
-        if (this.pushPermission !== 'granted') return
-        const registration = await serviceWorkerRegistration(true)
-        let subscription = await registration.pushManager.getSubscription()
-        const created = !subscription
-        subscription ||= await registration.pushManager.subscribe({
+        const subscriptionRequest = activeServiceWorkerRegistration.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: applicationServerKey(this.pushPublicKey)
         })
+        const subscription = await subscriptionRequest
         try {
           await api.put(
             `/notifications/push/subscriptions/${deviceId(true)}`,
@@ -194,6 +210,7 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
         }
         throw error
       } finally {
+        this.pushPermission = window.Notification.permission
         this.pushLoading = false
       }
     },

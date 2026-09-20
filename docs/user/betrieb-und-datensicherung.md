@@ -30,17 +30,11 @@ Die Produktionsvorlage setzt `MATO_LOOP_SECURE_COOKIES=true`. Ändern Sie den We
 
 ## App und Push-Benachrichtigungen
 
-Der Produktionsbuild ist eine installierbare Web-App. Betreiben Sie MatoLoop über eine vertrauenswürdige HTTPS-Adresse und setzen Sie `MATO_LOOP_SECURE_COOKIES=true`. Unter iOS und iPadOS stehen Push-Benachrichtigungen ab Version 16.4 nur zur Verfügung, nachdem MatoLoop über **Zum Home-Bildschirm** installiert wurde. Die Berechtigung wird ausschließlich über den Schalter im Benachrichtigungsbereich angefordert.
+Der Produktionsbuild ist eine installierbare Web-App. Betreiben Sie MatoLoop über eine vertrauenswürdige HTTPS-Adresse und setzen Sie `MATO_LOOP_SECURE_COOKIES=true`. Ein Administrator richtet Web Push einmalig unter **Einstellungen > Benachrichtigungen** mit einer betreuten Kontakt-E-Mail-Adresse ein. MatoLoop erzeugt dabei den privaten Schlüssel `/data/secrets/web-push-vapid.pem` und unterstützt die Browser-Pushdienste von Apple, Google und Mozilla.
 
-Web Push ist standardmäßig deaktiviert. Aktivieren Sie nur die tatsächlich verwendeten Push-Dienste mit exakten HTTPS-Ursprüngen:
+Benutzer aktivieren Push anschließend für jeden Browser oder jede PWA-Installation über den Schalter im Benachrichtigungsbereich. Unter iOS und iPadOS ist dafür mindestens Version 16.4 erforderlich und MatoLoop muss zuvor über **Zum Home-Bildschirm** installiert worden sein. Die Systemberechtigung kann nur durch diese ausdrückliche Benutzeraktion angefordert werden.
 
-```env
-MATO_LOOP_WEB_PUSH_ENABLED=true
-MATO_LOOP_WEB_PUSH_VAPID_SUBJECT=mailto:admin@example.com
-MATO_LOOP_WEB_PUSH_ALLOWED_ORIGINS=https://fcm.googleapis.com,https://updates.push.services.mozilla.com,https://web.push.apple.com
-```
-
-Die VAPID-Kennung muss eine betreute `mailto:`-Adresse oder eine öffentliche HTTPS-Adresse sein. MatoLoop erzeugt beim ersten Abruf der Push-Konfiguration den privaten Schlüssel `/data/secrets/web-push-vapid.pem`. Sichern Sie ihn zusammen mit Datenbank und Datenverzeichnis; ein verlorener Schlüssel macht bestehende Geräte-Abonnements unbrauchbar. Push-Zustellung erfolgt bestmöglich und ersetzt weder die gespeicherten Benachrichtigungen noch den Chatverlauf.
+Sichern Sie `/data/secrets/web-push-vapid.pem` zusammen mit Datenbank und Datenverzeichnis; ein verlorener Schlüssel macht bestehende Geräte-Abonnements unbrauchbar. Push-Zustellung erfolgt bestmöglich und ersetzt weder die gespeicherten Benachrichtigungen noch den Chatverlauf.
 
 Für den PWA-Entwicklungsmodus auf dem normalen Entwicklungsport `10020` verwenden Sie:
 

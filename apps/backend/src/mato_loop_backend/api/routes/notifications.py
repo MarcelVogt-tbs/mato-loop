@@ -16,13 +16,16 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import Notification, UserAccount
 from mato_loop_backend.notifications import NotificationError, NotificationService
-from mato_loop_backend.security import require_user
+from mato_loop_backend.security import require_admin, require_user
+from mato_loop_backend.settings import SettingsStore, WebPushSettings
 from mato_loop_backend.web_push import (
     VapidKeyStore,
     WebPushConfigurationError,
     WebPushRegistrationError,
     WebPushService,
     WebPushSubscriptionInput,
+    load_effective_web_push_settings,
+    validate_web_push_subject,
 )
 
 router = APIRouter(prefix="/notifications", dependencies=[Depends(require_user)])
@@ -81,7 +84,16 @@ class WebPushConfigResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
+    configured: bool
     public_key: str | None = Field(alias="publicKey")
+
+
+class WebPushSettingsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    configured: bool
+    contact_email: str | None = Field(alias="contactEmail")
 
 
 def _notification_payload(item: Notification) -> NotificationResponse:
@@ -136,13 +148,77 @@ def _decode_cursor(value: str, user_id: UUID) -> tuple[datetime, UUID]:
 
 
 @router.get("/push/config", response_model=WebPushConfigResponse)
-async def get_web_push_config() -> WebPushConfigResponse:
+async def get_web_push_config(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> WebPushConfigResponse:
     store = VapidKeyStore()
     try:
+        settings = await load_effective_web_push_settings(db)
         public_key = store.public_key()
-    except WebPushConfigurationError as exc:
+        if settings.legacy and settings.enabled and public_key is None:
+            public_key = store.ensure_key()
+        configured = bool(
+            settings.subject
+            and settings.allowed_origins
+            and public_key
+            and validate_web_push_subject(settings.subject)
+        )
+    except (ValueError, WebPushConfigurationError) as exc:
         raise ApiError(503, "webPush.unavailable") from exc
-    return WebPushConfigResponse(enabled=public_key is not None, publicKey=public_key)
+    return WebPushConfigResponse(
+        enabled=settings.enabled and configured,
+        configured=configured,
+        publicKey=public_key,
+    )
+
+
+async def _web_push_settings_payload(db: AsyncSession) -> WebPushSettingsResponse:
+    stored = await SettingsStore.load_optional(db, WebPushSettings)
+    effective = await load_effective_web_push_settings(db)
+    try:
+        public_key = VapidKeyStore().public_key()
+        configured = bool(
+            effective.subject
+            and effective.allowed_origins
+            and public_key
+            and validate_web_push_subject(effective.subject)
+        )
+    except (ValueError, WebPushConfigurationError):
+        configured = False
+    contact_email = stored.contact_email if stored else None
+    if stored is None and effective.subject and effective.subject.startswith("mailto:"):
+        contact_email = effective.subject.removeprefix("mailto:")
+    return WebPushSettingsResponse(
+        enabled=stored.enabled if stored else effective.enabled,
+        configured=configured,
+        contactEmail=contact_email,
+    )
+
+
+@router.get("/push/settings", response_model=WebPushSettingsResponse)
+async def get_web_push_settings(
+    _admin: Annotated[UserAccount, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> WebPushSettingsResponse:
+    return await _web_push_settings_payload(db)
+
+
+@router.put("/push/settings", response_model=WebPushSettingsResponse)
+async def update_web_push_settings(
+    payload: WebPushSettings,
+    _admin: Annotated[UserAccount, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> WebPushSettingsResponse:
+    if payload.enabled and payload.contact_email is None:
+        raise ApiError(422, "validation.required", field="contactEmail")
+    if payload.contact_email is not None:
+        try:
+            VapidKeyStore().ensure_key()
+        except WebPushConfigurationError as exc:
+            raise ApiError(503, "webPush.unavailable") from exc
+    await SettingsStore.save(db, payload)
+    await db.commit()
+    return await _web_push_settings_payload(db)
 
 
 @router.put("/push/subscriptions/{device_id}", status_code=status.HTTP_204_NO_CONTENT)

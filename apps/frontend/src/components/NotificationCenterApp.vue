@@ -84,7 +84,17 @@
             <q-item-label caption aria-live="polite">{{ pushStatus }}</q-item-label>
           </q-item-section>
           <q-item-section side>
+            <q-btn
+              v-if="(!notifications.pushConfigured || !notifications.pushServerEnabled) && auth.isAdmin"
+              flat
+              no-caps
+              color="primary"
+              icon="settings"
+              label="Einrichten"
+              :to="{ name: 'settings-notifications' }"
+            />
             <q-toggle
+              v-else-if="notifications.pushConfigured && notifications.pushServerEnabled"
               color="primary"
               :model-value="notifications.pushSubscribed"
               :disable="pushToggleDisabled"
@@ -153,6 +163,7 @@ import AppStateMessage from 'components/AppStateMessage.vue'
 import ApprovalCard from 'components/ApprovalCard.vue'
 import QuestionDock from 'components/QuestionDock.vue'
 import { useApprovalStore } from 'stores/approvals'
+import { useAuthStore } from 'stores/auth'
 import { useChatStore } from 'stores/chat'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useQuestionStore } from 'stores/questions'
@@ -163,6 +174,7 @@ defineOptions({ name: 'NotificationCenterApp' })
 
 const router = useRouter()
 const approvals = useApprovalStore()
+const auth = useAuthStore()
 const chat = useChatStore()
 const notifications = useInAppNotificationStore()
 const questions = useQuestionStore()
@@ -184,6 +196,7 @@ const pushToggleDisabled = computed(() => (
   || notifications.pushLoadFailed
   || !notifications.pushServerEnabled
   || !notifications.pushPublicKey
+  || !notifications.pushRegistrationReady
   || notifications.pushPermission === 'denied'
   || notifications.pushLoading
 ))
@@ -191,7 +204,11 @@ const pushStatus = computed(() => {
   if (!notifications.pushSupported) return 'Dieser Browser unterstützt Push-Benachrichtigungen nicht.'
   if (notifications.pushLoadFailed) return 'Die Push-Einstellungen konnten nicht geladen werden.'
   if (!notifications.pushLoaded) return 'Push-Einstellungen werden geladen.'
-  if (!notifications.pushServerEnabled) return 'Push-Benachrichtigungen sind auf diesem Server nicht verfügbar.'
+  if (!notifications.pushConfigured) return auth.isAdmin
+    ? 'Web Push muss für diese Instanz noch eingerichtet werden.'
+    : 'Web Push wurde für diese Instanz noch nicht eingerichtet.'
+  if (!notifications.pushServerEnabled) return 'Web Push ist für diese Instanz deaktiviert.'
+  if (!notifications.pushRegistrationReady) return 'Der Push-Dienst wird vorbereitet.'
   if (notifications.pushPermission === 'denied') return 'Benachrichtigungen sind in den Browser-Einstellungen blockiert.'
   return notifications.pushSubscribed
     ? 'Push-Benachrichtigungen sind auf diesem Gerät aktiv.'
