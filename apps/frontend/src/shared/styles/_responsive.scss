@@ -277,6 +277,15 @@
     padding: 16px;
   }
 
+  .question-dock__option-control,
+  .question-dock__option-description {
+    flex-basis: 100%;
+  }
+
+  .question-dock__option {
+    flex-wrap: wrap;
+  }
+
   .question-dock__footer-spacer {
     display: none;
   }

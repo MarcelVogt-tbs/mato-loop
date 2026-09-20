@@ -89,10 +89,11 @@
           <div
             v-for="option in current.options"
             :key="option.label"
-            class="question-dock__option row items-start no-wrap"
+            class="question-dock__option row items-start"
           >
             <q-radio
               v-if="current.type === 'single_choice'"
+              class="question-dock__option-control col"
               :model-value="customSelected ? null : (currentAnswers[0] || null)"
               :tabindex="singleTabIndex(option.label)"
               :val="option.label"
@@ -102,12 +103,13 @@
             />
             <q-checkbox
               v-else
+              class="question-dock__option-control col"
               :model-value="currentAnswers.includes(option.label)"
               :label="option.label"
               :disable="busy"
               @update:model-value="toggleMultiple(option.label)"
             />
-            <span v-if="option.description" class="col text-caption app-muted q-pt-sm q-ml-sm">
+            <span v-if="option.description" class="question-dock__option-description col text-caption app-muted q-pt-sm">
               {{ option.description }}
             </span>
           </div>

@@ -291,6 +291,13 @@
 .question-dock__option {
   min-width: 0;
   padding: 2px 0;
+  gap: 8px;
+}
+
+.question-dock__option-control,
+.question-dock__option-description {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .question-dock__footer {
