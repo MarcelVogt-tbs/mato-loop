@@ -192,6 +192,43 @@ async def test_debug_mcp_http_authenticates_and_filters_sessions(monkeypatch) ->
     assert user.id in statement.params.values()
 
 
+async def test_debug_mcp_uses_session_profile_for_ai_defaults(monkeypatch) -> None:
+    user = UserAccount(id=uuid4(), username="admin", is_active=True, is_admin=True)
+    session = ChatSession(id=uuid4(), user_id=user.id, agent_profile_id=uuid4())
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = user
+
+    @asynccontextmanager
+    async def session_factory():
+        yield db
+
+    profile_ai = AsyncMock(side_effect=RuntimeError("stop after profile lookup"))
+    monkeypatch.setattr(debug_mcp, "AsyncSessionFactory", session_factory)
+    monkeypatch.setattr(debug_mcp, "_owned_session", AsyncMock(return_value=session))
+    monkeypatch.setattr(debug_mcp, "load_agent_profile_ai", profile_ai)
+    server, mcp_app = debug_mcp.create_debug_mcp()
+    app = Starlette(routes=[Mount("/api/debug", app=mcp_app)])
+
+    async with server.session_manager.run():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="https://matoloop.test",
+            headers={"Authorization": "Bearer secret"},
+        ) as client:
+            async with streamable_http_client(
+                "https://matoloop.test/api/debug/mcp", http_client=client
+            ) as (read, write, _session_id):
+                async with ClientSession(read, write) as mcp_session:
+                    await mcp_session.initialize()
+                    await mcp_session.call_tool("inspect_session", {"session_id": str(session.id)})
+                    await mcp_session.call_tool(
+                        "inspect_tool_access", {"session_id": str(session.id)}
+                    )
+
+    assert profile_ai.await_args_list[0].args[1:] == (user.id, session.agent_profile_id)
+    assert profile_ai.await_args_list[1].args[1:] == (user.id, session.agent_profile_id)
+
+
 async def test_debug_mcp_postgres_isolates_two_admins(request) -> None:
     if not request.config.getoption("--debug-db"):
         pytest.skip("requires --debug-db")

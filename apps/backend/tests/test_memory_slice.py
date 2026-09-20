@@ -1034,14 +1034,14 @@ async def test_mark_seen_updates_only_unseen_memories_without_touching_updated_a
 
 async def test_memory_settings_update_locks_saves_and_commits(monkeypatch) -> None:
     settings = MemorySettings()
-    load = AsyncMock(
-        side_effect=lambda _db, settings_type, **_kwargs: (
-            settings if settings_type is MemorySettings else AiSettings()
-        )
-    )
+    load = AsyncMock(return_value=settings)
+    load_ai = AsyncMock(return_value=(AiSettings(), Mock()))
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "load", load)
     monkeypatch.setattr(SettingsStore, "save", save)
+    monkeypatch.setattr(
+        "mato_loop_backend.api.routes.memories.load_agent_profile_ai", load_ai
+    )
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = 4
     payload = MemorySettingsRequest(
@@ -1067,6 +1067,7 @@ async def test_memory_settings_update_locks_saves_and_commits(monkeypatch) -> No
         "user_id": user.id,
         "for_update": True,
     }
+    load_ai.assert_awaited_once_with(db, user.id, None)
     assert settings.dreaming_interval_minutes == 30
     assert settings.dreaming_update_policy == ToolExecutionPolicy.ASK
     save.assert_awaited_once_with(db, settings, user_id=user.id)
@@ -1168,8 +1169,11 @@ async def test_dreaming_queue_fits_sources_using_loaded_runtime_safety(monkeypat
     db.scalars.return_value = Mock(all=Mock(return_value=[session]))
     db.scalar.side_effect = [None, None, MemoryDreamState(session_id=session.id), None]
     monkeypatch.setattr(DreamingService, "_next_messages", AsyncMock(return_value=messages))
+    monkeypatch.setattr(
+        "mato_loop_backend.memory.dreaming.load_agent_profile_ai",
+        AsyncMock(return_value=(ai, Mock())),
+    )
     load = AsyncMock(side_effect=lambda _db, kind, **_kwargs: {
-        AiSettings: ai,
         MemorySettings: MemorySettings(),
         AgentRuntimeSettings: AgentRuntimeSettings(safety_reserve_tokens=safety),
     }[kind])
@@ -1204,7 +1208,7 @@ async def test_stale_automation_dreaming_run_is_cancelled_before_model_work(
     monkeypatch.setattr(SettingsStore, "load", load)
     provider = AsyncMock()
     monkeypatch.setattr(
-        "mato_loop_backend.memory.dreaming.load_effective_ai", provider
+        "mato_loop_backend.memory.dreaming.load_agent_profile_ai", provider
     )
     db = AsyncMock(spec=AsyncSession)
 
@@ -1229,8 +1233,8 @@ async def test_manual_dreaming_api_rejects_automation_source(monkeypatch) -> Non
     ai = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=MemorySettings()))
     monkeypatch.setattr(
-        "mato_loop_backend.api.routes.memories.load_effective_ai",
-        AsyncMock(return_value=ai),
+        "mato_loop_backend.api.routes.memories.load_agent_profile_ai",
+        AsyncMock(return_value=(ai, Mock())),
     )
     enqueue = AsyncMock()
     monkeypatch.setattr(DreamingService, "enqueue", enqueue)
@@ -2292,6 +2296,10 @@ async def test_host_matching_routes_profile_and_remove_candidates(
         )
     )
     monkeypatch.setattr(ProviderService, "complete", complete)
+    monkeypatch.setattr(
+        "mato_loop_backend.memory.dreaming.load_agent_profile_ai",
+        AsyncMock(return_value=(ai, Mock())),
+    )
     load_settings = AsyncMock(
         side_effect=lambda _db, kind, **kwargs: (
             MemorySettings(
@@ -2495,6 +2503,10 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
     provider = LlmProviderConfig(name="Lokal", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="model")
     ai = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
+    monkeypatch.setattr(
+        "mato_loop_backend.memory.dreaming.load_agent_profile_ai",
+        AsyncMock(return_value=(ai, Mock())),
+    )
     initial_settings = MemorySettings(dreaming_update_policy="auto")
     settings = MemorySettings(dreaming_update_policy=policy)
     load_settings = AsyncMock(

@@ -62,6 +62,7 @@ from mato_loop_backend.settings import (
     UserProfileSettings,
 )
 from mato_loop_backend.settings.models import (
+    AgentProfileAccessOverrides,
     LlmProviderConfig,
     ModelConfig,
     ModelInputModality,
@@ -149,9 +150,17 @@ async def _runtime_setup(
     ai_settings = AiSettings(
         providers=[provider],
         models=[item for item in (model, vision_model, builder_model) if item is not None],
-        default_model_id=model.id,
-        vision_model_id=vision_model.id if vision_model is not None else None,
-        skill_creation_model_id=builder_model.id if builder_model is not None else None,
+    )
+    profile_settings = AgentProfilesSettings(
+        builtin_access_overrides={
+            GENERAL_PROFILE_ID: AgentProfileAccessOverrides(
+                default_model_id=model.id,
+                vision_model_id=vision_model.id if vision_model is not None else None,
+                skill_creation_model_id=(
+                    builder_model.id if builder_model is not None else None
+                ),
+            )
+        }
     )
     runtime_settings = AgentRuntimeSettings(safety_reserve_tokens=safety_reserve_tokens)
     session = ChatSession(
@@ -235,7 +244,6 @@ async def _runtime_setup(
         return {
             AiSettings: ai_settings,
             AgentIdentitySettings: AgentIdentitySettings(),
-            AgentProfilesSettings: AgentProfilesSettings(),
             AgentRuntimeSettings: runtime_settings,
             InstanceLimits: InstanceLimits(),
             MemorySettings: MemorySettings(enabled=False),
@@ -246,6 +254,9 @@ async def _runtime_setup(
             ),
             UserProfileSettings: UserProfileSettings(),
         }[settings_type]
+
+    async def load_optional(_db, settings_type, **_kwargs):
+        return profile_settings if settings_type is AgentProfilesSettings else None
 
     projections = []
 
@@ -284,6 +295,7 @@ async def _runtime_setup(
         events.append(event)
 
     monkeypatch.setattr(SettingsStore, "load", load_settings)
+    monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
     monkeypatch.setattr(AgentRuntime, "_records", AsyncMock(return_value=records))
     monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     monkeypatch.setattr(ContextManager, "build", build_context)

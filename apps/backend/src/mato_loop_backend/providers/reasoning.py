@@ -36,6 +36,15 @@ _QWEN_3_8_27B = ReasoningProfile(
     supports_disable=True,
 )
 
+_HALOGEN_FLASH_NEXT = ReasoningProfile(
+    efforts=(
+        ReasoningEffort.MINIMAL, ReasoningEffort.LOW, ReasoningEffort.MEDIUM,
+        ReasoningEffort.HIGH, ReasoningEffort.XHIGH,
+    ),
+    default_effort=ReasoningEffort.XHIGH,
+    supports_disable=True,
+)
+
 
 def reasoning_profile(
     model_id: str, metadata: dict[str, object] | None = None
@@ -60,6 +69,8 @@ def reasoning_profile(
             return ReasoningProfile(tuple(efforts), default)
 
     name = model_id.rsplit("/", 1)[-1].casefold().replace("_", "-")
+    if name == "halogen-qwen3.8-flash-next":
+        return _HALOGEN_FLASH_NEXT
     if name == "qwen3.8-27b" or name.startswith(("qwen3.8-27b-", "qwen3.8-27b:")):
         return _QWEN_3_8_27B
     return None

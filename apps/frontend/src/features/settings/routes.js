@@ -6,12 +6,6 @@ export const settingsRoutes = [
     meta: { settingsLabel: 'Provider', settingsIcon: 'dns' }
   },
   {
-    path: 'default-models',
-    name: 'settings-default-models',
-    component: () => import('pages/settings/DefaultModelSettingsPage.vue'),
-    meta: { settingsLabel: 'Standardmodelle', settingsIcon: 'stars' }
-  },
-  {
     path: 'agents',
     name: 'settings-agents',
     component: () => import('pages/settings/AgentProfileSettingsPage.vue'),
@@ -36,8 +30,8 @@ export const settingsRoutes = [
     meta: { settingsLabel: 'Integrationen', settingsIcon: 'extension' },
     children: [
       {
-        path: ':integrationId/access',
-        name: 'settings-integration-access',
+        path: ':integrationId/resources',
+        name: 'settings-integration-resources',
         component: () => import('pages/settings/IntegrationAccessPage.vue')
       }
     ]
@@ -49,8 +43,8 @@ export const settingsRoutes = [
     meta: { settingsLabel: 'MCP-Server', settingsIcon: 'hub' },
     children: [
       {
-        path: ':serverId/access',
-        name: 'settings-mcp-access',
+        path: ':serverId/tools',
+        name: 'settings-mcp-tools',
         component: () => import('pages/settings/McpAccessPage.vue')
       }
     ]
@@ -65,7 +59,7 @@ export const settingsRoutes = [
     path: 'tools',
     name: 'settings-tools',
     component: () => import('pages/settings/ToolSettingsPage.vue'),
-    meta: { settingsLabel: 'Tools', settingsIcon: 'build' }
+    meta: { settingsLabel: 'Tools', settingsIcon: 'build', requiresAdmin: true }
   },
   {
     path: 'personal-variables',

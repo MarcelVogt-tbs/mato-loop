@@ -6,7 +6,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import select, text
+from sqlalchemy import MetaData, insert, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -18,7 +18,6 @@ from mato_loop_backend.models import (
     ChatSession,
     PermissionGrant,
     SettingRecord,
-    UserAccount,
 )
 from mato_loop_backend.settings import GENERAL_PROFILE_ID
 
@@ -54,85 +53,148 @@ async def _seed_database(url: str):
     queued_run_id = uuid4()
     completed_run_id = uuid4()
     engine = create_async_engine(url, poolclass=NullPool)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory.begin() as db:
-        db.add(UserAccount(id=user_id, username="migration-test"))
-        await db.flush()
-        global_settings = await db.scalar(
-            select(SettingRecord).where(
-                SettingRecord.key == "agent-profiles",
-                SettingRecord.user_id.is_(None),
+    metadata = MetaData()
+    async with engine.begin() as connection:
+        await connection.run_sync(
+            lambda sync_connection: metadata.reflect(
+                sync_connection,
+                only=(
+                    "user_accounts",
+                    "settings",
+                    "chat_sessions",
+                    "agent_runs",
+                    "permission_grants",
+                ),
             )
         )
-        assert global_settings is not None
-        global_settings.data = {
-            "profiles": [{"id": str(custom_profile_id), "name": "Global"}]
-        }
-        db.add_all(
+        users = metadata.tables["user_accounts"]
+        settings = metadata.tables["settings"]
+        sessions = metadata.tables["chat_sessions"]
+        runs = metadata.tables["agent_runs"]
+        grants = metadata.tables["permission_grants"]
+
+        await connection.execute(
+            insert(users).values(id=user_id, username="migration-test")
+        )
+        global_settings_id = await connection.scalar(
+            select(settings.c.id).where(
+                settings.c.key == "agent-profiles",
+                settings.c.user_id.is_(None),
+            )
+        )
+        assert global_settings_id is not None
+        await connection.execute(
+            update(settings)
+            .where(settings.c.id == global_settings_id)
+            .values(
+                data={
+                    "profiles": [{"id": str(custom_profile_id), "name": "Global"}]
+                }
+            )
+        )
+        await connection.execute(
+            insert(settings),
             [
-                SettingRecord(
-                    key="agent-profiles",
-                    user_id=user_id,
-                    data={"profiles": [{"id": str(custom_profile_id), "name": "Personal"}]},
-                ),
-                SettingRecord(
-                    key="integrations",
-                    user_id=user_id,
-                    data={
+                {
+                    "id": uuid4(),
+                    "key": "agent-profiles",
+                    "user_id": user_id,
+                    "data": {
+                        "profiles": [
+                            {"id": str(custom_profile_id), "name": "Personal"}
+                        ]
+                    },
+                },
+                {
+                    "id": uuid4(),
+                    "key": "integrations",
+                    "user_id": user_id,
+                    "data": {
                         "instances": [
                             {"id": str(integration_id), "adapter_type": "tbs-desk"}
                         ]
                     },
-                ),
-                ChatSession(
-                    id=session_id,
-                    user_id=user_id,
-                    agent_profile_id=custom_profile_id,
-                ),
-                ChatSession(
-                    id=integration_session_id,
-                    user_id=user_id,
-                    agent_profile_id=integration_profile_id,
-                ),
-            ]
+                },
+            ],
         )
-        await db.flush()
-        db.add_all(
+        session_defaults = {
+            "title": "Test",
+            "session_type": "chat",
+            "title_generation_status": "pending",
+            "is_pinned": False,
+            "memory_mode": "full",
+            "web_search_policy": "available",
+            "private_integration_data_used": False,
+        }
+        await connection.execute(
+            insert(sessions),
             [
-                AgentRun(
-                    id=queued_run_id,
-                    session_id=session_id,
-                    agent_profile_id=custom_profile_id,
-                    status="queued",
-                ),
-                AgentRun(
-                    id=completed_run_id,
-                    session_id=session_id,
-                    agent_profile_id=custom_profile_id,
-                    status="completed",
-                ),
-                PermissionGrant(
-                    session_id=session_id,
-                    capability="filesystem.read",
-                    resource_type="path",
-                    resource_scope="/tmp",
-                    agent_profile_id=custom_profile_id,
-                ),
-                PermissionGrant(
-                    session_id=session_id,
-                    capability="filesystem.read",
-                    resource_type="path",
-                    resource_scope="/data",
-                    agent_profile_id=GENERAL_PROFILE_ID,
-                ),
-                PermissionGrant(
-                    session_id=integration_session_id,
-                    capability="support.read",
-                    resource_type="network_service",
-                    resource_scope=str(integration_id),
-                    agent_profile_id=integration_profile_id,
-                ),
-            ]
+                {
+                    **session_defaults,
+                    "id": session_id,
+                    "user_id": user_id,
+                    "agent_profile_id": custom_profile_id,
+                },
+                {
+                    **session_defaults,
+                    "id": integration_session_id,
+                    "user_id": user_id,
+                    "agent_profile_id": integration_profile_id,
+                },
+            ],
+        )
+        run_defaults = {
+            "trust_level": "public",
+            "pseudonymization_enabled": False,
+            "execution_operations": [],
+        }
+        await connection.execute(
+            insert(runs),
+            [
+                {
+                    **run_defaults,
+                    "id": queued_run_id,
+                    "session_id": session_id,
+                    "agent_profile_id": custom_profile_id,
+                    "status": "queued",
+                },
+                {
+                    **run_defaults,
+                    "id": completed_run_id,
+                    "session_id": session_id,
+                    "agent_profile_id": custom_profile_id,
+                    "status": "completed",
+                },
+            ],
+        )
+        await connection.execute(
+            insert(grants),
+            [
+                {
+                    "id": uuid4(),
+                    "session_id": session_id,
+                    "capability": "filesystem.read",
+                    "resource_type": "path",
+                    "resource_scope": "/tmp",
+                    "agent_profile_id": custom_profile_id,
+                },
+                {
+                    "id": uuid4(),
+                    "session_id": session_id,
+                    "capability": "filesystem.read",
+                    "resource_type": "path",
+                    "resource_scope": "/data",
+                    "agent_profile_id": GENERAL_PROFILE_ID,
+                },
+                {
+                    "id": uuid4(),
+                    "session_id": integration_session_id,
+                    "capability": "support.read",
+                    "resource_type": "network_service",
+                    "resource_scope": str(integration_id),
+                    "agent_profile_id": integration_profile_id,
+                },
+            ],
         )
     await engine.dispose()
     return (

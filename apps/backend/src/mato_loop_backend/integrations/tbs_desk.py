@@ -533,10 +533,12 @@ class TbsDeskIntegrationService:
         instance = cls.find(settings, integration_id)
         if instance is None:
             raise TbsDeskError("integration.notFound")
+        config = {"base_url": base_url.rstrip("/"), "username": username}
+        connection_changed = instance.config != config
         old_credential_id = instance.credential_id
         instance.name = name
         instance.enabled = enabled
-        instance.config = {"base_url": base_url.rstrip("/"), "username": username}
+        instance.config = config
         instance.owner_id = owner_id
         TbsDeskConfig.model_validate(instance.config)
         if password is not None:
@@ -547,6 +549,21 @@ class TbsDeskIntegrationService:
             instance.credential_id = credential.id
             if old_credential_id is not None:
                 await delete_credential(db, old_credential_id, owner_id=owner_id)
+        if connection_changed:
+            from mato_loop_backend.integrations.service import (
+                _clear_integration_policies,
+                _load_tools,
+                clear_profile_integration_policies,
+            )
+
+            tools = await _load_tools(db, owner_id, for_update=True)
+            changed = _clear_integration_policies(tools, integration_id)
+            changed = tools.resource_labels.pop(str(integration_id), None) is not None or changed
+            if changed:
+                await SettingsStore.save(db, tools, user_id=owner_id)
+            await clear_profile_integration_policies(
+                db, integration_id, owner_id=owner_id
+            )
         await SettingsStore.save(db, settings, user_id=owner_id)
         await db.commit()
         return settings
@@ -562,6 +579,18 @@ class TbsDeskIntegrationService:
         settings.instances.remove(instance)
         if instance.credential_id is not None:
             await delete_credential(db, instance.credential_id, owner_id=owner_id)
+        from mato_loop_backend.integrations.service import (
+            _clear_integration_policies,
+            _load_tools,
+            clear_profile_integration_policies,
+        )
+
+        tools = await _load_tools(db, owner_id, for_update=True)
+        changed = _clear_integration_policies(tools, integration_id)
+        changed = tools.resource_labels.pop(str(integration_id), None) is not None or changed
+        if changed:
+            await SettingsStore.save(db, tools, user_id=owner_id)
+        await clear_profile_integration_policies(db, integration_id, owner_id=owner_id)
         await SettingsStore.save(db, settings, user_id=owner_id)
         await db.commit()
         return settings

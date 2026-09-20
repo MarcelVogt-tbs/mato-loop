@@ -110,7 +110,7 @@
             Azure Speech Fast Transcription transkribiert abgeschlossene Sprachnachrichten und Audiodateien.
             Keine Live-Transkription, kein Chat und keine Tool-Aufrufe.
             Das Originalaudio wird ohne Pseudonymisierung an Azure gesendet – auch wenn der Schutz für Kennungen und Secrets aktiviert ist.
-            Nach der Modellerkennung kannst du das Modell unter Standardmodelle für die Transkription auswählen.
+            Nach der Modellerkennung kannst du das Modell im Agentenprofil für die Transkription auswählen.
           </q-banner>
         </q-form>
 

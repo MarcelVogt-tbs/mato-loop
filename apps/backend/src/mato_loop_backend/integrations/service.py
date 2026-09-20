@@ -14,10 +14,12 @@ from mato_loop_backend.integrations.search import normalize_search_tool_settings
 from mato_loop_backend.models import ExecutionAgent
 from mato_loop_backend.security import delete_credential, store_credential
 from mato_loop_backend.settings import (
+    AgentProfilesSettings,
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
     ToolSettings,
+    UserAgentProfilesSettings,
     UserIntegrationSettings,
     UserToolSettings,
 )
@@ -44,6 +46,70 @@ def _clear_integration_policies(
         if resources:
             changed = permissions.resource_policies.pop(key, None) is not None or changed
     return changed
+
+
+async def clear_profile_integration_policies(
+    db: AsyncSession, integration_id: UUID | str, *, owner_id: UUID | None
+) -> None:
+    key = str(integration_id)
+    documents: list[
+        tuple[AgentProfilesSettings | UserAgentProfilesSettings | None, UUID | None]
+    ]
+    if owner_id is None:
+        instance = await SettingsStore.load_optional(
+            db, AgentProfilesSettings, for_update=True
+        )
+        user_ids = await SettingsStore.list_user_scopes(db, UserAgentProfilesSettings)
+        documents = [(instance, None)]
+        for user_id in user_ids:
+            documents.append(
+                (
+                    await SettingsStore.load_optional(
+                        db,
+                        UserAgentProfilesSettings,
+                        user_id=user_id,
+                        for_update=True,
+                    ),
+                    user_id,
+                )
+            )
+    else:
+        documents = [
+            (
+                await SettingsStore.load_optional(
+                    db,
+                    UserAgentProfilesSettings,
+                    user_id=owner_id,
+                    for_update=True,
+                ),
+                owner_id,
+            )
+        ]
+
+    for settings, user_id in documents:
+        if settings is None:
+            continue
+        overrides = [profile.overrides for profile in settings.profiles]
+        if isinstance(settings, AgentProfilesSettings):
+            overrides.extend(settings.builtin_access_overrides.values())
+        changed = False
+        for override in overrides:
+            for permissions in (
+                override.private_permissions,
+                override.public_permissions,
+            ):
+                if permissions is None:
+                    continue
+                changed = (
+                    permissions.integration_policies.pop(key, None) is not None
+                    or changed
+                )
+                changed = (
+                    permissions.resource_policies.pop(key, None) is not None
+                    or changed
+                )
+        if changed:
+            await SettingsStore.save(db, settings, user_id=user_id)
 
 
 async def _load_integrations(
@@ -188,11 +254,22 @@ class OpenScadIntegrationService:
         if instance.execution_agent_id != current.execution_agent_id:
             raise IntegrationSettingsError("integration.changed")
         cls._ensure_unique(settings, execution_agent_id, excluding=integration_id)
+        binding_changed = (
+            instance.execution_agent_id != execution_agent_id
+            or instance.config != {"binary_path": binary_path}
+        )
         instance.name = name
         instance.enabled = enabled
         instance.execution_agent_id = execution_agent_id
         instance.config = {"binary_path": binary_path}
         validate_integration(instance)
+        if binding_changed:
+            tools = await _load_tools(db, settings_owner_id, for_update=True)
+            if _clear_integration_policies(tools, integration_id):
+                await _save_settings(db, tools, settings_owner_id)
+            await clear_profile_integration_policies(
+                db, integration_id, owner_id=settings_owner_id
+            )
         await _save_settings(db, settings, settings_owner_id)
         await db.commit()
         return settings
@@ -223,6 +300,9 @@ class OpenScadIntegrationService:
         tools = await _load_tools(db, settings_owner_id, for_update=True)
         _clear_integration_policies(tools, integration_id)
         await _save_settings(db, tools, settings_owner_id)
+        await clear_profile_integration_policies(
+            db, integration_id, owner_id=settings_owner_id
+        )
         await _save_settings(db, settings, settings_owner_id)
         await db.commit()
         return settings
@@ -383,6 +463,9 @@ class CalDavIntegrationService:
                 changed = True
             if changed:
                 await _save_settings(db, tools, owner_id)
+            await clear_profile_integration_policies(
+                db, clear_policies, owner_id=owner_id
+            )
         await _save_settings(db, settings, owner_id)
         await db.commit()
         return settings
@@ -560,6 +643,9 @@ class MailIntegrationService:
             key = str(clear_policies)
             if _clear_integration_policies(tools, key, resources=False):
                 await _save_settings(db, tools, owner_id)
+            await clear_profile_integration_policies(
+                db, clear_policies, owner_id=owner_id
+            )
         await _save_settings(db, settings, owner_id)
         await db.commit()
         return settings
@@ -674,6 +760,9 @@ class BookStackIntegrationService:
             changed = tools.resource_labels.pop(integration_id, None) is not None or changed
             if changed:
                 await _save_settings(db, tools, owner_id)
+            await clear_profile_integration_policies(
+                db, clear_policies, owner_id=owner_id
+            )
         await _save_settings(db, settings, owner_id)
         await db.commit()
         return settings
@@ -811,6 +900,9 @@ class MealieIntegrationService:
             changed = tools.resource_labels.pop(integration_id, None) is not None or changed
             if changed:
                 await _save_settings(db, tools, owner_id)
+            await clear_profile_integration_policies(
+                db, clear_policies, owner_id=owner_id
+            )
         await _save_settings(db, settings, owner_id)
         await db.commit()
         return settings

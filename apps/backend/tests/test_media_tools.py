@@ -32,6 +32,8 @@ from mato_loop_backend.providers.media import (
 )
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
+    GENERAL_PROFILE_ID,
+    AgentProfilesSettings,
     AiSettings,
     IntegrationSettings,
     SettingsStore,
@@ -39,6 +41,7 @@ from mato_loop_backend.settings import (
     ToolSettings,
 )
 from mato_loop_backend.settings.models import (
+    AgentProfileAccessOverrides,
     LlmProviderConfig,
     ModelCapability,
     ModelConfig,
@@ -125,7 +128,30 @@ def mock_settings_load(monkeypatch, tools: ToolSettings, ai: AiSettings) -> Asyn
 
     mocked = AsyncMock(side_effect=load)
     monkeypatch.setattr(SettingsStore, "load", mocked)
+    async def load_optional(_db, settings_type, **_kwargs):
+        return (
+            _profile_settings(tools, ai)
+            if settings_type is AgentProfilesSettings
+            else None
+        )
+
+    monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
     return mocked
+
+
+def _profile_settings(tools: ToolSettings, ai: AiSettings) -> AgentProfilesSettings:
+    return AgentProfilesSettings(
+        builtin_access_overrides={
+            GENERAL_PROFILE_ID: AgentProfileAccessOverrides(
+                private_permissions=tools.private_permissions,
+                public_permissions=tools.public_permissions,
+                image_generation_model_id=ai.image_generation_model_id,
+                speech_generation_model_id=ai.speech_generation_model_id,
+                audio_generation_model_id=ai.audio_generation_model_id,
+                audio_transcription_model_id=ai.audio_transcription_model_id,
+            )
+        }
+    )
 
 
 def test_media_schemas_follow_effective_capabilities() -> None:
@@ -659,27 +685,29 @@ async def test_policy_revocation_during_approval_stops_media_service(
     call = ToolCall(id="image", name="generate_image", arguments={"prompt": "Test"})
     tool_context = context(tmp_path, call)
     ai = media_settings(ModelCapability.IMAGE_GENERATION)
-    tool_loads = 0
-
     async def load(_db, settings_type, **_kwargs):
-        nonlocal tool_loads
         if settings_type is AiSettings:
             return ai
-        tool_loads += 1
-        return (
-            ask_settings
-            if tool_loads == 1
-            else ToolSettings(
-                private_permissions={
-                    "policies": {"media.generate.image": "disabled"}
-                },
-                public_permissions={
-                    "policies": {"media.generate.image": "disabled"}
-                },
-            )
+        return ask_settings
+
+    disabled_settings = ToolSettings(
+        private_permissions={"policies": {"media.generate.image": "disabled"}},
+        public_permissions={"policies": {"media.generate.image": "disabled"}},
+    )
+    profile_loads = 0
+
+    async def load_optional(_db, settings_type, **_kwargs):
+        nonlocal profile_loads
+        if settings_type is not AgentProfilesSettings:
+            return None
+        profile_loads += 1
+        return _profile_settings(
+            ask_settings if profile_loads == 1 else disabled_settings,
+            ai,
         )
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
     generate = AsyncMock(side_effect=AssertionError("Provider must not be called"))
     monkeypatch.setattr(MediaService, "generate_image", generate)
 

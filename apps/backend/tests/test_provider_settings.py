@@ -11,8 +11,6 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import providers as provider_routes
 from mato_loop_backend.api.routes.providers import (
     AzureSpeechProviderRequest,
-    DefaultModelRequest,
-    DefaultModelsRequest,
     EnabledRequest,
     MemoryPolicyRequest,
     ModelRequest,
@@ -27,8 +25,6 @@ from mato_loop_backend.api.routes.providers import (
     list_providers,
     save_azure_speech_provider,
     save_openai_provider,
-    set_default_model,
-    set_default_models,
     set_model_enabled,
     set_provider_enabled,
     set_provider_memory_policy,
@@ -44,12 +40,18 @@ from mato_loop_backend.providers.openai_compatible import DiscoveredModel
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.providers.settings_service import ProviderSettingsService
 from mato_loop_backend.settings import (
+    GENERAL_PROFILE_ID,
+    PLAN_PROFILE_ID,
+    AgentProfilesSettings,
     AiSettings,
+    CustomAgentProfile,
     SettingsStore,
     ToolSettings,
+    UserAgentProfilesSettings,
     UserAiSettings,
 )
 from mato_loop_backend.settings.models import (
+    AgentProfileAccessOverrides,
     LlmProviderConfig,
     MemoryPolicy,
     ModelAvailability,
@@ -69,9 +71,15 @@ def _db() -> AsyncMock:
 
 def _mock_settings(monkeypatch, settings: AiSettings) -> None:
     async def load(_db, settings_type, **_kwargs):
-        return settings if settings_type is AiSettings else ToolSettings()
+        if settings_type is AiSettings:
+            return settings
+        if settings_type is AgentProfilesSettings:
+            return AgentProfilesSettings()
+        return ToolSettings()
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=None))
+    monkeypatch.setattr(SettingsStore, "list_user_scopes", AsyncMock(return_value=[]))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
 
 
@@ -678,7 +686,7 @@ async def test_codex_login_creates_provider_without_static_model(monkeypatch) ->
     assert settings.models == []
 
 
-async def test_manual_model_crud_toggles_and_default(monkeypatch) -> None:
+async def test_manual_model_crud_and_toggles(monkeypatch) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     settings = AiSettings(providers=[provider])
     db = _db()
@@ -704,8 +712,7 @@ async def test_manual_model_crud_toggles_and_default(monkeypatch) -> None:
     assert model.reasoning_effort == "low"
     assert settings.default_model_id is None
 
-    await set_default_model(DefaultModelRequest.model_validate(str(model.id)), db)
-    assert settings.default_model_id == model.id
+    settings.default_model_id = model.id
     settings.compaction_model_id = model.id
     settings.title_generation_model_id = model.id
 
@@ -733,9 +740,6 @@ async def test_manual_model_crud_toggles_and_default(monkeypatch) -> None:
     assert updated.context_window_tokens == 64_000
     assert updated.supports_parallel_tool_calls is False
 
-    with pytest.raises(ApiError) as exc_info:
-        await set_default_model(DefaultModelRequest(model_id=updated.id), db)
-    assert exc_info.value.code == "session.modelToolsUnavailable"
     await set_provider_enabled(provider.id, EnabledRequest(enabled=False), db)
     assert settings.default_model_id is None
 
@@ -744,242 +748,172 @@ async def test_manual_model_crud_toggles_and_default(monkeypatch) -> None:
     assert settings.models == []
 
 
-async def test_default_models_are_saved_atomically(monkeypatch) -> None:
+async def test_instance_model_disable_removes_sparse_profile_references_for_all_users(
+    monkeypatch,
+) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
-    agent = ModelConfig(provider_id=provider.id, model_id="agent")
-    compaction = ModelConfig(provider_id=provider.id, model_id="compaction")
-    title = ModelConfig(provider_id=provider.id, model_id="title")
-    skill_builder = ModelConfig(provider_id=provider.id, model_id="skill-builder")
-    settings = AiSettings(
-        providers=[provider], models=[agent, compaction, title, skill_builder]
+    model = ModelConfig(provider_id=provider.id, model_id="agent")
+    ai = AiSettings(providers=[provider], models=[model])
+    instance = AgentProfilesSettings(
+        builtin_access_overrides={
+            GENERAL_PROFILE_ID: AgentProfileAccessOverrides(
+                defaultModelId=model.id,
+                compactionModelId=model.id,
+            )
+        },
+        profiles=[
+            CustomAgentProfile(
+                name="Instance",
+                description="",
+                baseProfileId=GENERAL_PROFILE_ID,
+                overrides={"skillCreationModelId": model.id},
+            )
+        ],
     )
-    _mock_settings(monkeypatch, settings)
-
-    result = await set_default_models(
-        DefaultModelsRequest(
-            default_model_id=agent.id,
-            compaction_model_id=compaction.id,
-            title_generation_model_id=title.id,
-            title_vision_fallback_enabled=False,
-            skill_creation_model_id=skill_builder.id,
-        ),
-        _db(),
-    )
-
-    assert settings.default_model_id == agent.id
-    assert settings.compaction_model_id == compaction.id
-    assert settings.title_generation_model_id == title.id
-    assert settings.title_vision_fallback_enabled is False
-    assert settings.skill_creation_model_id == skill_builder.id
-    assert result["defaultModelId"] == str(agent.id)
-    assert result["compactionModelId"] == str(compaction.id)
-    assert result["titleGenerationModelId"] == str(title.id)
-    assert result["titleVisionFallbackEnabled"] is False
-    assert result["skillCreationModelId"] == str(skill_builder.id)
-
-    skill_builder.supports_tools = False
-    with pytest.raises(ApiError) as exc_info:
-        await set_default_models(
-            DefaultModelsRequest(
-                default_model_id=agent.id,
-                compaction_model_id=compaction.id,
-                title_generation_model_id=title.id,
-                skill_creation_model_id=skill_builder.id,
+    user_documents = [
+        (
+            uuid4(),
+            UserAgentProfilesSettings(
+                profiles=[
+                    CustomAgentProfile(
+                        name=name,
+                        description="",
+                        baseProfileId=PLAN_PROFILE_ID,
+                        overrides={"titleGenerationModelId": model.id},
+                    )
+                ]
             ),
-            _db(),
         )
-    assert exc_info.value.code == "session.modelToolsUnavailable"
-    assert exc_info.value.field == "skillCreationModelId"
+        for name in ("First", "Second")
+    ]
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
+    monkeypatch.setattr(
+        SettingsStore,
+        "list_user_scopes",
+        AsyncMock(return_value=[user_id for user_id, _ in user_documents]),
+    )
+    monkeypatch.setattr(
+        SettingsStore,
+        "load_optional",
+        AsyncMock(
+            side_effect=lambda _db, _kind, *, user_id, **_kwargs: dict(
+                user_documents
+            )[user_id]
+        ),
+    )
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+    db = _db()
+
+    await ProviderSettingsService.set_model_enabled(
+        db, ai, None, model.id, False
+    )
+
+    overrides = [
+        instance.builtin_access_overrides[GENERAL_PROFILE_ID],
+        instance.profiles[0].overrides,
+        *(document.profiles[0].overrides for _, document in user_documents),
+    ]
+    assert all(
+        not set(override.model_dump(exclude_unset=True)) & {
+            "default_model_id",
+            "compaction_model_id",
+            "skill_creation_model_id",
+            "title_generation_model_id",
+        }
+        for override in overrides
+    )
+    assert save.await_count == 4
+    db.commit.assert_awaited_once()
 
 
-async def test_capability_defaults_require_matching_models(monkeypatch) -> None:
-    provider = LlmProviderConfig(name="Lemonade", adapter_type="lemonade")
-    chat = ModelConfig(provider_id=provider.id, model_id="chat")
-    image = ModelConfig(
+async def test_personal_model_delete_cleans_only_owner_profile(
+    monkeypatch,
+) -> None:
+    owner_id = uuid4()
+    provider = LlmProviderConfig(name="Personal", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="personal")
+    ai = UserAiSettings(providers=[provider], models=[model])
+    instance = AgentProfilesSettings(
+        profiles=[
+            CustomAgentProfile(
+                name="Instance",
+                description="",
+                baseProfileId=GENERAL_PROFILE_ID,
+                overrides={"defaultModelId": model.id},
+            )
+        ]
+    )
+    personal = UserAgentProfilesSettings(
+        profiles=[
+            CustomAgentProfile(
+                name="Personal",
+                description="",
+                baseProfileId=GENERAL_PROFILE_ID,
+                overrides={"defaultModelId": model.id},
+            )
+        ]
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
+    load_optional = AsyncMock(return_value=personal)
+    monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
+    list_scopes = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "list_user_scopes", list_scopes)
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    db = _db()
+
+    await ProviderSettingsService.delete_model(db, ai, owner_id, model.id)
+
+    assert "default_model_id" in instance.profiles[0].overrides.model_fields_set
+    assert "default_model_id" not in personal.profiles[0].overrides.model_fields_set
+    assert "default_model_id" not in personal.model_dump(mode="json")["profiles"][0]["overrides"]
+    load_optional.assert_awaited_once_with(
+        db, UserAgentProfilesSettings, user_id=owner_id, for_update=True
+    )
+    list_scopes.assert_not_awaited()
+    db.commit.assert_awaited_once()
+
+
+async def test_model_capability_change_removes_incompatible_profile_reference(
+    monkeypatch,
+) -> None:
+    provider = LlmProviderConfig(name="Media", adapter_type="lemonade")
+    model = ModelConfig(
         provider_id=provider.id,
-        model_id="image",
+        model_id="media",
         capabilities={ModelCapability.IMAGE_GENERATION},
     )
-    settings = AiSettings(providers=[provider], models=[chat, image])
-    _mock_settings(monkeypatch, settings)
+    ai = AiSettings(providers=[provider], models=[model])
+    instance = AgentProfilesSettings(
+        profiles=[
+            CustomAgentProfile(
+                name="Media",
+                description="",
+                baseProfileId=GENERAL_PROFILE_ID,
+                overrides={"imageGenerationModelId": model.id},
+            )
+        ]
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
+    monkeypatch.setattr(SettingsStore, "list_user_scopes", AsyncMock(return_value=[]))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
 
-    result = await set_default_models(
-        DefaultModelsRequest(
-            default_model_id=chat.id,
-            compaction_model_id=None,
-            title_generation_model_id=None,
-            image_generation_model_id=image.id,
-        ),
+    await ProviderSettingsService.update_model(
         _db(),
+        ai,
+        None,
+        model.id,
+        {
+            "model_id": model.model_id,
+            "capabilities": {ModelCapability.AUDIO_GENERATION},
+        },
+        None,
     )
 
-    assert settings.image_generation_model_id == image.id
-    assert result["imageGenerationModelId"] == str(image.id)
-
-    with pytest.raises(ApiError) as exc_info:
-        await set_default_models(
-            DefaultModelsRequest(
-                default_model_id=image.id,
-                compaction_model_id=None,
-                title_generation_model_id=None,
-            ),
-            _db(),
-        )
-    assert exc_info.value.code == "provider.modelCapabilityUnavailable"
-    assert exc_info.value.field == "defaultModelId"
-
-
-async def test_vision_default_requires_image_input(monkeypatch) -> None:
-    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
-    text = ModelConfig(provider_id=provider.id, model_id="text")
-    vision = ModelConfig(
-        provider_id=provider.id,
-        model_id="vision",
-        supports_image_input=True,
-        supports_tools=False,
+    assert (
+        "image_generation_model_id"
+        not in instance.profiles[0].overrides.model_fields_set
     )
-    settings = AiSettings(providers=[provider], models=[text, vision])
-    _mock_settings(monkeypatch, settings)
-
-    result = await set_default_models(
-        DefaultModelsRequest(
-            default_model_id=None,
-            compaction_model_id=None,
-            title_generation_model_id=None,
-            vision_model_id=vision.id,
-        ),
-        _db(),
-    )
-
-    assert settings.vision_model_id == vision.id
-    assert result["visionModelId"] == str(vision.id)
-
-    with pytest.raises(ApiError) as exc_info:
-        await set_default_models(
-            DefaultModelsRequest(
-                default_model_id=None,
-                compaction_model_id=None,
-                title_generation_model_id=None,
-                vision_model_id=text.id,
-            ),
-            _db(),
-        )
-    assert exc_info.value.code == "provider.modelCapabilityUnavailable"
-    assert exc_info.value.field == "visionModelId"
-
-
-async def test_video_default_supports_native_video_or_frame_analysis(monkeypatch) -> None:
-    provider = LlmProviderConfig(name="vLLM", adapter_type="openai-compatible")
-    video = ModelConfig(
-        provider_id=provider.id,
-        model_id="video",
-        input_modalities={ModelInputModality.TEXT, ModelInputModality.VIDEO},
-    )
-    settings = AiSettings(providers=[provider], models=[video])
-    _mock_settings(monkeypatch, settings)
-
-    result = await set_default_models(
-        DefaultModelsRequest(
-            default_model_id=None,
-            compaction_model_id=None,
-            title_generation_model_id=None,
-            video_model_id=video.id,
-        ),
-        _db(),
-    )
-
-    assert settings.video_model_id == video.id
-    assert result["videoModelId"] == str(video.id)
-
-    provider.config["api_type"] = "responses"
-    with pytest.raises(ApiError) as exc_info:
-        await set_default_models(
-            DefaultModelsRequest(
-                default_model_id=None,
-                compaction_model_id=None,
-                title_generation_model_id=None,
-                video_model_id=video.id,
-            ),
-            _db(),
-        )
-    assert exc_info.value.code == "provider.modelCapabilityUnavailable"
-    assert exc_info.value.field == "videoModelId"
-
-    frame_model = ModelConfig(
-        provider_id=provider.id,
-        model_id="frames",
-        supports_image_input=True,
-    )
-    settings.models.append(frame_model)
-    result = await set_default_models(
-        DefaultModelsRequest(
-            default_model_id=None,
-            compaction_model_id=None,
-            title_generation_model_id=None,
-            video_model_id=frame_model.id,
-        ),
-        _db(),
-    )
-    assert settings.video_model_id == frame_model.id
-    assert result["videoModelId"] == str(frame_model.id)
-
-
-async def test_media_default_rejects_unsupported_provider_adapter(monkeypatch) -> None:
-    provider = LlmProviderConfig(name="OpenAI", adapter_type="openai-compatible")
-    image = ModelConfig(
-        provider_id=provider.id,
-        model_id="image",
-        capabilities={ModelCapability.IMAGE_GENERATION},
-    )
-    settings = AiSettings(providers=[provider], models=[image])
-    _mock_settings(monkeypatch, settings)
-
-    with pytest.raises(ApiError) as exc_info:
-        await set_default_models(
-            DefaultModelsRequest(
-                default_model_id=None,
-                compaction_model_id=None,
-                title_generation_model_id=None,
-                image_generation_model_id=image.id,
-            ),
-            _db(),
-        )
-
-    assert exc_info.value.code == "provider.modelCapabilityUnavailable"
-    assert exc_info.value.field == "imageGenerationModelId"
-    assert settings.image_generation_model_id is None
-
-
-async def test_default_models_reject_unavailable_model_with_field(monkeypatch) -> None:
-    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
-    unavailable = ModelConfig(provider_id=provider.id, model_id="title", enabled=False)
-    settings = AiSettings(providers=[provider], models=[unavailable])
-    _mock_settings(monkeypatch, settings)
-
-    with pytest.raises(ApiError) as exc_info:
-        await set_default_models(
-            DefaultModelsRequest(
-                default_model_id=None,
-                compaction_model_id=None,
-                title_generation_model_id=unavailable.id,
-            ),
-            _db(),
-        )
-
-    assert exc_info.value.code == "provider.modelUnavailable"
-    assert exc_info.value.field == "titleGenerationModelId"
-
-
-async def test_disconnected_codex_model_cannot_be_default(monkeypatch) -> None:
-    provider = LlmProviderConfig(name="Codex", adapter_type="openai-codex")
-    model = ModelConfig(provider_id=provider.id, model_id="openai-codex/test")
-    settings = AiSettings(providers=[provider], models=[model])
-    _mock_settings(monkeypatch, settings)
-
-    with pytest.raises(ApiError) as exc_info:
-        await set_default_model(DefaultModelRequest(model_id=model.id), _db())
-
-    assert exc_info.value.code == "provider.modelUnavailable"
 
 
 async def test_duplicate_model_id_is_rejected_per_provider(monkeypatch) -> None:
@@ -1027,9 +961,13 @@ async def test_model_delete_clears_defaults_and_sessions_in_its_scope(
     instance = settings if scope == "instance" else AiSettings(personal_providers_enabled=True)
 
     async def load(_db, loaded_type, **_kwargs):
+        if loaded_type is AgentProfilesSettings:
+            return AgentProfilesSettings()
         return settings if loaded_type is settings_type else instance
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=None))
+    monkeypatch.setattr(SettingsStore, "list_user_scopes", AsyncMock(return_value=[]))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     db = _db()
 
@@ -1167,7 +1105,7 @@ async def test_normal_provider_read_is_effective_and_hides_configuration(
         "Instance",
         "Personal",
     ]
-    assert result["defaultModelId"] == str(models[1].id)
+    assert "defaultModelId" not in result
     assert all(item["config"] == {} for item in result["providers"])
 
 
@@ -1209,8 +1147,8 @@ async def test_personal_provider_read_includes_effective_selection_catalog(
 
     assert [item["name"] for item in result["providers"]] == ["Personal"]
     assert [item["modelId"] for item in result["models"]] == ["personal"]
-    assert result["defaultModelId"] == str(instance_model.id)
-    assert result["effectiveTitleGenerationModelId"] == str(instance_model.id)
+    assert "defaultModelId" not in result
+    assert "effectiveTitleGenerationModelId" not in result
     assert [item["name"] for item in result["availableProviders"]] == [
         "Instance",
         "Personal",
@@ -1258,10 +1196,14 @@ async def test_provider_deletion_clears_sessions_and_credentials_in_its_scope(
     personal = UserAiSettings(providers=[provider], models=[model])
 
     async def load(_db, settings_type, **_kwargs):
+        if settings_type is AgentProfilesSettings:
+            return AgentProfilesSettings()
         return personal if settings_type is UserAiSettings else instance
 
     delete_credential = AsyncMock(return_value=True)
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=None))
+    monkeypatch.setattr(SettingsStore, "list_user_scopes", AsyncMock(return_value=[]))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     monkeypatch.setattr(provider_routes, "delete_credential", delete_credential)
     db = _db()
@@ -1312,19 +1254,9 @@ def test_provider_payload_contains_discovery_fields_in_camel_case() -> None:
         "medium",
         "xhigh",
     ]
-    assert payload["compactionModelId"] is None
-    assert payload["titleGenerationModelId"] is None
-    assert payload["titleVisionFallbackEnabled"] is True
-
-
-def test_default_models_request_enables_title_vision_fallback_by_default() -> None:
-    request = DefaultModelsRequest(
-        default_model_id=None,
-        compaction_model_id=None,
-        title_generation_model_id=None,
-    )
-
-    assert request.title_vision_fallback_enabled is True
+    assert "compactionModelId" not in payload
+    assert "titleGenerationModelId" not in payload
+    assert "titleVisionFallbackEnabled" not in payload
 
 
 @pytest.mark.parametrize("value", [0, -1, True, 1.5, 2.0, "512"])

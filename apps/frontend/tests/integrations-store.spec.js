@@ -631,15 +631,7 @@ describe('integration store', () => {
         }
       ],
       resources: [
-        {
-          key: 'calendar:work',
-          groupKey: 'work',
-          label: 'Arbeit',
-          applicableCapabilities: ['calendar.read'],
-          policies: { 'calendar.read': 'auto' },
-          effectivePolicies: { 'calendar.read': 'auto' },
-          hardUnavailableCapabilities: []
-        }
+        { key: 'calendar:work', groupKey: 'work', label: 'Arbeit' }
       ]
     }
     api.get.mockResolvedValue({ data: access })
@@ -649,24 +641,16 @@ describe('integration store', () => {
     await store.fetchAccess('integration-id')
     await store.saveAccess(
       'integration-id',
-      {
-        policies: { 'calendar.read': 'auto' },
-        resources: { 'calendar:work': { 'calendar.read': 'auto' } },
-        defaultResourceKey: 'calendar:work',
-        defaultTaskListKey: null
-      }
+      { defaultResourceKey: 'calendar:work', defaultTaskListKey: null }
     )
 
     expect(api.get).toHaveBeenCalledWith(
-      '/integrations/integration-id/access', { params: { scope: 'instance', trust: 'private' } }
+      '/integrations/integration-id/access', { params: { scope: 'instance' } }
     )
     expect(api.put).toHaveBeenCalledWith('/integrations/integration-id/access', {
-      policies: { 'calendar.read': 'auto' },
-      resources: { 'calendar:work': { 'calendar.read': 'auto' } },
       defaultResourceKey: 'calendar:work',
       defaultTaskListKey: null
-    }, { params: { scope: 'instance', trust: 'private' } })
-    expect(store.accessByIntegration['instance:private:integration-id']).toEqual(access)
+    }, { params: { scope: 'instance' } })
   })
 
   it('keeps integration access on the selected personal scope', async () => {
@@ -676,39 +660,30 @@ describe('integration store', () => {
     store.selectScope('personal')
 
     await store.fetchAccess('personal-id')
-    await store.saveAccess('personal-id', { resources: {} })
+    await store.saveAccess('personal-id', { defaultResourceKey: null, defaultTaskListKey: null })
 
     expect(api.get).toHaveBeenCalledWith(
-      '/integrations/personal-id/access', { params: { scope: 'personal', trust: 'private' } }
+      '/integrations/personal-id/access', { params: { scope: 'personal' } }
     )
     expect(api.put).toHaveBeenCalledWith(
       '/integrations/personal-id/access',
-      { resources: {} },
-      { params: { scope: 'personal', trust: 'private' } }
+      { defaultResourceKey: null, defaultTaskListKey: null },
+      { params: { scope: 'personal' } }
     )
   })
 
-  it('isolates access responses by scope and trust and discards stale branches', async () => {
+  it('discards access responses from a stale scope', async () => {
     const requests = []
     api.get.mockImplementation((_url, config) => new Promise((resolve) => {
       requests.push({ params: config.params, resolve })
     }))
     const store = useIntegrationStore()
 
-    const privateLoad = store.fetchAccess('integration-id')
-    store.selectTrust('public')
-    const publicLoad = store.fetchAccess('integration-id')
-    requests[1].resolve({ data: { integrationId: 'integration-id', branch: 'public' } })
-    await publicLoad
-    requests[0].resolve({ data: { integrationId: 'integration-id', branch: 'private' } })
-    await privateLoad
+    const load = store.fetchAccess('integration-id')
+    store.selectScope('personal')
+    requests[0].resolve({ data: { integrationId: 'integration-id' } })
 
-    expect(requests.map((request) => request.params)).toEqual([
-      { scope: 'instance', trust: 'private' },
-      { scope: 'instance', trust: 'public' }
-    ])
-    expect(store.accessByIntegration).toEqual({
-      'instance:public:integration-id': { integrationId: 'integration-id', branch: 'public' }
-    })
+    await expect(load).resolves.toBeNull()
+    expect(requests[0].params).toEqual({ scope: 'instance' })
   })
 })

@@ -16,7 +16,7 @@ Beim Anlegen synchronisiert MatoLoop die verfügbaren Modelle. Eine erneute Sync
 
 ## 3. Modell aktivieren
 
-Öffnen Sie beim Provider das gewünschte Modell und aktivieren Sie es, falls es nicht bereits als natives Providermodell aktiv ist. Danach können Sie die Verbindung mit einem aktiven Chatmodell testen. Wählen Sie anschließend unter **Einstellungen > Standardmodelle** mindestens ein Standardmodell für **Agent** aus.
+Öffnen Sie beim Provider das gewünschte Modell und aktivieren Sie es, falls es nicht bereits als natives Providermodell aktiv ist. Danach können Sie die Verbindung mit einem aktiven Chatmodell testen. Öffnen Sie anschließend **Einstellungen > Agenten**, wählen Sie mindestens für **Allgemein** ein Agentmodell und konfigurieren Sie **Plan** und **Build** bei Bedarf unabhängig davon.
 
 ## 4. Computer optional verbinden
 
@@ -29,6 +29,7 @@ Kehren Sie zum Chat zurück, geben Sie eine Nachricht ein und senden Sie sie ab.
 Vor dem Senden können Sie unter anderem auswählen:
 
 - Modell
+- Agentenprofil
 - Memory-Modus
 - Websuchmodus
 - Computer

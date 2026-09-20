@@ -110,6 +110,22 @@ class SettingsStore:
         )
 
     @staticmethod
+    async def list_user_scopes(
+        session: AsyncSession, settings_type: type[SettingsDocument]
+    ) -> list[UUID]:
+        if settings_type.settings_scope != SettingsScope.USER:
+            raise ValueError(f"{settings_type.settings_key} is not user-scoped")
+        result = await session.scalars(
+            select(SettingRecord.user_id)
+            .where(
+                SettingRecord.key == settings_type.settings_key,
+                SettingRecord.user_id.is_not(None),
+            )
+            .order_by(SettingRecord.user_id)
+        )
+        return list(result.all())
+
+    @staticmethod
     def _validate_scope(
         settings_type: type[SettingsDocument], user_id: UUID | None
     ) -> None:

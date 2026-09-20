@@ -206,6 +206,7 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
     UserProfileSettings,
+    apply_agent_profile_ai,
     effective_model_pseudonymization,
     effective_model_trust,
     load_agent_profile,
@@ -827,7 +828,15 @@ class AgentRuntime:
         if active_run is not None:
             raise AgentRunError("session.runAlreadyActive")
         await cls._ensure_user_active(db, chat_session.user_id, for_update=True)
-        ai_settings = await load_effective_ai(db, chat_session.user_id)
+        try:
+            profile = await load_agent_profile(
+                db, chat_session.user_id, chat_session.agent_profile_id
+            )
+        except AgentProfileUnavailable as exc:
+            raise AgentRunError("agentProfile.selectedUnavailable") from exc
+        ai_settings = apply_agent_profile_ai(
+            await load_effective_ai(db, chat_session.user_id), profile
+        )
         instance_limits = await SettingsStore.load(db, InstanceLimits)
         model_id = model_id_override or chat_session.model_config_id or ai_settings.default_model_id
         model = _model_for_id(ai_settings, model_id)
@@ -838,13 +847,6 @@ class AgentRuntime:
             raise AgentRunError("session.modelUnavailable")
         if model is not None and not model.supports_tools:
             raise AgentRunError("session.modelToolsUnavailable")
-        try:
-            profile = (
-                await load_agent_profile(db, chat_session.user_id, chat_session.agent_profile_id)
-                if chat_session.agent_profile_id is not None else None
-            )
-        except AgentProfileUnavailable as exc:
-            raise AgentRunError("agentProfile.selectedUnavailable") from exc
         trust_level = effective_model_trust(provider, model)
         pseudonymization_enabled = (
             trust_level == TrustLevel.PUBLIC
@@ -1264,7 +1266,9 @@ class AgentRuntime:
                     audio = await service.read_audio(attachment, run.session_id, current_only=True)
                     result = await MediaService.transcribe_audio(
                         db, audio=audio, language=None,
-                        timeout=tools.transcribe_audio.timeout_seconds, user_id=user_id,
+                        timeout=tools.transcribe_audio.timeout_seconds,
+                        agent_profile_id=chat_session.agent_profile_id,
+                        user_id=user_id,
                     )
                     text = result.text.strip()
                     if not text or len(message.content) + len(text) + 2 > 200_000:
@@ -1701,6 +1705,14 @@ class AgentRuntime:
             or selected_execution_agent.revoked_at is not None
         ):
             selected_execution_agent = None
+        agent_profile_id = run.agent_profile_id or chat_session.agent_profile_id
+        try:
+            prompt_agent_profile = await load_agent_profile(
+                db, chat_session.user_id, agent_profile_id
+            )
+        except AgentProfileUnavailable as exc:
+            raise AgentRunError("agentProfile.selectedUnavailable") from exc
+        ai_settings = apply_agent_profile_ai(ai_settings, prompt_agent_profile)
         model_id = run.model_config_id or chat_session.model_config_id or ai_settings.default_model_id
         model = _model_for_id(ai_settings, model_id)
         if model is None:
@@ -1720,16 +1732,6 @@ class AgentRuntime:
         model_trust_level = TrustLevel(
             run.trust_level or effective_model_trust(provider, model).value
         )
-        agent_profile_id = run.agent_profile_id or chat_session.agent_profile_id
-        if agent_profile_id is None:
-            prompt_agent_profile = None
-        else:
-            try:
-                prompt_agent_profile = await load_agent_profile(
-                    db, chat_session.user_id, agent_profile_id
-                )
-            except AgentProfileUnavailable as exc:
-                raise AgentRunError("agentProfile.selectedUnavailable") from exc
         agent_identity = await load_effective_agent_identity(
             db, chat_session.user_id, prompt_agent_profile
         )
@@ -1829,7 +1831,10 @@ class AgentRuntime:
                 modelRequest=model_requests + 1,
             )
             await db.refresh(chat_session)
-            ai_settings = await load_effective_ai(db, chat_session.user_id)
+            ai_settings = apply_agent_profile_ai(
+                await load_effective_ai(db, chat_session.user_id),
+                prompt_agent_profile,
+            )
             runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
             instance_limits = await SettingsStore.load(db, InstanceLimits)
             memory_settings = await SettingsStore.load(
@@ -2459,6 +2464,7 @@ class AgentRuntime:
                     ReasoningEffort.NONE
                     if empty_response_retries > 0 and can_disable_reasoning
                     else chat_session.reasoning_effort
+                    or prompt_agent_profile.reasoning_effort
                 ),
             }
 
@@ -3857,6 +3863,7 @@ class AgentRuntime:
                                 language=requested_language,
                                 timeout=active_tool_settings.analyze_video.timeout_seconds,
                                 active_model_id=active_model.id,
+                                agent_profile_id=agent_profile_id,
                                 user_id=chat_session.user_id,
                             )
                             model_requests += 1
@@ -4983,7 +4990,12 @@ class AgentRuntime:
                     )
                     await db.commit()
                     return
-                ai_settings = await load_effective_ai(db, chat_session.user_id)
+                profile = await load_agent_profile(
+                    db, chat_session.user_id, chat_session.agent_profile_id
+                )
+                ai_settings = apply_agent_profile_ai(
+                    await load_effective_ai(db, chat_session.user_id), profile
+                )
                 runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
                 input_message = await db.get(
                     Message,

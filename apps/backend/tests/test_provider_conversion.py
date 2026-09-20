@@ -327,12 +327,14 @@ def test_gpt_5_6_responses_replay_normalizes_summary_and_omits_context() -> None
 async def test_provider_http_error_logs_only_safe_metadata(caplog) -> None:
     response = httpx.Response(
         400,
+        request=httpx.Request("POST", "https://provider.test/v1/chat/completions"),
+        headers={"X-Request-ID": "request-123"},
         json={
             "error": {
                 "type": "invalid_request_error",
                 "code": "invalid_value",
                 "param": "input[3]",
-                "message": "secret provider detail",
+                "message": "Invalid data:image/png;base64,c2VjcmV0 and Bearer secret-token",
             }
         },
     )
@@ -343,10 +345,36 @@ async def test_provider_http_error_logs_only_safe_metadata(caplog) -> None:
         with pytest.raises(ProviderError):
             await _ensure_success(response)
 
+    assert "status=400" in caplog.text
+    assert "endpoint='/v1/chat/completions'" in caplog.text
     assert "type='invalid_request_error'" in caplog.text
     assert "code='invalid_value'" in caplog.text
     assert "param='input[3]'" in caplog.text
-    assert "secret provider detail" not in caplog.text
+    assert "request_id='request-123'" in caplog.text
+    assert "[data URL redacted]" in caplog.text
+    assert "Bearer [redacted]" in caplog.text
+    assert "c2VjcmV0" not in caplog.text
+    assert "secret-token" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_provider_non_json_http_error_logs_bounded_message(caplog) -> None:
+    response = httpx.Response(
+        400,
+        request=httpx.Request("POST", "https://provider.test/v1/chat/completions"),
+        text="plain upstream failure " + "x" * 1_000,
+    )
+
+    with caplog.at_level(
+        logging.WARNING, logger="mato_loop_backend.providers.openai_compatible"
+    ):
+        with pytest.raises(ProviderError) as exc_info:
+            await _ensure_success(response)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.public_code == "provider.requestFailed"
+    assert "plain upstream failure" in caplog.text
+    assert "x" * 501 not in caplog.text
 
 
 def test_payloads_convert_model_options_for_each_protocol() -> None:
@@ -475,6 +503,7 @@ async def test_chat_completions_supports_non_streaming(monkeypatch) -> None:
     sent_body = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://local.test/v1/chat/completions"
         sent_body.update(json.loads(request.content))
         return httpx.Response(
             200,
@@ -509,7 +538,7 @@ async def test_chat_completions_supports_non_streaming(monkeypatch) -> None:
         deltas.append(text)
 
     result = await chat_completions(
-        base_url="http://local.test/v1",
+        base_url="http://local.test/v1/",
         api_key=None,
         request=ProviderRequest(
             model="local-model",

@@ -472,12 +472,13 @@ async def test_effective_agent_profiles_merge_enabled_personal_profiles(
         )]
     )
     async def load(_db, settings_type, **_kwargs):
-        return instance if settings_type is AgentProfilesSettings else IntegrationSettings()
+        return IntegrationSettings()
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
     monkeypatch.setattr(
         SettingsStore, "load_optional", AsyncMock(
             side_effect=lambda _db, settings_type, **_kwargs: (
+                instance if settings_type is AgentProfilesSettings else
                 personal if settings_type is UserAgentProfilesSettings else None
             )
         )
@@ -511,9 +512,9 @@ async def test_builtin_access_inherits_per_entry_and_respects_scope(monkeypatch)
             "policies": {"shell.read": "ask"},
             "integrationPolicies": {integration_id: {"browser.read": "disabled"}}}},
     )])
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda db, kind, **kw:
-        instance if kind is AgentProfilesSettings else IntegrationSettings()))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=IntegrationSettings()))
     monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=lambda db, kind, **kw:
+        instance if kind is AgentProfilesSettings else
         personal if kind is UserAgentProfilesSettings else None))
 
     async def get(include_personal=True):
@@ -595,11 +596,11 @@ async def test_integration_profiles_remain_available_when_personal_profiles_are_
     )
 
     async def load(_db, settings_type, **_kwargs):
-        if settings_type is AgentProfilesSettings:
-            return AgentProfilesSettings(personal_agents_enabled=False)
         return IntegrationSettings()
 
     async def load_optional(_db, settings_type, **_kwargs):
+        if settings_type is AgentProfilesSettings:
+            return AgentProfilesSettings(personal_agents_enabled=False)
         if settings_type is UserIntegrationSettings:
             return UserIntegrationSettings(instances=[integration])
         return None

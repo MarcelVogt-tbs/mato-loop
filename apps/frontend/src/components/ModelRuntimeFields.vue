@@ -40,7 +40,7 @@
           Bei ChatGPT Codex wird kein Ausgabelimit übertragen. Die Einstellung beeinflusst nur die interne Kontextplanung; die Ausgabe begrenzt der Provider.
         </div>
         <div v-else class="text-caption app-muted q-mb-sm">
-          Auto passt das Ausgabebudget an den freien Kontext an. Ein manuelles Limit ist eine zusätzliche Obergrenze, keine reservierte Ausgabelänge.
+          Auto verwendet ein gemeldetes Providerlimit oder andernfalls den Serverstandard. Ein manuelles Limit ist eine zusätzliche Obergrenze, keine reservierte Ausgabelänge.
         </div>
         <q-input
           v-if="form.maxOutputTokens != null"
@@ -203,7 +203,7 @@ const contextWindowHint = computed(() => {
   return `Manueller Override; Providerwert: ${form.value.discoveredContextWindowTokens.toLocaleString('de-DE')} Tokens.`
 })
 const outputLimitHint = computed(() => form.value.discoveredMaxOutputTokens == null
-  ? 'Provider-Ausgabelimit unbekannt. Der Provider kann die Ausgabe zusätzlich begrenzen.'
+  ? 'Provider-Ausgabelimit unbekannt. Auto überträgt kein Limit; die Ausgabe begrenzt der Provider.'
   : `Gemeldetes Provider-Ausgabelimit: ${form.value.discoveredMaxOutputTokens.toLocaleString('de-DE')} Tokens.`)
 
 function positiveIntegerRule(value) {

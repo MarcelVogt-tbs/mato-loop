@@ -1,5 +1,5 @@
 <template>
-  <router-view v-if="route.name === 'settings-mcp-access'" />
+  <router-view v-if="route.name === 'settings-mcp-tools'" />
   <section v-else>
     <header class="settings-section-header">
       <div>
@@ -14,7 +14,7 @@
 
     <q-banner rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="security" color="primary" /></template>
-      MCP-Tools können externe Aktionen ausführen. Prüfe Server und Zugriffsrichtlinien, bevor du automatische Ausführung erlaubst.
+      MCP-Tools können externe Aktionen ausführen. Prüfe Server und Tools; Rechte werden in Agentenprofilen festgelegt.
     </q-banner>
     <q-card v-if="auth.isAdmin" flat class="app-surface-tonal q-mb-md">
       <q-card-section class="row items-center justify-between q-gutter-md">
@@ -63,7 +63,7 @@
           </q-item-section>
           <q-item-section side top>
             <div class="row items-center no-wrap q-gutter-xs">
-              <q-btn flat dense :round="$q.screen.lt.md" no-caps icon="policy" :label="$q.screen.gt.sm ? 'Zugriff' : undefined" aria-label="Zugriff verwalten" :to="{ name: 'settings-mcp-access', params: { serverId: server.id }, query: { scope: servers.scope } }" />
+              <q-btn flat dense :round="$q.screen.lt.md" no-caps icon="construction" :label="$q.screen.gt.sm ? 'Tools' : undefined" aria-label="Tools anzeigen" :to="{ name: 'settings-mcp-tools', params: { serverId: server.id }, query: { scope: servers.scope } }" />
               <template v-if="$q.screen.lt.md">
                 <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${server.name}`" :loading="refreshingId === server.id">
                   <q-menu auto-close>
@@ -179,6 +179,6 @@ async function removeServer(server) {
 }
 onMounted(() => {
   servers.selectScope(resolveSettingsScope(route.query.scope, auth.isAdmin))
-  if (route.name !== 'settings-mcp-access') void loadPage()
+  if (route.name !== 'settings-mcp-tools') void loadPage()
 })
 </script>

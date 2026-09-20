@@ -82,7 +82,7 @@ it('shows the transport omission hint only when explicitly enabled without chang
       presentation.reasoningSummaryForced = !omitted
       await nextTick()
       expect(root.textContent.includes(codexHint)).toBe(omitted)
-      expect(root.textContent.includes('Ein manuelles Limit ist eine zusätzliche Obergrenze')).toBe(!omitted)
+      expect(root.textContent.includes('Auto verwendet ein gemeldetes Providerlimit')).toBe(!omitted)
       expect(root.textContent.includes('Provider-Ausgabelimit unbekannt')).toBe(!omitted)
       if (cap !== null) {
         expect(root.textContent.includes('dient nur der internen Kontextplanung.')).toBe(omitted)

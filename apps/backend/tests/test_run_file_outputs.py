@@ -1272,6 +1272,7 @@ async def test_pending_audio_and_image_tools_use_owned_live_sources(tmp_path, mo
         db=db,
         session=session,
         run_id=run_id,
+        agent_profile_id=None,
         model_id=target.model.id,
         tool_settings=ToolSettings(),
     )

@@ -2839,6 +2839,7 @@ async def _generate_image(
         context.db,
         ModelCapability.IMAGE_GENERATION,
         active_model_id=context.model_id,
+        agent_profile_id=context.agent_profile_id or context.session.agent_profile_id,
         user_id=context.session.user_id,
     )
     if not _media_target_matches_binding(context, target):
@@ -2859,6 +2860,7 @@ async def _generate_image(
         seed=arguments.seed,
         timeout=context.tool_settings.generate_image.timeout_seconds,
         active_model_id=context.model_id,
+        agent_profile_id=context.agent_profile_id or context.session.agent_profile_id,
         expected_model_id=target.model.id,
         expected_trust_level=target_trust_level,
         user_id=context.session.user_id,
@@ -2951,6 +2953,7 @@ async def _edit_image(
         context.db,
         ModelCapability.IMAGE_EDITING,
         active_model_id=context.model_id,
+        agent_profile_id=context.agent_profile_id or context.session.agent_profile_id,
         user_id=context.session.user_id,
     )
     if not _media_target_matches_binding(context, target):
@@ -3010,6 +3013,7 @@ async def _edit_image(
         source_attachment_ids=source_attachment_ids,
         timeout=context.tool_settings.edit_image.timeout_seconds,
         active_model_id=context.model_id,
+        agent_profile_id=context.agent_profile_id or context.session.agent_profile_id,
         expected_model_id=target.model.id,
         expected_trust_level=target_trust_level,
         user_id=context.session.user_id,
@@ -3053,6 +3057,7 @@ async def _generate_speech(
         voice=arguments.voice or "shimmer",
         speed=arguments.speed,
         timeout=context.tool_settings.generate_speech.timeout_seconds,
+        agent_profile_id=context.agent_profile_id or context.session.agent_profile_id,
         user_id=context.session.user_id,
     )
     return ToolResult(
@@ -3083,6 +3088,7 @@ async def _generate_audio(
         duration=arguments.duration_seconds,
         seed=arguments.seed,
         timeout=context.tool_settings.generate_audio.timeout_seconds,
+        agent_profile_id=context.agent_profile_id or context.session.agent_profile_id,
         user_id=context.session.user_id,
     )
     return ToolResult(
@@ -3121,6 +3127,7 @@ async def _transcribe_audio(
         audio=audio,
         language=arguments.language,
         timeout=context.tool_settings.transcribe_audio.timeout_seconds,
+        agent_profile_id=context.agent_profile_id or context.session.agent_profile_id,
         user_id=context.session.user_id,
     )
     return ToolResult(

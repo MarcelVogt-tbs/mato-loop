@@ -224,16 +224,16 @@
           <q-item-section side top>
             <div class="row items-center no-wrap q-gutter-xs">
               <q-btn
-                v-if="integration.supportsIntegrationPolicies || integration.supportsResourcePolicies"
+                v-if="integration.adapterType === 'caldav'"
                 flat
                 dense
                 no-caps
                 :round="$q.screen.lt.md"
-                icon="policy"
-                :label="$q.screen.gt.sm ? 'Zugriff' : undefined"
-                aria-label="Zugriff verwalten"
+                icon="folder_open"
+                :label="$q.screen.gt.sm ? 'Standardressourcen' : undefined"
+                aria-label="Standardressourcen verwalten"
                 :disable="!canEditIntegration(integration)"
-                :to="{ name: 'settings-integration-access', params: { integrationId: integration.id }, query: { scope: integrations.scope } }"
+                :to="{ name: 'settings-integration-resources', params: { integrationId: integration.id }, query: { scope: integrations.scope } }"
               />
               <q-btn
                 flat
@@ -311,7 +311,7 @@ const testingId = ref(null)
 const removingId = ref(null)
 const searchSelectionSaving = ref(false)
 const section = ref('instances')
-const showAccessPage = computed(() => route.name === 'settings-integration-access')
+const showAccessPage = computed(() => route.name === 'settings-integration-resources')
 const showInstances = computed(() => !auth.isAdmin || section.value === 'instances')
 const searchProviders = computed(() => integrations.search.providers)
 const calendarAccounts = computed(() => integrations.calendar.accounts)

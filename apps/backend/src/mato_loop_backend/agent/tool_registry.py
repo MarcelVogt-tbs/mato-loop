@@ -72,6 +72,7 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
+    apply_agent_profile_ai,
     load_agent_profile,
     load_agent_profile_tools,
     load_effective_ai,
@@ -1203,7 +1204,9 @@ class ToolRegistry:
             context.tool_settings = apply_delegation_ceiling(
                 current_settings, context.tool_settings._delegation_ceiling
             )
-            ai_settings = await load_effective_ai(context.db, context.session.user_id)
+            ai_settings = apply_agent_profile_ai(
+                await load_effective_ai(context.db, context.session.user_id), _profile
+            )
             if self._capability_resolver is None:
                 raise RuntimeError("tool registry capability resolver is not configured")
             if definition.required_capability not in self._capability_resolver(

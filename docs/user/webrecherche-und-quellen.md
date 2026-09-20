@@ -18,7 +18,7 @@ Der Fallback wird nur bei vorübergehenden Fehlern des primären Providers verwe
 
 ## Webseiten abrufen
 
-`webfetch` ruft eine konkrete HTTP- oder HTTPS-Adresse ab und ist unabhängig von der Websuche konfiguriert. Unter **Einstellungen > Tools > Richtlinien** gilt dafür eine einheitliche Tool-Richtlinie:
+`webfetch` ruft eine konkrete HTTP- oder HTTPS-Adresse ab und ist unabhängig von der Websuche konfiguriert. Das ausgewählte Agentenprofil legt dafür getrennt für private und öffentliche Modelle eine Richtlinie fest:
 
 - **Deaktiviert**
 - **Nachfragen**

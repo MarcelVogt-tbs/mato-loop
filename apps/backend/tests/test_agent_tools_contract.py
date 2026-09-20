@@ -68,6 +68,8 @@ from mato_loop_backend.models import (
 from mato_loop_backend.providers import ToolCall
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
+    GENERAL_PROFILE_ID,
+    AgentProfilesSettings,
     AgentProfileUnavailable,
     AiSettings,
     EffectiveAgentIdentity,
@@ -251,7 +253,7 @@ def _context(
         ask_handler=AsyncMock(return_value=decision),
         tool_settings=tool_settings,
     )
-    context.db.scalar.return_value = Mock(data=tool_settings.model_dump(mode="json"))
+    context.db.scalar.return_value = Mock(data=_settings_record(tool_settings))
     context.model_trust_level = TrustLevel.PRIVATE
     return context
 
@@ -267,6 +269,23 @@ def _tool_settings(data: dict) -> ToolSettings:
         values["privatePermissions"] = permissions
         values["publicPermissions"] = permissions
     return ToolSettings.model_validate(values)
+
+
+def _settings_record(settings: ToolSettings) -> dict:
+    permissions = settings.private_permissions.model_dump(mode="json")
+    return {
+        **settings.model_dump(mode="json"),
+        "builtin_access_overrides": {
+            str(GENERAL_PROFILE_ID): {
+                "private_permissions": permissions,
+                "public_permissions": permissions,
+            }
+        },
+    }
+
+
+def _set_profile_settings(context: ToolContext, settings: ToolSettings) -> None:
+    context.db.scalar.return_value.data = _settings_record(settings)
 
 
 async def test_missing_profile_reload_keeps_private_trust(monkeypatch, tmp_path) -> None:
@@ -1899,6 +1918,7 @@ async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) 
         arguments={"instructions": "Sei freundlich."},
     )
     context = _context(tmp_path, call, decision=PermissionDecision.DENY)
+    _set_profile_settings(context, tool_settings)
     persona.owner_id = context.session.user_id
     monkeypatch.setattr(tools_module, "load_agent_profile", AsyncMock(return_value=object()))
     monkeypatch.setattr(
@@ -2094,6 +2114,7 @@ async def test_update_user_profile_both_models_auto_skips_approval(
         arguments={"model_scope": "both_models", "preferred_name": "Grace"},
     )
     context = _context(tmp_path, call, decision=PermissionDecision.DENY)
+    _set_profile_settings(context, tool_settings)
 
     result = await tool_registry.execute(call, context)
 
@@ -2456,6 +2477,23 @@ async def test_load_skill_auto_to_ask_policy_transition_blocks(
         arguments={"skill_id": str(skill.id)},
     )
     context = _context(tmp_path, call)
+    profile_loads = iter(
+        [
+            _tool_settings({"policies": {"skills.load": "auto"}}),
+            _tool_settings({"policies": {"skills.load": "ask"}}),
+        ]
+    )
+
+    async def load_optional(_db, settings_type, **_kwargs):
+        if settings_type is not AgentProfilesSettings:
+            return None
+        return AgentProfilesSettings.model_validate(
+            _settings_record(next(profile_loads))
+        )
+
+    monkeypatch.setattr(
+        SettingsStore, "load_optional", AsyncMock(side_effect=load_optional)
+    )
     context.skill_state.catalog[skill.id] = skill
 
     result = await tool_registry.execute(call, context)
@@ -2483,6 +2521,7 @@ async def test_load_skill_ask_policy_uses_the_user_skill_collection(
         arguments={"skill_id": str(skill.id)},
     )
     context = _context(tmp_path, call)
+    _set_profile_settings(context, settings)
     context.skill_state.catalog[skill.id] = skill
 
     result = await tool_registry.execute(call, context)
@@ -2517,7 +2556,9 @@ async def test_disabled_agent_identity_tool_is_not_offered_or_executed(
         name="update_agent_identity",
         arguments={"display_name": "Ada"},
     )
-    result = await tool_registry.execute(call, _context(tmp_path, call))
+    context = _context(tmp_path, call)
+    _set_profile_settings(context, tool_settings)
+    result = await tool_registry.execute(call, context)
 
     assert result.is_error
     assert result.metadata == {"errorCode": "tool.unavailable"}
@@ -2540,7 +2581,9 @@ async def test_disabled_user_profile_tool_is_not_offered_or_executed(
         name="update_user_profile",
         arguments={"preferred_name": "Ada"},
     )
-    result = await tool_registry.execute(call, _context(tmp_path, call))
+    context = _context(tmp_path, call)
+    _set_profile_settings(context, tool_settings)
+    result = await tool_registry.execute(call, context)
 
     assert result.is_error
     assert result.metadata == {"errorCode": "tool.unavailable"}
@@ -4145,7 +4188,7 @@ async def test_webfetch_applies_the_effective_policy(
         public_addresses_only=public_addresses_only,
     )
     context.tool_settings.web_fetch.user_agent = "ConfiguredBrowser/1.0"
-    context.db.scalar.return_value.data = context.tool_settings.model_dump(mode="json")
+    context.db.scalar.return_value.data = _settings_record(context.tool_settings)
 
     result = await tool_registry.execute(call, context)
 
@@ -4218,7 +4261,7 @@ async def test_fetch_transcript_uses_one_video_approval_and_returns_evidence(
         },
     )
     context = _context(tmp_path, call, web_fetch_policy=policy)
-    context.db.scalar.return_value.data = context.tool_settings.model_dump(mode="json")
+    context.db.scalar.return_value.data = _settings_record(context.tool_settings)
 
     result = await tool_registry.execute(call, context)
 
@@ -4342,7 +4385,7 @@ async def test_effective_dispatch_preserves_ceiling_across_live_settings_reload(
     before = ToolSettings(private_permissions={"policies": {capability: ceiling_policy}})
     snapshot = permission_snapshot(before, {tool_name})
     live = ToolSettings(private_permissions={"policies": {capability: "auto"}})
-    context.db.scalar.return_value.data = live.model_dump(mode="json")
+    context.db.scalar.return_value.data = _settings_record(live)
     context.tool_settings = live.model_copy(deep=True)
     context.tool_settings._delegation_ceiling = snapshot
     network_reads = []

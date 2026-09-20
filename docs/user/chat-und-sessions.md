@@ -12,13 +12,13 @@ Für jede Session können Sie festlegen:
 
 | Einstellung | Bedeutung |
 | --- | --- |
-| Agent | Persona, Aufgabenanweisungen und optionale Tool-Abweichungen für private und öffentliche Modelle |
+| Agent | Arbeitsweise, Modelle, Reasoning, Integrationen und Tool-Rechte |
 | Modell | Verwendetes aktives Chatmodell |
 | Memory | Voll, nur lesen oder deaktiviert |
 | Websuche | Erzwingen, verfügbar oder deaktiviert |
 | Computer | Optional verbundener Computer für lokale Funktionen |
 
-Das ausgewählte Agentenprofil gilt für die Session. Beim Start eines Laufs wählt das Vertrauenslevel des Modells dessen private oder öffentliche Abweichungen. Nicht gesetzte Werte übernehmen immer die aktuell wirksamen Vorgaben aus **Tools** und **Integrationen**; Profile sind keine vollständigen Richtlinienkopien. Ein Profilwechsel ist während eines aktiven Laufs gesperrt. **Allgemein** ist das feste Profil für neue Sessions und übernimmt alle Vorgaben ohne eigene Tool-Abweichungen. Vom Modell ausgelöste Dateiaktionen werden zusätzlich durch die beiden Dateirichtlinien des gewählten Computers beschränkt. Zwei feste Schalter aktivieren oder blockieren Shell-Aktionen im Home-Verzeichnis und außerhalb davon; beide sind standardmäßig aktiviert. Einen pauschalen Lesen-/Schreiben-Modus gibt es nicht. Shell-Befehle werden konservativ als Lesen oder Schreiben klassifiziert. Tokenbasierte Präfixregeln und Session-Freigaben können Rückfragen reduzieren; Session-Freigaben bleiben an Agentenprofil, Vertrauenslevel, Klasse, Computer und absoluten Arbeitsordner gebunden und überstimmen keine harte Grenze.
+Das ausgewählte Agentenprofil gilt für die Session. Eine ausdrückliche Session-Modellwahl hat Vorrang vor dem Agentmodell des Profils; ohne beides kann kein Lauf starten. Entsprechend hat eine ausdrückliche Reasoning-Stufe der Session Vorrang vor der Profilstufe. Beim Start eines Laufs wählt das Vertrauenslevel des Modells den privaten oder öffentlichen Berechtigungszweig des Profils. **Allgemein**, **Plan** und **Build** sind unabhängige Instanz-Basisprofile; eigene Profile übernehmen jedes nicht angepasste Feld von ihrer gewählten Basis. Ein Profilwechsel ist während eines aktiven Laufs gesperrt. **Allgemein** gilt für neue Sessions. Vom Modell ausgelöste Dateiaktionen werden zusätzlich durch die beiden Dateirichtlinien des gewählten Computers beschränkt. Zwei feste Schalter aktivieren oder blockieren Shell-Aktionen im Home-Verzeichnis und außerhalb davon; beide sind standardmäßig aktiviert. Einen pauschalen Lesen-/Schreiben-Modus gibt es nicht. Shell-Befehle werden als Lesen oder Schreiben klassifiziert. Profilgebundene Präfixregeln und Session-Freigaben können Rückfragen reduzieren; Session-Freigaben bleiben an Agentenprofil, Vertrauenslevel, Klasse, Computer und absoluten Arbeitsordner gebunden und überstimmen keine technische, Vertrauens-, Pfad-, Computer- oder Delegationsgrenze.
 
 Eine neue Session besitzt nur internen Session-Speicher und noch keinen Workspace. Die Computerauswahl und der absolute aktuelle Ordner unter **Control Center > Dateien** sind veränderbare Session-Vorgaben. Beim Start eines Laufs speichert MatoLoop davon eine unveränderliche Momentaufnahme. Änderungen gelten erst für den nächsten Lauf. Ist kein Computer gewählt oder der gewählte Computer offline, bleiben Chat und Backend-Tools verfügbar; Computer-, Prozess- und passende lokale Integrationstools fehlen. MatoLoop wechselt nicht automatisch zu einem anderen Computer und wiederholt keine fehlgeschlagene lokale Operation automatisch.
 
@@ -28,7 +28,7 @@ Antworten werden während der Erzeugung angezeigt. MatoLoop stellt Arbeitsphasen
 
 Reasoning-Zusammenfassungen werden nur angezeigt, wenn das Modell sie liefert und die Modellkonfiguration sie erlaubt. Sie sind nicht mit vollständigen internen Gedankengängen gleichzusetzen.
 
-Bei unterstützten Modellen kann der Reasoning-Aufwand direkt neben der Modellauswahl geändert oder wieder auf den Modellstandard zurückgesetzt werden. Qwen3.8-27B verwendet standardmäßig **Mittel**. Codex übernimmt verfügbare Stufen und Standardwert aus dem aktuellen Modellkatalog.
+Bei unterstützten Modellen kann der Reasoning-Aufwand direkt neben der Modellauswahl geändert oder wieder auf die Profilstufe zurückgesetzt werden. Ist auch im Profil keine Stufe gewählt, gilt der Modellstandard. Qwen3.8-27B verwendet standardmäßig **Mittel**. Codex übernimmt verfügbare Stufen und Modellstandard aus dem aktuellen Katalog.
 
 ## Nachrichtenaktionen
 

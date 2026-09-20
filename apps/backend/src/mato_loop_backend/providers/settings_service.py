@@ -14,8 +14,16 @@ from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.media import media_model_available
 from mato_loop_backend.providers.openai_compatible import DiscoveredModel
 from mato_loop_backend.security import scoped_credentials
-from mato_loop_backend.settings import AiSettings, SettingsStore, UserAiSettings
+from mato_loop_backend.settings import (
+    AgentProfilesSettings,
+    AiSettings,
+    SettingsStore,
+    UserAgentProfilesSettings,
+    UserAiSettings,
+)
 from mato_loop_backend.settings.models import (
+    AgentProfileAccessOverrides,
+    AgentProfileOverrides,
     AiSettingsBase,
     LlmProviderConfig,
     MemoryPolicy,
@@ -127,8 +135,34 @@ def video_analysis_model_available(settings: AiSettingsBase, model_id: UUID) -> 
     )
 
 
+def model_reference_available(
+    settings: AiSettingsBase, field: str, model_id: UUID
+) -> bool:
+    capability = DEFAULT_MODEL_FIELDS[field][1]
+    value = available_model(settings, model_id, capability)
+    return bool(
+        value
+        and not (
+            field
+            in {"default_model_id", "skill_creation_model_id", "dreaming_model_id"}
+            and not value.supports_tools
+        )
+        and not (
+            field == "vision_model_id" and not value.supports_image_input
+        )
+        and not (
+            field == "video_model_id"
+            and not video_analysis_model_available(settings, model_id)
+        )
+        and not (
+            capability != ModelCapability.CHAT
+            and not media_model_available(settings, capability, model_id)
+        )
+    )
+
+
 def clear_invalid_defaults(settings: AiSettingsBase) -> None:
-    for field, (_api_field, capability) in DEFAULT_MODEL_FIELDS.items():
+    for field in DEFAULT_MODEL_FIELDS:
         model_id = getattr(settings, field)
         if (
             isinstance(settings, UserAiSettings)
@@ -136,25 +170,8 @@ def clear_invalid_defaults(settings: AiSettingsBase) -> None:
             and not any(item.id == model_id for item in settings.models)
         ):
             continue
-        media_capability = capability != ModelCapability.CHAT
         if model_id is not None and (
-            available_model(settings, model_id, capability) is None
-            or (
-                field in {"default_model_id", "skill_creation_model_id"}
-                and not model(settings, model_id).supports_tools
-            )
-            or (
-                field == "vision_model_id"
-                and not model(settings, model_id).supports_image_input
-            )
-            or (
-                field == "video_model_id"
-                and not video_analysis_model_available(settings, model_id)
-            )
-            or (
-                media_capability
-                and not media_model_available(settings, capability, model_id)
-            )
+            not model_reference_available(settings, field, model_id)
         ):
             setattr(settings, field, None)
 
@@ -205,6 +222,82 @@ async def _clear_sessions(
     if owner_id is not None:
         statement = statement.where(ChatSession.user_id == owner_id)
     await db.execute(statement.values(model_config_id=None))
+
+
+def _clear_profile_model_references(
+    overrides: AgentProfileAccessOverrides | AgentProfileOverrides,
+    settings: AiSettingsBase,
+    candidate_ids: set[UUID],
+) -> bool:
+    changed = False
+    for field in DEFAULT_MODEL_FIELDS:
+        if field not in overrides.model_fields_set:
+            continue
+        model_id = getattr(overrides, field)
+        if (
+            model_id in candidate_ids
+            and not model_reference_available(settings, field, model_id)
+        ):
+            setattr(overrides, field, None)
+            overrides.model_fields_set.discard(field)
+            changed = True
+    return changed
+
+
+async def clear_invalid_profile_model_references(
+    db: AsyncSession,
+    settings: AiSettingsDocument,
+    owner_id: UUID | None,
+    candidate_ids: set[UUID],
+) -> None:
+    if not candidate_ids:
+        return
+
+    instance = await SettingsStore.load(
+        db, AgentProfilesSettings, for_update=True
+    )
+    if owner_id is None:
+        changed = any(
+            [
+                _clear_profile_model_references(overrides, settings, candidate_ids)
+                for overrides in instance.builtin_access_overrides.values()
+            ]
+        )
+        changed = any(
+            [
+                _clear_profile_model_references(
+                    profile.overrides, settings, candidate_ids
+                )
+                for profile in instance.profiles
+            ]
+        ) or changed
+        if changed:
+            await SettingsStore.save(db, instance)
+        documents = []
+        for user_id in await SettingsStore.list_user_scopes(
+            db, UserAgentProfilesSettings
+        ):
+            personal = await SettingsStore.load_optional(
+                db, UserAgentProfilesSettings, user_id=user_id, for_update=True
+            )
+            if personal is not None:
+                documents.append((user_id, personal))
+    else:
+        personal = await SettingsStore.load_optional(
+            db, UserAgentProfilesSettings, user_id=owner_id, for_update=True
+        )
+        documents = [(owner_id, personal)] if personal is not None else []
+
+    for user_id, document in documents:
+        if any(
+            [
+                _clear_profile_model_references(
+                    profile.overrides, settings, candidate_ids
+                )
+                for profile in document.profiles
+            ]
+        ):
+            await SettingsStore.save(db, document, user_id=user_id)
 
 
 class ProviderSettingsService:
@@ -304,6 +397,16 @@ class ProviderSettingsService:
                     if item.origin == ModelOrigin.DISCOVERED:
                         item.availability = ModelAvailability.MISSING
             clear_invalid_defaults(settings)
+            await clear_invalid_profile_model_references(
+                db,
+                settings,
+                owner_id,
+                {
+                    item.id
+                    for item in settings.models
+                    if item.provider_id == provider_config.id
+                },
+            )
         await cls.save(db, settings, owner_id)
         return provider_config
 
@@ -318,6 +421,12 @@ class ProviderSettingsService:
     ) -> None:
         provider(settings, provider_id).enabled = enabled
         clear_invalid_defaults(settings)
+        await clear_invalid_profile_model_references(
+            db,
+            settings,
+            owner_id,
+            {item.id for item in settings.models if item.provider_id == provider_id},
+        )
         await cls.save(db, settings, owner_id)
         await db.commit()
 
@@ -419,6 +528,16 @@ class ProviderSettingsService:
         ):
             raise ProviderSettingsError("provider.configurationChanged")
         cls._reconcile_discovered_models(settings, current_provider, discovered)
+        await clear_invalid_profile_model_references(
+            db,
+            settings,
+            owner_id,
+            {
+                item.id
+                for item in settings.models
+                if item.provider_id == current_provider.id
+            },
+        )
         await cls.save(db, settings, owner_id)
         await db.commit()
         return settings, owner_id
@@ -611,6 +730,9 @@ class ProviderSettingsService:
             validated.discovered_max_output_tokens = None
         settings.models[settings.models.index(current)] = validated
         clear_invalid_defaults(settings)
+        await clear_invalid_profile_model_references(
+            db, settings, owner_id, {validated.id}
+        )
         await cls.save(db, settings, owner_id)
         await db.commit()
 
@@ -628,6 +750,9 @@ class ProviderSettingsService:
             raise ProviderSettingsError("provider.modelUnavailable")
         value.enabled = enabled
         clear_invalid_defaults(settings)
+        await clear_invalid_profile_model_references(
+            db, settings, owner_id, {value.id}
+        )
         await cls.save(db, settings, owner_id)
         await db.commit()
 
@@ -649,96 +774,9 @@ class ProviderSettingsService:
             statement = statement.where(ChatSession.user_id == owner_id)
         await db.execute(statement.values(model_config_id=None))
         clear_invalid_defaults(settings)
-        await cls.save(db, settings, owner_id)
-        await db.commit()
-
-    @classmethod
-    async def set_default_model(
-        cls,
-        db: AsyncSession,
-        settings: AiSettingsDocument,
-        validation_settings: AiSettingsBase,
-        owner_id: UUID | None,
-        model_id: UUID | None,
-    ) -> None:
-        if model_id is not None:
-            value = available_model(validation_settings, model_id)
-            if value is None:
-                raise ProviderSettingsError("provider.modelUnavailable")
-            if ModelCapability.CHAT not in value.capabilities:
-                raise ProviderSettingsError("provider.modelCapabilityUnavailable")
-            if not value.supports_tools:
-                raise ProviderSettingsError("session.modelToolsUnavailable")
-        settings.default_model_id = model_id
-        await cls.save(db, settings, owner_id)
-        await db.commit()
-
-    @classmethod
-    async def set_default_models(
-        cls,
-        db: AsyncSession,
-        settings: AiSettingsDocument,
-        validation_settings: AiSettingsBase,
-        owner_id: UUID | None,
-        values: dict[str, Any],
-        fields_set: set[str],
-    ) -> None:
-        for field, (api_field, capability) in DEFAULT_MODEL_FIELDS.items():
-            model_id = values[field]
-            if model_id is None:
-                continue
-            value = available_model(validation_settings, model_id)
-            if value is None:
-                raise ProviderSettingsError(
-                    "provider.modelUnavailable", field=api_field
-                )
-            if capability not in value.capabilities:
-                raise ProviderSettingsError(
-                    "provider.modelCapabilityUnavailable", field=api_field
-                )
-            if (
-                field in {"default_model_id", "skill_creation_model_id"}
-                and not value.supports_tools
-            ):
-                raise ProviderSettingsError(
-                    "session.modelToolsUnavailable", field=api_field
-                )
-            if field == "vision_model_id" and not value.supports_image_input:
-                raise ProviderSettingsError(
-                    "provider.modelCapabilityUnavailable", field=api_field
-                )
-            if field == "video_model_id" and not video_analysis_model_available(
-                validation_settings, model_id
-            ):
-                raise ProviderSettingsError(
-                    "provider.modelCapabilityUnavailable", field=api_field
-                )
-            if capability != ModelCapability.CHAT and not media_model_available(
-                validation_settings, capability, model_id
-            ):
-                raise ProviderSettingsError(
-                    "provider.modelCapabilityUnavailable", field=api_field
-                )
-            if field == "dreaming_model_id" and not value.supports_tools:
-                raise ProviderSettingsError(
-                    "memory.dreamingModelToolsUnavailable", field=api_field
-                )
-        additive_fields = {
-            "vision_model_id",
-            "skill_creation_model_id",
-            "video_model_id",
-            "image_generation_model_id",
-            "speech_generation_model_id",
-            "audio_generation_model_id",
-            "audio_transcription_model_id",
-        }
-        for field in DEFAULT_MODEL_FIELDS:
-            if field in additive_fields and field not in fields_set:
-                continue
-            setattr(settings, field, values[field])
-        settings.title_vision_fallback_enabled = values[
-            "title_vision_fallback_enabled"
-        ]
+        await clear_invalid_profile_model_references(
+            db, settings, owner_id, {value.id}
+        )
         await cls.save(db, settings, owner_id)
         await db.commit()
 
@@ -765,6 +803,9 @@ class ProviderSettingsService:
         clear_removed_defaults(settings, removed_model_ids)
         await _clear_sessions(db, removed_model_ids, owner_id)
         clear_invalid_defaults(settings)
+        await clear_invalid_profile_model_references(
+            db, settings, owner_id, removed_model_ids
+        )
         if value.credential_id:
             await delete_credential(
                 db, value.credential_id, owner_id=value.owner_id
@@ -830,8 +871,10 @@ class ProviderSettingsService:
         credentials: list[Credential],
     ) -> None:
         credential_ids = {item.id for item in credentials}
+        affected_provider_ids: set[UUID] = set()
         for value in settings.providers:
             if value.credential_id in credential_ids:
+                affected_provider_ids.add(value.id)
                 value.credential_id = None
                 for item in settings.models:
                     if item.provider_id == value.id:
@@ -839,5 +882,13 @@ class ProviderSettingsService:
         clear_invalid_defaults(settings)
         for credential in credentials:
             await db.delete(credential)
+        affected_model_ids = {
+            item.id
+            for item in settings.models
+            if item.provider_id in affected_provider_ids
+        }
+        await clear_invalid_profile_model_references(
+            db, settings, owner_id, affected_model_ids
+        )
         await cls.save(db, settings, owner_id)
         await db.commit()

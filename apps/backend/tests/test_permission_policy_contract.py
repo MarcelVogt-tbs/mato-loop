@@ -49,6 +49,8 @@ from mato_loop_backend.models import (
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
+    GENERAL_PROFILE_ID,
+    AgentProfilesSettings,
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
@@ -99,6 +101,24 @@ def _tool_settings(data: dict) -> ToolSettings:
     }
     values["publicPermissions"] = permissions
     return ToolSettings.model_validate(values).select_trust(TrustLevel.PUBLIC)
+
+
+def _profile_settings(data: dict) -> AgentProfilesSettings:
+    permissions = {
+        key: data[key]
+        for key in ("policies", "integrationPolicies", "resourcePolicies")
+        if key in data
+    }
+    return AgentProfilesSettings.model_validate(
+        {
+            "builtin_access_overrides": {
+                str(GENERAL_PROFILE_ID): {
+                    "privatePermissions": permissions,
+                    "publicPermissions": permissions,
+                }
+            }
+        }
+    )
 
 
 def _root_files(tmp_path, session: ChatSession) -> RootFileService:
@@ -607,16 +627,27 @@ async def test_policy_revocation_while_waiting_for_approval_stops_action(
         nonlocal settings_loads
         if settings_type is IntegrationSettings:
             return IntegrationSettings()
+        return ToolSettings()
+
+    async def load_optional(_db, settings_type, **_kwargs):
+        nonlocal settings_loads
+        if settings_type is not AgentProfilesSettings:
+            return None
         settings_loads += 1
-        return _tool_settings(
+        return _profile_settings(
             {
                 "policies": {
-                    "filesystem.delete": "ask" if settings_loads == 1 else "disabled"
+                    "filesystem.delete": (
+                        "ask" if settings_loads == 1 else "disabled"
+                    )
                 }
             }
         )
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(
+        SettingsStore, "load_optional", AsyncMock(side_effect=load_optional)
+    )
     monkeypatch.setattr(
         AgentRuntime, "_request_approval", AsyncMock(return_value="allow_once")
     )
@@ -645,8 +676,14 @@ async def test_skill_policy_revocation_while_waiting_stops_loading(
         nonlocal settings_loads
         if settings_type is IntegrationSettings:
             return IntegrationSettings()
+        return ToolSettings()
+
+    async def load_optional(_db, settings_type, **_kwargs):
+        nonlocal settings_loads
+        if settings_type is not AgentProfilesSettings:
+            return None
         settings_loads += 1
-        return _tool_settings(
+        return _profile_settings(
             {
                 "policies": {
                     "skills.load": "ask" if settings_loads == 1 else "disabled"
@@ -655,6 +692,9 @@ async def test_skill_policy_revocation_while_waiting_stops_loading(
         )
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(
+        SettingsStore, "load_optional", AsyncMock(side_effect=load_optional)
+    )
     monkeypatch.setattr(
         AgentRuntime, "_request_approval", AsyncMock(return_value="allow_once")
     )
@@ -779,7 +819,7 @@ async def test_runtime_discovery_uses_global_not_integration_policy(
     }
     if global_policy is not None:
         settings_data["policies"] = {"calendar.read": global_policy}
-    tools = _tool_settings(settings_data)
+    tools = ToolSettings()
 
     async def load_settings(_db, settings_type, **_kwargs):
         return (
@@ -789,6 +829,17 @@ async def test_runtime_discovery_uses_global_not_integration_policy(
         )
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(
+        SettingsStore,
+        "load_optional",
+        AsyncMock(
+            side_effect=lambda _db, settings_type, **_kwargs: (
+                _profile_settings(settings_data)
+                if settings_type is AgentProfilesSettings
+                else None
+            )
+        ),
+    )
     request_approval = AsyncMock(return_value="allow_once")
     monkeypatch.setattr(AgentRuntime, "_request_approval", request_approval)
 

@@ -1725,6 +1725,38 @@ async def test_qwen_3_8_uses_medium_by_default_and_disables_thinking_cleanly(
     assert exc_info.value.public_code == "provider.modelCapabilityUnavailable"
 
 
+@pytest.mark.parametrize("effort", [None, "none", "minimal", "low", "medium", "high", "xhigh"])
+async def test_halogen_reasoning_options_reach_chat_transport(monkeypatch, effort):
+    from mato_loop_backend.api.routes.providers import (
+        _model_reasoning_default,
+        _model_reasoning_options,
+    )
+
+    provider = LlmProviderConfig(
+        name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "http://provider.test/v1", "api_type": "chat_completions"},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="halogen-qwen3.8-flash-next")
+    assert _model_reasoning_default(provider, model) == "xhigh"
+    assert _model_reasoning_options(provider, model) == [
+        "none", "minimal", "low", "medium", "high", "xhigh",
+    ]
+    transport = AsyncMock(return_value=ProviderResult(content="OK"))
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+    await ProviderService.complete(
+        AsyncMock(spec=AsyncSession), provider=provider, model=model,
+        messages=[{"role": "user", "content": "Reply with OK."}], tools=[],
+        reasoning_effort=effort,
+    )
+    body = _chat_body(transport.await_args.kwargs["request"])
+    assert body["chat_template_kwargs"] == {"enable_thinking": effort != "none"}
+    if effort == "none":
+        assert "reasoning_effort" not in body
+    else:
+        assert body["reasoning_effort"] == (effort or "xhigh")
+    assert "temperature" not in body
+
+
 async def test_complete_rejects_unknown_adapter_before_transport(monkeypatch) -> None:
     provider = LlmProviderConfig(
         name="Unknown", adapter_type="unknown", config={"base_url": "http://unknown.test"}
@@ -1807,7 +1839,7 @@ def test_raw_input_budget_is_exact_inverse_of_guarded_input():
 
 
 @pytest.mark.parametrize("api_type", ["chat_completions", "responses"])
-async def test_output_budget_serialized_cap_is_adaptive_and_name_invariant(monkeypatch, api_type):
+async def test_output_budget_omits_unknown_cap_and_remains_name_invariant(monkeypatch, api_type):
     provider = LlmProviderConfig(
         name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
         config={"base_url": "https://local.test/v1", "api_type": api_type},
@@ -1840,8 +1872,8 @@ async def test_output_budget_serialized_cap_is_adaptive_and_name_invariant(monke
         budget = result.provider_data["output_budget"]
         budgets.append(budget)
         field = "max_tokens" if api_type == "chat_completions" else "max_output_tokens"
-        assert bodies[-1][field] == budget["allocatedOutputTokens"]
-        assert budget["transmittedMaxOutputTokens"] == bodies[-1][field]
+        assert field not in bodies[-1]
+        assert budget["transmittedMaxOutputTokens"] is None
         assert budget["allocatedOutputTokens"] == (
             model.context_window_tokens - 4096 - budget["guardedInputTokens"]
         )
@@ -2035,7 +2067,11 @@ async def test_output_budget_large_native_media_has_only_explicit_caps(
     if helper is None:
         assert budget["allocatedOutputTokens"] > 2048
         assert budget["mode"] == ("auto" if manual is None else "manual")
-    assert transport.await_args.kwargs["request"].max_output_tokens == budget["allocatedOutputTokens"]
+    assert transport.await_args.kwargs["request"].max_output_tokens == (
+        budget["allocatedOutputTokens"]
+        if manual is not None or helper is not None
+        else None
+    )
 
 
 @pytest.mark.parametrize("legacy", [False, True])

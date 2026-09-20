@@ -9,7 +9,7 @@ vi.mock('src/boot/axios', () => ({ api }))
 
 import { useToolSettingsStore } from '../src/stores/tool-settings'
 
-const settings = (policy = 'ask') => ({
+const settings = () => ({
   groups: [{
     id: 'web',
     label: 'Web',
@@ -22,8 +22,6 @@ const settings = (policy = 'ask') => ({
       actions: [{ capability: 'network.fetch', configurable: true }]
     }]
   }],
-  policies: { 'network.fetch': policy },
-  shellPrefixes: { read: [['cat']], write: [] },
   transcribeAudio: { timeoutSeconds: 180 }
 })
 
@@ -40,80 +38,14 @@ const configuration = {
     }]
   }],
   toolAvailability: { webfetch: true },
-  webFetch: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 32, publicAddressesOnly: false }
+  webFetch: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 32, publicAddressesOnly: false },
+  transcribeAudio: { timeoutSeconds: 180 }
 }
 
 describe('tool settings store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-  })
-
-  it('loads and saves only the selected scope and trust branch', async () => {
-    api.get.mockResolvedValue({ data: settings() })
-    api.put.mockResolvedValue({ data: settings('auto') })
-    const store = useToolSettingsStore()
-    store.selectScope('personal')
-    store.selectTrust('public')
-    api.get.mockImplementation((url) => Promise.resolve({
-      data: url === '/tools/personal-settings' ? { enabled: true } : settings()
-    }))
-
-    await store.fetchSettings()
-    await store.saveSettings({ policies: { 'network.fetch': 'auto' } })
-
-    expect(api.get).toHaveBeenCalledWith('/tools/settings', {
-      params: { scope: 'personal', trust: 'public' }
-    })
-    expect(api.put).toHaveBeenCalledWith(
-      '/tools/settings',
-      expect.objectContaining({
-        policies: { 'network.fetch': 'auto' },
-        transcribeAudio: { timeoutSeconds: 180 }
-      }),
-      { params: { scope: 'personal', trust: 'public' } }
-    )
-    expect(api.put.mock.calls[0][1]).not.toHaveProperty('updateAgentIdentity')
-    expect(store.policies['network.fetch']).toBe('auto')
-    expect(store.groups[0].tools[0].available).toBe(false)
-  })
-
-  it('discards a late response from the previous trust branch', async () => {
-    const requests = []
-    api.get.mockImplementation((url, config) => url === '/tools/availability'
-      ? Promise.resolve({ data: { tools: {} } })
-      : new Promise((resolve) => {
-      requests.push({ trust: config.params.trust, resolve })
-      }))
-    const store = useToolSettingsStore()
-
-    const privateLoad = store.fetchSettings()
-    store.selectTrust('public')
-    const publicLoad = store.fetchSettings()
-    requests[1].resolve({ data: settings('auto') })
-    await publicLoad
-    requests[0].resolve({ data: settings('disabled') })
-    await privateLoad
-
-    expect(store.trust).toBe('public')
-    expect(store.policies['network.fetch']).toBe('auto')
-    expect(store.loading).toBe(false)
-  })
-
-  it('does not apply a save after the selected branch changes', async () => {
-    let resolveSave
-    api.put.mockImplementation(() => new Promise((resolve) => { resolveSave = resolve }))
-    const store = useToolSettingsStore()
-    store.assignSettings(settings('ask'))
-    store.loaded = true
-
-    const save = store.saveSettings({ policies: { 'network.fetch': 'auto' } })
-    store.selectTrust('public')
-    resolveSave({ data: settings('auto') })
-
-    await expect(save).resolves.toBeUndefined()
-    expect(store.trust).toBe('public')
-    expect(store.loaded).toBe(false)
   })
 
   it('loads and saves admin-only tool configuration without scope parameters', async () => {
@@ -145,7 +77,7 @@ describe('tool settings store', () => {
     expect(store.configurationWebFetch.publicAddressesOnly).toBe(true)
   })
 
-  it('updates the loaded policy catalog after tool availability changes', () => {
+  it('updates loaded tools after technical availability changes', () => {
     const store = useToolSettingsStore()
     store.assignSettings({
       ...settings(),
@@ -196,18 +128,4 @@ describe('tool settings store', () => {
     expect(store.transcribeAudioAvailable).toBe(true)
   })
 
-  it('reloads the selected trust branch after resetting personal settings', async () => {
-    api.delete.mockResolvedValue({ data: {} })
-    api.get.mockResolvedValue({ data: settings() })
-    const store = useToolSettingsStore()
-    store.selectScope('personal')
-    store.selectTrust('public')
-
-    await store.resetPersonalSettings()
-
-    expect(api.delete).toHaveBeenCalledWith('/tools/settings', { params: { scope: 'personal' } })
-    expect(api.get).toHaveBeenCalledWith('/tools/settings', {
-      params: { scope: 'personal', trust: 'public' }
-    })
-  })
 })

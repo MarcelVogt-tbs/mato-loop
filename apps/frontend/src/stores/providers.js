@@ -13,21 +13,6 @@ function assignProviderPayload(store, payload) {
   store.models = payload.models
   store.availableProviders = payload.availableProviders ?? payload.providers
   store.availableModels = payload.availableModels ?? payload.models
-  store.defaultModelId = payload.defaultModelId ?? null
-  store.compactionModelId = payload.compactionModelId ?? null
-  store.titleGenerationModelId = payload.titleGenerationModelId ?? null
-  store.effectiveTitleGenerationModelId = payload.effectiveTitleGenerationModelId
-    ?? payload.titleGenerationModelId
-    ?? null
-  store.titleVisionFallbackEnabled = payload.titleVisionFallbackEnabled !== false
-  store.dreamingModelId = payload.dreamingModelId ?? null
-  store.visionModelId = payload.visionModelId ?? null
-  store.videoModelId = payload.videoModelId ?? null
-  store.imageGenerationModelId = payload.imageGenerationModelId ?? null
-  store.speechGenerationModelId = payload.speechGenerationModelId ?? null
-  store.audioGenerationModelId = payload.audioGenerationModelId ?? null
-  store.audioTranscriptionModelId = payload.audioTranscriptionModelId ?? null
-  store.skillCreationModelId = payload.skillCreationModelId ?? null
   if ('personalProvidersEnabled' in payload) {
     store.personalProvidersEnabled = payload.personalProvidersEnabled !== false
   }
@@ -114,19 +99,6 @@ export const useProviderStore = defineStore('providers', {
     models: [],
     availableProviders: null,
     availableModels: null,
-    defaultModelId: null,
-    compactionModelId: null,
-    titleGenerationModelId: null,
-    effectiveTitleGenerationModelId: null,
-    titleVisionFallbackEnabled: true,
-    dreamingModelId: null,
-    visionModelId: null,
-    videoModelId: null,
-    imageGenerationModelId: null,
-    speechGenerationModelId: null,
-    audioGenerationModelId: null,
-    audioTranscriptionModelId: null,
-    skillCreationModelId: null,
     scope: 'instance',
     personalProvidersEnabled: true,
     codex: {},
@@ -282,35 +254,6 @@ export const useProviderStore = defineStore('providers', {
     },
     async testModel(id) {
       return (await api.post(`/providers/models/${id}/test`, null, scopeConfig(this.scope))).data
-    },
-    async setDefaultModels({
-      defaultModelId,
-      compactionModelId,
-      titleGenerationModelId,
-      titleVisionFallbackEnabled,
-      dreamingModelId,
-      visionModelId,
-      videoModelId,
-      imageGenerationModelId,
-      speechGenerationModelId,
-      audioGenerationModelId,
-      audioTranscriptionModelId,
-      skillCreationModelId
-    }) {
-      return (await mutateAndRefresh(this, () => api.put('/providers/default-models', {
-        default_model_id: defaultModelId || null,
-        compaction_model_id: compactionModelId || null,
-        title_generation_model_id: titleGenerationModelId || null,
-        title_vision_fallback_enabled: titleVisionFallbackEnabled !== false,
-        dreaming_model_id: dreamingModelId || null,
-        vision_model_id: visionModelId || null,
-        video_model_id: videoModelId || null,
-        image_generation_model_id: imageGenerationModelId || null,
-        speech_generation_model_id: speechGenerationModelId || null,
-        audio_generation_model_id: audioGenerationModelId || null,
-        audio_transcription_model_id: audioTranscriptionModelId || null,
-        skill_creation_model_id: skillCreationModelId || null
-      }, scopeConfig(this.scope))))?.data
     },
     async removeProvider(id) {
       await api.delete(`/providers/configuration/${id}`, scopeConfig(this.scope))

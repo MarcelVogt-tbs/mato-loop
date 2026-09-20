@@ -1299,18 +1299,18 @@ def _blocked_context(instance, revision, *, book_key: str = "book:9"):
 
 
 @pytest.mark.parametrize("tool_name", ["knowledge_search", "knowledge_list_books"])
-@pytest.mark.parametrize("permission_source", ["tools", "profile"])
 @pytest.mark.parametrize("delegated", [False, True])
 async def test_aggregate_books_recheck_resource_policies_after_pending_approval(
-    monkeypatch, tool_name, permission_source, delegated,
+    monkeypatch, tool_name, delegated,
 ) -> None:
     from mato_loop_backend.agent.subagents import apply_delegation_ceiling, permission_snapshot
 
     instance = _base()
     integrations = IntegrationSettings(instances=[instance])
     profile = AgentProfile(name="Reader", instructions="Read selected books.")
-    tools = ToolSettings(private_permissions={"policies": {"knowledge.read": "ask"}})
-    permissions = profile.private_permissions if permission_source == "profile" else tools.private_permissions
+    tools = ToolSettings()
+    permissions = profile.private_permissions
+    permissions.policies["knowledge.read"] = ToolExecutionPolicy.ASK
     permissions.resource_policies = {
         str(instance.id): {"book:8": {"knowledge.read": ToolExecutionPolicy.DISABLED}}
     }
@@ -1331,7 +1331,11 @@ async def test_aggregate_books_recheck_resource_policies_after_pending_approval(
         return model()
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
-    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=None))
+
+    async def load_optional(_db, model, **_kwargs):
+        return await load(_db, model) if model is AgentProfilesSettings else None
+
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=load_optional))
     db = AsyncMock()
     session = ChatSession(id=uuid4(), user_id=uuid4(), agent_profile_id=profile.id)
     current_tools, _profile = await load_agent_profile_tools(db, session.user_id, profile.id, TrustLevel.PRIVATE)

@@ -35,6 +35,20 @@ from mato_loop_backend.settings.models import (
 
 logger = logging.getLogger(__name__)
 
+_PROVIDER_REQUEST_ID_HEADERS = (
+    "x-request-id",
+    "request-id",
+    "x-correlation-id",
+    "trace-id",
+)
+_DATA_URL = re.compile(r"data:[^\s,;]+(?:;[^\s,]+)*,[^\s]+", re.IGNORECASE)
+_BEARER_TOKEN = re.compile(r"\bBearer\s+\S+", re.IGNORECASE)
+_SENSITIVE_PROVIDER_TEXT = re.compile(
+    r"\b(?:api[-_ ]?key|authorization|password|secret|access[-_ ]?token|refresh[-_ ]?token)\b",
+    re.IGNORECASE,
+)
+_URL_QUERY = re.compile(r"(https?://[^\s?#]+)\?[^\s#]+", re.IGNORECASE)
+
 class DiscoveredModel(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -555,26 +569,56 @@ def _retry_after(response: httpx.Response) -> float | None:
             return None
 
 
+def _safe_provider_text(value: Any, *, limit: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = " ".join(value.split())
+    cleaned = _DATA_URL.sub("[data URL redacted]", cleaned)
+    cleaned = _BEARER_TOKEN.sub("Bearer [redacted]", cleaned)
+    cleaned = _URL_QUERY.sub(r"\1?[query redacted]", cleaned)
+    if _SENSITIVE_PROVIDER_TEXT.search(cleaned):
+        return "[sensitive provider message redacted]"
+    return cleaned[:limit] or None
+
+
 async def _ensure_success(response: httpx.Response) -> None:
     if response.status_code < 400:
         return
     await response.aread()
     error: Any = None
+    non_json_message: str | None = None
     try:
         payload = response.json()
         if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
             error = payload["error"]
     except (json.JSONDecodeError, UnicodeDecodeError):
-        pass
+        non_json_message = response.text
     error_type = error.get("type") if isinstance(error, dict) else None
     error_code = error.get("code") if isinstance(error, dict) else None
     error_param = error.get("param") if isinstance(error, dict) else None
+    error_message = error.get("message") if isinstance(error, dict) else non_json_message
+    try:
+        endpoint = response.request.url.path
+    except RuntimeError:
+        endpoint = None
+    request_id = next(
+        (
+            value
+            for header in _PROVIDER_REQUEST_ID_HEADERS
+            if (value := _safe_provider_text(response.headers.get(header), limit=200))
+        ),
+        None,
+    )
     logger.warning(
-        "Provider request failed with HTTP status %s (type=%r, code=%r, param=%r)",
+        "Provider request failed (status=%s, endpoint=%r, type=%r, code=%r, "
+        "param=%r, request_id=%r, message=%r)",
         response.status_code,
-        error_type[:80] if isinstance(error_type, str) else None,
-        error_code[:80] if isinstance(error_code, str) else None,
-        error_param[:80] if isinstance(error_param, str) else None,
+        endpoint,
+        _safe_provider_text(error_type, limit=80),
+        _safe_provider_text(error_code, limit=80),
+        _safe_provider_text(error_param, limit=80),
+        request_id,
+        _safe_provider_text(error_message, limit=500),
     )
     raise ProviderError(
         f"Provider request failed with HTTP {response.status_code}",

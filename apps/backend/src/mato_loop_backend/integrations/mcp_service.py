@@ -19,6 +19,7 @@ from mato_loop_backend.integrations.service import (
     _load_integrations,
     _load_tools,
     _save_settings,
+    clear_profile_integration_policies,
 )
 from mato_loop_backend.integrations.sonobin import SONOBIN, SonoBinConfig
 from mato_loop_backend.security import (
@@ -255,6 +256,9 @@ class McpIntegrationService:
             )
             if changed:
                 await _save_settings(db, tool_settings, owner_id)
+            await clear_profile_integration_policies(
+                db, integration_id, owner_id=owner_id
+            )
         else:
             resource_keys = {mcp_resource_key(tool["name"]) for tool in tools}
             if cls._prune_tool_state(tool_settings, integration_id, resource_keys):
@@ -310,6 +314,7 @@ class McpIntegrationService:
         changed = tools.resource_labels.pop(str(integration_id), None) is not None or changed
         if changed:
             await _save_settings(db, tools, owner_id)
+        await clear_profile_integration_policies(db, integration_id, owner_id=owner_id)
         await _save_settings(db, settings, owner_id)
         await db.commit()
 

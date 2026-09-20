@@ -26,7 +26,6 @@ describe('MatoLoop frontend scaffold', () => {
     expect(routeNames).toEqual(['chat', 'settings'])
     expect(settingsRoute.children.map((route) => route.name)).toEqual([
       'settings-providers',
-      'settings-default-models',
       'settings-agents',
       'settings-integrations',
       'settings-mcp',
@@ -47,11 +46,11 @@ describe('MatoLoop frontend scaffold', () => {
     expect(
       settingsRoute.children.find((route) => route.name === 'settings-integrations').children
         .map((route) => route.name)
-    ).toEqual(['settings-integration-access'])
+    ).toEqual(['settings-integration-resources'])
     expect(
       settingsRoute.children.find((route) => route.name === 'settings-mcp').children
         .map((route) => ({ name: route.name, path: route.path }))
-    ).toEqual([{ name: 'settings-mcp-access', path: ':serverId/access' }])
+    ).toEqual([{ name: 'settings-mcp-tools', path: ':serverId/tools' }])
     expect(
       settingsRoute.children.find((route) => route.name === 'settings-agents').children
         .map((route) => route.name)
@@ -68,6 +67,7 @@ describe('MatoLoop frontend scaffold', () => {
     expect(settingsRoutes.find((route) => route.name === 'settings-users')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-debug-access')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-instance-limits')?.meta.requiresAdmin).toBe(true)
+    expect(settingsRoutes.find((route) => route.name === 'settings-tools')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-channels')?.meta).toEqual({
       settingsLabel: 'Kanäle', settingsIcon: 'forum'
     })
@@ -88,7 +88,7 @@ describe('MatoLoop frontend scaffold', () => {
     })
     expect(settingsRoutes.find((route) => route.name === 'settings-persona')?.meta).toBeUndefined()
     expect(settingsRoutes
-      .filter((route) => ['settings-providers', 'settings-default-models', 'settings-integrations', 'settings-tools'].includes(route.name))
+      .filter((route) => ['settings-providers', 'settings-integrations'].includes(route.name))
       .every((route) => route.meta.requiresAdmin === undefined)).toBe(true)
   })
 })

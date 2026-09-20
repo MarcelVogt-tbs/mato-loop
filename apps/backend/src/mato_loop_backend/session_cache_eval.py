@@ -23,7 +23,7 @@ from mato_loop_backend.sessions.service import ACTIVE_RUN_STATUSES
 from mato_loop_backend.settings import (
     effective_model_pseudonymization,
     effective_model_trust,
-    load_effective_ai,
+    load_agent_profile_ai,
 )
 from mato_loop_backend.settings.models import ReasoningEffort
 
@@ -366,7 +366,7 @@ class SessionCacheEvaluator:
             )
             if active_runs and not self.args.recover:
                 raise RuntimeError("The selected user has an active agent run; retry when it is idle.")
-            ai = await load_effective_ai(db, user.id)
+            ai, _profile = await load_agent_profile_ai(db, user.id, None)
             providers = {provider.id: provider for provider in ai.providers if provider.enabled}
             requested_model = self.args.model or DEFAULT_MODELS[self.args.adapter]
             candidates = [

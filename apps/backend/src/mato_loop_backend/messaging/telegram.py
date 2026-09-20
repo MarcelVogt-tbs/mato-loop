@@ -79,7 +79,6 @@ from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
     InstanceLimits,
     SettingsStore,
-    load_effective_ai,
 )
 
 logger = logging.getLogger(__name__)
@@ -574,12 +573,11 @@ async def _new_session(
     attachments: list[AttachmentInput],
     run_id: UUID,
 ) -> AgentRun:
-    ai = await load_effective_ai(db, endpoint.user_id)
     item = ChatSession(
         user_id=endpoint.user_id,
         title="Neue Session",
         title_generation_status=TitleGenerationStatus.PENDING.value,
-        model_config_id=ai.default_model_id,
+        model_config_id=None,
         agent_profile_id=GENERAL_PROFILE_ID,
     )
     db.add(item)

@@ -14,11 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent.permissions import PermissionDecision
 from mato_loop_backend.agent.tools import ToolContext, ToolRegistry
 from mato_loop_backend.api.request_body_limit import _request_limit
-from mato_loop_backend.api.routes.integrations import (
-    IntegrationAccessRequest,
-    get_integration_access,
-    update_integration_access,
-)
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.integrations import registry as integration_registry
 from mato_loop_backend.integrations.mail import (
@@ -51,7 +46,6 @@ from mato_loop_backend.settings import (
     IntegrationSettings,
     SettingsStore,
     ToolExecutionPolicy,
-    ToolSettings,
 )
 
 
@@ -451,44 +445,6 @@ async def test_mail_service_stores_only_encrypted_password_credential(monkeypatc
         "payload": {"password": "secret"},
     }
     db.commit.assert_awaited_once()
-
-
-async def test_action_only_integration_access_reads_and_updates_without_resources(
-    monkeypatch,
-) -> None:
-    account = _account()
-    integrations = IntegrationSettings(instances=[account])
-    tools = ToolSettings()
-
-    async def load(_db, settings_type, **_kwargs):
-        return integrations if settings_type is IntegrationSettings else tools
-
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
-    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
-    db = AsyncMock(spec=AsyncSession)
-
-    access = await get_integration_access(account.id, db, "public")
-    assert access["resources"] == []
-    assert {item["capability"] for item in access["actions"]} == {
-        "mail.read",
-        "mail.drafts",
-        "mail.send",
-        "mail.delete",
-    }
-
-    updated = await update_integration_access(
-        account.id,
-        IntegrationAccessRequest(
-            policies={"mail.read": ToolExecutionPolicy.AUTO}, resources={}
-        ),
-        db,
-        "public",
-    )
-    assert tools.permissions.integration_policies[str(account.id)] == {
-        "mail.read": ToolExecutionPolicy.AUTO
-    }
-    read = next(item for item in updated["actions"] if item["capability"] == "mail.read")
-    assert read["effectiveIntegrationPolicy"] == "auto"
 
 
 def test_message_and_attachment_tokens_are_opaque_and_revision_bound() -> None:

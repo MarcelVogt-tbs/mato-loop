@@ -22,34 +22,12 @@ const list = { servers: [{
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
   }]
 }] }
-const access = {
-  integrationId: 'server-1',
-  globalPolicy: null,
-  effectiveGlobalPolicy: 'auto',
-  actions: [{
-    capability: 'mcp.call',
-    label: 'MCP-Tool aufrufen',
-    allowedPolicies: ['disabled', 'ask', 'auto'],
-    globalPolicy: 'auto',
-    integrationPolicy: 'ask',
-    effectiveIntegrationPolicy: 'ask'
-  }],
-  resources: [{
-    key: 'tool:lookup-hash',
-    groupKey: null,
-    label: 'lookup',
-    hardUnavailableCapabilities: [],
-    applicableCapabilities: ['mcp.call'],
-    policies: { 'mcp.call': 'auto' },
-    effectivePolicies: { 'mcp.call': 'auto' }
-  }]
-}
 
 describe('MCP server store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    api.get.mockImplementation((url) => Promise.resolve({ data: url.endsWith('/access') ? access : structuredClone(list) }))
+    api.get.mockResolvedValue({ data: structuredClone(list) })
   })
 
   it('applies successful server writes locally without follow-up list requests', async () => {
@@ -81,43 +59,6 @@ describe('MCP server store', () => {
     expect(store.servers[0].tools[0].annotations.readOnlyHint).toBe(true)
   })
 
-  it('keeps private and public access branches separate', async () => {
-    api.put.mockResolvedValue({ data: { ...access, globalPolicy: 'disabled', effectiveGlobalPolicy: 'disabled' } })
-    const store = useMcpServerStore()
-
-    await store.fetchAccess('server-1')
-    store.selectTrust('public')
-    await store.fetchAccess('server-1')
-    await store.saveAccess('server-1', {
-      globalPolicy: 'disabled',
-      policies: { 'mcp.call': 'disabled' },
-      resources: { 'tool:lookup-hash': { 'mcp.call': 'auto' } }
-    })
-
-    expect(api.get).toHaveBeenNthCalledWith(1, '/mcp/servers/server-1/access', { params: { scope: 'instance', trust: 'private' } })
-    expect(api.get).toHaveBeenNthCalledWith(2, '/mcp/servers/server-1/access', { params: { scope: 'instance', trust: 'public' } })
-    expect(api.put).toHaveBeenCalledWith('/mcp/servers/server-1/access', {
-      globalPolicy: 'disabled',
-      policies: { 'mcp.call': 'disabled' },
-      resources: { 'tool:lookup-hash': { 'mcp.call': 'auto' } }
-    }, { params: { scope: 'instance', trust: 'public' } })
-    expect(store.access.globalPolicy).toBe('disabled')
-    expect(store.access.effectiveGlobalPolicy).toBe('disabled')
-  })
-
-  it('omits the instance global policy from personal access writes', async () => {
-    api.put.mockResolvedValue({ data: access })
-    const store = useMcpServerStore()
-    store.selectScope('personal')
-
-    await store.saveAccess('server-1', { globalPolicy: null, policies: {}, resources: {} })
-
-    expect(api.put).toHaveBeenCalledWith('/mcp/servers/server-1/access', {
-      policies: {}, resources: {}
-    }, { params: { scope: 'personal', trust: 'private' } })
-    expect(store.access.effectiveGlobalPolicy).toBe('auto')
-  })
-
   it('loads and saves the personal-server setting', async () => {
     api.get.mockResolvedValueOnce({ data: { personalAllowed: false } })
     api.put.mockResolvedValueOnce({ data: { personalAllowed: true } })
@@ -132,20 +73,4 @@ describe('MCP server store', () => {
     expect(store.settingsLoaded).toBe(true)
   })
 
-  it('discards access loaded for a previous trust branch', async () => {
-    const requests = []
-    api.get.mockImplementation((_url, config) => new Promise((resolve) => requests.push({ config, resolve })))
-    const store = useMcpServerStore()
-
-    const privateLoad = store.fetchAccess('server-1')
-    store.selectTrust('public')
-    const publicLoad = store.fetchAccess('server-1')
-    requests[1].resolve({ data: { ...access, branch: 'public' } })
-    await publicLoad
-    requests[0].resolve({ data: { ...access, branch: 'private' } })
-    await privateLoad
-
-    expect(store.access.branch).toBe('public')
-    expect(store.accessLoading).toBe(false)
-  })
 })

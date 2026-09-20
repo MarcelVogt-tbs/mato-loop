@@ -21,12 +21,18 @@ from mato_loop_backend.providers.base import ProviderError, ProviderResult, Publ
 from mato_loop_backend.providers.output_budget import allocate_output_tokens, guarded_input_tokens
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
+    GENERAL_PROFILE_ID,
+    AgentProfilesSettings,
     AgentRuntimeSettings,
     AiSettings,
     ReasoningEffort,
     SettingsStore,
 )
-from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+from mato_loop_backend.settings.models import (
+    AgentProfileAccessOverrides,
+    LlmProviderConfig,
+    ModelConfig,
+)
 
 _VALID_SUMMARY = """Goal
 Continue.
@@ -46,6 +52,27 @@ None.
 Source message IDs
 None.
 """
+
+
+@pytest.fixture(autouse=True)
+def profile_model_defaults(monkeypatch):
+    async def load_optional(db, settings_type, **_kwargs):
+        if settings_type is not AgentProfilesSettings:
+            return None
+        ai = await SettingsStore.load(db, AiSettings)
+        return AgentProfilesSettings(
+            builtin_access_overrides={
+                GENERAL_PROFILE_ID: AgentProfileAccessOverrides(
+                    default_model_id=ai.default_model_id,
+                    compaction_model_id=ai.compaction_model_id,
+                    title_generation_model_id=ai.title_generation_model_id,
+                    title_vision_fallback_enabled=ai.title_vision_fallback_enabled,
+                    vision_model_id=ai.vision_model_id,
+                )
+            }
+        )
+
+    monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
 
 
 class _SessionContext:

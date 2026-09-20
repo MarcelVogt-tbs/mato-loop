@@ -178,6 +178,27 @@ class AgentProfilePermissions(BaseModel):
         return AgentProfilePermissions.model_validate(data)
 
 
+class ShellPrefixSettings(BaseModel):
+    read: list[list[str]] = Field(default_factory=list, max_length=100)
+    write: list[list[str]] = Field(default_factory=list, max_length=100)
+
+    @field_validator("read", "write")
+    @classmethod
+    def validate_prefixes(cls, value: list[list[str]]) -> list[list[str]]:
+        normalized: list[list[str]] = []
+        for prefix in value:
+            if not 1 <= len(prefix) <= 8 or any(
+                not token
+                or len(token) > 256
+                or any(not 33 <= ord(character) <= 126 for character in token)
+                for token in prefix
+            ):
+                raise ValueError("invalid shell prefix")
+            if prefix not in normalized:
+                normalized.append(prefix)
+        return normalized
+
+
 class AgentProfileAccessOverrides(BaseModel):
     model_config = ConfigDict(alias_generator=lambda value: _camel_case(value), populate_by_name=True, extra="forbid")
 
@@ -185,6 +206,20 @@ class AgentProfileAccessOverrides(BaseModel):
     integration_availability: dict[str, StrictBool] | None = None
     private_permissions: AgentProfilePermissions | None = None
     public_permissions: AgentProfilePermissions | None = None
+    shell_prefixes: ShellPrefixSettings | None = None
+    default_model_id: UUID | None = None
+    reasoning_effort: ReasoningEffort | None = None
+    compaction_model_id: UUID | None = None
+    title_generation_model_id: UUID | None = None
+    title_vision_fallback_enabled: StrictBool | None = None
+    skill_creation_model_id: UUID | None = None
+    dreaming_model_id: UUID | None = None
+    vision_model_id: UUID | None = None
+    video_model_id: UUID | None = None
+    image_generation_model_id: UUID | None = None
+    speech_generation_model_id: UUID | None = None
+    audio_generation_model_id: UUID | None = None
+    audio_transcription_model_id: UUID | None = None
 
     _validate_availability = field_validator("integration_availability")(
         lambda value: validate_integration_availability(value) if value is not None else value
@@ -192,7 +227,25 @@ class AgentProfileAccessOverrides(BaseModel):
 
     @model_validator(mode="after")
     def reject_null_overrides(self) -> Self:
-        if any(getattr(self, field) is None for field in self.model_fields_set):
+        nullable = {
+            "default_model_id",
+            "reasoning_effort",
+            "compaction_model_id",
+            "title_generation_model_id",
+            "skill_creation_model_id",
+            "dreaming_model_id",
+            "vision_model_id",
+            "video_model_id",
+            "image_generation_model_id",
+            "speech_generation_model_id",
+            "audio_generation_model_id",
+            "audio_transcription_model_id",
+        }
+        if any(
+            getattr(self, field) is None
+            for field in self.model_fields_set
+            if field not in nullable
+        ):
             raise ValueError("access overrides must not be null")
         return self
 
@@ -233,6 +286,20 @@ class AgentProfile(BaseModel):
     public_permissions: AgentProfilePermissions = Field(
         default_factory=AgentProfilePermissions
     )
+    shell_prefixes: ShellPrefixSettings = Field(default_factory=ShellPrefixSettings)
+    default_model_id: UUID | None = None
+    reasoning_effort: ReasoningEffort | None = None
+    compaction_model_id: UUID | None = None
+    title_generation_model_id: UUID | None = None
+    title_vision_fallback_enabled: StrictBool = True
+    skill_creation_model_id: UUID | None = None
+    dreaming_model_id: UUID | None = None
+    vision_model_id: UUID | None = None
+    video_model_id: UUID | None = None
+    image_generation_model_id: UUID | None = None
+    speech_generation_model_id: UUID | None = None
+    audio_generation_model_id: UUID | None = None
+    audio_transcription_model_id: UUID | None = None
     delegation_enabled: StrictBool = False
     session_write_paths: list[str] | None = None
     base_profile_id: UUID | None = Field(default=None, exclude=True)
@@ -291,6 +358,20 @@ class AgentProfileOverrides(BaseModel):
     integration_availability: dict[str, StrictBool] | None = None
     private_permissions: AgentProfilePermissions | None = None
     public_permissions: AgentProfilePermissions | None = None
+    shell_prefixes: ShellPrefixSettings | None = None
+    default_model_id: UUID | None = None
+    reasoning_effort: ReasoningEffort | None = None
+    compaction_model_id: UUID | None = None
+    title_generation_model_id: UUID | None = None
+    title_vision_fallback_enabled: StrictBool | None = None
+    skill_creation_model_id: UUID | None = None
+    dreaming_model_id: UUID | None = None
+    vision_model_id: UUID | None = None
+    video_model_id: UUID | None = None
+    image_generation_model_id: UUID | None = None
+    speech_generation_model_id: UUID | None = None
+    audio_generation_model_id: UUID | None = None
+    audio_transcription_model_id: UUID | None = None
     delegation_enabled: StrictBool | None = None
     session_write_paths: list[str] | None = None
 
@@ -303,7 +384,23 @@ class AgentProfileOverrides(BaseModel):
 
     @model_validator(mode="after")
     def reject_null_non_nullable_fields(self) -> Self:
-        nullable = {"persona_id", "max_tool_calls", "session_write_paths"}
+        nullable = {
+            "persona_id",
+            "max_tool_calls",
+            "session_write_paths",
+            "default_model_id",
+            "reasoning_effort",
+            "compaction_model_id",
+            "title_generation_model_id",
+            "skill_creation_model_id",
+            "dreaming_model_id",
+            "vision_model_id",
+            "video_model_id",
+            "image_generation_model_id",
+            "speech_generation_model_id",
+            "audio_generation_model_id",
+            "audio_transcription_model_id",
+        }
         if any(
             field in self.model_fields_set and getattr(self, field) is None
             for field in type(self).model_fields
@@ -846,30 +943,6 @@ class MediaToolSettings(BaseModel):
         le=3_600,
         validation_alias=AliasChoices("timeout_seconds", "timeoutSeconds"),
     )
-
-
-class ShellPrefixSettings(BaseModel):
-    read: list[list[str]] = Field(default_factory=list, max_length=100)
-    write: list[list[str]] = Field(default_factory=list, max_length=100)
-
-    @field_validator("read", "write")
-    @classmethod
-    def validate_prefixes(cls, value: list[list[str]]) -> list[list[str]]:
-        normalized: list[list[str]] = []
-        for prefix in value:
-            if not 1 <= len(prefix) <= 8 or any(
-                not token
-                or len(token) > 256
-                or any(
-                    not 33 <= ord(character) <= 126
-                    for character in token
-                )
-                for token in prefix
-            ):
-                raise ValueError("invalid shell prefix")
-            if prefix not in normalized:
-                normalized.append(prefix)
-        return normalized
 
 
 class DefaultCalendarSettings(BaseModel):

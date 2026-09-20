@@ -12,13 +12,13 @@ Prüfen Sie, ob ein verbundener Computer und ein absoluter aktueller Ordner gew�
 
 Provider und Modell müssen aktiviert sein. Das Modell muss außerdem verfügbar sein und die benötigte Chatfähigkeit besitzen.
 
-## Why Can I Not Record or Transcribe a Voice Message?
+## Warum kann ich keine Sprachnachricht aufnehmen oder transkribieren?
 
-Recording requires browser microphone access. Audio transcription must be enabled and an available default transcription model selected only for automatic transcription after sending. Without transcription, you can still record, send, and play the original audio attachment.
+Für die Aufnahme benötigt der Browser Mikrofonzugriff. Nur für die automatische Transkription nach dem Senden müssen Audiotranskription technisch aktiviert und im gewählten Agentenprofil ein verfügbares Transkriptionsmodell ausgewählt sein. Ohne Transkription können Sie den Originalanhang weiterhin aufnehmen, senden und abspielen.
 
 ## Warum fragt MatoLoop trotz automatischer Tools nach einer Freigabe?
 
-Einzelne Ressourcen, private Netzwerkziele oder sicherheitsrelevante Aktionen können strengeren Hostregeln unterliegen. Modell- und Session-Einstellungen können die globale Richtlinie ebenfalls einschränken.
+Einzelne Ressourcen, private Netzwerkziele oder sicherheitsrelevante Aktionen können strengeren Hostregeln unterliegen. Profil- und Session-Einstellungen können eine Aktion ebenfalls einschränken. Technische Verfügbarkeit, Vertrauens-, Pfad-, Computer- und Delegationsgrenzen bleiben auch bei **Automatisch** wirksam.
 
 ## Macht „Rückgängig“ Dateiänderungen rückgängig?
 

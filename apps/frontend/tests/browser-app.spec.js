@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createApp, h, markRaw, nextTick, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
-import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
+import { createMemoryHistory, createRouter } from 'vue-router'
 import { Quasar, QAvatar, QBtnToggle, QForm, QSkeleton, QBanner, QBtn, QCard, QCardActions, QCardSection, QDialog, QFile, QIcon, QInput,
   QItem, QItemLabel, QItemSection, QLinearProgress, QList, QMenu, QSelect, QSpace, QTab, QTabs, QToggle, QToolbar, QToolbarTitle, QTooltip, QSeparator, QScrollArea, ClosePopup, Notify, Ripple } from 'quasar'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -356,32 +356,6 @@ it('offers manual cancellation while requested attachment is still in flight', a
   expect(socket.send).toHaveBeenCalledExactlyOnceWith('{"type":"detach"}')
   expect(browser.controlRequestId).toBeNull()
   expect(browser.submitting).toBe('detach')
-})
-
-it.each(['private', 'public'])('resolves browser.instances on the generic access page and loads inherited and explicit policies (%s)', async (trust) => {
-  const integrations = useIntegrationStore()
-  const instances = integrations.browser.instances
-  integrations.selectScope('personal')
-  integrations.selectTrust(trust)
-  integrations.browser = { configured: true, instances }
-  vi.spyOn(integrations, 'fetchCatalog').mockResolvedValue(integrations.catalog)
-  vi.spyOn(integrations, 'fetchAll').mockResolvedValue()
-  api.get.mockResolvedValueOnce({ data: { resources: [], actions: [
-    { capability: 'browser.read', label: 'Browser lesen', allowedPolicies: ['disabled', 'ask'], globalPolicy: 'ask', integrationPolicy: null, effectiveIntegrationPolicy: 'ask' },
-    { capability: 'browser.write', label: 'Browser steuern', allowedPolicies: ['disabled', 'ask'], globalPolicy: 'ask', integrationPolicy: 'ask', effectiveIntegrationPolicy: 'ask' }
-  ] } })
-  await mount({ render: () => h(RouterView) }, { path: '/settings/integrations/browser-1/access?scope=personal' })
-  await vi.waitFor(() => expect(root.textContent).toContain('Browser lesen'))
-  expect(root.textContent).toContain('Zugriff für Browser')
-  expect(root.textContent).not.toContain('Automatisch')
-  expect(root.textContent).toContain('Wirksam: Nachfragen')
-  expect(root.querySelector('form').classList.contains('disabled')).toBe(false)
-  expect(root.querySelectorAll('[role="combobox"]')).toHaveLength(2)
-  root.querySelector('[role="combobox"]').click()
-  await vi.waitFor(() => expect(document.querySelector('.q-menu')).not.toBeNull())
-  expect(menuItem('Automatisch')).toBeUndefined()
-  expect(api.get).toHaveBeenCalledExactlyOnceWith('/integrations/browser-1/access', { params: { scope: 'personal', trust } })
-  expect(FakeWebSocket.instances).toHaveLength(0)
 })
 
 it.each([{ width: 390, dark: false }, { width: 390, dark: true }, { width: 1440, dark: false }, { width: 1440, dark: true }])(

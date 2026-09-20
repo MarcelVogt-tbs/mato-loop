@@ -58,11 +58,12 @@ from mato_loop_backend.session_storage import (
 )
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
+    AgentProfile,
     AgentProfileUnavailable,
     AiSettings,
     effective_model_trust,
     load_agent_profile,
-    load_effective_ai,
+    load_agent_profile_ai,
 )
 from mato_loop_backend.settings.models import ModelAvailability, ModelCapability
 from mato_loop_backend.workspace import RootFileError, RootFileService
@@ -72,6 +73,21 @@ from .cleanup import descendant_sessions
 logger = logging.getLogger(__name__)
 VISIBLE_MESSAGE_ROLES = ("user", "assistant")
 ACTIVE_RUN_STATUSES = ("queued", "running", "waiting_approval", "waiting_input")
+
+
+async def _profile_ai(
+    db: AsyncSession, user_id: UUID, profile_id: UUID | None
+) -> AiSettings:
+    return (await _profile_ai_and_profile(db, user_id, profile_id))[0]
+
+
+async def _profile_ai_and_profile(
+    db: AsyncSession, user_id: UUID, profile_id: UUID | None
+) -> tuple[AiSettings, AgentProfile]:
+    try:
+        return await load_agent_profile_ai(db, user_id, profile_id)
+    except AgentProfileUnavailable as exc:
+        raise SessionServiceError(409, "agentProfile.selectedUnavailable") from exc
 
 PayloadSerializer = Callable[..., Awaitable[dict[str, Any]]]
 MessageSerializer = Callable[..., dict[str, Any]]
@@ -960,13 +976,14 @@ async def create_session(
         )
         if project is None:
             raise SessionServiceError(404, "project.notFound", field="projectId")
-    ai = await load_effective_ai(db, user.id)
+    agent_profile_id = payload.agent_profile_id or GENERAL_PROFILE_ID
+    await validate_agent_profile(db, user.id, agent_profile_id)
+    ai = await _profile_ai(db, user.id, agent_profile_id)
     model_id = payload.model_id or ai.default_model_id
     if not model_available(ai, model_id):
         raise SessionServiceError(409, "session.modelUnavailable", field="modelId")
     if not model_supports_tools(ai, model_id):
         raise SessionServiceError(409, "session.modelToolsUnavailable", field="modelId")
-    await validate_agent_profile(db, user.id, payload.agent_profile_id)
     fields = payload.model_fields_set
     agent_id = (
         payload.preferred_execution_agent_id
@@ -994,8 +1011,8 @@ async def create_session(
         project_id=payload.project_id,
         title="Neue Session",
         title_generation_status=TitleGenerationStatus.PENDING.value,
-        model_config_id=model_id,
-        agent_profile_id=payload.agent_profile_id,
+        model_config_id=payload.model_id,
+        agent_profile_id=agent_profile_id,
         reasoning_effort=payload.reasoning_effort.value if payload.reasoning_effort else None,
         memory_mode=payload.memory_mode.value,
         web_search_policy=payload.web_search_policy.value,
@@ -1154,7 +1171,7 @@ async def send_message(
     )
     if active:
         raise SessionServiceError(409, "session.runAlreadyActive")
-    ai = await load_effective_ai(db, user.id)
+    ai = await _profile_ai(db, user.id, item.agent_profile_id)
     model_id = item.model_config_id or ai.default_model_id
     if not model_available(ai, model_id):
         raise SessionServiceError(409, "session.modelUnavailable")
@@ -1223,6 +1240,11 @@ async def update_session(
     item = await owned_session_query(db, session_id, user.id)
     if item is None:
         raise SessionServiceError(404, "session.notFound")
+    target_profile_id = (
+        payload.agent_profile_id or GENERAL_PROFILE_ID
+        if "agent_profile_id" in fields
+        else item.agent_profile_id
+    )
     if fields & policy_fields:
         active = await db.scalar(
             select(AgentRun.id).where(
@@ -1278,16 +1300,20 @@ async def update_session(
             for tab in (item.control_center or {}).get("tabs", [])
         ) and not any(tab.app_id == "browser" and tab.kind == "app" for tab in payload.control_center.tabs)
         item.control_center = payload.control_center.model_dump(mode="json")
-    if "model_id" in fields:
-        ai = await load_effective_ai(db, user.id)
-        if payload.model_id is not None and not model_available(ai, payload.model_id):
+    if fields & {"model_id", "agent_profile_id"}:
+        ai = await _profile_ai(db, user.id, target_profile_id)
+        requested_model_id = (
+            payload.model_id if "model_id" in fields else item.model_config_id
+        )
+        if requested_model_id is not None and not model_available(ai, requested_model_id):
             raise SessionServiceError(400, "session.modelUnavailable")
-        effective_model_id = payload.model_id or ai.default_model_id
+        effective_model_id = requested_model_id or ai.default_model_id
         if not model_available(ai, effective_model_id):
             raise SessionServiceError(409, "session.modelUnavailable")
         if not model_supports_tools(ai, effective_model_id):
             raise SessionServiceError(409, "session.modelToolsUnavailable")
-        item.model_config_id = payload.model_id
+        if "model_id" in fields:
+            item.model_config_id = payload.model_id
     if "agent_profile_id" in fields:
         agent_profile_id = payload.agent_profile_id or GENERAL_PROFILE_ID
         await validate_agent_profile(db, user.id, agent_profile_id)
@@ -1300,13 +1326,13 @@ async def update_session(
         item.memory_mode = payload.memory_mode.value
     if "web_search_policy" in fields and payload.web_search_policy is not None:
         if payload.web_search_policy.value == "required":
-            ai = await load_effective_ai(db, user.id)
+            ai = await _profile_ai(db, user.id, target_profile_id)
             model_id = item.model_config_id or ai.default_model_id
             if not model_supports_tools(ai, model_id):
                 raise SessionServiceError(409, "session.modelToolsUnavailable")
         item.web_search_policy = payload.web_search_policy.value
     if fields & execution_fields:
-        ai = await load_effective_ai(db, user.id)
+        ai = await _profile_ai(db, user.id, target_profile_id)
         model = model_for_session(ai, item.model_config_id or ai.default_model_id)
         provider = provider_for_session(ai, model)
         agent_id = (

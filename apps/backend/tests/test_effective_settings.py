@@ -77,7 +77,7 @@ def test_integration_settings_normalizes_legacy_availability() -> None:
     assert set(disabled.model_dump()) == {"instances", "adapter_availability"}
 
 
-async def test_effective_ai_combines_providers_and_uses_only_effective_personal_defaults(
+async def test_effective_ai_combines_provider_inventory_without_personal_defaults(
     monkeypatch,
 ) -> None:
     user_id = uuid4()
@@ -112,10 +112,15 @@ async def test_effective_ai_combines_providers_and_uses_only_effective_personal_
     effective = await load_effective_ai(AsyncMock(spec=AsyncSession), user_id)
 
     assert [provider.owner_id for provider in effective.providers] == [None, user_id]
-    assert effective.default_model_id == personal_model.id
+    assert [model.id for model in effective.models] == [
+        instance_model.id,
+        personal_model.id,
+        unavailable_model.id,
+    ]
+    assert effective.default_model_id == instance_model.id
     assert effective.compaction_model_id == instance_model.id
     assert effective.title_generation_model_id == instance_model.id
-    assert effective.title_vision_fallback_enabled is True
+    assert effective.title_vision_fallback_enabled is False
     assert instance_provider.owner_id is None
     assert personal_provider.owner_id is None
     assert "owner_id" not in effective.providers[1].model_dump()
@@ -217,7 +222,7 @@ async def test_effective_integrations_excludes_globally_disabled_adapters(
     assert personal.instances == [personal_item]
 
 
-async def test_effective_ai_personal_default_can_select_instance_model(monkeypatch) -> None:
+async def test_effective_ai_ignores_legacy_personal_default(monkeypatch) -> None:
     user_id = uuid4()
     provider = LlmProviderConfig(name="Instance", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="instance")
@@ -228,7 +233,7 @@ async def test_effective_ai_personal_default_can_select_instance_model(monkeypat
 
     effective = await load_effective_ai(AsyncMock(spec=AsyncSession), user_id)
 
-    assert effective.default_model_id == model.id
+    assert effective.default_model_id is None
 
 
 async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_limits(
@@ -261,7 +266,7 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_li
 
     effective = await load_effective_tools(AsyncMock(spec=AsyncSession), uuid4())
 
-    assert effective.permissions.policies == {"instance": "ask", "personal": "auto"}
+    assert effective.permissions.policies == {}
     assert effective.web_fetch.user_agent == "Instance Agent"
     assert effective.web_fetch.max_response_mib == 7
     assert effective.web_fetch.public_addresses_only is False
@@ -295,11 +300,8 @@ async def test_effective_tools_keeps_personal_integration_defaults_when_tool_sna
 
     effective = await load_effective_tools(AsyncMock(spec=AsyncSession), uuid4())
 
-    assert effective.permissions.policies == instance.public_permissions.policies
-    assert (
-        effective.permissions.integration_policies
-        == personal.public_permissions.integration_policies
-    )
+    assert effective.permissions.policies == {}
+    assert effective.permissions.integration_policies == {}
 
 
 def test_personal_integration_tool_settings_do_not_snapshot_policies() -> None:

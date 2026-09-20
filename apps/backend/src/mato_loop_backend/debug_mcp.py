@@ -57,10 +57,9 @@ from mato_loop_backend.sessions.serialization import (
 from mato_loop_backend.settings import MemorySettings, SettingsStore, TrustLevel
 from mato_loop_backend.settings.effective import (
     filter_agent_profile_integrations,
-    load_agent_profile,
+    load_agent_profile_ai,
     load_agent_profile_tools,
     load_effective_agent_identity,
-    load_effective_ai,
     load_effective_integrations,
     load_effective_skills,
 )
@@ -277,7 +276,7 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
             session = await _owned_session(db, session_id, user_id)
             if session is None:
                 return _not_found()
-            ai = await load_effective_ai(db, user_id)
+            ai, profile = await load_agent_profile_ai(db, user_id, session.agent_profile_id)
             model_id = session.model_config_id or ai.default_model_id
             model = next((item for item in ai.models if item.id == model_id), None)
             provider = (
@@ -285,7 +284,6 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
                 if model
                 else None
             )
-            profile = await load_agent_profile(db, user_id, session.agent_profile_id)
             identity = await load_effective_agent_identity(db, user_id, profile)
             skills = await load_effective_skills(db, user_id, enabled_only=True)
             integrations = filter_agent_profile_integrations(
@@ -365,7 +363,7 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
             session = await _owned_session(db, session_id, user_id)
             if session is None:
                 return _not_found()
-            ai = await load_effective_ai(db, user_id)
+            ai, _profile = await load_agent_profile_ai(db, user_id, session.agent_profile_id)
             model_id = session.model_config_id or ai.default_model_id
             model = next((item for item in ai.models if item.id == model_id), None)
             provider = (

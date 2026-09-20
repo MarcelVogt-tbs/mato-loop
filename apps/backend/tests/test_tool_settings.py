@@ -9,15 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent.tools import resolve_tool_execution_policy, tool_registry
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.tool_settings import (
-    PersonalSettingsEnabledRequest,
-    ToolSettingsRequest,
-    get_personal_tool_settings,
+    MediaTimeoutRequest,
     get_tool_availability,
-    get_tool_settings,
-    reset_personal_tool_settings,
-    set_personal_tool_settings_enabled,
+    get_tool_configuration,
     tool_configuration_payload,
-    update_tool_settings,
 )
 from mato_loop_backend.settings import (
     AgentProfilePermissions,
@@ -26,7 +21,6 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
-    UserToolSettings,
     WebFetchSettings,
     build_profile,
     core_profiles,
@@ -38,16 +32,14 @@ def _db() -> AsyncMock:
     return AsyncMock(spec=AsyncSession)
 
 
-async def test_nonadmin_cannot_read_instance_tool_settings(monkeypatch) -> None:
+async def test_nonadmin_cannot_read_tool_configuration(monkeypatch) -> None:
     load = AsyncMock(return_value=ToolSettings())
     monkeypatch.setattr(SettingsStore, "load", load)
 
     with pytest.raises(ApiError, match="auth.adminRequired"):
-        await get_tool_settings(
-            _db(), TrustLevel.PUBLIC, scope="instance", user=SimpleNamespace(id=uuid4(), is_admin=False)
-        )
+        await get_tool_configuration(SimpleNamespace(is_admin=False), _db())
 
-    load.assert_awaited_once()
+    load.assert_not_awaited()
 
 
 def test_legacy_duckduckgo_provider_is_migrated_to_no_key_search() -> None:
@@ -449,13 +441,13 @@ def test_agent_profile_can_override_webfetch_capability() -> None:
     )
 
 
-async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
+async def test_get_tool_configuration_returns_defaults(monkeypatch) -> None:
     settings = ToolSettings()
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
 
-    result = await get_tool_settings(_db(), TrustLevel.PUBLIC)
-
-    assert result["personalSettingsEnabled"] is True
+    result = await get_tool_configuration(
+        SimpleNamespace(is_admin=True), _db()
+    )
 
     assert {
         key: result[key]
@@ -484,29 +476,6 @@ async def test_get_tool_settings_returns_defaults(monkeypatch) -> None:
         "transcribeAudio": {"timeoutSeconds": 300},
         "analyzeVideo": {"timeoutSeconds": 1800},
     }
-    auto_capabilities = {
-        "session.files.read",
-        "session.files.write",
-        "file.provide",
-        "memory.read",
-        "network.fetch",
-        "network.search",
-        "skills.load",
-        "media.generate.image",
-    }
-    assert {
-        capability
-        for capability, policy in result["policies"].items()
-        if policy == "auto"
-    } == auto_capabilities
-    assert all(
-        policy == "ask"
-        for capability, policy in result["policies"].items()
-        if capability not in auto_capabilities
-    )
-    assert "network.fetch" in result["policies"]
-    assert "session.tool_result.read" in result["policies"]
-    assert result["shellPrefixes"] == {"read": [], "write": []}
     assert [group["id"] for group in result["groups"]] == [
         "filesystem",
         "process",
@@ -577,126 +546,10 @@ async def test_tool_availability_exposes_hard_caps(monkeypatch) -> None:
     assert result == {"tools": {}}
 
 
-async def test_personal_tool_settings_gate(monkeypatch) -> None:
-    user = SimpleNamespace(id=uuid4(), is_admin=False)
-    instance = ToolSettings(personal_settings_enabled=False)
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
-
-    assert await get_personal_tool_settings(user, _db()) == {"enabled": False}
-    with pytest.raises(ApiError, match="tool.personalSettingsDisabled"):
-        await get_tool_settings(_db(), TrustLevel.PUBLIC, scope="personal", user=user)
-
-    instance.personal_settings_enabled = True
-    monkeypatch.setattr(
-        "mato_loop_backend.api.routes.tool_settings.load_effective_tools",
-        AsyncMock(return_value=instance),
-    )
-    result = await get_tool_settings(
-        _db(), TrustLevel.PUBLIC, scope="personal", user=user
-    )
-    assert result["webFetch"]["maxResponseMiB"] == 64
-
-
-async def test_personal_tool_settings_can_be_enabled_and_reset(monkeypatch) -> None:
-    user = SimpleNamespace(id=uuid4(), is_admin=True)
-    integration_id = uuid4()
-    instance = ToolSettings(personal_settings_enabled=False)
-    personal = UserToolSettings(
-        public_permissions={
-            "policies": {"filesystem.delete": "auto"},
-            "integrationPolicies": {
-                str(integration_id): {"mail.read": "disabled"}
-            },
-        },
-    )
-    load = AsyncMock(return_value=instance)
-    save = AsyncMock()
-    monkeypatch.setattr(SettingsStore, "load", load)
-    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))
-    monkeypatch.setattr(SettingsStore, "save", save)
-    monkeypatch.setattr(
-        "mato_loop_backend.api.routes.tool_settings.load_effective_tools",
-        AsyncMock(return_value=instance),
-    )
-    db = _db()
-
-    assert await set_personal_tool_settings_enabled(
-        PersonalSettingsEnabledRequest(enabled=True), db, user
-    ) == {"enabled": True}
-    result = await reset_personal_tool_settings(db, user=user)
-
-    assert result["personalSettingsEnabled"] is True
-    assert personal.personal_tool_defaults_enabled is False
-    assert personal.public_permissions.integration_policies[str(integration_id)] == {
-        "mail.read": "disabled"
-    }
-    save.assert_any_await(db, personal, user_id=user.id)
-    assert db.commit.await_count == 2
-
-
-async def test_put_tool_settings_saves_only_selected_branch(monkeypatch) -> None:
-    save = AsyncMock()
-    existing = ToolSettings()
-    load = AsyncMock(return_value=existing)
-    monkeypatch.setattr(SettingsStore, "load", load)
-    monkeypatch.setattr(SettingsStore, "save", save)
-    db = _db()
-    payload = ToolSettingsRequest.model_validate(
-        {
-            "policies": {
-                "filesystem.delete": "ask",
-                "media.generate.image": "ask",
-                "media.generate.speech": "auto",
-                "media.generate.audio": "disabled",
-                "settings.agent_identity.update": "auto",
-            },
-            "shellPrefixes": {
-                "read": [["cat"]],
-                "write": [["git", "status"]],
-            },
-            "generateImage": {"timeoutSeconds": 600},
-            "editImage": {"timeoutSeconds": 450},
-            "generateSpeech": {"timeoutSeconds": 120},
-            "generateAudio": {"timeoutSeconds": 900},
-            "transcribeAudio": {"timeoutSeconds": 180},
-        }
-    )
-
-    result = await update_tool_settings(payload, db, TrustLevel.PUBLIC)
-
-    assert result["webFetch"]["maxResponseMiB"] == 64
-    saved = save.await_args.args[1]
-    assert load.await_args_list[0].args[1] is ToolSettings
-    assert load.await_args_list[0].kwargs == {}
-    assert load.await_args_list[1].args[1] is ToolSettings
-    assert load.await_args_list[1].kwargs == {"for_update": True}
-    assert saved is existing
-    assert saved.settings_key == "tools"
-    assert saved.shell_prefixes.read == [["cat"]]
-    assert saved.shell_prefixes.write == [["git", "status"]]
-    assert result["shellPrefixes"] == {
-        "read": [["cat"]],
-        "write": [["git", "status"]],
-    }
-    assert saved.generate_image.timeout_seconds == 600
-    assert saved.edit_image.timeout_seconds == 450
-    assert saved.generate_speech.timeout_seconds == 120
-    assert saved.generate_audio.timeout_seconds == 900
-    assert saved.transcribe_audio.timeout_seconds == 180
-    assert saved.public_permissions.policies == payload.policies
-    assert saved.private_permissions.policies == {}
-    assert payload.policies.items() <= result["policies"].items()
-    db.commit.assert_awaited_once()
-
-
 @pytest.mark.parametrize("timeout", [9, 3_601, 30.5])
 def test_tool_settings_reject_invalid_media_timeout(timeout: float) -> None:
     with pytest.raises(ValidationError):
-        ToolSettingsRequest.model_validate(
-            {
-                "generateImage": {"timeoutSeconds": timeout},
-            }
-        )
+        MediaTimeoutRequest.model_validate({"timeoutSeconds": timeout})
 
 
 def test_legacy_tool_policies_are_ignored_and_not_serialized() -> None:
@@ -716,9 +569,7 @@ def test_legacy_tool_policies_are_ignored_and_not_serialized() -> None:
 
 def test_tool_settings_request_rejects_legacy_nested_policy() -> None:
     with pytest.raises(ValidationError):
-        ToolSettingsRequest.model_validate(
-            {"generateImage": {"policy": "ask", "timeoutSeconds": 300}}
-        )
+        MediaTimeoutRequest.model_validate({"policy": "ask", "timeoutSeconds": 300})
 
 
 @pytest.mark.parametrize("limit", [0, 257, 1.5])

@@ -48,7 +48,7 @@
       <template #avatar><q-icon name="person" color="primary" /></template>
       {{ personalBlocked
         ? 'Persönliche Provider wurden für diese Instanz deaktiviert. Vorhandene Einstellungen bleiben gespeichert, können aber nicht bearbeitet werden.'
-        : 'Hier verwaltest du deine persönlichen Provider und Modelle. Instanzmodelle bleiben zusätzlich für Standardmodelle verfügbar.' }}
+        : 'Hier verwaltest du deine persönlichen Provider und Modelle. Instanzmodelle bleiben zusätzlich für Agentenprofile verfügbar.' }}
     </q-banner>
 
     <q-card v-if="!llmProviders.length && !providers.loading" flat class="app-surface q-pa-lg">

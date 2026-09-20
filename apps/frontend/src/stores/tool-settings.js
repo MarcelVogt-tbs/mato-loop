@@ -3,40 +3,15 @@ import { api } from 'src/boot/axios'
 
 const defaultMediaSettings = () => ({ timeoutSeconds: 300 })
 const defaultVideoAnalysisSettings = () => ({ timeoutSeconds: 1800 })
-const defaultShellPrefixes = () => ({ read: [], write: [] })
 const defaultConfigurationWebFetch = () => ({
   userAgent: '',
   maxResponseMiB: 64,
   publicAddressesOnly: true
 })
 
-function settingsPayload(state) {
-  return {
-    groups: state.groups,
-    policies: state.policies,
-    shellPrefixes: state.shellPrefixes,
-    generateImage: state.generateImage,
-    editImage: state.editImage,
-    generateSpeech: state.generateSpeech,
-    generateAudio: state.generateAudio,
-    transcribeAudio: state.transcribeAudio,
-    analyzeVideo: state.analyzeVideo
-  }
-}
-
-function branchConfig(scope, trust, config = {}) {
-  return { ...config, params: { ...(config.params || {}), scope, trust } }
-}
-
-function contextIsCurrent(store, scope, trust, version) {
-  return store.scope === scope && store.trust === trust && store.loadVersion === version
-}
-
 export const useToolSettingsStore = defineStore('tool-settings', {
   state: () => ({
     groups: [],
-    policies: {},
-    shellPrefixes: defaultShellPrefixes(),
     generateImage: defaultMediaSettings(),
     editImage: defaultMediaSettings(),
     generateSpeech: defaultMediaSettings(),
@@ -45,15 +20,11 @@ export const useToolSettingsStore = defineStore('tool-settings', {
     analyzeVideo: defaultVideoAnalysisSettings(),
     transcribeAudioAvailable: true,
     toolAvailability: {},
-    scope: 'instance',
-    trust: 'private',
-    personalSettingsEnabled: true,
     loaded: false,
     loadFailed: false,
     loading: false,
     saving: false,
     loadVersion: 0,
-    saveVersion: 0,
     configurationGroups: [],
     configurationWebFetch: defaultConfigurationWebFetch(),
     configurationLoaded: false,
@@ -64,58 +35,6 @@ export const useToolSettingsStore = defineStore('tool-settings', {
     configurationSaveVersion: 0
   }),
   actions: {
-    selectScope(scope) {
-      const next = scope === 'personal' ? 'personal' : 'instance'
-      if (next === this.scope) return
-      this.scope = next
-      this.invalidatePolicyRequests()
-    },
-    selectTrust(trust) {
-      const next = trust === 'public' ? 'public' : 'private'
-      if (next === this.trust) return
-      this.trust = next
-      this.invalidatePolicyRequests()
-    },
-    invalidatePolicyRequests() {
-      this.loadVersion += 1
-      this.saveVersion += 1
-      this.loading = false
-      this.saving = false
-      this.loaded = false
-    },
-    async fetchSettings(scope = this.scope, trust = this.trust) {
-      const loadVersion = ++this.loadVersion
-      this.loading = true
-      this.loadFailed = false
-      try {
-        let gate = null
-        if (scope === 'personal') {
-          gate = (await api.get('/tools/personal-settings')).data
-          if (!contextIsCurrent(this, scope, trust, loadVersion)) return
-          this.personalSettingsEnabled = gate.enabled !== false
-          if (!this.personalSettingsEnabled) {
-            this.assignSettings({})
-            this.loaded = true
-            return settingsPayload(this)
-          }
-        }
-        const [{ data }, availability] = await Promise.all([
-          api.get('/tools/settings', branchConfig(scope, trust)),
-          api.get('/tools/availability')
-        ])
-        if (!contextIsCurrent(this, scope, trust, loadVersion)) return
-        this.assignAvailability(availability.data)
-        this.assignSettings(data)
-        if (gate) this.personalSettingsEnabled = gate.enabled !== false
-        this.loaded = true
-        return settingsPayload(this)
-      } catch (error) {
-        if (contextIsCurrent(this, scope, trust, loadVersion)) this.loadFailed = true
-        throw error
-      } finally {
-        if (contextIsCurrent(this, scope, trust, loadVersion)) this.loading = false
-      }
-    },
     async fetchAvailability() {
       const loadVersion = ++this.loadVersion
       this.loading = true
@@ -131,54 +50,6 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       } finally {
         if (this.loadVersion === loadVersion) this.loading = false
       }
-    },
-    async saveSettings(settings) {
-      const scope = this.scope
-      const trust = this.trust
-      const saveVersion = ++this.saveVersion
-      this.loadVersion += 1
-      this.saving = true
-      try {
-        const payload = {
-          policies: { ...this.policies, ...(settings.policies || {}) },
-          shellPrefixes: settings.shellPrefixes || this.shellPrefixes,
-          generateImage: { ...this.generateImage, ...settings.generateImage },
-          editImage: { ...this.editImage, ...settings.editImage },
-          generateSpeech: { ...this.generateSpeech, ...settings.generateSpeech },
-          generateAudio: { ...this.generateAudio, ...settings.generateAudio },
-          transcribeAudio: { ...this.transcribeAudio, ...settings.transcribeAudio },
-          analyzeVideo: { ...this.analyzeVideo, ...settings.analyzeVideo }
-        }
-        const { data } = await api.put('/tools/settings', payload, branchConfig(scope, trust))
-        if (this.scope !== scope || this.trust !== trust || this.saveVersion !== saveVersion) return
-        this.assignSettings(data)
-        this.loaded = true
-        return settingsPayload(this)
-      } finally {
-        if (this.saveVersion === saveVersion) this.saving = false
-      }
-    },
-    async resetPersonalSettings() {
-      const scope = this.scope
-      const trust = this.trust
-      const saveVersion = ++this.saveVersion
-      this.loadVersion += 1
-      this.saving = true
-      try {
-        await api.delete('/tools/settings', { params: { scope: 'personal' } })
-        if (this.scope !== scope || this.trust !== trust || this.saveVersion !== saveVersion) return
-        const { data } = await api.get('/tools/settings', branchConfig(scope, trust))
-        if (this.scope !== scope || this.trust !== trust || this.saveVersion !== saveVersion) return
-        this.assignSettings(data)
-        this.loaded = true
-        return settingsPayload(this)
-      } finally {
-        if (this.saveVersion === saveVersion) this.saving = false
-      }
-    },
-    async setPersonalSettingsEnabled(enabled) {
-      await api.patch('/tools/personal-enabled', { enabled }, { params: { scope: 'instance' } })
-      this.personalSettingsEnabled = enabled
     },
     async fetchConfiguration() {
       const loadVersion = ++this.configurationLoadVersion
@@ -225,6 +96,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       this.assignAvailability({
         tools: data?.toolAvailability
       })
+      this.assignSettings(data)
     },
     assignAvailability(data) {
       this.toolAvailability = { ...data?.tools }
@@ -239,9 +111,6 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       this.transcribeAudioAvailable = this.toolAvailability.transcribe_audio !== false
     },
     assignSettings(data) {
-      if ('personalSettingsEnabled' in (data || {})) {
-        this.personalSettingsEnabled = data.personalSettingsEnabled !== false
-      }
       this.groups = (Array.isArray(data?.groups) ? data.groups : [])
         .map((group) => ({
           ...group,
@@ -254,18 +123,6 @@ export const useToolSettingsStore = defineStore('tool-settings', {
             }))
         }))
         .filter((group) => group.tools.length)
-      const builtinCapabilities = new Set(this.groups.flatMap((group) => (
-        group.tools.flatMap((tool) => (
-          (tool.actions || []).filter((action) => action.configurable).map((action) => action.capability)
-        ))
-      )))
-      this.policies = Object.fromEntries(
-        Object.entries(data?.policies || {}).filter(([capability]) => builtinCapabilities.has(capability))
-      )
-      this.shellPrefixes = {
-        read: Array.isArray(data?.shellPrefixes?.read) ? data.shellPrefixes.read.map((item) => [...item]) : [],
-        write: Array.isArray(data?.shellPrefixes?.write) ? data.shellPrefixes.write.map((item) => [...item]) : []
-      }
       for (const field of ['generateImage', 'generateSpeech', 'generateAudio', 'transcribeAudio']) {
         this[field] = { ...defaultMediaSettings(), ...data?.[field] }
       }

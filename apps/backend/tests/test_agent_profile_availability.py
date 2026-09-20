@@ -133,6 +133,8 @@ def mock_settings(monkeypatch, integrations, profile, *, personal=None):
         return model()
 
     async def optional(_db, model, **_kwargs):
+        if model is AgentProfilesSettings:
+            return await load(_db, model)
         return personal if model is UserIntegrationSettings else None
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
@@ -225,7 +227,6 @@ async def test_profile_scope_validation_and_listing_include_option_only_integrat
         str(search.id),
         str(coding.id),
     }
-    assert all(not item["supportsPolicies"] for item in personal_result["integrations"])
 
 
 def test_shared_accounts_opt_in_is_separate_from_permissions_and_does_not_mutate_source():

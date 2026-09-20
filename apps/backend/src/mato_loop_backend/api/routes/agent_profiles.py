@@ -16,6 +16,12 @@ from mato_loop_backend.api.routes.integrations import (
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.models import ChatSession, PermissionGrant, UserAccount
+from mato_loop_backend.providers.reasoning import reasoning_profile
+from mato_loop_backend.providers.settings_service import (
+    DEFAULT_MODEL_FIELDS,
+    available_model,
+    model_reference_available,
+)
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
@@ -24,8 +30,10 @@ from mato_loop_backend.settings import (
     AgentProfileOverrides,
     AgentProfilePermissions,
     AgentProfilesSettings,
+    AiSettings,
     CustomAgentProfile,
     IntegrationSettings,
+    ModelCapability,
     SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
@@ -33,6 +41,7 @@ from mato_loop_backend.settings import (
     UserAgentIdentitySettings,
     UserAgentProfilesSettings,
     load_effective_agent_profiles,
+    load_effective_ai,
     load_effective_integrations,
     load_effective_tools,
     resolve_agent_persona,
@@ -369,6 +378,40 @@ async def _profile_from_request(
                 )
         if persona_id not in allowed_persona_ids:
             raise ApiError(422, "validation.invalidChoice", field="personaId")
+
+    ai = (
+        await load_effective_ai(db, user.id)
+        if owner_id is not None
+        else await SettingsStore.load(db, AiSettings)
+    )
+    for field, (api_field, _capability) in DEFAULT_MODEL_FIELDS.items():
+        if field not in overrides.model_fields_set:
+            continue
+        model_id = getattr(overrides, field)
+        if model_id is None:
+            continue
+        selected = available_model(ai, model_id)
+        if selected is None:
+            raise ApiError(422, "provider.modelUnavailable", field=api_field)
+        if model_reference_available(ai, field, model_id):
+            continue
+        if field in {
+            "default_model_id",
+            "skill_creation_model_id",
+            "dreaming_model_id",
+        } and not selected.supports_tools:
+            raise ApiError(422, "session.modelToolsUnavailable", field=api_field)
+        raise ApiError(422, "provider.modelCapabilityUnavailable", field=api_field)
+    if "reasoning_effort" in overrides.model_fields_set and overrides.reasoning_effort is not None:
+        model_id = (
+            overrides.default_model_id
+            if "default_model_id" in overrides.model_fields_set
+            else bases[payload.base_profile_id].default_model_id
+        )
+        selected = available_model(ai, model_id, ModelCapability.CHAT)
+        profile = reasoning_profile(selected.model_id, selected.discovery_metadata) if selected else None
+        if profile is None or overrides.reasoning_effort not in profile.options:
+            raise ApiError(422, "validation.invalidChoice", field="reasoningEffort")
 
     integrations = (
         await load_effective_integrations(db, user.id)

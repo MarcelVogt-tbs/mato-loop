@@ -6,7 +6,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 from pydantic import (
-    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -281,34 +280,6 @@ class ProviderPolicyRequest(ApiRequest):
     memory_policy: MemoryPolicy
 
 
-class DefaultModelRequest(ApiRequest):
-    model_id: UUID | None = Field(
-        validation_alias=AliasChoices("modelId", "defaultModelId", "model_id")
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def accept_scalar(cls, value: Any) -> Any:
-        if value is None or isinstance(value, (str, UUID)):
-            return {"modelId": value}
-        return value
-
-
-class DefaultModelsRequest(ApiRequest):
-    default_model_id: UUID | None
-    compaction_model_id: UUID | None
-    title_generation_model_id: UUID | None
-    title_vision_fallback_enabled: bool = True
-    skill_creation_model_id: UUID | None = None
-    dreaming_model_id: UUID | None = None
-    vision_model_id: UUID | None = None
-    video_model_id: UUID | None = None
-    image_generation_model_id: UUID | None = None
-    speech_generation_model_id: UUID | None = None
-    audio_generation_model_id: UUID | None = None
-    audio_transcription_model_id: UUID | None = None
-
-
 def _provider(settings: AiSettingsBase, provider_id: UUID) -> LlmProviderConfig:
     try:
         return _find_provider(settings, provider_id)
@@ -343,50 +314,6 @@ def _settings_payload(
             {"personalProvidersEnabled": settings.personal_providers_enabled}
             if isinstance(settings, AiSettings)
             else {}
-        ),
-        "defaultModelId": str(settings.default_model_id) if settings.default_model_id else None,
-        "compactionModelId": (
-            str(settings.compaction_model_id) if settings.compaction_model_id else None
-        ),
-        "titleGenerationModelId": (
-            str(settings.title_generation_model_id)
-            if settings.title_generation_model_id
-            else None
-        ),
-        "titleVisionFallbackEnabled": settings.title_vision_fallback_enabled,
-        "skillCreationModelId": (
-            str(settings.skill_creation_model_id)
-            if settings.skill_creation_model_id
-            else None
-        ),
-        "dreamingModelId": (
-            str(settings.dreaming_model_id) if settings.dreaming_model_id else None
-        ),
-        "visionModelId": (
-            str(settings.vision_model_id) if settings.vision_model_id else None
-        ),
-        "videoModelId": (
-            str(settings.video_model_id) if settings.video_model_id else None
-        ),
-        "imageGenerationModelId": (
-            str(settings.image_generation_model_id)
-            if settings.image_generation_model_id
-            else None
-        ),
-        "speechGenerationModelId": (
-            str(settings.speech_generation_model_id)
-            if settings.speech_generation_model_id
-            else None
-        ),
-        "audioGenerationModelId": (
-            str(settings.audio_generation_model_id)
-            if settings.audio_generation_model_id
-            else None
-        ),
-        "audioTranscriptionModelId": (
-            str(settings.audio_transcription_model_id)
-            if settings.audio_transcription_model_id
-            else None
         ),
         "providers": [
             {
@@ -581,9 +508,6 @@ async def list_providers(
         )
         response["availableProviders"] = available["providers"]
         response["availableModels"] = available["models"]
-        response["effectiveTitleGenerationModelId"] = available[
-            "titleGenerationModelId"
-        ]
     return response
 
 
@@ -931,54 +855,6 @@ async def test_model(
         logger.exception("Unexpected model connection test failure")
         raise ApiError(502, "provider.requestFailed") from exc
     return {"status": "ok"}
-
-
-@router.put("/default-model")
-async def set_default_model(
-    payload: DefaultModelRequest | None,
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-    scope: SettingsApiScope = "instance",
-    user: Annotated[UserAccount | None, Depends(require_user)] = None,
-) -> dict:
-    settings, owner_id = await _load_scoped_ai(
-        db, scope, user, for_update=True, mutation=True
-    )
-    model_id = payload.model_id if payload else None
-    validation_settings = (
-        await load_effective_ai(db, owner_id) if owner_id is not None else settings
-    )
-    await _apply_settings(
-        ProviderSettingsService.set_default_model(
-            db, settings, validation_settings, owner_id, model_id
-        )
-    )
-    return await _settings_response(db, settings, owner_id)
-
-
-@router.put("/default-models")
-async def set_default_models(
-    payload: DefaultModelsRequest,
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-    scope: SettingsApiScope = "instance",
-    user: Annotated[UserAccount | None, Depends(require_user)] = None,
-) -> dict:
-    settings, owner_id = await _load_scoped_ai(
-        db, scope, user, for_update=True, mutation=True
-    )
-    validation_settings = (
-        await load_effective_ai(db, owner_id) if owner_id is not None else settings
-    )
-    await _apply_settings(
-        ProviderSettingsService.set_default_models(
-            db,
-            settings,
-            validation_settings,
-            owner_id,
-            payload.model_dump(),
-            payload.model_fields_set,
-        )
-    )
-    return await _settings_response(db, settings, owner_id)
 
 
 @router.delete("/configuration/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)

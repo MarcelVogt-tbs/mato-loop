@@ -5,8 +5,8 @@ function serversFrom(data) {
   return Array.isArray(data) ? data : (data?.servers || [])
 }
 
-function branchConfig(scope, trust = null) {
-  return { params: { scope, ...(trust ? { trust } : {}) } }
+function branchConfig(scope) {
+  return { params: { scope } }
 }
 
 export const useMcpServerStore = defineStore('mcp-servers', {
@@ -21,13 +21,7 @@ export const useMcpServerStore = defineStore('mcp-servers', {
     settingsLoading: false,
     settingsSaving: false,
     scope: 'instance',
-    trust: 'private',
-    access: null,
-    accessLoading: false,
-    accessLoadFailed: false,
-    savingAccess: false,
-    loadVersion: 0,
-    accessVersion: 0
+    loadVersion: 0
   }),
   actions: {
     selectScope(scope) {
@@ -38,17 +32,6 @@ export const useMcpServerStore = defineStore('mcp-servers', {
       this.loaded = false
       this.loadVersion += 1
       this.loading = false
-      this.access = null
-      this.accessVersion += 1
-      this.accessLoading = false
-    },
-    selectTrust(trust) {
-      const next = trust === 'public' ? 'public' : 'private'
-      if (next === this.trust) return
-      this.trust = next
-      this.access = null
-      this.accessVersion += 1
-      this.accessLoading = false
     },
     async fetchServers() {
       const version = ++this.loadVersion
@@ -126,40 +109,6 @@ export const useMcpServerStore = defineStore('mcp-servers', {
         else this.servers[index] = data
       }
       return data
-    },
-    async fetchAccess(id) {
-      const scope = this.scope
-      const trust = this.trust
-      const version = ++this.accessVersion
-      this.accessLoading = true
-      this.accessLoadFailed = false
-      try {
-        const { data } = await api.get(`/mcp/servers/${id}/access`, branchConfig(scope, trust))
-        if (this.scope !== scope || this.trust !== trust || this.accessVersion !== version) return
-        this.access = data
-        return data
-      } catch (error) {
-        if (this.scope === scope && this.trust === trust && this.accessVersion === version) this.accessLoadFailed = true
-        throw error
-      } finally {
-        if (this.scope === scope && this.trust === trust && this.accessVersion === version) this.accessLoading = false
-      }
-    },
-    async saveAccess(id, payload) {
-      const scope = this.scope
-      const trust = this.trust
-      const request = { ...payload }
-      if (scope === 'personal') delete request.globalPolicy
-      const version = ++this.accessVersion
-      this.savingAccess = true
-      try {
-        const { data } = await api.put(`/mcp/servers/${id}/access`, request, branchConfig(scope, trust))
-        if (this.scope !== scope || this.trust !== trust || this.accessVersion !== version) return
-        this.access = data
-        return data
-      } finally {
-        if (this.scope === scope && this.trust === trust && this.accessVersion === version) this.savingAccess = false
-      }
     }
   }
 })

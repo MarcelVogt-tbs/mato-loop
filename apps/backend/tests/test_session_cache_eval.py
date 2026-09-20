@@ -1,7 +1,10 @@
 from argparse import Namespace
-from unittest.mock import AsyncMock
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
+from mato_loop_backend import session_cache_eval
+from mato_loop_backend.models import UserAccount
 from mato_loop_backend.session_cache_eval import (
     SessionCacheEvaluator,
     _report,
@@ -38,6 +41,31 @@ async def test_session_payload_omits_unspecified_reasoning_effort() -> None:
     payload = evaluator._json.await_args_list[1].kwargs["payload"]
 
     assert "reasoning_effort" not in payload
+
+
+async def test_prepare_uses_general_profile_for_ai_defaults(monkeypatch) -> None:
+    user = UserAccount(id=uuid4(), username="developer", is_active=True)
+    db = AsyncMock()
+    users = MagicMock()
+    users.all.return_value = [user]
+    db.scalars.return_value = users
+    db.scalar.return_value = 0
+
+    @asynccontextmanager
+    async def session_factory():
+        yield db
+
+    profile_ai = AsyncMock(side_effect=RuntimeError("stop after profile lookup"))
+    monkeypatch.setattr(session_cache_eval, "AsyncSessionFactory", session_factory)
+    monkeypatch.setattr(session_cache_eval, "load_agent_profile_ai", profile_ai)
+    evaluator = SessionCacheEvaluator(Namespace(user_id=None, recover=False))
+
+    try:
+        await evaluator.prepare()
+    except RuntimeError as exc:
+        assert str(exc) == "stop after profile lookup"
+
+    assert profile_ai.await_args.args[1:] == (user.id, None)
 
 
 def test_report_includes_cache_reads_and_writes() -> None:

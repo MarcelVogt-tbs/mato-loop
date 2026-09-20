@@ -1013,12 +1013,22 @@ def browser_api(monkeypatch):
     async def save(_db, settings, *, user_id=None):
         documents[type(settings), user_id] = settings.model_copy(deep=True)
 
+    async def load_optional(_db, settings_type, *, user_id=None, **_kwargs):
+        if settings_type is UserToolSettings:
+            return documents.get(
+                (settings_type, user_id), UserToolSettings()
+            ).model_copy(deep=True)
+        settings = documents.get((settings_type, user_id))
+        return settings.model_copy(deep=True) if settings is not None else None
+
     async def scalar(statement):
         params = statement.compile().params
         return agent if params.get("id_1") == agent and params.get("user_id_1") == user.id else None
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
-    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=UserToolSettings()))
+    monkeypatch.setattr(
+        SettingsStore, "load_optional", AsyncMock(side_effect=load_optional)
+    )
     monkeypatch.setattr(SettingsStore, "save", AsyncMock(side_effect=save))
     db.scalar.side_effect = scalar
     db.scalars.return_value = SimpleNamespace(all=lambda: [agent])

@@ -714,7 +714,11 @@ class ProviderService:
             reserved_output_tokens=reserve,
             safety_reserve_tokens=safety_reserve_tokens,
         )
-        request.max_output_tokens = None if adapter.omit_generation_options else allocated
+        request.max_output_tokens = (
+            allocated
+            if not adapter.omit_generation_options and limit is not None
+            else None
+        )
         output_budget = {
             "estimatedInputTokens": input_tokens,
             "finalEstimatedInputTokens": final_input_tokens,

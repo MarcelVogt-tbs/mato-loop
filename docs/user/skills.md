@@ -8,7 +8,7 @@ Bei einer passenden Anfrage kann der Agent automatisch genau einen Skill aus Ihr
 
 Ist Webrecherche für die Session verpflichtend, darf der Agent zunächst einen eindeutig passenden Skill laden. Die vorgeschriebene Suche bleibt trotzdem erforderlich und folgt im nächsten Schritt.
 
-Unter **Einstellungen > Tools** gelten Vorgaben für **Skills laden** und **Skills speichern**. Das gewählte Profil kann für private und öffentliche Modelle jeweils davon abweichen:
+Im gewählten Agentenprofil legen Sie die Rechte für **Skills laden** und **Skills speichern** getrennt für private und öffentliche Modelle fest:
 
 - **Nicht erlaubt** deaktiviert die Aktion.
 - **Nachfragen** zeigt vor der Aktion eine Freigabe.
@@ -20,7 +20,7 @@ Eine Freigabe **Für Session erlauben** kann weitere passende Skill-Aktionen in 
 
 Bitten Sie im Chat ausdrücklich um einen wiederverwendbaren Skill, zum Beispiel: „Erstelle einen Skill namens API-Prüfung, der API-Beschreibungen auf gültige Tool-Schemas prüft.“ Nur eine direkte Bitte in Ihrer neuesten Nachricht startet die Erstellung. Zitierte oder zu übersetzende Skill-Anweisungen werden als Text behandelt und lösen keine Erstellung aus.
 
-Der Agent übergibt eine kurze Aufgabenbeschreibung und auf Wunsch einen Namensvorschlag an ein Builder-Modell. Das Modell für **Skill-Erstellung** wählen Sie unter **Einstellungen > Standardmodelle**. Ohne separate Auswahl wird das Sessionmodell verwendet. Kann ein separat ausgewähltes Builder-Modell keinen Entwurf erstellen, fragt MatoLoop, bevor es ersatzweise das Sessionmodell verwendet.
+Der Agent übergibt eine kurze Aufgabenbeschreibung und auf Wunsch einen Namensvorschlag an ein Builder-Modell. Das Modell für **Skill-Erstellung** wählen Sie unter **Einstellungen > Agenten > Modelle** im verwendeten Profil. Ohne separate Auswahl wird das Sessionmodell verwendet. Kann ein separat ausgewähltes Builder-Modell keinen Entwurf erstellen, fragt MatoLoop, bevor es ersatzweise das Sessionmodell verwendet.
 
 Fehlen für einen wiederverwendbaren Skill relevante Angaben, fragt der Agent diese vor der Erstellung gebündelt ab. Bereits vollständige Anfragen werden ohne zusätzliche Rückfragerunde an das Builder-Modell übergeben.
 

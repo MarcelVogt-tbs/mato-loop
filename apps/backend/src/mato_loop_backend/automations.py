@@ -33,7 +33,7 @@ from mato_loop_backend.session_storage import SessionStorage, SessionStorageErro
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
     SkillDefinition,
-    load_effective_ai,
+    load_agent_profile_ai,
     load_effective_skills,
 )
 from mato_loop_backend.web_push import (
@@ -493,7 +493,9 @@ class AutomationService:
         skill = await AutomationService.skill(db, automation.user_id, automation.skill_id)
         runtime = runtime_snapshot(execution_session)
         if runtime["modelId"] is None:
-            ai_settings = await load_effective_ai(db, automation.user_id)
+            ai_settings, _profile = await load_agent_profile_ai(
+                db, automation.user_id, execution_session.agent_profile_id
+            )
             runtime["modelId"] = (
                 str(ai_settings.default_model_id) if ai_settings.default_model_id else None
             )

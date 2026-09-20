@@ -19,7 +19,7 @@
           <q-badge v-if="dirty" color="warning" text-color="black" label="Ungespeichert" />
         </div>
         <div class="text-body2 app-muted">
-          Persona, Aufgaben-Prompt und Berechtigungen festlegen.
+          Arbeitsweise, Modelle und Berechtigungen festlegen.
         </div>
       </q-toolbar-title>
       <div class="settings-scope-actions row items-center col-auto">
@@ -81,6 +81,7 @@
         indicator-color="primary"
       >
         <q-tab name="profile" icon="badge" label="Profil" />
+        <q-tab name="models" icon="stars" label="Modelle" />
         <q-tab name="tools" icon="build" label="Tools" />
         <q-tab name="integrations" icon="extension" label="Integrationen" />
       </q-tabs>
@@ -406,11 +407,120 @@
           </q-card>
         </q-tab-panel>
 
+        <q-tab-panel name="models" class="q-pa-none">
+          <q-card flat class="app-surface q-mb-md">
+            <q-card-section>
+              <div class="text-subtitle1 text-weight-bold">Agentmodell</div>
+              <div class="text-caption app-muted">Modell und Reasoning für die eigentlichen Agentenläufe.</div>
+            </q-card-section>
+            <q-separator />
+            <q-card-section>
+              <q-select
+                :model-value="modelValue('defaultModelId')"
+                outlined clearable emit-value map-options
+                label="Agentmodell"
+                :options="modelOptions({ field: 'defaultModelId', requiresTools: true })"
+                :disable="accessProtected"
+                :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                hint="Benötigt Tool-Unterstützung. Ohne Auswahl kann dieses Profil keine Agentenläufe starten."
+                persistent-hint
+                @update:model-value="setModelValue('defaultModelId', $event)"
+              />
+              <q-select
+                class="q-mt-lg"
+                :model-value="modelValue('reasoningEffort')"
+                outlined emit-value map-options
+                label="Reasoning-Stufe"
+                :options="reasoningSelectionOptions"
+                :disable="accessProtected"
+                :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                :hint="reasoningOptions.length ? 'Gilt, solange die Session keine eigene Stufe festlegt.' : 'Das gewählte Modell bietet keine konfigurierbare Reasoning-Stufe.'"
+                persistent-hint
+                @update:model-value="setModelValue('reasoningEffort', $event)"
+              />
+            </q-card-section>
+          </q-card>
+
+          <q-expansion-item
+            icon="tune"
+            label="Weitere Modelle"
+            caption="Titel, Komprimierung, Analyse, Medien und Hintergrundarbeit"
+            class="app-surface"
+          >
+            <template v-for="setting in additionalModelSettings" :key="setting.field">
+              <q-separator />
+              <q-card-section>
+                <div class="q-mb-sm">
+                  <div class="text-weight-medium">{{ setting.title }}</div>
+                  <div class="text-caption app-muted">{{ setting.description }}</div>
+                </div>
+                <q-select
+                  :model-value="modelValue(setting.field)"
+                  outlined clearable emit-value map-options
+                  :label="setting.label"
+                  :options="modelOptions(setting)"
+                  :disable="accessProtected"
+                  :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
+                  @update:model-value="setModelValue(setting.field, $event)"
+                />
+                <q-select
+                  v-if="setting.field === 'titleGenerationModelId'"
+                  :model-value="modelValue('titleVisionFallbackEnabled')"
+                  class="q-mt-sm"
+                  label="Bei Bildinhalten auf das Visionmodell ausweichen"
+                  outlined emit-value map-options
+                  :options="titleVisionFallbackOptions"
+                  :disable="accessProtected"
+                  @update:model-value="setModelValue('titleVisionFallbackEnabled', $event)"
+                />
+              </q-card-section>
+            </template>
+          </q-expansion-item>
+        </q-tab-panel>
+
         <q-tab-panel name="tools" class="q-pa-none">
           <div class="text-h6 text-weight-bold">Tool-Rechte</div>
           <div class="text-body2 app-muted q-mb-md">
             Die technische Verfügbarkeit kommt aus den Tool- und Integrationseinstellungen. Dieses Profil legt fest, ob der Agent eine verfügbare Aktion ausführen darf.
           </div>
+
+          <q-card flat class="app-surface q-mb-md">
+            <q-card-section>
+              <div class="row items-center justify-between">
+                <div>
+                  <div class="text-subtitle1 text-weight-bold">Shell-Präfixe</div>
+                  <div class="text-caption app-muted">Dauerhafte Freigaben auf Befehlspräfixe begrenzen.</div>
+                </div>
+                <q-btn-toggle
+                  :model-value="ownership.shellPrefixes ? 'own' : 'inherit'"
+                  unelevated no-caps toggle-color="primary" :options="inheritOptions"
+                  :disable="accessProtected"
+                  @update:model-value="setOwnership('shellPrefixes', $event)"
+                />
+              </div>
+            </q-card-section>
+            <q-separator />
+            <q-card-section class="row q-col-gutter-md">
+              <q-input
+                v-model="form.shellPrefixesRead"
+                class="col-12 col-md-6"
+                outlined type="textarea" autogrow
+                label="Lesende Befehle"
+                hint="Ein Präfix pro Zeile, zum Beispiel git status."
+                :disable="accessProtected || !ownership.shellPrefixes"
+                :rules="[shellPrefixRule]"
+              />
+              <q-input
+                v-model="form.shellPrefixesWrite"
+                class="col-12 col-md-6"
+                outlined type="textarea" autogrow
+                label="Schreibende Befehle"
+                hint="Ein Präfix pro Zeile, zum Beispiel npm install."
+                :disable="accessProtected || !ownership.shellPrefixes"
+                :rules="[shellPrefixRule]"
+              />
+            </q-card-section>
+          </q-card>
 
           <q-banner rounded class="app-surface-tonal q-mb-md">
             <template #avatar><q-icon name="privacy_tip" color="primary" /></template>
@@ -645,8 +755,10 @@ import SettingsScopeToggle from 'components/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { resolveSettingsScope } from 'src/features/settings/scope'
 import { policyOverride, setPolicyOverride } from 'src/utils/agent-permissions'
+import { modelReasoningEffortOptions } from 'src/utils/model-runtime'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useAuthStore } from 'stores/auth'
+import { useProviderStore } from 'stores/providers'
 
 defineOptions({ name: 'AgentProfileEditorPage' })
 
@@ -656,6 +768,7 @@ const router = useRouter()
 const { confirm } = useConfirm()
 const agents = useAgentProfileStore()
 const auth = useAuthStore()
+const providers = useProviderStore()
 const formRef = ref(null)
 const editingAgent = ref(null)
 const loadFailed = ref(false)
@@ -678,6 +791,21 @@ const form = reactive({
   integrationAvailability: {},
   publicPermissions: emptyPermissions(),
   privatePermissions: emptyPermissions(),
+  defaultModelId: null,
+  reasoningEffort: null,
+  compactionModelId: null,
+  titleGenerationModelId: null,
+  titleVisionFallbackEnabled: true,
+  skillCreationModelId: null,
+  dreamingModelId: null,
+  visionModelId: null,
+  videoModelId: null,
+  imageGenerationModelId: null,
+  speechGenerationModelId: null,
+  audioGenerationModelId: null,
+  audioTranscriptionModelId: null,
+  shellPrefixesRead: '',
+  shellPrefixesWrite: '',
   delegationEnabled: false,
   sessionWriteMode: 'unrestricted',
   sessionWritePathsText: ''
@@ -690,6 +818,20 @@ const ownership = reactive({
   maxToolCalls: false,
   todoEnabled: false,
   integrationsEnabledByDefault: false,
+  defaultModelId: false,
+  reasoningEffort: false,
+  compactionModelId: false,
+  titleGenerationModelId: false,
+  titleVisionFallbackEnabled: false,
+  skillCreationModelId: false,
+  dreamingModelId: false,
+  visionModelId: false,
+  videoModelId: false,
+  imageGenerationModelId: false,
+  speechGenerationModelId: false,
+  audioGenerationModelId: false,
+  audioTranscriptionModelId: false,
+  shellPrefixes: false,
   delegationEnabled: false,
   sessionWritePaths: false
 })
@@ -705,10 +847,29 @@ const inheritOptions = [
   { label: 'Erben', value: 'inherit' },
   { label: 'Eigener Wert', value: 'own' }
 ]
+const INHERIT_MODEL_VALUE = '__inherit__'
 const sessionWriteModeOptions = [
   { label: 'Unbeschränkt', value: 'unrestricted' },
   { label: 'Alles verweigern', value: 'denied' },
   { label: 'Nur angegebene Pfade', value: 'paths' }
+]
+const modelFields = [
+  'defaultModelId', 'reasoningEffort', 'compactionModelId', 'titleGenerationModelId',
+  'titleVisionFallbackEnabled', 'skillCreationModelId', 'dreamingModelId', 'visionModelId',
+  'videoModelId', 'imageGenerationModelId', 'speechGenerationModelId',
+  'audioGenerationModelId', 'audioTranscriptionModelId'
+]
+const additionalModelSettings = [
+  { field: 'compactionModelId', title: 'Kontextkomprimierung', description: 'Verdichtet ältere Gesprächsinhalte.', label: 'Komprimierungsmodell' },
+  { field: 'titleGenerationModelId', title: 'Titelgenerierung', description: 'Erstellt einen kurzen Sessiontitel.', label: 'Titelmodell' },
+  { field: 'skillCreationModelId', title: 'Skill-Erstellung', description: 'Erstellt prüfbare Skill-Entwürfe.', label: 'Modell für Skill-Erstellung', requiresTools: true },
+  { field: 'dreamingModelId', title: 'Dreaming', description: 'Verarbeitet Gespräche zu langfristigen Erinnerungen.', label: 'Dreaming-Modell', requiresTools: true },
+  { field: 'visionModelId', title: 'Bildanalyse', description: 'Liest Bilder und bildbasierte Dokumentseiten.', label: 'Visionmodell', options: 'vision' },
+  { field: 'videoModelId', title: 'Videoanalyse', description: 'Analysiert Videos nativ oder über Einzelbilder.', label: 'Videomodell', options: 'video' },
+  { field: 'imageGenerationModelId', title: 'Bildgenerierung', description: 'Erzeugt Bilder aus Text.', label: 'Bildmodell', capability: 'image_generation' },
+  { field: 'speechGenerationModelId', title: 'Sprachausgabe', description: 'Wandelt Text in Sprache um.', label: 'Sprachmodell', capability: 'speech_generation' },
+  { field: 'audioGenerationModelId', title: 'Audio und Musik', description: 'Erzeugt Audio oder Musik.', label: 'Audiomodell', capability: 'audio_generation' },
+  { field: 'audioTranscriptionModelId', title: 'Transkription', description: 'Wandelt Audioaufnahmen in Text um.', label: 'Transkriptionsmodell', capability: 'audio_transcription' }
 ]
 const scope = computed(() => resolveSettingsScope(route.query.scope, auth.isAdmin))
 const baseProfiles = computed(() => agents.agents.filter((agent) => (
@@ -719,6 +880,21 @@ const baseProfileOptions = computed(() => baseProfiles.value.map((agent) => ({
   value: agent.id
 })))
 const baseProfile = computed(() => editingAgent.value?.accessBaseline || baseProfiles.value.find((agent) => agent.id === form.baseProfileId) || null)
+const selectedAgentModel = computed(() => providers.availableModels?.find((model) => model.id === form.defaultModelId)
+  || providers.models.find((model) => model.id === form.defaultModelId))
+const reasoningOptions = computed(() => modelReasoningEffortOptions(selectedAgentModel.value))
+const reasoningSelectionOptions = computed(() => [
+  { label: `Erben: ${reasoningLabel(baseProfile.value?.reasoningEffort)}`, value: INHERIT_MODEL_VALUE },
+  ...reasoningOptions.value
+])
+const titleVisionFallbackOptions = computed(() => [
+  {
+    label: `Erben: ${baseProfile.value?.titleVisionFallbackEnabled === false ? 'Deaktiviert' : 'Aktiviert'}`,
+    value: INHERIT_MODEL_VALUE
+  },
+  { label: 'Aktiviert', value: true },
+  { label: 'Deaktiviert', value: false }
+])
 const integrationDefault = computed({
   get: () => ownership.integrationsEnabledByDefault ? form.integrationsEnabledByDefault : 'inherit',
   set(value) {
@@ -789,6 +965,19 @@ const sessionWritePathsRule = () => form.sessionWriteMode !== 'paths' || (
     && !path.split('/').some((part) => part === '.' || part === '..') && !/[*?[\]{}]/.test(path)
   ))
 ) || 'Mindestens einen normalisierten relativen POSIX-Pfad eingeben.'
+const parseShellPrefixes = (value) => [...new Map(
+  value.split('\n')
+    .map((line) => line.trim().split(/\s+/).filter(Boolean))
+    .filter((prefix) => prefix.length)
+    .map((prefix) => [JSON.stringify(prefix), prefix])
+).values()]
+const shellPrefixRule = (value) => {
+  const prefixes = parseShellPrefixes(value)
+  return (prefixes.length <= 100 && prefixes.every((prefix) => (
+    prefix.length <= 8
+    && prefix.every((token) => token.length <= 256 && /^[\x21-\x7e]+$/.test(token))
+  ))) || 'Maximal 100 Präfixe mit je 1 bis 8 sichtbaren Tokens eingeben.'
+}
 const permissionField = (audience) => `${audience}Permissions`
 const permissions = (audience) => form[permissionField(audience)]
 const policyLabel = (policy) => policyLabels[policy] || policy
@@ -839,10 +1028,19 @@ function requestPayload() {
   }
   if (ownership.instructions) overrides.instructions = form.instructions.trim()
   if (ownership.runtimeInstructions) overrides.runtimeInstructions = form.runtimeInstructions.trim()
+  for (const field of modelFields) {
+    if (ownership[field]) overrides[field] = form[field]
+  }
   if (ownership.integrationsEnabledByDefault) overrides.integrationsEnabledByDefault = form.integrationsEnabledByDefault
   if (Object.keys(form.integrationAvailability).length) overrides.integrationAvailability = clone(form.integrationAvailability)
   for (const field of ['publicPermissions', 'privatePermissions']) {
     if (Object.values(form[field]).some((entries) => Object.keys(entries).length)) overrides[field] = clone(form[field])
+  }
+  if (ownership.shellPrefixes) {
+    overrides.shellPrefixes = {
+      read: parseShellPrefixes(form.shellPrefixesRead),
+      write: parseShellPrefixes(form.shellPrefixesWrite)
+    }
   }
   if (ownership.sessionWritePaths) {
     overrides.sessionWritePaths = form.sessionWriteMode === 'unrestricted'
@@ -867,6 +1065,21 @@ function assignValues(agent) {
     maxToolCalls: agent?.maxToolCalls === null ? null : (agent?.maxToolCalls ?? 25),
     todoEnabled: agent?.todoEnabled ?? false,
     integrationsEnabledByDefault: agent?.integrationsEnabledByDefault ?? true,
+    defaultModelId: agent?.defaultModelId || null,
+    reasoningEffort: agent?.reasoningEffort || null,
+    compactionModelId: agent?.compactionModelId || null,
+    titleGenerationModelId: agent?.titleGenerationModelId || null,
+    titleVisionFallbackEnabled: agent?.titleVisionFallbackEnabled !== false,
+    skillCreationModelId: agent?.skillCreationModelId || null,
+    dreamingModelId: agent?.dreamingModelId || null,
+    visionModelId: agent?.visionModelId || null,
+    videoModelId: agent?.videoModelId || null,
+    imageGenerationModelId: agent?.imageGenerationModelId || null,
+    speechGenerationModelId: agent?.speechGenerationModelId || null,
+    audioGenerationModelId: agent?.audioGenerationModelId || null,
+    audioTranscriptionModelId: agent?.audioTranscriptionModelId || null,
+    shellPrefixesRead: (agent?.shellPrefixes?.read || []).map((prefix) => prefix.join(' ')).join('\n'),
+    shellPrefixesWrite: (agent?.shellPrefixes?.write || []).map((prefix) => prefix.join(' ')).join('\n'),
     delegationEnabled: agent?.delegationEnabled ?? false,
     sessionWriteMode: writePaths === null || writePaths === undefined
       ? 'unrestricted'
@@ -881,11 +1094,14 @@ function applyInheritedValues() {
   const current = Object.fromEntries(Object.keys(ownership).filter((field) => ownership[field]).map((field) => [field, clone(
     field === 'sessionWritePaths'
         ? { sessionWriteMode: form.sessionWriteMode, sessionWritePathsText: form.sessionWritePathsText }
+        : field === 'shellPrefixes'
+          ? { shellPrefixesRead: form.shellPrefixesRead, shellPrefixesWrite: form.shellPrefixesWrite }
         : form[field]
   )]))
   assignValues(base)
   for (const [field, value] of Object.entries(current)) {
     if (field === 'sessionWritePaths') Object.assign(form, value)
+    else if (field === 'shellPrefixes') Object.assign(form, value)
     else form[field] = value
   }
 }
@@ -893,6 +1109,50 @@ function applyInheritedValues() {
 function setOwnership(field, value) {
   ownership[field] = value === 'own'
   if (!ownership[field]) applyInheritedValues()
+}
+
+function modelValue(field) {
+  return ownership[field] ? form[field] : INHERIT_MODEL_VALUE
+}
+
+function setModelValue(field, value) {
+  if (value === INHERIT_MODEL_VALUE) {
+    ownership[field] = false
+    applyInheritedValues()
+    return
+  }
+  ownership[field] = true
+  form[field] = value
+  if (field === 'defaultModelId' && ownership.reasoningEffort) {
+    const supported = new Set(selectedAgentModel.value?.reasoningEfforts || [])
+    if (form.reasoningEffort !== null && !supported.has(form.reasoningEffort)) {
+      form.reasoningEffort = null
+    }
+  }
+}
+
+function reasoningLabel(value) {
+  return reasoningOptions.value.find((option) => option.value === value)?.label || 'Providerstandard'
+}
+
+function modelOptions(setting) {
+  const selected = form[setting.field]
+  const options = setting.options === 'vision'
+    ? providers.visionModelOptions
+    : setting.options === 'video'
+      ? providers.videoModelOptions
+      : providers.selectionOptions(
+          selected,
+          setting.requiresTools === true,
+          setting.capability || 'chat'
+        )
+  const inherited = baseProfile.value?.[setting.field]
+  const inheritedLabel = options.find((option) => option.value === inherited)?.label
+    || (inherited ? providers.selectedModelState(inherited, setting.capability || 'chat').label : 'Kein Modell')
+  return [
+    { label: `Erben: ${inheritedLabel}`, value: INHERIT_MODEL_VALUE },
+    ...options
+  ]
 }
 
 function assignForm(agent = null) {
@@ -1041,9 +1301,10 @@ async function load() {
   loadFailed.value = false
   notFound.value = false
   agents.selectScope(scope.value)
+  providers.selectScope(scope.value)
   agents.resetIntegrationMetadata()
   try {
-    await agents.fetchAgents(scope.value)
+    await Promise.all([agents.fetchAgents(scope.value), providers.fetchAll()])
     if (isCreate.value) {
       editingAgent.value = null
       if (!baseProfiles.value.some((profile) => profile.id === agents.defaultAgentProfileId)) {

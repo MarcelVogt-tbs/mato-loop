@@ -77,7 +77,6 @@ from mato_loop_backend.settings import (
     SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
-    TrustLevel,
     UserIntegrationSettings,
     UserToolSettings,
     WebSearchToolSettings,
@@ -365,11 +364,9 @@ class OpenCodeIntegrationRequest(BaseModel):
         return self
 
 
-class IntegrationAccessRequest(BaseModel):
+class IntegrationDefaultsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    policies: dict[str, ToolExecutionPolicy] | None = None
-    resources: dict[str, dict[str, ToolExecutionPolicy]] = Field(default_factory=dict)
     default_resource_key: str | None = Field(
         default=None,
         max_length=500,
@@ -411,8 +408,6 @@ def _personal_settings_payload(settings: IntegrationSettings) -> dict:
 
 
 def _provider_payload(provider: IntegrationInstance) -> dict:
-    adapter = integration_adapter(provider.integration_type, provider.adapter_type)
-    resource_actions = tool_registry.integration_resource_actions(provider)
     return {
         "id": str(provider.id),
         "name": provider.name,
@@ -420,10 +415,6 @@ def _provider_payload(provider: IntegrationInstance) -> dict:
         "providerType": provider.adapter_type,
         "enabled": provider.enabled,
         "hasCredential": provider.credential_id is not None,
-        "supportsIntegrationPolicies": bool(resource_actions),
-        "supportsResourcePolicies": bool(
-            adapter and resource_actions and adapter.resource_loader
-        ),
         "config": (
             {
                 "imapHost": provider.config.get("imap_host"),
@@ -650,6 +641,36 @@ def _access_payload(
             else None
         )
     return payload
+
+
+def _default_resources_payload(
+    instance: IntegrationInstance,
+    resources: tuple[IntegrationResource, ...],
+    tools: ToolSettingsDocument,
+) -> dict:
+    default_calendar = tools.default_calendar
+    default_task_list = tools.default_task_list
+    return {
+        "integrationId": str(instance.id),
+        "resources": [
+            {"key": item.key, "groupKey": item.group_key, "label": item.label}
+            for item in resources
+        ],
+        "defaultResourceKey": (
+            default_calendar.calendar_key
+            if default_calendar is not None
+            and default_calendar.integration_id == instance.id
+            and any(item.key == default_calendar.calendar_key for item in resources)
+            else None
+        ),
+        "defaultTaskListKey": (
+            default_task_list.task_list_key
+            if default_task_list is not None
+            and default_task_list.integration_id == instance.id
+            and any(item.key == default_task_list.task_list_key for item in resources)
+            else None
+        ),
+    }
 
 
 def search_settings_payload(
@@ -1757,7 +1778,6 @@ async def test_sonobin_integration(
 async def get_integration_access(
     integration_id: UUID,
     db: Annotated[AsyncSession, Depends(get_db_session)],
-    trust: TrustLevel,
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
@@ -1765,26 +1785,21 @@ async def get_integration_access(
     instance = _integration(integrations, integration_id)
     if instance is None:
         raise ApiError(404, "integration.notFound")
-    if instance.integration_type == "mcp":
-        raise ApiError(404, "integration.notFound")
+    if instance.integration_type != "calendar" or instance.adapter_type != "caldav":
+        raise ApiError(409, "integration.resourcePoliciesUnsupported")
     await _load_scoped_integrations(
         db, scope, user, adapter_type=instance.adapter_type
     )
     resources = await _integration_resources(db, instance)
-    tools = (
-        await load_effective_tools(db, owner_id, trust)
-        if owner_id is not None
-        else (await _load_scoped_tools(db, owner_id)).select_trust(trust)
-    )
-    return _access_payload(instance, resources, tools)
+    tools = await load_effective_tools(db, owner_id) if owner_id is not None else await _load_scoped_tools(db, owner_id)
+    return _default_resources_payload(instance, resources, tools)
 
 
 @router.put("/{integration_id}/access")
 async def update_integration_access(
     integration_id: UUID,
-    payload: IntegrationAccessRequest,
+    payload: IntegrationDefaultsRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
-    trust: TrustLevel,
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
@@ -1794,50 +1809,14 @@ async def update_integration_access(
     instance = _integration(integrations, integration_id)
     if instance is None:
         raise ApiError(404, "integration.notFound")
-    if instance.integration_type == "mcp":
-        raise ApiError(404, "integration.notFound")
+    if instance.integration_type != "calendar" or instance.adapter_type != "caldav":
+        raise ApiError(409, "integration.resourcePoliciesUnsupported")
     await _load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type=instance.adapter_type
     )
     resources = await _integration_resources(db, instance)
     revision = instance.model_dump(mode="json")
-    adapter = integration_adapter(instance.integration_type, instance.adapter_type)
-    if adapter is None:
-        raise ApiError(409, "integration.resourcePoliciesUnsupported")
-    resource_actions = tool_registry.integration_resource_actions(instance)
-    if not resource_actions:
-        raise ApiError(409, "integration.resourcePoliciesUnsupported")
     resource_keys = {resource.key for resource in resources}
-    resources_by_key = {resource.key: resource for resource in resources}
-    capabilities = {action.capability for action in resource_actions}
-    actions_by_capability = {
-        action.capability: action for action in resource_actions
-    }
-    if set(payload.resources) - resource_keys:
-        raise ApiError(422, "validation.invalidChoice", field="resources")
-    if any(set(policies) - capabilities for policies in payload.resources.values()):
-        raise ApiError(422, "validation.invalidChoice", field="resources")
-    if any(
-        resource_key in resources_by_key
-        and resources_by_key[resource_key].applicable_capabilities is not None
-        and not set(policies)
-        <= resources_by_key[resource_key].applicable_capabilities
-        for resource_key, policies in payload.resources.items()
-    ):
-        raise ApiError(422, "validation.invalidChoice", field="resources")
-    if payload.policies is not None and set(payload.policies) - capabilities:
-        raise ApiError(422, "validation.invalidChoice", field="policies")
-    if payload.policies is not None and any(
-        policy not in actions_by_capability[capability].allowed_policies
-        for capability, policy in payload.policies.items()
-    ):
-        raise ApiError(422, "validation.invalidChoice", field="policies")
-    if any(
-        policy not in actions_by_capability[capability].allowed_policies
-        for policies in payload.resources.values()
-        for capability, policy in policies.items()
-    ):
-        raise ApiError(422, "validation.invalidChoice", field="resources")
     default_resource_changed = "default_resource_key" in payload.model_fields_set
     default_task_list_changed = "default_task_list_key" in payload.model_fields_set
     if (default_resource_changed or default_task_list_changed) and (
@@ -1878,22 +1857,6 @@ async def update_integration_access(
     if current.model_dump(mode="json") != revision:
         raise ApiError(409, "integration.changed")
     tools = await _load_scoped_tools(db, owner_id, for_update=True)
-    tools.select_trust(trust)
-    if payload.policies is not None:
-        normalized_policies = dict(payload.policies)
-        if normalized_policies:
-            tools.permissions.integration_policies[str(integration_id)] = normalized_policies
-        else:
-            tools.permissions.integration_policies.pop(str(integration_id), None)
-    normalized = {
-        resource_key: dict(policies)
-        for resource_key, policies in payload.resources.items()
-        if policies
-    }
-    if normalized:
-        tools.permissions.resource_policies[str(integration_id)] = normalized
-    else:
-        tools.permissions.resource_policies.pop(str(integration_id), None)
     labels = {resource.key: resource.label for resource in resources}
     if labels:
         tools.resource_labels[str(integration_id)] = labels
@@ -1924,11 +1887,11 @@ async def update_integration_access(
     await SettingsStore.save(db, tools, user_id=owner_id)
     await db.commit()
     response_tools = (
-        await load_effective_tools(db, owner_id, trust)
+        await load_effective_tools(db, owner_id)
         if owner_id is not None
         else tools
     )
-    return _access_payload(current, resources, response_tools)
+    return _default_resources_payload(current, resources, response_tools)
 
 
 @router.get("/personal-settings")

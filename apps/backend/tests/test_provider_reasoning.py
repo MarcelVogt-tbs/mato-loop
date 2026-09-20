@@ -274,6 +274,15 @@ def test_codex_reasoning_profile_uses_catalog_metadata() -> None:
     assert profile.supports_disable is False
 
 
+def test_halogen_profile_is_exact_and_discovery_takes_precedence() -> None:
+    assert reasoning_profile("halogen-unrelated") is None
+    profile = reasoning_profile("halogen-qwen3.8-flash-next", {
+        "reasoning_efforts": ["low", "medium"], "default_reasoning_effort": "low",
+    })
+    assert profile.default_effort == ReasoningEffort.LOW
+    assert profile.options == (ReasoningEffort.LOW, ReasoningEffort.MEDIUM)
+
+
 async def test_chat_stream_routes_tagged_reasoning_separately(monkeypatch) -> None:
     events = [
         {"choices": [{"delta": {"content": "<thi"}}]},
@@ -314,6 +323,7 @@ async def test_chat_stream_routes_tagged_reasoning_separately(monkeypatch) -> No
 async def test_chat_stream_stops_at_done_without_waiting_for_eof(monkeypatch) -> None:
     stream = _OpenAfterTerminalEvent(
         'data: {"choices":[{"delta":{"content":"Antwort"},"finish_reason":"stop"}]}\n\n'
+        'data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}\n\n'
         "data: [DONE]\n\n"
     )
     real_client = httpx.AsyncClient
@@ -331,6 +341,7 @@ async def test_chat_stream_stops_at_done_without_waiting_for_eof(monkeypatch) ->
     )
 
     assert result.content == "Antwort"
+    assert result.usage == {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4}
 
 
 async def test_responses_stream_routes_summary_separately(monkeypatch) -> None:

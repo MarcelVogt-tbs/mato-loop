@@ -70,7 +70,9 @@ const providers = useProviderStore()
 const has = (field) => props.fields.includes(field)
 const hasSessionFields = computed(() => SESSION_FIELDS.some(has))
 const hasLlmFields = computed(() => LLM_FIELDS.some(has))
-const selectedAgent = computed(() => agentProfiles.byId(props.session?.agentProfileId))
+const selectedAgent = computed(() => agentProfiles.byId(
+  props.session?.agentProfileId || agentProfiles.defaultAgentProfileId
+))
 const agentProfileOptions = computed(() => {
   const options = agentProfiles.agents.map((agent) => ({
     label: agent.name,
@@ -131,7 +133,7 @@ const executionAgentMessage = computed(() => {
   if (!liveWorkspaceContext.value.connected) return 'Der ausgewählte Computer ist nicht verfügbar.'
   return ''
 })
-const effectiveModelId = computed(() => props.session?.modelId || providers.defaultModelId)
+const effectiveModelId = computed(() => props.session?.modelId || selectedAgent.value?.defaultModelId)
 const modelSelectionOptions = computed(() => providers.selectionOptions(effectiveModelId.value, true))
 const selectedModelConfig = computed(() => providers.models.find((model) => model.id === effectiveModelId.value))
 const selectedModelTrustIcon = computed(() => selectedModelConfig.value?.effectiveTrustLevel === 'private' ? 'lock' : 'public')
@@ -269,13 +271,14 @@ const ModelField = defineComponent(() => () => h(QSelect, selectProps({
   class: props.compact ? 'composer-model' : undefined,
   hint: props.compact ? undefined : modelSupportsTools.value ? 'Modell für diese Session.' : 'Das ausgewählte Modell unterstützt keine Tools.',
   persistentHint: !props.compact,
+  clearable: true,
   'onUpdate:modelValue': selectModel
 }), {
   prepend: () => h(QIcon, { name: selectedModelTrustIcon.value, size: props.compact ? '18px' : undefined }),
   option: (scope) => optionSlot(scope, (option) => option.trustIcon)
 }))
 const ReasoningField = defineComponent(() => () => h(QSelect, selectProps({
-  modelValue: props.session?.reasoningEffort ?? null,
+  modelValue: props.session?.reasoningEffort ?? selectedAgent.value?.reasoningEffort ?? null,
   options: reasoningEffortOptions.value,
   label: 'Denken',
   class: props.compact ? 'composer-reasoning' : undefined,

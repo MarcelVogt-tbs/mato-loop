@@ -1,58 +1,58 @@
-# Automations
+# Automationen
 
-An automation runs a saved agent task manually or on a schedule. Open **Einstellungen > Automationen** to see its status and next start. Select an automation to manage its **Einstellungen** and **Verlauf** on the same page.
+Eine Automation führt einen gespeicherten Agentenauftrag manuell oder nach Zeitplan aus. Unter **Einstellungen > Automationen** sehen Sie Status und nächsten Start. Wählen Sie eine Automation aus, um **Einstellungen** und **Verlauf** auf derselben Seite zu verwalten.
 
-## Create an automation
+## Automation erstellen
 
-Choose **Automation erstellen** and answer three questions:
+Wählen Sie **Automation erstellen** und beantworten Sie drei Fragen:
 
-1. **Auftrag**: Give it a name and describe the task and expected result.
-2. **Ausführung**: Choose manual, one-time, or recurring execution. Manual automations need no schedule. Recurring schedules offer daily, weekday, weekly, and monthly presets.
-3. **Ergebnis**: Results and errors always appear in the automation's history. Optionally select a chat to receive successful results as well.
+1. **Auftrag**: Vergeben Sie einen Namen und beschreiben Sie Aufgabe und erwartetes Ergebnis.
+2. **Ausführung**: Wählen Sie eine manuelle, einmalige oder wiederkehrende Ausführung. Manuelle Automationen benötigen keinen Zeitplan. Für wiederkehrende Ausführungen stehen tägliche, werktägliche, wöchentliche und monatliche Vorlagen bereit.
+3. **Ergebnis**: Ergebnisse und Fehler erscheinen immer im Verlauf der Automation. Optional können erfolgreiche Ergebnisse zusätzlich an einen Chat gesendet werden.
 
-Choose **Speichern**. Changes apply only after saving. **Jetzt ausführen** starts the saved task; save or discard pending changes before starting it manually. A schedule continues using the saved definition while you edit.
+Wählen Sie **Speichern**. Änderungen gelten erst nach dem Speichern. **Jetzt ausführen** startet den gespeicherten Auftrag; speichern oder verwerfen Sie offene Änderungen vor einem manuellen Start. Während der Bearbeitung verwendet der Zeitplan weiterhin die gespeicherte Definition.
 
-## Understand the status
+## Status verstehen
 
-- **Nur manuell**: No automatic starts are configured.
-- **Geplant**: At least one future scheduled start is enabled.
-- **Zeitpläne pausiert**: Automatic starts are paused; manual execution remains possible.
-- **Keine weiteren Termine**: No enabled schedule has another occurrence. Manual execution remains possible.
-- **Läuft**, **Eingereiht**, **Freigabe erforderlich**, or **Eingabe erforderlich**: A run is active. The scheduling state is shown separately, because pausing future starts does not cancel current work.
-- **Archiviert**: History remains accessible, but the automation cannot be edited or started.
+- **Nur manuell**: Es sind keine automatischen Starts eingerichtet.
+- **Geplant**: Mindestens ein künftiger geplanter Start ist aktiviert.
+- **Zeitpläne pausiert**: Automatische Starts sind pausiert; eine manuelle Ausführung bleibt möglich.
+- **Keine weiteren Termine**: Kein aktivierter Zeitplan besitzt einen weiteren Termin. Eine manuelle Ausführung bleibt möglich.
+- **Läuft**, **Eingereiht**, **Freigabe erforderlich** oder **Eingabe erforderlich**: Eine Ausführung ist aktiv. Der Planungsstatus wird getrennt angezeigt, weil das Pausieren künftiger Starts die aktuelle Arbeit nicht abbricht.
+- **Archiviert**: Der Verlauf bleibt zugänglich, die Automation kann aber weder bearbeitet noch gestartet werden.
 
-There can be at most one active run per automation. Handle pending permissions or questions in the notification center. A failed or interrupted run is not automatically retried, because earlier tools may already have caused external effects.
+Pro Automation kann höchstens eine Ausführung aktiv sein. Offene Freigaben oder Fragen bearbeiten Sie in **Benachrichtigungen**. Eine fehlgeschlagene oder unterbrochene Ausführung wird nicht automatisch wiederholt, weil frühere Tools bereits externe Änderungen verursacht haben können.
 
-## Scheduling options
+## Zeitplanoptionen
 
-New recurring schedules use the browser's timezone, shown under **Zeitplanoptionen**. Changing devices does not change the saved timezone. One-time timestamps and optional end dates are entered in the current device's local time.
+Neue wiederkehrende Zeitpläne verwenden die unter **Zeitplanoptionen** angezeigte Zeitzone des Browsers. Ein Gerätewechsel ändert die gespeicherte Zeitzone nicht. Einmalige Zeitpunkte und optionale Enddaten geben Sie in der lokalen Zeit des aktuellen Geräts ein.
 
-**Benutzerdefiniert** accepts a five-field Cron expression: minute, hour, day, month, weekday. For example, `0 8 * * 1-5` means Monday through Friday at 08:00 in the selected timezone. Existing custom expressions are not rewritten by the preset selector. A monthly day that does not exist in a particular month has no occurrence in that month.
+**Benutzerdefiniert** akzeptiert einen Cron-Ausdruck mit fünf Feldern: Minute, Stunde, Tag, Monat und Wochentag. `0 8 * * 1-5` bedeutet beispielsweise Montag bis Freitag um 08:00 Uhr in der gewählten Zeitzone. Die Vorlagenauswahl überschreibt bestehende benutzerdefinierte Ausdrücke nicht. Ein monatlicher Tag, der in einem bestimmten Monat nicht existiert, hat in diesem Monat keinen Termin.
 
-Use **Zeitplanoptionen** for timezone overrides, an inclusive end date, or disabling one schedule. Use **Weitere Ausführungseinstellungen** to add another schedule. The primary **Zeitpläne aktiv** switch pauses all automatic starts without removing their configuration. Switching to manual mode saves an empty schedule list; the old schedule drafts are retained only until saving or leaving the page.
+Unter **Zeitplanoptionen** können Sie die Zeitzone ändern, ein einschließlich geltendes Enddatum setzen oder einen einzelnen Zeitplan deaktivieren. Mit **Weitere Ausführungseinstellungen** fügen Sie einen weiteren Zeitplan hinzu. Der Hauptschalter **Zeitpläne aktiv** pausiert alle automatischen Starts, ohne ihre Konfiguration zu entfernen. Beim Wechsel in den manuellen Modus wird eine leere Zeitplanliste gespeichert; die alten Zeitplanentwürfe bleiben nur bis zum Speichern oder Verlassen der Seite erhalten.
 
-With exactly one one-time schedule, **Nach erfolgreichem geplanten Termin archivieren** archives the automation after that scheduled run succeeds. Manual, failed, cancelled, or skipped runs do not trigger archival. Archived automations can be permanently deleted from **Archiv**, including their history.
+Bei genau einem einmaligen Zeitplan archiviert **Nach erfolgreichem geplanten Termin archivieren** die Automation nach einer erfolgreichen geplanten Ausführung. Manuelle, fehlgeschlagene, abgebrochene oder übersprungene Ausführungen lösen keine Archivierung aus. Archivierte Automationen können einschließlich ihres Verlaufs unter **Archiv** dauerhaft gelöscht werden.
 
-During daylight-saving changes, skipped recurring local times execute once after the spring jump, and duplicated autumn times execute once. Occurrences missed during server downtime are not replayed. Simultaneous schedules are combined into one run; a due occurrence while a previous run is active produces a skipped history entry.
+Bei Zeitumstellungen werden im Frühjahr übersprungene lokale Termine einmal nach dem Zeitsprung und im Herbst doppelt vorkommende Termine einmal ausgeführt. Während eines Serverausfalls verpasste Termine werden nicht nachgeholt. Gleichzeitige Zeitpläne werden zu einer Ausführung zusammengefasst; wird ein Termin fällig, während die vorherige Ausführung noch aktiv ist, entsteht ein übersprungener Verlaufseintrag.
 
-## Advanced task settings
+## Weitere Auftragseinstellungen
 
-Each automation has its own persistent execution context. Previous results, files, and permissions can affect subsequent runs; it does not begin as a fresh chat each time.
+Jede Automation besitzt einen eigenen dauerhaften Ausführungskontext. Frühere Ergebnisse, Dateien und Freigaben können spätere Ausführungen beeinflussen; sie beginnt nicht jedes Mal als neuer Chat.
 
-**Weitere Auftragseinstellungen** allows a one-time copy of settings from a chat, including model, memory, web search, computer, and working directory. Later changes to the source chat are not synchronized. Without an explicit model selection, the effective default model is used.
+**Weitere Auftragseinstellungen** übernimmt Einstellungen einmalig aus einem Chat, darunter Agentenprofil, Modell, Memory, Websuche, Computer und Arbeitsordner. Spätere Änderungen am Quellchat werden nicht synchronisiert. Ohne ausdrückliche Modellwahl wird das Agentmodell des übernommenen Profils verwendet.
 
-A skill is optional. The agent can select an appropriate or explicitly named skill from the task using the normal skill-loading tool. **Skill verbindlich verwenden (optional)** instead binds a specific skill by ID and requires it to be loaded. Skills add instructions, never tools or permissions. Their normal approval policies still apply.
+Ein Skill ist optional. Der Agent kann mit dem normalen Skill-Tool einen passenden oder im Auftrag ausdrücklich genannten Skill auswählen. **Skill verbindlich verwenden (optional)** bindet stattdessen einen bestimmten Skill anhand seiner ID und schreibt dessen Laden vor. Skills ergänzen Anweisungen, aber niemals Tools oder Rechte. Die normalen Profilrechte und Freigaben gelten weiterhin.
 
-## Results and history
+## Ergebnisse und Verlauf
 
-**Verlauf** shows run results or controlled errors, execution status, and timing. **Konfiguration dieses Laufs** contains the historical task and configuration used by that run; later edits do not change it. Completion and failure notifications open the exact run directly.
+**Verlauf** zeigt Ergebnisse oder kontrollierte Fehler, Ausführungsstatus und Zeitangaben. **Konfiguration dieses Laufs** enthält den damaligen Auftrag und die für diese Ausführung verwendete Konfiguration; spätere Änderungen wirken sich darauf nicht aus. Benachrichtigungen über Abschluss oder Fehler öffnen direkt die betreffende Ausführung.
 
-An output chat receives the final successful assistant response, not internal reasoning or tool records. If the chat is busy, delivery waits. Delivery failure is separate from execution failure: a successful result remains available even if delivery fails. After three technical delivery attempts, **Zustellung erneut versuchen** retries delivery without rerunning the task.
+Ein Ausgabechat erhält die abschließende erfolgreiche Agentenantwort, nicht interne Überlegungen oder Tool-Datensätze. Ist der Chat beschäftigt, wartet die Zustellung. Ein Zustellungsfehler ist von einem Ausführungsfehler getrennt: Ein erfolgreiches Ergebnis bleibt auch bei fehlgeschlagener Zustellung verfügbar. Nach drei technischen Zustellversuchen wiederholt **Zustellung erneut versuchen** nur die Zustellung, nicht den Auftrag.
 
-After choosing an output chat, **Weitere Ergebniseinstellungen** offers the chat's default channel, the MatoLoop app, or an available personal channel. An unavailable saved channel remains visible; disabled providers fall back to the app according to the channel policy.
+Nach Auswahl eines Ausgabechats bietet **Weitere Ergebniseinstellungen** den Standardkanal des Chats, die MatoLoop-App oder einen verfügbaren persönlichen Kanal an. Ein gespeicherter, aber nicht verfügbarer Kanal bleibt sichtbar; bei deaktivierten Providern fällt die Zustellung gemäß Kanalrichtlinie auf die App zurück.
 
-**Automation an diesen Chat binden** changes deletion behavior: deleting that chat also requires deleting the dependent automation. With an optional link, the chat can be unlinked while retaining the automation.
+**Automation an diesen Chat binden** ändert das Löschverhalten: Beim Löschen dieses Chats muss auch die abhängige Automation gelöscht werden. Bei einer optionalen Verknüpfung kann der Chat getrennt werden, während die Automation erhalten bleibt.
 
-## Agent tools and permissions
+## Agenten-Tools und Rechte
 
-The agent can list, create, edit, start, and delete automations, including manual-only tasks. These operations use the effective policies under **Einstellungen > Tools** and the selected agent profile. Selecting a skill or creating an automation does not grant additional tool access or bypass approvals.
+Der Agent kann Automationen einschließlich rein manueller Aufträge auflisten, erstellen, bearbeiten, starten und löschen. Diese Aktionen verwenden die Rechte des gewählten Agentenprofils. Die Auswahl eines Skills oder das Erstellen einer Automation gewährt keinen zusätzlichen Tool-Zugriff und umgeht keine Freigaben.

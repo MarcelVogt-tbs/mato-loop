@@ -80,7 +80,6 @@ from mato_loop_backend.settings import (
     MemorySettings,
     SettingsStore,
     UserPreferences,
-    load_effective_ai,
 )
 from mato_loop_backend.settings.models import ReasoningEffort
 from mato_loop_backend.workspace import RootFileError, RootFileService
@@ -567,7 +566,7 @@ async def _session_payload(
             has_unread_messages=has_unread_messages,
             default_channel=default_channel,
         )
-    ai = await load_effective_ai(db, item.user_id)
+    ai = await session_service._profile_ai(db, item.user_id, item.agent_profile_id)
     memory = await SettingsStore.load(db, MemorySettings, user_id=item.user_id)
     model_id = item.model_config_id or ai.default_model_id
     model = _model_for_session(ai, model_id) if _model_available(ai, model_id) else None
@@ -696,7 +695,6 @@ async def session_defaults(
     ] = None,
     project_id: Annotated[UUID | None, Query(alias="projectId")] = None,
 ) -> dict:
-    ai = await load_effective_ai(db, user.id)
     memory = await SettingsStore.load(db, MemorySettings, user_id=user.id)
     preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
     try:
@@ -706,6 +704,9 @@ async def session_defaults(
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)
+    ai, profile = await session_service._profile_ai_and_profile(
+        db, user.id, selected_agent_profile_id
+    )
     selected_model_id = model_id or ai.default_model_id
     model = (
         _model_for_session(ai, selected_model_id)
@@ -740,7 +741,7 @@ async def session_defaults(
     return {
         "modelId": str(selected_model_id) if selected_model_id else None,
         "agentProfileId": str(selected_agent_profile_id),
-        "reasoningEffort": None,
+        "reasoningEffort": profile.reasoning_effort,
         "modelAvailable": bool(model and model.supports_tools),
         "modelUnavailableReason": (
             None

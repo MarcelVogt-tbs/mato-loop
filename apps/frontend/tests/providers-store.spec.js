@@ -158,7 +158,6 @@ describe('provider store', () => {
 
     expect(store.providers.map((provider) => provider.id)).toEqual(['p1'])
     expect(store.models.map((model) => model.id)).toEqual(['m1'])
-    expect(store.defaultModelId).toBe('m1')
     expect(store.lastLoadComplete).toBe(false)
     expect(store.loading).toBe(false)
   })
@@ -282,74 +281,6 @@ describe('provider store', () => {
     expect(api.get).not.toHaveBeenCalled()
   })
 
-  it('saves all default models atomically and applies the complete response', async () => {
-    const store = useProviderStore()
-    api.put.mockResolvedValue({
-      data: {
-        providers: [{ id: 'p1', name: 'Lokal', enabled: true }],
-        models: [
-          { id: 'agent', providerId: 'p1', enabled: true },
-          { id: 'compact', providerId: 'p1', enabled: true }
-        ],
-        defaultModelId: 'agent',
-        compactionModelId: 'compact',
-        titleGenerationModelId: null,
-        titleVisionFallbackEnabled: false,
-        dreamingModelId: 'compact',
-        visionModelId: 'vision',
-        videoModelId: 'video',
-        imageGenerationModelId: 'image',
-        speechGenerationModelId: null,
-        audioGenerationModelId: 'audio',
-        audioTranscriptionModelId: 'transcription',
-        skillCreationModelId: 'compact'
-      }
-    })
-
-    await store.setDefaultModels({
-      defaultModelId: 'agent',
-      compactionModelId: 'compact',
-      titleGenerationModelId: null,
-      titleVisionFallbackEnabled: false,
-      dreamingModelId: 'compact',
-      visionModelId: 'vision',
-      videoModelId: 'video',
-      imageGenerationModelId: 'image',
-      speechGenerationModelId: null,
-      audioGenerationModelId: 'audio',
-      audioTranscriptionModelId: 'transcription',
-      skillCreationModelId: 'compact'
-    })
-
-    expect(api.put).toHaveBeenCalledTimes(1)
-    expect(api.put).toHaveBeenCalledWith('/providers/default-models', {
-      default_model_id: 'agent',
-      compaction_model_id: 'compact',
-      title_generation_model_id: null,
-      title_vision_fallback_enabled: false,
-      dreaming_model_id: 'compact',
-      vision_model_id: 'vision',
-      video_model_id: 'video',
-      image_generation_model_id: 'image',
-      speech_generation_model_id: null,
-      audio_generation_model_id: 'audio',
-      audio_transcription_model_id: 'transcription',
-      skill_creation_model_id: 'compact'
-    }, { params: { scope: 'instance' } })
-    expect(store.defaultModelId).toBe('agent')
-    expect(store.compactionModelId).toBe('compact')
-    expect(store.titleGenerationModelId).toBeNull()
-    expect(store.titleVisionFallbackEnabled).toBe(false)
-    expect(store.dreamingModelId).toBe('compact')
-    expect(store.visionModelId).toBe('vision')
-    expect(store.videoModelId).toBe('video')
-    expect(store.imageGenerationModelId).toBe('image')
-    expect(store.speechGenerationModelId).toBeNull()
-    expect(store.audioGenerationModelId).toBe('audio')
-    expect(store.audioTranscriptionModelId).toBe('transcription')
-    expect(store.skillCreationModelId).toBe('compact')
-  })
-
   it.each(['openai-compatible', 'lemonade', 'azure-speech'])('creates and updates %s providers through the configured endpoints', async (type) => {
     const store = useProviderStore()
     const payload = {
@@ -411,7 +342,6 @@ describe('provider store', () => {
     expect(api.post).toHaveBeenCalledWith(
       '/providers/configuration/azure/models/sync', null, { params: { scope: 'instance' } }
     )
-    expect(store.audioTranscriptionModelId).toBe('transcription')
     expect(store.capabilityOptions('audio_transcription')).toEqual([{
       label: 'Fast Transcription · Azure Speech', value: 'transcription',
       trustLevel: 'public', trustIcon: 'public', disable: false
@@ -545,7 +475,6 @@ describe('provider store', () => {
     expect(store.providers.map((provider) => provider.id)).toEqual(['personal-provider'])
     expect(store.models.map((model) => model.id)).toEqual(['personal-model'])
     expect(store.modelOptions.map((option) => option.value)).toEqual(['instance-model', 'personal-model'])
-    expect(store.effectiveTitleGenerationModelId).toBe('instance-model')
     expect(api.get).toHaveBeenCalledWith('/providers/personal-policy')
     expect(api.get).toHaveBeenCalledWith('/providers', { params: { scope: 'personal' } })
     expect(api.get).not.toHaveBeenCalledWith('/providers', { params: { scope: 'instance' } })

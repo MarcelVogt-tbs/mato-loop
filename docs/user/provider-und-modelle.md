@@ -24,15 +24,15 @@ Neu erkannte Modelle beginnen in der Regel deaktiviert; vom Provider als natives
 
 Bei Providern ohne Modellerkennung kann eine Modell-ID manuell eingetragen werden.
 
-Manuell eingetragene und automatisch erkannte Modelle können gelöscht werden. Dabei werden ihre Standardmodell-Einstellungen im betroffenen Einstellungsbereich entfernt; betroffene Sessions verwenden anschließend wieder das wirksame Standardmodell. Bietet ein Provider ein gelöschtes Modell weiterhin an, erscheint es bei der nächsten Synchronisierung erneut als neu erkanntes Modell.
+Manuell eingetragene und automatisch erkannte Modelle können gelöscht werden. Dabei entfernt MatoLoop Verweise auf dieses Modell aus betroffenen Agentenprofilen und die ausdrückliche Modellwahl betroffener Sessions. Diese Sessions verwenden anschließend das Modell ihres Profils, sofern dort eines gewählt ist. Bietet ein Provider ein gelöschtes Modell weiterhin an, erscheint es bei der nächsten Synchronisierung erneut als neu erkanntes Modell. Auch Synchronisierung, Deaktivierung, geänderte Fähigkeiten und eine getrennte Codex-Verbindung bereinigen ungültig gewordene Profilverweise.
 
 ## Laufzeiteinstellungen
 
-Je Modell können unter anderem Kontextfenster, Ausgabelimit, Streaming, Tool-Unterstützung, Bildunterstützung, Datenfreigabe, Memory-Policy und Reasoning-Zusammenfassungen konfiguriert werden. Webfetch folgt stattdessen den Tool-Richtlinien für die effektive private oder öffentliche Modellklasse. MatoLoop bietet den Reasoning-Aufwand im Chat nur für ausdrücklich unterstützte Modelle an und berücksichtigt deren verfügbare Stufen und Providerformat. Qwen3.8-27B unterstützt **Aus**, **Niedrig**, **Mittel** und **Sehr hoch**; MatoLoop verwendet **Mittel** als Standard. Codex übernimmt die unterstützten Stufen einschließlich **Maximum** und **Ultra** sowie den Standardwert aus dem synchronisierten Modellkatalog.
+Je Modell können unter anderem Kontextfenster, Ausgabelimit, Streaming, Tool-Unterstützung, Bildunterstützung, Datenfreigabe, Memory-Policy und Reasoning-Zusammenfassungen konfiguriert werden. Webfetch folgt stattdessen den Rechten des gewählten Agentenprofils für die effektive private oder öffentliche Modellklasse. MatoLoop bietet den Reasoning-Aufwand im Chat nur für ausdrücklich unterstützte Modelle an und berücksichtigt deren verfügbare Stufen und Providerformat. Qwen3.8-27B unterstützt **Aus**, **Niedrig**, **Mittel** und **Sehr hoch**; MatoLoop verwendet **Mittel** als Modellstandard. Codex übernimmt die unterstützten Stufen einschließlich **Maximum** und **Ultra** sowie den Modellstandard aus dem synchronisierten Katalog.
 
-## Standardmodelle
+## Profilmodelle
 
-Unter **Einstellungen > Standardmodelle** werden Modelle für verschiedene Aufgaben gewählt:
+Unter **Einstellungen > Agenten > Modelle** wählen Sie je Agentenprofil Modelle für verschiedene Aufgaben:
 
 - Agent
 - Bildanalyse
@@ -41,4 +41,4 @@ Unter **Einstellungen > Standardmodelle** werden Modelle für verschiedene Aufga
 - Bild-, Sprach- und Audiogenerierung
 - Transkription
 
-Nicht jede Aufgabe muss konfiguriert sein. Persönliche Standardmodelle überschreiben die Instanzvorgabe nur, wenn das gewählte Modell effektiv verfügbar ist. Fehlt jedoch das Agent-Standardmodell und ist in der Session kein Modell gewählt, kann kein Chatlauf starten.
+**Allgemein**, **Plan** und **Build** sind unabhängige geschützte Instanz-Basisprofile. Ein eigenes Instanz- oder persönliches Profil wählt genau eines davon als Basis und übernimmt jedes nicht angepasste Feld fortlaufend. Es gibt keine globalen oder persönlichen Standardmodelle außerhalb der Profile. Eine ausdrückliche Modellwahl der Session hat Vorrang vor dem Agentmodell des Profils. Sessiongebundene Hilfsaufrufe verwenden die Modellfelder dieses Profils; profilunabhängiges Dreaming verwendet **Allgemein**. Nicht jede Hilfsaufgabe muss konfiguriert sein. Fehlt jedoch sowohl in der Session als auch im Profil ein Agentmodell, kann kein Chatlauf starten.

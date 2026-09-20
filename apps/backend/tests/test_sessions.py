@@ -65,6 +65,8 @@ from mato_loop_backend.sessions.service import (
     session_message_page,
 )
 from mato_loop_backend.settings import (
+    GENERAL_PROFILE_ID,
+    AgentProfilesSettings,
     AiSettings,
     MemorySettings,
     SettingsStore,
@@ -72,6 +74,7 @@ from mato_loop_backend.settings import (
     UserPreferences,
 )
 from mato_loop_backend.settings.models import (
+    AgentProfileAccessOverrides,
     LlmProviderConfig,
     ModelAvailability,
     ModelConfig,
@@ -81,6 +84,23 @@ from mato_loop_backend.workspace import FileRoot, RootFileService
 
 def _user() -> UserAccount:
     return UserAccount(id=uuid4(), username="test", password_hash="hash")
+
+
+@pytest.fixture(autouse=True)
+def profile_model_defaults(monkeypatch):
+    async def load_optional(db, settings_type, **_kwargs):
+        if settings_type is not AgentProfilesSettings:
+            return None
+        ai = await SettingsStore.load(db, AiSettings)
+        return AgentProfilesSettings(
+            builtin_access_overrides={
+                GENERAL_PROFILE_ID: AgentProfileAccessOverrides(
+                    default_model_id=ai.default_model_id,
+                )
+            }
+        )
+
+    monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
 
 
 def _stored_app_tab(app_id: str, *, pinned: bool = False) -> dict:
@@ -615,7 +635,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     )
 
     session = db.add.call_args.args[0]
-    assert session.model_config_id == model.id
+    assert session.model_config_id is None
     assert session.reasoning_effort == "low"
     assert session.user_id == user.id
     assert session.memory_mode == "full"
@@ -2351,7 +2371,7 @@ async def test_required_search_unavailability_does_not_reject_user_message(monke
             "dirty": True,
         },
     )
-    load.assert_awaited_once()
+    assert load.await_count >= 1
     assert result["runId"] == str(run.id)
 
 

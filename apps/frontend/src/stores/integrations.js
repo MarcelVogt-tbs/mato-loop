@@ -69,14 +69,6 @@ function scopeConfig(scope, config = {}) {
   return { ...config, params: { ...(config.params || {}), scope } }
 }
 
-function accessConfig(scope, trust) {
-  return { params: { scope, trust } }
-}
-
-function accessKey(scope, trust, id) {
-  return `${scope}:${trust}:${id}`
-}
-
 function scopeContext(store) {
   return { scope: store.scope, generation: store.scopeGeneration }
 }
@@ -101,12 +93,6 @@ function clearIntegrations(store) {
   store.browserStatuses = {}
 }
 
-function clearAccess(store, id) {
-  for (const key of Object.keys(store.accessByIntegration)) {
-    if (key.endsWith(`:${id}`)) delete store.accessByIntegration[key]
-  }
-}
-
 export const useIntegrationStore = defineStore('integrations', {
   state: () => ({
     search: emptySearch(),
@@ -123,19 +109,15 @@ export const useIntegrationStore = defineStore('integrations', {
     browserStatuses: {},
     browserLoadVersion: 0,
     scope: 'instance',
-    trust: 'private',
     catalog: [],
     catalogLoading: false,
     catalogLoaded: false,
     catalogLoadFailed: false,
-    accessByIntegration: {},
     pendingLoads: 0,
     loading: false,
     loaded: false,
     loadFailed: false,
     scopeGeneration: 0,
-    accessGeneration: 0,
-    accessVersions: {},
     loadVersions: {},
     effectiveLoadVersion: 0
   }),
@@ -159,16 +141,7 @@ export const useIntegrationStore = defineStore('integrations', {
       this.loading = false
       this.loaded = false
       this.loadFailed = false
-      this.accessByIntegration = {}
-      this.accessGeneration += 1
-      this.accessVersions = {}
       clearIntegrations(this)
-    },
-    selectTrust(trust) {
-      const next = trust === 'public' ? 'public' : 'private'
-      if (next === this.trust) return
-      this.trust = next
-      this.accessGeneration += 1
     },
     async fetchCatalog() {
       this.catalogLoading = true
@@ -257,7 +230,6 @@ export const useIntegrationStore = defineStore('integrations', {
       const context = scopeContext(this)
       await api.delete(`/integrations/search/providers/${id}`, scopeConfig(context.scope))
       if (!contextIsCurrent(this, context)) return
-      clearAccess(this, id)
       await this.fetchSearch()
     },
     async saveSearchSelection(primaryProvider, fallbackProvider) {
@@ -293,7 +265,6 @@ export const useIntegrationStore = defineStore('integrations', {
       const context = scopeContext(this)
       await api.delete(`/integrations/calendar/accounts/${id}`, scopeConfig(context.scope))
       if (!contextIsCurrent(this, context)) return
-      clearAccess(this, id)
       await this.fetchCalendar()
     },
     async testCalendar(id) {
@@ -319,7 +290,6 @@ export const useIntegrationStore = defineStore('integrations', {
       const context = scopeContext(this)
       await api.delete(`/integrations/mail/accounts/${id}`, scopeConfig(context.scope))
       if (!contextIsCurrent(this, context)) return
-      clearAccess(this, id)
       await this.fetchMail()
     },
     async testMail(id) {
@@ -391,7 +361,6 @@ export const useIntegrationStore = defineStore('integrations', {
       const context = scopeContext(this)
       await api.delete(`/integrations/knowledge/bases/${id}`, scopeConfig(context.scope))
       if (!contextIsCurrent(this, context)) return
-      clearAccess(this, id)
       await this.fetchKnowledge()
     },
     async testKnowledge(id) {
@@ -417,7 +386,6 @@ export const useIntegrationStore = defineStore('integrations', {
       const context = scopeContext(this)
       await api.delete(`/integrations/recipes/accounts/${id}`, scopeConfig(context.scope))
       if (!contextIsCurrent(this, context)) return
-      clearAccess(this, id)
       await this.fetchRecipes()
     },
     async testRecipes(id) {
@@ -443,7 +411,6 @@ export const useIntegrationStore = defineStore('integrations', {
       const context = scopeContext(this)
       await api.delete(`/integrations/music/sonobin/${id}`, scopeConfig(context.scope))
       if (!contextIsCurrent(this, context)) return
-      clearAccess(this, id)
       await this.fetchMusic()
     },
     async testSonoBin(id) {
@@ -578,7 +545,6 @@ export const useIntegrationStore = defineStore('integrations', {
         this.browser = data
         this.browserLoaded = true
         delete this.browserStatuses[id]
-        clearAccess(this, id)
       }
     },
     async browserStatus(id, test = false) {
@@ -594,49 +560,14 @@ export const useIntegrationStore = defineStore('integrations', {
       delete this.browserStatuses[id]
     },
     async fetchAccess(id) {
-      const context = {
-        scope: this.scope,
-        trust: this.trust,
-        scopeGeneration: this.scopeGeneration,
-        accessGeneration: this.accessGeneration
-      }
-      const key = accessKey(context.scope, context.trust, id)
-      const version = (this.accessVersions[key] || 0) + 1
-      this.accessVersions[key] = version
-      const { data } = await api.get(
-        `/integrations/${id}/access`,
-        accessConfig(context.scope, context.trust)
-      )
-      if (this.scope !== context.scope
-        || this.trust !== context.trust
-        || this.scopeGeneration !== context.scopeGeneration
-        || this.accessGeneration !== context.accessGeneration
-        || this.accessVersions[key] !== version) return null
-      this.accessByIntegration[key] = data
-      return data
+      const context = scopeContext(this)
+      const { data } = await api.get(`/integrations/${id}/access`, scopeConfig(context.scope))
+      return contextIsCurrent(this, context) ? data : null
     },
     async saveAccess(id, payload) {
-      const context = {
-        scope: this.scope,
-        trust: this.trust,
-        scopeGeneration: this.scopeGeneration,
-        accessGeneration: this.accessGeneration
-      }
-      const key = accessKey(context.scope, context.trust, id)
-      const version = (this.accessVersions[key] || 0) + 1
-      this.accessVersions[key] = version
-      const { data } = await api.put(
-        `/integrations/${id}/access`,
-        payload,
-        accessConfig(context.scope, context.trust)
-      )
-      if (this.scope !== context.scope
-        || this.trust !== context.trust
-        || this.scopeGeneration !== context.scopeGeneration
-        || this.accessGeneration !== context.accessGeneration
-        || this.accessVersions[key] !== version) return null
-      this.accessByIntegration[key] = data
-      return data
+      const context = scopeContext(this)
+      const { data } = await api.put(`/integrations/${id}/access`, payload, scopeConfig(context.scope))
+      return contextIsCurrent(this, context) ? data : null
     },
     async fetchEffectiveSearch() {
       const loadVersion = ++this.effectiveLoadVersion

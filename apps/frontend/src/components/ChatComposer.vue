@@ -223,6 +223,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ComposerAttachments from 'components/ComposerAttachments.vue'
 import SessionSettingsFields from 'components/SessionSettingsFields.vue'
+import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useChatStore } from 'stores/chat'
 import { useProviderStore } from 'stores/providers'
@@ -247,6 +248,7 @@ const props = defineProps({
 const emit = defineEmits(['add-attachments', 'remove-attachment', 'send', 'stop', 'update', 'update:draft'])
 const $q = useQuasar()
 const identity = useAgentIdentityStore()
+const agentProfiles = useAgentProfileStore()
 const chat = useChatStore()
 const providers = useProviderStore()
 const toolSettings = useToolSettingsStore()
@@ -281,15 +283,18 @@ const audioScope = computed(() => ({
 }))
 const currentDictation = computed(() => chat.getAudioDictation(audioScope.value.sessionId, audioScope.value.projectId))
 const recordingDuration = computed(() => formatAttachmentDuration(recordingDurationMs.value) || '0:00')
-const effectiveModelId = computed(() => props.session?.modelId || providers.defaultModelId)
+const selectedAgent = computed(() => agentProfiles.byId(
+  props.session?.agentProfileId || agentProfiles.defaultAgentProfileId
+))
+const effectiveModelId = computed(() => props.session?.modelId || selectedAgent.value?.defaultModelId)
 const selectedModelConfig = computed(() => providers.models.find((model) => (
   model.id === effectiveModelId.value
 )))
 const modelSupportsTools = computed(() => selectedModelConfig.value?.supportsTools !== false)
 const transcriptionModelAvailable = computed(() => (
-  Boolean(providers.audioTranscriptionModelId)
+  Boolean(selectedAgent.value?.audioTranscriptionModelId)
   && providers.capabilityOptions('audio_transcription')
-    .some((option) => option.value === providers.audioTranscriptionModelId)
+    .some((option) => option.value === selectedAgent.value.audioTranscriptionModelId)
 ))
 const transcriptionUnavailableReason = computed(() => {
   if (toolSettings.loading || !toolSettings.loaded && !toolSettings.loadFailed) {
