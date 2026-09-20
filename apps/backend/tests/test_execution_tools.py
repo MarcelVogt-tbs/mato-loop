@@ -1224,25 +1224,39 @@ async def test_attached_shell_routes_to_shared_runtime_without_isolated_transpor
     ) == requested
 
 
-async def test_attached_shell_rejects_personal_variable_environment(
+async def test_attached_shell_resolves_one_time_environment(
     tmp_path, monkeypatch
 ) -> None:
+    from mato_loop_backend.agent import shared_shell
+
+    secret_id = uuid4()
     call = ToolCall(
         "shell",
         "shell_run",
-        {"command": "env", "environment": {"TOKEN": str(uuid4())}},
+        {
+            "command": "env",
+            "environment": {"TOKEN": f"run-secret:{secret_id}"},
+        },
     )
     client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
     context = _context(tmp_path, call, client)
+    context.one_time_secrets[secret_id] = "exact secret"
+    terminal = object()
     monkeypatch.setattr(
-        terminal_coordinator, "attached_for", lambda **_kwargs: object()
+        terminal_coordinator, "attached_for", lambda **_kwargs: terminal
     )
+    run = AsyncMock(return_value=ToolResult.json({"ok": True}))
+    monkeypatch.setattr(shared_shell, "run_shared_shell", run)
 
     result = await _tools(client.operations).execute(call, context)
 
-    assert result.is_error
-    assert json.loads(result.content)["error"]["code"] == (
-        "variable.sharedTerminalUnsupported"
+    assert not result.is_error
+    run.assert_awaited_once_with(
+        context,
+        ShellRunArguments.model_validate(call.arguments),
+        terminal,
+        environment={"TOKEN": "exact secret"},
+        one_time_secret_ids=(secret_id,),
     )
     assert client.requests == []
 

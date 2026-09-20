@@ -50,7 +50,7 @@ class SharedTerminalTests(unittest.IsolatedAsyncioTestCase):
         await self.shared.acquire()
         return await self.shared.prepare(self.command_id, command)
 
-    async def execute(self, prepared, output=None, timeout=3):
+    async def execute(self, prepared, output=None, timeout=3, environment=None):
         async def stream(channel, text):
             if output is not None:
                 output.append((channel, text))
@@ -60,6 +60,7 @@ class SharedTerminalTests(unittest.IsolatedAsyncioTestCase):
             prepared["inspection"]["inspectionRevision"],
             timeout,
             stream,
+            environment,
         )
 
     async def test_acquire_requires_empty_primary_prompt_and_preserves_partial_input(self):
@@ -118,6 +119,27 @@ class SharedTerminalTests(unittest.IsolatedAsyncioTestCase):
         await self.human_prompt()
         await self.write(b"printf '%s' \"$VALUE\"\r")
         self.assertIn(b"kept", await self.output_until(b"kept"))
+
+    async def test_environment_is_exact_and_scoped_to_one_command(self):
+        await self.write(b"export TOKEN=original; mkdir sub\r")
+        await self.human_prompt()
+        prepared = await self.prepare('printf "%s" "$TOKEN"; TOKEN=changed; cd sub; false')
+        output = []
+
+        result = await self.execute(
+            prepared,
+            output,
+            environment={"TOKEN": "  exact secret  "},
+        )
+
+        self.assertEqual(result["exitCode"], 1)
+        self.assertIn("  exact secret  ", "".join(data for _, data in output))
+        await self.shared.release()
+        await self.human_prompt()
+        await self.write(b'printf \'%s:%s\' "$TOKEN" "$PWD"\r')
+        terminal_output = await self.output_until(b"original:")
+        self.assertIn(b"original:", terminal_output)
+        self.assertIn(os.fsencode(self.home / "sub"), terminal_output)
 
     async def test_cancel_and_timeout_return_control_without_replay(self):
         prepared = await self.prepare("sleep 30")

@@ -352,6 +352,7 @@ class MatoLoopAgent:
                 arguments.expected_inspection_revision,
                 arguments.timeout_seconds,
                 stream,
+                arguments.environment,
             )
         if isinstance(arguments, SharedPrepareArguments):
             return await self.shared_terminal.get(arguments.terminal_id).prepare(

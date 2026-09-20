@@ -46,6 +46,20 @@ EnvironmentName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$"
 EnvironmentValue = Annotated[str, Field(max_length=65_536)]
 
 
+def _bounded_unprotected_environment(
+    value: dict[str, str] | None,
+) -> dict[str, str] | None:
+    if value is None:
+        return None
+    protected = PROTECTED_ENVIRONMENT_NAMES.intersection(value)
+    protected.update(name for name in value if name.startswith(("DYLD_", "GIT_CONFIG_")))
+    if protected:
+        raise ValueError(f"environment cannot replace {min(protected)}")
+    if any("\x00" in item or len(item.encode("utf-8")) > 65_536 for item in value.values()):
+        raise ValueError("environment values must be valid process values of at most 65536 bytes")
+    return value
+
+
 def _absolute_path(value: str) -> str:
     parsed = PurePosixPath(value)
     if (
@@ -281,20 +295,7 @@ class ShellArguments(HostDirectoryArguments):
     )
     environment: dict[EnvironmentName, EnvironmentValue] | None = Field(default=None, max_length=32)
 
-    @field_validator("environment")
-    @classmethod
-    def bounded_unprotected_environment(cls, value: dict[str, str] | None) -> dict[str, str] | None:
-        if value is None:
-            return None
-        protected = PROTECTED_ENVIRONMENT_NAMES.intersection(value)
-        protected.update(name for name in value if name.startswith(("DYLD_", "GIT_CONFIG_")))
-        if protected:
-            raise ValueError(f"environment cannot replace {min(protected)}")
-        if any("\x00" in item or len(item.encode("utf-8")) > 65_536 for item in value.values()):
-            raise ValueError(
-                "environment values must be valid process values of at most 65536 bytes"
-            )
-        return value
+    _environment_is_bounded = field_validator("environment")(_bounded_unprotected_environment)
 
 
 class ResolveDirectoryArguments(PathArguments):
@@ -397,6 +398,9 @@ class SharedExecuteArguments(SharedCommandArguments):
         alias="expectedInspectionRevision", pattern=r"^[0-9a-f]{64}$"
     )
     timeout_seconds: float | None = Field(default=None, alias="timeoutSeconds", gt=0, le=3600)
+    environment: dict[EnvironmentName, EnvironmentValue] | None = Field(default=None, max_length=32)
+
+    _environment_is_bounded = field_validator("environment")(_bounded_unprotected_environment)
 
 
 class SharedTerminalStatus(StrictModel):

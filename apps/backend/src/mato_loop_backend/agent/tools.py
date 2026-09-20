@@ -1731,6 +1731,65 @@ async def _run_process(
     return tool_result
 
 
+async def _resolve_shell_environment(
+    arguments: ShellRunArguments, context: ToolContext
+) -> tuple[dict[str, str], dict[str, UUID]] | ToolResult:
+    if not arguments.environment:
+        return {}, {}
+    variables = []
+    for variable_id in dict.fromkeys(
+        reference
+        for reference in arguments.environment.values()
+        if isinstance(reference, UUID)
+    ):
+        variable = await get_personal_variable(
+            context.db, context.session.user_id, variable_id
+        )
+        if variable is None:
+            return ToolResult.error("personalVariable.notFound")
+        variables.append(variable)
+    if variables and not await _allow(
+        context,
+        personal_variables_permission(
+            context.session.user_id,
+            names=tuple(variable.label for variable in variables),
+        ),
+    ):
+        return ToolResult.error("permission.denied")
+    values: dict[UUID | str, str] = {}
+    for variable in variables:
+        current = await get_personal_variable(
+            context.db,
+            context.session.user_id,
+            variable.id,
+            populate_existing=True,
+        )
+        if current is None:
+            return ToolResult.error("personalVariable.notFound")
+        values[variable.id] = personal_variable_value(current)
+    one_time_ids: dict[str, UUID] = {}
+    for reference in dict.fromkeys(
+        reference
+        for reference in arguments.environment.values()
+        if isinstance(reference, str)
+    ):
+        if reference.startswith("run-secret:"):
+            secret_id = UUID(reference.removeprefix("run-secret:"))
+            value = context.one_time_secrets.get(secret_id)
+            if value is not None:
+                one_time_ids[reference] = secret_id
+        else:
+            secret_id = UUID(reference.removeprefix("session-secret:"))
+            value = session_secrets.resolve(context.session.id, secret_id)
+        if value is None:
+            return ToolResult.error("secret.valueRefUnavailable")
+        values[reference] = value
+    return (
+        {name: values[reference] for name, reference in arguments.environment.items()},
+        one_time_ids,
+    )
+
+
 async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> ToolResult:
     client = _workspace_client(context)
     if client.current_directory is None:
@@ -1741,11 +1800,19 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         agent_id=client.agent_id,
     )
     if terminal is not None:
-        if arguments.environment:
-            return ToolResult.error("variable.sharedTerminalUnsupported")
         from mato_loop_backend.agent.shared_shell import run_shared_shell
 
-        return await run_shared_shell(context, arguments, terminal)
+        resolved = await _resolve_shell_environment(arguments, context)
+        if isinstance(resolved, ToolResult):
+            return resolved
+        environment, one_time_ids = resolved
+        return await run_shared_shell(
+            context,
+            arguments,
+            terminal,
+            environment=environment,
+            one_time_secret_ids=tuple(one_time_ids.values()),
+        )
     requested = arguments.model_dump(
         mode="json", exclude_none=True, exclude_defaults=True
     )
@@ -1769,60 +1836,10 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
     )
     if not await _allow(context, permission):
         return ToolResult.error("permission.denied")
-    environment: dict[str, str] = {}
-    one_time_ids: dict[str, UUID] = {}
-    if arguments.environment:
-        variables = []
-        for variable_id in dict.fromkeys(
-            reference
-            for reference in arguments.environment.values()
-            if isinstance(reference, UUID)
-        ):
-            variable = await get_personal_variable(
-                context.db, context.session.user_id, variable_id
-            )
-            if variable is None:
-                return ToolResult.error("personalVariable.notFound")
-            variables.append(variable)
-        if variables and not await _allow(
-            context,
-            personal_variables_permission(
-                context.session.user_id,
-                names=tuple(variable.label for variable in variables),
-            ),
-        ):
-            return ToolResult.error("permission.denied")
-        values: dict[UUID | str, str] = {}
-        for variable in variables:
-            current = await get_personal_variable(
-                context.db,
-                context.session.user_id,
-                variable.id,
-                populate_existing=True,
-            )
-            if current is None:
-                return ToolResult.error("personalVariable.notFound")
-            values[variable.id] = personal_variable_value(current)
-        for reference in dict.fromkeys(
-            reference
-            for reference in arguments.environment.values()
-            if isinstance(reference, str)
-        ):
-            if reference.startswith("run-secret:"):
-                secret_id = UUID(reference.removeprefix("run-secret:"))
-                value = context.one_time_secrets.get(secret_id)
-                if value is not None:
-                    one_time_ids[reference] = secret_id
-            else:
-                secret_id = UUID(reference.removeprefix("session-secret:"))
-                value = session_secrets.resolve(context.session.id, secret_id)
-            if value is None:
-                return ToolResult.error("secret.valueRefUnavailable")
-            values[reference] = value
-        environment = {
-            name: values[reference]
-            for name, reference in arguments.environment.items()
-        }
+    resolved = await _resolve_shell_environment(arguments, context)
+    if isinstance(resolved, ToolResult):
+        return resolved
+    environment, one_time_ids = resolved
     process_arguments = {
         "command": executed["command"],
         "currentDirectory": client.current_directory,

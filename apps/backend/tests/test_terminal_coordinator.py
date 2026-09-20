@@ -138,6 +138,7 @@ def env(monkeypatch):
             self.exit_code = 0
             self.timed_out = False
             self.execute_error = None
+            self.output = "evidence"
 
         def status(self, terminal_id):
             return SharedTerminalStatus(
@@ -181,7 +182,9 @@ def env(monkeypatch):
                 self.executions += 1
                 self.running = True
                 self.started.set()
-                await kwargs["on_event"](SimpleNamespace(event="stdout", data="evidence"))
+                await kwargs["on_event"](
+                    SimpleNamespace(event="stdout", data=self.output)
+                )
                 if self.hold:
                     await self.release.wait()
                 if self.execute_error:
@@ -218,10 +221,20 @@ def env(monkeypatch):
     context.ask_handler = authorize
     state.context = context
 
-    def start(command="cat README.md", timeout=None):
+    def start(
+        command="cat README.md",
+        timeout=None,
+        *,
+        environment=None,
+        one_time_secret_ids=(),
+    ):
         call.arguments = {"command": command}
         return asyncio.create_task(shared_shell.run_shared_shell(
-            context, ShellRunArguments(command=command, timeout=timeout), terminal,
+            context,
+            ShellRunArguments(command=command, timeout=timeout),
+            terminal,
+            environment=environment,
+            one_time_secret_ids=one_time_secret_ids,
         ))
 
     state.start = start
@@ -257,6 +270,36 @@ async def test_shared_shell_prepares_immutable_command_then_uses_ordinary_approv
         "timeoutSeconds": 4.0,
     }
     assert all("command" not in arguments for operation, arguments in env.native.calls if operation == "terminal.shared.execute")
+
+
+async def test_shared_shell_passes_temporary_environment_and_redacts_output(env):
+    env.policy = ToolExecutionPolicy.AUTO
+    secret_id = uuid4()
+    env.context.one_time_secrets[secret_id] = "exact secret"
+    env.native.output = "before exact secret after"
+
+    result = await env.start(
+        "printf output",
+        environment={"TOKEN": "exact secret"},
+        one_time_secret_ids=(secret_id,),
+    )
+
+    assert not result.is_error
+    content = json.loads(result.content)
+    assert content["output"]["stdout"] == "before [redacted] after"
+    execute = next(
+        arguments
+        for operation, arguments in env.native.calls
+        if operation == "terminal.shared.execute"
+    )
+    assert execute["environment"] == {"TOKEN": "exact secret"}
+    assert secret_id not in env.context.one_time_secrets
+    assert env.evaluated[-1].capability == "shell.write"
+    assert env.evaluated[-1].approval_details["shellAnalysisComplete"] is False
+    assert shared_shell.run_events.publish.await_args.args[1]["output"] == {
+        "stdout": "before [redacted] after",
+        "stderr": "",
+    }
 
 
 async def test_shared_shell_reinspects_and_executes_edited_command_once(env):

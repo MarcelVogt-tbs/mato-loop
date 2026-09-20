@@ -246,6 +246,16 @@ class ProtocolTests(unittest.TestCase):
             {"terminalId": AGENT_ID, "commandId": REQUEST_ID, "command": "pwd"},
         )
         self.assertEqual(prepared.command, "pwd")
+        executed = arguments(
+            "terminal.shared.execute",
+            {
+                "terminalId": AGENT_ID,
+                "commandId": REQUEST_ID,
+                "expectedInspectionRevision": "a" * 64,
+                "environment": {"TOKEN": " exact secret "},
+            },
+        )
+        self.assertEqual(executed.environment, {"TOKEN": " exact secret "})
         self.assertEqual(
             arguments("terminal.shared.acquire", {"terminalId": AGENT_ID}).terminal_id,
             AGENT_ID,
@@ -271,6 +281,15 @@ class ProtocolTests(unittest.TestCase):
             (
                 "terminal.shared.prepare",
                 {"terminalId": AGENT_ID, "commandId": REQUEST_ID, "command": ""},
+            ),
+            (
+                "terminal.shared.execute",
+                {
+                    "terminalId": AGENT_ID,
+                    "commandId": REQUEST_ID,
+                    "expectedInspectionRevision": "a" * 64,
+                    "environment": {"PATH": "unsafe"},
+                },
             ),
             ("terminal.open", {"rows": 0, "columns": 80}),
             ("terminal.read", {"terminalId": AGENT_ID, "maxBytes": 65_537}),

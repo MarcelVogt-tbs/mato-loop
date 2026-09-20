@@ -7,6 +7,7 @@ import codecs
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import signal
 import socket
@@ -385,7 +386,14 @@ class SharedTerminal:
                 self.command_id = self.command = self.inspection = None
             return {}
 
-    async def execute(self, command_id, expected_inspection_revision, timeout, stream):
+    async def execute(
+        self,
+        command_id,
+        expected_inspection_revision,
+        timeout,
+        stream,
+        environment=None,
+    ):
         timeout = self.manager.process.execution_timeout(timeout)
         started = time.monotonic()
         async with self.lock:
@@ -406,7 +414,22 @@ class SharedTerminal:
             self.exit_code = None
             self.cancelled = False
             self.completed.clear()
-            encoded = base64.b64encode(self.command.encode()).decode("ascii")
+            command = self.command
+            if environment:
+                helper = f"__ml_env_{uuid4().hex}"
+                code = f"{helper}_code"
+                assignments = "\n".join(
+                    f"  local {name}={shlex.quote(value)}\n  export {name}"
+                    for name, value in environment.items()
+                )
+                encoded_command = base64.b64encode(command.encode()).decode("ascii")
+                command = (
+                    f"{helper}() {{\n{assignments}\n"
+                    f'  eval -- "$(builtin printf %s {encoded_command} | base64 -d)"\n'
+                    f'  local {code}=$?\n  unset -f {helper}\n  return "${code}"\n}}\n'
+                    f"{helper}"
+                )
+            encoded = base64.b64encode(command.encode()).decode("ascii")
             self.state = "running"
             try:
                 request, _ = await self._send("execute", encoded)
