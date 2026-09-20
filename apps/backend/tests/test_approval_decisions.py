@@ -570,7 +570,7 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
     async def publish(*_args) -> None:
         created.set()
 
-    async def deliver(*_args) -> None:
+    async def deliver(*_args, **_kwargs) -> None:
         assert db.commit.await_count == 1
 
     db.flush.side_effect = flush
@@ -619,6 +619,7 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
         assert await task == "allow_once"
     assert push.await_args.args[0] == session.user_id
     assert push.await_args.args[1].notification.target.type == "actions"
+    assert push.await_args.kwargs == {"session_id": session.id}
     wait_for.assert_not_awaited()
 
 

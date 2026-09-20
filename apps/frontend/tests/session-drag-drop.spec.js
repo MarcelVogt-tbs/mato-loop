@@ -28,6 +28,7 @@ const { chat, confirm, projects, pending, quasar, routeUpdate, terminal, workspa
       cachedSessions: sessions, sessionLists,
       sessionList: (id) => sessionLists[id ?? 'standalone'],
       ensureSessionList: (id) => sessionLists[id ?? 'standalone'],
+      markSessionPresent: vi.fn().mockResolvedValue(),
       setSessionScope: vi.fn().mockResolvedValue(),
       moveSession: vi.fn().mockResolvedValue()
     },
@@ -159,6 +160,25 @@ beforeEach(async () => {
   await nextTick()
 })
 afterEach(() => { app?.unmount(); vi.useRealTimers() })
+
+it('reports only the session shown in a visible chat tab', async () => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  const store = useChatStore()
+  store.current = { id: 'session-1' }
+  useRoute().query = { session: 'session-1' }
+  await nextTick()
+
+  expect(store.markSessionPresent).toHaveBeenCalledWith('session-1')
+
+  store.markSessionPresent.mockClear()
+  visibility.mockReturnValue('hidden')
+  store.current = { id: 'session-2' }
+  useRoute().query = { session: 'session-2' }
+  await nextTick()
+
+  expect(store.markSessionPresent).not.toHaveBeenCalled()
+  visibility.mockRestore()
+})
 
 it('keeps project and session actions visible while their shared menu is open', async () => {
   const projectAction = root.querySelector('[aria-label="Aktionen für Alpha"]')

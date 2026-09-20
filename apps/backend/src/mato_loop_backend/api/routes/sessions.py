@@ -63,6 +63,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.security import require_user
 from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.sessions import service as session_service
+from mato_loop_backend.sessions.presence import mark_session_present
 from mato_loop_backend.sessions.serialization import (
     LAST_MESSAGE_AT_UNSET as _LAST_MESSAGE_AT_UNSET,
 )
@@ -910,6 +911,18 @@ async def mark_session_read(
     )
     await db.commit()
     return {"read": True}
+
+
+@router.put("/{session_id}/presence", status_code=status.HTTP_204_NO_CONTENT)
+async def mark_session_presence(
+    session_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Response:
+    if await _owned_session(db, session_id, user.id) is None:
+        raise ApiError(404, "session.notFound")
+    mark_session_present(user.id, session_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.patch("/{session_id}")

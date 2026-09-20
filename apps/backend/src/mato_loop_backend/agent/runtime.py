@@ -5677,6 +5677,7 @@ class AgentRuntime:
                     tag=f"approval:{approval.id}",
                     target=WebPushActionsTarget(type="actions"),
                 ),
+                session_id=origin.id,
             )
             decision = await asyncio.shield(waiter)
         except asyncio.CancelledError:

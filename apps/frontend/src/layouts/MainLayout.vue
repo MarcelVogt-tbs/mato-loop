@@ -644,6 +644,9 @@ const selectedProjectId = computed(() => (
 const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
 ))
+const activeRouteSessionId = computed(() => (
+  route.name === 'chat' && routeSessionId.value === chat.current?.id ? chat.current.id : null
+))
 const projectOptions = computed(() => [
   { label: 'Ohne Projekt', value: null },
   ...projects.items.map((project) => ({ label: project.name, value: project.id }))
@@ -1151,8 +1154,14 @@ async function closeNavigation() {
   document.getElementById('app-navigation-toggle')?.focus()
 }
 
+function refreshSessionPresence() {
+  if (document.visibilityState !== 'visible' || !activeRouteSessionId.value) return
+  void chat.markSessionPresent(activeRouteSessionId.value).catch(() => {})
+}
+
 function refreshSessionsWhenVisible() {
   if (document.visibilityState !== 'visible') return
+  refreshSessionPresence()
   if (projects.loadFailed) void loadProjects()
   if (chat.current?.id && !chat.running) {
     void chat.refreshSession(chat.current.id, { suppressErrorToast: true }).catch(() => {})
@@ -1179,10 +1188,9 @@ function handlePushMessage(event) {
 }
 
 async function refreshActiveSessions() {
-  if (
-    document.visibilityState !== 'visible'
-    || sessionActivityRefreshPending
-  ) return
+  if (document.visibilityState !== 'visible') return
+  refreshSessionPresence()
+  if (sessionActivityRefreshPending) return
   sessionActivityRefreshPending = true
   try {
     const requests = [
@@ -1355,6 +1363,8 @@ watch(() => route.name, (name) => {
 
 watch(() => route.name === 'chat' && routeSessionId.value === chat.current?.id ? chat.current?.id : null,
   (id) => browser.setDisplayedSession(id), { immediate: true, flush: 'sync' })
+
+watch(activeRouteSessionId, refreshSessionPresence, { immediate: true, flush: 'post' })
 
 watch(() => [
   chat.current?.id, chat.current?.preferredExecutionAgentId, browser.sessionId,

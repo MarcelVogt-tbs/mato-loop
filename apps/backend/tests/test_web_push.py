@@ -212,6 +212,26 @@ async def test_subscription_delete_is_owner_and_device_scoped() -> None:
     assert "web_push_subscriptions.device_id =" in sql
 
 
+async def test_delivery_is_skipped_for_a_present_target_session(monkeypatch) -> None:
+    user_id = uuid4()
+    session_id = uuid4()
+    factory = MagicMock()
+    monkeypatch.setattr(web_push, "session_is_present", lambda *_args: True)
+    monkeypatch.setattr(web_push, "AsyncSessionFactory", factory)
+
+    await WebPushService.deliver_after_commit(
+        user_id,
+        WebPushPayload(
+            notification=WebPushNotificationPayload(
+                title="Fertig",
+                target=WebPushSessionTarget(type="session", sessionId=session_id),
+            )
+        ),
+    )
+
+    factory.assert_not_called()
+
+
 @pytest.mark.parametrize("status_code, stale", [(410, True), (503, False)])
 async def test_delivery_removes_only_stale_subscriptions(
     monkeypatch, tmp_path: Path, status_code: int, stale: bool
