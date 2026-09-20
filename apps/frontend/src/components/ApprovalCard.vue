@@ -130,7 +130,50 @@
             embedded
             class="q-mt-md"
           />
-          <div v-if="shellClassification" class="q-mt-md">
+          <div v-if="canEditArguments" class="q-mt-md">
+            <div class="row items-center q-gutter-sm">
+              <q-btn
+                v-if="!argumentEdit"
+                outline
+                dense
+                no-caps
+                color="primary"
+                icon="edit"
+                label="Argumente bearbeiten"
+                :disable="Boolean(loadingDecision)"
+                @click="startArgumentEdit"
+              />
+              <q-btn
+                v-else
+                flat
+                dense
+                no-caps
+                icon="undo"
+                label="Bearbeitung verwerfen"
+                :disable="Boolean(loadingDecision)"
+                @click="argumentEdit = null"
+              />
+            </div>
+            <q-form v-if="argumentEdit" ref="argumentFormRef" class="q-mt-md">
+              <q-input
+                v-for="field in argumentEdit"
+                :key="field.path.join('.')"
+                v-model="field.value"
+                outlined
+                :type="field.inputType"
+                :label="field.label"
+                :autogrow="field.inputType === 'textarea'"
+                :maxlength="field.maxLength"
+                :disable="Boolean(loadingDecision)"
+                :rules="argumentRules(field)"
+                class="q-mb-sm"
+              />
+              <q-banner v-if="argumentEditDirty" rounded class="app-surface-tonal">
+                Die bearbeitete Aktion wird mit den endgültigen Werten erneut validiert und einmalig freigegeben.
+              </q-banner>
+            </q-form>
+          </div>
+          <div v-if="shellClassification && !argumentEditDirty" class="q-mt-md">
             <q-chip
               dense
               square
@@ -202,7 +245,7 @@
 
     <q-separator />
     <q-card-actions class="q-pa-md">
-      <div v-if="!isMemoryApproval && hasBothAllowDecisions" class="column">
+      <div v-if="!isMemoryApproval && hasBothAllowDecisions && !argumentEditDirty" class="column">
         <q-checkbox
           v-model="rememberForSession"
           color="primary"
@@ -212,6 +255,9 @@
         <div class="text-caption app-muted q-ml-sm">
           Kann in den Session-Freigaben widerrufen werden.
         </div>
+      </div>
+      <div v-else-if="argumentEditDirty" class="text-caption app-muted">
+        Bearbeitete Aktionen werden einmalig freigegeben.
       </div>
       <q-space />
       <q-btn
@@ -259,7 +305,7 @@
         unelevated
         no-caps
         color="primary"
-        :label="rememberForSession ? 'Für Session erlauben' : 'Einmal erlauben'"
+        :label="argumentEditDirty ? 'Änderungen einmal erlauben' : rememberForSession ? 'Für Session erlauben' : 'Einmal erlauben'"
         :loading="loadingDecision === allowDecision"
         :disable="Boolean(loadingDecision) || matchingDraftDirty"
         @click="decide(allowDecision)"
@@ -302,6 +348,8 @@ const { confirm } = useConfirm()
 const loadingDecision = ref(null)
 const memoryEdit = ref(null)
 const memoryFormRef = ref(null)
+const argumentEdit = ref(null)
+const argumentFormRef = ref(null)
 const memoryCategoryOptions = ['context', 'fact', 'goal', 'identity', 'preference']
   .map((value) => ({ value, label: memoryCategoryLabel(value) }))
 const memoryAudienceOptions = ['private_only', 'public_only', 'both']
@@ -316,6 +364,16 @@ const shellPrefixes = computed(() => (
       .map((prefix) => prefix.join(' '))
     : []
 ))
+const argumentEditPayload = computed(() => props.approval.payload?.argumentEdit)
+const canEditArguments = computed(() => (
+  props.approval.status === 'pending'
+  && hasDecision('allow_once')
+  && Array.isArray(argumentEditPayload.value?.fields)
+  && argumentEditPayload.value.fields.length > 0
+))
+const argumentEditDirty = computed(() => argumentEdit.value?.some((field) => (
+  field.value !== field.initialValue
+)) || false)
 const isMemoryApproval = computed(() => props.approval.requestType === 'memory_change')
 const memoryDisplay = computed(() => memoryApprovalDisplay(props.approval))
 const memoryPayload = computed(() => memoryDisplay.value.payload)
@@ -395,7 +453,7 @@ const hasBothAllowDecisions = computed(() => (
   hasDecision('allow_once') && hasDecision('allow_session')
 ))
 const allowDecision = computed(() => (
-  rememberForSession.value ? 'allow_session' : 'allow_once'
+  argumentEditDirty.value ? 'allow_once' : rememberForSession.value ? 'allow_session' : 'allow_once'
 ))
 
 function hasDecision(decision) {
@@ -429,9 +487,37 @@ function startMemoryEdit() {
   memoryEdit.value = { ...memoryPayload.value.after, pinned: memoryPinned.value }
 }
 
+function inputValue(field) {
+  if (field.inputType === 'datetime-local') return field.value.replace(/(?:Z|[+-]\d{2}:\d{2})$/, '').slice(0, 16)
+  return field.value
+}
+
+function submittedValue(field) {
+  if (field.value === field.initialValue) return field.originalValue
+  if (field.inputType !== 'datetime-local') return field.value
+  const offset = field.originalValue.match(/(?:Z|[+-]\d{2}:\d{2})$/)?.[0]
+  return offset ? `${field.value}${offset}` : field.value
+}
+
+function startArgumentEdit() {
+  argumentEdit.value = argumentEditPayload.value.fields.map((field) => {
+    const value = inputValue(field)
+    return { ...field, originalValue: field.value, initialValue: value, value }
+  })
+  rememberForSession.value = false
+}
+
+function argumentRules(field) {
+  return [
+    (value) => !field.required || Boolean(value?.trim()) || `Bitte ${field.label.toLowerCase()} eingeben.`,
+    (value) => (value?.length ?? 0) <= field.maxLength || `${field.label} darf höchstens ${field.maxLength} Zeichen enthalten.`
+  ]
+}
+
 async function decide(decision) {
   if (loadingDecision.value) return
   if (decision === 'approve' && memoryEdit.value && !await memoryFormRef.value?.validate()) return
+  if (decision.startsWith('allow') && argumentEditDirty.value && !await argumentFormRef.value?.validate()) return
   if (loadingDecision.value) return
   loadingDecision.value = decision
   try {
@@ -456,7 +542,16 @@ async function decide(decision) {
         if (!accepted) return
       }
     }
-    await approvals.decide(props.approval.id, decision, draftRevision.value, edit)
+    const toolEdit = decision === 'allow_once' && argumentEditDirty.value
+      ? {
+          revision: argumentEditPayload.value.revision,
+          edits: argumentEdit.value.map((field) => ({
+            path: field.path,
+            value: submittedValue(field)
+          }))
+        }
+      : undefined
+    await approvals.decide(props.approval.id, decision, draftRevision.value, edit, toolEdit)
   } catch {
     // The central API interceptor displays the error; local edits remain available.
   } finally {

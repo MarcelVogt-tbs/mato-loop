@@ -5,6 +5,7 @@ import { validRelativePath } from 'src/utils/attachments'
 
 const TERMINAL_DECISION_ERRORS = new Set([
   'approval.policyChanged',
+  'approval.requestChanged',
   'approval.runInactive',
   'approval.targetChanged',
   'approval.decisionUnavailable',
@@ -71,7 +72,7 @@ export const useApprovalStore = defineStore('approvals', {
       this.loaded = true
       this.loadFailed = false
     },
-    async decide(id, decision, expectedRevision, memoryEdit) {
+    async decide(id, decision, expectedRevision, memoryEdit, argumentEdit) {
       this.submittingId = id
       try {
         await api.post(`/approvals/${id}/decisions`, {
@@ -79,6 +80,12 @@ export const useApprovalStore = defineStore('approvals', {
           ...(decision === 'approve' && memoryEdit != null ? { memory_edit: memoryEdit } : {}),
           ...(decision.startsWith('allow') && expectedRevision != null
             ? { expected_revision: expectedRevision }
+            : {}),
+          ...(argumentEdit
+            ? {
+                argument_edits: argumentEdit.edits,
+                argument_revision: argumentEdit.revision
+              }
             : {})
         })
         this.revision += 1

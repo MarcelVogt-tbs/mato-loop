@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Literal
 
 from mato_loop_backend.settings.models import ToolExecutionPolicy, TrustLevel
 
@@ -19,6 +20,15 @@ class ToolAction:
             if trust_level == TrustLevel.PRIVATE
             else self.public_default_policy
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalEditField:
+    path: tuple[str, ...]
+    label: str
+    input_type: Literal["text", "textarea", "temporal"] = "text"
+    required: bool = False
+    max_length: int = 10_000
 
 
 @dataclass(frozen=True, slots=True)

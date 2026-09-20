@@ -16,6 +16,7 @@ from mato_loop_backend.agent.runtime import (
     RUN_PHASES,
     AgentRunError,
     AgentRuntime,
+    _persist_edited_tool_arguments,
     _public_reasoning_payload,
     _public_run_error,
     _publish_run_phase,
@@ -1469,3 +1470,60 @@ def test_provider_cannot_set_internal_runtime_state() -> None:
     )
 
     assert "_matoloop" not in result
+
+
+async def test_persisted_edited_tool_call_keeps_final_arguments_and_provenance(
+    monkeypatch,
+) -> None:
+    session_id = uuid4()
+    run_id = uuid4()
+    assistant = Message(
+        id=uuid4(),
+        session_id=session_id,
+        role="assistant",
+        content="",
+        tool_calls=[{
+            "id": "call-1",
+            "name": "calendar_create_event",
+            "arguments": {"summary": "Meeting"},
+        }],
+        provider_data={"finish_reason": "tool_calls"},
+    )
+    serialized_calls = list(assistant.tool_calls)
+    live_calls = [{
+        "id": "call-1",
+        "name": "calendar_create_event",
+        "arguments": {"summary": "Meeting"},
+    }]
+    call = ToolCall(
+        "call-1",
+        "calendar_create_event",
+        {"summary": "Meeting mit Hans"},
+    )
+    db = AsyncMock(spec=AsyncSession)
+    publish = AsyncMock()
+    monkeypatch.setattr(runtime_module.run_events, "publish", publish)
+
+    await _persist_edited_tool_arguments(
+        db,
+        run_id,
+        assistant,
+        serialized_calls,
+        live_calls,
+        0,
+        call,
+        None,
+        call.arguments,
+    )
+
+    assert assistant.tool_calls[0]["arguments"]["summary"] == "Meeting mit Hans"
+    assert live_calls[0]["arguments"]["summary"] == "Meeting mit Hans"
+    assert assistant.provider_data["_matoloop"]["userEditedToolCalls"] == {
+        "call-1": {"summary": "Meeting mit Hans"}
+    }
+    db.execute.assert_awaited_once()
+    db.commit.assert_awaited_once()
+    publish.assert_awaited_once_with(
+        run_id,
+        {"type": "message.updated", "messageId": str(assistant.id)},
+    )

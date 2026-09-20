@@ -32,7 +32,7 @@ from mato_loop_backend.agent.tool_arguments import (
     QuestionRequestArguments,
     TaskArguments,
 )
-from mato_loop_backend.agent.tool_contracts import ToolAction
+from mato_loop_backend.agent.tool_contracts import ApprovalEditField, ToolAction
 from mato_loop_backend.agent.tool_display import TOOL_GROUPS
 from mato_loop_backend.agent.tool_references import (
     InvalidToolReference,
@@ -107,6 +107,7 @@ VideoAnalysisHandler = Callable[
 ]
 VideoAnalysisTargetResolver = Callable[[int], ResolvedVideoModel | None]
 TaskHandler = Callable[[TaskArguments], Awaitable["ToolResult"]]
+ArgumentsEditedHandler = Callable[[dict[str, Any]], Awaitable[None]]
 PolicyResolver = Callable[..., ToolExecutionPolicy]
 CapabilityResolver = Callable[..., set[str]]
 MAX_DYNAMIC_ARGUMENT_BYTES = 256 * 1024
@@ -115,6 +116,16 @@ MAX_DYNAMIC_JSON_DEPTH = 64
 
 class DynamicToolArgumentsError(ValueError):
     pass
+
+
+class ToolArgumentsEdited(Exception):
+    def __init__(
+        self,
+        edits: tuple[tuple[tuple[str, ...], str], ...],
+        approval_binding: str | None = None,
+    ) -> None:
+        self.edits = edits
+        self.approval_binding = approval_binding
 
 
 def _json_depth(value: Any, depth: int = 0) -> int:
@@ -257,6 +268,7 @@ class ToolContext:
     session_read_cursors: dict[UUID, UUID | None] = field(default_factory=dict)
     one_time_secrets: dict[UUID, str] = field(default_factory=dict)
     task_handler: TaskHandler | None = None
+    arguments_edited_handler: ArgumentsEditedHandler | None = None
 
     async def current_integrations(self) -> IntegrationSettings:
         from mato_loop_backend.agent.subagents import integration_ceiling_ids
@@ -339,6 +351,7 @@ class ToolDefinition:
     ) = None
     prompt_fragments: tuple[str, ...] = ()
     arguments_schema: dict[str, Any] | None = None
+    approval_edit_fields: tuple[ApprovalEditField, ...] = ()
 
     def schema(self) -> dict[str, Any]:
         if self.arguments_schema is not None:
@@ -525,7 +538,55 @@ class EffectiveToolSet:
         tool = self.tools.get(call.name)
         if tool is None:
             return ToolResult.error("tool.unavailable")
-        return await self.registry._execute_definition(call, context, tool)
+        edited = False
+        original_arguments = dict(call.arguments)
+        while True:
+            try:
+                result = await self.registry._execute_definition(call, context, tool)
+                if edited:
+                    result.metadata["userEdited"] = True
+                    try:
+                        content = json.loads(result.content)
+                    except (TypeError, ValueError):
+                        content = None
+                    if isinstance(content, dict) and "requestedArguments" in content:
+                        content.update({
+                            "requestedArguments": original_arguments,
+                            "executedArguments": dict(call.arguments),
+                            "userEdited": True,
+                        })
+                        result.content = json.dumps(content, ensure_ascii=False)
+                return result
+            except ToolArgumentsEdited as exc:
+                allowed = {field.path for field in tool.definition.approval_edit_fields}
+                if not exc.edits or any(path not in allowed for path, _value in exc.edits):
+                    return ToolResult.error("approval.requestChanged")
+                arguments = deepcopy(call.arguments)
+                for path, value in exc.edits:
+                    target = arguments
+                    for segment in path[:-1]:
+                        child = target.get(segment)
+                        if not isinstance(child, dict):
+                            return ToolResult.error("tool.invalidArguments", field=segment)
+                        target = child
+                    target[path[-1]] = value
+                call.arguments.clear()
+                call.arguments.update(arguments)
+                context.bound_options.clear()
+                context.bound_resource = None
+                context.approval_resolution.clear()
+                context.approval_resolution["argument_edit_approved"] = json.dumps(
+                    {
+                        "arguments": call.arguments,
+                        "permission": exc.approval_binding,
+                    },
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                if context.arguments_edited_handler is not None:
+                    await context.arguments_edited_handler(call.arguments)
+                edited = True
 
 
 class ToolRegistry:
@@ -654,6 +715,7 @@ class ToolRegistry:
             releases_private_data=contribution.releases_private_data,
             authorization_factory=contribution.authorization_factory,
             prompt_fragments=contribution.prompt_fragments,
+            approval_edit_fields=contribution.approval_edit_fields,
         )
 
     def inactive_capability_groups(
@@ -1432,6 +1494,8 @@ class ToolRegistry:
             if definition.releases_private_data and not result.is_error:
                 result.metadata["privateIntegrationData"] = True
             return result
+        except ToolArgumentsEdited:
+            raise
         except (
             AttachmentError,
             ExecutionClientError,

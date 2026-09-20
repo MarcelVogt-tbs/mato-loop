@@ -70,3 +70,51 @@ it.each(['read', 'write'])('displays historical terminal approval data generical
     decision: 'allow_session'
   })
 })
+
+it('edits a shell command and approves the final value in one action', async () => {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const approvals = useApprovalStore()
+  api.post.mockResolvedValue({ data: { status: 'approved' } })
+  approvals.add({
+    id: 'editable', sessionId: 'session-1', requestType: 'agent_action', actionKind: 'shell_run', status: 'pending',
+    title: 'Befehl ausführen?', summary: 'Befehl prüfen', riskLevel: 'low',
+    capability: 'shell.read', resourceType: 'shell_command', resourceDisplay: '/workspace',
+    availableDecisions: ['allow_once', 'allow_session', 'deny'],
+    payload: {
+      shellClassification: 'read', shellAnalysisComplete: true, shellPrefixes: [['ls']],
+      argumentEdit: {
+        revision: 'a'.repeat(64),
+        fields: [{
+          path: ['command'], label: 'Befehl', inputType: 'textarea', required: true,
+          maxLength: 262144, value: 'ls'
+        }]
+      }
+    },
+    details: { tool: 'shell_run', arguments: { command: 'ls' } }
+  })
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ render: () => approvals.pending[0] ? h(ApprovalCard, { approval: approvals.pending[0] }) : null })
+  app.use(pinia).use(Quasar, { components: { QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QSelect, QSeparator, QSpace, QToggle, QTooltip } })
+  app.mount(root)
+  await nextTick()
+
+  ;[...root.querySelectorAll('button')].find((button) => button.textContent.includes('Argumente bearbeiten')).click()
+  await nextTick()
+  const command = root.querySelector('textarea')
+  command.value = 'pwd'
+  command.dispatchEvent(new Event('input', { bubbles: true }))
+  await nextTick()
+
+  expect(root.textContent).not.toContain('Keine Schreibaktion erkannt')
+  expect(root.querySelector('.q-checkbox')).toBeNull()
+  const allow = [...root.querySelectorAll('button')].find((button) => button.textContent.includes('Änderungen einmal erlauben'))
+  allow.click()
+  await vi.waitFor(() => expect(api.post).toHaveBeenCalled())
+  expect(api.post).toHaveBeenCalledWith('/approvals/editable/decisions', {
+    decision: 'allow_once',
+    argument_revision: 'a'.repeat(64),
+    argument_edits: [{ path: ['command'], value: 'pwd' }]
+  })
+})

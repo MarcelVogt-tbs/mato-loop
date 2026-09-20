@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -12,14 +13,22 @@ from mato_loop_backend.agent import runtime as runtime_module
 from mato_loop_backend.agent import shared_shell
 from mato_loop_backend.agent.approval_decisions import decide_agent_action
 from mato_loop_backend.agent.permissions import PermissionPolicy
-from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.runtime import AgentRuntime, _argument_edit_permission_binding
 from mato_loop_backend.agent.tool_arguments import ShellRunArguments
-from mato_loop_backend.agent.tool_registry import ToolContext
+from mato_loop_backend.agent.tool_contracts import ApprovalEditField
+from mato_loop_backend.agent.tool_registry import (
+    BoundTool,
+    EffectiveToolSet,
+    ToolContext,
+    ToolDefinition,
+    ToolRegistry,
+)
 from mato_loop_backend.execution import (
     ExecutionClientError,
     SharedPrepareResult,
     SharedProcessResult,
     SharedTerminalStatus,
+    ShellInspectResult,
     TerminalControlResult,
 )
 from mato_loop_backend.execution.terminals import TerminalCoordinator, TerminalRuntime
@@ -203,6 +212,7 @@ def env(monkeypatch):
     async def authorize(permission):
         return await AgentRuntime._authorize(
             db, run, session, call, permission, context.root_files,
+            approval_resolution=context.approval_resolution,
         )
 
     context.ask_handler = authorize
@@ -247,6 +257,91 @@ async def test_shared_shell_prepares_immutable_command_then_uses_ordinary_approv
         "timeoutSeconds": 4.0,
     }
     assert all("command" not in arguments for operation, arguments in env.native.calls if operation == "terminal.shared.execute")
+
+
+async def test_shared_shell_reinspects_and_executes_edited_command_once(env):
+    async def handler(arguments, context):
+        return await shared_shell.run_shared_shell(context, arguments, env.terminal)
+
+    definition = ToolDefinition(
+        "shell_run",
+        "Run shell command",
+        ShellRunArguments,
+        handler,
+        approval_edit_fields=(
+            ApprovalEditField(("command",), "Befehl", "textarea", True, 256 * 1024),
+        ),
+    )
+    tools = EffectiveToolSet(ToolRegistry([]), {"shell_run": BoundTool(definition)})
+    task = asyncio.create_task(tools.execute(env.context.tool_call, env.context))
+    approval = await pending(env)
+    edit = approval.payload["argumentEdit"]
+
+    await decide_agent_action(
+        env.db,
+        approval,
+        "allow_once",
+        argument_revision=edit["revision"],
+        argument_edits=((('command',), "touch changed.txt"),),
+    )
+    result = await task
+
+    assert not result.is_error
+    assert env.context.tool_call.arguments["command"] == "touch changed.txt"
+    content = json.loads(result.content)
+    assert content["requestedArguments"]["command"] == "cat README.md"
+    assert content["executedArguments"]["command"] == "touch changed.txt"
+    assert content["userEdited"] is True
+    assert env.native.executions == 1
+    prepares = [args["command"] for operation, args in env.native.calls if operation == "terminal.shared.prepare"]
+    assert prepares == ["cat README.md", "touch changed.txt"]
+    execute = next(args for operation, args in env.native.calls if operation == "terminal.shared.execute")
+    assert execute["expectedInspectionRevision"] == hashlib.sha256(b"touch changed.txt").hexdigest()
+
+
+async def test_argument_edit_approval_is_consumed_only_by_matching_action(env):
+    env.policy = ToolExecutionPolicy.AUTO
+    request = shared_shell.shell_command_permission(
+        env.agent.id,
+        env.session.current_directory,
+        "touch changed.txt",
+        ShellInspectResult.model_validate({
+            "targets": [],
+            "classification": "write",
+            "readOnly": False,
+            "analysisComplete": True,
+            "commands": [],
+            "inspectionRevision": "a" * 64,
+        }),
+    )
+    resolution = {
+        "argument_edit_approved": json.dumps({
+            "arguments": env.context.tool_call.arguments,
+            "permission": _argument_edit_permission_binding(request),
+        })
+    }
+
+    await AgentRuntime._authorize(
+        env.db,
+        env.run,
+        env.session,
+        env.context.tool_call,
+        replace(request, action_kind="personal_variable_access"),
+        env.context.root_files,
+        approval_resolution=resolution,
+    )
+    assert "argument_edit_approved" in resolution
+
+    await AgentRuntime._authorize(
+        env.db,
+        env.run,
+        env.session,
+        env.context.tool_call,
+        request,
+        env.context.root_files,
+        approval_resolution=resolution,
+    )
+    assert "argument_edit_approved" not in resolution
 
 
 @pytest.mark.parametrize("policy,executions", [

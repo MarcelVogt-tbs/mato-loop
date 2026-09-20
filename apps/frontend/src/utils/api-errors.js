@@ -136,6 +136,7 @@ const messages = {
   'approval.notFound': () => 'Die Freigabe wurde nicht gefunden.',
   'approval.policyChanged': () => 'Die Berechtigungsrichtlinie wurde geändert. Der Vorschlag ist nicht mehr gültig.',
   'approval.runInactive': () => 'Der zugehörige Agent-Run ist nicht mehr aktiv.',
+  'approval.requestChanged': () => 'Die Freigabe wurde inzwischen geändert. Bitte prüfe die aktuellen Angaben.',
   'approval.targetChanged': () => 'Die betroffene Erinnerung wurde inzwischen geändert. Der Vorschlag ist nicht mehr gültig.',
   'personaProfile.defaultProtected': () => 'Die Standard-Persona kann nicht gelöscht werden.',
   'personaProfile.duplicate': () => 'Eine Persona mit diesem Namen ist bereits vorhanden.',

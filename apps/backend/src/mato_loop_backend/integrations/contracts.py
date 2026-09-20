@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from mato_loop_backend.agent.tool_contracts import ToolAction
+from mato_loop_backend.agent.tool_contracts import ApprovalEditField, ToolAction
 from mato_loop_backend.settings.models import AgentProfile, IntegrationInstance
 
 ToolHandler = Callable[[Any, Any], Awaitable[Any]]
@@ -71,6 +71,7 @@ class ToolContribution:
     result_model: type[BaseModel] | None = None
     prompt_fragments: tuple[str, ...] = ()
     arguments_schema: dict[str, Any] | None = None
+    approval_edit_fields: tuple[ApprovalEditField, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

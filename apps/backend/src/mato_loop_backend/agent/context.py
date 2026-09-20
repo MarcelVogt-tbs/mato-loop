@@ -427,6 +427,19 @@ def message_dict(
     if message.role == "assistant" and message.generation_status == "interrupted":
         content = f"{content}\n\n[Response interrupted by the user.]".strip()
     provider_data = dict(message.provider_data or {})
+    runtime_data = provider_data.get("_matoloop")
+    if not isinstance(runtime_data, dict):
+        runtime_data = {}
+    tool_calls = message.tool_calls
+    edited_calls = runtime_data.get("userEditedToolCalls")
+    if message.role == "assistant" and tool_calls and isinstance(edited_calls, dict):
+        tool_calls = [
+            {
+                **call,
+                "arguments": edited_calls.get(str(call.get("id")), call.get("arguments", {})),
+            }
+            for call in tool_calls
+        ]
     provider_data.pop("_matoloop", None)
     provider_data = _model_provider_file_roots(provider_data)
     attachment_markers = []
@@ -498,7 +511,7 @@ def message_dict(
         "role": message.role,
         "content": content,
         "tool_call_id": message.tool_call_id,
-        "tool_calls": _model_tool_calls(message.tool_calls),
+        "tool_calls": _model_tool_calls(tool_calls),
         "provider_data": provider_data or None,
         "attachments": [
             {
@@ -1237,6 +1250,7 @@ def _projection_messages(
     historical_omitted_markers: dict[int, str] = {}
     current_tool_indices: list[int] = []
     browser_inspect_calls: set[str] = set()
+    user_edited_tool_arguments = False
     for record_index, item in enumerate(records):
         if item.id == latest_user_id and todo_message is not None:
             messages.append(todo_message)
@@ -1309,6 +1323,17 @@ def _projection_messages(
                     projected["content"] = _model_browser_inspection(projected["content"])
                 current_tool_indices.append(len(messages))
         messages.append(projected)
+        runtime_data = (
+            item.provider_data.get("_matoloop")
+            if isinstance(item.provider_data, dict)
+            else None
+        )
+        if (
+            item.role == "tool"
+            and isinstance(runtime_data, dict)
+            and runtime_data.get("userEditedArguments") is True
+        ):
+            user_edited_tool_arguments = True
         if item.id == latest_user_id and runtime_instructions.strip():
             projected["content"] = (projected.get("content") or "") + (
                 "\n\n<system-reminder>\n"
@@ -1317,6 +1342,13 @@ def _projection_messages(
                 + runtime_instructions.strip()
                 + "\n</system-reminder>"
             )
+    if user_edited_tool_arguments:
+        messages[0]["content"] += (
+            "\n\nThe transcript contains tool calls whose arguments the user edited and "
+            "approved before execution. The projected calls contain the executed values. "
+            "Treat those values as intentional user input. Do not revert or replace them "
+            "unless the user explicitly requests it."
+        )
     if todo_message is not None:
         messages.append(todo_message)
     _limit_tool_output_tokens(

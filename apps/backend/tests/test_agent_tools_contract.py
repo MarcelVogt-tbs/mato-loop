@@ -22,8 +22,10 @@ from mato_loop_backend.agent.permissions import (
     PermissionPolicy,
     PermissionRequest,
 )
-from mato_loop_backend.agent.runtime import _tool_policy
+from mato_loop_backend.agent.runtime import _argument_edit_payload, _tool_policy
 from mato_loop_backend.agent.tool_arguments import ReadArguments, TaskArguments
+from mato_loop_backend.agent.tool_contracts import ApprovalEditField
+from mato_loop_backend.agent.tool_registry import ToolArgumentsEdited
 from mato_loop_backend.agent.tools import (
     BoundTool,
     EffectiveToolSet,
@@ -209,6 +211,80 @@ async def test_bound_tool_defaults_fill_only_fully_omitted_arguments(tmp_path) -
     result = await effective.execute(partial, _context(tmp_path, partial))
     assert result.is_error is True
     assert result.metadata["errorCode"] == "tool.invalidArguments"
+
+
+async def test_argument_edit_is_persisted_before_validated_retry(tmp_path) -> None:
+    events = []
+
+    async def handler(arguments, _context):
+        events.append(("execute", arguments.value))
+        if arguments.value == "original":
+            raise ToolArgumentsEdited(((('value',), "edited"),))
+        return ToolResult.json({"value": arguments.value})
+
+    async def persist(arguments):
+        events.append(("persist", arguments["value"]))
+
+    definition = ToolDefinition(
+        "example",
+        "Example tool",
+        _RequiredArguments,
+        handler,
+        approval_edit_fields=(ApprovalEditField(("value",), "Wert", required=True),),
+    )
+    effective = EffectiveToolSet(ToolRegistry([]), {"example": BoundTool(definition)})
+    call = ToolCall("edit", "example", {"value": "original"})
+    context = _context(tmp_path, call)
+    context.arguments_edited_handler = persist
+
+    result = await effective.execute(call, context)
+
+    assert events == [
+        ("execute", "original"),
+        ("persist", "edited"),
+        ("execute", "edited"),
+    ]
+    assert call.arguments == {"value": "edited"}
+    assert context.approval_resolution["argument_edit_approved"]
+    assert result.metadata["userEdited"] is True
+
+
+async def test_argument_edit_rejects_undeclared_path(tmp_path) -> None:
+    async def handler(_arguments, _context):
+        raise ToolArgumentsEdited(((('other',), "edited"),))
+
+    definition = ToolDefinition(
+        "example",
+        "Example tool",
+        _RequiredArguments,
+        handler,
+        approval_edit_fields=(ApprovalEditField(("value",), "Wert"),),
+    )
+    effective = EffectiveToolSet(ToolRegistry([]), {"example": BoundTool(definition)})
+    call = ToolCall("edit", "example", {"value": "original"})
+
+    result = await effective.execute(call, _context(tmp_path, call))
+
+    assert result.metadata["errorCode"] == "approval.requestChanged"
+    assert call.arguments == {"value": "original"}
+
+
+def test_argument_edit_uses_date_input_for_all_day_event() -> None:
+    definition = SimpleNamespace(
+        name="calendar_create_event",
+        approval_edit_fields=(
+            ApprovalEditField(("timing", "start"), "Beginn", "temporal", True),
+        )
+    )
+
+    payload = _argument_edit_payload(
+        definition,
+        {"timing": {"type": "allDay", "start": "2026-09-20"}},
+    )
+
+    assert payload is not None
+    assert payload["fields"][0]["inputType"] == "date"
+    assert payload["fields"][0]["value"] == "2026-09-20"
 
 
 def _definition(name: str = "example") -> ToolDefinition:

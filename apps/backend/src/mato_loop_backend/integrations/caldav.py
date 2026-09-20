@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
-from mato_loop_backend.agent.tool_contracts import ToolAction
+from mato_loop_backend.agent.tool_contracts import ApprovalEditField, ToolAction
 from mato_loop_backend.integrations.caldav_client import (
     CalDavCalendar,
     CalDavClient,
@@ -1930,6 +1930,13 @@ CALDAV_SHARED_TOOLS = (
         resource_argument="calendar_key",
         authorization_factory=_create_permission,
         releases_private_data=True,
+        approval_edit_fields=(
+            ApprovalEditField(("summary",), "Titel", required=True, max_length=500),
+            ApprovalEditField(("timing", "start"), "Beginn", "temporal", True),
+            ApprovalEditField(
+                ("timing", "end"), "Ende (ganztägig: exklusiv)", "temporal", True
+            ),
+        ),
     ),
     ToolContribution(
         name="calendar_update_event",
@@ -1946,6 +1953,13 @@ CALDAV_SHARED_TOOLS = (
         resource_argument="calendar_key",
         authorization_factory=_update_permission,
         releases_private_data=True,
+        approval_edit_fields=(
+            ApprovalEditField(("summary",), "Titel", required=True, max_length=500),
+            ApprovalEditField(("timing", "start"), "Beginn", "temporal", True),
+            ApprovalEditField(
+                ("timing", "end"), "Ende (ganztägig: exklusiv)", "temporal", True
+            ),
+        ),
     ),
     ToolContribution(
         name="calendar_delete_event",

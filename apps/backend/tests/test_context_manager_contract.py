@@ -290,6 +290,60 @@ def test_message_projection_timestamps_only_user_content() -> None:
     assert user.content == "okay abgeschickt"
 
 
+def test_projection_marks_user_edited_tool_arguments_as_authoritative() -> None:
+    session_id = uuid4()
+    assistant = _message(session_id, "assistant", "")
+    assistant.tool_calls = [{
+        "id": "calendar-1",
+        "name": "calendar_create_event",
+        "arguments": {"summary": "Meeting"},
+    }, {
+        "id": "read-1",
+        "name": "read",
+        "arguments": {"root": "files", "path": "note.txt"},
+    }]
+    assistant.provider_data = {
+        "_matoloop": {
+            "userEditedToolCalls": {
+                "calendar-1": {"summary": "Meeting mit Hans"},
+            }
+        }
+    }
+    tool = _message(
+        session_id,
+        "tool",
+        '{"event":{"summary":"Meeting mit Hans"}}',
+    )
+    tool.tool_call_id = "calendar-1"
+    tool.provider_data = {"_matoloop": {"userEditedArguments": True}}
+    second_tool = _message(session_id, "tool", '{"content":"Notiz"}')
+    second_tool.tool_call_id = "read-1"
+
+    projected = _projection_messages(
+        "System",
+        None,
+        [assistant, tool, second_tool],
+        TrustLevel.PRIVATE,
+    )
+
+    assert projected[1]["tool_calls"][0]["arguments"] == {
+        "summary": "Meeting mit Hans"
+    }
+    assert projected[2]["content"] == tool.content
+    assert projected[3]["role"] == "tool"
+    assert projected[3]["tool_call_id"] == "read-1"
+    assert len(projected) == 4
+    assert projected[0] == {
+        "role": "system",
+        "content": (
+            "System\n\nThe transcript contains tool calls whose arguments the user edited and "
+            "approved before execution. The projected calls contain the executed values. Treat "
+            "those values as intentional user input. Do not revert or replace them unless the "
+            "user explicitly requests it."
+        ),
+    }
+
+
 def test_user_active_file_context_remains_stable_between_turns() -> None:
     session_id = uuid4()
     previous = _message(session_id, "user", "Vorher")

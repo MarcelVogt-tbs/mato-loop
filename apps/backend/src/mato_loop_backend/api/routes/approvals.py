@@ -24,9 +24,20 @@ from mato_loop_backend.sessions.service import SessionServiceError, get_owned_se
 router = APIRouter(prefix="/approvals", dependencies=[Depends(require_user)])
 
 
+class ApprovalArgumentEdit(BaseModel):
+    path: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(
+        min_length=1, max_length=4
+    )
+    value: str = Field(max_length=256 * 1024)
+
+
 class ApprovalDecisionRequest(BaseModel):
     decision: Literal["allow_once", "allow_session", "approve", "deny"]
     memory_edit: MemoryApprovalEdit | None = None
+    argument_edits: list[ApprovalArgumentEdit] | None = Field(
+        default=None, min_length=1, max_length=8
+    )
+    argument_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     expected_revision: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",
@@ -122,6 +133,12 @@ async def decide_approval(
         or approval.action_kind not in {"memory_update", "memory_merge"}
     ):
         raise ApiError(400, "validation.invalid", field="memory_edit")
+    if (payload.argument_edits is None) != (payload.argument_revision is None):
+        raise ApiError(400, "validation.invalid", field="argument_edits")
+    if payload.argument_edits is not None and (
+        payload.decision != "allow_once" or payload.memory_edit is not None
+    ):
+        raise ApiError(400, "approval.decisionUnavailable")
     if approval.request_type == "memory_change":
         await db.refresh(approval, with_for_update=True)
         if approval.status != "pending":
@@ -144,9 +161,17 @@ async def decide_approval(
             approval,
             payload.decision,
             expected_revision=payload.expected_revision,
+            argument_edits=(
+                tuple((tuple(edit.path), edit.value) for edit in payload.argument_edits)
+                if payload.argument_edits is not None
+                else ()
+            ),
+            argument_revision=payload.argument_revision,
         )
     except ApprovalDecisionError as exc:
-        raise ApiError(exc.status_code, exc.code, field=exc.field) from exc
+        raise ApiError(
+            exc.status_code, exc.code, field=exc.field, params=exc.params
+        ) from exc
 
 
 async def _decide_memory_change(

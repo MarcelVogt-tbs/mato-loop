@@ -129,6 +129,7 @@ from mato_loop_backend.agent.tool_arguments import (
     validate_question_answers as validate_question_answers,
 )
 from mato_loop_backend.agent.tool_contracts import (
+    ApprovalEditField,
     ToolAction,
     ToolPolicyResolution,
 )
@@ -5602,6 +5603,9 @@ tool_registry = ToolRegistry(
             icon="terminal",
             actions=(_SHELL_READ, _SHELL_WRITE),
             alternative_action_groups=(frozenset({"shell.read", "shell.write"}),),
+            approval_edit_fields=(
+                ApprovalEditField(("command",), "Befehl", "textarea", True, 256 * 1024),
+            ),
         ),
     ],
 )

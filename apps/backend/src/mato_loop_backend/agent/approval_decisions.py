@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -19,12 +19,78 @@ from mato_loop_backend.models import ApprovalRequest, PermissionGrant
 
 class ApprovalDecisionError(RuntimeError):
     def __init__(
-        self, status_code: int, code: str, *, field: str | None = None
+        self,
+        status_code: int,
+        code: str,
+        *,
+        field: str | None = None,
+        params: dict | None = None,
     ) -> None:
         super().__init__(code)
         self.status_code = status_code
         self.code = code
         self.field = field
+        self.params = params
+
+
+def _validated_argument_edits(
+    approval: ApprovalRequest,
+    edits: tuple[tuple[tuple[str, ...], str], ...],
+    revision: str | None,
+) -> tuple[tuple[tuple[str, ...], str], ...]:
+    edit_payload = (approval.payload or {}).get("argumentEdit")
+    if not isinstance(edit_payload, dict) or revision != edit_payload.get("revision"):
+        raise ApprovalDecisionError(409, "approval.requestChanged")
+    raw_fields = edit_payload.get("fields")
+    if not isinstance(raw_fields, list):
+        raise ApprovalDecisionError(409, "approval.requestChanged")
+    fields = {
+        tuple(field["path"]): field
+        for field in raw_fields
+        if isinstance(field, dict)
+        and isinstance(field.get("path"), list)
+        and all(isinstance(segment, str) for segment in field["path"])
+    }
+    paths = [path for path, _value in edits]
+    if len(paths) != len(set(paths)) or any(path not in fields for path in paths):
+        raise ApprovalDecisionError(400, "validation.invalid", field="argument_edits")
+    temporal: dict[str, date | datetime] = {}
+    for path, value in edits:
+        descriptor = fields[path]
+        field_name = ".".join(path)
+        if descriptor.get("required") is True and not value.strip():
+            raise ApprovalDecisionError(422, "validation.required", field=field_name)
+        max_length = descriptor.get("maxLength")
+        if not isinstance(max_length, int) or max_length < 1:
+            raise ApprovalDecisionError(409, "approval.requestChanged")
+        if len(value) > max_length:
+            raise ApprovalDecisionError(
+                422,
+                "validation.tooLong",
+                field=field_name,
+                params={"maxLength": max_length},
+            )
+        input_type = descriptor.get("inputType")
+        try:
+            if input_type == "date":
+                parsed: date | datetime = date.fromisoformat(value)
+            elif input_type == "datetime-local":
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if parsed.tzinfo is None or parsed.utcoffset() is None:
+                    raise ValueError
+            else:
+                continue
+        except ValueError as exc:
+            raise ApprovalDecisionError(
+                422, "validation.invalidFormat", field=field_name
+            ) from exc
+        temporal[path[-1]] = parsed
+    start, end = temporal.get("start"), temporal.get("end")
+    if start is not None and end is not None and (
+        type(start) is not type(end) or end <= start
+    ):
+        raise ApprovalDecisionError(422, "validation.invalid", field="timing.end")
+    return edits
 
 
 async def decide_agent_action(
@@ -33,6 +99,8 @@ async def decide_agent_action(
     decision: str,
     *,
     expected_revision: str | None = None,
+    argument_edits: tuple[tuple[tuple[str, ...], str], ...] = (),
+    argument_revision: str | None = None,
     idempotent_same_decision: bool = False,
 ) -> dict[str, str]:
     async def decide() -> dict[str, str]:
@@ -45,7 +113,12 @@ async def decide_agent_action(
                 AgentRuntime.resolve_approval(approval.id, ApprovalResolution("deny"))
             raise ApprovalDecisionError(409, "approval.runInactive")
         return await _decide_agent_action(
-            db, approval, decision, expected_revision=expected_revision,
+            db,
+            approval,
+            decision,
+            expected_revision=expected_revision,
+            argument_edits=argument_edits,
+            argument_revision=argument_revision,
             idempotent_same_decision=idempotent_same_decision,
         )
 
@@ -58,7 +131,14 @@ async def decide_agent_action(
 
 
 async def _decide_agent_action(
-    db, approval, decision, *, expected_revision=None, idempotent_same_decision=False,
+    db,
+    approval,
+    decision,
+    *,
+    expected_revision=None,
+    argument_edits=(),
+    argument_revision=None,
+    idempotent_same_decision=False,
 ) -> dict[str, str]:
     if approval.status != "pending":
         if (
@@ -76,6 +156,48 @@ async def _decide_agent_action(
         raise ApprovalDecisionError(400, "approval.decisionUnavailable")
     if approval.request_type != "agent_action":
         raise ApprovalDecisionError(400, "approval.decisionUnavailable")
+    if argument_edits:
+        if decision != "allow_once" or expected_revision is not None:
+            raise ApprovalDecisionError(400, "approval.decisionUnavailable")
+        edits = _validated_argument_edits(
+            approval, argument_edits, argument_revision
+        )
+        if not AgentRuntime.claim_approval_resolution(approval.id):
+            approval.status = "expired"
+            approval.resolved_at = datetime.now(UTC)
+            await db.commit()
+            raise ApprovalDecisionError(409, "approval.runInactive")
+        approval.status = "approved"
+        approval.decision = decision
+        approval.resolved_at = datetime.now(UTC)
+        approval.payload = {
+            **approval.payload,
+            "ownerArgumentEdits": [
+                {"path": list(path), "value": value} for path, value in edits
+            ],
+        }
+        try:
+            await db.commit()
+        except (Exception, asyncio.CancelledError):
+            AgentRuntime.release_approval_resolution(approval.id)
+            raise
+        resolution = ApprovalResolution(decision, argument_edits=edits)
+        if not AgentRuntime.resolve_approval(approval.id, resolution):
+            approval.status = "expired"
+            approval.decision = None
+            await db.commit()
+            raise ApprovalDecisionError(409, "approval.runInactive")
+        await run_events.publish(
+            approval.run_id,
+            {
+                "type": "approval.resolved",
+                "approvalId": str(approval.id),
+                "decision": decision,
+            },
+        )
+        return {"status": approval.status, "decision": decision}
+    if argument_revision is not None:
+        raise ApprovalDecisionError(400, "validation.invalid", field="argument_revision")
 
     skill_draft_approval = (
         approval.capability == "skills.write"

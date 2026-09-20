@@ -83,6 +83,23 @@ describe('inline approvals', () => {
     })
   })
 
+  it('submits edited arguments together with a one-time decision', async () => {
+    api.post.mockResolvedValue({ data: { status: 'approved' } })
+    const approvals = useApprovalStore()
+    approvals.add({ id: 'edit', sessionId: 'session-1' })
+
+    await approvals.decide('edit', 'allow_once', undefined, undefined, {
+      revision: 'a'.repeat(64),
+      edits: [{ path: ['command'], value: 'pwd' }]
+    })
+
+    expect(api.post).toHaveBeenCalledWith('/approvals/edit/decisions', {
+      decision: 'allow_once',
+      argument_revision: 'a'.repeat(64),
+      argument_edits: [{ path: ['command'], value: 'pwd' }]
+    })
+  })
+
   it('does not preview an invalid child draft path or a non-session root', async () => {
     const approvals = useApprovalStore()
     for (const draftFile of [

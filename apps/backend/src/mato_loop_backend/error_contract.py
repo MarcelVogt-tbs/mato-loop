@@ -76,6 +76,7 @@ _MESSAGES = {
     "automation.timezoneInvalid": "The schedule timezone is invalid.",
     "approval.policyChanged": "The approval policy changed before the decision was applied.",
     "approval.targetChanged": "The approval target changed before the decision was applied.",
+    "approval.requestChanged": "The approval request changed before the decision was applied.",
     "attachment.tooLarge": "The attachment is too large.",
     "attachment.textTooLarge": "The text attachment exceeds the configured processing limit.",
     "auth.accountDisabled": "The user account is disabled.",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -101,6 +102,7 @@ from mato_loop_backend.agent.tool_arguments import (
     QuestionRequestArguments,
 )
 from mato_loop_backend.agent.tool_display import tool_display
+from mato_loop_backend.agent.tool_registry import ToolArgumentsEdited
 from mato_loop_backend.agent.tools import (
     PROJECT_CODING_TOOL_NAMES,
     QuestionArguments,
@@ -501,6 +503,7 @@ class AgentRunError(RuntimeError):
 class ApprovalResolution:
     decision: str
     expected_revision: str | None = None
+    argument_edits: tuple[tuple[tuple[str, ...], str], ...] = ()
 
 
 def _skill_draft_output_tool(*, editing: bool = False) -> dict[str, Any]:
@@ -604,6 +607,121 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
             "preview": instructions[:200],
         }
     return safe
+
+
+async def _persist_edited_tool_arguments(
+    db: AsyncSession,
+    run_id: UUID,
+    assistant: Message,
+    serialized_calls: list[dict[str, Any]],
+    live_calls: list[dict[str, Any]],
+    index: int,
+    call: ToolCall,
+    definition: Any,
+    arguments: dict[str, Any],
+) -> None:
+    safe_arguments = _safe_tool_arguments(call.name, arguments)
+    serialized_calls[index] = {
+        **serialized_calls[index],
+        "arguments": safe_arguments,
+        "toolDisplay": tool_display(call.name, safe_arguments, definition),
+    }
+    assistant.tool_calls = list(serialized_calls)
+    live_calls[index] = {**live_calls[index], "arguments": dict(arguments)}
+    provider_data = dict(assistant.provider_data or {})
+    runtime_data = provider_data.get("_matoloop")
+    if not isinstance(runtime_data, dict):
+        runtime_data = {}
+    edited_calls = runtime_data.get("userEditedToolCalls")
+    if not isinstance(edited_calls, dict):
+        edited_calls = {}
+    provider_data["_matoloop"] = {
+        **runtime_data,
+        "userEditedToolCalls": {
+            **edited_calls,
+            call.id: safe_arguments,
+        },
+    }
+    replay_items = provider_data.get("responses_output_items")
+    if isinstance(replay_items, list):
+        provider_data["responses_output_items"] = [
+            {
+                **item,
+                "arguments": json.dumps(safe_arguments, ensure_ascii=True),
+            }
+            if isinstance(item, dict)
+            and str(item.get("call_id") or item.get("id") or "") == call.id
+            else item
+            for item in replay_items
+        ]
+    assistant.provider_data = provider_data
+    await db.execute(
+        update(Message)
+        .where(Message.id == assistant.id)
+        .values(tool_calls=list(serialized_calls), provider_data=provider_data)
+    )
+    await db.commit()
+    await run_events.publish(
+        run_id, {"type": "message.updated", "messageId": str(assistant.id)}
+    )
+
+
+def _argument_edit_payload(definition: Any, arguments: dict[str, Any]) -> dict[str, Any] | None:
+    if definition is None:
+        return None
+    fields = []
+    for descriptor in definition.approval_edit_fields:
+        value: Any = arguments
+        for segment in descriptor.path:
+            if not isinstance(value, dict) or segment not in value:
+                break
+            value = value[segment]
+        else:
+            if not isinstance(value, str):
+                continue
+            input_type = descriptor.input_type
+            if input_type == "temporal":
+                input_type = (
+                    "date"
+                    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)
+                    else "datetime-local"
+                )
+            fields.append(
+                {
+                    "path": list(descriptor.path),
+                    "label": descriptor.label,
+                    "inputType": input_type,
+                    "required": descriptor.required,
+                    "maxLength": descriptor.max_length,
+                    "value": value,
+                }
+            )
+    if not fields:
+        return None
+    revision = hashlib.sha256(
+        json.dumps(
+            {"tool": definition.name, "fields": fields},
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    return {"revision": revision, "fields": fields}
+
+
+def _argument_edit_permission_binding(request: PermissionRequest) -> str:
+    return json.dumps(
+        {
+            "actionKind": request.action_kind,
+            "integrationId": str(request.policy_integration_id or ""),
+            "resourceKey": request.policy_resource_key,
+            "resourceType": request.resource_type,
+            "useIntegrationPolicy": request.use_integration_policy,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def _tool_call_signature(call: ToolCall) -> str:
@@ -3940,6 +4058,17 @@ class AgentRuntime:
                             )
                             if not delegated else None
                         ),
+                        arguments_edited_handler=partial(
+                            _persist_edited_tool_arguments,
+                            db,
+                            run.id,
+                            assistant,
+                            serialized_calls,
+                            live_tool_calls[assistant.id],
+                            index,
+                            call,
+                            bound_tool.definition if bound_tool else None,
+                        ),
                     )
                     assert effective_toolset is not None
                     tool_started_at = time.monotonic()
@@ -3980,6 +4109,13 @@ class AgentRuntime:
                                 },
                             )
                         raise
+                    if tool_result.metadata.get("userEdited") is True:
+                        call_signature = _tool_call_signature(call)
+                        if call.arguments.get("root") in {"workspace", "computer"} or call.name in {
+                            "shell_run",
+                            "apply_patch",
+                        }:
+                            call_signature += f":directory={run.current_directory_snapshot}"
                     if delegated:
                         for attachment in tool_result.attachments:
                             attachment.ephemeral = True
@@ -4269,6 +4405,11 @@ class AgentRuntime:
                             "_matoloop": {
                                 "runId": str(run.id),
                                 "toolName": call.name,
+                                **(
+                                    {"userEditedArguments": True}
+                                    if metadata.get("userEdited") is True
+                                    else {}
+                                ),
                                 **({"errorCode": metadata["errorCode"]} if isinstance(metadata.get("errorCode"), str) else {}),
                                 **({"preparedReply": metadata["preparedReply"]} if isinstance(metadata.get("preparedReply"), dict) else {}),
                                 "fileOutputsPending": not ephemeral_output or bool(tool_attachments or tool_file_actions),
@@ -5274,6 +5415,28 @@ class AgentRuntime:
             session_write_paths=session_write_paths,
             **permission_namespace,
         )
+        edited_approval = (
+            approval_resolution.get("argument_edit_approved")
+            if approval_resolution is not None
+            else None
+        )
+        try:
+            edited_approval = json.loads(edited_approval) if edited_approval else None
+        except (TypeError, ValueError):
+            edited_approval = None
+        if (
+            not check_only
+            and isinstance(edited_approval, dict)
+            and edited_approval.get("arguments") == call.arguments
+            and edited_approval.get("permission")
+            == _argument_edit_permission_binding(request)
+        ):
+            approval_resolution.pop("argument_edit_approved", None)
+            return (
+                PermissionDecision.DENY
+                if decision == PermissionDecision.DENY
+                else PermissionDecision.ALLOW
+            )
         browser_approval_key = None
         if (
             request.action_kind.startswith("browser_") and approval_resolution is not None
@@ -5311,6 +5474,10 @@ class AgentRuntime:
             request = await capture_browser_approval(
                 request, call, chat_session, run, approval_resolution,
             )
+        definition = (
+            tool_registry._combined_definitions(integration_settings)[0].get(call.name)
+            or tool_registry._operation_definitions.get(call.name)
+        )
         resolution = await cls._request_approval(
             db,
             run,
@@ -5320,10 +5487,15 @@ class AgentRuntime:
             display=tool_display(
                 call.name,
                 _safe_tool_arguments(call.name, call.arguments),
-                tool_registry._combined_definitions(integration_settings)[0].get(call.name)
-                or tool_registry._operation_definitions.get(call.name),
+                definition,
             ),
+            argument_edit=_argument_edit_payload(definition, call.arguments),
         )
+        if isinstance(resolution, ApprovalResolution) and resolution.argument_edits:
+            raise ToolArgumentsEdited(
+                resolution.argument_edits,
+                _argument_edit_permission_binding(request),
+            )
         approval_decision = (
             resolution.decision if isinstance(resolution, ApprovalResolution) else resolution
         )
@@ -5397,6 +5569,7 @@ class AgentRuntime:
         permission: PermissionRequest,
         *,
         display: dict[str, str] | None = None,
+        argument_edit: dict[str, Any] | None = None,
     ) -> str | ApprovalResolution:
         origin = await permission_origin(db, chat_session)
         resource_display = permission.resource_display
@@ -5454,6 +5627,7 @@ class AgentRuntime:
                 ),
                 **(permission.approval_details or {}),
                 **provenance(chat_session),
+                **({"argumentEdit": argument_edit} if argument_edit else {}),
                 "displayItems": [
                     {
                         "label": item.label,

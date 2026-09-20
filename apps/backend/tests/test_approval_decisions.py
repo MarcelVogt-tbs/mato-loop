@@ -122,6 +122,104 @@ async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None
     assert result == {"status": "approved", "decision": "allow_session"}
 
 
+async def test_argument_edit_approves_exact_values_once(monkeypatch) -> None:
+    approval = _approval()
+    approval.payload = {
+        "argumentEdit": {
+            "revision": "a" * 64,
+            "fields": [
+                {
+                    "path": ["command"],
+                    "label": "Befehl",
+                    "inputType": "textarea",
+                    "required": True,
+                    "maxLength": 100,
+                    "value": "ls",
+                }
+            ],
+        }
+    }
+    user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = approval
+    monkeypatch.setattr(AgentRuntime, "claim_approval_resolution", Mock(return_value=True))
+    resolve = Mock(return_value=True)
+    monkeypatch.setattr(AgentRuntime, "resolve_approval", resolve)
+    monkeypatch.setattr(run_events, "publish", AsyncMock())
+
+    result = await decide_approval(
+        approval.id,
+        ApprovalDecisionRequest(
+            decision="allow_once",
+            argument_revision="a" * 64,
+            argument_edits=[{"path": ["command"], "value": "pwd"}],
+        ),
+        user,
+        db,
+    )
+
+    assert result == {"status": "approved", "decision": "allow_once"}
+    assert approval.payload["ownerArgumentEdits"] == [
+        {"path": ["command"], "value": "pwd"}
+    ]
+    resolve.assert_called_once_with(
+        approval.id,
+        ApprovalResolution(
+            "allow_once", argument_edits=((('command',), "pwd"),)
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("revision", "value", "code"),
+    [
+        ("b" * 64, "pwd", "approval.requestChanged"),
+        ("a" * 64, "", "validation.required"),
+        ("a" * 64, "x" * 101, "validation.tooLong"),
+    ],
+)
+async def test_argument_edit_rejects_stale_or_invalid_values(
+    monkeypatch, revision, value, code
+) -> None:
+    approval = _approval()
+    approval.payload = {
+        "argumentEdit": {
+            "revision": "a" * 64,
+            "fields": [
+                {
+                    "path": ["command"],
+                    "label": "Befehl",
+                    "inputType": "textarea",
+                    "required": True,
+                    "maxLength": 100,
+                    "value": "ls",
+                }
+            ],
+        }
+    }
+    user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = approval
+    claim = Mock(return_value=True)
+    monkeypatch.setattr(AgentRuntime, "claim_approval_resolution", claim)
+
+    with pytest.raises(ApiError) as exc_info:
+        await decide_approval(
+            approval.id,
+            ApprovalDecisionRequest(
+                decision="allow_once",
+                argument_revision=revision,
+                argument_edits=[{"path": ["command"], "value": value}],
+            ),
+            user,
+            db,
+        )
+
+    assert exc_info.value.code == code
+    assert approval.status == "pending"
+    claim.assert_not_called()
+
+
 async def test_allow_session_rejects_entire_malformed_grant_set(monkeypatch) -> None:
     approval = _approval()
     approval.payload = {
