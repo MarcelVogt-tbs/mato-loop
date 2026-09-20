@@ -54,8 +54,9 @@ curl -fsSL https://mato.example/api/execution-agents/install.sh | sh -s -- --ins
 ```
 
 The bootstrap installs pinned, private `uv` and Python runtimes below
-`~/.local/share/matoloop-agent`; it offers to install missing Debian/Ubuntu system packages and
-never changes shell profiles. From a
+`~/.local/share/matoloop-agent`; it offers to install only the Agent's missing Debian/Ubuntu system
+packages and never changes shell profiles. Browser Python, Chromium, and browser host dependencies
+are installed later through the browser integration setup. From a
 checkout it uses the current source. A standalone script requires `git` to obtain the private
 repository because there is no native release package. The setup asks for the Agent home directory
 and normal MatoLoop instance URL, derives the WebSocket endpoint, and reuses the Agent's secure

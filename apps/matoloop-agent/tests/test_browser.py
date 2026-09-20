@@ -489,12 +489,28 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             Path(__file__).resolve().parents[1] / "src" / "matoloop_agent" / "browser-setup.sh"
         ).read_text()
         self.assertIn("playwright install-deps chromium", script)
+        self.assertIn("MATOLOOP_BROWSER_UV_EXECUTABLE", script)
+        self.assertIn("'playwright==1.59.0'", script)
+        self.assertIn("'pillow>=12.1.1,<13'", script)
+        self.assertLess(script.index("pip install"), script.index("browser-install; then"))
         self.assertIn('check_tool "$tool"', script)
         self.assertIn("[missing]", script)
         self.assertLess(script.index("browser-install; then"), script.index("Install missing"))
         self.assertIn("&& [ -t 0 ]", script)
         self.assertNotIn("Browser-Einrichtung", script)
         self.assertNotIn("MATOLOOP_BROWSER_FROZEN", script)
+
+    async def test_native_status_reports_missing_python_packages_without_starting_worker(self):
+        self.manager.container = False
+        with (
+            patch("importlib.util.find_spec", return_value=None),
+            patch.object(self.manager, "spawn", AsyncMock()) as spawn,
+        ):
+            status = await self.manager.status()
+        self.assertEqual(status["state"], "missing")
+        self.assertEqual(status["missing"], ["pillow", "playwright"])
+        self.assertEqual(status["errorCode"], "browser.dependenciesMissing")
+        spawn.assert_not_awaited()
 
     async def test_headless_control_needs_no_desktop_fence(self):
         with patch.dict(os.environ, {"MATOLOOP_AGENT_CONTAINER": "0"}):

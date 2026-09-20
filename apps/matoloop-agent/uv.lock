@@ -113,8 +113,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
-    { name = "pillow" },
-    { name = "playwright" },
     { name = "pydantic" },
     { name = "tree-sitter" },
     { name = "tree-sitter-bash" },
@@ -122,7 +120,13 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+browser = [
+    { name = "pillow" },
+    { name = "playwright" },
+]
 dev = [
+    { name = "pillow" },
+    { name = "playwright" },
     { name = "ruff" },
     { name = "watchfiles" },
 ]
@@ -130,8 +134,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1,<1" },
-    { name = "pillow", specifier = ">=12.1.1,<13" },
-    { name = "playwright", specifier = "==1.59.0" },
     { name = "pydantic", specifier = ">=2.11,<3" },
     { name = "tree-sitter", specifier = ">=0.25,<0.27" },
     { name = "tree-sitter-bash", specifier = ">=0.25,<0.26" },
@@ -139,7 +141,13 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+browser = [
+    { name = "pillow", specifier = ">=12.1.1,<13" },
+    { name = "playwright", specifier = "==1.59.0" },
+]
 dev = [
+    { name = "pillow", specifier = ">=12.1.1,<13" },
+    { name = "playwright", specifier = "==1.59.0" },
     { name = "ruff", specifier = ">=0.14.11,<0.15" },
     { name = "watchfiles", specifier = ">=1.1,<2" },
 ]

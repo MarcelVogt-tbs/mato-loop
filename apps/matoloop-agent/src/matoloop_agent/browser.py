@@ -345,6 +345,16 @@ class BrowserManager:
             return BrowserStatus(
                 state="error", setupId=self.setup.terminal_id, errorCode="browser.setupFailed"
             ).model_dump(by_alias=True)
+        if not self.container:
+            from importlib.util import find_spec
+
+            missing = [name for name in ("PIL", "playwright") if find_spec(name) is None]
+            if missing:
+                return BrowserStatus(
+                    state="missing",
+                    missing=["pillow" if name == "PIL" else name for name in missing],
+                    errorCode="browser.dependenciesMissing",
+                ).model_dump(by_alias=True)
         if self.worker is not None:
             try:
                 if (await self.rpc("health"))["ok"]:
@@ -390,12 +400,16 @@ class BrowserManager:
         if self.setup_task is not None:
             await self.setup_task
         script = Path(__file__).with_name("browser-setup.sh")
+        uv = self.config.data_dir.parent / "tools/bin/uv"
+        if not uv.is_file():
+            uv = Path(shutil.which("uv") or "uv")
         environment = {
             "HOME": str(Path.home()),
             "PATH": BROWSER_PATH,
             "LANG": "C.UTF-8",
             "TERM": "xterm-256color",
             "MATOLOOP_BROWSER_EXECUTABLE": sys.executable,
+            "MATOLOOP_BROWSER_UV_EXECUTABLE": str(uv),
             "MATOLOOP_AGENT_CONTAINER": "1" if self.container else "0",
             "MATOLOOP_BROWSER_DATA_DIR": str(self.config.data_dir),
             "MATOLOOP_BROWSER_ROOT": str(root),

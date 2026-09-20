@@ -22,6 +22,11 @@ elif [ "$(uname -s)" != Linux ]; then
     printf '%s\n' 'Browser setup is not supported on this system yet.'
     exit 1
 else
+    printf '%s\n' 'Installing browser Python packages in the Agent environment.'
+    "${MATOLOOP_BROWSER_UV_EXECUTABLE}" pip install \
+        --python "${MATOLOOP_BROWSER_EXECUTABLE}" \
+        'pillow>=12.1.1,<13' \
+        'playwright==1.59.0'
     printf '%s\n' 'The matching Chromium version will be installed in the Agent directory.'
     printf '%s\n' 'Checking browser setup tools.'
     for tool in bash apt-get dpkg-query; do

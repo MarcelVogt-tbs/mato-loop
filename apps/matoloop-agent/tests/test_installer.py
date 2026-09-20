@@ -16,6 +16,12 @@ SPEC.loader.exec_module(installer)
 
 
 class InstallerTests(unittest.TestCase):
+    def test_browser_packages_are_not_core_dependencies(self) -> None:
+        project = INSTALLER_PATH.parents[1] / "apps/matoloop-agent/pyproject.toml"
+        dependencies = project.read_text().split("[project.scripts]", 1)[0]
+        self.assertNotIn("playwright", dependencies)
+        self.assertNotIn("pillow", dependencies)
+
     def test_system_dependencies_install_only_missing_packages(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             packages = Path(temporary) / "system-packages.txt"
@@ -134,6 +140,17 @@ class InstallerTests(unittest.TestCase):
                 check=True,
                 stdout=subprocess.DEVNULL,
             )
+            result = subprocess.run(
+                [
+                    destination / "bin/python",
+                    "-c",
+                    "import importlib.util; print(importlib.util.find_spec('playwright'))",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.stdout.strip(), "None")
 
     def test_checkout_install_keeps_every_managed_file_under_selected_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

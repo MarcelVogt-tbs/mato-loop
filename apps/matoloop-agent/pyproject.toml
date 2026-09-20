@@ -6,9 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "httpx>=0.28.1,<1",
-    "pillow>=12.1.1,<13",
     "pydantic>=2.11,<3",
-    "playwright==1.59.0",
     "tree-sitter>=0.25,<0.27",
     "tree-sitter-bash>=0.25,<0.26",
     "websockets>=15,<17",
@@ -18,7 +16,12 @@ dependencies = [
 matoloop-agent = "matoloop_agent.__main__:main"
 
 [dependency-groups]
-dev = ["ruff>=0.14.11,<0.15", "watchfiles>=1.1,<2"]
+browser = ["pillow>=12.1.1,<13", "playwright==1.59.0"]
+dev = [
+    { include-group = "browser" },
+    "ruff>=0.14.11,<0.15",
+    "watchfiles>=1.1,<2",
+]
 
 [build-system]
 requires = ["hatchling"]
