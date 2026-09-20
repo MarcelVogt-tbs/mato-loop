@@ -293,7 +293,14 @@ export function createAudioRecorder({
 
 export function useAudioRecorder(options) {
   const recorder = createAudioRecorder(options)
+  const preventUnload = (event) => {
+    if (!recorder.starting.value && !recorder.recording.value && !recorder.finalizing.value) return
+    event.preventDefault()
+    event.returnValue = ''
+  }
+  window.addEventListener('beforeunload', preventUnload)
   onBeforeUnmount(() => {
+    window.removeEventListener('beforeunload', preventUnload)
     void recorder.dispose()
   })
   return recorder

@@ -411,13 +411,13 @@
   backdrop-filter: blur(6px);
 }
 
-.composer-recording {
-  padding: 10px 12px;
-  border-radius: 10px;
-}
-
 .composer-dictation-actions {
   justify-content: flex-end;
+}
+
+.composer-recording-status {
+  gap: 4px;
+  white-space: nowrap;
 }
 
 .composer-recording__pulse {

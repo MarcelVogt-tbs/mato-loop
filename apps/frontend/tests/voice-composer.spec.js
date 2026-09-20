@@ -167,6 +167,20 @@ describe('voice attachment composer', () => {
     expect(mocks.recorder.startRecording).toHaveBeenCalledOnce()
   })
 
+  it('uses the microphone button to start and finish a compact recording', async () => {
+    await click('Sprachnachricht aufnehmen')
+    expect(root.querySelector('.composer-recording-status')?.textContent).toContain('0:01')
+
+    await click('Sprachnachricht beenden')
+    expect(mocks.recorder.stopRecording).toHaveBeenCalledOnce()
+    expect(root.querySelector('.composer-recording-status')).toBeNull()
+
+    stopResolve(file())
+    await nextTick()
+    await nextTick()
+    expect(chat.activeAttachmentDraft[0].voiceMessage).toBe(true)
+  })
+
   it.each(['recording', 'starting', 'finalizing'])('hands off actual route navigation while %s', async (state) => {
     chat.outboxLoaded = true
     mocks.api.get.mockImplementation(async (url) => ({ data: url.startsWith('/sessions/session-')
@@ -181,7 +195,7 @@ describe('voice attachment composer', () => {
       mocks.recorder.recording.value = false
       mocks.recorder.starting.value = true
     }
-    if (state === 'finalizing') await click('Als Sprachnachricht anhängen')
+    if (state === 'finalizing') await click('Sprachnachricht beenden')
     mocks.api.get.mockClear()
     await router.push('/?session=session-2')
     if (state !== 'starting') {
@@ -200,17 +214,14 @@ describe('voice attachment composer', () => {
     }
   })
 
-  it.each(['delete', 'logout', 'cancel'])('does not retain a late recording after explicit %s', async (action) => {
+  it.each(['delete', 'logout'])('does not retain a late recording after explicit %s', async (action) => {
     await click('Sprachnachricht aufnehmen')
-    if (action === 'cancel') await click('Abbrechen')
-    else {
-      await click('Als Sprachnachricht anhängen')
-      if (action === 'delete') {
-        mocks.api.delete.mockResolvedValue({})
-        await chat.deleteSession('session-1')
-      } else chat.setDraftOwner(null)
-      stopResolve(file())
-    }
+    await click('Sprachnachricht beenden')
+    if (action === 'delete') {
+      mocks.api.delete.mockResolvedValue({})
+      await chat.deleteSession('session-1')
+    } else chat.setDraftOwner(null)
+    stopResolve(file())
     mocks.onAutoStopped(file('late.wav'))
     await nextTick()
     expect(chat.getAudioDictation('session-1')).toBeNull()
@@ -220,7 +231,7 @@ describe('voice attachment composer', () => {
   it('retains multiple recordings as marked, playable attachments without draft transcription', async () => {
     for (const name of ['eins.wav', 'zwei.wav']) {
       await click('Sprachnachricht aufnehmen')
-      await click('Als Sprachnachricht anhängen')
+      await click('Sprachnachricht beenden')
       stopResolve(file(name))
       await nextTick()
       await nextTick()
@@ -237,7 +248,7 @@ describe('voice attachment composer', () => {
     useInstanceLimitsStore().maxAttachmentsPerMessage = 0
     for (const name of ['eins.wav', 'zwei.wav']) {
       await click('Sprachnachricht aufnehmen')
-      await click('Als Sprachnachricht anhängen')
+      await click('Sprachnachricht beenden')
       stopResolve(file(name))
       await nextTick()
       await nextTick()
@@ -262,7 +273,7 @@ describe('voice attachment composer', () => {
       await nextTick()
     }
     await click('Sprachnachricht aufnehmen')
-    await click('Als Sprachnachricht anhängen')
+    await click('Sprachnachricht beenden')
     if (scope === 'project') chat.sessionsProjectId = 'project-2'
     else {
       chat.current = { id: 'session-2' }
@@ -286,7 +297,7 @@ describe('voice attachment composer', () => {
     await nextTick()
     expect(chat.activeAttachmentDraft[0].voiceMessage).toBe(true)
     await click('Sprachnachricht aufnehmen')
-    await click('Als Sprachnachricht anhängen')
+    await click('Sprachnachricht beenden')
     app.unmount()
     stopResolve(file('late.wav'))
     await nextTick()

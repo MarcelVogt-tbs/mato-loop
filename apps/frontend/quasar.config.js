@@ -46,8 +46,7 @@ export default configure(() => ({
     manifestFilename: 'manifest.webmanifest',
     injectPwaMetaTags: false,
     extendInjectManifestOptions(options) {
-      options.injectionPoint = undefined
-      options.globPatterns = []
+      options.globPatterns = ['**/*.{css,html,ico,js,png,svg,webmanifest,woff,woff2}']
     }
   },
   animations: ['fadeIn', 'fadeOut']

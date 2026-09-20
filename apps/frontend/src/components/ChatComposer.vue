@@ -23,46 +23,6 @@
           class="q-mb-sm"
           @remove="$emit('remove-attachment', $event)"
         />
-        <div v-if="recording" class="composer-recording app-surface-tonal q-mb-sm">
-          <div class="row items-center q-gutter-sm">
-            <q-icon name="fiber_manual_record" color="negative" class="composer-recording__pulse" />
-            <span class="text-weight-medium">Aufnahme läuft</span>
-            <span class="text-caption app-muted">{{ recordingDuration }}</span>
-            <q-space />
-            <q-btn
-              flat
-              dense
-              no-caps
-              color="negative"
-              icon="close"
-              label="Abbrechen"
-              type="button"
-              @click="cancelVoiceRecording"
-            />
-            <q-btn
-              unelevated
-              dense
-              no-caps
-              color="primary"
-              icon="stop"
-              label="Als Sprachnachricht anhängen"
-              type="button"
-              @click="finishVoiceRecording"
-            />
-          </div>
-          <div class="text-caption app-muted q-mt-xs">
-            Die Aufnahme bleibt als Audio erhalten und wird beim Senden transkribiert.
-            Nach fünf Minuten stoppt sie automatisch.
-          </div>
-        </div>
-        <q-banner v-else-if="starting" dense rounded class="app-surface-tonal q-mb-sm">
-          <template #avatar><q-spinner color="primary" size="22px" /></template>
-          Mikrofon wird gestartet ...
-        </q-banner>
-        <q-banner v-else-if="finalizing" dense rounded class="app-surface-tonal q-mb-sm">
-          <template #avatar><q-spinner color="primary" size="22px" /></template>
-          Aufnahme wird vorbereitet ...
-        </q-banner>
         <q-banner
           v-if="currentDictation?.files?.length"
           dense
@@ -171,18 +131,31 @@
             >
               <q-tooltip>Dateien anhängen</q-tooltip>
             </q-btn>
+            <div
+              v-if="recording"
+              class="composer-recording-status row items-center text-caption text-negative"
+              aria-hidden="true"
+            >
+              <q-icon name="fiber_manual_record" size="12px" class="composer-recording__pulse" />
+              <span>{{ recordingDuration }}</span>
+            </div>
             <q-btn
               flat
               round
               dense
-              icon="mic"
+              :icon="recording ? 'stop' : 'mic'"
+              :color="recording ? 'negative' : undefined"
               type="button"
-              aria-label="Sprachnachricht aufnehmen"
+              :aria-label="recording ? 'Sprachnachricht beenden' : 'Sprachnachricht aufnehmen'"
               :loading="starting || finalizing"
-              :disable="inputDisabled || starting || recording || finalizing"
-              @click="startVoiceRecording"
+              :disable="inputDisabled || starting || finalizing"
+              @click="toggleVoiceRecording"
             >
-              <q-tooltip>{{ transcriptionUnavailableReason || 'Sprachnachricht aufnehmen, Transkription beim Senden' }}</q-tooltip>
+              <q-tooltip>
+                {{ recording
+                  ? 'Aufnahme beenden und anhängen'
+                  : transcriptionUnavailableReason || 'Sprachnachricht aufnehmen, Transkription beim Senden' }}
+              </q-tooltip>
             </q-btn>
             <q-btn
               v-if="running"
@@ -355,12 +328,8 @@ async function startVoiceRecording() {
   }
 }
 
-async function cancelVoiceRecording() {
-  const scope = recordingScope
-  if (!await confirm('Die laufende Aufnahme wird verworfen.', 'Aufnahme abbrechen?')) return
-  if (scope !== recordingScope) return
-  await cancelAudioActivity()
-  input.value?.focus()
+function toggleVoiceRecording() {
+  return recording.value ? finishVoiceRecording() : startVoiceRecording()
 }
 
 function finishVoiceRecording() {

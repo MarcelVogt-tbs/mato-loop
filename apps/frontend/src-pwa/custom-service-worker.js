@@ -1,12 +1,40 @@
 /* eslint-env serviceworker */
 
 import { parsePushPayload, pushTargetPath } from '../src/utils/web-push'
+import {
+  cleanupOutdatedCaches,
+  getCacheKeyForURL,
+  matchPrecache,
+  precache
+} from 'workbox-precaching'
 
-// Workbox 7 restores its default marker when injectionPoint is undefined; the injected list is empty.
-void self.__WB_MANIFEST
+precache(self.__WB_MANIFEST)
+cleanupOutdatedCaches()
 
-self.addEventListener('install', (event) => event.waitUntil(self.skipWaiting()))
-self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()))
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') void self.skipWaiting()
+  if (event.data?.type === 'WINDOW_COUNT' && event.ports[0]) {
+    event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then((clients) => event.ports[0].postMessage(clients.length)))
+  }
+})
+
+self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') return
+  const url = new URL(event.request.url)
+  if (url.origin !== self.location.origin) return
+
+  if (event.request.mode === 'navigate') {
+    if (url.pathname === '/api' || url.pathname.startsWith('/api/')
+      || url.pathname === '/docs' || url.pathname.startsWith('/docs/')) return
+    event.respondWith(matchPrecache('/index.html').then((response) => response || fetch(event.request)))
+    return
+  }
+
+  if (getCacheKeyForURL(event.request.url)) {
+    event.respondWith(matchPrecache(event.request).then((response) => response || fetch(event.request)))
+  }
+})
 
 async function notifyClients() {
   const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
