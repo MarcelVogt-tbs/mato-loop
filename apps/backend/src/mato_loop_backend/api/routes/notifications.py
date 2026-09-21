@@ -17,6 +17,7 @@ from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import Notification, UserAccount
 from mato_loop_backend.notifications import NotificationError, NotificationService
 from mato_loop_backend.security import require_admin, require_user
+from mato_loop_backend.sessions.presence import mark_user_present
 from mato_loop_backend.settings import SettingsStore, WebPushSettings
 from mato_loop_backend.web_push import (
     VapidKeyStore,
@@ -145,6 +146,14 @@ def _decode_cursor(value: str, user_id: UUID) -> tuple[datetime, UUID]:
         return created_at, UUID(payload[2])
     except (binascii.Error, UnicodeDecodeError, ValueError, TypeError) as exc:
         raise ApiError(400, "validation.invalid", field="cursor") from exc
+
+
+@router.put("/presence", status_code=status.HTTP_204_NO_CONTENT)
+async def mark_notification_presence(
+    user: Annotated[UserAccount, Depends(require_user)],
+) -> Response:
+    mark_user_present(user.id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/push/config", response_model=WebPushConfigResponse)

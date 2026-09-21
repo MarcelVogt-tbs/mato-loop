@@ -12,6 +12,7 @@ from mato_loop_backend.api.routes.notifications import (
     _encode_cursor,
     list_notifications,
     mark_all_notifications_read,
+    mark_notification_presence,
     mark_notification_read,
 )
 from mato_loop_backend.models import Notification, UserAccount
@@ -36,6 +37,19 @@ def _notification(user_id, *, created_at: datetime | None = None) -> Notificatio
         deduplication_key=f"automation-run:{uuid4()}:completed",
         created_at=created_at or datetime(2026, 8, 14, 8, 0, tzinfo=UTC),
     )
+
+
+async def test_mark_notification_presence_is_user_scoped(monkeypatch) -> None:
+    from mato_loop_backend.api.routes import notifications as notifications_route
+
+    user = _user()
+    mark = MagicMock()
+    monkeypatch.setattr(notifications_route, "mark_user_present", mark)
+
+    response = await mark_notification_presence(user)
+
+    assert response.status_code == 204
+    mark.assert_called_once_with(user.id)
 
 
 def test_notification_model_preserves_history_when_session_is_deleted() -> None:

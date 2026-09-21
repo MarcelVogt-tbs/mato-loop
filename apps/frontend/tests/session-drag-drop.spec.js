@@ -8,7 +8,7 @@ import { useControlCenterStore } from 'stores/control-center'
 import { useIntegrationStore } from 'stores/integrations'
 import { useRoute } from 'vue-router'
 
-const { chat, confirm, projects, pending, quasar, routeUpdate, terminal, workspace } = vi.hoisted(() => {
+const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, terminal, workspace } = vi.hoisted(() => {
   const sessions = [
     { id: 'standalone', title: 'Standalone', projectId: null },
     { id: 'project-session', title: 'Project session', projectId: 'a' }
@@ -23,12 +23,17 @@ const { chat, confirm, projects, pending, quasar, routeUpdate, terminal, workspa
       fileTabDirty: vi.fn(() => false), discardFileTab: vi.fn()
     },
     confirm: vi.fn(),
+    notifications: {
+      unreadCount: 0,
+      fetchLatest: vi.fn().mockResolvedValue(),
+      markPresent: vi.fn().mockResolvedValue(),
+      reconcilePush: vi.fn().mockResolvedValue()
+    },
     routeUpdate: { callback: null },
     chat: {
       cachedSessions: sessions, sessionLists,
       sessionList: (id) => sessionLists[id ?? 'standalone'],
       ensureSessionList: (id) => sessionLists[id ?? 'standalone'],
-      markSessionPresent: vi.fn().mockResolvedValue(),
       setSessionScope: vi.fn().mockResolvedValue(),
       moveSession: vi.fn().mockResolvedValue()
     },
@@ -64,9 +69,7 @@ vi.mock('stores/projects', () => ({ useProjectStore: () => projects }))
 vi.mock('stores/approvals', () => ({ useApprovalStore: () => pending }))
 vi.mock('stores/questions', () => ({ useQuestionStore: () => pending }))
 vi.mock('stores/agent-identity', () => ({ useAgentIdentityStore: () => ({ fetchIdentity: vi.fn().mockResolvedValue() }) }))
-vi.mock('stores/in-app-notifications', () => ({ useInAppNotificationStore: () => ({
-  unreadCount: 0, fetchLatest: vi.fn().mockResolvedValue(), reconcilePush: vi.fn().mockResolvedValue()
-}) }))
+vi.mock('stores/in-app-notifications', () => ({ useInAppNotificationStore: () => notifications }))
 vi.mock('stores/control-center', async () => {
   const { reactive } = await import('vue')
   const store = reactive({
@@ -161,22 +164,29 @@ beforeEach(async () => {
 })
 afterEach(() => { app?.unmount(); vi.useRealTimers() })
 
-it('reports only the session shown in a visible chat tab', async () => {
+it('reports presence only while the app is focused and visible', async () => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
-  const store = useChatStore()
-  store.current = { id: 'session-1' }
-  useRoute().query = { session: 'session-1' }
-  await nextTick()
+  const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+  notifications.markPresent.mockClear()
 
-  expect(store.markSessionPresent).toHaveBeenCalledWith('session-1')
+  window.dispatchEvent(new Event('focus'))
+  expect(notifications.markPresent).toHaveBeenCalledOnce()
 
-  store.markSessionPresent.mockClear()
+  notifications.markPresent.mockClear()
+  vi.advanceTimersByTime(5000)
+  expect(notifications.markPresent).toHaveBeenCalledOnce()
+
+  notifications.markPresent.mockClear()
+  focus.mockReturnValue(false)
+  window.dispatchEvent(new Event('focus'))
+  expect(notifications.markPresent).not.toHaveBeenCalled()
+
+  focus.mockReturnValue(true)
   visibility.mockReturnValue('hidden')
-  store.current = { id: 'session-2' }
-  useRoute().query = { session: 'session-2' }
-  await nextTick()
+  window.dispatchEvent(new Event('focus'))
+  expect(notifications.markPresent).not.toHaveBeenCalled()
 
-  expect(store.markSessionPresent).not.toHaveBeenCalled()
+  focus.mockRestore()
   visibility.mockRestore()
 })
 

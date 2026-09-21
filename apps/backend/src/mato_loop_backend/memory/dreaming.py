@@ -1804,7 +1804,6 @@ class DreamingService:
                         tag=f"approval:{approval.id}",
                         target=WebPushActionsTarget(type="actions"),
                     ),
-                    session_id=session.id,
                 )
                 for approval in created_approvals
             )

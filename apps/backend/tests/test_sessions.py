@@ -30,7 +30,6 @@ from mato_loop_backend.api.routes.sessions import (
     get_session,
     get_session_messages,
     list_sessions,
-    mark_session_presence,
     mark_session_read,
     message_payload,
     run_payload,
@@ -557,27 +556,6 @@ async def test_mark_session_read_uses_owned_assistant_message_monotonically() ->
     assert "updated_at=chat_sessions.updated_at" in sql.replace(" ", "")
     assert read_at in update_statement.compile().params.values()
     db.commit.assert_awaited_once()
-
-
-async def test_mark_session_presence_requires_ownership(monkeypatch) -> None:
-    from mato_loop_backend.api.routes import sessions as sessions_route
-
-    user = _user()
-    session = ChatSession(id=uuid4(), user_id=user.id, title="Aktiv")
-    db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
-    mark = MagicMock()
-    monkeypatch.setattr(sessions_route, "mark_session_present", mark)
-
-    response = await mark_session_presence(session.id, user, db)
-
-    assert response.status_code == 204
-    mark.assert_called_once_with(user.id, session.id)
-
-    db.get.return_value = None
-    with pytest.raises(ApiError) as exc_info:
-        await mark_session_presence(uuid4(), user, db)
-    assert exc_info.value.code == "session.notFound"
 
 
 async def test_session_is_created_with_first_message_and_run(monkeypatch) -> None:

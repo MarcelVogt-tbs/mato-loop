@@ -25,7 +25,7 @@ from mato_loop_backend.config import RuntimeConfig, get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.models import UserAccount, WebPushSubscription
 from mato_loop_backend.security import CredentialCipher
-from mato_loop_backend.sessions.presence import session_is_present
+from mato_loop_backend.sessions.presence import user_is_present
 from mato_loop_backend.settings.models import WebPushSettings
 from mato_loop_backend.settings.store import SettingsStore
 
@@ -359,17 +359,9 @@ class WebPushService:
     async def deliver_after_commit(
         user_id: UUID,
         payload: WebPushPayload,
-        *,
-        session_id: UUID | None = None,
     ) -> None:
         """Best-effort delivery. Call only after the producer transaction commits."""
-        target = payload.notification.target
-        session_id = (
-            target.session_id
-            if session_id is None and isinstance(target, WebPushSessionTarget)
-            else session_id
-        )
-        if session_id is not None and session_is_present(user_id, session_id):
+        if user_is_present(user_id):
             return
         try:
             async with AsyncSessionFactory() as db:
@@ -396,6 +388,8 @@ class WebPushService:
             cipher = CredentialCipher()
         except Exception:
             logger.error("Web Push delivery could not be prepared")
+            return
+        if user_is_present(user_id):
             return
         try:
             timeout = aiohttp.ClientTimeout(total=_DELIVERY_TIMEOUT_SECONDS)

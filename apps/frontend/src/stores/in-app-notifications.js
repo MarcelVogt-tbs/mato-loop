@@ -62,6 +62,9 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
     revision: 0
   }),
   actions: {
+    async markPresent() {
+      await api.put('/notifications/presence', null, { suppressErrorToast: true })
+    },
     async fetchLatest(config = {}) {
       const revision = ++this.revision
       this.loading = true

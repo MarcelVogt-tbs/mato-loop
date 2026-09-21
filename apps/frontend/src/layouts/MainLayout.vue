@@ -644,9 +644,6 @@ const selectedProjectId = computed(() => (
 const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
 ))
-const activeRouteSessionId = computed(() => (
-  route.name === 'chat' && routeSessionId.value === chat.current?.id ? chat.current.id : null
-))
 const projectOptions = computed(() => [
   { label: 'Ohne Projekt', value: null },
   ...projects.items.map((project) => ({ label: project.name, value: project.id }))
@@ -1154,14 +1151,18 @@ async function closeNavigation() {
   document.getElementById('app-navigation-toggle')?.focus()
 }
 
-function refreshSessionPresence() {
-  if (document.visibilityState !== 'visible' || !activeRouteSessionId.value) return
-  void chat.markSessionPresent(activeRouteSessionId.value).catch(() => {})
+function appIsFocused() {
+  return document.visibilityState === 'visible' && document.hasFocus()
+}
+
+function refreshAppPresence() {
+  if (!appIsFocused()) return
+  void notifications.markPresent().catch(() => {})
 }
 
 function refreshSessionsWhenVisible() {
   if (document.visibilityState !== 'visible') return
-  refreshSessionPresence()
+  refreshAppPresence()
   if (projects.loadFailed) void loadProjects()
   if (chat.current?.id && !chat.running) {
     void chat.refreshSession(chat.current.id, { suppressErrorToast: true }).catch(() => {})
@@ -1189,7 +1190,7 @@ function handlePushMessage(event) {
 
 async function refreshActiveSessions() {
   if (document.visibilityState !== 'visible') return
-  refreshSessionPresence()
+  refreshAppPresence()
   if (sessionActivityRefreshPending) return
   sessionActivityRefreshPending = true
   try {
@@ -1197,6 +1198,7 @@ async function refreshActiveSessions() {
       approvals.fetchPending({ suppressErrorToast: true }),
       questions.fetchPending({ suppressErrorToast: true })
     ]
+    if (appIsFocused()) requests.push(notifications.fetchLatest({ suppressErrorToast: true }))
     if (chat.current?.id && !chat.running) {
       requests.push(chat.refreshSession(chat.current.id, { suppressErrorToast: true }))
     }
@@ -1364,8 +1366,6 @@ watch(() => route.name, (name) => {
 watch(() => route.name === 'chat' && routeSessionId.value === chat.current?.id ? chat.current?.id : null,
   (id) => browser.setDisplayedSession(id), { immediate: true, flush: 'sync' })
 
-watch(activeRouteSessionId, refreshSessionPresence, { immediate: true, flush: 'post' })
-
 watch(() => [
   chat.current?.id, chat.current?.preferredExecutionAgentId, browser.sessionId,
   executionAgents.byId(browser.agentId)?.connected === true
@@ -1419,11 +1419,13 @@ onMounted(async () => {
   window.visualViewport?.addEventListener('scroll', updateVisualViewport)
   window.addEventListener('resize', updateVisualViewport)
   window.addEventListener('keydown', handleSearchShortcut)
+  window.addEventListener('focus', refreshAppPresence)
   window.addEventListener('beforeunload', preventDiscardOnUnload)
   document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
   window.addEventListener('matoloop:service-worker-ready', refreshPushState)
   window.navigator.serviceWorker?.addEventListener('message', handlePushMessage)
   sessionActivityTimer = window.setInterval(refreshActiveSessions, SESSION_ACTIVITY_REFRESH_MS)
+  refreshAppPresence()
   await Promise.allSettled([
     loadProjects(),
     loadStandaloneSessions(),
@@ -1440,6 +1442,7 @@ onBeforeUnmount(() => {
   window.visualViewport?.removeEventListener('scroll', updateVisualViewport)
   window.removeEventListener('resize', updateVisualViewport)
   window.removeEventListener('keydown', handleSearchShortcut)
+  window.removeEventListener('focus', refreshAppPresence)
   window.removeEventListener('beforeunload', preventDiscardOnUnload)
   terminal.release()
   browser.release()

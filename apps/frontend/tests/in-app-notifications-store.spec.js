@@ -19,6 +19,17 @@ describe('in-app notification store', () => {
     delete global.window
   })
 
+  it('reports focused app presence without transient error toasts', async () => {
+    api.put.mockResolvedValue({ data: null })
+    const store = useInAppNotificationStore()
+
+    await store.markPresent()
+
+    expect(api.put).toHaveBeenCalledWith('/notifications/presence', null, {
+      suppressErrorToast: true
+    })
+  })
+
   it('loads the latest notifications and unread count', async () => {
     api.get.mockResolvedValue({
       data: {

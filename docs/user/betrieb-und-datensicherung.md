@@ -34,6 +34,8 @@ Der Produktionsbuild ist eine installierbare Web-App. Betreiben Sie MatoLoop üb
 
 Benutzer aktivieren Push anschließend für jeden Browser oder jede PWA-Installation über den Schalter im Benachrichtigungsbereich. Unter iOS und iPadOS ist dafür mindestens Version 16.4 erforderlich und MatoLoop muss zuvor über **Zum Home-Bildschirm** installiert worden sein. Die Systemberechtigung kann nur durch diese ausdrückliche Benutzeraktion angefordert werden.
 
+Solange MatoLoop in einem Browserfenster oder einer installierten PWA fokussiert ist, versendet MatoLoop keine Push-Benachrichtigungen an die Geräte dieses Benutzers. Die gespeicherten Benachrichtigungen und In-App-Aktionen bleiben davon unberührt.
+
 Sichern Sie `/data/secrets/web-push-vapid.pem` zusammen mit Datenbank und Datenverzeichnis; ein verlorener Schlüssel macht bestehende Geräte-Abonnements unbrauchbar. Push-Zustellung erfolgt bestmöglich und ersetzt weder die gespeicherten Benachrichtigungen noch den Chatverlauf.
 
 Für den PWA-Entwicklungsmodus auf dem normalen Entwicklungsport `10020` verwenden Sie:

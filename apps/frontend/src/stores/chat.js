@@ -1357,9 +1357,6 @@ export const useChatStore = defineStore('chat', {
       if (this.current?.id === session.id) this.current.hasUnreadMessages = false
       this.updateCachedSession(session.id, (summary) => ({ ...summary, hasUnreadMessages: false }))
     },
-    async markSessionPresent(sessionId) {
-      await api.put(`/sessions/${sessionId}/presence`, null, { suppressErrorToast: true })
-    },
     async undoUserMessage(message) {
       const session = this.current
       if (!session || message?.role !== 'user' || this.historyActionPending) return null
