@@ -215,7 +215,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Build production image
-        run: bash scripts/ci/publish-docker-image.sh build matoloop-agent apps/matoloop-agent apps/matoloop-agent/Dockerfile
+        run: bash scripts/ci/publish-docker-image.sh build matoloop-agent . apps/matoloop-agent/Dockerfile
 
   publish-images:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/v'))
@@ -243,7 +243,7 @@ jobs:
           fi
           export IMAGE_VERSION
           bash scripts/ci/publish-docker-image.sh build mato-loop . apps/backend/Dockerfile
-          bash scripts/ci/publish-docker-image.sh build matoloop-agent apps/matoloop-agent apps/matoloop-agent/Dockerfile
+          bash scripts/ci/publish-docker-image.sh build matoloop-agent . apps/matoloop-agent/Dockerfile
       - name: Check current develop revision
         id: freshness
         if: github.ref == 'refs/heads/develop'
@@ -291,7 +291,7 @@ jobs:
             tag=
           fi
           bash scripts/ci/publish-docker-image.sh "$mode" mato-loop . apps/backend/Dockerfile "$tag"
-          bash scripts/ci/publish-docker-image.sh "$mode" matoloop-agent apps/matoloop-agent apps/matoloop-agent/Dockerfile "$tag"
+          bash scripts/ci/publish-docker-image.sh "$mode" matoloop-agent . apps/matoloop-agent/Dockerfile "$tag"
       - name: Remove local publication images
         if: always()
         run: docker image rm --force "mato-loop:ci-$CI_RUN_ID" "matoloop-agent:ci-$CI_RUN_ID" >/dev/null 2>&1 || true

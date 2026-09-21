@@ -194,3 +194,9 @@ API keys and OAuth tokens are encrypted in PostgreSQL. Personal credentials are 
 - [CI and releases](docs/ci-and-releases.md)
 - [Backend](apps/backend/README.md)
 - [Frontend](apps/frontend/README.md)
+
+## License
+
+Copyright (C) 2026 MatoLoop contributors.
+
+MatoLoop is licensed under the [GNU Affero General Public License version 3 only](LICENSE) (`AGPL-3.0-only`).

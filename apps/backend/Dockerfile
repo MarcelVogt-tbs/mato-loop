@@ -32,6 +32,7 @@ COPY apps/backend/src ./src
 COPY apps/backend/alembic ./alembic
 COPY apps/backend/alembic.ini ./alembic.ini
 COPY scripts/install-matoloop-agent.sh ./scripts/install-matoloop-agent.sh
+COPY LICENSE /usr/share/licenses/mato-loop/LICENSE
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 ARG BUILD_REVISION=unknown
 RUN printf '%s\n' "$BUILD_REVISION" > /app/BUILD_REVISION

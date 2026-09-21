@@ -3,6 +3,7 @@ name = "mato-loop-backend"
 version = "0.1.0"
 description = "MatoLoop FastAPI backend"
 readme = "README.md"
+license = "AGPL-3.0-only"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "aiohttp>=3.12.0",

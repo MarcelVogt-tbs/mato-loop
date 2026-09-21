@@ -94,6 +94,7 @@ CREATED="$(git show -s --format=%cI "$REVISION")"
 PROJECT_VERSION="$(<VERSION)"
 LABELS=(
     --label "org.opencontainers.image.created=$CREATED"
+    --label "org.opencontainers.image.licenses=AGPL-3.0-only"
     --label "org.opencontainers.image.revision=$REVISION"
 )
 BUILD_ARGS=(--build-arg "BUILD_REVISION=$REVISION")
