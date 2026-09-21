@@ -124,6 +124,32 @@ class InstallerTests(unittest.TestCase):
             self.assertIn("export UV_PYTHON_INSTALL_BIN=0", text)
             self.assertIn("export UV_MANAGED_PYTHON=1", text)
 
+    def test_installed_wrapper_help_includes_native_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "agent"
+            (root / "bin").mkdir(parents=True)
+            (root / "venv/bin").mkdir(parents=True)
+            shutil.copy2(
+                INSTALLER_PATH.with_name("install-matoloop-agent.sh"),
+                root / "bin/matoloop-agent",
+            )
+            (root / "bin/python").touch(mode=0o700)
+            (root / "installer.py").touch()
+            runtime = root / "venv/bin/matoloop-agent"
+            runtime.write_text("#!/bin/sh\nprintf '%s\\n' 'runtime help'\n")
+            runtime.chmod(0o700)
+
+            result = subprocess.run(
+                [root / "bin/matoloop-agent", "--help"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertIn("runtime help", result.stdout)
+            self.assertIn("install [--home PATH] [--instance-url URL]", result.stdout)
+            self.assertIn("uninstall [--purge] [--yes]", result.stdout)
+
     def test_system_service_runs_as_installing_user_at_boot(self) -> None:
         text = installer.service_text({"wrapper": Path("/home/test/.local/bin/matoloop-agent")})
         self.assertIn(f"User={installer.pwd.getpwuid(os.getuid()).pw_name}", text)

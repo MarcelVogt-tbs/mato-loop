@@ -37,6 +37,19 @@ fail() {
 if [ "$INSTALLED" = true ] && [ -x "$PYTHON" ] && [ -f "$MANAGER" ]; then
     case "${1:-run}" in
         install|update|status|uninstall) exec "$PYTHON" "$MANAGER" "$@" ;;
+        -h|--help)
+            "$INSTALL_ROOT/venv/bin/matoloop-agent" --help
+            printf '%s\n' \
+                '' \
+                'native installation commands:' \
+                '  install [--home PATH] [--instance-url URL]' \
+                '  update' \
+                '  status' \
+                '  uninstall [--purge] [--yes]' \
+                '' \
+                "Run 'matoloop-agent COMMAND --help' for command-specific options."
+            exit 0
+            ;;
         *)
             export MATOLOOP_AGENT_CONFIG="$INSTALL_ROOT/data/config.json"
             exec "$INSTALL_ROOT/venv/bin/matoloop-agent" "$@"
