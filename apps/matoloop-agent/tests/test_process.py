@@ -166,6 +166,51 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             }.items():
                 self.assertEqual(inspections[name]["targets"][0]["path"], os.fspath(expected))
 
+    def test_explicit_executable_follows_only_its_symlink_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "python-real"
+            executable.write_text("#!/bin/sh\n")
+            executable.chmod(0o755)
+            bin_directory = root / ".venv/bin"
+            bin_directory.mkdir(parents=True)
+            python3 = bin_directory / "python3"
+            python3.symlink_to("../../python-real")
+            python = bin_directory / "python"
+            python.symlink_to("python3")
+            script = root / "pcap_analyze.py"
+            script.write_text("print('ok')\n")
+            runner = ProcessRunner(configuration(root), Filesystem(configuration(root)))
+            command = ".venv/bin/python pcap_analyze.py client.pcapng server.pcapng"
+
+            inspected = runner.inspect_shell(command, os.fspath(root))
+
+            self.assertTrue(inspected["analysisComplete"])
+            self.assertEqual(inspected["classification"], "read")
+            self.assertEqual(
+                [target["path"] for target in inspected["targets"]],
+                [os.fspath(python), os.fspath(python3), os.fspath(executable), os.fspath(script)],
+            )
+            argv, _ = runner.execution_argv(
+                current_directory=os.fspath(root),
+                command=command,
+                expected_inspection_revision=inspected["inspectionRevision"],
+            )
+            self.assertEqual(argv, [os.fspath(runner.shell), "-c", command])
+
+            replacement = root / "python-replacement"
+            replacement.write_text("#!/bin/sh\n")
+            replacement.chmod(0o755)
+            python3.unlink()
+            python3.symlink_to("../../python-replacement")
+            with self.assertRaises(AgentError) as raised:
+                runner.execution_argv(
+                    current_directory=os.fspath(root),
+                    command=command,
+                    expected_inspection_revision=inspected["inspectionRevision"],
+                )
+            self.assertEqual(raised.exception.code, "process.inspectionChanged")
+
     async def test_inspection_classifies_flat_commands_and_executes_read_pipeline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -21,6 +21,7 @@ from .errors import AgentError
 
 _RENAME_NOREPLACE = 1
 _RENAME_EXCHANGE = 2
+_MAX_EXECUTABLE_LINKS = 40
 _renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
 if _renameat2 is not None:
     _renameat2.argtypes = [
@@ -163,11 +164,51 @@ class Filesystem:
     def resolve_path_target(
         self, path: str, current_directory: str, *, must_exist: bool
     ) -> dict[str, str | int]:
+        target, _ = self._resolve_path_target(
+            path, current_directory, must_exist=must_exist, allow_symlink=False
+        )
+        return target
+
+    def resolve_executable_targets(
+        self, path: str, current_directory: str
+    ) -> list[dict[str, str | int]]:
+        targets = []
+        seen = set()
+        for _ in range(_MAX_EXECUTABLE_LINKS):
+            target, destination = self._resolve_path_target(
+                path, current_directory, must_exist=False, allow_symlink=True
+            )
+            targets.append(target)
+            if destination is None:
+                if len(targets) > 1 and "mode" in target and not stat.S_ISREG(target["mode"]):
+                    raise AgentError(
+                        "path.unsupportedType", "Executable link target is not a regular file"
+                    )
+                return targets
+            path = posixpath.normpath(
+                destination
+                if destination.startswith("/")
+                else f"{posixpath.dirname(target['path'])}/{destination}"
+            )
+            if path in seen:
+                break
+            seen.add(path)
+        raise AgentError("path.unsupportedType", "Executable symbolic link chain is invalid")
+
+    def _resolve_path_target(
+        self,
+        path: str,
+        current_directory: str,
+        *,
+        must_exist: bool,
+        allow_symlink: bool,
+    ) -> tuple[dict[str, str | int], str | None]:
         candidate = posixpath.normpath(
             path if path.startswith("/") else f"{current_directory}/{path}"
         )
         _parts(candidate)
         metadata = None
+        destination = None
         with self._root_fd() as root_fd:
             # Validate traversed components before lexical normalization can erase a link/..
             absolute = path if path.startswith("/") else f"{current_directory}/{path}"
@@ -183,11 +224,15 @@ class Filesystem:
                     raise
                 if must_exist:
                     raise AgentError("path.notFound", "Path target is unavailable") from exc
-                return {"path": candidate}
+                return {"path": candidate}, None
             try:
                 metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
                 if stat.S_ISLNK(metadata.st_mode):
-                    raise AgentError("path.unsupportedType", "Shell path target is a symbolic link")
+                    if not allow_symlink:
+                        raise AgentError(
+                            "path.unsupportedType", "Shell path target is a symbolic link"
+                        )
+                    destination = os.readlink(name, dir_fd=parent_fd)
             except FileNotFoundError as exc:
                 if must_exist:
                     raise AgentError("path.notFound", "Path target is unavailable") from exc
@@ -196,7 +241,8 @@ class Filesystem:
                 raise AgentError("path.unavailable", "Path target is unavailable") from exc
             finally:
                 os.close(parent_fd)
-        return self._target(candidate, metadata) if metadata is not None else {"path": candidate}
+        target = self._target(candidate, metadata) if metadata is not None else {"path": candidate}
+        return target, destination
 
     def inspect_toolchain_directory(
         self,

@@ -1394,7 +1394,10 @@ class ProcessRunner:
                 if tokens[0] in ansi_words:
                     unsupported_target_quoting = True
                 else:
-                    add(tokens[0], "executable", access="read", must_exist=True)
+                    for target in self.filesystem.resolve_executable_targets(tokens[0], current):
+                        if "mode" not in target:
+                            analysis_complete = False
+                        retain(target, "executable", "read")
             for path, kind, must_exist in _path_operands(tokens):
                 if path in metadata_paths:
                     continue
@@ -1478,6 +1481,10 @@ class ProcessRunner:
             inspection is not None
             and inspection.get("readOnly") is True
             and inspection.get("analysisComplete") is True
+            and not any(
+                target.get("kind") == "executable" and stat.S_ISLNK(target.get("mode", 0))
+                for target in inspection.get("targets", [])
+            )
         ):
             commands = inspection.get("commands", [])
             simple = not any(character in command for character in "();<>|&$`*?[]{}~\n\r")
