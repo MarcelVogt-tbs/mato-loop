@@ -5,6 +5,7 @@ import argparse
 import atexit
 import json
 import os
+import pwd
 import secrets
 import shutil
 import subprocess
@@ -15,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 SOURCE_URL = "https://git.devmato.net/devmato/MatoLoop.git"
+SYSTEM_SERVICE_PATH = Path("/etc/systemd/system/matoloop-agent.service")
 SYSTEM_PACKAGES = (
     "bash",
     "ripgrep",
@@ -56,11 +58,9 @@ def paths() -> dict[str, Path]:
             or os.environ.get("MATOLOOP_AGENT_WRAPPER_PATH")
             or Path(os.environ.get("XDG_BIN_HOME", home / ".local/bin")) / "matoloop-agent"
         ),
-        "service": Path(
-            stored.get("servicePath")
-            or Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
-            / "systemd/user/matoloop-agent.service"
-        ),
+        "service": SYSTEM_SERVICE_PATH,
+        "legacy_service": Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
+        / "systemd/user/matoloop-agent.service",
     }
 
 
@@ -191,9 +191,9 @@ def check_linux() -> None:
         fail(f"native installation is not supported on {sys.platform} yet")
     if os.getuid() == 0:
         fail("the native Agent must be installed as a regular user")
-    for command in ("systemctl",):
+    for command in ("sudo", "systemctl"):
         if shutil.which(command) is None:
-            fail(f"{command} is required for the Linux user service")
+            fail(f"{command} is required for the Linux system service")
 
 
 def install_system_dependencies(layout: dict[str, Path]) -> None:
@@ -284,14 +284,29 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+User={pwd.getpwuid(os.getuid()).pw_name}
 ExecStart="{executable}" run
 Restart=on-failure
 RestartSec=5
 UMask=0077
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 """
+
+
+def install_service(layout: dict[str, Path], content: bytes) -> None:
+    descriptor, temporary = tempfile.mkstemp(prefix=".matoloop-agent.", dir=layout["root"])
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+        run("sudo", "install", "-m", "0644", temporary, layout["service"])
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def remove_service(layout: dict[str, Path]) -> None:
+    run("sudo", "rm", "-f", layout["service"])
 
 
 def write_manager(layout: dict[str, Path], source: Path) -> None:
@@ -309,13 +324,6 @@ def write_manager(layout: dict[str, Path], source: Path) -> None:
         fail(f"the command path is a directory: {layout['wrapper']}")
     layout["wrapper"].unlink(missing_ok=True)
     layout["wrapper"].symlink_to(launcher)
-
-
-def write_runtime_files(layout: dict[str, Path], source: Path) -> None:
-    write_manager(layout, source)
-    if layout["service"].is_symlink():
-        fail(f"the user service path is a symlink: {layout['service']}")
-    write_file(layout["service"], service_text(layout).encode(), 0o600)
 
 
 def install(arguments: argparse.Namespace) -> None:
@@ -340,12 +348,16 @@ def install(arguments: argparse.Namespace) -> None:
         or layout["wrapper"].is_symlink()
         or layout["service"].exists()
         or layout["service"].is_symlink()
+        or layout["legacy_service"].exists()
+        or layout["legacy_service"].is_symlink()
     ):
-        fail("an unmanaged MatoLoop Agent wrapper or user service already exists")
+        fail("an unmanaged MatoLoop Agent wrapper or service already exists")
     if layout["marker"].is_symlink():
         fail("the installation ownership marker is invalid")
     if layout["service"].is_symlink():
-        fail(f"the user service path is a symlink: {layout['service']}")
+        fail(f"the system service path is a symlink: {layout['service']}")
+    if layout["legacy_service"].exists() or layout["legacy_service"].is_symlink():
+        fail("uninstall the legacy MatoLoop Agent user service before installing")
     for managed_file in (
         layout["installer"],
         layout["root"] / "bin/matoloop-agent",
@@ -355,6 +367,8 @@ def install(arguments: argparse.Namespace) -> None:
             fail(f"managed installation file is a symlink: {managed_file}")
 
     state = read_state(layout)
+    if layout["service"].exists() and not state:
+        fail("an unmanaged MatoLoop Agent system service already exists")
     source = Path(arguments.source or state.get("source", "")).expanduser().resolve()
     managed = arguments.managed if arguments.source else state.get("sourceType") == "managed"
     if not source.is_dir():
@@ -389,6 +403,7 @@ def install(arguments: argparse.Namespace) -> None:
     )
     websocket, insecure = backend_url(instance)
 
+    run("sudo", "-v")
     layout["data"].mkdir(parents=True, exist_ok=True)
     layout["data"].chmod(0o700)
     install_system_dependencies(layout)
@@ -436,15 +451,11 @@ def install(arguments: argparse.Namespace) -> None:
         config.pop("openscadExecutable", None)
 
     active = (
-        run(
-            "systemctl", "--user", "is-active", "--quiet", "matoloop-agent.service", check=False
-        ).returncode
+        run("systemctl", "is-active", "--quiet", "matoloop-agent.service", check=False).returncode
         == 0
     )
     enabled = (
-        run(
-            "systemctl", "--user", "is-enabled", "--quiet", "matoloop-agent.service", check=False
-        ).returncode
+        run("systemctl", "is-enabled", "--quiet", "matoloop-agent.service", check=False).returncode
         == 0
     )
     old_source = layout["root"] / ".source-old"
@@ -453,7 +464,6 @@ def install(arguments: argparse.Namespace) -> None:
     managed_files = (
         layout["installer"],
         layout["root"] / "bin/matoloop-agent",
-        layout["service"],
         config_path,
         layout["state"],
     )
@@ -461,6 +471,7 @@ def install(arguments: argparse.Namespace) -> None:
         path: (path.read_bytes(), path.stat().st_mode & 0o777) if path.is_file() else None
         for path in managed_files
     }
+    service_snapshot = layout["service"].read_bytes() if layout["service"].is_file() else None
     new_state = {
         "source": os.fspath(layout["source"] if managed else source),
         "sourceType": "managed" if managed else "checkout",
@@ -469,11 +480,10 @@ def install(arguments: argparse.Namespace) -> None:
         "homeDirectory": os.fspath(home),
         "instanceUrl": instance.rstrip("/"),
         "wrapperPath": os.fspath(layout["wrapper"]),
-        "servicePath": os.fspath(layout["service"]),
     }
     try:
         if active:
-            run("systemctl", "--user", "stop", "matoloop-agent.service")
+            run("sudo", "systemctl", "stop", "matoloop-agent.service")
         if managed and layout["source"].exists():
             layout["source"].replace(old_source)
         if managed:
@@ -484,15 +494,16 @@ def install(arguments: argparse.Namespace) -> None:
         temporary_link.symlink_to(new_venv)
         os.replace(temporary_link, layout["venv"])
         write_json(config_path, config)
-        write_runtime_files(layout, source)
+        write_manager(layout, source)
         write_json(layout["state"], new_state)
-        run("systemctl", "--user", "daemon-reload")
-        run("systemctl", "--user", "enable", "--now", "matoloop-agent.service")
+        install_service(layout, service_text(layout).encode())
+        run("sudo", "systemctl", "daemon-reload")
+        run("sudo", "systemctl", "enable", "--now", "matoloop-agent.service")
         for _ in range(2):
             time.sleep(1)
-            run("systemctl", "--user", "is-active", "--quiet", "matoloop-agent.service")
+            run("systemctl", "is-active", "--quiet", "matoloop-agent.service")
     except BaseException:
-        run("systemctl", "--user", "stop", "matoloop-agent.service", check=False)
+        run("sudo", "systemctl", "stop", "matoloop-agent.service", check=False)
         if old_venv is None:
             layout["venv"].unlink(missing_ok=True)
         else:
@@ -511,19 +522,23 @@ def install(arguments: argparse.Namespace) -> None:
                 path.unlink(missing_ok=True)
             else:
                 write_file(path, *snapshot)
+        if service_snapshot is None:
+            remove_service(layout)
+        else:
+            install_service(layout, service_snapshot)
         if not state:
             write_json(layout["state"], new_state)
         run(
+            "sudo",
             "systemctl",
-            "--user",
             "enable" if enabled else "disable",
             "matoloop-agent.service",
             check=False,
         )
         if layout["venv"].exists():
-            run("systemctl", "--user", "daemon-reload", check=False)
+            run("sudo", "systemctl", "daemon-reload", check=False)
             if active:
-                run("systemctl", "--user", "start", "matoloop-agent.service", check=False)
+                run("sudo", "systemctl", "start", "matoloop-agent.service", check=False)
         raise
     shutil.rmtree(old_source, ignore_errors=True)
     if old_venv is not None and old_venv != new_venv and layout["venvs"] in old_venv.parents:
@@ -575,7 +590,7 @@ def status() -> None:
     print(f"Source: {state['source']} ({state['sourceType']})")
     print(f"Data:   {layout['data']}")
     print(f"Home:   {state['homeDirectory']}")
-    run("systemctl", "--user", "status", "--no-pager", "matoloop-agent.service", check=False)
+    run("systemctl", "status", "--no-pager", "matoloop-agent.service", check=False)
 
 
 def uninstall(purge: bool, yes: bool) -> None:
@@ -595,7 +610,7 @@ def uninstall(purge: bool, yes: bool) -> None:
             fail("the MatoLoop Agent command was replaced; no files were removed")
     if layout["service"].exists():
         if layout["service"].is_symlink() or layout["service"].read_text() != service_text(layout):
-            fail("the MatoLoop Agent user service was replaced; no files were removed")
+            fail("the MatoLoop Agent system service was replaced; no files were removed")
     if not yes and sys.stdin.isatty():
         detail = " and credentials" if purge else " (credentials will be preserved)"
         if input(f"Remove MatoLoop Agent{detail}? [y/N] ").strip().lower() not in {
@@ -607,11 +622,9 @@ def uninstall(purge: bool, yes: bool) -> None:
             return
     elif not yes:
         fail("unattended uninstall requires --yes")
-    run("systemctl", "--user", "stop", "matoloop-agent.service", check=False)
+    run("sudo", "systemctl", "stop", "matoloop-agent.service", check=False)
     if (
-        run(
-            "systemctl", "--user", "is-active", "--quiet", "matoloop-agent.service", check=False
-        ).returncode
+        run("systemctl", "is-active", "--quiet", "matoloop-agent.service", check=False).returncode
         == 0
     ):
         fail("the MatoLoop Agent service is still running; no files were removed")
@@ -634,9 +647,9 @@ def uninstall(purge: bool, yes: bool) -> None:
             fail("sudo and apt-get are required to remove system dependencies")
         run("sudo", "apt-get", "remove", "-y", "--", *packages)
     if layout["service"].exists():
-        run("systemctl", "--user", "disable", "matoloop-agent.service")
-    layout["service"].unlink(missing_ok=True)
-    run("systemctl", "--user", "daemon-reload", check=False)
+        run("sudo", "systemctl", "disable", "matoloop-agent.service")
+    remove_service(layout)
+    run("sudo", "systemctl", "daemon-reload", check=False)
     layout["wrapper"].unlink(missing_ok=True)
     if purge:
         shutil.rmtree(layout["root"], ignore_errors=True)
@@ -657,7 +670,7 @@ def uninstall(purge: bool, yes: bool) -> None:
                     child.unlink()
         layout["installer"].unlink(missing_ok=True)
         layout["state"].unlink(missing_ok=True)
-    for directory in (layout["wrapper"].parent, layout["service"].parent, layout["root"]):
+    for directory in (layout["wrapper"].parent, layout["root"]):
         try:
             directory.rmdir()
         except OSError:

@@ -19,7 +19,8 @@ UV="$TOOLS_DIR/bin/uv"
 PYTHON="$INSTALL_ROOT/bin/python"
 MANAGER="$INSTALL_ROOT/installer.py"
 WRAPPER=${XDG_BIN_HOME:-$HOME/.local/bin}/matoloop-agent
-SERVICE=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/matoloop-agent.service
+SERVICE=/etc/systemd/system/matoloop-agent.service
+LEGACY_SERVICE=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/matoloop-agent.service
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." 2>/dev/null && pwd || true)
 INPUT=
 if [ -t 0 ]; then
@@ -69,8 +70,9 @@ case "$HOME/" in
 esac
 [ ! -e "$INSTALL_ROOT" ] || [ -d "$INSTALL_ROOT" ] || fail "The installation root is not a directory."
 if [ ! -f "$INSTALL_ROOT/.managed-by-matoloop-agent" ] &&
-    { [ -e "$WRAPPER" ] || [ -L "$WRAPPER" ] || [ -e "$SERVICE" ] || [ -L "$SERVICE" ]; }; then
-    fail "An unmanaged MatoLoop Agent command or user service already exists."
+    { [ -e "$WRAPPER" ] || [ -L "$WRAPPER" ] || [ -e "$SERVICE" ] || [ -L "$SERVICE" ] ||
+      [ -e "$LEGACY_SERVICE" ] || [ -L "$LEGACY_SERVICE" ]; }; then
+    fail "An unmanaged MatoLoop Agent command or service already exists."
 fi
 if [ -d "$INSTALL_ROOT" ] && [ ! -f "$INSTALL_ROOT/.managed-by-matoloop-agent" ] &&
     [ -n "$(ls -A "$INSTALL_ROOT")" ]; then

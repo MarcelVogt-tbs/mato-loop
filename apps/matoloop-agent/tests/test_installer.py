@@ -124,6 +124,12 @@ class InstallerTests(unittest.TestCase):
             self.assertIn("export UV_PYTHON_INSTALL_BIN=0", text)
             self.assertIn("export UV_MANAGED_PYTHON=1", text)
 
+    def test_system_service_runs_as_installing_user_at_boot(self) -> None:
+        text = installer.service_text({"wrapper": Path("/home/test/.local/bin/matoloop-agent")})
+        self.assertIn(f"User={installer.pwd.getpwuid(os.getuid()).pw_name}", text)
+        self.assertIn("WantedBy=multi-user.target", text)
+        self.assertNotIn("WantedBy=default.target", text)
+
     def test_environment_runs_through_final_activation_link(self) -> None:
         uv = shutil.which("uv")
         if uv is None:
@@ -171,20 +177,30 @@ class InstallerTests(unittest.TestCase):
                 "XDG_BIN_HOME": str(base / "bin"),
                 "XDG_CONFIG_HOME": str(base / "config"),
             }
+            system_service = base / "system/matoloop-agent.service"
 
             def fake_sync(layout, _source, destination):
                 executable = destination / "bin/matoloop-agent"
                 executable.parent.mkdir(parents=True)
                 executable.touch()
 
+            def fake_run(*command, **_kwargs):
+                if command[:4] == ("sudo", "install", "-m", "0644"):
+                    Path(command[-1]).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(command[-2], command[-1])
+                elif command[:3] == ("sudo", "rm", "-f"):
+                    Path(command[-1]).unlink(missing_ok=True)
+                return subprocess.CompletedProcess(command, 0)
+
             arguments = installer.argparse.Namespace(
                 source=str(source), managed=False, home=str(home), instance_url="https://mato.test"
             )
             with (
                 patch.dict(os.environ, environment),
+                patch.object(installer, "SYSTEM_SERVICE_PATH", system_service),
                 patch.object(installer, "check_linux"),
                 patch.object(installer, "sync_environment", side_effect=fake_sync),
-                patch.object(installer, "run"),
+                patch.object(installer, "run", side_effect=fake_run),
             ):
                 installer.install(arguments)
                 layout = installer.paths()
@@ -200,12 +216,17 @@ class InstallerTests(unittest.TestCase):
             (previous / "working").touch()
 
             def fail_start(*command, **_kwargs):
+                if command[:4] == ("sudo", "install", "-m", "0644"):
+                    shutil.copy2(command[-2], command[-1])
+                elif command[:3] == ("sudo", "rm", "-f"):
+                    Path(command[-1]).unlink(missing_ok=True)
                 if "enable" in command and "--now" in command:
                     raise subprocess.CalledProcessError(1, command)
                 return subprocess.CompletedProcess(command, 0)
 
             with (
                 patch.dict(os.environ, environment),
+                patch.object(installer, "SYSTEM_SERVICE_PATH", system_service),
                 patch.object(installer, "check_linux"),
                 patch.object(installer, "sync_environment", side_effect=fake_sync),
                 patch.object(installer, "run", side_effect=fail_start),
@@ -287,7 +308,11 @@ class InstallerTests(unittest.TestCase):
                 "XDG_BIN_HOME": str(bin_home),
                 "XDG_CONFIG_HOME": str(config_home),
             }
-            with patch.dict(os.environ, environment):
+            system_service = Path(temporary) / "system/matoloop-agent.service"
+            with (
+                patch.dict(os.environ, environment),
+                patch.object(installer, "SYSTEM_SERVICE_PATH", system_service),
+            ):
                 layout = installer.paths()
                 (layout["data"] / "agent-state").mkdir(parents=True)
                 (layout["data"] / "agent-state/credential.json").write_text("secret")
@@ -303,8 +328,13 @@ class InstallerTests(unittest.TestCase):
                 launcher.touch()
                 layout["wrapper"].parent.mkdir(parents=True)
                 layout["wrapper"].symlink_to(launcher)
-                inactive = subprocess.CompletedProcess([], 3)
-                with patch.object(installer, "run", return_value=inactive):
+
+                def fake_run(*command, **_kwargs):
+                    if command[:3] == ("sudo", "rm", "-f"):
+                        Path(command[-1]).unlink(missing_ok=True)
+                    return subprocess.CompletedProcess(command, 3)
+
+                with patch.object(installer, "run", side_effect=fake_run):
                     installer.uninstall(purge=False, yes=True)
                 self.assertTrue((layout["data"] / "agent-state/credential.json").exists())
                 self.assertFalse((layout["data"] / "config.json").exists())
@@ -321,7 +351,14 @@ class InstallerTests(unittest.TestCase):
                 "XDG_BIN_HOME": str(Path(temporary) / "bin"),
                 "XDG_CONFIG_HOME": str(Path(temporary) / "config"),
             }
-            with patch.dict(os.environ, environment):
+            with (
+                patch.dict(os.environ, environment),
+                patch.object(
+                    installer,
+                    "SYSTEM_SERVICE_PATH",
+                    Path(temporary) / "system/matoloop-agent.service",
+                ),
+            ):
                 layout = installer.paths()
                 layout["data"].mkdir(parents=True)
                 layout["marker"].touch()
@@ -344,7 +381,6 @@ class InstallerTests(unittest.TestCase):
                     calls.index(
                         (
                             "systemctl",
-                            "--user",
                             "is-active",
                             "--quiet",
                             "matoloop-agent.service",
@@ -361,7 +397,14 @@ class InstallerTests(unittest.TestCase):
                 "XDG_BIN_HOME": str(Path(temporary) / "bin"),
                 "XDG_CONFIG_HOME": str(Path(temporary) / "config"),
             }
-            with patch.dict(os.environ, environment):
+            with (
+                patch.dict(os.environ, environment),
+                patch.object(
+                    installer,
+                    "SYSTEM_SERVICE_PATH",
+                    Path(temporary) / "system/matoloop-agent.service",
+                ),
+            ):
                 layout = installer.paths()
                 layout["data"].mkdir(parents=True)
                 layout["marker"].touch()
@@ -385,7 +428,14 @@ class InstallerTests(unittest.TestCase):
                 "XDG_BIN_HOME": str(Path(temporary) / "bin"),
                 "XDG_CONFIG_HOME": str(Path(temporary) / "config"),
             }
-            with patch.dict(os.environ, environment):
+            with (
+                patch.dict(os.environ, environment),
+                patch.object(
+                    installer,
+                    "SYSTEM_SERVICE_PATH",
+                    Path(temporary) / "system/matoloop-agent.service",
+                ),
+            ):
                 layout = installer.paths()
                 layout["data"].mkdir(parents=True)
                 layout["marker"].touch()

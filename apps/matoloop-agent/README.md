@@ -63,8 +63,9 @@ and normal MatoLoop instance URL, derives the WebSocket endpoint, and reuses the
 pairing prompt. An `http://` instance enables insecure transport; use `https://` outside a trusted
 local network.
 
-The user systemd service runs with the installing user's permissions. Repeating `install` deploys
-the checkout as it currently exists and repairs an interrupted installation. The same script is
+The systemd system service starts at boot and runs with the installing user's permissions. The
+installer uses `sudo` only to manage that service and optional system packages. Repeating `install`
+deploys the checkout as it currently exists and repairs an interrupted installation. The same script is
 installed as the `matoloop-agent` command; there is no second wrapper implementation:
 
 ```bash
@@ -83,8 +84,8 @@ instead to deploy uncommitted local changes without pulling.
 `uninstall` preserves credentials, while `uninstall --purge` removes all managed Agent files. Both
 offer to remove only the system packages recorded as newly installed by MatoLoop. Agent
 home directories and workspaces are always preserved. The first platform implementation targets
-Linux user services with systemd. It does not enable linger automatically. Browser and shared
-terminal capabilities remain unavailable when their host prerequisites are declined or unsupported.
+Linux system services with systemd. Browser and shared terminal capabilities remain unavailable
+when their host prerequisites are declined or unsupported.
 
 Run tests:
 
