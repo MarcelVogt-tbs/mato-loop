@@ -371,6 +371,7 @@ class ToolDefinition:
                     else {}
                 ),
             }
+            parameters.setdefault("required", []).append(PERMISSION_REASON_ARGUMENT)
         schema = parameters
         _remove_schema_titles(schema)
         return {"name": self.name, "description": self.description, "parameters": schema}

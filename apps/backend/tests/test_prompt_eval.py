@@ -269,7 +269,7 @@ def test_transcript_routing_uses_the_production_tool_contract() -> None:
         assert "does not accept video attachments" in by_name["transcribe_audio"]["description"]
         assert "does not accept URLs" in by_name["analyze_video"]["description"]
         parameters = by_name["fetch_transcript"]["parameters"]
-        assert parameters["required"] == ["url"]
+        assert parameters["required"] == ["url", "_reason"]
         assert parameters["additionalProperties"] is False
         assert set(parameters["properties"]) == {
             "_reason",
@@ -359,7 +359,7 @@ def test_agent_web_routing_cases_offer_real_production_schemas() -> None:
             {"exclusiveMinimum": 0, "maximum": 3600, "type": "number"},
             {"type": "null"},
         ]
-        assert by_name["shell_run"]["parameters"]["required"] == ["command"]
+        assert by_name["shell_run"]["parameters"]["required"] == ["command", "_reason"]
         assert by_name["shell_run"]["parameters"]["additionalProperties"] is False
 
 
@@ -809,7 +809,7 @@ def test_grouped_result_rejects_unknown_action() -> None:
     assert [tool["name"] for tool in build_tools] == ["question", "build_skill"]
     assert "call question once for missing" in build_messages[0]["content"]
     assert "Pass a compact brief" in build_messages[0]["content"]
-    assert build_tools[1]["parameters"]["required"] == ["brief"]
+    assert build_tools[1]["parameters"]["required"] == ["brief", "_reason"]
 
 
 def test_skill_build_case_checks_compact_brief_not_generated_draft() -> None:

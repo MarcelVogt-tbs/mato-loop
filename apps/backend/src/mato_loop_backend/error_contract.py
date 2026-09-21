@@ -356,6 +356,10 @@ _MESSAGES = {
         "The tool execution was interrupted and its outcome is unknown. Do not infer success or "
         "failure without verification."
     ),
+    "tool.invalidArguments": (
+        "The tool arguments are invalid. Inspect error.field and retry with arguments "
+        "that match the tool schema."
+    ),
     "tool.cursorInvalid": (
         "The session cursor is unavailable. Retry session_read with error.params.retryArguments exactly."
     ),

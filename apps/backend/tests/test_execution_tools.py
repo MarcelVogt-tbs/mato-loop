@@ -139,6 +139,7 @@ def test_shell_tool_cannot_select_execution_targets() -> None:
         "environment",
         "timeout",
     }
+    assert shell["parameters"]["required"] == ["command", "_reason"]
     assert "command's purpose" in shell["parameters"]["properties"]["_reason"]["description"]
     assert ShellRunArguments(command="pwd").timeout is None
     assert all(item["name"] != "process_exec" for item in tools.schemas())

@@ -1128,6 +1128,7 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
     assert schemas["delete_path"]["parameters"]["properties"]["recursive"]["default"] is False
     for name in {"copy_path", "move_path"}:
         assert set(schemas[name]["parameters"]["required"]) == {
+            "_reason",
             "source_root",
             "source_path",
             "destination_root",
@@ -2670,11 +2671,21 @@ async def test_disabled_user_profile_tool_is_not_offered_or_executed(
     [
         (
             ToolCall(id="unknown", name="missing", arguments={}),
-            {"code": "tool.unknown"},
+            {
+                "code": "tool.unknown",
+                "message": "The tool operation could not be completed.",
+            },
         ),
         (
             ToolCall(id="invalid", name="example", arguments={"unexpected": True}),
-            {"code": "tool.invalidArguments", "field": "value"},
+            {
+                "code": "tool.invalidArguments",
+                "field": "value",
+                "message": (
+                    "The tool arguments are invalid. Inspect error.field and retry with "
+                    "arguments that match the tool schema."
+                ),
+            },
         ),
     ],
 )
@@ -2684,12 +2695,7 @@ async def test_tool_registry_returns_stable_errors_for_unknown_tools_and_invalid
     result = await ToolRegistry([_definition()]).execute(call, Mock())
 
     assert result.metadata == {"errorCode": expected_error["code"]}
-    assert json.loads(result.content) == {
-        "error": {
-            **expected_error,
-            "message": "The tool operation could not be completed.",
-        }
-    }
+    assert json.loads(result.content) == {"error": expected_error}
 
 
 @pytest.mark.parametrize(
@@ -3072,7 +3078,7 @@ async def test_session_search_shows_private_derived_titles_to_public_models(
 def test_session_tool_result_read_schema_uses_a_fixed_host_chunk_size() -> None:
     schema = tool_registry._definitions["session_tool_result_read"].schema()
 
-    assert schema["parameters"]["required"] == ["message_id"]
+    assert schema["parameters"]["required"] == ["message_id", "_reason"]
     assert schema["parameters"]["properties"]["offset"] == {
         "default": 0,
         "minimum": 0,
@@ -3086,9 +3092,9 @@ def test_session_discovery_and_anchor_schemas_keep_tasks_separate() -> None:
     search = tool_registry._definitions["session_search"].schema()
     read = tool_registry._definitions["session_read"].schema()
 
-    assert "required" not in browse["parameters"]
+    assert browse["parameters"]["required"] == ["_reason"]
     assert "query" not in browse["parameters"]["properties"]
-    assert search["parameters"]["required"] == ["query"]
+    assert search["parameters"]["required"] == ["query", "_reason"]
     assert "around_message_id" in read["parameters"]["properties"]
 
 
@@ -3748,7 +3754,10 @@ async def test_memory_write_reports_invalid_identifier_field(tmp_path) -> None:
     assert json.loads(result.content) == {
         "error": {
             "code": "tool.invalidArguments",
-            "message": "The tool operation could not be completed.",
+            "message": (
+                "The tool arguments are invalid. Inspect error.field and retry with arguments "
+                "that match the tool schema."
+            ),
             "field": "memory_id",
         }
     }
@@ -4173,7 +4182,7 @@ def test_fetch_transcript_schema_has_the_expected_contract() -> None:
         "url",
         "language",
     }
-    assert schema["parameters"]["required"] == ["url"]
+    assert schema["parameters"]["required"] == ["url", "_reason"]
     assert schema["parameters"]["properties"]["language"]["default"] is None
 
 
@@ -4194,13 +4203,13 @@ def test_skill_write_schemas_delegate_compact_briefs() -> None:
         "brief",
         "name_hint",
     }
-    assert build_schema["required"] == ["brief"]
+    assert build_schema["required"] == ["brief", "_reason"]
     assert set(edit_schema["properties"]) == {
         "_reason",
         "skill_id",
         "brief",
     }
-    assert edit_schema["required"] == ["skill_id", "brief"]
+    assert edit_schema["required"] == ["skill_id", "brief", "_reason"]
 
 
 def test_tool_schemas_remove_annotative_titles_recursively() -> None:

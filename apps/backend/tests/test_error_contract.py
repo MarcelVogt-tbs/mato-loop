@@ -57,6 +57,10 @@ def test_chat_history_errors_have_controlled_fallbacks() -> None:
         == "The session cursor is unavailable. Retry session_read with "
         "error.params.retryArguments exactly."
     )
+    assert describe_error("tool.invalidArguments").message == (
+        "The tool arguments are invalid. Inspect error.field and retry with arguments "
+        "that match the tool schema."
+    )
 
 
 def test_changed_file_error_has_controlled_fallback() -> None:
