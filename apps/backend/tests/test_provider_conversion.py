@@ -40,6 +40,30 @@ def test_chat_messages_convert_internal_tool_calls() -> None:
     assert messages[1]["tool_call_id"] == "call-1"
 
 
+def test_chat_messages_merge_leading_system_messages() -> None:
+    messages = _chat_messages(
+        [
+            {"role": "system", "content": "Host prompt"},
+            {"role": "system", "content": "Compacted history"},
+            {"role": "user", "content": "Continue"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call-1", "name": "web_search", "arguments": {"query": "news"}}
+                ],
+            },
+            {"role": "tool", "content": "result", "tool_call_id": "call-1"},
+        ]
+    )
+
+    assert [message["role"] for message in messages] == [
+        "system", "user", "assistant", "tool",
+    ]
+    assert messages[0]["content"] == "Host prompt\n\nCompacted history"
+    assert messages[-1]["tool_call_id"] == "call-1"
+
+
 def test_responses_input_keeps_function_call_and_output() -> None:
     instructions, items = _responses_input(
         [

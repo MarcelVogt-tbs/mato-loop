@@ -212,6 +212,7 @@ def _chat_messages(
     media: list[ProviderMedia] | None = None,
 ) -> list[dict[str, Any]]:
     converted = []
+    leading_system = True
     grouped_media = _media_by_message(media or [])
     pending_tool_media: list[list[ProviderMedia]] = []
     for index, message in enumerate(messages):
@@ -238,7 +239,11 @@ def _chat_messages(
             and isinstance(provider_data.get("chat_reasoning_details"), list)
         ):
             item["reasoning_details"] = provider_data["chat_reasoning_details"]
-        converted.append(item)
+        if leading_system and item["role"] == "system" and converted:
+            converted[0]["content"] += "\n\n" + item["content"]
+        else:
+            converted.append(item)
+        leading_system = leading_system and item["role"] == "system"
         message_media = grouped_media.get(index)
         if message["role"] == "tool":
             if message_media:
