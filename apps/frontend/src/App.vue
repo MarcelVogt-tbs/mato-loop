@@ -17,12 +17,15 @@
 
   <q-banner
     v-if="updateAvailable"
+    dense
     rounded
-    class="pwa-update-banner bg-primary text-white shadow-8"
+    class="pwa-update-banner app-surface shadow-2"
+    role="status"
   >
     Eine neue Version ist verfügbar.
     <template #action>
-      <q-btn flat no-caps color="white" label="Neu starten" @click="confirmUpdate" />
+      <q-btn flat dense no-caps color="primary" label="Später" @click="snoozeUpdate" />
+      <q-btn flat dense no-caps color="primary" label="Neu starten" @click="confirmUpdate" />
     </template>
   </q-banner>
 </template>
@@ -32,7 +35,13 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import AppLogo from 'components/AppLogo.vue'
 import { useAuthStore } from 'stores/auth'
-import { PWA_UPDATE_EVENT, pwaWindowCount, requestPwaUpdate } from 'src/utils/pwa-update'
+import {
+  PWA_UPDATE_EVENT,
+  pwaUpdateSnoozeRemaining,
+  pwaWindowCount,
+  requestPwaUpdate,
+  snoozePwaUpdate
+} from 'src/utils/pwa-update'
 
 defineOptions({ name: 'App' })
 
@@ -41,13 +50,26 @@ const auth = useAuthStore()
 const startupSlow = ref(false)
 const updateAvailable = ref(false)
 let startupTimer = null
+let updateTimer = null
 
 function reload() {
   window.location.reload()
 }
 
 function showUpdate() {
+  window.clearTimeout(updateTimer)
+  const snoozeRemaining = pwaUpdateSnoozeRemaining()
+  if (snoozeRemaining) {
+    updateTimer = window.setTimeout(() => { void detectWaitingUpdate() }, snoozeRemaining)
+    return
+  }
   updateAvailable.value = true
+}
+
+function snoozeUpdate() {
+  snoozePwaUpdate()
+  updateAvailable.value = false
+  showUpdate()
 }
 
 async function detectWaitingUpdate() {
@@ -83,6 +105,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.clearTimeout(startupTimer)
+  window.clearTimeout(updateTimer)
   window.removeEventListener(PWA_UPDATE_EVENT, showUpdate)
 })
 </script>
