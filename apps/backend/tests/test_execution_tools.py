@@ -1218,32 +1218,33 @@ async def test_secret_references_keep_only_selected_fields_for_session(
     first_result = await _tools(client.operations).execute(shell_call, context)
 
     assert not first_result.is_error
-    assert context.one_time_secrets == {}
+    assert list(context.one_time_secrets.values()) == ["  exact secret  "]
     assert client.requests[-1][1]["environment"] == {
         "SSH_USERNAME": "  exact user  ",
         "SSH_PASSWORD": "  exact secret  ",
     }
     assert len(context.ask_handler.await_args_list) == 1
 
-    username_call = ToolCall(
+    password_call = ToolCall(
         "shell-again",
         "shell_run",
         {
             "command": "env",
-            "environment": {"SSH_USERNAME": environment["SSH_USERNAME"]},
+            "environment": {"SSH_PASSWORD": environment["SSH_PASSWORD"]},
         },
     )
-    context.tool_call = username_call
-    second_result = await _tools(client.operations).execute(username_call, context)
+    context.tool_call = password_call
+    second_result = await _tools(client.operations).execute(password_call, context)
 
     assert not second_result.is_error
     assert client.requests[-1][1]["environment"] == {
-        "SSH_USERNAME": "  exact user  "
+        "SSH_PASSWORD": "  exact secret  "
     }
+    assert list(context.one_time_secrets.values()) == ["  exact secret  "]
 
-    other_context = _context(tmp_path, username_call, client)
+    other_context = _context(tmp_path, password_call, client)
     isolated_result = await _tools(client.operations).execute(
-        username_call, other_context
+        password_call, other_context
     )
 
     assert isolated_result.is_error
@@ -1365,7 +1366,6 @@ async def test_attached_shell_resolves_one_time_environment(
         ShellRunArguments.model_validate(call.arguments),
         terminal,
         environment={"TOKEN": "exact secret"},
-        one_time_secret_ids=(secret_id,),
     )
     assert client.requests == []
 

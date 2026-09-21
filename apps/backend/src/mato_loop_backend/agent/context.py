@@ -772,7 +772,8 @@ def general_system_prompt(
             "helpers or attempting a command, if any required authentication value is missing, call "
             "secret_input, not question, once with all currently missing authentication values. Use "
             "masked=false for visible identifiers and masked=true for secrets. Pass its returned environment "
-            "unchanged to shell_run."
+            "unchanged to shell_run. Its references remain reusable throughout the current run; reuse the exact "
+            "name/reference pairs instead of asking again."
         )
     if session_environment and "shell_run" in offered_tool_names:
         parts.append(

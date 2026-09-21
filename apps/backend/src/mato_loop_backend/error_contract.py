@@ -93,7 +93,7 @@ _MESSAGES = {
     "personalVariable.notFound": "The personal variable was not found.",
     "personalVariable.valueInvalid": "The personal variable value is invalid.",
     "personalVariable.valueRequired": "A value is required for this change.",
-    "secret.valueRefUnavailable": "The one-time secret is unavailable or has already been used.",
+    "secret.valueRefUnavailable": "The run-local secret is unavailable or belongs to another run.",
     "variable.sharedTerminalUnsupported": "Personal variables are not supported in an attached terminal.",
     "executionAgent.notFound": "The MatoLoop Agent was not found.",
     "executionAgent.alreadyPaired": "The MatoLoop Agent is already paired.",

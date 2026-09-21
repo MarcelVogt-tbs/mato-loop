@@ -1733,9 +1733,9 @@ async def _run_process(
 
 async def _resolve_shell_environment(
     arguments: ShellRunArguments, context: ToolContext
-) -> tuple[dict[str, str], dict[str, UUID]] | ToolResult:
+) -> dict[str, str] | ToolResult:
     if not arguments.environment:
-        return {}, {}
+        return {}
     variables = []
     for variable_id in dict.fromkeys(
         reference
@@ -1767,7 +1767,6 @@ async def _resolve_shell_environment(
         if current is None:
             return ToolResult.error("personalVariable.notFound")
         values[variable.id] = personal_variable_value(current)
-    one_time_ids: dict[str, UUID] = {}
     for reference in dict.fromkeys(
         reference
         for reference in arguments.environment.values()
@@ -1776,18 +1775,13 @@ async def _resolve_shell_environment(
         if reference.startswith("run-secret:"):
             secret_id = UUID(reference.removeprefix("run-secret:"))
             value = context.one_time_secrets.get(secret_id)
-            if value is not None:
-                one_time_ids[reference] = secret_id
         else:
             secret_id = UUID(reference.removeprefix("session-secret:"))
             value = session_secrets.resolve(context.session.id, secret_id)
         if value is None:
             return ToolResult.error("secret.valueRefUnavailable")
         values[reference] = value
-    return (
-        {name: values[reference] for name, reference in arguments.environment.items()},
-        one_time_ids,
-    )
+    return {name: values[reference] for name, reference in arguments.environment.items()}
 
 
 async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> ToolResult:
@@ -1805,13 +1799,12 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         resolved = await _resolve_shell_environment(arguments, context)
         if isinstance(resolved, ToolResult):
             return resolved
-        environment, one_time_ids = resolved
+        environment = resolved
         return await run_shared_shell(
             context,
             arguments,
             terminal,
             environment=environment,
-            one_time_secret_ids=tuple(one_time_ids.values()),
         )
     requested = arguments.model_dump(
         mode="json", exclude_none=True, exclude_defaults=True
@@ -1839,7 +1832,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
     resolved = await _resolve_shell_environment(arguments, context)
     if isinstance(resolved, ToolResult):
         return resolved
-    environment, one_time_ids = resolved
+    environment = resolved
     process_arguments = {
         "command": executed["command"],
         "currentDirectory": client.current_directory,
@@ -1852,8 +1845,6 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
     )
     if len(request.model_dump_json(by_alias=True).encode()) > MAX_REQUEST_BYTES:
         return ToolResult.error("executionAgent.requestTooLarge")
-    for secret_id in one_time_ids.values():
-        context.one_time_secrets.pop(secret_id, None)
     return await _run_process(
         context,
         "shell.run",
@@ -5587,9 +5578,10 @@ tool_registry = ToolRegistry(
         ToolDefinition(
             "secret_input",
             "Ask once for all missing credentials, including usernames. Values are not returned. The user may "
-            "keep selected fields temporarily for this session; other references work for one shell_run. Call "
-            "alone, then pass the returned environment unchanged to shell_run. Set masked false only for values "
-            "the user may see while typing. Use variable_write only for explicitly requested durable storage.",
+            "keep selected fields temporarily for this session; other references remain reusable throughout the "
+            "current run. Call alone, then pass the returned environment unchanged to shell_run. Reuse the exact "
+            "name/reference pairs instead of asking again. Set masked false only for values the user may see while "
+            "typing. Use variable_write only for explicitly requested durable storage.",
             SecretInputArguments,
             _secret_input,
             required_operation="shell.run",

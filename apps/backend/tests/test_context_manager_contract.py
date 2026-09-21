@@ -1712,6 +1712,7 @@ def test_secret_input_prompt_routes_all_credentials_before_probing() -> None:
     assert "secret_input, not question, once with all currently missing" in prompt
     assert "masked=false for visible identifiers and masked=true for secrets" in prompt
     assert "returned environment unchanged to shell_run" in prompt
+    assert "references remain reusable throughout the current run" in prompt
 
 
 def test_session_environment_prompt_exposes_only_references() -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from mato_loop_backend.agent.permissions import PermissionDecision, shell_command_permission
 from mato_loop_backend.agent.tool_registry import ToolContext, ToolResult
@@ -24,7 +24,6 @@ async def run_shared_shell(
     runtime: TerminalRuntime,
     *,
     environment: dict[str, str] | None = None,
-    one_time_secret_ids: tuple[UUID, ...] = (),
 ) -> ToolResult:
     requested = arguments.model_dump(exclude_none=True)
     environment = environment or {}
@@ -108,8 +107,6 @@ async def run_shared_shell(
             )
             if len(request.model_dump_json(by_alias=True).encode()) > MAX_REQUEST_BYTES:
                 raise ExecutionClientError("executionAgent.requestTooLarge")
-            for secret_id in one_time_secret_ids:
-                context.one_time_secrets.pop(secret_id, None)
             return await runtime.client.request(
                 "terminal.shared.execute",
                 execute_arguments,

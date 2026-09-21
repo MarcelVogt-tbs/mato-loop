@@ -226,7 +226,6 @@ def env(monkeypatch):
         timeout=None,
         *,
         environment=None,
-        one_time_secret_ids=(),
     ):
         call.arguments = {"command": command}
         return asyncio.create_task(shared_shell.run_shared_shell(
@@ -234,7 +233,6 @@ def env(monkeypatch):
             ShellRunArguments(command=command, timeout=timeout),
             terminal,
             environment=environment,
-            one_time_secret_ids=one_time_secret_ids,
         ))
 
     state.start = start
@@ -281,7 +279,6 @@ async def test_shared_shell_passes_temporary_environment_and_redacts_output(env)
     result = await env.start(
         "printf output",
         environment={"TOKEN": "exact secret"},
-        one_time_secret_ids=(secret_id,),
     )
 
     assert not result.is_error
@@ -293,7 +290,7 @@ async def test_shared_shell_passes_temporary_environment_and_redacts_output(env)
         if operation == "terminal.shared.execute"
     )
     assert execute["environment"] == {"TOKEN": "exact secret"}
-    assert secret_id not in env.context.one_time_secrets
+    assert env.context.one_time_secrets[secret_id] == "exact secret"
     assert env.evaluated[-1].capability == "shell.write"
     assert env.evaluated[-1].approval_details["shellAnalysisComplete"] is False
     assert shared_shell.run_events.publish.await_args.args[1]["output"] == {
