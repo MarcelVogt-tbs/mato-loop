@@ -144,6 +144,7 @@ const messages = {
   'personaProfile.notFound': () => 'Die Persona wurde nicht gefunden.',
   'personaProfile.personalDisabled': () => 'Persönliche Personas wurden vom Administrator deaktiviert.',
   'personalVariable.duplicate': () => 'Eine Variable mit diesem Namen ist bereits vorhanden.',
+  'personalVariable.descriptionInvalid': () => 'Die Beschreibung der persönlichen Variable ist ungültig oder zu lang.',
   'personalVariable.limitReached': () => 'Die maximale Anzahl persönlicher Variablen ist erreicht.',
   'personalVariable.notFound': () => 'Die persönliche Variable wurde nicht gefunden.',
   'personalVariable.valueInvalid': () => 'Der Wert der persönlichen Variable ist ungültig oder zu groß.',

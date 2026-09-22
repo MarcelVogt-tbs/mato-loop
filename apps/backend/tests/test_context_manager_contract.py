@@ -1724,11 +1724,17 @@ def test_session_environment_prompt_exposes_only_references() -> None:
     prompt = general_system_prompt(
         _session(),
         offered_tool_names=frozenset({"shell_run"}),
-        session_environment={"API_TOKEN": reference},
+        session_environment={
+            "API_TOKEN": {
+                "valueRef": reference,
+                "description": "Token for deployments",
+            }
+        },
     )
 
-    assert '"API_TOKEN": "' + reference + '"' in prompt
-    assert "Reuse these exact name/reference pairs" in prompt
+    assert f'"valueRef": "{reference}"' in prompt
+    assert '"description": "Token for deployments"' in prompt
+    assert "Use each valueRef with its name" in prompt
     assert "exact-secret" not in prompt
 
 

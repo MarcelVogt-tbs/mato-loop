@@ -1186,6 +1186,7 @@ async def test_secret_references_keep_only_selected_fields_for_session(
                         "name": "SSH_USERNAME",
                         "label": "SSH username",
                         "question": "Enter the username",
+                        "description": "SSH username for backup.example",
                         "masked": False,
                     },
                     {
@@ -1216,6 +1217,10 @@ async def test_secret_references_keep_only_selected_fields_for_session(
     assert environment["SSH_PASSWORD"].startswith("run-secret:")
     assert "exact user" not in secret_result.content
     assert "exact secret" not in secret_result.content
+    assert session_secrets.prompt_entries(context.session.id)["SSH_USERNAME"] == {
+        "valueRef": environment["SSH_USERNAME"],
+        "description": "SSH username for backup.example",
+    }
     assert list(context.one_time_secrets.values()) == ["  exact secret  "]
     shell_call = ToolCall(
         "shell", "shell_run", {"command": "env", "environment": environment}

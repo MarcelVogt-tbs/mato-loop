@@ -35,6 +35,7 @@
               <q-item-label class="text-weight-medium">{{ variable.name }}</q-item-label>
               <q-chip dense outline :icon="variable.secret ? 'lock' : 'visibility'">{{ variable.secret ? 'Secret' : 'Variable' }}</q-chip>
             </div>
+            <q-item-label v-if="variable.description" caption lines="2">{{ variable.description }}</q-item-label>
             <q-item-label caption lines="2">{{ variable.secret ? 'Wert ausgeblendet' : variable.value }}</q-item-label>
           </q-item-section>
           <q-item-section side top>
@@ -59,6 +60,15 @@
         <q-form class="col column no-wrap" @submit="save">
           <q-card-section class="col scroll q-gutter-md">
             <q-input v-model="form.name" outlined autofocus label="Name" maxlength="120" lazy-rules :rules="[requiredRule]" />
+            <q-input
+              v-model="form.description"
+              outlined
+              autogrow
+              type="textarea"
+              label="Beschreibung (optional)"
+              hint="Hilft dem Assistenten, den passenden Wert auszuwählen. Keine Zugangsdaten eintragen."
+              maxlength="500"
+            />
             <q-input
               v-model="form.value"
               outlined
@@ -100,18 +110,18 @@ const dialogOpen = ref(false)
 const selected = ref(null)
 const saving = ref(false)
 const removingId = ref(null)
-const form = reactive({ name: '', value: '', secret: false })
+const form = reactive({ name: '', description: '', value: '', secret: false })
 const requiredRule = (value) => String(value || '').length > 0 || 'Pflichtfeld'
 
 function openCreate() {
   selected.value = null
-  Object.assign(form, { name: '', value: '', secret: false })
+  Object.assign(form, { name: '', description: '', value: '', secret: false })
   dialogOpen.value = true
 }
 
 function openEdit(variable) {
   selected.value = variable
-  Object.assign(form, { name: variable.name, value: variable.secret ? '' : variable.value, secret: variable.secret })
+  Object.assign(form, { name: variable.name, description: variable.description || '', value: variable.secret ? '' : variable.value, secret: variable.secret })
   dialogOpen.value = true
 }
 
@@ -126,7 +136,7 @@ async function load() {
 async function save() {
   saving.value = true
   try {
-    const payload = { name: form.name, value: form.value, secret: form.secret }
+    const payload = { name: form.name, description: form.description.trim() || null, value: form.value, secret: form.secret }
     if (selected.value?.secret && form.secret && !form.value) delete payload.value
     if (selected.value) await variables.updateVariable(selected.value.id, payload)
     else await variables.createVariable(payload)

@@ -15,8 +15,8 @@ describe('personal variable store', () => {
   })
 
   it('loads and applies CRUD results without exposing or inventing secret values', async () => {
-    const secret = { id: 'secret-1', name: 'API_TOKEN', secret: true }
-    const variable = { id: 'variable-1', name: 'CITY', value: 'Berlin', secret: false }
+    const secret = { id: 'secret-1', name: 'API_TOKEN', description: 'Token für Deployments', secret: true }
+    const variable = { id: 'variable-1', name: 'CITY', description: 'Standardstadt', value: 'Berlin', secret: false }
     api.get.mockResolvedValue({ data: [secret] })
     api.post.mockResolvedValue({ data: variable })
     api.put.mockResolvedValue({ data: { ...variable, value: 'Hamburg' } })
@@ -24,13 +24,13 @@ describe('personal variable store', () => {
     const store = usePersonalVariableStore()
 
     await store.fetchVariables()
-    await store.createVariable({ name: 'CITY', value: 'Berlin', secret: false })
-    await store.updateVariable(variable.id, { name: 'CITY', value: 'Hamburg', secret: false })
+    await store.createVariable({ name: 'CITY', description: 'Standardstadt', value: 'Berlin', secret: false })
+    await store.updateVariable(variable.id, { name: 'CITY', description: 'Standardstadt', value: 'Hamburg', secret: false })
     await store.removeVariable(secret.id)
 
     expect(api.get).toHaveBeenCalledWith('/personal-variables')
-    expect(api.post).toHaveBeenCalledWith('/personal-variables', { name: 'CITY', value: 'Berlin', secret: false })
-    expect(api.put).toHaveBeenCalledWith('/personal-variables/variable-1', { name: 'CITY', value: 'Hamburg', secret: false })
+    expect(api.post).toHaveBeenCalledWith('/personal-variables', { name: 'CITY', description: 'Standardstadt', value: 'Berlin', secret: false })
+    expect(api.put).toHaveBeenCalledWith('/personal-variables/variable-1', { name: 'CITY', description: 'Standardstadt', value: 'Hamburg', secret: false })
     expect(api.delete).toHaveBeenCalledWith('/personal-variables/secret-1')
     expect(store.variables).toEqual([{ ...variable, value: 'Hamburg' }])
   })

@@ -149,6 +149,7 @@ async def answer_question(
                         name=proposal.name,
                         value=validated_answers[question.id][0],
                         secret=proposal.secret,
+                        description=proposal.description,
                     )
                 else:
                     assert proposal.variable_id is not None
@@ -159,6 +160,7 @@ async def answer_question(
                         name=proposal.name,
                         value=validated_answers[question.id][0],
                         secret=proposal.secret,
+                        description=proposal.description,
                     )
             except PersonalVariableError as exc:
                 AgentRuntime.release_question_resolution(request_id)

@@ -2516,7 +2516,7 @@ class AgentRuntime:
                     else None
                 ),
                 current_directory=run.current_directory_snapshot,
-                session_environment=session_secrets.references(chat_session.id),
+                session_environment=session_secrets.prompt_entries(chat_session.id),
             )
             schemas = effective_toolset.schemas() if effective_toolset else []
             if delegated:

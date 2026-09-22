@@ -4493,7 +4493,15 @@ async def _secret_input(
         for item in arguments.inputs
         if item.name in answers.remember_for_session
     }
-    session_environment = session_secrets.put(context.session.id, remembered)
+    session_environment = session_secrets.put(
+        context.session.id,
+        remembered,
+        {
+            item.name: item.description
+            for item in arguments.inputs
+            if item.description and item.name in answers.remember_for_session
+        },
+    )
     environment = {}
     for item in arguments.inputs:
         if item.name in session_environment:
@@ -4531,6 +4539,7 @@ async def _variable_write(
                 type="password" if arguments.secret else "value",
                 save_proposal={
                     "name": arguments.name,
+                    "description": arguments.description,
                     "secret": arguments.secret,
                     "action": action,
                     "variable_id": arguments.variable_id,
@@ -4554,6 +4563,7 @@ async def _variable_write(
         {
             "saved": True,
             "name": arguments.name,
+            "description": arguments.description,
             "secret": arguments.secret,
             "valueRef": str(saved.id),
         }
@@ -5502,7 +5512,7 @@ tool_registry = ToolRegistry(
             "variable_write",
             "Ask for and durably save one personal variable or secret only when the user explicitly requests "
             "storage; otherwise use secret_input. Never put the value in tool arguments. Include variable_id "
-            "only when updating an exact existing variable.",
+            "only when updating an exact existing variable. Add description when its purpose is known.",
             VariableWriteArguments,
             _variable_write,
             group="agent",

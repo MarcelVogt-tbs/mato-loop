@@ -258,6 +258,7 @@ async def test_protected_answer_is_saved_but_never_persisted_or_resumed(
                     "type": "password",
                     "save_proposal": {
                         "name": "API_TOKEN",
+                        "description": "Token for deployments",
                         "secret": True,
                         "action": "create",
                         "trust_level": "public",
@@ -301,6 +302,7 @@ async def test_protected_answer_is_saved_but_never_persisted_or_resumed(
         name="API_TOKEN",
         value="  exact secret  ",
         secret=True,
+        description="Token for deployments",
     )
     assert request.answers == {"value": ["saved"]}
     assert "exact secret" not in json.dumps(request.answers)

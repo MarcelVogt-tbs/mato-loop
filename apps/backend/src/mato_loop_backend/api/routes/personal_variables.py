@@ -11,6 +11,7 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.personal_variables import (
+    PERSONAL_VARIABLE_DESCRIPTION_MAX_LENGTH,
     PERSONAL_VARIABLE_NAME_PATTERN,
     PersonalVariableError,
     create_personal_variable,
@@ -28,6 +29,7 @@ class PersonalVariableRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     name: str = Field(min_length=1, max_length=120, pattern=PERSONAL_VARIABLE_NAME_PATTERN.pattern)
+    description: str | None = Field(default=None, max_length=PERSONAL_VARIABLE_DESCRIPTION_MAX_LENGTH)
     value: str | None = None
     secret: bool
 
@@ -42,6 +44,7 @@ class PersonalVariableUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     name: str = Field(min_length=1, max_length=120, pattern=PERSONAL_VARIABLE_NAME_PATTERN.pattern)
+    description: str | None = Field(default=None, max_length=PERSONAL_VARIABLE_DESCRIPTION_MAX_LENGTH)
     value: str | None = None
     secret: bool
 
@@ -49,6 +52,7 @@ class PersonalVariableUpdateRequest(BaseModel):
 def _api_error(exc: PersonalVariableError) -> ApiError:
     status_code = {
         "personalVariable.notFound": 404,
+        "personalVariable.descriptionInvalid": 422,
         "personalVariable.valueInvalid": 422,
         "personalVariable.valueRequired": 422,
     }.get(exc.code, 409)
@@ -79,7 +83,12 @@ async def create_variable(
     try:
         assert payload.value is not None
         variable = await create_personal_variable(
-            db, user.id, name=payload.name, value=payload.value, secret=payload.secret
+            db,
+            user.id,
+            name=payload.name,
+            value=payload.value,
+            secret=payload.secret,
+            description=payload.description,
         )
         await db.commit()
         return personal_variable_payload(variable)
@@ -102,6 +111,7 @@ async def update_variable(
             name=payload.name,
             value=payload.value,
             secret=payload.secret,
+            description=payload.description,
         )
         await db.commit()
         return personal_variable_payload(variable)

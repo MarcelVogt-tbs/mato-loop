@@ -153,6 +153,7 @@ class QuestionArguments(ToolArguments):
 
 class PersonalVariableSaveProposal(ToolArguments):
     name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,119}$")
+    description: str | None = Field(default=None, max_length=500)
     secret: bool
     action: Literal["create", "update"]
     variable_id: UUID | None = None
@@ -453,6 +454,11 @@ class VariableReadArguments(ToolArguments):
 
 class VariableWriteArguments(ToolArguments):
     name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,119}$")
+    description: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Optional purpose; never include the value.",
+    )
     secret: bool
     variable_id: UUID | None = None
 
@@ -461,6 +467,11 @@ class SecretInputField(ToolArguments):
     name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
     label: str = Field(min_length=1, max_length=30)
     question: str = Field(min_length=1, max_length=2_000)
+    description: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Optional purpose for session reuse; never include the value.",
+    )
     masked: bool = True
 
     @field_validator("label", "question")

@@ -12,6 +12,7 @@ MAX_SESSIONS_WITH_SECRETS = 256
 class _SessionSecret:
     id: UUID
     value: str = field(repr=False)
+    description: str | None = None
 
 
 class SessionSecretStore:
@@ -22,13 +23,18 @@ class SessionSecretStore:
             UUID, OrderedDict[str, _SessionSecret]
         ] = OrderedDict()
 
-    def put(self, session_id: UUID, values: dict[str, str]) -> dict[str, str]:
+    def put(
+        self,
+        session_id: UUID,
+        values: dict[str, str],
+        descriptions: dict[str, str] | None = None,
+    ) -> dict[str, str]:
         secrets = self._sessions.setdefault(session_id, OrderedDict())
         self._sessions.move_to_end(session_id)
         references: dict[str, str] = {}
         for name, value in values.items():
             secrets.pop(name, None)
-            secret = _SessionSecret(uuid4(), value)
+            secret = _SessionSecret(uuid4(), value, (descriptions or {}).get(name))
             secrets[name] = secret
             references[name] = f"session-secret:{secret.id}"
         while len(secrets) > MAX_SESSION_SECRET_NAMES:
@@ -42,6 +48,18 @@ class SessionSecretStore:
         if secrets is None:
             return {}
         return {name: f"session-secret:{secret.id}" for name, secret in secrets.items()}
+
+    def prompt_entries(self, session_id: UUID) -> dict[str, dict[str, str]]:
+        secrets = self._sessions.get(session_id)
+        if secrets is None:
+            return {}
+        return {
+            name: {
+                "valueRef": f"session-secret:{secret.id}",
+                **({"description": secret.description} if secret.description else {}),
+            }
+            for name, secret in secrets.items()
+        }
 
     def resolve(self, session_id: UUID, secret_id: UUID) -> str | None:
         secrets = self._sessions.get(session_id)

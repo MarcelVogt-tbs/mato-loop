@@ -89,6 +89,7 @@ _MESSAGES = {
     "auth.setupCompleted": "The initial administrator account already exists.",
     "auth.userMissing": "Authentication failed.",
     "personalVariable.duplicate": "A personal variable with this name already exists.",
+    "personalVariable.descriptionInvalid": "The personal variable description is invalid.",
     "personalVariable.limitReached": "The personal variable limit has been reached.",
     "personalVariable.notFound": "The personal variable was not found.",
     "personalVariable.valueInvalid": "The personal variable value is invalid.",

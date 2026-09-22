@@ -13,6 +13,7 @@ from mato_loop_backend.security import read_credential, store_credential
 PERSONAL_VARIABLE_KIND = "personal_variable"
 PERSONAL_VARIABLE_LIMIT = 100
 PERSONAL_VARIABLE_VALUE_MAX_BYTES = 64 * 1024
+PERSONAL_VARIABLE_DESCRIPTION_MAX_LENGTH = 500
 PERSONAL_VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,119}$")
 
 
@@ -25,6 +26,14 @@ class PersonalVariableError(RuntimeError):
 def validate_personal_variable_value(value: str) -> str:
     if "\0" in value or len(value.encode()) > PERSONAL_VARIABLE_VALUE_MAX_BYTES:
         raise PersonalVariableError("personalVariable.valueInvalid", "value")
+    return value
+
+
+def normalize_personal_variable_description(value: str | None) -> str | None:
+    if value is None or not (value := value.strip()):
+        return None
+    if "\0" in value or len(value) > PERSONAL_VARIABLE_DESCRIPTION_MAX_LENGTH:
+        raise PersonalVariableError("personalVariable.descriptionInvalid", "description")
     return value
 
 
@@ -92,9 +101,11 @@ def personal_variable_value(variable: Credential) -> str:
 
 def personal_variable_payload(variable: Credential) -> dict[str, object]:
     secret = variable.metadata_json.get("secret") is True
+    description = variable.metadata_json.get("description")
     result: dict[str, object] = {
         "id": str(variable.id),
         "name": variable.label,
+        "description": description if isinstance(description, str) else None,
         "secret": secret,
     }
     if not secret:
@@ -109,8 +120,10 @@ async def create_personal_variable(
     name: str,
     value: str,
     secret: bool,
+    description: str | None = None,
 ) -> Credential:
     validate_personal_variable_value(value)
+    description = normalize_personal_variable_description(description)
     await _lock_owner(db, owner_id)
     if await get_personal_variable_by_name(db, owner_id, name) is not None:
         raise PersonalVariableError("personalVariable.duplicate", "name")
@@ -128,7 +141,7 @@ async def create_personal_variable(
         kind=PERSONAL_VARIABLE_KIND,
         label=name,
         payload={"value": value},
-        metadata={"secret": secret},
+        metadata={"secret": secret, **({"description": description} if description else {})},
     )
 
 
@@ -140,9 +153,11 @@ async def update_personal_variable(
     name: str,
     value: str | None,
     secret: bool,
+    description: str | None = None,
 ) -> Credential:
     if value is not None:
         validate_personal_variable_value(value)
+    description = normalize_personal_variable_description(description)
     await _lock_owner(db, owner_id)
     variable = await get_personal_variable(db, owner_id, variable_id, for_update=True)
     if variable is None:
@@ -160,6 +175,6 @@ async def update_personal_variable(
         kind=PERSONAL_VARIABLE_KIND,
         label=name,
         payload={"value": value},
-        metadata={"secret": secret},
+        metadata={"secret": secret, **({"description": description} if description else {})},
         credential=variable,
     )
