@@ -25,6 +25,7 @@ from mato_loop_backend.settings import (
     build_profile,
     core_profiles,
     plan_profile,
+    sysadmin_profile,
 )
 
 
@@ -308,6 +309,22 @@ def test_build_profile_defaults_to_auto_writes_and_preserves_overrides(trust: Tr
         ).policy
         == ToolExecutionPolicy.ASK
     )
+
+
+@pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
+def test_sysadmin_profile_reads_automatically_and_asks_for_changes(trust: TrustLevel) -> None:
+    profile = sysadmin_profile()
+    settings = ToolSettings().select_trust(trust)
+    settings._agent_permissions = (
+        profile.private_permissions
+        if trust == TrustLevel.PRIVATE
+        else profile.public_permissions
+    )
+
+    for capability in ("filesystem.read", "shell.read"):
+        assert resolve_tool_execution_policy(settings, capability).policy == ToolExecutionPolicy.AUTO
+    for capability in ("filesystem.write", "filesystem.delete", "shell.write"):
+        assert resolve_tool_execution_policy(settings, capability).policy == ToolExecutionPolicy.ASK
 
 
 def test_agent_profile_overrides_scoped_defaults_but_not_hard_limits() -> None:

@@ -107,10 +107,12 @@ GENERAL_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000001")
 DEFAULT_PERSONA_ID = UUID("00000000-0000-4000-8000-000000000002")
 PLAN_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000003")
 BUILD_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000004")
+SYSADMIN_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000005")
 CORE_PROFILE_NAMES = {
     GENERAL_PROFILE_ID: "Allgemein",
     PLAN_PROFILE_ID: "Plan",
     BUILD_PROFILE_ID: "Build",
+    SYSADMIN_PROFILE_ID: "Sysadmin",
 }
 CORE_PROFILE_IDS = frozenset(CORE_PROFILE_NAMES)
 WEATHER_SKILL_ID = UUID("00000000-0000-4000-8000-000000000101")
@@ -589,8 +591,44 @@ def build_profile() -> AgentProfile:
     )
 
 
+def sysadmin_profile() -> AgentProfile:
+    policies = {
+        "filesystem.read": ToolExecutionPolicy.AUTO,
+        "filesystem.write": ToolExecutionPolicy.ASK,
+        "filesystem.delete": ToolExecutionPolicy.ASK,
+        "shell.read": ToolExecutionPolicy.AUTO,
+        "shell.write": ToolExecutionPolicy.ASK,
+    }
+    return AgentProfile(
+        id=SYSADMIN_PROFILE_ID,
+        name=CORE_PROFILE_NAMES[SYSADMIN_PROFILE_ID],
+        description=(
+            "Unterstützt bei Einrichtung, Wartung und Fehlerdiagnose von Systemen, Diensten und "
+            "Docker-Containern. Liest automatisch, auch mit öffentlichen Modellen; gelesene Inhalte "
+            "werden an das Modell übermittelt. Änderungen benötigen eine Freigabe."
+        ),
+        instructions=(
+            "Support the user's system administration tasks, including setup, configuration, maintenance, "
+            "diagnostics, services, networking, storage, permissions, packages, and Docker. Inspect the "
+            "actual state, configuration, status, and logs before making changes. Use available read actions "
+            "without asking for confirmation. For changes, use the provided tools and rely on the host "
+            "approval flow instead of asking for duplicate confirmation in chat. Prefer the smallest safe "
+            "change, avoid unrelated changes, and preserve security controls. Explain material downtime or "
+            "data-loss risks before the applicable tool call. Verify approved changes and report the outcome, "
+            "checks, and remaining problems concisely. Never expose secrets."
+        ),
+        answer_display="timeline",
+        max_tool_calls=None,
+        todo_enabled=True,
+        integrations_enabled_by_default=False,
+        private_permissions=AgentProfilePermissions(policies=policies),
+        public_permissions=AgentProfilePermissions(policies=policies),
+        session_write_paths=None,
+    )
+
+
 def core_profiles() -> list[AgentProfile]:
-    return [general_profile(), plan_profile(), build_profile()]
+    return [general_profile(), plan_profile(), build_profile(), sysadmin_profile()]
 
 
 def cap_agent_profile_policy(

@@ -28,6 +28,7 @@ from mato_loop_backend.settings import (
     BUILD_PROFILE_ID,
     GENERAL_PROFILE_ID,
     PLAN_PROFILE_ID,
+    SYSADMIN_PROFILE_ID,
     AgentIdentitySettings,
     AgentProfileOverrides,
     AgentProfilePermissions,
@@ -48,14 +49,15 @@ from mato_loop_backend.settings import (
 
 def test_builtin_agent_profile_defaults() -> None:
     profiles = core_profiles()
-    default, plan, build = profiles
+    default, plan, build, sysadmin = profiles
 
     assert [profile.id for profile in profiles] == [
         GENERAL_PROFILE_ID,
         PLAN_PROFILE_ID,
         BUILD_PROFILE_ID,
+        SYSADMIN_PROFILE_ID,
     ]
-    assert [profile.name for profile in profiles] == ["Allgemein", "Plan", "Build"]
+    assert [profile.name for profile in profiles] == ["Allgemein", "Plan", "Build", "Sysadmin"]
     assert AgentProfilesSettings().profiles == []
     assert default.persona_id is None
     assert default.private_permissions == AgentProfilePermissions()
@@ -77,6 +79,14 @@ def test_builtin_agent_profile_defaults() -> None:
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.AUTO,
     }
+    assert sysadmin.private_permissions == sysadmin.public_permissions
+    assert sysadmin.private_permissions.policies == {
+        "filesystem.read": ToolExecutionPolicy.AUTO,
+        "filesystem.write": ToolExecutionPolicy.ASK,
+        "filesystem.delete": ToolExecutionPolicy.ASK,
+        "shell.read": ToolExecutionPolicy.AUTO,
+        "shell.write": ToolExecutionPolicy.ASK,
+    }
     assert not plan.private_permissions.integration_policies
     assert not build.private_permissions.integration_policies
     for profile in (plan, build):
@@ -89,6 +99,11 @@ def test_builtin_agent_profile_defaults() -> None:
     assert plan.session_write_paths == []
     assert build.delegation_enabled is True
     assert build.session_write_paths is None
+    assert sysadmin.max_tool_calls is None
+    assert sysadmin.todo_enabled is True
+    assert sysadmin.integrations_enabled_by_default is False
+    assert sysadmin.session_write_paths is None
+    assert "host approval flow" in sysadmin.instructions
     assert "plan directly in the conversation" in plan.instructions
     assert "Do not implement" in plan.instructions
     assert "shortest actionable plan" in plan.instructions
@@ -515,12 +530,12 @@ async def test_effective_agent_profiles_merge_enabled_personal_profiles(
     effective = await load_effective_agent_profiles(AsyncMock(), user_id)
 
     assert [profile.name for profile in effective.profiles] == [
-        "Allgemein", "Plan", "Build", "Global", "Personal"
+        "Allgemein", "Plan", "Build", "Sysadmin", "Global", "Personal"
     ]
-    assert effective.profiles[3].owner_id is None
-    assert effective.profiles[4].owner_id == user_id
-    assert effective.profiles[4].delegation_enabled is True
-    assert effective.profiles[4].todo_enabled is False
+    assert effective.profiles[4].owner_id is None
+    assert effective.profiles[5].owner_id == user_id
+    assert effective.profiles[5].delegation_enabled is True
+    assert effective.profiles[5].todo_enabled is False
 
 
 async def test_builtin_access_inherits_per_entry_and_respects_scope(monkeypatch) -> None:

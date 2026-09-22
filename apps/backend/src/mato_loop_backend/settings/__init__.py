@@ -22,6 +22,7 @@ from mato_loop_backend.settings.models import (
     DEFAULT_SKILLS,
     GENERAL_PROFILE_ID,
     PLAN_PROFILE_ID,
+    SYSADMIN_PROFILE_ID,
     WEATHER_SKILL_ID,
     AgentIdentitySettings,
     AgentProfile,
@@ -73,6 +74,7 @@ from mato_loop_backend.settings.models import (
     general_profile,
     plan_profile,
     resolve_agent_profile,
+    sysadmin_profile,
 )
 from mato_loop_backend.settings.store import SettingsStore
 
@@ -107,6 +109,7 @@ __all__ = [
     "MemorySettings",
     "ModelCapability",
     "PLAN_PROFILE_ID",
+    "SYSADMIN_PROFILE_ID",
     "PersonaProfile",
     "ReasoningEffort",
     "SettingsScope",
@@ -150,4 +153,5 @@ __all__ = [
     "resolve_agent_profile",
     "resolve_agent_persona",
     "shipped_profiles",
+    "sysadmin_profile",
 ]
