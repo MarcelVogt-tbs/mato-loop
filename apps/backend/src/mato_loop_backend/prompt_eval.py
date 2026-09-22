@@ -39,6 +39,7 @@ from mato_loop_backend.agent.title_generation import (
     initial_title_output_budget,
     repair_title_output_budget,
 )
+from mato_loop_backend.agent.tool_registry import DynamicToolArgumentsError
 from mato_loop_backend.agent.tools import (
     SESSION_TOOL_RESULT_CHUNK_CHARACTERS,
     EffectiveToolSet,
@@ -6595,9 +6596,9 @@ def _validate_tool_calls(
             ):
                 raw_arguments = {**bound_tool.default_arguments, **raw_arguments}
             definition.validate_arguments(
-                raw_arguments
+                raw_arguments, require_reason=True
             )
-        except ValidationError:
+        except (ValidationError, DynamicToolArgumentsError):
             failures.append(f"{call.name} returned invalid arguments")
             continue
         path_fields = [
@@ -6626,7 +6627,7 @@ def _validated_arguments(call: ToolCall) -> dict[str, Any]:
         )
         assert isinstance(arguments, dict)
         return arguments
-    except ValidationError:
+    except (ValidationError, DynamicToolArgumentsError):
         return call.arguments
 
 

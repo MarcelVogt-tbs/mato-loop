@@ -579,7 +579,6 @@ def _model_for_id(ai_settings: AiSettings, model_id: UUID | None) -> ModelConfig
 
 def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     safe = dict(arguments)
-    safe.pop(PERMISSION_REASON_ARGUMENT, None)
     for key in safe:
         if key.lower().endswith(("token", "password", "secret", "credential", "api_key")):
             safe[key] = "[Redacted]"
@@ -728,9 +727,10 @@ def _argument_edit_permission_binding(request: PermissionRequest) -> str:
     )
 
 
-def _tool_call_signature(call: ToolCall) -> str:
+def _tool_call_signature(call: ToolCall, *, include_reason: bool = False) -> str:
     normalized = dict(call.arguments)
-    normalized.pop(PERMISSION_REASON_ARGUMENT, None)
+    if not include_reason:
+        normalized.pop(PERMISSION_REASON_ARGUMENT, None)
     if call.name == "fetch_transcript" and isinstance(normalized.get("url"), str):
         try:
             normalized["url"] = canonicalize_youtube_video_url(normalized["url"])
@@ -3230,6 +3230,7 @@ class AgentRuntime:
             memory_write_attempted = False
             resolved_memory_outcome: str | None = None
             repeated_tool_call_limit_reached = False
+            repeated_tool_call_seen = False
             user_denied_batch = False
             invalid_question_batch = any(
                 call.name in {"question", "secret_input"}
@@ -3273,8 +3274,10 @@ class AgentRuntime:
                 current_memory_state = memory_state
                 current_memory_trust = model_trust_level
                 call_signature = _tool_call_signature(call)
+                validation_signature = "arguments:" + _tool_call_signature(call, include_reason=True)
                 if call.arguments.get("root") in {"workspace", "computer"} or call.name in {"shell_run", "apply_patch"}:
                     call_signature += f":directory={run.current_directory_snapshot}"
+                    validation_signature += f":directory={run.current_directory_snapshot}"
                 is_research_call = (
                     chat_session.web_search_policy != WebSearchPolicy.DISABLED
                     and call.name in _RESEARCH_TOOL_NAMES
@@ -3329,9 +3332,8 @@ class AgentRuntime:
                     )
                     metadata = {"errorCode": "tool.skippedAfterUserDenial"}
                 elif repeated_successful_research_call:
-                    if repeated_tool_call_repair_available:
-                        repeated_tool_call_repair_available = False
-                    else:
+                    repeated_tool_call_seen = True
+                    if not repeated_tool_call_repair_available:
                         repeated_tool_call_limit_reached = True
                     previous_metadata = successful_research_calls[call_signature]
                     tool_result_content = json.dumps(
@@ -3349,15 +3351,17 @@ class AgentRuntime:
                         "alreadyCompleted": True,
                         "sources": previous_metadata.get("sources", []),
                     }
-                elif call_signature in failed_tool_call_signatures and not _retryable_transient_read(
+                elif (
+                    call_signature in failed_tool_call_signatures
+                    or validation_signature in failed_tool_call_signatures
+                ) and not _retryable_transient_read(
                     call,
                     call_signature,
                     failed_tool_call_signatures,
                     retried_transient_reads,
                 ):
-                    if repeated_tool_call_repair_available:
-                        repeated_tool_call_repair_available = False
-                    else:
+                    repeated_tool_call_seen = True
+                    if not repeated_tool_call_repair_available:
                         repeated_tool_call_limit_reached = True
                     tool_result_content = json.dumps(
                         error_payload("agent.repeatedToolCall"), ensure_ascii=False
@@ -4622,7 +4626,7 @@ class AgentRuntime:
                         > MEMORY_WRITE_OUTCOME_PRIORITY[resolved_memory_outcome]
                     ):
                         resolved_memory_outcome = outcome
-                if rejected_batch_code:
+                if rejected_batch_code or error_code == "agent.repeatedToolCall":
                     pass
                 elif error_code in {
                     "question.exclusiveCallRequired",
@@ -4631,7 +4635,9 @@ class AgentRuntime:
                     failed_tool_call_signatures.pop(call_signature, None)
                     retried_transient_reads.discard(call_signature)
                 elif isinstance(error_code, str):
-                    failed_tool_call_signatures[call_signature] = error_code
+                    # Validation repairs may change metadata; execution retries must change the action.
+                    failure_signature = validation_signature if error_code == "tool.invalidArguments" else call_signature
+                    failed_tool_call_signatures[failure_signature] = error_code
                 else:
                     if bound_tool is not None and any(action.mutates for action in bound_tool.definition.actions):
                         # A successful mutation changes preconditions, not the recorded outcome of earlier calls.
@@ -4639,6 +4645,7 @@ class AgentRuntime:
                         retried_transient_reads.clear()
                     else:
                         failed_tool_call_signatures.pop(call_signature, None)
+                        failed_tool_call_signatures.pop(validation_signature, None)
                         retried_transient_reads.discard(call_signature)
                     if call.name in _RESEARCH_TOOL_NAMES:
                         research_used = True
@@ -4693,6 +4700,8 @@ class AgentRuntime:
                     required_skill_load_called = True
                     if not isinstance(metadata.get("errorCode"), str):
                         required_skill_load_succeeded = True
+            if repeated_tool_call_seen:
+                repeated_tool_call_repair_available = False
             if tool_budget_exhausted:
                 raise AgentRunError("agent.toolCallLimitReached")
             if tool_batch_exceeds_budget:

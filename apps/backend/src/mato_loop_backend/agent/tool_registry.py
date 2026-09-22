@@ -117,7 +117,9 @@ MAX_DYNAMIC_JSON_DEPTH = 64
 
 
 class DynamicToolArgumentsError(ValueError):
-    pass
+    def __init__(self, message: str, *, field: str | None = None) -> None:
+        super().__init__(message)
+        self.field = field
 
 
 class ToolArgumentsEdited(Exception):
@@ -365,10 +367,12 @@ class ToolDefinition:
         if self.actions:
             parameters.setdefault("properties", {})[PERMISSION_REASON_ARGUMENT] = {
                 "type": "string",
-                **(
-                    {"description": self.permission_reason_instruction}
-                    if self.permission_reason_instruction
-                    else {}
+                "minLength": 1,
+                "maxLength": 500,
+                "description": (
+                    "Required for every call, even without approval. Briefly explain why this action "
+                    "is needed in the user's language."
+                    + (" " + self.permission_reason_instruction if self.permission_reason_instruction else "")
                 ),
             }
             parameters.setdefault("required", []).append(PERMISSION_REASON_ARGUMENT)
@@ -376,14 +380,17 @@ class ToolDefinition:
         _remove_schema_titles(schema)
         return {"name": self.name, "description": self.description, "parameters": schema}
 
-    def validate_arguments(self, value: object) -> Any:
+    def validate_arguments(self, value: object, *, require_reason: bool = False) -> Any:
         if self.actions and isinstance(value, dict):
             value = dict(value)
+            reason_supplied = PERMISSION_REASON_ARGUMENT in value
             reason = value.pop(PERMISSION_REASON_ARGUMENT, None)
-            if reason is not None and (
+            if (require_reason or reason_supplied) and (
                 not isinstance(reason, str) or not reason.strip() or len(reason) > 500
             ):
-                raise DynamicToolArgumentsError("permission reason is invalid")
+                raise DynamicToolArgumentsError(
+                    "permission reason is invalid", field=PERMISSION_REASON_ARGUMENT
+                )
         if self.arguments_schema is not None:
             _json_depth(value)
             try:
@@ -1324,14 +1331,18 @@ class ToolRegistry:
         except InvalidToolReference as exc:
             return ToolResult.error("integration.staleReference", field=exc.field)
         try:
-            arguments = definition.validate_arguments(raw_arguments)
+            arguments = definition.validate_arguments(
+                raw_arguments, require_reason=context.assistant_message_id is not None
+            )
         except JsonSchemaValidationError as exc:
             field_name = next(
                 (str(part) for part in reversed(exc.absolute_path) if isinstance(part, str)),
                 None,
             )
             return ToolResult.error("tool.invalidArguments", field=field_name)
-        except (DynamicToolArgumentsError, SchemaError, Unresolvable):
+        except DynamicToolArgumentsError as exc:
+            return ToolResult.error("tool.invalidArguments", field=exc.field)
+        except (SchemaError, Unresolvable):
             return ToolResult.error("tool.invalidArguments")
         except ValidationError as exc:
             errors = exc.errors(include_url=False, include_input=False, include_context=False)

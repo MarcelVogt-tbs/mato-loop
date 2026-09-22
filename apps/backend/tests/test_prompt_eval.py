@@ -199,7 +199,7 @@ async def test_transcript_recovery_checks_reference_offset_and_final_roles(monke
     for wrong_key in (None, "message_id", "offset"):
         calls = [ToolCall(
             f"read-{index}", "session_tool_result_read",
-            dict(step[0]["tool_calls"][0]["arguments"]),
+            {**step[0]["tool_calls"][0]["arguments"], "_reason": "Den nächsten Transkriptabschnitt lesen."},
         ) for index, step in enumerate(steps)]
         if wrong_key:
             calls[1].arguments[wrong_key] = (
@@ -365,13 +365,13 @@ def test_agent_web_routing_cases_offer_real_production_schemas() -> None:
 
 def test_webfetch_json_cases_check_routing_and_untrusted_continuation() -> None:
     selection = _case("known_json_url_with_shell_uses_webfetch")
-    fetch = ToolCall("fetch-json", "webfetch", {"url": "https://example.com/data.json"})
+    fetch = ToolCall("fetch-json", "webfetch", {"url": "https://example.com/data.json", "_reason": "Die angegebenen Daten abrufen."})
     assert evaluate(selection, ProviderResult(tool_calls=[fetch])) == []
     assert evaluate(selection, ProviderResult(tool_calls=[
-        ToolCall("shell-json", "shell_run", {"command": "curl https://example.com/data.json"}),
+        ToolCall("shell-json", "shell_run", {"command": "curl https://example.com/data.json", "_reason": "Daten abrufen."}),
     ]))
     assert evaluate(selection, ProviderResult(tool_calls=[
-        replace(fetch, arguments={"url": "https://example.com/other.json"}),
+        replace(fetch, arguments={**fetch.arguments, "url": "https://example.com/other.json"}),
     ]))
 
     continuation = _case("webfetch_json_continuation_ignores_instructions")
@@ -741,7 +741,7 @@ def test_grouped_result_normalizes_to_existing_tool_contract() -> None:
             ToolCall(
                 "grouped",
                 "automation_action",
-                {"action": "get", "automation_id": str(prompt_eval.AUTOMATION_ID)},
+                {"action": "get", "automation_id": str(prompt_eval.AUTOMATION_ID), "_reason": "Die Automation prüfen."},
             )
         ]
     )
@@ -753,7 +753,7 @@ def test_grouped_result_normalizes_to_existing_tool_contract() -> None:
         ToolCall(
             "grouped",
             "get_automation",
-            {"automation_id": str(prompt_eval.AUTOMATION_ID)},
+            {"automation_id": str(prompt_eval.AUTOMATION_ID), "_reason": "Die Automation prüfen."},
         )
     ]
     assert evaluate(case, normalized, "grouped") == []
@@ -840,6 +840,7 @@ def test_skill_build_case_checks_compact_brief_not_generated_draft() -> None:
                     "build_skill",
                     {
                         "brief": "Check API requests with the Tool and validate responses.",
+                        "_reason": "Den angeforderten Skill erstellen.",
                         "name_hint": "API-Recherche",
                     },
                 )
@@ -989,7 +990,8 @@ def test_skill_build_cases_clarify_once_then_use_the_answers() -> None:
                             "Review a Git diff with file paths for correctness, security issues, "
                             "and missing tests while ignoring style. Return findings ordered by "
                             "severity with file path and line."
-                        )
+                        ),
+                        "_reason": "Den besprochenen Skill erstellen.",
                     },
                 )
             ]
@@ -1008,6 +1010,7 @@ def test_evaluator_applies_tool_argument_defaults() -> None:
                     "root": "files",
                     "path": f"attachments/{prompt_eval.ATTACHMENT_ID}/video.mp4",
                     "focus": "Analyze the video",
+                    "_reason": "Das Video untersuchen.",
                 },
             )
         ]
@@ -1020,6 +1023,7 @@ def test_one_time_automation_evaluator_accepts_redundant_timezone() -> None:
     case = _case("explicit_one_time_automation_create_uses_run_at")
     arguments = {
         "name": "Erinnerung",
+        "_reason": "Die gewünschte Erinnerung einrichten.",
         "task": "Erinnere mich an Niklas",
         "enabled": True,
         "deliver_to_current_session": True,
@@ -1056,6 +1060,7 @@ def test_evaluator_rejects_partial_bound_calendar_arguments() -> None:
     case = _case("calendar_alternate_query_copies_binding")
     arguments = {
         "calendar_key": prompt_eval.ALTERNATE_CALENDAR_KEY,
+        "_reason": "Die Termine prüfen.",
         "start": "2026-07-28T00:00:00+02:00",
         "end": "2026-07-29T00:00:00+02:00",
     }
@@ -1151,6 +1156,7 @@ def test_question_evaluator_checks_selection_payload_and_continuation() -> None:
                 "calendar_create_event",
                 {
                     "summary": "Zahnarzt",
+                    "_reason": "Den gewünschten Termin erstellen.",
                     "timing": {
                         "type": "timed",
                         "start": "2026-07-28T10:00:00+02:00",
@@ -1170,6 +1176,7 @@ def test_question_evaluator_checks_selection_payload_and_continuation() -> None:
                 "calendar_create_event",
                 {
                     "summary": "Zahnarzt",
+                    "_reason": "Den gewünschten Termin erstellen.",
                     "timing": {
                         "start": "2026-07-28T10:00:00+02:00",
                         "end": "2026-07-28T11:00:00+02:00",
@@ -1571,7 +1578,7 @@ async def test_memory_tool_driven_layout_runs_canonical_retrieval_round(
                     ToolCall(
                         "eval-model-memory-1",
                         "memory_retrieve",
-                        {"purpose": "context", "mode": "browse"},
+                        {"purpose": "context", "mode": "browse", "_reason": "Die gespeicherten Informationen prüfen."},
                     )
                 ],
                 usage={"input_tokens": 100, "cached_input_tokens": 60},
@@ -1695,13 +1702,13 @@ def test_layout_keeps_privacy_instruction_in_first_system_message() -> None:
 def test_evaluate_checks_expected_tool_arguments_and_paths() -> None:
     case = _case("workspace_read_uses_exact_root")
     valid = ProviderResult(
-        tool_calls=[ToolCall("1", "read", {"root": "computer", "path": "README.md"})]
+        tool_calls=[ToolCall("1", "read", {"root": "computer", "path": "README.md", "_reason": "Die Dokumentation lesen."})]
     )
     invalid = ProviderResult(
-        tool_calls=[ToolCall("1", "read", {"root": "files", "path": "README.md"})]
+        tool_calls=[ToolCall("1", "read", {"root": "files", "path": "README.md", "_reason": "Die Dokumentation lesen."})]
     )
     absolute = ProviderResult(
-        tool_calls=[ToolCall("1", "read", {"root": "computer", "path": "/README.md"})]
+        tool_calls=[ToolCall("1", "read", {"root": "computer", "path": "/README.md", "_reason": "Die Dokumentation lesen."})]
     )
 
     assert evaluate(case, valid) == []
@@ -1712,7 +1719,7 @@ def test_evaluate_checks_expected_tool_arguments_and_paths() -> None:
 def test_evaluate_checks_query_shape_multiple_calls_and_link_labels() -> None:
     current = _case("current_information_uses_search")
     valid = ProviderResult(
-        tool_calls=[ToolCall("1", "web_search", {"query": "Python stabile Version"})]
+        tool_calls=[ToolCall("1", "web_search", {"query": "Python stabile Version", "_reason": "Die aktuelle Version prüfen."})]
     )
     invalid = ProviderResult(
         tool_calls=[
@@ -1723,7 +1730,8 @@ def test_evaluate_checks_query_shape_multiple_calls_and_link_labels() -> None:
                     "query": (
                         "Python 2026 aktuelle neueste stabile Version release download "
                         "news documentation overview"
-                    )
+                    ),
+                    "_reason": "Die aktuelle Version prüfen.",
                 },
             )
         ]
@@ -1740,7 +1748,7 @@ def test_evaluate_checks_query_shape_multiple_calls_and_link_labels() -> None:
             ToolCall(
                 "1",
                 "memory_write",
-                {"content": "Ich heiße Lara.", "category": "identity"},
+                {"content": "Ich heiße Lara.", "category": "identity", "_reason": "Die gewünschte Information speichern."},
             )
         ]
     )
@@ -1757,6 +1765,7 @@ def test_evaluate_checks_query_shape_multiple_calls_and_link_labels() -> None:
                     "content": "Der Nutzer isst grundsätzlich kein Hähnchen.",
                     "category": "preference",
                     "pin": True,
+                    "_reason": "Die gewünschte Präferenz dauerhaft berücksichtigen.",
                 },
             )
         ]
@@ -1780,24 +1789,24 @@ def test_session_search_accepts_any_schema_valid_query_containing_aurora() -> No
 
     assert evaluate(
         case,
-        ProviderResult(tool_calls=[ToolCall("1", "session_search", {"query": "Aurora"})]),
+        ProviderResult(tool_calls=[ToolCall("1", "session_search", {"query": "Aurora", "_reason": "Den früheren Chat finden."})]),
     ) == []
     assert evaluate(
         case,
         ProviderResult(
-            tool_calls=[ToolCall("1", "session_search", {"query": "frühere Aurora Chats"})]
+            tool_calls=[ToolCall("1", "session_search", {"query": "frühere Aurora Chats", "_reason": "Den früheren Chat finden."})]
         ),
     ) == []
     assert "session_search returned invalid arguments" in evaluate(
         case,
-        ProviderResult(tool_calls=[ToolCall("1", "session_search", {"query": 42})]),
+        ProviderResult(tool_calls=[ToolCall("1", "session_search", {"query": 42, "_reason": "Den früheren Chat finden."})]),
     )
     assert any(
         "does not contain 'Aurora'" in failure
         for failure in evaluate(
             case,
             ProviderResult(
-                tool_calls=[ToolCall("1", "session_search", {"query": "Projekt Borealis"})]
+                tool_calls=[ToolCall("1", "session_search", {"query": "Projekt Borealis", "_reason": "Den früheren Chat finden."})]
             ),
         )
     )
@@ -1809,15 +1818,15 @@ def test_open_comparison_accepts_wifi_terms_but_requires_one_search() -> None:
     for term in ("WLAN", "Wi-Fi", "WiFi"):
         result = ProviderResult(
             tool_calls=[
-                ToolCall("1", "web_search", {"query": f"{term} 7 Router Marktübersicht"})
+                ToolCall("1", "web_search", {"query": f"{term} 7 Router Marktübersicht", "_reason": "Aktuelle Geräte vergleichen."})
             ]
         )
         assert evaluate(case, result) == []
 
     parallel = ProviderResult(
         tool_calls=[
-            ToolCall("1", "web_search", {"query": "Wi-Fi 7 Router Marktübersicht"}),
-            ToolCall("2", "web_search", {"query": "WLAN 7 Router Vergleich"}),
+            ToolCall("1", "web_search", {"query": "Wi-Fi 7 Router Marktübersicht", "_reason": "Aktuelle Geräte vergleichen."}),
+            ToolCall("2", "web_search", {"query": "WLAN 7 Router Vergleich", "_reason": "Aktuelle Geräte vergleichen."}),
         ]
     )
     assert any(
@@ -1827,14 +1836,14 @@ def test_open_comparison_accepts_wifi_terms_but_requires_one_search() -> None:
     assert evaluate(
         case,
         ProviderResult(
-            tool_calls=[ToolCall("1", "web_search", {"query": "Router Marktübersicht"})]
+            tool_calls=[ToolCall("1", "web_search", {"query": "Router Marktübersicht", "_reason": "Aktuelle Geräte vergleichen."})]
         ),
     )
 
 
 def test_evaluate_rejects_invalid_uuid_tool_arguments() -> None:
     result = ProviderResult(
-        tool_calls=[ToolCall("1", "session_read", {"session_id": "not-a-uuid"})]
+        tool_calls=[ToolCall("1", "session_read", {"session_id": "not-a-uuid", "_reason": "Den Chat lesen."})]
     )
 
     assert "session_read returned invalid arguments" in evaluate(
@@ -1851,7 +1860,7 @@ def test_transcription_accepts_schema_valid_german_language_representations_only
                 ToolCall(
                     "1",
                     "transcribe_audio",
-                    {"attachment_id": attachment_id, "language": language},
+                    {"attachment_id": attachment_id, "language": language, "_reason": "Die Aufnahme transkribieren."},
                 )
             ]
         )
@@ -1862,7 +1871,7 @@ def test_transcription_accepts_schema_valid_german_language_representations_only
             ToolCall(
                 "1",
                 "transcribe_audio",
-                {"attachment_id": attachment_id, "language": "fr"},
+                {"attachment_id": attachment_id, "language": "fr", "_reason": "Die Aufnahme transkribieren."},
             )
         ]
     )
@@ -1874,6 +1883,7 @@ def test_transcription_accepts_schema_valid_german_language_representations_only
                 {
                     "attachment_id": "80000000-0000-4000-8000-000000000002",
                     "language": "de",
+                    "_reason": "Die Aufnahme transkribieren.",
                 },
             )
         ]
@@ -2121,7 +2131,7 @@ def test_missing_tool_result_requires_structured_verification() -> None:
                 ToolCall(
                     "verify-file",
                     "read",
-                    {"root": "files", "path": "note.txt"},
+                    {"root": "files", "path": "note.txt", "_reason": "Das unbekannte Schreibergebnis prüfen."},
                 )
             ]
         ),
@@ -2235,18 +2245,18 @@ def test_research_budget_question_and_search_reformulation_are_material() -> Non
     assert "expected no tools, got ['web_search']" in evaluate(
         budget_case,
         ProviderResult(
-            tool_calls=[ToolCall("next", "web_search", {"query": "Example stable version"})]
+            tool_calls=[ToolCall("next", "web_search", {"query": "Example stable version", "_reason": "Die Version prüfen."})]
         ),
     )
 
     case = _case("failed_and_irrelevant_searches_are_reformulated")
     changed = ProviderResult(
         tool_calls=[
-            ToolCall("new", "web_search", {"query": "Project Aurora official changelog"})
+            ToolCall("new", "web_search", {"query": "Project Aurora official changelog", "_reason": "Das offizielle Änderungsprotokoll finden."})
         ]
     )
     release_only = ProviderResult(
-        tool_calls=[ToolCall("new", "web_search", {"query": "Project Aurora release"})]
+        tool_calls=[ToolCall("new", "web_search", {"query": "Project Aurora release", "_reason": "Die Veröffentlichung finden."})]
     )
     assert evaluate(case, changed) == []
     assert any("not materially reformulated" in failure for failure in evaluate(case, release_only))

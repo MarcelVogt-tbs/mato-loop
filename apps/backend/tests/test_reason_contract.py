@@ -1,0 +1,106 @@
+import json
+from dataclasses import replace
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import pytest
+from test_required_web_search_runtime import _runtime_setup, _tool_messages
+
+from mato_loop_backend.agent.context import message_dict
+from mato_loop_backend.agent.runtime import AgentRunError, AgentRuntime, _safe_tool_arguments
+from mato_loop_backend.agent.tool_registry import ToolRegistry, ToolResult
+from mato_loop_backend.agent.tools import tool_registry
+from mato_loop_backend.models import Message, WebSearchPolicy
+from mato_loop_backend.prompt_eval import PromptCase, _validate_tool_calls
+from mato_loop_backend.providers.base import ProviderResult, ToolCall
+
+
+def read_call(identifier, path="note.txt", **extra):
+    return ToolCall(identifier, "read", {"root": "files", "path": path, **extra})
+
+
+@pytest.mark.parametrize("extra", [{}, {"_reason": None}, {"_reason": ""}, {"_reason": " "}, {"_reason": "x" * 501}])
+async def test_reason_repair_through_runtime_and_real_registry(monkeypatch, extra):
+    initial = read_call("initial", **extra)
+    repaired = read_call("repaired", _reason="Die Datei wird für die Antwort benötigt.")
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(tool_calls=[initial]), ProviderResult(tool_calls=[repaired]), ProviderResult(content="Gelesen.")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    handler = AsyncMock(return_value=ToolResult.json({"content": "note"}))
+
+    async def flush():
+        for added in db.add.call_args_list:
+            if isinstance(added.args[0], Message) and added.args[0].id is None:
+                added.args[0].id = uuid4()
+
+    db.flush.side_effect = flush
+
+    async def execute(call, context, tool):
+        # Keep the real registry validation; replace only the filesystem handler.
+        tool = replace(tool, definition=replace(tool.definition, handler=handler))
+        return await ToolRegistry._execute_definition(tool_registry, call, context, tool)
+
+    monkeypatch.setattr(tool_registry, "_execute_definition", execute)
+    await AgentRuntime._execute_loop(db, run)
+
+    first, second = _tool_messages(db)
+    assert json.loads(first.content)["error"] == {
+        "code": "tool.invalidArguments",
+        "message": "The tool arguments are invalid. Inspect error.field and retry with arguments that match the tool schema.",
+        "field": "_reason",
+    }
+    assert json.loads(second.content) == {"content": "note"}
+    assert len(requests) == 3
+    handler.assert_awaited_once()
+
+
+@pytest.mark.parametrize("repair", [True, False])
+async def test_repeated_batch_gets_one_model_round_to_repair(monkeypatch, repair):
+    calls = [read_call(str(i), path=f"{i}.txt") for i in range(2)]
+    final_calls = [read_call(f"fixed-{i}", path=f"{i}.txt", _reason="Die Datei wird benötigt.") for i in range(2)] if repair else calls
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(tool_calls=calls), ProviderResult(tool_calls=calls), ProviderResult(tool_calls=final_calls), ProviderResult(content="Fertig.")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+
+    async def execute(call, _context, _tool):
+        return ToolResult.json({"content": "note"}) if "_reason" in call.arguments else ToolResult.error("tool.invalidArguments", field="_reason")
+
+    tool_registry._execute_definition.side_effect = execute
+    if repair:
+        await AgentRuntime._execute_loop(db, run)
+        assert len(requests) == 4
+        assert tool_registry._execute_definition.await_count == 4
+    else:
+        with pytest.raises(AgentRunError, match="agent.repeatedToolCall"):
+            await AgentRuntime._execute_loop(db, run)
+        assert len(requests) == 3
+        assert tool_registry._execute_definition.await_count == 2
+
+
+async def test_changing_reason_does_not_retry_execution_failure(monkeypatch):
+    calls = [read_call(str(i), _reason=f"Begründung {i}") for i in range(3)]
+    db, run, _, _, _ = await _runtime_setup(
+        monkeypatch, [ProviderResult(tool_calls=[call]) for call in calls],
+        search_policy=WebSearchPolicy.AVAILABLE, tool_result=ToolResult.error("file.notFound"),
+    )
+    with pytest.raises(AgentRunError, match="agent.repeatedToolCall"):
+        await AgentRuntime._execute_loop(db, run)
+    tool_registry._execute_definition.assert_awaited_once()
+
+
+def test_reason_survives_persisted_history_projection():
+    arguments = {"root": "files", "path": "note.txt", "_reason": "Den Inhalt für die Antwort prüfen."}
+    message = Message(role="assistant", content="", tool_calls=[{
+        "id": "read", "name": "read", "arguments": _safe_tool_arguments("read", arguments),
+    }])
+    assert message_dict(message)["tool_calls"][0]["arguments"] == arguments
+
+
+@pytest.mark.parametrize("extra,valid", [({}, False), ({"_reason": None}, False), ({"_reason": " "}, False), ({"_reason": "Prüfen."}, True)])
+def test_prompt_evaluator_enforces_reason(extra, valid):
+    case = PromptCase(id="reason-contract", kind="general", user="Lies note.txt.", tools=("read",))
+    assert (not _validate_tool_calls(case, [read_call("read", **extra)])) is valid
