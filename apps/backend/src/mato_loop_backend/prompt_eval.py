@@ -5617,8 +5617,9 @@ def _rewrite_system_prompt_v2(prompt: str) -> str:
             )
         elif paragraph.startswith("For a relevant host-generated toolResultReference"):
             paragraph = (
-                "Read relevant toolResultReference data with exact session_tool_result_read arguments and "
-                "nextOffset as needed; never rerun the original tool."
+                "Read relevant toolResultReference data with session_tool_result_read. Copy the reference "
+                "argument values unchanged and add the required _reason in the user's language. "
+                "Use nextOffset for further chunks; never rerun the original tool."
             )
         elif paragraph.startswith("Attachment markers may name host-derived"):
             paragraph = "Read attachment-derived text or PCM audio from its session/derived path."

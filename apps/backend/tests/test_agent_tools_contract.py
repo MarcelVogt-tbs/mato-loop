@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.agent.tools as tools_module
 import mato_loop_backend.integrations.registry as integration_registry
-from mato_loop_backend.agent.context import _projection_messages
+from mato_loop_backend.agent.context import _projection_messages, _tool_result_reference
 from mato_loop_backend.agent.permissions import (
     PermissionDecision,
     PermissionPolicy,
@@ -3301,6 +3301,46 @@ async def test_session_tool_result_read_returns_bounded_continuation_chunks(tmp_
         "contentIsUntrusted": True,
     }
     context.ask_handler.assert_not_awaited()
+
+
+@pytest.mark.parametrize("trust_level", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
+async def test_session_tool_result_read_missing_reason_survives_projection_and_retry(
+    tmp_path, trust_level,
+) -> None:
+    message = Message(
+        id=uuid4(), session_id=uuid4(), role="tool", content="Persisted documentation",
+        trust_level=trust_level.value,
+    )
+    reference = _tool_result_reference(message.id, message.content)
+    call = ToolCall("read-result", reference["tool"], reference["arguments"])
+    context = _context(tmp_path, call)
+    context.assistant_message_id = uuid4()
+    message.session_id = context.session.id
+    _mock_tool_result_history(context, message, "webfetch")
+    reader = Message(
+        id=context.assistant_message_id, session_id=context.session.id,
+        role="assistant", content="", trust_level=trust_level.value,
+        tool_calls=[{"id": call.id, "name": call.name, "arguments": call.arguments}],
+    )
+
+    result = await tool_registry.execute(call, context)
+    context.db.scalar.assert_not_awaited()
+    page = Message(
+        id=uuid4(), session_id=context.session.id, role="tool",
+        tool_call_id=call.id, content=result.content, trust_level=trust_level.value,
+    )
+    projected = _projection_messages("System", None, [reader, page], trust_level)
+    payload = json.loads(next(item["content"] for item in projected if item["role"] == "tool"))
+    assert payload["error"]["code"] == "tool.invalidArguments"
+    assert payload["error"]["field"] == "_reason"
+
+    call.arguments["_reason"] = "Die bereits gelesene Dokumentation wird für die Fortsetzung benötigt."
+    result = await tool_registry.execute(call, context)
+    page.content = result.content
+    projected = _projection_messages("System", None, [reader, page], trust_level)
+    payload = json.loads(next(item["content"] for item in projected if item["role"] == "tool"))
+    assert payload["messageId"] == str(message.id)
+    assert payload["content"] == message.content
 
 
 async def test_session_tool_result_read_exposes_attachment_references(tmp_path) -> None:

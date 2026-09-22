@@ -1568,7 +1568,9 @@ def test_session_tool_result_prompt_only_appears_when_the_tool_is_offered() -> N
 
     assert "relevant toolResultReference" in offered
     assert "never rerun the original tool" in offered
-    assert "nextOffset as needed" in offered
+    assert "Copy the reference argument values unchanged" in offered
+    assert "add the required _reason in the user's language" in offered
+    assert "Use nextOffset for further chunks" in offered
     assert "toolResultReference" not in unavailable
 
 

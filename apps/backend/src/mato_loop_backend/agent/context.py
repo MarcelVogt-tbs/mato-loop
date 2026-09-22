@@ -909,8 +909,9 @@ def general_system_prompt(
         )
     if "session_tool_result_read" in offered_tool_names:
         parts.append(
-            "Read relevant toolResultReference data with exact session_tool_result_read arguments and "
-            "nextOffset as needed; never rerun the original tool."
+            "Read relevant toolResultReference data with session_tool_result_read. Copy the reference "
+            "argument values unchanged and add the required _reason in the user's language. "
+            "Use nextOffset for further chunks; never rerun the original tool."
         )
     if file_tools_available:
         parts.append(
@@ -1883,6 +1884,8 @@ def _target_tool_result(
             payload = json.loads(content)
         except (TypeError, json.JSONDecodeError):
             return json.dumps({"content": "", "redactedNestedToolResult": True})
+        if isinstance(payload, dict) and set(payload) == {"error"} and isinstance(payload["error"], dict):
+            return content
         nested_content = payload.get("content") if isinstance(payload, dict) else None
         if not isinstance(nested_content, str):
             return json.dumps({"content": "", "redactedNestedToolResult": True})
