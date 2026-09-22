@@ -11,8 +11,10 @@ import {
 precache(self.__WB_MANIFEST)
 cleanupOutdatedCaches()
 
+self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()))
+
 self.addEventListener('message', (event) => {
-  if (event.data?.type === 'SKIP_WAITING') void self.skipWaiting()
+  if (event.data?.type === 'SKIP_WAITING') event.waitUntil(self.skipWaiting())
   if (event.data?.type === 'WINDOW_COUNT' && event.ports[0]) {
     event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true })
       .then((clients) => event.ports[0].postMessage(clients.length)))

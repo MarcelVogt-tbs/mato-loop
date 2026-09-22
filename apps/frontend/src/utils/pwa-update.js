@@ -1,5 +1,5 @@
 export const PWA_UPDATE_EVENT = 'matoloop:pwa-update'
-export const PWA_UPDATE_RELOAD_KEY = 'matoloop:pwa-update-reload'
+export const PWA_BEFORE_UPDATE_EVENT = 'matoloop:pwa-before-update'
 export const PWA_UPDATE_SNOOZE_KEY = 'matoloop:pwa-update-snooze-until'
 
 const PWA_UPDATE_SNOOZE_MS = 60 * 60 * 1000
@@ -8,9 +8,25 @@ export function announcePwaUpdate() {
   window.dispatchEvent(new Event(PWA_UPDATE_EVENT))
 }
 
-export function requestPwaUpdate() {
-  sessionStorage.setItem(PWA_UPDATE_RELOAD_KEY, '1')
-  window.location.reload()
+export async function requestPwaUpdate() {
+  const serviceWorker = navigator.serviceWorker
+  const registration = await serviceWorker?.getRegistration?.()
+  if (!window.dispatchEvent(new Event(PWA_BEFORE_UPDATE_EVENT, { cancelable: true }))) return false
+
+  if (!registration?.waiting) {
+    window.location.reload()
+    return true
+  }
+
+  const reload = () => window.location.reload()
+  serviceWorker.addEventListener('controllerchange', reload, { once: true })
+  try {
+    registration.waiting.postMessage({ type: 'SKIP_WAITING' })
+  } catch (error) {
+    serviceWorker.removeEventListener('controllerchange', reload)
+    throw error
+  }
+  return true
 }
 
 export function snoozePwaUpdate() {

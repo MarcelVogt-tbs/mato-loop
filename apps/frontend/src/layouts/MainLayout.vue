@@ -606,6 +606,7 @@ import { useIntegrationStore } from 'stores/integrations'
 import { useConfirm } from 'src/composables/confirm'
 import { terminalControlCenterState } from 'src/control-center/manifest'
 import { notifyError } from 'src/utils/notifications'
+import { PWA_BEFORE_UPDATE_EVENT } from 'src/utils/pwa-update'
 import { sessionSidebarStatus } from 'src/utils/session-groups'
 import { searchShortcutAction } from 'src/utils/search-shortcut'
 
@@ -1421,6 +1422,7 @@ onMounted(async () => {
   window.addEventListener('keydown', handleSearchShortcut)
   window.addEventListener('focus', refreshAppPresence)
   window.addEventListener('beforeunload', preventDiscardOnUnload)
+  window.addEventListener(PWA_BEFORE_UPDATE_EVENT, preventDiscardOnUnload)
   document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
   window.addEventListener('matoloop:service-worker-ready', refreshPushState)
   window.navigator.serviceWorker?.addEventListener('message', handlePushMessage)
@@ -1444,6 +1446,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleSearchShortcut)
   window.removeEventListener('focus', refreshAppPresence)
   window.removeEventListener('beforeunload', preventDiscardOnUnload)
+  window.removeEventListener(PWA_BEFORE_UPDATE_EVENT, preventDiscardOnUnload)
   terminal.release()
   browser.release()
   document.removeEventListener('visibilitychange', refreshSessionsWhenVisible)

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  PWA_UPDATE_RELOAD_KEY,
+  PWA_BEFORE_UPDATE_EVENT,
   PWA_UPDATE_SNOOZE_KEY,
   pwaUpdateSnoozeRemaining,
   pwaWindowCount,
@@ -22,16 +22,60 @@ afterEach(() => {
 })
 
 describe('PWA updates', () => {
-  it('marks a requested update before reloading', () => {
-    const setItem = vi.fn()
+  function updateEnvironment(waiting = { postMessage: vi.fn() }) {
     const reload = vi.fn()
-    Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, value: { setItem } })
-    Object.defineProperty(globalThis, 'window', { configurable: true, value: { location: { reload } } })
+    const serviceWorker = Object.assign(new EventTarget(), {
+      getRegistration: vi.fn().mockResolvedValue({ waiting })
+    })
+    const window = Object.assign(new EventTarget(), { location: { reload } })
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: window })
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { serviceWorker } })
+    return { reload, serviceWorker, waiting, window }
+  }
 
-    requestPwaUpdate()
+  it('activates the waiting worker before reloading exactly once on takeover', async () => {
+    const { reload, serviceWorker, waiting } = updateEnvironment()
 
-    expect(setItem).toHaveBeenCalledWith(PWA_UPDATE_RELOAD_KEY, '1')
+    await expect(requestPwaUpdate()).resolves.toBe(true)
+
+    expect(waiting.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' })
+    expect(reload).not.toHaveBeenCalled()
+    serviceWorker.dispatchEvent(new Event('controllerchange'))
+    serviceWorker.dispatchEvent(new Event('controllerchange'))
     expect(reload).toHaveBeenCalledOnce()
+  })
+
+  it('allows unsaved changes or recording guards to block activation before takeover', async () => {
+    const { reload, serviceWorker, waiting, window } = updateEnvironment()
+    window.addEventListener(PWA_BEFORE_UPDATE_EVENT, (event) => event.preventDefault(), { once: true })
+
+    await expect(requestPwaUpdate()).resolves.toBe(false)
+
+    expect(waiting.postMessage).not.toHaveBeenCalled()
+    serviceWorker.dispatchEvent(new Event('controllerchange'))
+    expect(reload).not.toHaveBeenCalled()
+
+    await expect(requestPwaUpdate()).resolves.toBe(true)
+    expect(waiting.postMessage).toHaveBeenCalledOnce()
+    serviceWorker.dispatchEvent(new Event('controllerchange'))
+    expect(reload).toHaveBeenCalledOnce()
+  })
+
+  it('reloads if the offered worker has already activated', async () => {
+    const { reload } = updateEnvironment(null)
+
+    await expect(requestPwaUpdate()).resolves.toBe(true)
+    expect(reload).toHaveBeenCalledOnce()
+  })
+
+  it('removes the reload listener if sending the activation request fails', async () => {
+    const { reload, serviceWorker } = updateEnvironment({
+      postMessage: vi.fn(() => { throw new Error('Worker unavailable') })
+    })
+
+    await expect(requestPwaUpdate()).rejects.toThrow('Worker unavailable')
+    serviceWorker.dispatchEvent(new Event('controllerchange'))
+    expect(reload).not.toHaveBeenCalled()
   })
 
   it('counts controlled app windows before activating an update', async () => {

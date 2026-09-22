@@ -25,7 +25,7 @@
     Eine neue Version ist verfügbar.
     <template #action>
       <q-btn flat dense no-caps color="primary" label="Später" @click="snoozeUpdate" />
-      <q-btn flat dense no-caps color="primary" label="Neu starten" @click="confirmUpdate" />
+      <q-btn flat dense no-caps color="primary" label="Neu starten" :loading="restarting" @click="confirmUpdate" />
     </template>
   </q-banner>
 </template>
@@ -35,6 +35,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import AppLogo from 'components/AppLogo.vue'
 import { useAuthStore } from 'stores/auth'
+import { notifyError } from 'src/utils/notifications'
 import {
   PWA_UPDATE_EVENT,
   pwaUpdateSnoozeRemaining,
@@ -49,6 +50,7 @@ const $q = useQuasar()
 const auth = useAuthStore()
 const startupSlow = ref(false)
 const updateAvailable = ref(false)
+const restarting = ref(false)
 let startupTimer = null
 let updateTimer = null
 
@@ -94,7 +96,23 @@ async function confirmUpdate() {
     message: 'Speichere offene Änderungen und beende laufende Aufnahmen. MatoLoop wird anschließend neu geladen.',
     cancel: 'Abbrechen',
     ok: { label: 'Neu starten', color: 'primary', noCaps: true }
-  }).onOk(() => requestPwaUpdate())
+  }).onOk(async () => {
+    if (restarting.value) return
+    restarting.value = true
+    try {
+      if (!await requestPwaUpdate()) {
+        restarting.value = false
+        $q.dialog({
+          title: 'Neustart noch nicht möglich',
+          message: 'Speichere oder verwirf offene Änderungen und beende laufende Aufnahmen. Versuche den Neustart anschließend erneut.',
+          ok: { label: 'Verstanden', color: 'primary', noCaps: true }
+        })
+      }
+    } catch (error) {
+      restarting.value = false
+      notifyError(error)
+    }
+  })
 }
 
 onMounted(() => {
