@@ -93,11 +93,11 @@ async def test_codex_model_discovery_filters_and_normalizes_models(
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.url.path == "/backend-api/codex/models"
-        assert request.url.params["client_version"] == "0.153.4"
+        assert request.url.params["client_version"] == "0.156.0"
         assert request.headers["Authorization"] == "Bearer access"
         assert request.headers["ChatGPT-Account-ID"] == "account"
         assert request.headers["originator"] == "mato-loop"
-        assert request.headers["version"] == "0.153.4"
+        assert request.headers["version"] == "0.156.0"
         return httpx.Response(
             200,
             json={
@@ -120,6 +120,8 @@ async def test_codex_model_discovery_filters_and_normalizes_models(
                             {"effort": "future", "description": "Unknown"},
                         ],
                     },
+                    {"slug": "gpt-6-sol", "visibility": "list"},
+                    {"slug": "gpt-6-luna", "visibility": "list"},
                     {"slug": "hidden", "visibility": "hide"},
                 ]
             },
@@ -134,6 +136,8 @@ async def test_codex_model_discovery_filters_and_normalizes_models(
 
     assert [model.id for model in models] == [
         "openai-codex/gpt-6-astra",
+        "openai-codex/gpt-6-sol",
+        "openai-codex/gpt-6-luna",
         "openai-codex/gpt-image-2",
     ]
     assert models[0].metadata == {
@@ -144,8 +148,8 @@ async def test_codex_model_discovery_filters_and_normalizes_models(
         "default_reasoning_effort": "medium",
         "reasoning_efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
     }
-    assert models[1].capabilities == {"image_generation", "image_editing"}
-    assert models[1].metadata == {
+    assert models[3].capabilities == {"image_generation", "image_editing"}
+    assert models[3].metadata == {
         "name": "GPT Image 2",
         "supports_tools": False,
         "capabilities_authoritative": True,
