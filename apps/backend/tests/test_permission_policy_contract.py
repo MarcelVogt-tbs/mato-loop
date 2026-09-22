@@ -761,6 +761,93 @@ async def test_policy_revocation_while_waiting_for_approval_stops_action(
     assert decision == PermissionDecision.DENY
 
 
+@pytest.mark.parametrize("kind", ["file", "shell"])
+@pytest.mark.parametrize(
+    ("policy_after_approval", "expected"),
+    [
+        ("ask", PermissionDecision.ALLOW),
+        ("disabled", PermissionDecision.DENY),
+    ],
+)
+async def test_external_working_directory_policy_is_revalidated_after_approval(
+    tmp_path, monkeypatch, kind, policy_after_approval, expected
+) -> None:
+    session = _session(user_id=uuid4(), current_directory="/work")
+    root_files = _root_files(tmp_path, session)
+    agent = ExecutionAgent(
+        id=uuid4(),
+        user_id=session.user_id,
+        home_directory="/home/user",
+        home_filesystem_policy="auto",
+        external_filesystem_policy="ask",
+        home_shell_enabled=True,
+        external_shell_enabled=True,
+    )
+    if kind == "file":
+        request = execution_directory_permission(
+            agent.id, "/srv/data.txt", capability="filesystem.read"
+        )
+        call = ToolCall(id="read", name="read", arguments={})
+    else:
+        request = PermissionRequest(
+            capability="shell.read",
+            resource_type="shell_command",
+            resource_scope=shell_command_scope(
+                agent.id,
+                "/work",
+                "read",
+                [["cat"]],
+                ["/srv/data.txt"],
+                True,
+                ["read"],
+            ),
+            action_kind="shell_run",
+            risk_level="low",
+            title="Lesen?",
+            summary="Test",
+        )
+        call = ToolCall(id="shell", name="shell_run", arguments={})
+    settings_loads = 0
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return IntegrationSettings() if settings_type is IntegrationSettings else ToolSettings()
+
+    async def load_optional(_db, settings_type, **_kwargs):
+        nonlocal settings_loads
+        if settings_type is not AgentProfilesSettings:
+            return None
+        settings_loads += 1
+        return _profile_settings({
+            "policies": {
+                request.capability: "auto",
+                "working_directory.external": (
+                    "ask" if settings_loads == 1 else policy_after_approval
+                ),
+            }
+        })
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
+    monkeypatch.setattr(
+        SettingsStore, "load_optional", AsyncMock(side_effect=load_optional)
+    )
+    approve = AsyncMock(return_value="allow_once")
+    monkeypatch.setattr(AgentRuntime, "_request_approval", approve)
+    db = _db_with_grants()
+    db.scalar.return_value = agent
+
+    decision = await AgentRuntime._authorize(
+        db,
+        AgentRun(id=uuid4(), session_id=session.id, trust_level="public"),
+        session,
+        call,
+        request,
+        root_files,
+    )
+
+    assert decision == expected
+    approve.assert_awaited_once()
+
+
 async def test_skill_policy_revocation_while_waiting_stops_loading(
     tmp_path, monkeypatch
 ) -> None:

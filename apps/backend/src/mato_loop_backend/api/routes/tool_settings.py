@@ -61,7 +61,11 @@ class ToolConfigurationRequest(BaseModel):
 
 
 def tool_configuration_payload(settings: ToolSettings) -> dict:
-    groups = tool_registry.catalog(settings, IntegrationSettings())
+    groups = [
+        group
+        for group in tool_registry.catalog(settings, IntegrationSettings())
+        if group["tools"]
+    ]
     for group in groups:
         for tool in group["tools"]:
             tool["available"] = settings.tool_availability.get(tool["name"], True)

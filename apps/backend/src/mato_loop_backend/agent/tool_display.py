@@ -6,6 +6,7 @@ from typing import Any
 from mato_loop_backend.integrations.webfetch import WebFetchError, canonicalize_url
 
 TOOL_GROUPS = (
+    {"id": "working_directory", "label": "Arbeitsverzeichnis", "icon": "folder_open", "emoji": "📂"},
     {"id": "filesystem", "label": "Dateisystem", "icon": "folder", "emoji": "📁"},
     {"id": "process", "label": "Prozesse", "icon": "terminal", "emoji": "💻"},
     {"id": "web", "label": "Web", "icon": "language", "emoji": "🌐"},

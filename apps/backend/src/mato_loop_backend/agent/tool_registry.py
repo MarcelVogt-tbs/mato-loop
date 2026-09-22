@@ -357,6 +357,7 @@ class ToolDefinition:
     arguments_schema: dict[str, Any] | None = None
     approval_edit_fields: tuple[ApprovalEditField, ...] = ()
     permission_reason_instruction: str | None = None
+    requires_permission_reason: bool = False
 
     def schema(self) -> dict[str, Any]:
         if self.arguments_schema is not None:
@@ -364,7 +365,7 @@ class ToolDefinition:
         else:
             parameters = self.arguments_model.model_json_schema()
             model_file_root_schema(parameters)
-        if self.actions:
+        if self.actions or self.requires_permission_reason:
             parameters.setdefault("properties", {})[PERMISSION_REASON_ARGUMENT] = {
                 "type": "string",
                 "minLength": 1,
@@ -381,7 +382,7 @@ class ToolDefinition:
         return {"name": self.name, "description": self.description, "parameters": schema}
 
     def validate_arguments(self, value: object, *, require_reason: bool = False) -> Any:
-        if self.actions and isinstance(value, dict):
+        if (self.actions or self.requires_permission_reason) and isinstance(value, dict):
             value = dict(value)
             reason_supplied = PERMISSION_REASON_ARGUMENT in value
             reason = value.pop(PERMISSION_REASON_ARGUMENT, None)
@@ -445,7 +446,7 @@ def _actions_enabled(
     enabled = {
         action.capability
         for action in definition.actions
-        if not action.gates_tool_availability or policy_resolver(
+        if policy_resolver(
             tool_settings,
             action.capability,
             action.default_policy_for(tool_settings.trust_level),
@@ -622,6 +623,7 @@ class ToolRegistry:
         definitions: list[ToolDefinition],
         operation_definitions: list[ToolDefinition] | None = None,
         *,
+        group_actions: dict[str, tuple[ToolAction, ...]] | None = None,
         contributions_resolver: Callable[..., Any] = effective_integration_contributions,
         policy_resolver: PolicyResolver | None = None,
         capability_resolver: CapabilityResolver | None = None,
@@ -637,6 +639,7 @@ class ToolRegistry:
         }
         if self._definitions.keys() & self._operation_definitions.keys():
             raise ValueError("duplicate operation tool")
+        self._group_actions = group_actions or {}
         self._contributions_resolver = contributions_resolver
         self._policy_resolver = policy_resolver
         self._capability_resolver = capability_resolver
@@ -1060,29 +1063,26 @@ class ToolRegistry:
         sources.update(
             {name: ("builtin", None, None, ()) for name in self._operation_definitions}
         )
+        def action_payload(action: ToolAction) -> dict[str, Any]:
+            return {
+                "capability": action.capability,
+                "label": action.label,
+                "policy": self._policy_resolver(
+                    tool_settings,
+                    action.capability,
+                    action.default_policy_for(tool_settings.trust_level),
+                ).value,
+                "configurable": action.configurable,
+                "allowedPolicies": [policy.value for policy in action.allowed_policies],
+                "available": True,
+            }
+
         tools_by_group: dict[str, list[dict[str, Any]]] = {}
         for definition in definitions.values():
             source_type, source_id, _source_revision, _integration_revisions = sources[
                 definition.name
             ]
-            actions = [
-                {
-                    "capability": action.capability,
-                    "label": action.label,
-                    "policy": self._policy_resolver(
-                        tool_settings,
-                        action.capability,
-                        action.default_policy_for(tool_settings.trust_level),
-                    )
-                    .value,
-                    "configurable": action.configurable,
-                    "allowedPolicies": [
-                        policy.value for policy in action.allowed_policies
-                    ],
-                    "available": True,
-                }
-                for action in definition.actions
-            ]
+            actions = [action_payload(action) for action in definition.actions]
             tools_by_group.setdefault(definition.group, []).append(
                 {
                     "name": definition.name,
@@ -1110,10 +1110,14 @@ class ToolRegistry:
                     group_id,
                     {"id": group_id, "label": group_id, "icon": "extension"},
                 ),
+                "actions": [
+                    action_payload(action)
+                    for action in self._group_actions.get(group_id, ())
+                ],
                 "tools": tools_by_group.get(group_id, []),
             }
             for group_id in group_ids
-            if tools_by_group.get(group_id)
+            if tools_by_group.get(group_id) or self._group_actions.get(group_id)
         ]
 
     def action_default(
@@ -1122,18 +1126,9 @@ class ToolRegistry:
         trust_level: TrustLevel,
         integration_settings: IntegrationSettings | None = None,
     ) -> ToolExecutionPolicy:
-        definitions = (
-            {
-                **self._combined_definitions(integration_settings)[0],
-                **self._operation_definitions,
-            }
-            if integration_settings is not None
-            else {**self._definitions, **self._operation_definitions}
-        )
         default_pairs = {
             (action.private_default_policy, action.public_default_policy)
-            for definition in definitions.values()
-            for action in definition.actions
+            for action in self.policy_actions(integration_settings)
             if action.capability == capability
         }
         if len(default_pairs) > 1:
@@ -1143,6 +1138,22 @@ class ToolRegistry:
             (ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK),
         )
         return private if trust_level == TrustLevel.PRIVATE else public
+
+    def policy_actions(
+        self, integration_settings: IntegrationSettings | None = None
+    ) -> tuple[ToolAction, ...]:
+        definitions = (
+            {
+                **self._combined_definitions(integration_settings)[0],
+                **self._operation_definitions,
+            }
+            if integration_settings is not None
+            else {**self._definitions, **self._operation_definitions}
+        )
+        return (
+            *(action for definition in definitions.values() for action in definition.actions),
+            *(action for actions in self._group_actions.values() for action in actions),
+        )
 
     def integration_resource_actions(
         self, instance: IntegrationInstance

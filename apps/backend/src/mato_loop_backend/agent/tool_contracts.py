@@ -13,7 +13,6 @@ class ToolAction:
     configurable: bool = True
     mutates: bool = False
     allowed_policies: tuple[ToolExecutionPolicy, ...] = tuple(ToolExecutionPolicy)
-    gates_tool_availability: bool = True
 
     def default_policy_for(self, trust_level: TrustLevel) -> ToolExecutionPolicy:
         return (

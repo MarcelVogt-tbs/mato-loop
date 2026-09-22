@@ -121,21 +121,21 @@ it('shows only the disabled state for a direct personal editor link', async () =
   expect(root.querySelector('form')).toBeNull()
 })
 
-it('labels the external working directory policy independently of its host tool', async () => {
+it('shows the external working directory policy without a host tool', async () => {
   const page = await mountEditor('/agents/agent?scope=personal', [], true, [{
-    id: 'process', label: 'Prozesse', icon: 'terminal', tools: [{
-      name: 'change_directory', label: 'Verzeichnis wechseln', available: true, actions: [{
-        capability: 'working_directory.external',
-        label: 'Zugriff außerhalb des Arbeitsverzeichnisses',
-        policy: 'ask',
-        configurable: true,
-        allowedPolicies: ['disabled', 'ask', 'auto'],
-        available: true
-      }]
+    id: 'working_directory', label: 'Arbeitsverzeichnis', icon: 'folder_open', tools: [], actions: [{
+      capability: 'working_directory.external',
+      label: 'Zugriff außerhalb des Arbeitsverzeichnisses',
+      policy: 'ask',
+      configurable: true,
+      allowedPolicies: ['disabled', 'ask', 'auto'],
+      available: true
     }]
   }])
 
+  expect(page.permissionGroups[0].label).toBe('Arbeitsverzeichnis')
   expect(page.permissionGroups[0].actions[0].label).toBe('Zugriff außerhalb des Arbeitsverzeichnisses')
+  expect(page.baselineActions.public['working_directory.external'].policy).toBe('ask')
 })
 
 afterEach(() => {

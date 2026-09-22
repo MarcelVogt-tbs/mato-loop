@@ -1228,6 +1228,9 @@ async def test_files_search_preserves_hidden_ignored_binary_and_symlink_behavior
 
 def test_tool_catalog_exposes_types_but_model_schemas_do_not() -> None:
     catalog = tool_registry.catalog(ToolSettings(), IntegrationSettings())
+    working_directory = next(
+        group for group in catalog if group["id"] == "working_directory"
+    )
     tools = {
         tool["name"]: tool
         for group in catalog
@@ -1237,7 +1240,8 @@ def test_tool_catalog_exposes_types_but_model_schemas_do_not() -> None:
     assert tools["web_search"]["toolType"] == "backend"
     assert tools["get_system_info"]["toolType"] == "computer"
     assert tools["read"]["toolType"] == "shared"
-    assert tools["change_directory"]["actions"] == [{
+    assert working_directory["tools"] == []
+    assert working_directory["actions"] == [{
         "capability": "working_directory.external",
         "label": "Zugriff außerhalb des Arbeitsverzeichnisses",
         "policy": "ask",
@@ -1245,6 +1249,15 @@ def test_tool_catalog_exposes_types_but_model_schemas_do_not() -> None:
         "allowedPolicies": ["disabled", "ask", "auto"],
         "available": True,
     }]
+    assert tools["change_directory"]["actions"] == []
+    change_directory_schema = next(
+        schema
+        for schema in tool_registry.schemas(
+            IntegrationSettings(), execution_operations={"filesystem.resolve"}
+        )
+        if schema["name"] == "change_directory"
+    )
+    assert "_reason" in change_directory_schema["parameters"]["required"]
     assert {tool["toolType"] for tool in tools.values()} == {
         "backend",
         "computer",

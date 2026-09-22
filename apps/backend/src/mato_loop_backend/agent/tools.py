@@ -2316,10 +2316,13 @@ class ToolRegistry(_BaseToolRegistry):
         self,
         definitions: list[ToolDefinition],
         operation_definitions: list[ToolDefinition] | None = None,
+        *,
+        group_actions: dict[str, tuple[ToolAction, ...]] | None = None,
     ) -> None:
         super().__init__(
             definitions,
             operation_definitions,
+            group_actions=group_actions,
             contributions_resolver=lambda settings: effective_integration_contributions(
                 settings
             ),
@@ -4803,7 +4806,6 @@ _WORKING_DIRECTORY_EXTERNAL = ToolAction(
     "Zugriff außerhalb des Arbeitsverzeichnisses",
     ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
-    gates_tool_availability=False,
 )
 _SESSION_FILES_READ = ToolAction(
     "session.files.read", "Session-Dateien lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO
@@ -5582,7 +5584,7 @@ tool_registry = ToolRegistry(
             group="process",
             label="Verzeichnis wechseln",
             icon="drive_file_move",
-            actions=(_WORKING_DIRECTORY_EXTERNAL,),
+            requires_permission_reason=True,
         ),
         ToolDefinition(
             "secret_input",
@@ -5632,4 +5634,5 @@ tool_registry = ToolRegistry(
             ),
         ),
     ],
+    group_actions={"working_directory": (_WORKING_DIRECTORY_EXTERNAL,)},
 )

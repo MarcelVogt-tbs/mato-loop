@@ -38,10 +38,6 @@ def permission_snapshot(
     from mato_loop_backend.agent.tools import tool_registry
 
     integrations = integration_settings or IntegrationSettings()
-    definitions = {
-        **tool_registry._combined_definitions(integrations)[0],
-        **tool_registry._operation_definitions,
-    }
     # Only permission data belongs here, never integration configuration or credentials.
     return {
         "permissions": settings.permissions.model_dump(mode="json"),
@@ -61,8 +57,7 @@ def permission_snapshot(
         "integrationIds": sorted(str(item.id) for item in integrations.instances if item.enabled),
         "actionDefaults": {
             action.capability: action.default_policy_for(settings.trust_level).value
-            for definition in definitions.values()
-            for action in definition.actions
+            for action in tool_registry.policy_actions(integrations)
         },
         "integrationDefaults": {
             str(instance.id): {

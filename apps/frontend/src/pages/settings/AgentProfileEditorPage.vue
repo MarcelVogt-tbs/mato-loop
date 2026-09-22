@@ -929,11 +929,14 @@ const integrationAvailabilityOptions = (id) => [
 const baselineActions = computed(() => Object.fromEntries(audiences.map(({ value }) => [
   value,
   Object.fromEntries((agents.groupsByTrust[value] || []).flatMap((group) => (
-    (group.tools || []).flatMap((tool) => (
-      (tool.actions || []).map((action) => [action.capability, {
-        ...action, available: tool.available !== false && action.available !== false
-      }])
-    ))
+    [
+      ...(group.actions || []).map((action) => [action.capability, action]),
+      ...(group.tools || []).flatMap((tool) => (
+        (tool.actions || []).map((action) => [action.capability, {
+          ...action, available: tool.available !== false && action.available !== false
+        }])
+      ))
+    ]
   )))
 ])))
 const permissionGroups = computed(() => {
@@ -942,19 +945,20 @@ const permissionGroups = computed(() => {
     id: group.id,
     label: group.label,
     icon: group.icon,
-    actions: (group.tools || []).flatMap((tool) => (tool.actions || []).flatMap((action) => {
-      if (!action.configurable || seen.has(action.capability)) return []
-      seen.add(action.capability)
-      return [{
+    actions: [
+      ...(group.actions || []),
+      ...(group.tools || []).flatMap((tool) => (tool.actions || []).map((action) => ({
         ...action,
         available: tool.available !== false && action.available !== false,
-        label: action.capability === 'working_directory.external'
-          ? action.label
-          : (tool.actions || []).filter((item) => item.configurable).length > 1
+        label: (tool.actions || []).filter((item) => item.configurable).length > 1
           ? `${tool.label}: ${action.label}`
           : tool.label
-      }]
-    }))
+      })))
+    ].flatMap((action) => {
+      if (!action.configurable || seen.has(action.capability)) return []
+      seen.add(action.capability)
+      return [action]
+    })
   })).filter((group) => group.actions.length)
 })
 

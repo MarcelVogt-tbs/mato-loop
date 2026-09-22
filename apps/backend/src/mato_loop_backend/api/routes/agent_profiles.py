@@ -260,17 +260,18 @@ async def _response(
 def _catalog_policies(groups: list[dict]) -> dict[str, set[ToolExecutionPolicy]]:
     allowed: dict[str, set[ToolExecutionPolicy]] = {}
     for group in groups:
-        for tool in group["tools"]:
-            for action in tool["actions"]:
-                if not action["configurable"]:
-                    continue
-                modes = {
-                    ToolExecutionPolicy(policy)
-                    for policy in action["allowedPolicies"]
-                }
-                allowed.setdefault(action["capability"], modes).intersection_update(
-                    modes
-                )
+        actions = [
+            *group.get("actions", []),
+            *(action for tool in group["tools"] for action in tool["actions"]),
+        ]
+        for action in actions:
+            if not action["configurable"]:
+                continue
+            modes = {
+                ToolExecutionPolicy(policy)
+                for policy in action["allowedPolicies"]
+            }
+            allowed.setdefault(action["capability"], modes).intersection_update(modes)
     return allowed
 
 
