@@ -1713,6 +1713,8 @@ def test_secret_input_prompt_routes_all_credentials_before_probing() -> None:
     assert "masked=false for visible identifiers and masked=true for secrets" in prompt
     assert "returned environment unchanged to shell_run" in prompt
     assert "references remain reusable throughout the current run" in prompt
+    assert "pipe a shell-builtin printf of the variable directly to sudo -S" in prompt
+    assert "not a confirmed disclosure" in prompt
 
 
 def test_session_environment_prompt_exposes_only_references() -> None:

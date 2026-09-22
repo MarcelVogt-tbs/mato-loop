@@ -1123,7 +1123,8 @@ def shell_command_permission(
     if may_expose_secret:
         display_items += (PermissionDisplayItem(
             "Mögliche Secret-Ausgabe",
-            "Der Befehl könnte Passwörter, Tokens oder andere Zugangsdaten ausgeben.",
+            "Der Befehl könnte Zugangsdaten ausgeben oder an einen Prozess übergeben. Die Prüfung kann sichtbare "
+            "Ausgabe und eine direkte Authentifizierungsübergabe nicht sicher unterscheiden. Prüfe das Ausgabeziel.",
         ),)
     return PermissionRequest(
         capability=f"shell.{inspection.classification}",
@@ -1154,7 +1155,7 @@ def shell_command_permission(
             " Besonders geschützte Pfade benötigen immer eine Freigabe."
             if confidential_paths else ""
         ) + (
-            " Eine mögliche Ausgabe von Passwörtern, Tokens oder anderen Zugangsdaten benötigt immer eine Freigabe."
+            " Eine mögliche Ausgabe oder Prozessübergabe von Zugangsdaten benötigt immer eine Freigabe."
             if may_expose_secret else ""
         ),
         resource_display=current_directory,

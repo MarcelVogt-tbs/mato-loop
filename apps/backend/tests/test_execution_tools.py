@@ -693,6 +693,11 @@ def test_shell_permission_displays_confidential_paths() -> None:
     ]),
     ("printenv API_TOKEN", ["printenv", "API_TOKEN"], []),
     ('echo "$DB_PASSWORD"', ["echo", "$DB_PASSWORD"], []),
+    (
+        "printf '%s\\n' \"$SUDO_PASSWORD\" | sudo -S true",
+        ["printf", "%s\\n", "$SUDO_PASSWORD"],
+        [],
+    ),
     ("env", ["env"], []),
     ("export -p", ["export", "-p"], []),
 ])
@@ -716,6 +721,7 @@ def test_shell_permission_forces_one_time_approval_for_possible_secret_output(
     assert request.force_ask
     assert request.available_decisions == ("allow_once", "deny")
     assert request.display_items[-1].label == "Mögliche Secret-Ausgabe"
+    assert "nicht sicher unterscheiden" in request.display_items[-1].value
 
 
 @pytest.mark.parametrize(("command_line", "tokens"), [

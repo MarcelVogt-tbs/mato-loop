@@ -773,7 +773,11 @@ def general_system_prompt(
             "secret_input, not question, once with all currently missing authentication values. Use "
             "masked=false for visible identifiers and masked=true for secrets. Pass its returned environment "
             "unchanged to shell_run. Its references remain reusable throughout the current run; reuse the exact "
-            "name/reference pairs instead of asking again."
+            "name/reference pairs instead of asking again. In shell commands, reference only the environment "
+            "variable names; never reveal, transform, persist, or trace credential values. If sudo password "
+            "authentication is required, pipe a shell-builtin printf of the variable directly to sudo -S; never "
+            "use echo, tee, a temporary file, or a command-line argument. A secret-output warning identifies a "
+            "possible risk, not a confirmed disclosure; assess the command, execution status, and result."
         )
     if session_environment and "shell_run" in offered_tool_names:
         parts.append(
