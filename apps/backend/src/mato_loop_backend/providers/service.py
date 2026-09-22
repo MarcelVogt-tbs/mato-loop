@@ -499,6 +499,7 @@ class ProviderService:
         timeout: float = 300,
         target_trust_level: TrustLevel | None = None,
         pseudonymization_enabled: bool | None = None,
+        pseudonymization_key: bytes | None = None,
         image_inputs: list[ProviderImageInput] | None = None,
         media_inputs: list[ProviderMediaInput] | None = None,
         prompt_cache_key: str | None = None,
@@ -574,7 +575,9 @@ class ProviderService:
             required_image_ids=required_image_ids,
         )
         media.extend(direct_media)
-        pseudonymizer = RequestPseudonymizer() if use_pseudonymization else None
+        pseudonymizer = (
+            RequestPseudonymizer(key=pseudonymization_key) if use_pseudonymization else None
+        )
         if pseudonymizer is not None:
             try:
                 provider_messages = await asyncio.to_thread(
@@ -633,6 +636,8 @@ class ProviderService:
             _responses_body(request, reasoning_token_estimates=reasoning_token_estimates)
             if api_type == "responses" else _chat_body(request)
         )
+        if pseudonymizer is not None:
+            pseudonymizer.retain_transmitted(body)
         return _PreparedRequest(
             request, adapter, api_type, pseudonymizer,
             estimate_request_input_tokens(
@@ -661,6 +666,7 @@ class ProviderService:
         safety_reserve_tokens: int | None = None,
         target_trust_level: TrustLevel | None = None,
         pseudonymization_enabled: bool | None = None,
+        pseudonymization_key: bytes | None = None,
         image_inputs: list[ProviderImageInput] | None = None,
         media_inputs: list[ProviderMediaInput] | None = None,
         prompt_cache_key: str | None = None,
@@ -684,6 +690,7 @@ class ProviderService:
             timeout=timeout,
             target_trust_level=target_trust_level,
             pseudonymization_enabled=pseudonymization_enabled,
+            pseudonymization_key=pseudonymization_key,
             image_inputs=image_inputs,
             media_inputs=media_inputs,
             prompt_cache_key=prompt_cache_key,

@@ -4970,7 +4970,7 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "task",
-            "Join parallel self-contained tasks; avoid write conflicts; 8/run; no recursion.",
+            "Join scoped self-contained tasks with bounded results; avoid write conflicts; 8/run; no recursion.",
             TaskArguments,
             _task,
             group="agent",
@@ -5020,8 +5020,9 @@ tool_registry = ToolRegistry(
         ),
         ToolDefinition(
             "grep",
-            "Regex recursively; include glob; max 100 lines, 2000 characters/line. "
-            "Skip .git/binary/symlinks. root=computer skips hidden/ignored; "
+            "Regex in a file or recursively in a directory; include glob filters directories only. "
+            "Explicit files bypass hidden/ignore discovery filters. Max 100 lines, 2000 characters/line. "
+            "Skip .git/binary/symlinks. Directory root=computer skips hidden/ignored; "
             "root=files includes hidden; include overrides ignores. "
             "truncated=true: more/clipped text/size limit.",
             GrepArguments,

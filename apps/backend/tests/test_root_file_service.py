@@ -131,6 +131,62 @@ async def test_glob_preserves_execution_failures(tmp_path: Path, monkeypatch) ->
     assert exc_info.value.code == "tool.executionFailed"
 
 
+@pytest.mark.parametrize("name", ["notes.txt", ".hidden.txt", "-option.txt"])
+async def test_grep_explicit_file_preserves_path_filters_and_limits(tmp_path: Path, name: str) -> None:
+    service, root = make_service(tmp_path)
+    files = root / "files"
+    target = files / name
+    target.write_text("other\nneedle\n", encoding="utf-8")
+    (files / "sibling.txt").write_text("needle\n")
+    (files / ".gitignore").write_text(name + "\n")
+    search = RootFileSearch(service)
+    assert await search.grep(FileRoot.SESSION, name, "needle", "*.py") == {
+        "matches": [{"path": name, "line": 2, "text": "needle"}], "truncated": False,
+    }
+    assert await search.grep(FileRoot.SESSION, name, "absent", None) == {
+        "matches": [], "truncated": False,
+    }
+    with pytest.raises(RootFileError) as exc:
+        await search.grep(FileRoot.SESSION, name, "[", None)
+    assert exc.value.code == "tool.invalidArguments"
+    target.write_text("needle\n" * 101)
+    limited = await search.grep(FileRoot.SESSION, name, "needle", None)
+    assert len(limited["matches"]) == 100
+    assert limited["truncated"] is True
+    target.write_bytes(b"needle\n\0needle\n")
+    assert await search.grep(FileRoot.SESSION, name, "needle", None) == {
+        "matches": [], "truncated": False,
+    }
+    (files / ".git").mkdir()
+    (files / ".git" / "config").write_text("needle\n")
+    assert (await search.grep(FileRoot.SESSION, ".git/config", "needle", None))["matches"] == []
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "directory", "fifo"])
+async def test_grep_file_replacement_cannot_widen_access(tmp_path, monkeypatch, replacement):
+    service, root = make_service(tmp_path)
+    target = root / "files" / "target.txt"
+    target.write_text("safe")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+    original_open = service.open_file
+
+    def replace_then_open(file_root, path):
+        target.unlink()
+        if replacement == "symlink":
+            target.symlink_to(outside)
+        elif replacement == "directory":
+            target.mkdir()
+            (target / "secret.txt").write_text("secret")
+        else:
+            os.mkfifo(target)
+        return original_open(file_root, path)
+
+    monkeypatch.setattr(service, "open_file", replace_then_open)
+    with pytest.raises(RootFileError):
+        await RootFileSearch(service).grep(FileRoot.SESSION, "target.txt", "secret", None)
+
+
 def test_mutations_are_atomic_and_limited_to_session_files(tmp_path: Path) -> None:
     service, root = make_service(tmp_path)
     service.create_directory(FileRoot.SESSION, "subdirectory")

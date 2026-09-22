@@ -39,6 +39,8 @@ class RootFileSearch:
 
     async def glob(self, root: FileRoot | str, path: str, pattern: str) -> dict:
         base = self.root_files.path_parts(path)
+        if ".git" in base:
+            return {"paths": [], "truncated": False}
         paths: list[str] = []
 
         def consume(record: bytes) -> bool:
@@ -85,25 +87,37 @@ class RootFileSearch:
         include: str | None,
     ) -> dict:
         base = self.root_files.path_parts(path)
+        if ".git" in base:
+            return {"matches": [], "truncated": False}
+        is_file = self.root_files.path_kind(root, path) == "file"
         matches: list[dict[str, str | int]] = []
         text_clipped = False
+        file_truncated = False
+        binary = False
 
         def consume(record: bytes) -> bool:
-            nonlocal text_clipped
+            nonlocal text_clipped, file_truncated, binary
             try:
                 message = json.loads(record)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise RootFileError("tool.executionFailed", "Invalid ripgrep output") from exc
+            data = message.get("data", {})
+            if is_file and message.get("type") == "end":
+                binary |= data.get("binary_offset") is not None
             if message.get("type") != "match":
                 return False
-            data = message.get("data", {})
-            result = self._path(base, data.get("path", {}).get("text", ""))
+            result = path if is_file else self._path(base, data.get("path", {}).get("text", ""))
             text = data.get("lines", {}).get("text")
             line = data.get("line_number")
             if result is None or not isinstance(text, str) or not isinstance(line, int) or line < 1:
                 return False
+            if "\0" in text:
+                if is_file:
+                    binary = True
+                return False
             if len(matches) >= MAX_SEARCH_RESULTS:
-                return True
+                file_truncated = True
+                return not is_file
             text = text.rstrip("\r\n")
             matches.append(
                 {"path": result, "line": line, "text": text[:MAX_MATCH_TEXT]}
@@ -118,19 +132,28 @@ class RootFileSearch:
             "--no-require-git",
             "--no-follow",
             "--no-binary",
-            "--glob=!.git",
-            "--glob=!.git/**",
         ]
-        if include is not None:
+        if include is not None and not is_file:
             arguments.append(f"--glob={include}")
-        arguments += ["--", pattern, "."]
-        return_code, truncated = await self._run(root, path, arguments, b"\n", consume)
+        arguments += ["--glob=!.git", "--glob=!.git/**"]
+        if is_file:
+            arguments += ["--binary", f"--max-count={MAX_SEARCH_RESULTS + 1}", "--", pattern, "-"]
+            with self.root_files.open_file(root, path) as handle:
+                return_code, truncated = await self._run(
+                    root, "/".join(base[:-1]) or ".", arguments, b"\n", consume,
+                    input_fd=handle.fileno(),
+                )
+        else:
+            arguments += ["--", pattern, "."]
+            return_code, truncated = await self._run(root, path, arguments, b"\n", consume)
         if return_code == 2 and not truncated:
             raise RootFileError("tool.invalidArguments", "Invalid grep pattern")
         if return_code not in {0, 1} and not truncated:
             raise RootFileError("tool.executionFailed", "Grep search failed")
+        if binary:
+            return {"matches": [], "truncated": False}
         matches.sort(key=lambda match: (match["path"], match["line"]))
-        return {"matches": matches, "truncated": truncated or text_clipped}
+        return {"matches": matches, "truncated": truncated or text_clipped or file_truncated}
 
     async def _run(
         self,
@@ -139,6 +162,8 @@ class RootFileSearch:
         arguments: list[str],
         delimiter: bytes,
         consume: Callable[[bytes], bool],
+        *,
+        input_fd: int | None = None,
     ) -> tuple[int, bool]:
         if self.executable is None:
             raise RootFileError("tool.unavailable", "Ripgrep is unavailable")
@@ -149,7 +174,7 @@ class RootFileSearch:
                     *arguments,
                     cwd=f"/proc/self/fd/{directory_fd}",
                     env={"LANG": os.environ.get("LANG", "C.UTF-8")},
-                    stdin=asyncio.subprocess.DEVNULL,
+                    stdin=input_fd if input_fd is not None else asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     start_new_session=True,

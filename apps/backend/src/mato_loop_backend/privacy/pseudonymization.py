@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import copy
+import hmac
+import json
+import re
 import secrets
 from collections.abc import Callable
 from functools import lru_cache
@@ -20,6 +23,8 @@ from presidio_analyzer.predefined_recognizers import (
 )
 
 _SECRET_SCAN_LOCK = Lock()
+_MARKER_PATTERN = re.compile(r"\[\[MLP_.*?(?:\]\]|$)", re.DOTALL)
+_TRANSMITTED_MARKER_PATTERN = re.compile(r"\[\[MLP_[A-F0-9]{32}\]\]")
 _SECRET_SCAN_SETTINGS = {
     "plugins_used": [
         {"name": name}
@@ -152,18 +157,26 @@ class RequestPseudonymizer:
         "in the input."
     )
 
-    def __init__(self) -> None:
-        self._nonce = secrets.token_hex(4).upper()
-        self._markers: dict[tuple[str, str], str] = {}
+    def __init__(self, *, key: bytes | None = None) -> None:
+        # Only the random identity key is run-local; restoration stays request-local.
+        self._key = key if key is not None else secrets.token_bytes(32)
         self._originals: dict[str, str] = {}
 
     @property
     def max_marker_length(self) -> int:
-        return max((len(marker) for marker in self._originals), default=0)
+        return len(self.marker_prefix) + 32 + 2
 
     @property
     def marker_prefix(self) -> str:
-        return f"[[MLP_{self._nonce}_"
+        return "[[MLP_"
+
+    def retain_transmitted(self, body: dict[str, Any]) -> None:
+        """Discard restoration authority for fields omitted by the transport serializer."""
+        transmitted = set(_TRANSMITTED_MARKER_PATTERN.findall(json.dumps(body, ensure_ascii=False)))
+        self._originals = {
+            marker: original for marker, original in self._originals.items()
+            if marker in transmitted
+        }
 
     def protect_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         try:
@@ -172,6 +185,10 @@ class RequestPseudonymizer:
                 content = message.get("content")
                 if isinstance(content, str):
                     message["content"] = self.protect_text(content)
+                if message.get("role") != "assistant":
+                    # Only assistant messages can carry executable calls. Omitted arguments
+                    # must not activate a raw marker supplied elsewhere in this request.
+                    message.pop("tool_calls", None)
                 tool_calls = message.get("tool_calls")
                 if isinstance(tool_calls, list):
                     for call in tool_calls:
@@ -179,22 +196,19 @@ class RequestPseudonymizer:
                             call["arguments"] = self.protect_value(call["arguments"])
                 # Opaque continuation data cannot be inspected or safely pseudonymized.
                 message.pop("provider_data", None)
-            if self._originals:
-                system_message = next(
-                    (
-                        message
-                        for message in protected
-                        if message.get("role") == "system"
-                        and isinstance(message.get("content"), str)
-                    ),
-                    None,
-                )
-                if system_message is None:
-                    protected.insert(
-                        0, {"role": "system", "content": self._marker_instruction}
-                    )
-                else:
-                    system_message["content"] += f"\n\n{self._marker_instruction}"
+            system_message = next(
+                (
+                    message
+                    for message in protected
+                    if message.get("role") == "system"
+                    and isinstance(message.get("content"), str)
+                ),
+                None,
+            )
+            if system_message is None:
+                protected.insert(0, {"role": "system", "content": self._marker_instruction})
+            else:
+                system_message["content"] += f"\n\n{self._marker_instruction}"
             return protected
         except PseudonymizationError:
             raise
@@ -241,12 +255,12 @@ class RequestPseudonymizer:
         protected = text
         for result in sorted(selected, key=lambda item: item.start, reverse=True):
             original = text[result.start : result.end]
-            key = (result.entity_type, original.casefold())
-            marker = self._markers.get(key)
-            if marker is None:
-                marker = f"{self.marker_prefix}{len(self._markers) + 1:04d}]]"
-                self._markers[key] = marker
-                self._originals[marker] = original
+            identity = json.dumps((result.entity_type, original), ensure_ascii=False).encode()
+            digest = hmac.digest(self._key, identity, "sha256").hex()[:32].upper()
+            marker = f"{self.marker_prefix}{digest}]]"
+            if marker in self._originals and self._originals[marker] != original:
+                raise PseudonymizationError("privacy.pseudonymizationFailed")
+            self._originals[marker] = original
             protected = protected[: result.start] + marker + protected[result.end :]
         return protected
 
@@ -257,23 +271,17 @@ class RequestPseudonymizer:
         unknown_marker_replacement: str | None = None,
         on_unknown_marker: Callable[[], None] | None = None,
     ) -> str:
-        restored = text
-        for marker, original in self._originals.items():
-            restored = restored.replace(marker, original)
-        while self.marker_prefix in restored:
+        def restore(match: re.Match[str]) -> str:
+            marker = match.group()
+            if marker in self._originals:
+                return self._originals[marker]
             if unknown_marker_replacement is None:
                 raise PseudonymizationError("privacy.pseudonymizationFailed")
-            marker_start = restored.index(self.marker_prefix)
-            marker_end = restored.find("]]", marker_start + len(self.marker_prefix))
-            marker_end = len(restored) if marker_end < 0 else marker_end + 2
-            restored = (
-                restored[:marker_start]
-                + unknown_marker_replacement
-                + restored[marker_end:]
-            )
             if on_unknown_marker is not None:
                 on_unknown_marker()
-        return restored
+            return unknown_marker_replacement
+
+        return _MARKER_PATTERN.sub(restore, text)
 
 
 class StreamingPseudonymRestorer:

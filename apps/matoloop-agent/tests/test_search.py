@@ -1,3 +1,4 @@
+import os
 import shutil
 import tempfile
 import unittest
@@ -29,6 +30,97 @@ def configuration(root: Path) -> AgentConfig:
 
 @unittest.skipUnless(shutil.which("rg"), "ripgrep is required")
 class SearchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_files_and_empty_glob(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            agent = MatoLoopAgent(configuration(root), "secret")
+            self.assertEqual(
+                await agent.search.glob(str(root), "*.missing"), {"paths": [], "truncated": False}
+            )
+            for name in ("notes.txt", ".hidden.txt", "-option.txt"):
+                with self.subTest(name=name):
+                    target = root / name
+                    target.write_text("other\nneedle\n")
+                    (root / ".gitignore").write_text(name + "\n")
+                    (root / "sibling.txt").write_text("needle\n")
+                    result = await agent.dispatch(
+                        Request.model_validate(
+                            {
+                                "type": "request",
+                                "id": REQUEST_ID,
+                                "operation": "filesystem.grep",
+                                "arguments": {
+                                    "path": str(target),
+                                    "pattern": "needle",
+                                    "include": "*.py",
+                                },
+                            }
+                        )
+                    )
+                    self.assertEqual(
+                        result,
+                        {
+                            "matches": [{"path": str(target), "line": 2, "text": "needle"}],
+                            "truncated": False,
+                        },
+                    )
+                    self.assertEqual(
+                        await agent.search.grep(str(target), "absent", None),
+                        {"matches": [], "truncated": False},
+                    )
+                    with self.assertRaises(AgentError):
+                        await agent.search.grep(str(target), "[", None)
+                    for count in (100, 101):
+                        target.write_text("needle\n" * count)
+                        result = await agent.search.grep(str(target), "needle", None)
+                        self.assertEqual(len(result["matches"]), 100)
+                        self.assertEqual(result["truncated"], count == 101)
+                    target.write_bytes(b"needle\n\0needle\n")
+                    self.assertEqual(
+                        await agent.search.grep(str(target), "needle", None),
+                        {"matches": [], "truncated": False},
+                    )
+            (root / ".git").mkdir()
+            target = root / ".git/config"
+            target.write_text("needle")
+            self.assertEqual((await agent.search.grep(str(target), "needle", None))["matches"], [])
+            with patch.object(agent.search, "_run", return_value=(2, False)):
+                with self.assertRaises(AgentError):
+                    await agent.search.glob(str(root), "*.txt")
+
+    async def test_explicit_file_replacement_cannot_widen_access(self) -> None:
+        for replacement in ("symlink", "directory", "fifo"):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                target = root / "target.txt"
+                outside = root / "outside.txt"
+                outside.write_text("secret")
+                target.write_text("safe")
+                agent = MatoLoopAgent(configuration(root), "secret")
+                original_open = agent.filesystem._open_regular
+
+                def replace_then_open(
+                    parent_fd,
+                    name,
+                    target=target,
+                    outside=outside,
+                    replacement=replacement,
+                    original_open=original_open,
+                ):
+                    target.unlink()
+                    if replacement == "symlink":
+                        target.symlink_to(outside)
+                    elif replacement == "directory":
+                        target.mkdir()
+                        (target / "secret.txt").write_text("secret")
+                    else:
+                        os.mkfifo(target)
+                    return original_open(parent_fd, name)
+
+                with patch.object(agent.filesystem, "_open_regular", side_effect=replace_then_open):
+                    with self.assertRaises(AgentError):
+                        await agent.search.grep(str(target), "secret", None)
+
     async def test_dispatches_glob_and_grep_without_hidden_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

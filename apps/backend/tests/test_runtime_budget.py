@@ -83,6 +83,8 @@ async def test_profile_budget_snapshot_and_unlimited_run(monkeypatch, limit, cal
     await AgentRuntime._execute_loop(db, run)
 
     assert len(requests) == calls + 1
+    assert len({request["pseudonymization_key"] for request in requests}) == 1
+    assert len(requests[0]["pseudonymization_key"]) == 32
     assert tool_registry._execute_definition.await_count == calls
     assert len(_tool_messages(db)) == calls
     assert bool(requests[-1]["tools"]) is (limit is None)
@@ -135,6 +137,19 @@ async def test_truncated_repairs_are_bounded_even_with_unlimited_budget(monkeypa
         await AgentRuntime._execute_loop(db, run)
     assert len(requests) == len(_tool_messages(db)) == 3
     tool_registry._execute_definition.assert_not_awaited()
+
+
+async def test_independent_runtime_invocations_do_not_share_privacy_keys(monkeypatch):
+    keys = []
+    for _ in range(2):
+        db, run, requests, _projections, _events = await _runtime_setup(
+            monkeypatch, [ProviderResult(content="Done")],
+            search_policy=WebSearchPolicy.AVAILABLE,
+        )
+        await AgentRuntime._execute_loop(db, run)
+        keys.append(requests[0]["pseudonymization_key"])
+        assert all("pseudonymization_key" not in str(item.provider_data) for item in _assistant_messages(db))
+    assert keys[0] != keys[1]
 
 
 async def test_alternative_edit_patch_repair_retains_original_failure(monkeypatch):

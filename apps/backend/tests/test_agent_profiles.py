@@ -89,11 +89,13 @@ def test_builtin_agent_profile_defaults() -> None:
     assert plan.session_write_paths == []
     assert build.delegation_enabled is True
     assert build.session_write_paths is None
-    assert "Return the plan directly in the conversation" in plan.instructions
+    assert "plan directly in the conversation" in plan.instructions
     assert "Do not implement" in plan.instructions
-    assert "shortest form sufficient to implement" in plan.instructions
+    assert "shortest actionable plan" in plan.instructions
+    assert "not an implementation plan" in plan.instructions
+    assert "do not substitute a simpler but different feature" in plan.instructions
     assert "Do not restate the request or add boilerplate sections" in plan.instructions
-    assert "avoid asking questions the project can answer" in plan.instructions
+    assert "Resolve project facts from the code rather than asking the user" in plan.instructions
     assert "Do not turn such choices into assumptions" in plan.instructions
     assert "do not call any tool" not in plan.instructions
     assert "continue only permitted analysis and planning" in plan.runtime_instructions

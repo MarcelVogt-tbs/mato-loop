@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import re
+import secrets
 import time
 import traceback
 from collections.abc import Awaitable, Callable
@@ -96,7 +97,6 @@ from mato_loop_backend.agent.title_generation import (
 from mato_loop_backend.agent.title_generation import (
     initial_session_title as _initial_session_title,
 )
-from mato_loop_backend.agent.todos import session_todos, todo_context
 from mato_loop_backend.agent.tool_arguments import (
     ProtectedQuestionResolution,
     QuestionRequestArguments,
@@ -1923,6 +1923,7 @@ class AgentRuntime:
         budget_finalization = False
         truncated_tool_batches = 0
         live_tool_calls: dict[UUID, list[dict[str, Any]]] = {}
+        pseudonymization_key = secrets.token_bytes(32)
         session_read_cursors: dict[UUID, UUID | None] = {}
         automatic_memories: list[MemoryRecord] | None = None
         automatic_relevant_episodes: list[EpisodeReference] | None = None
@@ -2581,6 +2582,7 @@ class AgentRuntime:
                 "timeout": runtime_settings.request_timeout_seconds,
                 "target_trust_level": model_trust_level,
                 "pseudonymization_enabled": run_pseudonymization_enabled,
+                "pseudonymization_key": pseudonymization_key,
                 "prompt_cache_key": str(chat_session.id),
                 "required_image_ids": (),
                 "reasoning_effort": (
@@ -2637,11 +2639,6 @@ class AgentRuntime:
                             prompt_agent_profile.runtime_instructions if prompt_agent_profile else ""
                         ),
                         memory_context=memory_context,
-                        todo_context=(
-                            todo_context(session_todos(records))
-                            if "todo_write" in offered_tool_names
-                            else None
-                        ),
                         tool_schemas=schemas,
                         model=model,
                         target_trust_level=model_trust_level,

@@ -123,6 +123,6 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
         "name_hint",
     }
     assert prompt_tokens <= 7_300, prompt_tokens
-    # Permission reasons add one small host field to each permission-capable tool.
-    assert schema_tokens <= 9_400, schema_tokens
-    assert prompt_tokens + schema_tokens <= 16_700, prompt_tokens + schema_tokens
+    # Required permission reasons now include bounds and per-call guidance in every applicable schema.
+    assert schema_tokens <= 11_400, schema_tokens
+    assert prompt_tokens + schema_tokens <= 18_700, prompt_tokens + schema_tokens

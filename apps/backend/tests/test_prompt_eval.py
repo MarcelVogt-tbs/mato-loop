@@ -41,6 +41,24 @@ def _case(case_id: str):
     return next(case for case in CASES if case.id == case_id)
 
 
+def test_scoped_plan_and_child_cases_use_real_profiles_and_reject_extra_work() -> None:
+    for name in (
+        "plan_assessment_matches_requested_feature",
+        "plan_explicit_implementation_remains_actionable",
+        "delegated_findings_stay_bounded",
+    ):
+        case = _case(name)
+        messages, tools = build_case(case)
+        assert tools
+        assert case.max_content_words is not None
+        assert evaluate(case, ProviderResult(content="word " * 500))
+        assert evaluate(case, ProviderResult(tool_calls=[ToolCall("extra", "read", {})]))
+        if name.startswith("plan_"):
+            assert "Match depth to the requested deliverable" in messages[0]["content"]
+        else:
+            assert "Do not expand research into a full plan unless assigned one" in messages[0]["content"]
+
+
 def _source_constants(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     return {
@@ -2331,10 +2349,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 138
-    assert payload["contractCount"] == 355
-    assert "Cases: 217" in report
+    assert payload["contractCount"] == 358
+    assert "Cases: 220" in report
     assert "Semantic contracts: 138" in report
-    assert "All inventory rows: 355" in report
+    assert "All inventory rows: 358" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

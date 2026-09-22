@@ -611,7 +611,7 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
     assert persisted.user_id == session.user_id
     assert persisted.reason == "Die andere Session enthält den benötigten Kontext."
     assert persisted.payload["resourceDisplay"] == "Ziel-Session"
-    assert "_reason" not in persisted.payload["arguments"]
+    assert persisted.payload["arguments"]["_reason"] == persisted.reason
     enqueue.assert_awaited_once_with(db, persisted)
     statement = db.scalar.await_args.args[0]
     assert "chat_sessions.user_id =" in str(statement)

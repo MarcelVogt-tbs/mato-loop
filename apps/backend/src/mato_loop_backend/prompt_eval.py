@@ -66,6 +66,7 @@ from mato_loop_backend.settings.models import (
     PersonaProfile,
     ReasoningEffort,
     SkillDefinition,
+    plan_profile,
 )
 
 DEFAULT_MODELS = (
@@ -91,7 +92,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 39
+INVENTORY_VERSION = 40
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -283,7 +284,7 @@ def _privacy_fixture() -> tuple[str, str]:
             },
         ]
     )
-    marker = re.search(r"\[\[MLP_[A-F0-9]+_\d{4}\]\]", protected[1]["content"])
+    marker = re.search(r"\[\[MLP_[A-F0-9]{32}\]\]", protected[1]["content"])
     if marker is None:
         raise RuntimeError("Privacy evaluator fixture was not pseudonymized")
     instruction = protected[0]["content"].removeprefix("Evaluator privacy fixture.\n\n")
@@ -840,6 +841,51 @@ CASES = (
             "path": "terminanfrage.md",
         },
         argument_contains={"new_text": ("Dienstag",)},
+    ),
+    PromptCase(
+        id="plan_assessment_matches_requested_feature",
+        kind="general", scope="quality",
+        user=(
+            "Bewerte die Idee einer vom Benutzer fest gewählten Startsession beim Öffnen der PWA. "
+            "Bekannt: / öffnet bisher einen neuen Entwurf; ?session= ist ein Deep Link. "
+            "Neue Session muss weiter möglich bleiben. Es geht um einen festen Einstieg, "
+            "nicht um die zuletzt benutzte Session."
+        ),
+        system_options={"agent_profile": plan_profile()},
+        tools=("read", "glob", "grep", "task", "todo_write", "question"),
+        expected_no_tools=True, max_content_words=180,
+        content_contains=("Startsession",),
+        content_excludes=("CREATE TABLE", "GET /sessions", "Alembic"),
+    ),
+    PromptCase(
+        id="plan_explicit_implementation_remains_actionable",
+        kind="general", scope="quality",
+        user=(
+            "Plane die Umsetzung einer optionalen, fest gewählten Startsession pro Benutzer. "
+            "Beschlossen: Ein boolean auf chat_sessions mit Unique-Index pro Benutzer; "
+            "nur eigene Hauptsessions; beim Löschen entfällt die Auswahl. / löst sie auf, "
+            "?session= hat Vorrang, ?new=1 öffnet einen neuen Entwurf. "
+            "Die Struktur ist bekannt: FastAPI/SQLAlchemy/Alembic und Vue Router/Pinia. "
+            "Liefere Umsetzungsschritte und passende Tests."
+        ),
+        system_options={"agent_profile": plan_profile()},
+        tools=("read", "task", "question"), expected_no_tools=True,
+        content_contains=("Alembic", "new=1"),
+        content_contains_any=(("Test", "test"), ("Unique", "unique", "eindeutig")),
+        max_content_words=350,
+    ),
+    PromptCase(
+        id="delegated_findings_stay_bounded",
+        kind="general", scope="quality",
+        user=(
+            "Report only the two entry points and the relevant routing risk, at most 80 words. "
+            "Evidence: manifest.json:8 has start_url '/'; ChatPage.vue:830 loads a new draft "
+            "when session query is absent. Evidence is sufficient; return findings now.\n\n"
+            "<system-reminder>" + plan_profile().runtime_instructions + "</system-reminder>"
+        ),
+        system_options={"agent_profile": plan_profile(), "delegated": True},
+        tools=("read", "glob", "grep"), expected_no_tools=True,
+        content_contains=("manifest.json:8", "ChatPage.vue:830"), max_content_words=80,
     ),
     PromptCase(
         id="console_diagnostics_use_assistant_text",
@@ -4123,7 +4169,8 @@ _SEMANTIC_CONTRACTS = (
     ContractCoverage(
         "agent.delegated_task",
         "tools",
-        ("codebase_investigation_uses_delegated_task",),
+        ("codebase_investigation_uses_delegated_task", "plan_assessment_matches_requested_feature",
+         "plan_explicit_implementation_remains_actionable", "delegated_findings_stay_bounded"),
     ),
     ContractCoverage("file.provide", "file", ("provide_file_creates_download",)),
     ContractCoverage(
@@ -5271,8 +5318,9 @@ _V2_TOOL_DESCRIPTIONS = {
         "root=computer honors ignores; root=files overrides them. truncated=true: more/size limit."
     ),
     "grep": (
-        "Regex recursively; include glob; max 100 lines, 2000 characters/line. "
-        "Skip .git/binary/symlinks. root=computer skips hidden/ignored; "
+        "Regex in a file or recursively in a directory; include glob filters directories only. "
+        "Explicit files bypass hidden/ignore discovery filters. Max 100 lines, 2000 characters/line. "
+        "Skip .git/binary/symlinks. Directory root=computer skips hidden/ignored; "
         "root=files includes hidden; include overrides ignores. "
         "truncated=true: more/clipped text/size limit."
     ),

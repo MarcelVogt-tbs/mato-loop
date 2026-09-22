@@ -78,7 +78,7 @@ def test_pseudonymizer_protects_structured_secret_and_complete_private_key() -> 
     assert pseudonymizer.restore_text(protected) == source
 
 
-def test_protect_messages_adds_marker_instruction_only_when_needed() -> None:
+def test_protect_messages_keeps_marker_instruction_stable() -> None:
     pseudonymizer = RequestPseudonymizer()
 
     protected = pseudonymizer.protect_messages(
@@ -95,7 +95,7 @@ def test_protect_messages_adds_marker_instruction_only_when_needed() -> None:
     untouched = RequestPseudonymizer().protect_messages(
         [{"role": "system", "content": "Systemvertrag"}]
     )
-    assert untouched == [{"role": "system", "content": "Systemvertrag"}]
+    assert untouched[0] == protected[0]
 
 
 def test_pseudonymizer_preserves_unavailable_error_code(monkeypatch) -> None:
@@ -124,7 +124,7 @@ def test_streaming_restorer_handles_marker_boundaries() -> None:
 def test_streaming_restorer_rejects_unknown_request_marker() -> None:
     pseudonymizer = RequestPseudonymizer()
     protected = pseudonymizer.protect_text("anna@example.com")
-    unknown = protected.replace("0001", "9999")
+    unknown = protected[:-2] + "UNKNOWN]]"
     restorer = StreamingPseudonymRestorer(pseudonymizer)
 
     with pytest.raises(PseudonymizationError, match="privacy.pseudonymizationFailed"):
@@ -134,7 +134,7 @@ def test_streaming_restorer_rejects_unknown_request_marker() -> None:
 def test_visible_restoration_replaces_and_reports_unknown_markers() -> None:
     pseudonymizer = RequestPseudonymizer()
     protected = pseudonymizer.protect_text("anna@example.com")
-    unknown = protected.replace("0001", "9999")
+    unknown = protected[:-2] + "UNKNOWN]]"
     reported = []
 
     assert pseudonymizer.restore_text(
@@ -143,10 +143,51 @@ def test_visible_restoration_replaces_and_reports_unknown_markers() -> None:
         on_unknown_marker=lambda: reported.append(True),
     ) == "Kontakt: [...]"
     assert reported == [True]
-
     with pytest.raises(PseudonymizationError, match="privacy.pseudonymizationFailed"):
         pseudonymizer.restore_value({"address": unknown})
 
+
+def test_run_key_stabilizes_identity_without_sharing_restoration_authority() -> None:
+    key = b"r" * 32
+    first = RequestPseudonymizer(key=key)
+    old = first.protect_text("old@example.com")
+    shared = first.protect_text("shared@example.com")
+    estimate = RequestPseudonymizer(key=key)
+    estimate.protect_text("speculative@example.com")
+    second = RequestPseudonymizer(key=key)
+    assert second.protect_text("shared@example.com") == shared
+    assert second.restore_text(shared) == "shared@example.com"
+    assert RequestPseudonymizer().protect_text("shared@example.com") != shared
+    with pytest.raises(PseudonymizationError):
+        second.restore_value({"recipient": old})
+    # Raw placeholders do not activate old values, even with the same run key.
+    second.protect_messages([{"role": "user", "content": old}])
+    with pytest.raises(PseudonymizationError):
+        second.restore_text(old)
+    second.retain_transmitted({"messages": [{"role": "user", "content": "No contact"}]})
+    with pytest.raises(PseudonymizationError):
+        second.restore_text(shared)
+
+
+def test_exact_originals_and_single_pass_restoration(monkeypatch) -> None:
+    pseudonymizer = RequestPseudonymizer()
+    original = ["password=CaseSensitive", "password=casesensitive"]
+    protected = pseudonymizer.protect_value(original)
+    assert protected[0] != protected[1]
+    assert pseudonymizer.restore_value(protected) == original
+    monkeypatch.setattr(pseudonymization_module, "_analyze", lambda text: [
+        pseudonymization_module.RecognizerResult("SECRET", 0, len(text), 1.0)
+    ])
+    embedded = "secret containing [[MLP_original]]"
+    assert pseudonymizer.restore_text(pseudonymizer.protect_text(embedded)) == embedded
+
+
+def test_identity_collision_fails_closed(monkeypatch) -> None:
+    monkeypatch.setattr(pseudonymization_module.hmac, "digest", lambda *args: b"x" * 32)
+    pseudonymizer = RequestPseudonymizer()
+    pseudonymizer.protect_text("first@example.com")
+    with pytest.raises(PseudonymizationError):
+        pseudonymizer.protect_text("second@example.com")
 
 def test_streaming_visible_restoration_replaces_incomplete_marker() -> None:
     pseudonymizer = RequestPseudonymizer()

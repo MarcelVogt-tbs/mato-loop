@@ -361,7 +361,7 @@ async def test_public_complete_pseudonymizes_and_restores_request_scope(
         assert "provider_data" not in request.messages[-1]
         assert request.messages[0]["role"] == "system"
         assert "Host privacy placeholders" in request.messages[0]["content"]
-        markers = re.findall(r"\[\[MLP_[A-F0-9]+_\d{4}\]\]", protected)
+        markers = re.findall(r"\[\[MLP_[A-F0-9]{32}\]\]", protected)
         assert markers
         pseudonym = markers[-1]
         await kwargs["on_delta"]("Kontakt: " + pseudonym[:7])
@@ -425,6 +425,71 @@ async def test_public_complete_pseudonymizes_and_restores_request_scope(
     assert result.provider_data["output_budget"]["finalEstimatedInputTokens"] == prepared.estimated_input_tokens
 
 
+@pytest.mark.parametrize("api_type", ["chat_completions", "responses"])
+async def test_run_privacy_keeps_serialized_prefix_and_request_scope(monkeypatch, api_type) -> None:
+    provider = LlmProviderConfig(
+        name="Public", adapter_type="openai-compatible",
+        config={"base_url": "http://public.test/v1", "api_type": api_type},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="public-model")
+    options = dict(provider=provider, model=model, tools=[], pseudonymization_key=b"r" * 32)
+    source = [{"role": "user", "content": "Contact anna@example.com"}]
+    first = await ProviderService.prepare_request(messages=source, **options)
+    # Candidate preparation neither changes identities nor grants later restoration access.
+    await ProviderService.prepare_request(
+        messages=[{"role": "user", "content": "discarded@example.com"}], **options,
+    )
+    second = await ProviderService.prepare_request(
+        messages=[*source, {"role": "assistant", "content": "Noted"},
+                  {"role": "user", "content": "Also bob@example.com"}], **options,
+    )
+    serializer = _responses_body if api_type == "responses" else _chat_body
+    field = "input" if api_type == "responses" else "messages"
+    before, after = serializer(first.request), serializer(second.request)
+    assert after[field][:len(before[field])] == before[field]
+    if api_type == "responses":
+        assert before["instructions"] == after["instructions"]
+    old_marker = first.request.messages[-1]["content"].removeprefix("Contact ")
+
+    async def response(**kwargs):
+        assert kwargs["request"].messages == first.request.messages
+        return ProviderResult(content=old_marker)
+
+    monkeypatch.setattr(service_module, "chat_completions", response)
+    monkeypatch.setattr(service_module, "responses_api", response)
+    result = await ProviderService.complete(AsyncMock(spec=AsyncSession), messages=source, **options)
+    assert result.content == "anna@example.com"
+
+    current = await ProviderService.prepare_request(
+        messages=[{"role": "user", "content": old_marker}], **options,
+    )
+    assert current.pseudonymizer is not None
+    with pytest.raises(service_module.PseudonymizationError):
+        current.pseudonymizer.restore_value({"recipient": old_marker})
+
+
+async def test_privacy_drops_authority_for_serializer_omitted_fields() -> None:
+    provider = LlmProviderConfig(
+        name="Public", adapter_type="openai-compatible",
+        config={"base_url": "http://public.test/v1", "api_type": "responses"},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="public-model")
+    key = b"r" * 32
+    marker = service_module.RequestPseudonymizer(key=key).protect_text("omitted@example.com")
+    prepared = await ProviderService.prepare_request(
+        provider=provider, model=model, tools=[], pseudonymization_key=key, messages=[{
+            "role": "system", "content": "System",
+            "tool_calls": [{"id": "omitted", "name": "read", "arguments": {
+                "contact": "omitted@example.com",
+            }}],
+        }, {"role": "user", "content": marker}],
+    )
+    assert "tool_calls" not in prepared.request.messages[0]
+    assert prepared.pseudonymizer is not None
+    with pytest.raises(service_module.PseudonymizationError):
+        prepared.pseudonymizer.restore_value({"recipient": marker})
+
+
 async def test_public_complete_rejects_unknown_pseudonym_marker(monkeypatch) -> None:
     provider = LlmProviderConfig(
         name="Public",
@@ -435,9 +500,9 @@ async def test_public_complete_rejects_unknown_pseudonym_marker(monkeypatch) -> 
 
     async def fake_chat_completions(**kwargs):
         protected = kwargs["request"].messages[-1]["content"]
-        marker = re.search(r"\[\[MLP_[A-F0-9]+_\d{4}\]\]", protected)
+        marker = re.search(r"\[\[MLP_[A-F0-9]{32}\]\]", protected)
         assert marker is not None
-        unknown_marker = marker.group().replace("0001", "9999")
+        unknown_marker = marker.group()[:-2] + "UNKNOWN]]"
         return ProviderResult(
             content="",
             tool_calls=[
@@ -478,9 +543,9 @@ async def test_public_complete_warns_and_continues_for_unknown_visible_marker(
 
     async def fake_chat_completions(**kwargs):
         protected = kwargs["request"].messages[-1]["content"]
-        marker = re.search(r"\[\[MLP_[A-F0-9]+_\d{4}\]\]", protected)
+        marker = re.search(r"\[\[MLP_[A-F0-9]{32}\]\]", protected)
         assert marker is not None
-        unknown = marker.group().replace("0001", "9999")
+        unknown = marker.group()[:-2] + "UNKNOWN]]"
         await kwargs["on_delta"]("Kontakt: " + unknown)
         await kwargs["on_reasoning"]("Pruefe " + unknown, "summary")
         return ProviderResult(
@@ -1263,7 +1328,7 @@ async def test_media_selection_precedes_pseudonymization(monkeypatch) -> None:
     reference.update({"historical": True, "source_order": 0})
     captured = {}
 
-    class ReplacingPseudonymizer:
+    class ReplacingPseudonymizer(service_module.RequestPseudonymizer):
         def protect_messages(self, messages):
             assert all("attachments" not in message for message in messages)
             return [
@@ -1950,7 +2015,7 @@ async def test_output_budget_rechecks_pseudonym_expansion_and_required_reserve(m
     )
     model = ModelConfig(provider_id=provider.id, model_id="arbitrary", context_window_tokens=8192)
 
-    class ExpandingPseudonymizer:
+    class ExpandingPseudonymizer(service_module.RequestPseudonymizer):
         def protect_messages(self, messages):
             return [{"role": "system", "content": "privacy " * 100},
                     {"role": "user", "content": "placeholder " * 400}]

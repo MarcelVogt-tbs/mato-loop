@@ -3046,9 +3046,11 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     assert "do not inherit the parent transcript" in child
     assert "Respond in English" in child
     assert "Respond in the user's language" not in child
-    assert "complete goal" in work
+    assert "exact question, scope, stopping condition" in work
+    assert "result format and length" in work
+    assert "Do not expand research into a full plan unless assigned one" in child
     assert "acceptance criteria" in work
-    assert "write each task prompt in English" in work
+    assert "In English, give" in work
     assert "overlapping writes" in work
     assert work.count(build.instructions) == 1
     assert "do not lift those constraints or switch profiles" in work
@@ -3577,7 +3579,7 @@ async def test_private_tool_body_size_does_not_distort_history_compaction(
     assert summarize.await_count == int(projection.compacted)
     marker = _SHORTENED_TOOL_OUTPUT.lstrip()
     baselines = [candidate for candidate in candidates if candidate[-1]["content"] == marker]
-    assert len(baselines) == 1 + int(projection.compacted)
+    assert len({json.dumps(candidate, sort_keys=True) for candidate in baselines}) == 1 + int(projection.compacted)
     for baseline in baselines:
         full = next(candidate for candidate in candidates if candidate[:-1] == baseline[:-1])
         assert baseline[-1] == {**full[-1], "content": marker}
@@ -3620,7 +3622,7 @@ async def test_unshortenable_private_tool_body_keeps_privacy_overhead_in_compact
     blank = [{**message} for message in messages]
     blank[-1]["content"] = ""
     assert await estimate(blank) == trigger - 6
-    assert await estimate(messages) > raw_input_budget(model.context_window_tokens - 100)
+    assert await estimate(messages) > trigger
     minimum = deepcopy(messages)
     _limit_tool_output_tokens(
         minimum, [len(minimum) - 1], 0, model.characters_per_token,

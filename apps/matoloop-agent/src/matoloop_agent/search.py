@@ -72,6 +72,8 @@ class FilesystemSearch:
 
     async def glob(self, path: str, pattern: str) -> dict:
         base = _parts(path)
+        if ".git" in base:
+            return {"paths": [], "truncated": False}
         paths: list[str] = []
         response_bytes = 32
 
@@ -117,38 +119,55 @@ class FilesystemSearch:
             b"\0",
             consume,
         )
-        if return_code != 0 and not truncated:
+        if return_code not in {0, 1} and not truncated:
             raise AgentError("operation.failed", "Glob search failed")
         paths.sort()
         return {"paths": paths, "truncated": truncated}
 
     async def grep(self, path: str, pattern: str, include: str | None) -> dict:
         base = _parts(path)
+        if ".git" in base:
+            return {"matches": [], "truncated": False}
+        kind = self.filesystem.stat(path)["kind"]
+        if kind not in {"file", "directory"}:
+            raise AgentError("path.unsupportedType", "Search requires a regular file or directory")
+        is_file = kind == "file"
         matches: list[dict[str, str | int]] = []
         response_bytes = 32
         text_clipped = False
+        file_truncated = False
+        binary = False
 
         def consume(record: bytes) -> bool:
-            nonlocal response_bytes, text_clipped
+            nonlocal response_bytes, text_clipped, file_truncated, binary
             try:
                 message = json.loads(record)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise AgentError("operation.failed", "Invalid ripgrep output") from exc
+            data = message.get("data", {})
+            if is_file and message.get("type") == "end":
+                binary |= data.get("binary_offset") is not None
             if message.get("type") != "match":
                 return False
-            data = message.get("data", {})
             path_data = data.get("path", {})
             lines_data = data.get("lines", {})
-            path = self._path(path_data.get("text", ""))
+            result_path = self._path(path_data.get("text", ""))
             text = lines_data.get("text")
             line = data.get("line_number")
-            if path is None or not isinstance(text, str) or not isinstance(line, int) or line < 1:
+            if not isinstance(text, str) or not isinstance(line, int) or line < 1:
                 return False
-            result = self._result_path(base, path)
+            result = (
+                path if is_file else self._result_path(base, result_path) if result_path else None
+            )
             if result is None:
                 return False
+            if "\0" in text:
+                if is_file:
+                    binary = True
+                return False
             if len(matches) >= MAX_RESULTS:
-                return True
+                file_truncated = True
+                return not is_file
             text = text.rstrip("\r\n")
             match = {
                 "path": result,
@@ -157,7 +176,8 @@ class FilesystemSearch:
             }
             size = len(json.dumps(match, ensure_ascii=False).encode("utf-8")) + 1
             if response_bytes + size > self.filesystem.max_response_bytes:
-                return True
+                file_truncated = True
+                return not is_file
             matches.append(match)
             response_bytes += size
             text_clipped |= len(text) > MAX_MATCH_TEXT
@@ -168,7 +188,7 @@ class FilesystemSearch:
             "--json",
             "--no-require-git",
             "--no-follow",
-            "--no-binary",
+            "--binary" if is_file else "--no-binary",
             "--glob",
             "!.*",
             "--glob",
@@ -176,7 +196,7 @@ class FilesystemSearch:
             "--glob",
             "!**/.*/**",
         ]
-        if include is not None:
+        if include is not None and not is_file:
             arguments += [
                 "--type-clear",
                 "matoloop",
@@ -192,15 +212,29 @@ class FilesystemSearch:
             "!.git/**",
             "--regexp",
             pattern,
-            ".",
+            "-" if is_file else ".",
         ]
-        return_code, truncated = await self._run(path, arguments, b"\n", consume)
+        if is_file:
+            arguments = [f"--max-count={MAX_RESULTS + 1}", *arguments]
+            # Open once with no-follow and regular-file validation; never reopen the filename in rg.
+            with self.filesystem._parent(path) as (parent_fd, name, _parts_value):
+                fd, _metadata = self.filesystem._open_regular(parent_fd, name)
+            try:
+                return_code, truncated = await self._run(
+                    _path(base[:-1]), arguments, b"\n", consume, input_fd=fd
+                )
+            finally:
+                os.close(fd)
+        else:
+            return_code, truncated = await self._run(path, arguments, b"\n", consume)
         if return_code == 2 and not truncated:
             raise AgentError("request.invalid", "Invalid grep pattern")
         if return_code not in {0, 1} and not truncated:
             raise AgentError("operation.failed", "Grep search failed")
+        if binary:
+            return {"matches": [], "truncated": False}
         matches.sort(key=lambda match: (match["path"], match["line"]))
-        return {"matches": matches, "truncated": truncated or text_clipped}
+        return {"matches": matches, "truncated": truncated or text_clipped or file_truncated}
 
     async def _run(
         self,
@@ -208,6 +242,8 @@ class FilesystemSearch:
         arguments: list[str],
         delimiter: bytes,
         consume: Callable[[bytes], bool],
+        *,
+        input_fd: int | None = None,
     ) -> tuple[int, bool]:
         if self.executable is None:
             raise AgentError("operation.unsupported", "Ripgrep is unavailable")
@@ -218,7 +254,7 @@ class FilesystemSearch:
                 *arguments,
                 cwd=cwd,
                 env={"LANG": os.environ.get("LANG", "C.UTF-8")},
-                stdin=asyncio.subprocess.DEVNULL,
+                stdin=input_fd if input_fd is not None else asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
