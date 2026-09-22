@@ -842,9 +842,11 @@ def general_system_prompt(
     if execution_agent_connected and "shell_run" in offered_tool_names:
         parts.append(
             "Use the most suitable available tool. Prefer dedicated tools and established "
-            "command-line utilities over custom scripts. Keep shell commands direct, readable, "
-            "and limited to the requested work. Do not add preliminary checks, fallbacks, "
-            "diagnostics, or branches unless they are required for correctness."
+            "command-line utilities over custom scripts. Give each shell call one clear purpose. "
+            "Keep reads of protected files or possible secret output separate from ordinary diagnostics. "
+            "Prefer non-secret metadata and avoid repeating protected reads. Avoid decorative echo "
+            "labels; format necessary multi-step commands for review. Do not add preliminary checks, "
+            "fallbacks, diagnostics, or branches unless required for correctness."
         )
         parts.append(
             "Tool routing: Prefer shell_run for direct API requests, custom HTTP, pagination, multiple "

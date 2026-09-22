@@ -330,16 +330,18 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
     assert rule not in offline_messages[0]["content"]
     command_rule = (
         "Use the most suitable available tool. Prefer dedicated tools and established "
-        "command-line utilities over custom scripts. Keep shell commands direct, readable, "
-        "and limited to the requested work. Do not add preliminary checks, fallbacks, "
-        "diagnostics, or branches unless they are required for correctness."
+        "command-line utilities over custom scripts. Give each shell call one clear purpose. "
+        "Keep reads of protected files or possible secret output separate from ordinary diagnostics. "
+        "Prefer non-secret metadata and avoid repeating protected reads. Avoid decorative echo "
+        "labels; format necessary multi-step commands for review. Do not add preliminary checks, "
+        "fallbacks, diagnostics, or branches unless required for correctness."
     )
     assert messages[0]["content"].count(command_rule) == 1
     assert command_rule not in offline_messages[0]["content"]
     growth = prompt_eval.estimate_tokens(messages[0]["content"], 4.0) - prompt_eval.estimate_tokens(
         offline_messages[0]["content"], 4.0
     )
-    assert 135 <= growth <= 155
+    assert 185 <= growth <= 200
 
     shell_only_messages, _tools = build_case(
         replace(case, tools=("shell_run",))

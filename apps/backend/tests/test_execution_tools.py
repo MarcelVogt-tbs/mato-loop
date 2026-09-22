@@ -23,7 +23,7 @@ from mato_loop_backend.agent.permissions import (
     shell_command_scope,
     shell_prefix_allowed,
 )
-from mato_loop_backend.agent.runtime import _tool_policy
+from mato_loop_backend.agent.runtime import _external_working_directory_policy, _tool_policy
 from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.agent.subagents import permission_snapshot
 from mato_loop_backend.agent.tool_arguments import (
@@ -72,6 +72,7 @@ from mato_loop_backend.settings import (
     TrustLevel,
     build_profile,
     plan_profile,
+    sysadmin_profile,
 )
 from mato_loop_backend.workspace import RootFileService, SessionStorage
 
@@ -917,6 +918,60 @@ async def test_coding_profile_auto_reads_keep_path_boundaries(
     assert await PermissionPolicy.evaluate(
         context.db, context.session, request, context.root_files, policy,
         agent_profile_id=profile.id, trust_level=TrustLevel.PUBLIC,
+    ) == expected
+
+
+@pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
+@pytest.mark.parametrize("capability", ["filesystem.read", "shell.read"])
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/srv/stacks/sonobin/compose.yaml", PermissionDecision.ALLOW),
+        ("/srv/stacks/sonobin/.env", PermissionDecision.ASK),
+    ],
+)
+async def test_sysadmin_external_reads_only_ask_for_protected_paths(
+    tmp_path, trust, capability, path, expected
+) -> None:
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, ToolCall("read", "read", {}), client)
+    context.db.scalar.return_value = ExecutionAgent(
+        id=client.agent_id,
+        user_id=context.session.user_id,
+        home_directory="/home/user",
+        home_filesystem_policy="auto",
+        external_filesystem_policy="ask",
+        home_shell_enabled=True,
+        external_shell_enabled=True,
+    )
+    profile = sysadmin_profile()
+    settings = ToolSettings().select_trust(trust)
+    settings._agent_permissions = (
+        profile.private_permissions if trust == TrustLevel.PRIVATE else profile.public_permissions
+    )
+    request = (
+        execution_directory_permission(client.agent_id, path, capability=capability)
+        if capability == "filesystem.read"
+        else shell_command_permission(
+            client.agent_id,
+            client.current_directory,
+            f"cat {path}",
+            ShellInspectResult(
+                targets=[{"path": path, "kind": "input", "access": "read"}],
+                analysis_complete=True,
+                classification="read",
+                read_only=True,
+                commands=[],
+                inspection_revision="a" * 64,
+            ),
+        )
+    )
+
+    policy = _tool_policy(settings, IntegrationSettings(), request)
+    assert policy == ToolExecutionPolicy.AUTO
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session, request, context.root_files, policy,
+        external_working_directory_policy=_external_working_directory_policy(settings),
     ) == expected
 
 
