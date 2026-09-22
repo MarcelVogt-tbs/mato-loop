@@ -263,6 +263,24 @@ async def test_login_takeover_and_stale_controls(env):
     await env.coordinator.shutdown()
 
 
+async def test_shell_exit_rejects_new_work_but_allows_browser_close(env):
+    viewer = await open_viewer(env)
+    runtime = viewer.runtime
+    runtime.shell_exited = True
+    runtime.command_task = asyncio.create_task(asyncio.Event().wait())
+    try:
+        assert runtime.status()["state"] == "closed"
+        with pytest.raises(ExecutionClientError, match="terminal.disconnected"):
+            await runtime.check_access()
+        viewer.websocket.receive_json = AsyncMock(return_value={"type": "close"})
+        await asyncio.wait_for(terminals._handle_browser(viewer), 1)
+        assert runtime.command_task.cancelled()
+        assert not env.coordinator._runtimes
+        assert env.calls[-1][0] == "terminal.close"
+    finally:
+        await env.coordinator.shutdown()
+
+
 async def test_bounded_raw_replay_and_slow_viewer_resync(env):
     first = await open_viewer(env)
     for _ in range(140):

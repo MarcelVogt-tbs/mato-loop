@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import json
 from dataclasses import replace
@@ -30,7 +31,9 @@ from mato_loop_backend.execution import (
     SharedTerminalStatus,
     ShellInspectResult,
     TerminalControlResult,
+    TerminalReadResult,
 )
+from mato_loop_backend.execution import terminals as terminal_module
 from mato_loop_backend.execution.terminals import TerminalCoordinator, TerminalRuntime
 from mato_loop_backend.models import (
     AgentRun,
@@ -422,6 +425,98 @@ async def test_uncertain_execution_keeps_streamed_output_and_is_not_retried(env)
     assert result.metadata["errorCode"] == "process.outcomeUnknown"
     assert payload["output"]["stdout"] == "evidence"
     assert env.native.executions == 1
+
+
+@pytest.mark.parametrize("order,exit_code", [
+    ("result_first", None), ("result_first", 7),
+    ("eof_first", None), ("eof_first", 7),
+    ("missing_result", None), ("user_cancel", None),
+    ("access_loss", None), ("explicit_close", None),
+])
+async def test_shell_exit_preserves_completion_without_delaying_termination(
+    env, monkeypatch, order, exit_code,
+):
+    env.policy = ToolExecutionPolicy.AUTO
+    env.native.hold = True
+    env.native.exit_code = exit_code
+    eof, eof_seen, access_lost = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    original = env.native.request
+
+    async def request(operation, arguments, model, **kwargs):
+        if operation == "terminal.read":
+            await eof.wait()
+            eof_seen.set()
+            return TerminalReadResult(
+                data=base64.b64encode(b"final error\r\n").decode(), eof=True, exit_code=1,
+            )
+        result = await original(operation, arguments, model, **kwargs)
+        if operation == "terminal.shared.execute":
+            await kwargs["on_event"](SimpleNamespace(event="stdout", data="final error"))
+        return result
+
+    async def watch(_coordinator, _runtime):
+        await access_lost.wait()
+        raise ExecutionClientError("auth.sessionExpired")
+
+    async def watch_status(_coordinator, _runtime):
+        await asyncio.Event().wait()
+
+    env.native.request = request
+    monkeypatch.setattr(TerminalCoordinator, "_watch", watch)
+    monkeypatch.setattr(TerminalCoordinator, "_watch_status", watch_status)
+    monkeypatch.setattr(
+        terminal_module, "COMMAND_RESULT_GRACE", 0.02 if order == "missing_result" else 10,
+    )
+    coordinator = TerminalCoordinator()
+    terminal = env.terminal
+    coordinator._runtimes[(terminal.user_id, terminal.owner_session_id, terminal.agent_id)] = terminal
+    terminal.task = asyncio.create_task(coordinator._supervise(terminal))
+    task = env.start("set -e; false")
+    try:
+        await asyncio.wait_for(env.native.started.wait(), 1)
+        if order == "result_first":
+            env.native.release.set()
+            result = await asyncio.wait_for(task, 1)
+            eof.set()
+        else:
+            eof.set()
+            await asyncio.wait_for(eof_seen.wait(), 1)
+            assert terminal.shell_exited and not terminal.closed
+            assert not task.done()
+            assert not any(op == "terminal.close" for op, _ in env.native.calls)
+            if order == "eof_first":
+                env.native.release.set()
+            elif order == "user_cancel":
+                task.cancel()
+            elif order == "access_loss":
+                access_lost.set()
+            elif order == "explicit_close":
+                await asyncio.wait_for(coordinator.terminate(terminal), 1)
+            if order == "user_cancel":
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, 1)
+                result = None
+            else:
+                result = await asyncio.wait_for(task, 1)
+        if order == "explicit_close":
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(terminal.task, 1)
+        else:
+            await asyncio.wait_for(terminal.task, 1)
+        if result is not None:
+            expected_code = "process.commandFailed" if exit_code == 7 else "process.outcomeUnknown"
+            assert result.metadata["errorCode"] == expected_code
+            output = json.loads(result.content)["output"]["stdout"]
+            assert output == (
+                "evidencefinal error" if order in {"result_first", "eof_first"} else "evidence"
+            )
+        assert env.native.executions == 1
+        assert sum(op == "terminal.close" for op, _ in env.native.calls) == 1
+        assert not coordinator._runtimes
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await coordinator.shutdown()
 
 
 async def test_shared_shell_cancellation_cancels_prepared_command(env):

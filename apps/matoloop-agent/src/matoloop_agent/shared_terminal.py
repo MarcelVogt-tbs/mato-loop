@@ -181,7 +181,6 @@ class SharedTerminal:
         self.command = None
         self.inspection = None
         self.waiters = {}
-        self.completions = {}
         self.reader = asyncio.create_task(self._read_control())
         self.capture = None
         self.capture_start = 0
@@ -248,9 +247,6 @@ class SharedTerminal:
                         self.state = "agent"
                         if self.received >= self.capture_end:
                             self.completed.set()
-                        completion = self.completions.get(request)
-                        if completion is not None and not completion.done():
-                            completion.set_result(None)
                         continue
                     waiter = self.waiters.get(request)
                     if waiter is not None and not waiter.done():
@@ -269,7 +265,7 @@ class SharedTerminal:
             if self.capture_end is None:
                 self.capture_end = self._boundary()
             self.completed.set()
-            for waiter in (*self.waiters.values(), *self.completions.values()):
+            for waiter in self.waiters.values():
                 if not waiter.done():
                     waiter.set_exception(
                         AgentError("terminal.closed", "Bash control channel closed")
@@ -432,15 +428,11 @@ class SharedTerminal:
             encoded = base64.b64encode(command.encode()).decode("ascii")
             self.state = "running"
             try:
-                request, _ = await self._send("execute", encoded)
+                await self._send("execute", encoded)
             except AgentError:
                 await self.manager._terminate(self.entry)
                 self.exit_code = None
                 self.completed.set()
-                request = None
-            if request is not None:
-                completion = asyncio.get_running_loop().create_future()
-                self.completions[request] = completion
 
         sent = emitted = 0
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
@@ -481,8 +473,6 @@ class SharedTerminal:
                 await emit(decoder.decode(chunk))
             await emit(decoder.decode(b"", final=True))
         finally:
-            if request is not None:
-                self.completions.pop(request, None)
             self.capture = None
             if self.state == "agent":
                 self.command_id = self.command = self.inspection = None

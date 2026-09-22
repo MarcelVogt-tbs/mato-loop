@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import gc
 import os
 import shutil
 import tempfile
@@ -140,6 +141,48 @@ class SharedTerminalTests(unittest.IsolatedAsyncioTestCase):
         terminal_output = await self.output_until(b"original:")
         self.assertIn(b"original:", terminal_output)
         self.assertIn(os.fsencode(self.home / "sub"), terminal_output)
+
+    async def test_persisted_errexit_closes_shell_without_unhandled_future(self):
+        errors = []
+        loop = asyncio.get_running_loop()
+        previous = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: errors.append(context))
+        try:
+            prepared = await self.prepare("set -e; true")
+            self.assertEqual((await self.execute(prepared))["exitCode"], 0)
+            self.command_id = str(uuid4())
+            prepared = await self.shared.prepare(
+                self.command_id, "printf BEFORE; sleep 0.05; false; printf AFTER"
+            )
+            output = []
+            result = await asyncio.wait_for(self.execute(prepared, output), 3)
+            self.assertIsNone(result["exitCode"])
+            self.assertFalse(result["timedOut"])
+            self.assertEqual((await self.shared.status())["state"], "closed")
+            text = "".join(data for _, data in output)
+            self.assertIn("BEFORE", text)
+            self.assertNotIn("AFTER", text)
+            await self.terminal.close_all()
+            gc.collect()
+            self.assertEqual(errors, [])
+        finally:
+            loop.set_exception_handler(previous)
+
+    async def test_child_shell_errexit_retains_shared_state_and_allows_followup(self):
+        prepared = await self.prepare(
+            "VALUE=kept; bash -c 'set -e; printf BEFORE; false; printf AFTER'"
+        )
+        output = []
+        result = await self.execute(prepared, output)
+        self.assertEqual(result["exitCode"], 1)
+        self.assertEqual("".join(data for _, data in output), "BEFORE")
+        self.assertEqual((await self.shared.status())["state"], "agent")
+        self.command_id = str(uuid4())
+        prepared = await self.shared.prepare(self.command_id, 'printf "%s" "$VALUE"')
+        output.clear()
+        result = await self.execute(prepared, output)
+        self.assertEqual(result["exitCode"], 0)
+        self.assertEqual("".join(data for _, data in output), "kept")
 
     async def test_cancel_and_timeout_return_control_without_replay(self):
         prepared = await self.prepare("sleep 30")

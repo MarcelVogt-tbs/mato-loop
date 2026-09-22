@@ -151,7 +151,10 @@ async def run_shared_shell(
     except (asyncio.CancelledError, ExecutionClientError) as exc:
         if isinstance(exc, asyncio.CancelledError) and asyncio.current_task().cancelling():
             raise
-        code = "process.interrupted" if isinstance(exc, asyncio.CancelledError) else exc.code
+        if isinstance(exc, asyncio.CancelledError):
+            code = "process.outcomeUnknown" if runtime.shell_exited else "process.interrupted"
+        else:
+            code = exc.code
         result = ToolResult.error(code)
         if executing:
             safe_output = redacted_output(False) if redacted_values else dict(output)
@@ -170,7 +173,7 @@ async def run_shared_shell(
             })
         return result
     finally:
-        if not completed and not runtime.closed:
+        if not completed and not runtime.closed and not runtime.shell_exited:
             with suppress(Exception):
                 async with asyncio.timeout(3):
                     await runtime.client.request(
@@ -180,7 +183,7 @@ async def run_shared_shell(
                         timeout=2,
                     )
         runtime.command_id = runtime.command_task = runtime.active_tool_call_id = None
-        if not runtime.closed:
+        if not runtime.closed and not runtime.shell_exited:
             with suppress(ExecutionClientError):
                 await runtime.refresh_status()
             await runtime.send_status()

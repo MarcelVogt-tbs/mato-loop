@@ -33,6 +33,7 @@ REPLAY_BYTES = 256 * 1024
 VIEWER_BYTES = 2 * 1024 * 1024
 VALIDITY_INTERVAL = 2
 VALIDITY_GRACE = 30
+COMMAND_RESULT_GRACE = 2
 TERMINAL_OPERATIONS = frozenset({
     "terminal.read", "terminal.write", "terminal.resize", "terminal.close",
     "terminal.shared.open", "terminal.shared.status", "terminal.shared.acquire",
@@ -143,6 +144,7 @@ class TerminalRuntime:
     opening_task: asyncio.Task | None = None
     cleanup_task: asyncio.Task | None = None
     closed: bool = False
+    shell_exited: bool = False
     suspended_since: float | None = None
     personal_buffer: bytes = b""
     personal_truncated: bool = False
@@ -158,7 +160,7 @@ class TerminalRuntime:
             "terminalId": self.terminal_id,
             "attached": self.attached,
             "busy": self.command_id is not None or (native is not None and native.state == "running"),
-            "state": "closed" if self.closed else
+            "state": "closed" if self.closed or self.shell_exited else
             "running" if self.command_task is not None and not self.command_task.done() else
             native.state if native else "busy",
             "activeToolCallId": self.active_tool_call_id,
@@ -197,7 +199,7 @@ class TerminalRuntime:
 
     async def check_access(self) -> None:
         while True:
-            if self.closed or self.generation != agent_generation(self.agent_id):
+            if self.closed or self.shell_exited or self.generation != agent_generation(self.agent_id):
                 raise ExecutionClientError("terminal.disconnected")
             login_id = self.login_id
             try:
@@ -214,7 +216,7 @@ class TerminalRuntime:
                 raise
             if login_id == self.login_id:
                 break
-        if self.closed:
+        if self.closed or self.shell_exited:
             raise ExecutionClientError("terminal.disconnected")
         self.suspended_since = None
 
@@ -237,6 +239,11 @@ async def read_terminal(runtime: TerminalRuntime) -> None:
         if result.data:
             await runtime.send_bytes(base64.b64decode(result.data, validate=True))
         if result.eof:
+            runtime.shell_exited = True
+            # PTY EOF can arrive before the execute response and its final output.
+            # Keep access supervision active while that response finishes.
+            if runtime.command_task is not None:
+                await asyncio.wait({runtime.command_task}, timeout=COMMAND_RESULT_GRACE)
             return
 
 

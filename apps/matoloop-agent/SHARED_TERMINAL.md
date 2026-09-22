@@ -56,6 +56,17 @@ independent. Cancel and timeout interrupt the foreground process group. Shell or
 control-channel loss can produce `exitCode=null`; callers must not automatically
 replay an uncertain execution.
 
+On PTY EOF, the backend allows an active execute response up to two seconds to
+finish before cleanup, preserving its final output and result. Access supervision
+and explicit termination remain active during this interval. A missing result at
+shell exit is an unknown outcome, not a user interruption.
+
+Shell options persist just like variables. Enabling `set -e` in the shared Bash
+can end the terminal on a later failing command. Run self-contained strict-mode
+scripts in a child shell (`bash -c 'set -e; ...'`) instead. This does not protect
+a parent shell that already has `errexit` enabled; that option must be explicitly
+disabled or a fresh terminal opened. Commands are never automatically rewritten.
+
 ## Linux Integration
 
 The agent starts Bash with a generated private rcfile and an inherited Unix socket.
