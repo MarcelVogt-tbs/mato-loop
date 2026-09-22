@@ -387,15 +387,17 @@ async def test_shell_paths_require_complete_coverage_from_directory_grants(tmp_p
 
 
 @pytest.mark.parametrize(
-    ("path", "home_policy", "external_policy", "expected"),
+    ("path", "home_policy", "computer_external_policy", "profile_external_policy", "expected"),
     [
-        ("/home/user/project", "auto", "deny", PermissionDecision.ALLOW),
-        ("/home/user-other", "auto", "deny", PermissionDecision.DENY),
-        ("/srv/project", "auto", "ask", PermissionDecision.ASK),
+        ("/home/user/project", "auto", "deny", ToolExecutionPolicy.ASK, PermissionDecision.ASK),
+        ("/home/user-other", "auto", "deny", ToolExecutionPolicy.AUTO, PermissionDecision.DENY),
+        ("/srv/project", "auto", "ask", ToolExecutionPolicy.ASK, PermissionDecision.ASK),
+        ("/srv/project", "auto", "ask", ToolExecutionPolicy.AUTO, PermissionDecision.ALLOW),
+        ("/srv/project", "auto", "auto", ToolExecutionPolicy.DISABLED, PermissionDecision.DENY),
     ],
 )
 async def test_execution_filesystem_policy_uses_home_boundary(
-    tmp_path, path, home_policy, external_policy, expected
+    tmp_path, path, home_policy, computer_external_policy, profile_external_policy, expected
 ) -> None:
     session = _session(user_id=uuid4())
     root_files = _root_files(tmp_path, session)
@@ -405,7 +407,7 @@ async def test_execution_filesystem_policy_uses_home_boundary(
         alias="Desktop",
         home_directory="/home/user",
         home_filesystem_policy=home_policy,
-        external_filesystem_policy=external_policy,
+        external_filesystem_policy=computer_external_policy,
     )
     db = _db_with_grants()
     db.scalar.return_value = agent
@@ -413,7 +415,14 @@ async def test_execution_filesystem_policy_uses_home_boundary(
         agent.id, path, capability="filesystem.read"
     )
 
-    assert await PermissionPolicy.evaluate(db, session, request, root_files) == expected
+    assert await PermissionPolicy.evaluate(
+        db,
+        session,
+        request,
+        root_files,
+        ToolExecutionPolicy.AUTO,
+        external_working_directory_policy=profile_external_policy,
+    ) == expected
 
 
 async def test_current_directory_is_the_auto_workspace_boundary(tmp_path) -> None:
@@ -443,6 +452,82 @@ async def test_current_directory_is_the_auto_workspace_boundary(tmp_path) -> Non
     assert await PermissionPolicy.evaluate(
         db, session, outside, root_files, ToolExecutionPolicy.AUTO
     ) == PermissionDecision.ASK
+    assert await PermissionPolicy.evaluate(
+        db,
+        session,
+        outside,
+        root_files,
+        ToolExecutionPolicy.AUTO,
+        external_working_directory_policy=ToolExecutionPolicy.AUTO,
+    ) == PermissionDecision.ALLOW
+    assert await PermissionPolicy.evaluate(
+        db,
+        session,
+        outside,
+        root_files,
+        ToolExecutionPolicy.AUTO,
+        external_working_directory_policy=ToolExecutionPolicy.DISABLED,
+    ) == PermissionDecision.DENY
+
+
+async def test_shell_uses_external_working_directory_policy_for_known_targets(
+    tmp_path,
+) -> None:
+    session = _session(user_id=uuid4(), current_directory="/work")
+    root_files = _root_files(tmp_path, session)
+    agent = ExecutionAgent(
+        id=uuid4(),
+        user_id=session.user_id,
+        home_directory="/home/user",
+        home_filesystem_policy="auto",
+        external_filesystem_policy="ask",
+        home_shell_enabled=True,
+        external_shell_enabled=True,
+    )
+    db = _db_with_grants()
+    db.scalar.return_value = agent
+    request = PermissionRequest(
+        capability="shell.read",
+        resource_type="shell_command",
+        resource_scope=shell_command_scope(
+            agent.id,
+            "/work",
+            "read",
+            [["cat"]],
+            ["/srv/config.yaml"],
+            True,
+            ["read"],
+        ),
+        action_kind="shell_run",
+        risk_level="low",
+        title="Lesen?",
+        summary="Test",
+    )
+
+    assert await PermissionPolicy.evaluate(
+        db,
+        session,
+        request,
+        root_files,
+        ToolExecutionPolicy.AUTO,
+        external_working_directory_policy=ToolExecutionPolicy.ASK,
+    ) == PermissionDecision.ASK
+    assert await PermissionPolicy.evaluate(
+        db,
+        session,
+        request,
+        root_files,
+        ToolExecutionPolicy.AUTO,
+        external_working_directory_policy=ToolExecutionPolicy.AUTO,
+    ) == PermissionDecision.ALLOW
+    assert await PermissionPolicy.evaluate(
+        db,
+        session,
+        replace(request, force_ask=True),
+        root_files,
+        ToolExecutionPolicy.AUTO,
+        external_working_directory_policy=ToolExecutionPolicy.DISABLED,
+    ) == PermissionDecision.DENY
 
 
 async def test_confidential_workspace_paths_always_require_one_time_approval(
@@ -469,6 +554,17 @@ async def test_confidential_workspace_paths_always_require_one_time_approval(
     assert await PermissionPolicy.evaluate(
         db, session, request, root_files, ToolExecutionPolicy.AUTO
     ) == PermissionDecision.ASK
+    outside = execution_directory_permission(
+        agent.id, "/home/user/.env", capability="filesystem.read"
+    )
+    assert await PermissionPolicy.evaluate(
+        db,
+        session,
+        outside,
+        root_files,
+        ToolExecutionPolicy.AUTO,
+        external_working_directory_policy=ToolExecutionPolicy.DISABLED,
+    ) == PermissionDecision.DENY
 
 
 @pytest.mark.parametrize("trust_level", list(TrustLevel))
@@ -1235,6 +1331,48 @@ async def test_child_integration_ceiling_cannot_widen_ask_to_auto(tmp_path, monk
     decision = await AgentRuntime._authorize(db, run, child, ToolCall("read", "calendar_query_events", {}), request, _root_files(tmp_path, child))
     assert decision == PermissionDecision.USER_DENIED
     approve.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("current", "offered"),
+    [
+        (current, offered)
+        for current in ToolExecutionPolicy
+        for offered in ToolExecutionPolicy
+    ],
+)
+def test_external_working_directory_delegation_ceiling(current, offered) -> None:
+    settings = ToolSettings(
+        public_permissions={"policies": {"working_directory.external": current}}
+    ).select_trust(TrustLevel.PUBLIC)
+    offered_settings = ToolSettings(
+        public_permissions={"policies": {"working_directory.external": offered}}
+    ).select_trust(TrustLevel.PUBLIC)
+    snapshot = permission_snapshot(settings, {"change_directory"})
+    snapshot["offeredCeiling"] = permission_snapshot(
+        offered_settings, {"change_directory"}
+    )
+
+    assert runtime_module._external_working_directory_policy(
+        settings, snapshot=snapshot
+    ) == max(
+        (current, offered),
+        key=(
+            ToolExecutionPolicy.AUTO,
+            ToolExecutionPolicy.ASK,
+            ToolExecutionPolicy.DISABLED,
+        ).index,
+    )
+
+
+def test_legacy_delegation_ceiling_disables_external_working_directory() -> None:
+    settings = ToolSettings().select_trust(TrustLevel.PUBLIC)
+    snapshot = permission_snapshot(settings, {"change_directory"})
+    snapshot["actionDefaults"].pop("working_directory.external")
+
+    assert runtime_module._external_working_directory_policy(
+        settings, snapshot=snapshot
+    ) == ToolExecutionPolicy.DISABLED
 
 
 async def test_other_session_read_requires_approval_without_matching_grant(tmp_path) -> None:

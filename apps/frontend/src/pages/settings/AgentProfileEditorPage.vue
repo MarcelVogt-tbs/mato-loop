@@ -948,7 +948,9 @@ const permissionGroups = computed(() => {
       return [{
         ...action,
         available: tool.available !== false && action.available !== false,
-        label: (tool.actions || []).filter((item) => item.configurable).length > 1
+        label: action.capability === 'working_directory.external'
+          ? action.label
+          : (tool.actions || []).filter((item) => item.configurable).length > 1
           ? `${tool.label}: ${action.label}`
           : tool.label
       }]

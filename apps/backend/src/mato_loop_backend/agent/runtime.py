@@ -457,6 +457,34 @@ def _tool_policy(
     return policy
 
 
+def _external_working_directory_policy(
+    tool_settings: ToolSettings,
+    *,
+    snapshot: dict[str, Any] | None = None,
+) -> ToolExecutionPolicy:
+    capability = "working_directory.external"
+    if snapshot is not None and capability not in snapshot["actionDefaults"]:
+        return ToolExecutionPolicy.DISABLED
+    policy = resolve_tool_execution_policy(
+        tool_settings,
+        capability,
+        (
+            ToolExecutionPolicy(snapshot["actionDefaults"][capability])
+            if snapshot is not None
+            else tool_registry.action_default(capability, tool_settings.trust_level)
+        ),
+    ).policy
+    if snapshot is not None and (offered := snapshot.get("offeredCeiling")) is not None:
+        policies = (ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, ToolExecutionPolicy.DISABLED)
+        policy = max(
+            (policy, _external_working_directory_policy(
+                ceiling_settings(offered, tool_settings.trust_level), snapshot=offered,
+            )),
+            key=policies.index,
+        )
+    return policy
+
+
 @dataclass(slots=True)
 class _VisibleResponse:
     content_parts: list[str] = field(default_factory=list)
@@ -5406,6 +5434,7 @@ class AgentRuntime:
                 else sorted(set(session_write_paths) & set(ceiling_paths))
             )
         policy = _tool_policy(tool_settings, integration_settings, request)
+        external_working_directory_policy = _external_working_directory_policy(tool_settings)
         if ceiling is not None:
             ceiling_policy = _tool_policy(
                 ceiling_settings(ceiling, TrustLevel(run.trust_level)), integration_settings, request,
@@ -5413,6 +5442,15 @@ class AgentRuntime:
             )
             policies = (ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, ToolExecutionPolicy.DISABLED)
             policy = max((policy, ceiling_policy), key=policies.index)
+            external_working_directory_policy = max(
+                (
+                    external_working_directory_policy,
+                    _external_working_directory_policy(
+                        ceiling_settings(ceiling, TrustLevel(run.trust_level)), snapshot=ceiling,
+                    ),
+                ),
+                key=policies.index,
+            )
         if request.force_ask and policy == ToolExecutionPolicy.AUTO:
             policy = ToolExecutionPolicy.ASK
         decision = await PermissionPolicy.evaluate(
@@ -5421,6 +5459,7 @@ class AgentRuntime:
             request,
             root_files,
             policy,
+            external_working_directory_policy=external_working_directory_policy,
             agent_profile_id=agent_profile_id,
             trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
             session_write_paths=session_write_paths,
@@ -5545,18 +5584,29 @@ class AgentRuntime:
                 else sorted(set(session_write_paths) & set(ceiling_paths))
             )
         current_policy = _tool_policy(tool_settings, integration_settings, request)
+        current_external_working_directory_policy = _external_working_directory_policy(tool_settings)
         if ceiling is not None:
             ceiling_policy = _tool_policy(
                 ceiling_settings(ceiling, TrustLevel(run.trust_level)), integration_settings, request,
                 snapshot=ceiling,
             )
             current_policy = max((current_policy, ceiling_policy), key=policies.index)
+            current_external_working_directory_policy = max(
+                (
+                    current_external_working_directory_policy,
+                    _external_working_directory_policy(
+                        ceiling_settings(ceiling, TrustLevel(run.trust_level)), snapshot=ceiling,
+                    ),
+                ),
+                key=policies.index,
+            )
         current_decision = await PermissionPolicy.evaluate(
             db,
             chat_session,
             request,
             root_files,
             current_policy,
+            external_working_directory_policy=current_external_working_directory_policy,
             agent_profile_id=agent_profile_id,
             trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
             session_write_paths=session_write_paths,

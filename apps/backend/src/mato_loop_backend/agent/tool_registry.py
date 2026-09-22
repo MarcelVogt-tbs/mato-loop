@@ -445,7 +445,7 @@ def _actions_enabled(
     enabled = {
         action.capability
         for action in definition.actions
-        if policy_resolver(
+        if not action.gates_tool_availability or policy_resolver(
             tool_settings,
             action.capability,
             action.default_policy_for(tool_settings.trust_level),

@@ -1348,6 +1348,7 @@ class PermissionPolicy:
         root_files: RootFileService,
         policy: ToolExecutionPolicy | None = None,
         *,
+        external_working_directory_policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK,
         agent_profile_id: UUID | None = None,
         trust_level: TrustLevel | None = None,
         permission_session_id: UUID | None = None,
@@ -1512,11 +1513,16 @@ class PermissionPolicy:
                 else None
             )
             inside_workspace = workspace is not None and _path_is_within(path, workspace)
+            if not inside_workspace and external_working_directory_policy == ToolExecutionPolicy.DISABLED:
+                return PermissionDecision.DENY
             if request.capability != "file.provide" and confidential_execution_path(str(path)):
                 return PermissionDecision.ASK
             if policy == ToolExecutionPolicy.AUTO and inside_workspace:
                 return PermissionDecision.ALLOW
-            if workspace is None and selected_policy == "auto":
+            if (
+                policy == ToolExecutionPolicy.AUTO
+                and external_working_directory_policy == ToolExecutionPolicy.AUTO
+            ):
                 return PermissionDecision.ALLOW
             grants = list(
                 (
@@ -1582,12 +1588,19 @@ class PermissionPolicy:
                 for path in target_paths
                 if str(path) not in request.shell_metadata_paths
             )
+            if not inside_workspace and external_working_directory_policy == ToolExecutionPolicy.DISABLED:
+                return PermissionDecision.DENY
             confidential = any(
                 confidential_execution_path(str(path)) for path in target_paths
             )
             if confidential or request.force_ask:
                 return PermissionDecision.ASK
             if policy == ToolExecutionPolicy.AUTO and inside_workspace:
+                return PermissionDecision.ALLOW
+            if (
+                policy == ToolExecutionPolicy.AUTO
+                and external_working_directory_policy == ToolExecutionPolicy.AUTO
+            ):
                 return PermissionDecision.ALLOW
             if None in scope["targetAccesses"]:
                 return PermissionDecision.ASK

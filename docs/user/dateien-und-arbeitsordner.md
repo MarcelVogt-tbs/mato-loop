@@ -48,7 +48,7 @@ Nach erfolgreichen Schreib-, Kopier- und Verschiebeaktionen erscheint die vorhan
 
 Direkte Dateiaktionen unter **Control Center > Dateien** sind an den angemeldeten Eigentümer und den gewählten Computer gebunden. Sie dürfen absichtlich auf alles zugreifen, was dessen Betriebssystembenutzer lesen oder ändern darf, und umgehen die Modell-Richtlinien und Modell-Freigaben. Betriebssystemrechte sowie Descriptor- und No-Follow-Prüfungen des MatoLoop Agent gelten weiterhin.
 
-Benötigt eine vom Modell angeforderte Computeraktion zwingend einen aktuellen Ordner und wurde keiner gewählt, fragt der Agent nach einem absoluten Pfad. Der anschließende Verzeichniswechsel folgt der Dateizugriffsrichtlinie für das Home-Verzeichnis oder externe Pfade und kann eine widerrufbare Session-Freigabe erzeugen.
+Benötigt eine vom Modell angeforderte Computeraktion zwingend einen aktuellen Ordner und wurde keiner gewählt, fragt der Agent nach einem absoluten Pfad. Der anschließende Verzeichniswechsel folgt der Dateizugriffsrichtlinie für das Home-Verzeichnis oder externe Pfade und kann eine widerrufbare Session-Freigabe erzeugen. Für spätere Modellaktionen außerhalb dieses Arbeitsverzeichnisses gilt zusätzlich die Profilberechtigung **Zugriff außerhalb des Arbeitsverzeichnisses**; Aktionsrechte für Lesen, Schreiben und Löschen bleiben davon getrennt.
 
 Bis zu vier Dateien können im Browser gemeinsam ausgewählt und nacheinander hochgeladen werden. Die maximale Uploadgröße und die Quote der jeweiligen Sessionwurzel werden global von Administratoren unter **Einstellungen > Instanzlimits** festgelegt. Aktuelle Dateibytes und alle gespeicherten Vollversionen zählen gemeinsam gegen diese Quote. Neue Dateien überschreiben keine vorhandenen Pfade.
 

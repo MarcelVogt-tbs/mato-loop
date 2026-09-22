@@ -498,6 +498,7 @@ def plan_profile() -> AgentProfile:
         "filesystem.read": ToolExecutionPolicy.AUTO,
         "filesystem.write": ToolExecutionPolicy.DISABLED,
         "filesystem.delete": ToolExecutionPolicy.DISABLED,
+        "working_directory.external": ToolExecutionPolicy.ASK,
         "session.files.write": ToolExecutionPolicy.DISABLED,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.DISABLED,
@@ -557,6 +558,7 @@ def build_profile() -> AgentProfile:
         "filesystem.read": ToolExecutionPolicy.AUTO,
         "filesystem.write": ToolExecutionPolicy.AUTO,
         "filesystem.delete": ToolExecutionPolicy.AUTO,
+        "working_directory.external": ToolExecutionPolicy.ASK,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.AUTO,
     }
@@ -596,6 +598,7 @@ def sysadmin_profile() -> AgentProfile:
         "filesystem.read": ToolExecutionPolicy.AUTO,
         "filesystem.write": ToolExecutionPolicy.ASK,
         "filesystem.delete": ToolExecutionPolicy.ASK,
+        "working_directory.external": ToolExecutionPolicy.AUTO,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.ASK,
     }

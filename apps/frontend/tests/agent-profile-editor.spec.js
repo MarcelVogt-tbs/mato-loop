@@ -18,7 +18,7 @@ const first = '00000000-0000-4000-8000-000000000010'
 const second = '00000000-0000-4000-8000-000000000011'
 const builtinId = '00000000-0000-4000-8000-000000000001'
 
-async function mountEditor(path = '/agents/agent?scope=personal', extraAgents = [], personalAgentsEnabled = true) {
+async function mountEditor(path = '/agents/agent?scope=personal', extraAgents = [], personalAgentsEnabled = true, groups = []) {
   const builtin = {
     id: builtinId, scope: 'instance', protected: true, name: 'Allgemein', description: 'Standard',
     personaId: null, instructions: 'Follow the request.', answerDisplay: 'compact', maxToolCalls: 25,
@@ -46,6 +46,8 @@ async function mountEditor(path = '/agents/agent?scope=personal', extraAgents = 
     defaultAgentProfileId: builtinId,
     effectiveAgents: personalAgentsEnabled ? [builtin, agent, ...extraAgents] : [builtin],
     personalAgentsEnabled,
+    privateGroups: groups,
+    publicGroups: groups,
     integrations: [
       { id: first, name: 'Kalender', enabled: true, available: true, supportsPolicies: false },
       { id: second, name: 'SearXNG', enabled: true, available: true, supportsPolicies: false }
@@ -117,6 +119,23 @@ it('shows only the disabled state for a direct personal editor link', async () =
   expect(root.textContent).toContain('Persönliche Agenten wurden für diese Instanz deaktiviert.')
   expect(root.textContent).not.toContain('Das Agentenprofil konnte nicht geladen werden.')
   expect(root.querySelector('form')).toBeNull()
+})
+
+it('labels the external working directory policy independently of its host tool', async () => {
+  const page = await mountEditor('/agents/agent?scope=personal', [], true, [{
+    id: 'process', label: 'Prozesse', icon: 'terminal', tools: [{
+      name: 'change_directory', label: 'Verzeichnis wechseln', available: true, actions: [{
+        capability: 'working_directory.external',
+        label: 'Zugriff außerhalb des Arbeitsverzeichnisses',
+        policy: 'ask',
+        configurable: true,
+        allowedPolicies: ['disabled', 'ask', 'auto'],
+        available: true
+      }]
+    }]
+  }])
+
+  expect(page.permissionGroups[0].actions[0].label).toBe('Zugriff außerhalb des Arbeitsverzeichnisses')
 })
 
 afterEach(() => {

@@ -133,6 +133,22 @@ def test_root_specific_read_and_transfer_availability(
     assert ("delete_path" in tools) is ("filesystem.delete" not in disabled)
 
 
+def test_external_working_directory_policy_does_not_hide_directory_tool() -> None:
+    settings = ToolSettings(
+        public_permissions={
+            "policies": {"working_directory.external": ToolExecutionPolicy.DISABLED}
+        }
+    ).select_trust(TrustLevel.PUBLIC)
+
+    tools = tool_registry.effective(
+        IntegrationSettings(),
+        tool_settings=settings,
+        execution_operations={"filesystem.resolve"},
+    ).tools
+
+    assert "change_directory" in tools
+
+
 @pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
 @pytest.mark.parametrize(
     "capability",

@@ -4798,6 +4798,13 @@ _FILESYSTEM_WRITE = ToolAction(
 _FILESYSTEM_DELETE = ToolAction(
     "filesystem.delete", "Löschen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True
 )
+_WORKING_DIRECTORY_EXTERNAL = ToolAction(
+    "working_directory.external",
+    "Zugriff außerhalb des Arbeitsverzeichnisses",
+    ToolExecutionPolicy.ASK,
+    ToolExecutionPolicy.ASK,
+    gates_tool_availability=False,
+)
 _SESSION_FILES_READ = ToolAction(
     "session.files.read", "Session-Dateien lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO
 )
@@ -5575,6 +5582,7 @@ tool_registry = ToolRegistry(
             group="process",
             label="Verzeichnis wechseln",
             icon="drive_file_move",
+            actions=(_WORKING_DIRECTORY_EXTERNAL,),
         ),
         ToolDefinition(
             "secret_input",
