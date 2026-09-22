@@ -255,7 +255,7 @@ class TerminalCoordinator:
 
     async def open(
         self, user_id: UUID, session_id: UUID, agent_id: UUID, login_id: UUID,
-        websocket: WebSocket,
+        websocket: WebSocket, *, resume_terminal_id: str | None = None,
     ) -> BrowserTerminalConnection:
         agent = await validate_terminal_access(user_id, session_id, agent_id, login_id)
         if self._stopping:
@@ -265,6 +265,11 @@ class TerminalCoordinator:
         if runtime is not None and runtime.generation != agent_generation(agent_id):
             await self.terminate(runtime)
             runtime = None
+        if resume_terminal_id is not None and (
+            runtime is None or runtime.closed or runtime.shell_exited
+            or runtime.terminal_id != resume_terminal_id
+        ):
+            raise ExecutionClientError("terminal.disconnected")
         restored = runtime is not None or key in self._opening
         opening = self._opening.get(key)
         if runtime is None and opening is None:

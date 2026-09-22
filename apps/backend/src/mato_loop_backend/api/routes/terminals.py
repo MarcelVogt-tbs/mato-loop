@@ -213,7 +213,9 @@ async def browser_terminal(websocket: WebSocket, agent_id: UUID) -> None:
     tasks: set[asyncio.Task] = set()
     try:
         viewer = await terminal_coordinator.open(
-            login.user.id, session_id, agent_id, login.login_id, websocket
+            login.user.id, session_id, agent_id, login.login_id, websocket,
+            resume_terminal_id=websocket.query_params.get("terminalId", "") if
+            websocket.query_params.get("resumeOnly") == "1" else None,
         )
         tasks = {
             asyncio.create_task(_handle_browser(viewer)), asyncio.create_task(viewer.send()),

@@ -5,9 +5,9 @@ import { notifyError } from 'src/utils/notifications'
 
 const MAX_BUFFER_LENGTH = 512 * 1024
 
-function websocketUrl(agentId, sessionId, location = globalThis.location) {
+function websocketUrl(agentId, sessionId, terminalId = null, location = globalThis.location) {
   const protocol = location?.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${location?.host}/api/terminals/${encodeURIComponent(agentId)}?sessionId=${encodeURIComponent(sessionId)}`
+  return `${protocol}//${location?.host}/api/terminals/${encodeURIComponent(agentId)}?sessionId=${encodeURIComponent(sessionId)}${terminalId ? `&resumeOnly=1&terminalId=${encodeURIComponent(terminalId)}` : ''}`
 }
 
 function decodedBytes(data, truncated = false) {
@@ -28,6 +28,8 @@ export const useTerminalStore = defineStore('terminal', {
     generation: 0,
     replacedContexts: [],
     status: 'closed',
+    closeReason: null,
+    resumeOnly: false,
     restored: null,
     attached: false,
     busy: false,
@@ -54,7 +56,7 @@ export const useTerminalStore = defineStore('terminal', {
     removalBlocked: (state) => Boolean(state.busy || state.submitting)
   },
   actions: {
-    connect({ sessionId, agentId }) {
+    connect({ sessionId, agentId, resumeTerminalId = null }) {
       if (!sessionId || !agentId) return
       if (this.sessionId === sessionId && this.agentId === agentId && this.socket
         && !['closed', 'resyncRequired'].includes(this.status)) return
@@ -66,9 +68,10 @@ export const useTerminalStore = defineStore('terminal', {
         return
       }
       const generation = this.generation
-      const socket = new WebSocket(websocketUrl(agentId, sessionId))
+      const socket = new WebSocket(websocketUrl(agentId, sessionId, resumeTerminalId))
       socket.binaryType = 'arraybuffer'
       this.status = 'connecting'
+      this.resumeOnly = Boolean(resumeTerminalId)
       this.socket = markRaw(socket)
       socket.onopen = () => {
         if (this.generation !== generation || this.socket !== socket || this.status !== 'connecting') return
@@ -77,7 +80,7 @@ export const useTerminalStore = defineStore('terminal', {
       }
       socket.onmessage = (event) => void this.receive(event.data, generation, socket)
       socket.onerror = () => {
-        if (this.generation !== generation || this.socket !== socket || this.errorNotified) return
+        if (this.generation !== generation || this.socket !== socket || this.errorNotified || resumeTerminalId) return
         this.errorNotified = true
         notifyError({}, 'Die Terminalverbindung ist fehlgeschlagen.')
       }
@@ -86,6 +89,7 @@ export const useTerminalStore = defineStore('terminal', {
         if (event?.code === 4001) this.markReplaced()
         else if (event?.code === 4002 && this.status !== 'replaced') this.status = 'resyncRequired'
         else if (!['replaced', 'resyncRequired'].includes(this.status)) this.status = 'closed'
+        this.closeReason ||= event?.code >= 4400 ? event.code : (event?.reason || event?.code || null)
         this.socket = null
         this.submitting = null
       }
@@ -131,11 +135,15 @@ export const useTerminalStore = defineStore('terminal', {
       } else if (message.type === 'terminal.replaced') {
         this.markReplaced()
       } else if (message.type === 'terminal.closed') {
+        this.closeReason = message.reason
         if (this.status !== 'replaced') this.status = message.reason === 'resyncRequired' ? 'resyncRequired' : 'closed'
       } else if (message.type === 'error') {
         this.errorNotified = true
         this.submitting = null
-        notifyError({ error: message.error }, 'Die Terminalaktion ist fehlgeschlagen.')
+        if (this.resumeOnly && message.error?.code === 'terminal.disconnected') {
+          this.closeReason = 'terminated'
+          this.status = 'closed'
+        } else if (!this.resumeOnly) notifyError({ error: message.error }, 'Die Terminalaktion ist fehlgeschlagen.')
       }
     },
     applyStatus(message) {
@@ -151,6 +159,7 @@ export const useTerminalStore = defineStore('terminal', {
     },
     markReplaced() {
       this.status = 'replaced'
+      this.closeReason = 'replaced'
       const key = JSON.stringify([this.sessionId, this.agentId])
       if (!this.replacedContexts.includes(key)) this.replacedContexts.push(key)
     },
