@@ -342,14 +342,14 @@ it('shows replacement without reclaiming on remount or stale control actions', a
   expect(FakeWebSocket.instances).toHaveLength(1)
 })
 
-it('keeps an idle terminal free of informational labels but shows truncated replay', async () => {
+it('keeps an idle terminal free of informational labels, including truncated replay', async () => {
   store.$patch({ restored: false, currentDirectory: '/terminal/cwd' })
   await mountTerminal()
   expect(root.textContent).not.toMatch(/Neue Shell gestartet|Terminal-Ordner|Shell bereit/)
   expect(root.querySelector('.terminal-app [role="status"]')).toBeNull()
   store.truncated = true
   await nextTick()
-  expect(root.textContent).toContain('Frühere Ausgaben fehlen')
+  expect(root.querySelector('.terminal-app [role="status"]')).toBeNull()
 })
 
 it('waits for persisted tab creation and resumes after a failed optimistic removal', async () => {
@@ -410,6 +410,7 @@ it('uses the attachment toggle for both directions and blocks it during an agent
   expect(root.textContent).not.toContain('Manuell übernehmen')
   socket.state({ busy: false, state: 'idle', activeToolCallId: null })
   await nextTick()
+  expect(root.querySelector('.terminal-app').nextElementSibling.textContent).not.toContain('Agent verbunden.')
   expect(toggle.getAttribute('aria-disabled')).not.toBe('true')
   toggle.click()
   expect(JSON.parse(socket.send.mock.calls.at(-1)[0])).toEqual({ type: 'detach' })
@@ -418,5 +419,5 @@ it('uses the attachment toggle for both directions and blocks it during an agent
   expect(root.textContent).toContain('Manuelle Übernahme wird angefordert.')
   socket.state({ attached: false })
   await nextTick()
-  expect(root.textContent).toContain('Manuelle Steuerung')
+  expect(root.querySelector('.terminal-app').nextElementSibling.textContent).not.toContain('Manuelle Steuerung')
 })

@@ -30,9 +30,6 @@
       <q-banner v-else-if="terminal.suspended" dense class="bg-warning text-dark" role="status">
         Die Terminalverbindung ist vorübergehend ausgesetzt. Eingaben sind gesperrt, bis der Server sie wieder freigibt.
       </q-banner>
-      <q-banner v-if="terminal.truncated" dense class="bg-warning text-dark" role="status">
-        Der Terminalverlauf wurde gekürzt. Frühere Ausgaben fehlen.
-      </q-banner>
       <div class="terminal-app__stage col relative-position">
         <div ref="terminalHost" class="terminal-app__host fit" />
       </div>
