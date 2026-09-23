@@ -528,6 +528,15 @@ def test_calendar_permissions_describe_the_requested_action() -> None:
         start=datetime(2026, 8, 7, 14, tzinfo=UTC),
         end=datetime(2026, 8, 7, 15, tzinfo=UTC),
     )
+    query = caldav_module._query_permission(
+        caldav_module.CalendarQueryEventsArguments(
+            integration_id=account.id,
+            calendar_key=key,
+            start=timing.start,
+            end=timing.end,
+        ),
+        context,
+    )[0]
     create = caldav_module._create_permission(
         caldav_module.CalendarCreateEventArguments(
             integration_id=account.id,
@@ -536,16 +545,25 @@ def test_calendar_permissions_describe_the_requested_action() -> None:
             description="Nächste Schritte abstimmen",
             location="Raum 2",
             timing=timing,
+            reminders_minutes_before=[15, 60],
         ),
         context,
     )[0]
 
     assert create.resource_display == '"Teamkalender" · Konto "Arbeit"'
-    assert create.summary == (
-        'Der Agent möchte den Termin "Projektbesprechung" am '
-        "07.08.2026, 14:00 bis 15:00 Uhr (UTC+00:00) erstellen. "
-        'Ort: "Raum 2". Beschreibung: "Nächste Schritte abstimmen".'
-    )
+    assert query.summary == "Der Agent möchte Termine in diesem Kalender lesen."
+    assert [(item.label, item.value) for item in query.display_items] == [
+        ("Von", "07.08.2026, 14:00 Uhr (UTC+00:00)"),
+        ("Bis", "07.08.2026, 15:00 Uhr (UTC+00:00)"),
+    ]
+    assert create.summary == 'Der Agent möchte den Termin "Projektbesprechung" erstellen.'
+    assert [(item.label, item.value, item.format) for item in create.display_items] == [
+        ("Termin", "Projektbesprechung", "text"),
+        ("Zeitpunkt", "07.08.2026, 14:00 bis 15:00 Uhr (UTC+00:00)", "text"),
+        ("Ort", "Raum 2", "text"),
+        ("Beschreibung", "Nächste Schritte abstimmen", "text"),
+        ("Erinnerungen", ("15 Minuten vorher", "60 Minuten vorher"), "list"),
+    ]
 
     event = CalDavEvent(
         uid="uid",
@@ -577,13 +595,17 @@ def test_calendar_permissions_describe_the_requested_action() -> None:
         context,
     )[0]
 
-    assert update.summary == (
-        'Der Agent möchte den Termin "Alter Titel" am 08.08.2026 (ganztägig) '
-        "ändern: Ort entfernen."
-    )
-    assert delete.summary == (
-        'Der Agent möchte den Termin "Alter Titel" am 08.08.2026 (ganztägig) löschen.'
-    )
+    assert update.summary == 'Der Agent möchte den Termin "Alter Titel" ändern.'
+    assert [(item.label, item.value) for item in update.display_items] == [
+        ("Termin", "Alter Titel"),
+        ("Bisheriger Zeitpunkt", "08.08.2026 (ganztägig)"),
+        ("Änderungen", ("Ort entfernen",)),
+    ]
+    assert delete.summary == 'Der Agent möchte den Termin "Alter Titel" löschen.'
+    assert [(item.label, item.value) for item in delete.display_items] == [
+        ("Termin", "Alter Titel"),
+        ("Zeitpunkt", "08.08.2026 (ganztägig)"),
+    ]
 
 
 async def test_calendar_listing_remembers_resource_labels(monkeypatch) -> None:

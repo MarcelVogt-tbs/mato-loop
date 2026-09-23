@@ -799,16 +799,6 @@ def _format_event_timing(timing: EventTiming) -> str:
     )
 
 
-def _event_reference(event: _EventToken) -> str:
-    title = _display_text(event.summary) or "Ohne Titel"
-    timing = (
-        f" am {_format_event_timing(event.timing)}"
-        if event.timing is not None
-        else ""
-    )
-    return f'den Termin "{title}"{timing}'
-
-
 def _event_for_permission(
     arguments: CalendarUpdateEventArguments | CalendarDeleteEventArguments,
     context: Any,
@@ -1410,6 +1400,7 @@ def _permission(
     summary: str,
     resource: bool = False,
     use_integration_policy: bool = True,
+    display_items: tuple[Any, ...] = (),
 ) -> tuple[Any, ...]:
     from mato_loop_backend.agent.permissions import integration_operation_permission
 
@@ -1432,6 +1423,7 @@ def _permission(
             use_integration_policy=use_integration_policy,
             title=title,
             summary=summary,
+            display_items=display_items,
         ),
     )
 
@@ -1449,46 +1441,60 @@ def _list_permission(arguments: CalendarIntegrationArguments, context: Any) -> t
 
 
 def _query_permission(arguments: CalendarQueryEventsArguments, context: Any) -> tuple[Any, ...]:
+    from mato_loop_backend.agent.permissions import PermissionDisplayItem
+
     return _permission(
         "calendar.read",
         "query-events",
         arguments,
         context,
         title="Kalender lesen?",
-        summary=(
-            "Der Agent möchte Termine im Zeitraum "
-            f"{arguments.start:%d.%m.%Y, %H:%M} Uhr{_format_offset(arguments.start)} bis "
-            f"{arguments.end:%d.%m.%Y, %H:%M} Uhr{_format_offset(arguments.end)} lesen."
-        ),
+        summary="Der Agent möchte Termine in diesem Kalender lesen.",
         resource=True,
+        display_items=(
+            PermissionDisplayItem(
+                "Von", f"{arguments.start:%d.%m.%Y, %H:%M} Uhr{_format_offset(arguments.start)}"
+            ),
+            PermissionDisplayItem(
+                "Bis", f"{arguments.end:%d.%m.%Y, %H:%M} Uhr{_format_offset(arguments.end)}"
+            ),
+        ),
     )
 
 
 def _create_permission(arguments: CalendarCreateEventArguments, context: Any) -> tuple[Any, ...]:
-    summary = (
-        f'Der Agent möchte den Termin "{_display_text(arguments.summary)}" am '
-        f"{_format_event_timing(arguments.timing)} erstellen."
-    )
+    from mato_loop_backend.agent.permissions import PermissionDisplayItem
+
+    items = [
+        PermissionDisplayItem("Termin", _display_text(arguments.summary)),
+        PermissionDisplayItem("Zeitpunkt", _format_event_timing(arguments.timing)),
+    ]
     if arguments.location:
-        summary += f' Ort: "{_display_text(arguments.location)}".'
+        items.append(PermissionDisplayItem("Ort", _display_text(arguments.location, 1_000)))
     if arguments.description:
-        summary += f' Beschreibung: "{_display_text(arguments.description, 240)}".'
+        items.append(PermissionDisplayItem("Beschreibung", _display_text(arguments.description, 1_000)))
     if arguments.reminders_minutes_before:
-        summary += " Erinnerungen: " + ", ".join(
-            f"{minutes} Minuten vorher" for minutes in arguments.reminders_minutes_before
-        ) + "."
+        items.append(PermissionDisplayItem(
+            "Erinnerungen",
+            tuple(f"{minutes} Minuten vorher" for minutes in arguments.reminders_minutes_before),
+            format="list",
+        ))
     return _permission(
         "calendar.write",
         _operation_key("create", arguments),
         arguments,
         context,
         title="Termin erstellen?",
-        summary=summary,
+        summary=f'Der Agent möchte den Termin "{_display_text(arguments.summary)}" erstellen.',
         resource=True,
+        display_items=tuple(items),
     )
 
 
 def _update_permission(arguments: CalendarUpdateEventArguments, context: Any) -> tuple[Any, ...]:
+    from mato_loop_backend.agent.permissions import PermissionDisplayItem
+
+    display_items: tuple[Any, ...] = ()
     try:
         event = _event_for_permission(arguments, context)
     except ValueError:
@@ -1501,13 +1507,13 @@ def _update_permission(arguments: CalendarUpdateEventArguments, context: Any) ->
             changes.append(f"Zeit auf {_format_event_timing(arguments.timing)} ändern")
         if "location" in arguments.model_fields_set:
             changes.append(
-                f'Ort auf "{_display_text(arguments.location)}" ändern'
+                f'Ort auf "{_display_text(arguments.location, 1_000)}" ändern'
                 if arguments.location
                 else "Ort entfernen"
             )
         if "description" in arguments.model_fields_set:
             changes.append(
-                f'Beschreibung auf "{_display_text(arguments.description, 240)}" ändern'
+                f'Beschreibung auf "{_display_text(arguments.description, 1_000)}" ändern'
                 if arguments.description
                 else "Beschreibung entfernen"
             )
@@ -1522,7 +1528,15 @@ def _update_permission(arguments: CalendarUpdateEventArguments, context: Any) ->
                 )
                 + " setzen"
             )
-        summary = f"Der Agent möchte {_event_reference(event)} ändern: {'; '.join(changes)}."
+        summary = f'Der Agent möchte den Termin "{_display_text(event.summary) or "Ohne Titel"}" ändern.'
+        display_items = (
+            PermissionDisplayItem("Termin", _display_text(event.summary) or "Ohne Titel"),
+            *(
+                (PermissionDisplayItem("Bisheriger Zeitpunkt", _format_event_timing(event.timing)),)
+                if event.timing else ()
+            ),
+            PermissionDisplayItem("Änderungen", tuple(changes), format="list"),
+        )
     return _permission(
         "calendar.write",
         _operation_key("update", arguments),
@@ -1531,13 +1545,24 @@ def _update_permission(arguments: CalendarUpdateEventArguments, context: Any) ->
         title="Termin ändern?",
         summary=summary,
         resource=True,
+        display_items=display_items,
     )
 
 
 def _delete_permission(arguments: CalendarDeleteEventArguments, context: Any) -> tuple[Any, ...]:
+    from mato_loop_backend.agent.permissions import PermissionDisplayItem
+
+    display_items: tuple[Any, ...] = ()
     try:
         event = _event_for_permission(arguments, context)
-        summary = f"Der Agent möchte {_event_reference(event)} löschen."
+        summary = f'Der Agent möchte den Termin "{_display_text(event.summary) or "Ohne Titel"}" löschen.'
+        display_items = (
+            PermissionDisplayItem("Termin", _display_text(event.summary) or "Ohne Titel"),
+            *(
+                (PermissionDisplayItem("Zeitpunkt", _format_event_timing(event.timing)),)
+                if event.timing else ()
+            ),
+        )
     except ValueError:
         summary = "Der Agent möchte einen Termin aus diesem Kalender löschen."
     return _permission(
@@ -1548,6 +1573,7 @@ def _delete_permission(arguments: CalendarDeleteEventArguments, context: Any) ->
         title="Termin löschen?",
         summary=summary,
         resource=True,
+        display_items=display_items,
     )
 
 
