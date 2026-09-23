@@ -359,7 +359,7 @@
         unelevated
         icon="apps"
         aria-label="Control Center öffnen"
-        :aria-expanded="controlCenter.open"
+        :aria-expanded="controlCenterVisible"
         aria-controls="control-center-panel"
         @click="openControlCenter"
       >
@@ -558,7 +558,7 @@
 
     <q-dialog
       v-if="route.name === 'chat' && $q.screen.lt.md"
-      :model-value="controlCenter.open"
+      :model-value="controlCenterVisible"
       aria-label="Control Center"
       maximized
       transition-show="slide-left"
@@ -659,7 +659,10 @@ const sessionStatuses = computed(() => new Map(chat.cachedSessions.map((session)
   )
 ])))
 const showFloatingNavigation = computed(() => !drawerOpen.value)
-const showFloatingControlCenter = computed(() => route.name === 'chat' && !controlCenter.open)
+const controlCenterVisible = computed(() => (
+  controlCenter.open && (!$q.screen.lt.md || !controlCenter.restoredOpen)
+))
+const showFloatingControlCenter = computed(() => route.name === 'chat' && !controlCenterVisible.value)
 const showFloatingControls = computed(() => (
   showFloatingNavigation.value || showFloatingControlCenter.value
 ))
@@ -1331,7 +1334,7 @@ async function setControlCenterOpen(open) {
 }
 
 watch(
-  () => [controlCenter.open, $q.screen.lt.lg],
+  () => [controlCenterVisible.value, $q.screen.lt.lg],
   ([open, narrow]) => {
     if (open && narrow) drawerOpen.value = false
   }

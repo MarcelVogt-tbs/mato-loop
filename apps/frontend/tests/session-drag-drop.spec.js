@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createApp, h, nextTick } from 'vue'
+import { createApp, h, nextTick, reactive } from 'vue'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import MainLayout from '../src/layouts/MainLayout.vue'
 import { useChatStore } from 'stores/chat'
@@ -73,7 +73,8 @@ vi.mock('stores/in-app-notifications', () => ({ useInAppNotificationStore: () =>
 vi.mock('stores/control-center', async () => {
   const { reactive } = await import('vue')
   const store = reactive({
-    sessionId: null, ready: true, open: false, tabs: [], fileTabs: [], confirmedState: { tabs: [] },
+    sessionId: null, ready: true, open: false, restoredOpen: false, tabs: [], fileTabs: [], confirmedState: { tabs: [] },
+    openApp: vi.fn(async function () { this.open = true; this.restoredOpen = false }),
     removeFileTabs: vi.fn().mockResolvedValue()
   })
   return { useControlCenterStore: () => store }
@@ -106,11 +107,13 @@ vi.mock('components/ExecutionAgentDirectoryPickerDialog.vue', () => ({ default: 
 let app, root
 beforeEach(async () => {
   vi.clearAllMocks()
+  quasar.dark.isActive = false
+  quasar.screen = reactive({ lt: { sm: false, md: false, lg: false } })
   useChatStore().current = null
   useRoute().name = 'chat'
   useRoute().query = {}
   Object.assign(useBrowserStore(), { sessionId: null, agentId: null, integrationId: null })
-  Object.assign(useControlCenterStore(), { sessionId: null, ready: true, tabs: [], fileTabs: [], confirmedState: { tabs: [] } })
+  Object.assign(useControlCenterStore(), { sessionId: null, ready: true, open: false, restoredOpen: false, tabs: [], fileTabs: [], confirmedState: { tabs: [] } })
   useIntegrationStore().browser.instances = []
   Object.assign(useIntegrationStore(), { browserLoaded: true, catalogLoaded: true, catalogLoadFailed: false })
   useIntegrationStore().adapterAvailable.mockReturnValue(true)
@@ -163,6 +166,29 @@ beforeEach(async () => {
   await nextTick()
 })
 afterEach(() => { app?.unmount(); vi.useRealTimers() })
+
+it.each([
+  [true, false], [true, true], [false, false], [false, true]
+])('restores the panel beside chat but not the fullscreen dialog (phone=%s, dark=%s)', async (phone, dark) => {
+  quasar.dark.isActive = dark
+  const center = useControlCenterStore()
+  center.open = true
+  center.restoredOpen = true
+  await nextTick()
+  expect(root.querySelector('#control-center-toggle')).toBeNull()
+
+  quasar.screen.lt.sm = phone
+  quasar.screen.lt.md = true
+  await nextTick()
+  expect(root.querySelector('[role="dialog"]')).toBeNull()
+  const toggle = root.querySelector('#control-center-toggle')
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+
+  toggle.click()
+  await nextTick()
+  expect(center.openApp).toHaveBeenCalledOnce()
+  expect(root.querySelector('[role="dialog"]')).not.toBeNull()
+})
 
 it('reports presence only while the app is focused and visible', async () => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')

@@ -114,6 +114,30 @@ describe('control center store', () => {
     expect(useControlCenterStore().splitRatio).toBe(DEFAULT_CONTROL_CENTER_SPLIT_RATIO)
   })
 
+  it('keeps restored visibility separate from explicit opening and unrelated saves', async () => {
+    const store = useControlCenterStore()
+    const session = { id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files', open: true } }
+    store.bindSession(session)
+    store.syncSession(session)
+    expect(store.open).toBe(true)
+    expect(store.restoredOpen).toBe(true)
+
+    api.patch.mockResolvedValue({ data: { controlCenter: session.controlCenter } })
+    await store.setFileView(sessionFileView)
+    expect(store.restoredOpen).toBe(true)
+    expect(api.patch.mock.calls[0][1].control_center.open).toBe(true)
+
+    await store.openApp('files')
+    expect(store.open).toBe(true)
+    expect(store.restoredOpen).toBe(false)
+    store.syncSession(session)
+    expect(store.restoredOpen).toBe(true)
+
+    api.patch.mockRejectedValueOnce(new Error('request failed'))
+    await expect(store.setOpen(true)).rejects.toThrow('request failed')
+    expect(store.restoredOpen).toBe(true)
+  })
+
   it.each(['notifications', 'approvals'])('opens %s as notifications while persisting the panel state', async (appId) => {
     api.patch.mockResolvedValue({
       data: {
@@ -367,6 +391,19 @@ describe('control center store', () => {
     await store.rebindFileTargets(store.fileTabs[0].fileTarget)
     expect(store.fileTabs).toEqual([])
     expect(store.activeAppId).toBe('files')
+  })
+
+  it('reveals an existing file tab from a restored panel', async () => {
+    const store = useControlCenterStore()
+    const tabId = 'file-550e8400-e29b-41d4-a716-446655440000'
+    const fileTarget = { scope: 'session', rootIdentity: 'session-1', path: 'notes.md', name: 'notes.md' }
+    const state = { tabs: [{ tabId, kind: 'file', fileTarget }], activeAppId: tabId, open: true }
+    store.syncSession({ id: 'session-1', controlCenter: state })
+    api.patch.mockResolvedValue({ data: { controlCenter: state } })
+
+    await expect(store.openFile(fileTarget)).resolves.toBe(tabId)
+    expect(store.restoredOpen).toBe(false)
+    expect(api.patch).toHaveBeenCalledOnce()
   })
 
   it('keys historical tabs by root, file identity and revision independently of the current file', async () => {

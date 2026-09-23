@@ -251,7 +251,8 @@ export const useControlCenterStore = defineStore('control-center', {
     requestGeneration: 0,
     pendingState: null,
     confirmedState: defaultState(),
-    requestedAppId: null
+    requestedAppId: null,
+    restoredOpen: false
   }),
   getters: {
     activeContentId: (state) => state.activeGlobalSectionId || state.activeAppId,
@@ -286,6 +287,7 @@ export const useControlCenterStore = defineStore('control-center', {
       this.sessionId = sessionId
       this.confirmedState = normalizeState(session?.controlCenter || defaultState())
       this.applyState(this.confirmedState)
+      this.restoredOpen = true
       if (requestedAppId) void this.openApp(requestedAppId).catch(() => {})
     },
     bindSession(session) {
@@ -301,6 +303,7 @@ export const useControlCenterStore = defineStore('control-center', {
       this.sessionId = sessionId
       this.confirmedState = normalizeState(session?.controlCenter || defaultState())
       this.applyState(this.confirmedState)
+      this.restoredOpen = true
     },
     resetDraft() {
       this.requestGeneration += 1
@@ -311,6 +314,7 @@ export const useControlCenterStore = defineStore('control-center', {
       this.sessionId = null
       this.confirmedState = defaultState()
       this.applyState(this.confirmedState)
+      this.restoredOpen = false
     },
     async attachCreatedSession(sessionId, serverState) {
       const latest = copyState(this)
@@ -326,13 +330,15 @@ export const useControlCenterStore = defineStore('control-center', {
       }
       return this.save(latest)
     },
-    async save(value) {
+    async save(value, { reveal = false } = {}) {
       const next = normalizeState({
         ...value,
         fileView: Object.hasOwn(value, 'fileView') ? value.fileView : this.fileView,
         fileViews: value.fileViews || this.fileViews
       })
       if (!this.ready) return null
+      const restoredOpen = this.restoredOpen
+      if (reveal) this.restoredOpen = false
       this.applyState(next)
       if (!this.sessionId) {
         this.confirmedState = copyState(next)
@@ -363,6 +369,7 @@ export const useControlCenterStore = defineStore('control-center', {
         if (this.sessionId === sessionId && this.requestGeneration === generation) {
           this.pendingState = null
           this.applyState(this.confirmedState)
+          this.restoredOpen = restoredOpen
         }
         throw error
       } finally {
@@ -378,6 +385,7 @@ export const useControlCenterStore = defineStore('control-center', {
         if (!this.ready) {
           this.open = true
           this.requestedAppId = appId
+          this.restoredOpen = false
           return null
         }
         this.requestedAppId = null
@@ -385,13 +393,14 @@ export const useControlCenterStore = defineStore('control-center', {
       }
       if (this.tabs.some((tab) => tab.tabId === appId)) {
         this.activeGlobalSectionId = null
-        return this.save({ tabs: this.tabs, activeAppId: appId, open: true, fileView: this.fileView })
+        return this.save({ tabs: this.tabs, activeAppId: appId, open: true, fileView: this.fileView }, { reveal: true })
       }
       if (!controlCenterIntegrationIds.has(appId)) return
       this.activeGlobalSectionId = null
       if (!this.ready) {
         this.open = true
         this.requestedAppId = appId
+        this.restoredOpen = false
         return null
       }
       const exists = this.tabs.some((tab) => tab.appId === appId)
@@ -400,7 +409,7 @@ export const useControlCenterStore = defineStore('control-center', {
         activeAppId: appId,
         open: true,
         fileView: this.fileView
-      })
+      }, { reveal: true })
     },
     ensureApp(appId) {
       if (!controlCenterIntegrationIds.has(appId) || this.tabs.some((tab) => tab.appId === appId)) return
@@ -417,7 +426,7 @@ export const useControlCenterStore = defineStore('control-center', {
         activeAppId: this.activeAppId,
         open,
         fileView: this.fileView
-      })
+      }, { reveal: open })
     },
     setFileView(fileView) {
       const normalized = normalizeFileView(fileView)
@@ -486,7 +495,7 @@ export const useControlCenterStore = defineStore('control-center', {
       ]) === sourceKey)
       if (existing) {
         await this.activate(existing.tabId)
-        if (!this.open) await this.setOpen(true)
+        if (!this.open || this.restoredOpen) await this.setOpen(true)
         return existing.tabId
       }
       if (this.tabs.length >= 20) return null
@@ -502,7 +511,7 @@ export const useControlCenterStore = defineStore('control-center', {
         activeAppId: tabId,
         open: true,
         fileView: this.fileView
-      })
+      }, { reveal: true })
       return tabId
     },
     async closeFile(tabId) {
