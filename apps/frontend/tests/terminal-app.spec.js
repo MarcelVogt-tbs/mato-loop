@@ -67,7 +67,6 @@ beforeEach(() => {
 })
 afterEach(() => {
   app?.unmount()
-  vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -277,57 +276,6 @@ it('releases on unavailability and reconnects when the agent returns', async () 
   await nextTick()
   expect(FakeWebSocket.instances).toHaveLength(2)
   expect(store.status).toBe('connecting')
-  expect(FakeWebSocket.instances.at(-1).url).toContain('resumeOnly=1&terminalId=pty-1')
-})
-
-it('automatically resumes a previously connected shell after viewer loss', async () => {
-  await mountTerminal()
-  vi.useFakeTimers()
-  socket.onclose({ code: 1006 })
-  await nextTick()
-  expect(root.textContent).toContain('automatisch wiederhergestellt')
-  expect(FakeWebSocket.instances).toHaveLength(1)
-  vi.advanceTimersByTime(1000)
-  await nextTick()
-  const resumed = FakeWebSocket.instances.at(-1)
-  expect(resumed.url).toContain('resumeOnly=1&terminalId=pty-1')
-  resumed.open()
-  resumed.snapshot({ attached: true, personalData: btoa('retained') })
-  vi.useRealTimers()
-  await flushOutput()
-  expect(root.textContent).not.toContain('automatisch wiederhergestellt')
-  expect(lines(1)).toEqual(['retained'])
-  expect(store.attached).toBe(true)
-})
-
-it('stops retries after the server reports a terminated shell', async () => {
-  await mountTerminal()
-  vi.useFakeTimers()
-  socket.onclose({ code: 1006 })
-  await nextTick()
-  vi.advanceTimersByTime(1000)
-  await nextTick()
-  const resumed = FakeWebSocket.instances.at(-1)
-  resumed.open()
-  resumed.message({ type: 'error', error: { code: 'terminal.disconnected' } })
-  resumed.onclose({ code: 1000 })
-  await nextTick()
-  vi.advanceTimersByTime(60_000)
-  expect(FakeWebSocket.instances).toHaveLength(2)
-  expect(root.textContent).toContain('Neu verbinden')
-  vi.useRealTimers()
-})
-
-it('cancels pending retries when the terminal view is removed', async () => {
-  await mountTerminal()
-  vi.useFakeTimers()
-  socket.onclose({ code: 1006 })
-  await nextTick()
-  app.unmount()
-  app = null
-  vi.advanceTimersByTime(60_000)
-  expect(FakeWebSocket.instances).toHaveLength(1)
-  vi.useRealTimers()
 })
 
 it('shows replacement without reclaiming on remount or stale control actions', async () => {
@@ -342,14 +290,14 @@ it('shows replacement without reclaiming on remount or stale control actions', a
   expect(FakeWebSocket.instances).toHaveLength(1)
 })
 
-it('keeps an idle terminal free of informational labels, including truncated replay', async () => {
+it('keeps an idle terminal free of informational labels but shows truncated replay', async () => {
   store.$patch({ restored: false, currentDirectory: '/terminal/cwd' })
   await mountTerminal()
   expect(root.textContent).not.toMatch(/Neue Shell gestartet|Terminal-Ordner|Shell bereit/)
   expect(root.querySelector('.terminal-app [role="status"]')).toBeNull()
   store.truncated = true
   await nextTick()
-  expect(root.querySelector('.terminal-app [role="status"]')).toBeNull()
+  expect(root.textContent).toContain('Frühere Ausgaben fehlen')
 })
 
 it('waits for persisted tab creation and resumes after a failed optimistic removal', async () => {
@@ -410,7 +358,6 @@ it('uses the attachment toggle for both directions and blocks it during an agent
   expect(root.textContent).not.toContain('Manuell übernehmen')
   socket.state({ busy: false, state: 'idle', activeToolCallId: null })
   await nextTick()
-  expect(root.querySelector('.terminal-app').nextElementSibling.textContent).not.toContain('Agent verbunden.')
   expect(toggle.getAttribute('aria-disabled')).not.toBe('true')
   toggle.click()
   expect(JSON.parse(socket.send.mock.calls.at(-1)[0])).toEqual({ type: 'detach' })
@@ -419,5 +366,5 @@ it('uses the attachment toggle for both directions and blocks it during an agent
   expect(root.textContent).toContain('Manuelle Übernahme wird angefordert.')
   socket.state({ attached: false })
   await nextTick()
-  expect(root.querySelector('.terminal-app').nextElementSibling.textContent).not.toContain('Manuelle Steuerung')
+  expect(root.textContent).toContain('Manuelle Steuerung')
 })

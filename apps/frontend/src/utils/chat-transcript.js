@@ -271,7 +271,11 @@ export function buildChatTranscript(
       message.trustLevel = null
       message.activeDurationMs = null
     }
-    const visibleMessages = assistantSection.filter((message) => (
+    const redirectedEmpty = assistantSection.some((message) => message.redirected)
+      && !hasContent
+      && !assistantSection.some((message) => message.attachments?.length)
+      && workEntries.every((entry) => entry.type === 'reasoning')
+    const visibleMessages = (redirectedEmpty ? [] : assistantSection).filter((message) => (
       message.kind === 'runtime_error'
       || message.content
       || message.generationStatus === 'interrupted'

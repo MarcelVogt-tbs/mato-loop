@@ -439,6 +439,12 @@ def message_payload(
         ),
         "modelName": item.model_name,
         "generationStatus": item.generation_status or "completed",
+        "redirected": (
+            item.role == "assistant"
+            and item.generation_status == "interrupted"
+            and isinstance(runtime_data, dict)
+            and runtime_data.get("redirected") is True
+        ),
         "trustLevel": item.trust_level,
         "toolCallId": item.tool_call_id,
         "toolCalls": enrich_tool_calls(item.tool_calls),

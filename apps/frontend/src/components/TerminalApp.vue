@@ -15,8 +15,6 @@
       :title="disconnectedTitle"
       :description="terminal.status === 'replaced'
           ? 'Diese Ansicht steuert das Terminal nicht mehr. Verwende die andere Ansicht oder lade diese Seite bewusst neu.'
-          : autoReconnecting
-            ? 'Die Verbindung zur bestehenden Shell wird automatisch wiederhergestellt.'
           : 'Die Ansicht ist getrennt. Beim erneuten Verbinden wird der verfügbare Terminalzustand geladen.'"
     >
       <template v-if="terminal.status !== 'replaced'" #actions>
@@ -29,6 +27,9 @@
       </q-banner>
       <q-banner v-else-if="terminal.suspended" dense class="bg-warning text-dark" role="status">
         Die Terminalverbindung ist vorübergehend ausgesetzt. Eingaben sind gesperrt, bis der Server sie wieder freigibt.
+      </q-banner>
+      <q-banner v-if="terminal.truncated" dense class="bg-warning text-dark" role="status">
+        Der Terminalverlauf wurde gekürzt. Frühere Ausgaben fehlen.
       </q-banner>
       <div class="terminal-app__stage col relative-position">
         <div ref="terminalHost" class="terminal-app__host fit" />
@@ -98,12 +99,6 @@ let fitAddon
 let resizeObserver
 let viewerSocket
 let pendingReplays = 0
-let retryTimer
-let retryAttempts = 0
-let connectedContext = null
-let connectedTerminalId = null
-let currentContext = null
-const autoReconnecting = ref(false)
 
 function initializeTerminal() {
   if (xterm || !terminalHost.value) return
@@ -162,16 +157,8 @@ function disposeTerminal() {
 
 function reconnect() {
   if (!connectionAvailable.value || !chat.current?.id || terminal.status === 'replaced') return
-  stopRetry()
   terminal.connect({ sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId })
   viewerSocket = terminal.socket
-}
-
-function stopRetry() {
-  clearTimeout(retryTimer)
-  retryTimer = null
-  retryAttempts = 0
-  autoReconnecting.value = false
 }
 
 watch(
@@ -199,50 +186,19 @@ watch(disconnected, (value) => {
 watch(
   () => [chat.current?.id, chat.current?.preferredExecutionAgentId, connectionAvailable.value],
   () => {
-    const context = JSON.stringify([chat.current?.id, chat.current?.preferredExecutionAgentId])
-    if (context !== currentContext) {
-      stopRetry()
-      connectedContext = null
-      connectedTerminalId = null
-      currentContext = context
-    }
     if (connectionAvailable.value && chat.current?.id) {
       if (terminal.sessionId !== chat.current.id || terminal.agentId !== chat.current.preferredExecutionAgentId) {
-        terminal.connect({ sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId,
-          resumeTerminalId: connectedContext === context ? connectedTerminalId : null })
+        terminal.connect({ sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId })
       }
       viewerSocket = terminal.socket
       void nextTick(initializeTerminal)
     } else {
-      stopRetry()
       terminal.release(viewerSocket)
       disposeTerminal()
     }
   },
   { immediate: true }
 )
-watch(() => [terminal.status, terminal.socket, terminal.closeReason, connectionAvailable.value], () => {
-  const context = JSON.stringify([chat.current?.id, chat.current?.preferredExecutionAgentId])
-  if (terminal.ready && terminal.sessionId === chat.current?.id
-    && terminal.agentId === chat.current?.preferredExecutionAgentId) {
-    connectedContext = context
-    connectedTerminalId = terminal.terminalId
-    stopRetry()
-  } else if (connectedContext === context && connectionAvailable.value && !terminal.socket
-    && ['closed', 'resyncRequired'].includes(terminal.status)
-    && !['terminated', 4401, 4403, 4404].includes(terminal.closeReason) && !retryTimer) {
-    autoReconnecting.value = true
-    retryTimer = setTimeout(() => {
-      retryTimer = null
-      if (!connectionAvailable.value || connectedContext !== context || terminal.socket) return
-      terminal.connect({ sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId,
-        resumeTerminalId: connectedTerminalId })
-      viewerSocket = terminal.socket
-    }, Math.min(1000 * 2 ** retryAttempts++, 30000))
-  } else if (['terminated', 4401, 4403, 4404].includes(terminal.closeReason) || terminal.status === 'replaced') {
-    stopRetry()
-  }
-}, { immediate: true })
 
 onMounted(() => {
   if (!disconnected.value) initializeTerminal()
@@ -250,7 +206,6 @@ onMounted(() => {
   void nextTick(fitVisibleTerminal)
 })
 onBeforeUnmount(() => {
-  stopRetry()
   terminal.release(viewerSocket)
   window.visualViewport?.removeEventListener('resize', fitVisibleTerminal)
   disposeTerminal()

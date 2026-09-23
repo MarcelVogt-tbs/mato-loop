@@ -89,7 +89,7 @@
               </template>
               <MessageAttachments v-if="message.attachments?.length" :attachments="message.attachments" class="q-mt-sm" />
               <div v-if="message.generationStatus === 'interrupted'" class="text-caption app-muted q-mt-sm" role="status">
-                Anfrage abgebrochen
+                Anfrage gestoppt
               </div>
               <div v-if="message.createdAt" class="chat-message__meta items-center">
                 <time v-if="message.createdAt" :datetime="message.createdAt">

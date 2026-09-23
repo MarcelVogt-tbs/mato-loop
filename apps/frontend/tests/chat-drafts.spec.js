@@ -1257,6 +1257,46 @@ describe('chat drafts', () => {
     expect(watchRun).not.toHaveBeenCalled()
   })
 
+  it('watches the accepted follow-up after a same-session refresh overtakes its send', async () => {
+    global.EventSource = EventSourceMock
+    let acceptSend
+    api.post.mockImplementation((url) => url.endsWith('/messages')
+      ? new Promise((resolve) => { acceptSend = resolve })
+      : Promise.resolve({ data: {} }))
+    api.get.mockResolvedValue({ data: { id: 'session-1', messages: [], activeRun: null } })
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [] }
+    chat.selectedSessionId = 'session-1'
+
+    const sending = chat.sendToCurrent('Korrigierte Anfrage')
+    await vi.waitFor(() => expect(acceptSend).toBeTypeOf('function'))
+    await chat.refreshSession('session-1')
+    acceptSend({ data: {
+      runId: 'follow-up',
+      message: { id: 'correction', role: 'user', content: 'Korrigierte Anfrage' }
+    } })
+    await sending
+
+    expect(chat.current.messages.map((message) => message.id)).toEqual(['correction'])
+    expect(chat.runId).toBe('follow-up')
+    expect(chat.eventSource.url).toBe('/api/sessions/session-1/runs/follow-up/events')
+
+    api.get.mockImplementation((url) => Promise.resolve({ data: url === '/sessions/session-1'
+      ? {
+          id: 'session-1', activeRun: null,
+          messages: [
+            { id: 'correction', role: 'user', content: 'Korrigierte Anfrage' },
+            { id: 'failure', role: 'assistant', kind: 'runtime_error', error: { code: 'provider.unavailable' } }
+          ]
+        }
+      : { items: [], nextCursor: null }
+    }))
+    EventSourceMock.instances.at(-1).emit('run.failed', { runId: 'follow-up' })
+    await vi.waitFor(() => expect(chat.current.messages.at(-1)).toMatchObject({
+      kind: 'runtime_error', error: { code: 'provider.unavailable' }
+    }))
+  })
+
   it.each([
     [null, true], [null, false], ['project-1', true], ['project-1', false]
   ])('promotes a continued session in scope %s (already listed: %s)', async (projectId, listed) => {

@@ -212,7 +212,7 @@ describe('shared terminal', () => {
     expect(socket.send).not.toHaveBeenCalled()
   })
 
-  it('allows manual resync after the viewer falls behind', () => {
+  it('offers manual resync without automatically retrying', () => {
     const { store, socket } = connectedStore()
     socket.message({ type: 'terminal.closed', reason: 'resyncRequired' })
     socket.onclose({ code: 4002 })

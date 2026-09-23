@@ -30,7 +30,7 @@ import { useProviderStore } from '../src/stores/providers'
 import { useToolSettingsStore } from '../src/stores/tool-settings'
 import { useInstanceLimitsStore } from '../src/stores/instance-limits'
 
-let app, root, chat, session, stopResolve, showPage, router
+let app, root, chat, session, stopResolve, showPage, router, sentMessages
 const file = (name = 'aufnahme.wav') => new File(['wav'], name, { type: 'audio/wav' })
 
 async function click(label) {
@@ -45,6 +45,7 @@ async function click(label) {
 beforeEach(async () => {
   setActivePinia(createPinia())
   chat = useChatStore()
+  sentMessages = []
   chat.draftOwnerUserId = 'owner'
   chat.current = { id: 'session-1' }
   session = ref(chat.current)
@@ -78,7 +79,11 @@ beforeEach(async () => {
   app = createApp({
     render: () => showPage.value ? h(ChatPage) : h(ChatComposer, {
       session: session.value,
+      draft: chat.activeDraft,
+      running: chat.running,
+      queueMode: chat.messageQueueActive,
       attachments: chat.activeAttachmentDraft,
+      onSend: (content, options) => sentMessages.push({ content, options }),
       'onAdd-attachments': (files, done, options) => done?.(chat.addAttachmentFiles(files, options)),
       'onRemove-attachment': (id) => chat.removeAttachmentFile(id)
     })
@@ -86,9 +91,19 @@ beforeEach(async () => {
   app.use(router)
   app.config.globalProperties.$q = { screen: { lt: { sm: false }, gt: { xs: true } } }
   app.component('QBtn', defineComponent({
-    props: ['label', 'disable', 'loading'],
-    setup: (props) => () => h('button', { disabled: props.disable || props.loading }, props.label)
+    props: ['label', 'icon', 'disable', 'loading'],
+    setup: (props, { slots }) => () => h('button', {
+      'data-icon': props.icon,
+      disabled: props.disable || props.loading
+    }, props.label || (props.icon === 'arrow_drop_down' ? slots.default?.() : null))
   }))
+  app.component('QItem', defineComponent({
+    emits: ['click'],
+    setup: (_, { emit, slots }) => () => h('button', { onClick: () => emit('click') }, slots.default?.())
+  }))
+  for (const name of ['QList', 'QItemSection', 'QMenu']) {
+    app.component(name, { render() { return h('div', this.$slots.default?.()) } })
+  }
   for (const name of ['QCard', 'QForm', 'QInput', 'QIcon', 'QSpace', 'QBanner', 'QTooltip', 'QSpinner', 'QChip', 'QPopupProxy', 'QToolbar', 'QToolbarTitle', 'QSeparator', 'QCardSection']) {
     app.component(name, { methods: { focus() {} }, render() { return h('div', this.$slots.default?.()) } })
   }
@@ -112,6 +127,34 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it('switches the icon-only send button immediately and keeps the selected mode', async () => {
+    chat.selectedSessionId = 'session-1'
+    chat.running = true
+    chat.runId = 'run-1'
+    chat.setDraft('Kurs ändern')
+    await nextTick()
+
+    const mainButton = () => root.querySelector('button[aria-label="Nachricht jetzt senden"], button[aria-label="Nachricht vormerken"]')
+    expect(mainButton().dataset.icon).toBe('arrow_upward')
+    expect(mainButton().textContent).toBe('')
+    expect(root.querySelector('button[aria-label="Versandart auswählen"]').dataset.icon).toBe('arrow_drop_down')
+
+    await click('Nachricht jetzt senden')
+    expect(sentMessages).toEqual([{ content: 'Kurs ändern', options: { interrupt: true } }])
+
+    await click('Nach dem Lauf senden')
+    expect(mainButton().dataset.icon).toBe('schedule_send')
+    expect(mainButton().textContent).toBe('')
+    await click('Nachricht vormerken')
+    expect(sentMessages[1]).toEqual({ content: 'Kurs ändern', options: { interrupt: false } })
+    expect(mainButton().dataset.icon).toBe('schedule_send')
+
+    await click('Jetzt senden')
+    expect(mainButton().dataset.icon).toBe('arrow_upward')
+    await click('Nachricht jetzt senden')
+    expect(sentMessages[2].options).toEqual({ interrupt: true })
+  })
+
   it('never renders a composer while a direct child session URL redirects to its parent inspector', async () => {
     chat.outboxLoaded = true
     let releaseChild

@@ -1186,6 +1186,7 @@ async def cancel_run(
     run_id: UUID,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    redirect: bool = False,
 ) -> dict:
     if await _mutable_session(db, session_id, user.id) is None:
         raise ApiError(404, "session.runNotFound")
@@ -1194,7 +1195,7 @@ async def cancel_run(
         raise ApiError(404, "session.runNotFound")
     if run.status in {"completed", "failed", "cancelled"}:
         return run_payload(run)
-    if not AgentRuntime.cancel(run_id):
+    if not AgentRuntime.cancel(run_id, redirected=redirect):
         raise ApiError(409, "session.runInactive")
     return run_payload(run)
 

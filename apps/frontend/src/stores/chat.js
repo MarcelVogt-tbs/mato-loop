@@ -49,6 +49,7 @@ import {
 } from 'src/utils/attachments'
 import {
   clearChatOutbox,
+  compareChatOutboxEntries,
   deleteChatOutboxEntry,
   deleteChatOutboxEntries,
   loadChatOutbox,
@@ -148,6 +149,7 @@ export const useChatStore = defineStore('chat', {
     running: false,
     stopping: false,
     cancelRequested: false,
+    cancelRedirectRequested: false,
     streamContent: '',
     streamResearchSources: [],
     streamReasoning: null,
@@ -344,7 +346,7 @@ export const useChatStore = defineStore('chat', {
           const key = queueKeyForEntry(entry)
           const queue = this.queuedMessages[key] || []
           if (!queue.some((item) => item.id === entry.id)) queue.push(entry)
-          queue.sort((left, right) => left.queuedAt.localeCompare(right.queuedAt))
+          queue.sort(compareChatOutboxEntries)
           this.queuedMessages[key] = queue
           if (queue[0]?.paused) this.queuedSendPausedSessions[key] = true
           else delete this.queuedSendPausedSessions[key]
@@ -797,6 +799,7 @@ export const useChatStore = defineStore('chat', {
           this.running = false
           this.stopping = false
           this.cancelRequested = false
+          this.cancelRedirectRequested = false
           this.clearActivity()
         }
       }
@@ -1007,6 +1010,7 @@ export const useChatStore = defineStore('chat', {
         this.running = false
         this.stopping = false
         this.cancelRequested = false
+        this.cancelRedirectRequested = false
         this.streamContent = ''
         this.streamResearchSources = []
         this.streamReasoning = null
@@ -1316,6 +1320,7 @@ export const useChatStore = defineStore('chat', {
       this.running = false
       this.stopping = false
       this.cancelRequested = false
+      this.cancelRedirectRequested = false
       this.streamContent = ''
       this.streamResearchSources = []
       this.streamReasoning = null
@@ -1531,9 +1536,13 @@ export const useChatStore = defineStore('chat', {
         this.historyActionPending = false
       }
     },
-    async send(content, { preserveDraft = false } = {}) {
+    async send(content, { preserveDraft = false, interrupt = false } = {}) {
       if (this.outboxSaving || this.historyActionPending || this.sessionSettingsPending) return null
       this.outboxSaving = true
+      const interruptRun = interrupt && this.running && Boolean(this.current)
+        && (!this.runSessionId || this.runSessionId === this.current.id)
+      const runId = this.runId
+      const runSessionId = this.runSessionId
       const submitImmediately = !this.running
         && !this.stopping
         && !this.runId
@@ -1547,7 +1556,7 @@ export const useChatStore = defineStore('chat', {
       if (this.outboxLoadPromise) await this.outboxLoadPromise
       let entry
       try {
-        entry = await this.queueMessage(content, { preserveDraft })
+        entry = await this.queueMessage(content, { preserveDraft, interrupt: interruptRun })
       } finally {
         this.outboxSaving = false
       }
@@ -1556,6 +1565,7 @@ export const useChatStore = defineStore('chat', {
           this.running = false
           this.stopping = false
           this.cancelRequested = false
+          this.cancelRedirectRequested = false
           this.clearActivity()
         }
         return null
@@ -1563,9 +1573,12 @@ export const useChatStore = defineStore('chat', {
       if (submitImmediately) {
         this.running = false
       }
+      if (interruptRun && this.runId === runId && this.runSessionId === runSessionId) {
+        await this.stop({ redirect: true })
+      }
       return this.drainOutbox()
     },
-    async queueMessage(content, { preserveDraft = false } = {}) {
+    async queueMessage(content, { preserveDraft = false, interrupt = false } = {}) {
       const ownerUserId = this.draftOwnerUserId
       const loadVersion = this.outboxLoadVersion
       if (!ownerUserId) return null
@@ -1592,7 +1605,10 @@ export const useChatStore = defineStore('chat', {
         activeFile: useWorkspaceStore().activeFileSnapshot(
           this.activeContext?.preferredExecutionAgentId
         ),
-        queuedAt: new Date().toISOString(),
+        queuedAt: new Date(this.activeQueuedMessages.reduce(
+          (latest, item) => Math.max(latest, Date.parse(item.queuedAt) + 1), Date.now()
+        )).toISOString(),
+        ...(interrupt ? { interrupt: true } : {}),
         paused: false
       }
       try {
@@ -1608,6 +1624,8 @@ export const useChatStore = defineStore('chat', {
       const key = queueKeyForEntry(entry)
       if (!this.queuedMessages[key]) this.queuedMessages[key] = []
       this.queuedMessages[key].push(entry)
+      this.queuedMessages[key].sort(compareChatOutboxEntries)
+      if (!this.queuedMessages[key][0].paused) delete this.queuedSendPausedSessions[key]
       if (!preserveDraft) {
         this.clearAttachmentDraft(sessionId)
         if (sessionId) delete this.drafts.sessionMessages[sessionId]
@@ -1771,13 +1789,21 @@ export const useChatStore = defineStore('chat', {
             ...(entry.activeFile ? { active_file: entry.activeFile } : {})
           }
           const config = { suppressErrorToast: true }
-          await (entry.attachments.length
+          const { data } = await (entry.attachments.length
             ? api.post(
                 `/sessions/${entry.sessionId}/messages/with-attachments`,
                 buildAttachmentFormData(payload, entry.attachments),
                 config
               )
             : api.post(`/sessions/${entry.sessionId}/messages`, payload, config))
+          if (data?.runId && this.current?.id === entry.sessionId && this.selectedSessionId === entry.sessionId) {
+            if (data.message && !this.current.messages.some((message) => message.id === data.message.id)) {
+              this.current.messages.push(data.message)
+            }
+            if (this.runId !== data.runId || !this.eventSource) {
+              this.watchRun(entry.sessionId, data.runId, { status: 'queued', ...data })
+            }
+          }
           void this.refreshSessions(null, entry.projectId).catch(() => {})
           result = { created: false, sessionId: entry.sessionId }
         }
@@ -1809,9 +1835,10 @@ export const useChatStore = defineStore('chat', {
         if (this.queueSendingEntryId === entry.id) this.queueSendingEntryId = null
       }
     },
-    async stop() {
+    async stop({ redirect = false } = {}) {
       if (!this.running || this.stopping) return
       this.cancelRequested = true
+      this.cancelRedirectRequested = redirect
       this.running = false
       this.stopping = false
       void this.cancelActiveRun()
@@ -1821,10 +1848,16 @@ export const useChatStore = defineStore('chat', {
       const sessionId = this.runSessionId
       const runId = this.runId
       try {
-        await api.post(`/sessions/${sessionId}/runs/${runId}/cancel`)
+        const url = `/sessions/${sessionId}/runs/${runId}/cancel`
+        if (this.cancelRedirectRequested) {
+          await api.post(url, undefined, { params: { redirect: true } })
+        } else {
+          await api.post(url)
+        }
       } catch {
         if (this.runSessionId === sessionId && this.runId === runId) {
           this.cancelRequested = false
+          this.cancelRedirectRequested = false
           this.stopping = false
           this.running = true
         }
@@ -1950,6 +1983,7 @@ export const useChatStore = defineStore('chat', {
           this.running = false
           this.stopping = false
           this.cancelRequested = false
+          this.cancelRedirectRequested = false
           this.clearActivity()
         }
         throw error
@@ -1991,18 +2025,20 @@ export const useChatStore = defineStore('chat', {
             )
           : await api.post(`/sessions/${session.id}/messages`, payload, ...config)
         if (data.message) {
-          const canonicalIndex = session.messages.findIndex((message) => message.id === data.message.id)
+          const targetSession = this.selectedSessionId === session.id && this.current?.id === session.id
+            ? this.current : session
+          const canonicalIndex = targetSession.messages.findIndex((message) => message.id === data.message.id)
           if (canonicalIndex >= 0) {
-            session.messages[canonicalIndex] = data.message
+            targetSession.messages[canonicalIndex] = data.message
           } else {
-            session.messages.push(data.message)
-            if (data.message.role === 'user' && Number.isInteger(session.userRequestCount)) {
-              session.userRequestCount += 1
+            targetSession.messages.push(data.message)
+            if (data.message.role === 'user' && Number.isInteger(targetSession.userRequestCount)) {
+              targetSession.userRequestCount += 1
             }
           }
           if (data.message.createdAt) {
-            session.lastMessageAt = data.message.createdAt
-            this.updateSessionSummary(session)
+            targetSession.lastMessageAt = data.message.createdAt
+            this.updateSessionSummary(targetSession)
           }
         }
         if (clearDraft) {
@@ -2011,18 +2047,19 @@ export const useChatStore = defineStore('chat', {
           this.persistDrafts()
         }
         if (
-          this.sessionLoadVersion === sessionLoadVersion
-          && this.selectedSessionId === session.id
+          this.selectedSessionId === session.id
           && this.current?.id === session.id
         ) {
-          this.watchRun(session.id, data.runId, {
-            status: 'queued',
-            modelName: data.modelName,
-            agentProfileId: data.agentProfileId,
-            activeDurationMs: data.activeDurationMs,
-            activeDurationRunning: data.activeDurationRunning,
-            activeTimingRevision: data.activeTimingRevision
-          })
+          if (this.runId !== data.runId || !this.eventSource) {
+            this.watchRun(session.id, data.runId, {
+              status: 'queued',
+              modelName: data.modelName,
+              agentProfileId: data.agentProfileId,
+              activeDurationMs: data.activeDurationMs,
+              activeDurationRunning: data.activeDurationRunning,
+              activeTimingRevision: data.activeTimingRevision
+            })
+          }
           await this.cancelActiveRun()
         } else {
           void this.refreshSessions().catch(() => {})
@@ -2037,6 +2074,7 @@ export const useChatStore = defineStore('chat', {
           this.running = false
           this.stopping = false
           this.cancelRequested = false
+          this.cancelRedirectRequested = false
           this.clearActivity()
         }
         throw error
@@ -2443,6 +2481,7 @@ export const useChatStore = defineStore('chat', {
         this.running = false
         this.stopping = false
         this.cancelRequested = false
+        this.cancelRedirectRequested = false
         this.streamContent = ''
         this.streamResearchSources = []
         this.streamReasoning = null
@@ -2504,6 +2543,7 @@ export const useChatStore = defineStore('chat', {
           this.running = false
           this.stopping = false
           this.cancelRequested = false
+          this.cancelRedirectRequested = false
           this.streamModelName = null
           this.clearActivity()
           this.setSessionRunStatus(sessionId, null)

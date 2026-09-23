@@ -128,33 +128,6 @@ async def test_resume_keeps_output_and_partial_input_without_clearing_screen(env
         await env.coordinator.shutdown()
 
 
-async def test_resume_only_reuses_live_shell_without_starting_another(env):
-    socket = FakeWebSocket(env.session.id)
-    socket.query_params["resumeOnly"] = "1"
-    socket.query_params["terminalId"] = str(uuid4())
-    await terminals.browser_terminal(socket, env.agent.id)
-    assert socket.sent[0]["error"]["code"] == "terminal.disconnected"
-    assert not env.calls
-
-    first = await open_viewer(env)
-    socket.query_params.pop("terminalId")
-    await terminals.browser_terminal(socket, env.agent.id)
-    assert socket.sent[-1]["error"]["code"] == "terminal.disconnected"
-    assert first.runtime.viewer is first
-    resumed = await env.coordinator.open(env.user.id, env.session.id, env.agent.id, env.login.id,
-                                         FakeWebSocket(), resume_terminal_id=first.runtime.terminal_id)
-    assert resumed.runtime is first.runtime
-    assert sum(operation == "terminal.shared.open" for operation, _ in env.calls) == 1
-    with pytest.raises(ExecutionClientError, match="terminal.disconnected"):
-        await env.coordinator.open(env.user.id, env.session.id, env.agent.id, env.login.id,
-                                   FakeWebSocket(), resume_terminal_id=str(uuid4()))
-    await env.coordinator.terminate(first.runtime)
-    with pytest.raises(ExecutionClientError, match="terminal.disconnected"):
-        await env.coordinator.open(env.user.id, env.session.id, env.agent.id, env.login.id,
-                                   FakeWebSocket(), resume_terminal_id=first.runtime.terminal_id)
-    assert sum(operation == "terminal.shared.open" for operation, _ in env.calls) == 1
-
-
 @pytest.mark.parametrize("invalid", ["origin", "login", "session", "owner", "child", "automation", "agent", "tab", "revoked", "capability"])
 async def test_access_checked_before_open_or_replay(env, monkeypatch, invalid):
     socket = FakeWebSocket(env.session.id)

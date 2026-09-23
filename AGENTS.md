@@ -117,8 +117,6 @@ Example:
 
 ## Validation
 
-Add only meaningful regression tests for changed behavior. Extend existing tests when possible; avoid duplicate cases across layers and tests that merely mirror the implementation. Do not add tests for trivial, reversible changes.
-
 Prefer checks through the Docker development stack:
 
 ```bash

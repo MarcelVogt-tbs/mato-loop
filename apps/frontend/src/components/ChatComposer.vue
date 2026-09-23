@@ -169,8 +169,42 @@
               :disable="stopping"
               @click="$emit('stop')"
             />
+            <template v-if="running && queueMode">
+              <q-btn
+                round
+                unelevated
+                :color="sendMode === 'queue' ? 'secondary' : 'primary'"
+                :icon="sendMode === 'queue' ? 'schedule_send' : 'arrow_upward'"
+                :aria-label="sendMode === 'queue' ? 'Nachricht vormerken' : 'Nachricht jetzt senden'"
+                type="button"
+                :disable="sendDisabled"
+                @click="submit"
+              />
+              <q-btn
+                flat
+                round
+                dense
+                icon="arrow_drop_down"
+                aria-label="Versandart auswählen"
+                type="button"
+                :disable="inputDisabled || stopping"
+              >
+                <q-menu anchor="top right" self="bottom right" auto-close>
+                  <q-list>
+                    <q-item clickable @click="sendMode = 'interrupt'">
+                      <q-item-section>Jetzt senden</q-item-section>
+                      <q-item-section side><q-icon v-if="sendMode === 'interrupt'" name="check" /></q-item-section>
+                    </q-item>
+                    <q-item clickable @click="sendMode = 'queue'">
+                      <q-item-section>Nach dem Lauf senden</q-item-section>
+                      <q-item-section side><q-icon v-if="sendMode === 'queue'" name="check" /></q-item-section>
+                    </q-item>
+                  </q-list>
+                </q-menu>
+              </q-btn>
+            </template>
             <q-btn
-              v-if="!running || draftHasContent"
+              v-else-if="!running || draftHasContent"
               round
               unelevated
               :color="queueMode ? 'secondary' : 'primary'"
@@ -178,11 +212,7 @@
               :aria-label="queueMode ? 'Nachricht vormerken' : 'Nachricht senden'"
               type="submit"
               :disable="sendDisabled"
-            >
-              <q-tooltip v-if="queueMode">
-                Wird automatisch gesendet, sobald der Chat bereit ist
-              </q-tooltip>
-            </q-btn>
+            />
           </div>
         </div>
 
@@ -229,6 +259,7 @@ const input = ref(null)
 const attachmentInput = ref(null)
 const settingsFields = ref(null)
 const settingsOpen = ref(false)
+const sendMode = ref('interrupt')
 const { confirm } = useConfirm()
 let recordingScope = null
 let finishingRequest = null
@@ -302,7 +333,7 @@ const sessionSettingsWarning = computed(() => settingsFields.value?.warning || '
 function submit() {
   const content = props.draft.trim()
   if (sendDisabled.value) return
-  emit('send', content)
+  emit('send', content, { interrupt: props.running && sendMode.value === 'interrupt' })
 }
 
 function selectAttachmentFiles(event) {

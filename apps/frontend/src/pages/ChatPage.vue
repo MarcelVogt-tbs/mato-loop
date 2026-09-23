@@ -192,12 +192,12 @@
               :attachments="message.attachments"
             />
             <div
-              v-if="message.generationStatus === 'interrupted'"
+              v-if="message.generationStatus === 'interrupted' && !message.redirected"
               class="app-muted text-caption row items-center q-gutter-x-xs q-mt-sm"
               role="status"
             >
               <q-icon name="cancel" size="14px" aria-hidden="true" />
-              <span>Anfrage abgebrochen</span>
+              <span>Anfrage gestoppt</span>
             </div>
             <div
               v-if="message.createdAt
@@ -954,10 +954,10 @@ async function loadBackgroundData() {
   }
 }
 
-async function send(content) {
+async function send(content, options) {
   const sessionId = chat.current?.id
   enableFollowMode()
-  const request = chat.send(content)
+  const request = chat.send(content, options)
   try {
     const result = await request
     if (!result || !sessionId || chat.current?.id !== sessionId) return

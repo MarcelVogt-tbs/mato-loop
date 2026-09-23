@@ -2,6 +2,12 @@ const DATABASE_NAME = 'matoLoopChatOutbox'
 const DATABASE_VERSION = 1
 const STORE_NAME = 'entries'
 
+export function compareChatOutboxEntries(left, right) {
+  return Number(Boolean(right.interrupt)) - Number(Boolean(left.interrupt))
+    || left.queuedAt.localeCompare(right.queuedAt)
+    || left.id.localeCompare(right.id)
+}
+
 function openDatabase() {
   if (!globalThis.indexedDB) return Promise.reject(new Error('IndexedDB is unavailable'))
   return new Promise((resolve, reject) => {
@@ -50,9 +56,7 @@ export async function loadChatOutbox(ownerUserId) {
       // ponytail: queues are small; add an owner index only if this scan becomes measurable.
       done(request.result
         .filter((entry) => entry.ownerUserId === ownerUserId)
-        .sort((left, right) => (
-          left.queuedAt.localeCompare(right.queuedAt) || left.id.localeCompare(right.id)
-        )))
+        .sort(compareChatOutboxEntries))
     }
   })
 }

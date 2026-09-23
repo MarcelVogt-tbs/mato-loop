@@ -8,6 +8,21 @@ import {
 } from '../src/utils/chat-transcript'
 
 describe('chat transcript', () => {
+  it('hides an empty redirected turn while retaining explicit stops and visible partial responses', () => {
+    const user = { id: 'user', role: 'user', content: 'Start' }
+    const empty = { id: 'empty', role: 'assistant', content: '', generationStatus: 'interrupted', redirected: true,
+      reasoning: { kind: 'content', text: 'Unfertiger Gedanke', status: 'interrupted' }, activeDurationMs: 3000 }
+    const explicit = { ...empty, id: 'stopped', redirected: false }
+    const partial = { ...empty, id: 'partial', content: 'Angefangene Antwort' }
+
+    expect(buildChatTranscript([user, empty, { id: 'correction', role: 'user', content: 'Anders' }])
+      .messages.map((message) => message.id)).toEqual(['user', 'correction'])
+    expect(buildChatTranscript([user, explicit]).messages.at(-1).id).toBe('stopped')
+    expect(buildChatTranscript([user, partial]).messages.at(-1)).toMatchObject({
+      id: 'partial', content: 'Angefangene Antwort', redirected: true
+    })
+  })
+
   it('exposes validated file actions on the final assistant response', () => {
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
     const path = 'Support-Meeting-Protokoll.md'

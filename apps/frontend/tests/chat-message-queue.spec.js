@@ -419,6 +419,83 @@ describe('chat message queue', () => {
     ])
   })
 
+  it('saves a direct message before cancelling and sends it ahead of older queued messages after refresh', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.watchRun('session-1', 'run-1', { status: 'running' })
+    await chat.queueMessage('Später')
+    let resolveRefresh
+    api.get.mockImplementation((url) => url === '/sessions/session-1'
+      ? new Promise((resolve) => { resolveRefresh = resolve })
+      : Promise.resolve({ data: { items: [], nextCursor: null } }))
+    api.post.mockImplementation(async (url) => {
+      if (url.endsWith('/cancel')) {
+        expect((await loadChatOutbox('user-1')).map((entry) => entry.content)).toEqual([
+          'Jetzt', 'Später'
+        ])
+        return { data: { status: 'cancelled' } }
+      }
+      return { data: { message: { id: 'direct', role: 'user', content: 'Jetzt' }, runId: 'run-2' } }
+    })
+
+    await chat.send('Jetzt', { interrupt: true })
+
+    expect(api.post).toHaveBeenCalledTimes(1)
+    expect(api.post.mock.calls[0][0]).toBe('/sessions/session-1/runs/run-1/cancel')
+    expect(api.post.mock.calls[0][2]).toEqual({ params: { redirect: true } })
+    chat.eventSource.listeners.get('run.cancelled')()
+    await vi.waitFor(() => expect(resolveRefresh).toBeTypeOf('function'))
+    expect(api.post).toHaveBeenCalledTimes(1)
+    resolveRefresh({ data: {
+      id: 'session-1', activeRun: null,
+      messages: [{ id: 'interrupted', role: 'assistant', generationStatus: 'interrupted' }]
+    } })
+
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(2))
+    expect(api.post.mock.calls[1][1]).toMatchObject({ content: 'Jetzt' })
+    expect(chat.eventSource.url).toBe('/api/sessions/session-1/runs/run-2/events')
+    expect(chat.current.messages.map((message) => message.id)).toEqual(['interrupted', 'direct'])
+    expect(chat.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Später'])
+  })
+
+  it('keeps direct-message priority after a reload and retains the message when cancellation fails', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.watchRun('session-1', 'run-1', { status: 'running' })
+    await chat.queueMessage('Später')
+    api.post.mockRejectedValue(new Error('Cancel failed'))
+
+    await chat.send('Jetzt', { interrupt: true })
+    await vi.waitFor(() => expect(chat.running).toBe(true))
+
+    expect(api.post).toHaveBeenCalledTimes(1)
+    expect(chat.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Jetzt', 'Später'])
+    setActivePinia(createPinia())
+    const restored = useChatStore()
+    restored.setDraftOwner('user-1')
+    await restored.outboxLoadPromise
+    restored.cancelQueueDrain()
+    activeSession(restored)
+    expect(restored.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Jetzt', 'Später'])
+  })
+
+  it('does not cancel a run when the direct message cannot be saved', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.watchRun('session-1', 'run-1', { status: 'running' })
+    chat.setDraft('Nicht verlieren')
+    vi.stubGlobal('indexedDB', undefined)
+    try {
+      await chat.send('Nicht verlieren', { interrupt: true })
+
+      expect(api.post).not.toHaveBeenCalled()
+      expect(chat.running).toBe(true)
+      expect(chat.activeDraft).toBe('Nicht verlieren')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it.each(['run.completed', 'run.failed', 'run.cancelled', 'reconnect', 'navigation', 'session-switch'])(
     'opens only canonical final outputs after %s, never at tool completion', async (terminal) => {
       const chat = useChatStore()
@@ -766,6 +843,29 @@ describe('chat message queue', () => {
       run_id: entry.id
     }, { suppressErrorToast: true })
     expect(chat.queuedMessages['session-1']).toBeUndefined()
+  })
+
+  it('watches a background send when its session is selected before server acceptance', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.running = true
+    await chat.queueMessage('Korrektur')
+    activeSession(chat, 'session-2')
+    chat.running = false
+    api.get.mockResolvedValue({ data: { activeRun: null } })
+    let acceptSend
+    api.post.mockImplementation(() => new Promise((resolve) => { acceptSend = resolve }))
+
+    const sending = chat.drainOutbox()
+    await vi.waitFor(() => expect(acceptSend).toBeTypeOf('function'))
+    activeSession(chat)
+    acceptSend({ data: {
+      runId: 'follow-up', message: { id: 'correction', role: 'user', content: 'Korrektur' }
+    } })
+    await sending
+
+    expect(chat.current.messages.map((message) => message.id)).toEqual(['correction'])
+    expect(chat.eventSource.url).toBe('/api/sessions/session-1/runs/follow-up/events')
   })
 
   it('restores a background queue probe failure as paused', async () => {

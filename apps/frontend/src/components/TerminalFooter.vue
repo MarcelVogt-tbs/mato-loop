@@ -42,8 +42,10 @@ const runtimeStatus = computed(() => {
   if (!terminal.ready) return 'Terminal nicht verbunden.'
   if (terminal.submitting === 'attach') return 'Agent-Verbindung wird angefordert.'
   if (terminal.submitting === 'detach') return 'Manuelle Übernahme wird angefordert.'
-  if (terminal.attached) return terminal.activeToolCallId ? 'Der Agent führt einen Befehl aus.' : ''
-  return terminal.busy ? 'Ein manueller Befehl läuft.' : ''
+  if (terminal.attached) return terminal.activeToolCallId
+    ? 'Der Agent führt einen Befehl aus.'
+    : 'Agent verbunden.'
+  return terminal.busy ? 'Ein manueller Befehl läuft.' : 'Manuelle Steuerung'
 })
 
 function toggleAttachment(attached) {

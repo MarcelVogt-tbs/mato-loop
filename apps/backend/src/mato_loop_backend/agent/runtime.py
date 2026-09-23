@@ -888,6 +888,7 @@ class AgentRuntime:
     _title_tasks: dict[asyncio.Task[None], UUID] = {}
     _cancellable_runs: set[UUID] = set()
     _user_cancelled_runs: set[UUID] = set()
+    _redirected_runs: set[UUID] = set()
     _interrupted_runs: set[UUID] = set()
 
     @staticmethod
@@ -1267,11 +1268,13 @@ class AgentRuntime:
         return run
 
     @classmethod
-    def cancel(cls, run_id: UUID) -> bool:
+    def cancel(cls, run_id: UUID, *, redirected: bool = False) -> bool:
         task = cls._tasks.get(run_id)
         if task is None or task.done():
             return False
         cls._user_cancelled_runs.add(run_id)
+        if redirected:
+            cls._redirected_runs.add(run_id)
         if run_id in cls._cancellable_runs and task.cancelling() == 0:
             task.cancel()
         return True
@@ -1564,6 +1567,11 @@ class AgentRuntime:
                             reasoning = dict(visible_response.reasoning or {}) or None
                             if reasoning is not None:
                                 reasoning["status"] = "interrupted"
+                            metadata = _run_metadata(
+                                cancelled_run, redirected=run_id in cls._redirected_runs
+                            )
+                            if visible_response.warnings:
+                                metadata["warnings"] = list(visible_response.warnings)
                             interrupted_message = Message(
                                 session_id=session_id,
                                 role="assistant",
@@ -1572,16 +1580,7 @@ class AgentRuntime:
                                 generation_status="interrupted",
                                 trust_level=cancelled_run.trust_level,
                                 public_reasoning=reasoning,
-                                provider_data=(
-                                    {
-                                        "_matoloop": _run_metadata(
-                                            cancelled_run,
-                                            warnings=list(visible_response.warnings),
-                                        )
-                                    }
-                                    if visible_response.warnings
-                                    else {"_matoloop": _run_metadata(cancelled_run)}
-                                ),
+                                provider_data={"_matoloop": metadata},
                                 created_at=datetime.now(UTC),
                             )
                             db.add(interrupted_message)
@@ -1632,6 +1631,7 @@ class AgentRuntime:
                                     "createdAt": interrupted_message.created_at.isoformat(),
                                     "modelName": interrupted_message.model_name,
                                     "generationStatus": "interrupted",
+                                    "redirected": run_id in cls._redirected_runs,
                                     "toolCalls": None,
                                     "reasoning": interrupted_message.public_reasoning,
                                     "warnings": list(visible_response.warnings),
@@ -1764,6 +1764,7 @@ class AgentRuntime:
         finally:
             cls._cancellable_runs.discard(run_id)
             cls._user_cancelled_runs.discard(run_id)
+            cls._redirected_runs.discard(run_id)
             cls._interrupted_runs.discard(run_id)
 
     @classmethod

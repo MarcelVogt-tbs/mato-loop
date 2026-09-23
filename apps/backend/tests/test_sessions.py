@@ -1147,7 +1147,8 @@ async def test_session_owner_cannot_read_another_users_session() -> None:
     db.scalars.assert_not_awaited()
 
 
-async def test_active_run_cancellation_is_requested_without_waiting(monkeypatch) -> None:
+@pytest.mark.parametrize("redirect", [False, True])
+async def test_active_run_cancellation_is_requested_without_waiting(monkeypatch, redirect) -> None:
     user = _user()
     session_id = uuid4()
     session = ChatSession(id=session_id, user_id=user.id, title="Test")
@@ -1157,9 +1158,9 @@ async def test_active_run_cancellation_is_requested_without_waiting(monkeypatch)
     db.get.side_effect = [session, run]
     monkeypatch.setattr(AgentRuntime, "cancel", cancel)
 
-    result = await cancel_run(session_id, run.id, user, db)
+    result = await cancel_run(session_id, run.id, user, db, redirect=redirect)
 
-    cancel.assert_called_once_with(run.id)
+    cancel.assert_called_once_with(run.id, redirected=redirect)
     db.refresh.assert_not_awaited()
     assert result["status"] == "running"
 

@@ -41,6 +41,7 @@ from mato_loop_backend.providers.base import (
     ToolCall,
 )
 from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.sessions.serialization import message_payload
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
     AiSettings,
@@ -1024,7 +1025,8 @@ async def test_automation_run_does_not_emit_a_second_session_push(monkeypatch) -
     deliver.assert_not_awaited()
 
 
-async def test_user_cancel_persists_visible_response_before_terminal_event(monkeypatch) -> None:
+@pytest.mark.parametrize("redirected", [False, True])
+async def test_user_cancel_persists_visible_response_before_terminal_event(monkeypatch, redirected) -> None:
     monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     run = AgentRun(
         id=uuid4(),
@@ -1045,6 +1047,8 @@ async def test_user_cancel_persists_visible_response_before_terminal_event(monke
             "status": "streaming",
         }
         AgentRuntime._user_cancelled_runs.add(run.id)
+        if redirected:
+            AgentRuntime._redirected_runs.add(run.id)
         raise asyncio.CancelledError
 
     async def publish(_run_id, event) -> None:
@@ -1061,6 +1065,7 @@ async def test_user_cancel_persists_visible_response_before_terminal_event(monke
     assert isinstance(interrupted, Message)
     assert interrupted.content == "Teilantwort"
     assert interrupted.generation_status == "interrupted"
+    assert message_payload(interrupted)["redirected"] is redirected
     assert interrupted.model_name == "Antwortmodell"
     assert interrupted.trust_level == "private"
     assert interrupted.public_reasoning == {
@@ -1076,10 +1081,12 @@ async def test_user_cancel_persists_visible_response_before_terminal_event(monke
     assert events[1]["message"]["content"] == "Teilantwort"
     assert events[1]["message"]["createdAt"] == interrupted.created_at.isoformat()
     assert events[1]["message"]["modelName"] == "Antwortmodell"
+    assert events[1]["message"]["redirected"] is redirected
     assert run.status == "cancelled"
 
 
-async def test_immediate_user_cancel_persists_empty_interruption_marker(monkeypatch) -> None:
+@pytest.mark.parametrize("redirected", [False, True])
+async def test_immediate_user_cancel_persists_empty_interruption_marker(monkeypatch, redirected) -> None:
     monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     run = AgentRun(id=uuid4(), session_id=uuid4(), status="queued")
     db = AsyncMock(spec=AsyncSession)
@@ -1095,6 +1102,8 @@ async def test_immediate_user_cancel_persists_empty_interruption_marker(monkeypa
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
     monkeypatch.setattr(run_events, "publish", publish)
     AgentRuntime._user_cancelled_runs.add(run.id)
+    if redirected:
+        AgentRuntime._redirected_runs.add(run.id)
 
     with pytest.raises(asyncio.CancelledError):
         await AgentRuntime._run(run.id)
@@ -1102,6 +1111,7 @@ async def test_immediate_user_cancel_persists_empty_interruption_marker(monkeypa
     interrupted = db.add.call_args.args[0]
     assert interrupted.content == ""
     assert interrupted.generation_status == "interrupted"
+    assert message_payload(interrupted)["redirected"] is redirected
     assert [event["type"] for event in events] == [
         "message.interrupted",
         "run.cancelled",
