@@ -30,7 +30,7 @@ import { useProviderStore } from '../src/stores/providers'
 import { useToolSettingsStore } from '../src/stores/tool-settings'
 import { useInstanceLimitsStore } from '../src/stores/instance-limits'
 
-let app, root, chat, session, stopResolve, showPage, router, sentMessages
+let app, root, chat, session, stopResolve, showPage, router, sentMessages, stoppedCount
 const file = (name = 'aufnahme.wav') => new File(['wav'], name, { type: 'audio/wav' })
 
 async function click(label) {
@@ -46,6 +46,7 @@ beforeEach(async () => {
   setActivePinia(createPinia())
   chat = useChatStore()
   sentMessages = []
+  stoppedCount = 0
   chat.draftOwnerUserId = 'owner'
   chat.current = { id: 'session-1' }
   session = ref(chat.current)
@@ -84,6 +85,7 @@ beforeEach(async () => {
       queueMode: chat.messageQueueActive,
       attachments: chat.activeAttachmentDraft,
       onSend: (content, options) => sentMessages.push({ content, options }),
+      onStop: () => { stoppedCount += 1 },
       'onAdd-attachments': (files, done, options) => done?.(chat.addAttachmentFiles(files, options)),
       'onRemove-attachment': (id) => chat.removeAttachmentFile(id)
     })
@@ -127,6 +129,41 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it('shows one stop button without a draft and sends text or attachment drafts instead', async () => {
+    chat.selectedSessionId = 'session-1'
+    chat.running = true
+    chat.runId = 'run-1'
+    await nextTick()
+
+    expect(root.querySelector('button[aria-label="Agent-Anfrage stoppen"]').dataset.icon).toBe('stop')
+    expect(root.querySelector('button[aria-label="Versandart auswählen"]')).toBeNull()
+    await click('Agent-Anfrage stoppen')
+    expect(stoppedCount).toBe(1)
+    expect(sentMessages).toEqual([])
+
+    chat.setDraft('Kurs ändern')
+    await nextTick()
+    expect(root.querySelector('button[aria-label="Agent-Anfrage stoppen"]')).toBeNull()
+    expect(root.querySelector('button[aria-label="Nachricht jetzt senden"]').dataset.icon).toBe('arrow_upward')
+    expect(root.querySelector('button[aria-label="Versandart auswählen"]')).toBeTruthy()
+
+    chat.setDraft('')
+    await nextTick()
+    expect(root.querySelector('button[aria-label="Agent-Anfrage stoppen"]')).toBeTruthy()
+    expect(root.querySelector('button[aria-label="Versandart auswählen"]')).toBeNull()
+
+    chat.addAttachmentFiles([file('beleg.wav')])
+    await nextTick()
+    await click('Nachricht jetzt senden')
+    expect(sentMessages).toEqual([{ content: '', options: { interrupt: true } }])
+    chat.clearAttachmentDraft('session-1')
+    chat.setDraft('Kurs ändern')
+    await click('Sprachnachricht aufnehmen')
+    await nextTick()
+    expect(root.querySelector('button[aria-label="Aufnahme beenden und senden"]')).toBeTruthy()
+    expect(root.querySelector('button[aria-label="Versandart auswählen"]')).toBeTruthy()
+  })
+
   it('switches the icon-only send button immediately and keeps the selected mode', async () => {
     chat.selectedSessionId = 'session-1'
     chat.running = true
@@ -222,6 +259,66 @@ describe('voice attachment composer', () => {
     await nextTick()
     await nextTick()
     expect(chat.activeAttachmentDraft[0].voiceMessage).toBe(true)
+  })
+
+  it.each([
+    ['idle', false, false],
+    ['direct', true, false],
+    ['queued', true, true]
+  ])('finishes and sends the voice recording in %s mode', async (_mode, running, queued) => {
+    chat.selectedSessionId = 'session-1'
+    chat.running = running
+    if (running) chat.runId = 'run-1'
+    chat.setDraft('Zusätzlicher Text')
+    await nextTick()
+    await click('Sprachnachricht aufnehmen')
+    if (queued) await click('Nach dem Lauf senden')
+    const label = queued ? 'Aufnahme beenden und vormerken' : 'Aufnahme beenden und senden'
+    expect(root.querySelector(`button[aria-label="${label}"]`).disabled).toBe(false)
+
+    await click(label)
+    expect(mocks.recorder.stopRecording).toHaveBeenCalledOnce()
+    expect(stoppedCount).toBe(0)
+    expect(sentMessages).toEqual([])
+    expect(root.querySelector(`button[aria-label="${label}"]`).disabled).toBe(true)
+    stopResolve(file())
+
+    await vi.waitFor(() => expect(sentMessages).toEqual([{
+      content: 'Zusätzlicher Text', options: { interrupt: running && !queued }
+    }]))
+    expect(chat.activeAttachmentDraft[0].voiceMessage).toBe(true)
+    expect(chat.getAudioDictation('session-1')).toBeNull()
+  })
+
+  it('retains a rejected recording without sending or clearing the text draft', async () => {
+    useInstanceLimitsStore().maxAttachmentsPerMessage = 0
+    chat.selectedSessionId = 'session-1'
+    chat.setDraft('Bleibt erhalten')
+    await nextTick()
+    await click('Sprachnachricht aufnehmen')
+    await click('Aufnahme beenden und senden')
+    stopResolve(file('abgewiesen.wav'))
+
+    await vi.waitFor(() => expect(chat.getAudioDictation('session-1')?.files[0].name).toBe('abgewiesen.wav'))
+    expect(sentMessages).toEqual([])
+    expect(chat.activeDraft).toBe('Bleibt erhalten')
+    expect(chat.activeAttachmentDraft).toEqual([])
+  })
+
+  it('does not send a finished recording to a newly selected session', async () => {
+    chat.selectedSessionId = 'session-1'
+    await nextTick()
+    await click('Sprachnachricht aufnehmen')
+    await click('Aufnahme beenden und senden')
+    chat.current = { id: 'session-2' }
+    session.value = chat.current
+    chat.selectedSessionId = 'session-2'
+    await nextTick()
+    stopResolve(file('alte-session.wav'))
+
+    await vi.waitFor(() => expect(chat.attachmentDrafts.sessionMessages['session-1']?.[0]?.voiceMessage).toBe(true))
+    expect(sentMessages).toEqual([])
+    expect(chat.activeAttachmentDraft).toEqual([])
   })
 
   it.each(['recording', 'starting', 'finalizing'])('hands off actual route navigation while %s', async (state) => {

@@ -161,57 +161,50 @@
               v-if="running"
               round
               unelevated
-              color="negative"
-              icon="stop"
-              aria-label="Agent-Anfrage stoppen"
+              :color="canSendDuringRun ? sendMode === 'queue' ? 'secondary' : 'primary' : 'negative'"
+              :icon="canSendDuringRun ? sendMode === 'queue' ? 'schedule_send' : 'arrow_upward' : 'stop'"
+              :aria-label="canSendDuringRun
+                ? voiceActivity ? voiceSendLabel : sendMode === 'queue' ? 'Nachricht vormerken' : 'Nachricht jetzt senden'
+                : 'Agent-Anfrage stoppen'"
               type="button"
-              :loading="stopping"
-              :disable="stopping"
-              @click="$emit('stop')"
+              :loading="sendingRecording || starting || finalizing || (!canSendDuringRun && stopping)"
+              :disable="stopping || (voiceActivity && !canFinishAndSend)"
+              @click="canSendDuringRun ? submit() : $emit('stop')"
             />
-            <template v-if="running && queueMode">
-              <q-btn
-                round
-                unelevated
-                :color="sendMode === 'queue' ? 'secondary' : 'primary'"
-                :icon="sendMode === 'queue' ? 'schedule_send' : 'arrow_upward'"
-                :aria-label="sendMode === 'queue' ? 'Nachricht vormerken' : 'Nachricht jetzt senden'"
-                type="button"
-                :disable="sendDisabled"
-                @click="submit"
-              />
-              <q-btn
-                flat
-                round
-                dense
-                icon="arrow_drop_down"
-                aria-label="Versandart auswählen"
-                type="button"
-                :disable="inputDisabled || stopping"
-              >
-                <q-menu anchor="top right" self="bottom right" auto-close>
-                  <q-list>
-                    <q-item clickable @click="sendMode = 'interrupt'">
-                      <q-item-section>Jetzt senden</q-item-section>
-                      <q-item-section side><q-icon v-if="sendMode === 'interrupt'" name="check" /></q-item-section>
-                    </q-item>
-                    <q-item clickable @click="sendMode = 'queue'">
-                      <q-item-section>Nach dem Lauf senden</q-item-section>
-                      <q-item-section side><q-icon v-if="sendMode === 'queue'" name="check" /></q-item-section>
-                    </q-item>
-                  </q-list>
-                </q-menu>
-              </q-btn>
-            </template>
             <q-btn
-              v-else-if="!running || draftHasContent"
+              v-if="canSendDuringRun && (!voiceActivity || canFinishAndSend)"
+              flat
+              round
+              dense
+              icon="arrow_drop_down"
+              aria-label="Versandart auswählen"
+              type="button"
+              :disable="stopping"
+            >
+              <q-menu anchor="top right" self="bottom right" auto-close>
+                <q-list>
+                  <q-item clickable @click="sendMode = 'interrupt'">
+                    <q-item-section>Jetzt senden</q-item-section>
+                    <q-item-section side><q-icon v-if="sendMode === 'interrupt'" name="check" /></q-item-section>
+                  </q-item>
+                  <q-item clickable @click="sendMode = 'queue'">
+                    <q-item-section>Nach dem Lauf senden</q-item-section>
+                    <q-item-section side><q-icon v-if="sendMode === 'queue'" name="check" /></q-item-section>
+                  </q-item>
+                </q-list>
+              </q-menu>
+            </q-btn>
+            <q-btn
+              v-if="!running"
               round
               unelevated
               :color="queueMode ? 'secondary' : 'primary'"
               :icon="queueMode ? 'schedule_send' : 'arrow_upward'"
-              :aria-label="queueMode ? 'Nachricht vormerken' : 'Nachricht senden'"
-              type="submit"
-              :disable="sendDisabled"
+              :aria-label="voiceActivity ? voiceSendLabel : queueMode ? 'Nachricht vormerken' : 'Nachricht senden'"
+              :type="voiceActivity ? 'button' : 'submit'"
+              :loading="sendingRecording || starting || finalizing"
+              :disable="voiceActivity ? !canFinishAndSend : sendDisabled"
+              @click="voiceActivity && submit()"
             />
           </div>
         </div>
@@ -260,6 +253,7 @@ const attachmentInput = ref(null)
 const settingsFields = ref(null)
 const settingsOpen = ref(false)
 const sendMode = ref('interrupt')
+const sendingRecording = ref(false)
 const { confirm } = useConfirm()
 let recordingScope = null
 let finishingRequest = null
@@ -319,21 +313,58 @@ const interactionDisabled = computed(() => (
 const inputDisabled = computed(() => !props.session || props.disabled)
 const draftHasContent = computed(() => Boolean(props.draft.trim() || props.attachments.length))
 const inputPlaceholder = computed(() => `Eine Nachricht an ${identity.displayName} senden`)
+const voiceActivity = computed(() => starting.value || recording.value || finalizing.value || sendingRecording.value)
+const voiceSendLabel = computed(() => (
+  props.running ? sendMode.value === 'queue' : props.queueMode
+) ? 'Aufnahme beenden und vormerken' : 'Aufnahme beenden und senden')
+const canFinishAndSend = computed(() => (
+  recording.value && !inputDisabled.value && !starting.value && !finalizing.value && !sendingRecording.value
+  && modelSupportsTools.value && (!props.running || props.queueMode)
+))
 const sendDisabled = computed(() => (
   inputDisabled.value
   || (props.running && !props.queueMode)
   || starting.value
   || recording.value
   || finalizing.value
+  || sendingRecording.value
   || !modelSupportsTools.value
   || (!props.draft.trim() && !props.attachments.length)
 ))
+const canSendDuringRun = computed(() => props.running && (voiceActivity.value || (
+  props.queueMode && draftHasContent.value && !sendDisabled.value
+)))
 const sessionSettingsWarning = computed(() => settingsFields.value?.warning || '')
 
 function submit() {
+  if (recording.value) {
+    void finishAndSendRecording()
+    return
+  }
   const content = props.draft.trim()
   if (sendDisabled.value) return
   emit('send', content, { interrupt: props.running && sendMode.value === 'interrupt' })
+}
+
+async function finishAndSendRecording() {
+  if (!canFinishAndSend.value || !recordingScope) return
+  const scope = recordingScope
+  const content = props.draft.trim()
+  const interrupt = props.running && sendMode.value === 'interrupt'
+  sendingRecording.value = true
+  try {
+    const recordedFile = await finishVoiceRecording()
+    if (
+      !recordedFile || unmounted || scope.ownerUserId !== chat.draftOwnerUserId
+      || scope.sessionId !== (chat.current?.id || null)
+      || scope.sessionId !== audioScope.value.sessionId
+      || scope.projectId !== chat.sessionsProjectId
+      || !chat.activeAttachmentDraft.some((attachment) => attachment.file === recordedFile && attachment.voiceMessage)
+    ) return
+    emit('send', content, { interrupt })
+  } finally {
+    sendingRecording.value = false
+  }
 }
 
 function selectAttachmentFiles(event) {
@@ -371,6 +402,7 @@ function finishVoiceRecording() {
     try {
       const file = await stopRecording()
       if (file) retainRecording(file, scope)
+      return file
     } catch {
       $q.notify({ type: 'negative', message: 'Die Aufnahme konnte nicht verarbeitet werden.' })
     } finally {
@@ -455,6 +487,6 @@ defineExpose({
   focus: () => input.value?.focus(),
   cancelAudioActivity,
   prepareAudioNavigation,
-  hasAudioActivity: () => starting.value || recording.value || finalizing.value
+  hasAudioActivity: () => voiceActivity.value
 })
 </script>
