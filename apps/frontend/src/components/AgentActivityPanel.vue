@@ -80,8 +80,6 @@
       v-if="todos.length"
       class="work-history__todos"
       :todos="todos"
-      :expanded="historyExpanded"
-      :running="running"
     />
     <SubagentRows class="work-history__children" :children="unmatchedSubagents" />
   </div>

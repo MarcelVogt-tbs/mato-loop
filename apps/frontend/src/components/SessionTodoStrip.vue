@@ -1,5 +1,5 @@
 <template>
-  <q-card v-if="visibleTodos.length" flat bordered class="session-todos app-surface" aria-live="polite">
+  <q-card v-if="todos.length" flat bordered class="session-todos app-surface" aria-live="polite">
     <div class="session-todos__header text-weight-medium app-muted">Aufgaben · {{ completedCount }} von {{ todos.length }} erledigt</div>
     <q-linear-progress
       :value="completedCount / todos.length"
@@ -8,7 +8,7 @@
       aria-label="Aufgabenfortschritt"
     />
     <div class="session-todos__list" role="list" aria-label="Aufgaben dieser Session">
-      <div v-for="(todo, index) in visibleTodos" :key="index" class="session-todos__item" role="listitem">
+      <div v-for="(todo, index) in todos" :key="index" class="session-todos__item" role="listitem">
         <q-icon
           :name="statusIcon[todo.status]"
           :color="todo.status === 'completed' ? 'positive' : todo.status === 'in_progress' ? 'primary' : undefined"
@@ -28,9 +28,7 @@ import { computed } from 'vue'
 defineOptions({ name: 'SessionTodoStrip' })
 
 const props = defineProps({
-  todos: { type: Array, default: () => [] },
-  expanded: Boolean,
-  running: Boolean
+  todos: { type: Array, default: () => [] }
 })
 const statusIcon = {
   pending: 'radio_button_unchecked',
@@ -38,15 +36,6 @@ const statusIcon = {
   completed: 'check_circle',
   cancelled: 'remove_circle_outline'
 }
-const currentIndex = computed(() => {
-  const inProgress = props.todos.findIndex((todo) => todo.status === 'in_progress')
-  return inProgress >= 0 ? inProgress : props.todos.findIndex((todo) => todo.status === 'pending')
-})
-const visibleTodos = computed(() => {
-  if (props.expanded) return props.todos
-  if (!props.running) return []
-  return currentIndex.value >= 0 ? [props.todos[currentIndex.value]] : []
-})
 const completedCount = computed(() => props.todos.filter((todo) => todo.status === 'completed').length)
 </script>
 

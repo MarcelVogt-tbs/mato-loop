@@ -36,6 +36,33 @@ afterEach(() => {
 })
 
 describe('subagent inspector navigation and presentation', () => {
+  it('keeps the full task list visible with collapsed history during and after a run', async () => {
+    const running = ref(true)
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({
+      setup: () => () => h(AgentActivityPanel, {
+        history: { entries: [] },
+        running: running.value,
+        todos: [
+          { content: 'Erste Aufgabe', status: 'completed' },
+          { content: 'Zweite Aufgabe', status: 'pending' }
+        ]
+      })
+    })
+    app.use(createPinia()).use(Quasar, { components })
+    app.mount(root)
+
+    expect(root.querySelector('.work-history__toggle').getAttribute('aria-expanded')).toBe('false')
+    expect(root.querySelectorAll('.session-todos__item')).toHaveLength(2)
+    running.value = false
+    await nextTick()
+    expect(root.querySelectorAll('.session-todos__item')).toHaveLength(2)
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    expect(root.querySelectorAll('.session-todos__item')).toHaveLength(2)
+  })
+
   it('keeps tool output visible when work history is collapsed', async () => {
     root = document.createElement('div')
     document.body.append(root)
