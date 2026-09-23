@@ -283,6 +283,10 @@ def test_mcp_contribution_has_stable_schema_and_tool_resource_policy() -> None:
     assert request.capability == "mcp.call"
     assert request.policy_resource_key == mcp_resource_key("lookup")
     assert request.policy_integration_id == instance.id
+    assert len(request.effective_session_grants) == 1
+    assert request.effective_session_grants[0].access == "write"
+    assert request.effective_session_grants[0].resource_type == "integration_resource"
+    assert json.loads(request.effective_session_grants[0].resource_scope)["resourceKey"] == mcp_resource_key("lookup")
     assert contribution.integration_id == str(instance.id)
     assert contribution.policy_resource_key == mcp_resource_key("lookup")
     assert contribution.name.startswith(f"mcp_{instance.id.hex}_")

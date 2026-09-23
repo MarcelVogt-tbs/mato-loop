@@ -160,6 +160,37 @@ def test_integration_write_grants_do_not_cross_capability_families(tmp_path) -> 
     assert not PermissionPolicy.grant_matches(grant, code, root_files)
 
 
+@pytest.mark.parametrize(
+    ("capability", "access"),
+    [("mcp.call", "write"), ("sonobin.call", "write"), ("support.read", "read")],
+)
+def test_integration_session_grants_match_only_the_bound_resource(
+    tmp_path, capability, access
+) -> None:
+    session = _session()
+    root_files = _root_files(tmp_path, session)
+    integration_id = uuid4()
+
+    def request(*, resource_key="tool:one", selected_id=integration_id, revision="{}"):
+        return integration_operation_permission(
+            capability=capability,
+            integration_id=selected_id,
+            binding_revision=revision,
+            operation_key="call",
+            resource_key=resource_key,
+            title="Tool aufrufen?",
+            summary="Tool aufrufen.",
+        )
+
+    granted = request()
+    assert granted.effective_session_grants[0].access == access
+    grant = _grant(granted, session.id)
+    assert PermissionPolicy.grant_matches(grant, granted, root_files)
+    assert not PermissionPolicy.grant_matches(grant, request(resource_key="tool:two"), root_files)
+    assert not PermissionPolicy.grant_matches(grant, request(selected_id=uuid4()), root_files)
+    assert not PermissionPolicy.grant_matches(grant, request(revision='{"changed":true}'), root_files)
+
+
 def _path_request(
     root_files: RootFileService,
     path: str,

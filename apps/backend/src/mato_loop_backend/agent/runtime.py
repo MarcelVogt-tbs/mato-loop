@@ -5662,6 +5662,11 @@ class AgentRuntime:
         argument_edit: dict[str, Any] | None = None,
     ) -> str | ApprovalResolution:
         origin = await permission_origin(db, chat_session)
+        grant_payload = session_grants_payload(permission)
+        available_decisions = [
+            decision for decision in permission.available_decisions
+            if decision != "allow_session" or grant_payload
+        ]
         resource_display = permission.resource_display
         if (
             resource_display is None
@@ -5711,7 +5716,7 @@ class AgentRuntime:
                     else None
                 ),
                 "trustLevel": run.trust_level,
-                "sessionGrants": (grant_payload := session_grants_payload(permission)),
+                "sessionGrants": grant_payload,
                 "sessionGrantsFingerprint": session_grants_fingerprint(
                     permission.capability,
                     permission.resource_type,
@@ -5732,9 +5737,9 @@ class AgentRuntime:
                     "label": "Für diese Session",
                     "value": session_grants_display(permission),
                     "format": "list",
-                }] if "allow_session" in permission.available_decisions else []),
+                }] if "allow_session" in available_decisions else []),
             },
-            available_decisions=list(permission.available_decisions),
+            available_decisions=available_decisions,
         )
         db.add(approval)
         transition_run_status(run, "waiting_approval")

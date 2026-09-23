@@ -13,7 +13,9 @@ from mato_loop_backend.agent.approval_decisions import (
 from mato_loop_backend.agent.permissions import (
     PermissionRequest,
     execution_directory_scope,
+    integration_operation_permission,
     session_grants_fingerprint,
+    session_grants_payload,
     shell_command_scope,
 )
 from mato_loop_backend.agent.runtime import AgentRuntime, ApprovalResolution
@@ -120,6 +122,43 @@ async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None
         approval.id, ApprovalResolution(decision="allow_session")
     )
     assert result == {"status": "approved", "decision": "allow_session"}
+
+
+async def test_mcp_allow_session_persists_tool_grant(monkeypatch) -> None:
+    approval = _approval()
+    request = integration_operation_permission(
+        capability="mcp.call",
+        integration_id=uuid4(),
+        binding_revision="{}",
+        operation_key="call:lookup",
+        resource_key="tool:lookup",
+        title="MCP-Tool aufrufen?",
+        summary="Tool aufrufen.",
+    )
+    approval.capability = request.capability
+    approval.resource_type = request.resource_type
+    approval.resource_scope = request.resource_scope
+    approval.payload = {"sessionGrants": session_grants_payload(request)}
+    _fingerprint(approval)
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = approval
+    db.scalar.return_value = None
+    monkeypatch.setattr(AgentRuntime, "claim_approval_resolution", Mock(return_value=True))
+    monkeypatch.setattr(AgentRuntime, "resolve_approval", Mock(return_value=True))
+    monkeypatch.setattr(run_events, "publish", AsyncMock())
+
+    result = await decide_approval(
+        approval.id,
+        ApprovalDecisionRequest(decision="allow_session"),
+        UserAccount(id=approval.user_id, username="test", password_hash="hash"),
+        db,
+    )
+
+    assert result == {"status": "approved", "decision": "allow_session"}
+    grant = db.add.call_args.args[0]
+    assert grant.capability == "resource.write"
+    assert grant.resource_type == "integration_resource"
+    assert grant.resource_scope == request.effective_session_grants[0].resource_scope
 
 
 async def test_argument_edit_approves_exact_values_once(monkeypatch) -> None:
@@ -546,7 +585,8 @@ async def test_skill_approval_requires_and_forwards_exact_revision(
     assert approval.payload["approvedRevision"] == revision
 
 
-async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
+@pytest.mark.parametrize("reusable", [True, False])
+async def test_approval_wait_has_no_inactivity_timeout(monkeypatch, reusable) -> None:
     approval_id = uuid4()
     target_session_id = uuid4()
     session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
@@ -593,13 +633,14 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
                 arguments={"_reason": "Die andere Session enthält den benötigten Kontext."},
             ),
             PermissionRequest(
-                capability="session.read",
+                capability="session.read" if reusable else "unclassified.call",
                 resource_type="session",
                 resource_scope=str(target_session_id),
                 action_kind="session_read",
                 risk_level="medium",
                 title="Session lesen?",
                 summary="Andere Session lesen",
+                resource_display=None if reusable else "Ziel-Session",
             ),
         )
     )
@@ -612,12 +653,17 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch) -> None:
     assert persisted.reason == "Die andere Session enthält den benötigten Kontext."
     assert persisted.payload["resourceDisplay"] == "Ziel-Session"
     assert persisted.payload["arguments"]["_reason"] == persisted.reason
-    enqueue.assert_awaited_once_with(db, persisted)
-    statement = db.scalar.await_args.args[0]
-    assert "chat_sessions.user_id =" in str(statement)
-    assert {target_session_id, session.user_id, "chat"}.issubset(
-        set(statement.compile().params.values())
+    assert persisted.available_decisions == (
+        ["allow_once", "allow_session", "deny"] if reusable else ["allow_once", "deny"]
     )
+    assert bool(persisted.payload["sessionGrants"]) is reusable
+    enqueue.assert_awaited_once_with(db, persisted)
+    if reusable:
+        statement = db.scalar.await_args.args[0]
+        assert "chat_sessions.user_id =" in str(statement)
+        assert {target_session_id, session.user_id, "chat"}.issubset(
+            set(statement.compile().params.values())
+        )
 
     assert AgentRuntime.claim_approval_resolution(approval_id) is True
     assert AgentRuntime.resolve_approval(approval_id, "allow_once") is True

@@ -66,6 +66,9 @@ describe('API error messages', () => {
   })
 
   it('translates stable domain error codes', () => {
+    expect(apiErrorMessage({ error: { code: 'approval.targetChanged' } })).toBe(
+      'Das Ziel der Freigabe wurde inzwischen geändert. Der Vorschlag ist nicht mehr gültig.'
+    )
     expect(apiErrorMessage({ response: { data: { error: { code: 'auth.invalidCredentials' } } } })).toBe(
       'Benutzername oder Passwort ist ungültig.'
     )

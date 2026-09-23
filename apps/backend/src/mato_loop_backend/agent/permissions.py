@@ -61,7 +61,7 @@ _READ_CAPABILITIES = frozenset({
     "mealie.accounts.read", "memory.read", "network.fetch", "network.search",
     "recipes.read", "session.files.read", "session.read", "session.search",
     "session.tool_result.read", "secrets.access",
-    "skills.load", "system.info", "tasks.read", "calendar.read", "execution_agent.list",
+    "skills.load", "support.read", "system.info", "tasks.read", "calendar.read", "execution_agent.list",
 })
 _WRITE_CAPABILITIES = frozenset({
     "automation.create", "automation.delete", "automation.run", "automation.update",
@@ -70,6 +70,7 @@ _WRITE_CAPABILITIES = frozenset({
     "coding.plan.create", "filesystem.delete", "filesystem.write",
     "knowledge.delete", "knowledge.write", "mail.delete", "mail.drafts",
     "mail.send", "meal_plan.delete", "meal_plan.write", "memory.write",
+    "mcp.call", "sonobin.call",
     "media.edit.image", "media.generate.audio", "media.generate.image",
     "media.generate.speech",
     "session.files.write", "settings.agent_identity.update",
