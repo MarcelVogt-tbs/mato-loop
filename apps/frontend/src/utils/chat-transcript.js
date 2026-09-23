@@ -37,7 +37,7 @@ export function withLiveTranscriptMessage(messages, liveMessage) {
   return liveMessage.workHistory ? [...messages, liveMessage] : messages
 }
 
-export function groupWorkHistoryEntries(entries = [], current = null) {
+export function groupWorkHistoryEntries(entries = [], current = null, includePending = false) {
   const grouped = []
   for (const entry of entries) {
     if (entry.type !== 'tool') {
@@ -45,9 +45,9 @@ export function groupWorkHistoryEntries(entries = [], current = null) {
       continue
     }
     const previous = grouped.at(-1)
-    const completed = entry.result || entry.completed || entry === current
+    const completed = includePending || entry.result || entry.completed || entry === current
     if (completed && previous?.type === 'tool'
-      && (previous.result || previous.completed) && previous.tool?.name === entry.tool?.name) {
+      && (includePending || previous.result || previous.completed) && previous.tool?.name === entry.tool?.name) {
       grouped.splice(-1, 1, {
         key: `tool-group-${previous.key}`,
         type: 'tool-group',
@@ -128,6 +128,7 @@ export function buildChatTranscript(
         if (currentRound && toolExecutionActive && !result && !activeToolCallId) executionBlocked = true
         return {
           key: `${message.id || index}:${tool.id || toolIndex}:${toolIndex}`,
+          batchId: message.id || index,
           tool,
           ...(toolRunId ? { runId: toolRunId } : {}),
           result,

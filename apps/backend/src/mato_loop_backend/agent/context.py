@@ -923,7 +923,9 @@ def general_system_prompt(
         parts.append(
             "Use the supplied file tools instead of shell commands for file discovery, search, reading, "
             "and edits whenever a supplied schema fits. Use shell commands for process operations or when "
-            "no supplied file tool fits. "
+            "no supplied file tool fits. Call independent file tools together when their paths and purpose "
+            "are already known. Keep reads and searches scoped; wait for discovery results before reading "
+            "newly found paths. "
             "explicit root plus relative POSIX path; '.' is root. Path has no root name, files/ prefix, "
             "or absolute form. root=files is managed; root=computer is its selected directory. "
             "Copy and move need an exact unused destination."

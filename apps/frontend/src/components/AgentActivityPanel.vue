@@ -141,10 +141,13 @@ const presentation = computed(() => props.presentation || agentRunPresentation({
   streamReasoning: props.reasoning, streamContextSummary: props.contextSummary,
   transcript: { messages: [{ workHistory: props.history }] }
 }))
+const currentBatch = computed(() => props.running && props.activity?.phase === 'processing_tool'
+  && presentation.value.entry?.type === 'tool' ? presentation.value.entry.batchId : null)
 const preparedEntries = computed(() => {
   const current = presentation.value.entry
   const history = (props.history?.entries || []).filter((entry) => !(entry.type === 'reasoning' && entry.live) && (
-    entry.type !== 'tool' || !props.running || entry.result || entry.completed || entry.approval || entry.question || entry.key === current?.key
+    entry.type !== 'tool' || !props.running || entry.result || entry.completed || entry.approval || entry.question
+      || entry.key === current?.key || (!historyExpanded.value && currentBatch.value != null && entry.batchId === currentBatch.value)
   )).map((entry) => {
     const prepared = entry.key === current?.key ? current : { ...entry, active: false }
     return prepared.type === 'reasoning' ? {
@@ -191,20 +194,24 @@ const enrichedEntries = computed(() => {
 const outputEntries = computed(() => enrichedEntries.value.filter((entry) => (
   entry.type === 'tool' && (entry.output.attachments.length || entry.output.fileActions.length)
 )))
-const entries = computed(() => groupWorkHistoryEntries(enrichedEntries.value, currentEntries.value.at(-1)))
+const entries = computed(() => groupWorkHistoryEntries(
+  enrichedEntries.value, enrichedEntries.value.find((entry) => entry.key === presentation.value.entry?.key)
+))
 const currentEntries = computed(() => {
   const current = presentation.value.entry
   if (!current) return []
   const latestCommentary = current.tool?.id
     ? enrichedEntries.value.findLast((entry) => entry.type === 'commentary' && entry.toolCallIds?.length)
     : null
-  return enrichedEntries.value.filter((entry) => entry.key === current.key || (
+  return enrichedEntries.value.filter((entry) => entry.key === current.key
+    || (currentBatch.value != null && entry.type === 'tool' && entry.batchId === currentBatch.value) || (
     entry.type === 'commentary' && current.tool?.id
       && (entry === latestCommentary || entry.toolCallIds?.includes(current.tool.id))
   ))
 })
 const showPreview = computed(() => !historyExpanded.value && currentEntries.value.length > 0)
-const displayEntries = computed(() => historyExpanded.value ? entries.value : currentEntries.value)
+const displayEntries = computed(() => historyExpanded.value ? entries.value
+  : currentBatch.value != null ? groupWorkHistoryEntries(currentEntries.value, null, true) : currentEntries.value)
 const items = computed(() => enrichedEntries.value.filter((entry) => entry.type === 'tool'))
 const unmatchedSubagents = computed(() => {
   const matched = new Set(items.value.flatMap((item) => item.subagents || []).map((child) => child.id))

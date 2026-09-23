@@ -599,6 +599,58 @@ describe('subagent inspector navigation and presentation', () => {
 
   it.each([
     [1280, false], [1280, true], [390, false], [390, true]
+  ])('shows the current tool batch in the collapsed preview (width=%s, dark=%s)', async (width, dark) => {
+    vi.stubGlobal('innerWidth', width)
+    const messages = ref([
+      { id: 'user', role: 'user', content: 'Prüfe die Dateien' },
+      { id: 'previous', role: 'assistant', toolCalls: [{ id: 'old', name: 'web_search', arguments: { query: 'Alt' } }] },
+      { id: 'old-result', role: 'tool', toolCallId: 'old', content: '{}' },
+      {
+        id: 'batch', role: 'assistant', toolCalls: [
+          { id: 'first', name: 'read', arguments: { path: 'eins.md' } },
+          { id: 'second', name: 'read', arguments: { path: 'zwei.md' } },
+          { id: 'third', name: 'grep', arguments: { pattern: 'Text' } }
+        ]
+      }
+    ])
+    const activity = ref({ phase: 'processing_tool', toolCallId: 'first' })
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { render: () => null } }] })
+    await router.push('/')
+    const history = computed(() => buildChatTranscript(messages.value, [], {
+      running: true, toolExecutionActive: activity.value.phase === 'processing_tool',
+      activeToolCallId: activity.value.toolCallId
+    }).messages.find((message) => message.workHistory).workHistory)
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => h(AgentActivityPanel, {
+      history: history.value, running: true, activity: activity.value
+    }) })
+    app.use(createPinia()).use(router).use(Quasar, { components, config: { dark } })
+    app.mount(root)
+
+    expect(root.querySelectorAll('.work-history__tool-group')).toHaveLength(1)
+    expect(root.querySelector('.work-history__tool-group-header').textContent).toContain('· 2')
+    expect([...root.querySelectorAll('.tool-call__summary')].map((item) => item.textContent))
+      .toEqual(['eins.md', 'zwei.md', 'Text'])
+    expect(root.querySelectorAll('.tool-call--running')).toHaveLength(1)
+    expect(root.textContent).not.toContain('Alt')
+
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    expect(root.textContent).toContain('Alt')
+    expect(root.textContent).not.toContain('zwei.md')
+    expect(root.textContent).not.toContain('Text')
+    root.querySelector('.work-history__toggle').click()
+    messages.value.push({ id: 'first-result', role: 'tool', toolCallId: 'first', content: '{}' })
+    activity.value = { phase: 'processing_tool', toolCallId: 'second' }
+    await nextTick()
+    expect(root.querySelectorAll('.work-history__tool-group')).toHaveLength(1)
+    expect(root.querySelectorAll('.tool-call--running')).toHaveLength(1)
+    expect(root.querySelector('.tool-call--running .tool-call__summary').textContent).toBe('zwei.md')
+  })
+
+  it.each([
+    [1280, false], [1280, true], [390, false], [390, true]
   ])('keeps commentary with its tools until output starts (width=%s, dark=%s)', async (width, dark) => {
     vi.stubGlobal('innerWidth', width)
     const pinia = createPinia()
@@ -647,12 +699,12 @@ describe('subagent inspector navigation and presentation', () => {
     activity.value = { phase: 'processing_tool', toolCallId: 'fetch' }
     await nextTick()
     expect(root.textContent).toContain(intro)
-    expect(root.querySelector('.tool-call__title').textContent).toContain('Webseite abrufen')
-    const fetchRow = root.querySelector('.tool-call__header')
+    expect(root.querySelector('.tool-call--running .tool-call__title').textContent).toContain('Webseite abrufen')
+    const fetchRow = root.querySelector('.tool-call--running')
 
     messages.value.push({ role: 'tool', toolCallId: 'fetch', content: '{}' })
     await nextTick()
-    expect(root.querySelector('.tool-call__header')).toBe(fetchRow)
+    expect(root.querySelectorAll('.tool-call__header')[1]).toBe(fetchRow)
     expect(root.querySelector('.activity-shimmer').textContent).toContain('Webseite abrufen')
     activity.value = { phase: 'waiting_model', modelRequest: 2 }
     await nextTick()
