@@ -400,6 +400,65 @@ async def test_runtime_projects_only_selected_connected_computer_system_info(
             assert "Selected computer context:" not in prompt
 
 
+async def test_runtime_rebinds_computer_after_exclusive_switch_without_new_run(monkeypatch) -> None:
+    new_id = uuid4()
+    call = ToolCall("switch", "select_execution_agent", {
+        "agent_id": str(new_id), "_reason": "Den ausgewählten Computer wechseln.",
+    })
+    db, run, requests, _projections, events = await _runtime_setup(
+        monkeypatch, [ProviderResult(tool_calls=[call]), ProviderResult(content="Fertig", finish_reason="stop")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    session = db.get.return_value
+    session.session_type = "chat"
+    agent = ExecutionAgent(id=new_id, user_id=session.user_id, alias="Other computer", platform="linux")
+    db.get.side_effect = lambda model, _id, **_: agent if model is ExecutionAgent else session
+    monkeypatch.setattr(runtime_module.execution_agent_connections, "snapshot", lambda _id: frozenset({"shell.run"}))
+    monkeypatch.setattr(runtime_module.execution_agent_connections, "is_connected", lambda _id: True)
+
+    async def switch(_tool, _context, _bound):
+        session.preferred_execution_agent_id = new_id
+        session.current_directory = "/srv/new"
+        run.execution_agent_id = new_id
+        run.execution_operations = ["shell.run"]
+        run.current_directory_snapshot = "/srv/new"
+        return ToolResult.json({"id": str(new_id), "selected": True}, metadata={"executionAgentChanged": True})
+
+    monkeypatch.setattr(tool_registry, "_execute_definition", AsyncMock(side_effect=switch))
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == 2
+    assert "No MatoLoop Agent is selected" in requests[0]["messages"][0]["content"]
+    second = requests[1]["messages"][0]["content"]
+    assert f'"id": "{new_id}"' in second
+    assert '"currentDirectory": "/srv/new"' in second
+    assert any(tool["name"] == "shell_run" for tool in requests[1]["tools"])
+    assert any(event["type"] == "session.executionAgentChanged" for event in events)
+
+
+async def test_runtime_rejects_computer_switch_in_tool_batch(monkeypatch) -> None:
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch, [
+            ProviderResult(tool_calls=[
+                ToolCall("switch", "select_execution_agent", {"agent_id": str(uuid4())}),
+                ToolCall("list", "list_execution_agents", {}),
+            ]),
+            ProviderResult(content="Fertig", finish_reason="stop"),
+        ], search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    db.get.return_value.session_type = "chat"
+
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == 2
+    assert tool_registry._execute_definition.await_count == 0
+    assert [json.loads(item.content)["error"]["code"] for item in _tool_messages(db)] == [
+        "executionAgent.exclusiveCallRequired", "executionAgent.exclusiveCallRequired",
+    ]
+    assert run.execution_agent_id is None
+
+
 async def test_session_reasoning_effort_reaches_primary_model_request(monkeypatch) -> None:
     db, run, requests, _projections, _events = await _runtime_setup(
         monkeypatch,

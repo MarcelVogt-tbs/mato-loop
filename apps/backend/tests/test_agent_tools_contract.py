@@ -59,10 +59,12 @@ from mato_loop_backend.memory.retrieval import (
     MemoryRetrieveMode,
 )
 from mato_loop_backend.models import (
+    AgentRun,
     Automation,
     AutomationRun,
     AutomationSchedule,
     ChatSession,
+    ExecutionAgent,
     MemoryRecord,
     Message,
     MessageAttachment,
@@ -332,6 +334,100 @@ def _context(
     context.db.scalar.return_value = Mock(data=_settings_record(tool_settings))
     context.model_trust_level = TrustLevel.PRIVATE
     return context
+
+
+def _session_read_records(context: ToolContext, messages: list[Message], runs=()) -> None:
+    context.db.scalars.side_effect = lambda statement: Mock(all=Mock(
+        return_value=list(runs) if "FROM agent_runs" in str(statement) else messages,
+    ))
+
+
+async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkeypatch, tmp_path) -> None:
+    assert tool_registry.action_default("execution_agent.list", TrustLevel.PRIVATE) == ToolExecutionPolicy.AUTO
+    assert tool_registry.action_default("execution_agent.list", TrustLevel.PUBLIC) == ToolExecutionPolicy.ASK
+    assert all(
+        tool_registry.action_default("execution_agent.select", trust) == ToolExecutionPolicy.ASK
+        for trust in (TrustLevel.PRIVATE, TrustLevel.PUBLIC)
+    )
+    first = ExecutionAgent(id=uuid4(), user_id=uuid4(), alias="Server", platform="linux")
+    listing = ToolCall("list", "list_execution_agents", {})
+    context = _context(tmp_path, listing)
+    first.user_id = context.session.user_id
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[first]))
+    monkeypatch.setattr(tools_module.execution_agent_connections, "is_connected", lambda agent_id: agent_id == first.id)
+
+    result = await tool_registry.execute(listing, context)
+
+    assert json.loads(result.content)["items"] == [{
+        "id": str(first.id), "alias": "Server", "platform": "linux",
+        "connected": True, "selected": False,
+    }]
+    assert context.ask_handler.await_args.args[0].resource_scope == str(context.session.user_id)
+    assert "execution_agents.user_id" in str(context.db.scalars.await_args.args[0])
+
+    call = ToolCall("select", "select_execution_agent", {"agent_id": str(first.id)})
+    context.tool_call = call
+    context.session.session_type = "chat"
+    context.db.scalar.return_value = first
+    run = AgentRun(id=context.run_id, session_id=context.session.id)
+    context.db.get.return_value = run
+    monkeypatch.setattr(tools_module.execution_agent_connections, "snapshot", lambda _id: frozenset({"filesystem.resolve", "shell.run"}))
+    monkeypatch.setattr(
+        "mato_loop_backend.sessions.service.validate_execution_preferences",
+        AsyncMock(return_value=("/srv/new", "ask")),
+    )
+
+    switched = await tool_registry.execute(call, context)
+
+    assert switched.metadata["executionAgentChanged"] is True
+    assert context.session.preferred_execution_agent_id == first.id
+    assert context.session.current_directory == "/srv/new"
+    assert run.execution_agent_id == first.id
+    assert run.current_directory_snapshot == "/srv/new"
+    assert run.execution_operations == ["filesystem.resolve", "shell.run"]
+    permission = context.ask_handler.await_args.args[0]
+    assert permission.force_ask is True
+    assert permission.available_decisions == ("allow_once", "deny")
+    assert permission.resource_scope == str(first.id)
+
+
+async def test_execution_agent_switch_denial_keeps_existing_binding(tmp_path) -> None:
+    agent_id = uuid4()
+    call = ToolCall("select", "select_execution_agent", {"agent_id": str(agent_id)})
+    context = _context(tmp_path, call, decision=PermissionDecision.USER_DENIED)
+    context.session.session_type = "chat"
+    context.db.scalar.return_value = ExecutionAgent(id=agent_id, user_id=context.session.user_id, alias="Server")
+    context.session.preferred_execution_agent_id = uuid4()
+    context.session.current_directory = "/old"
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata["errorCode"] == "permission.denied"
+    assert context.session.current_directory == "/old"
+    context.db.get.assert_not_awaited()
+
+
+async def test_execution_agent_switch_rechecks_connection_after_approval(monkeypatch, tmp_path) -> None:
+    agent_id = uuid4()
+    call = ToolCall("select", "select_execution_agent", {"agent_id": str(agent_id)})
+    context = _context(tmp_path, call)
+    context.session.session_type = "chat"
+    context.session.current_directory = "/old"
+    context.db.scalar.return_value = ExecutionAgent(
+        id=agent_id, user_id=context.session.user_id, alias="Server",
+    )
+    monkeypatch.setattr(
+        "mato_loop_backend.sessions.service.validate_execution_preferences",
+        AsyncMock(return_value=(None, None)),
+    )
+    monkeypatch.setattr(tools_module.execution_agent_connections, "snapshot", lambda _id: None)
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata["errorCode"] == "executionAgent.unavailable"
+    assert context.session.preferred_execution_agent_id is None
+    assert context.session.current_directory == "/old"
+    context.db.get.assert_not_awaited()
 
 
 def _tool_settings(data: dict) -> ToolSettings:
@@ -2764,7 +2860,7 @@ async def test_session_read_uses_current_or_explicit_target_session(tmp_path, ta
     messages = Mock()
     messages.all.return_value = []
     context.db.scalar.return_value = target
-    context.db.scalars.return_value = messages
+    _session_read_records(context, messages.all.return_value)
 
     result = await tool_registry.execute(call, context)
 
@@ -2772,6 +2868,7 @@ async def test_session_read_uses_current_or_explicit_target_session(tmp_path, ta
     assert json.loads(result.content)["session"] == {
         "id": str(expected_id),
         "title": "Ziel",
+        "selectedExecutionAgentId": None,
     }
     request = context.ask_handler.await_args.args[0]
     assert request.resource_scope == str(expected_id)
@@ -2780,6 +2877,36 @@ async def test_session_read_uses_current_or_explicit_target_session(tmp_path, ta
     statement = context.db.scalar.await_args.args[0]
     assert "chat_sessions.parent_session_id IS NULL" in str(statement)
     assert context.session.id in statement.compile().params.values()
+
+
+async def test_session_read_preserves_agent_provenance_across_one_run_switch(tmp_path) -> None:
+    previous, selected = uuid4(), uuid4()
+    call = ToolCall("read", "session_read", {})
+    context = _context(tmp_path, call)
+    context.session.preferred_execution_agent_id = selected
+    run = AgentRun(id=uuid4(), session_id=context.session.id, execution_agent_id=selected)
+    messages = [
+        Message(id=uuid4(), session_id=context.session.id, role="user", content="Start",
+                provider_data={"_matoloop": {"executionAgentId": str(previous)}}),
+        Message(id=uuid4(), session_id=context.session.id, role="assistant", content="Old",
+                provider_data={"_matoloop": {"runId": str(run.id)}}),
+        Message(id=uuid4(), session_id=context.session.id, role="tool",
+                content=json.dumps({"selected": True, "id": str(selected)}),
+                provider_data={"_matoloop": {"runId": str(run.id), "toolName": "select_execution_agent"}}),
+        Message(id=uuid4(), session_id=context.session.id, role="assistant", content="New",
+                provider_data={"_matoloop": {"runId": str(run.id)}}),
+    ]
+    run.input_message_id = messages[0].id
+    context.db.scalar.return_value = context.session
+    _session_read_records(context, messages, [run])
+
+    result = await tool_registry.execute(call, context)
+    payload = json.loads(result.content)
+
+    assert payload["session"]["selectedExecutionAgentId"] == str(selected)
+    assert [item["executionAgentId"] for item in payload["messages"]] == [
+        str(previous), str(previous), str(selected), str(selected),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -2820,7 +2947,7 @@ async def test_session_read_exposes_authorized_messages_regardless_of_source_tru
             trust_level=source_trust.value,
         )
     ]
-    context.db.scalars.return_value = messages
+    _session_read_records(context, messages.all.return_value)
 
     result = await tool_registry.execute(call, context)
 
@@ -2858,7 +2985,7 @@ async def test_session_read_returns_a_window_around_discovery_anchor(tmp_path) -
     )
     rows = Mock()
     rows.all.return_value = messages
-    context.db.scalars.return_value = rows
+    _session_read_records(context, messages)
 
     result = await tool_registry.execute(call, context)
     payload = json.loads(result.content)
@@ -2895,7 +3022,7 @@ async def test_session_read_cursor_uses_last_emitted_message(tmp_path) -> None:
     )
     rows = Mock()
     rows.all.return_value = messages
-    context.db.scalars.return_value = rows
+    _session_read_records(context, messages)
 
     result = await tool_registry.execute(call, context)
     payload = json.loads(result.content)
@@ -3541,7 +3668,7 @@ async def test_session_read_exposes_historical_attachment_identity_and_path(tmp_
     records = Mock()
     records.all.return_value = [message]
     context.db.scalar.return_value = target
-    context.db.scalars.return_value = records
+    _session_read_records(context, [message])
 
     result = await tool_registry.execute(call, context)
 
@@ -3583,7 +3710,7 @@ async def test_session_read_references_truncated_tool_results(tmp_path) -> None:
     records = Mock()
     records.all.return_value = [assistant, tool_result]
     context.db.scalar.return_value = context.session
-    context.db.scalars.return_value = records
+    _session_read_records(context, [assistant, tool_result])
 
     result = await tool_registry.execute(call, context)
 
@@ -3616,7 +3743,7 @@ async def test_session_read_does_not_reference_foreign_session_tool_results(tmp_
     records = Mock()
     records.all.return_value = [tool_result]
     context.db.scalar.return_value = target
-    context.db.scalars.return_value = records
+    _session_read_records(context, [tool_result])
 
     result = await tool_registry.execute(call, context)
 
@@ -3643,7 +3770,7 @@ async def test_session_read_removes_reserved_reference_fields_from_content(tmp_p
     records = Mock()
     records.all.return_value = [tool_result]
     context.db.scalar.return_value = context.session
-    context.db.scalars.return_value = records
+    _session_read_records(context, [tool_result])
 
     result = await tool_registry.execute(call, context)
 
@@ -3677,7 +3804,7 @@ async def test_session_read_redacts_private_memory_for_public_model(tmp_path) ->
     records = Mock()
     records.all.return_value = [assistant, memory_result]
     context.db.scalar.return_value = target
-    context.db.scalars.return_value = records
+    _session_read_records(context, [assistant, memory_result])
 
     public_result = await tool_registry.execute(call, context)
     context.memory_trust_level = TrustLevel.PRIVATE

@@ -2463,6 +2463,10 @@ export const useChatStore = defineStore('chat', {
           void useQuestionStore().fetchPending().catch(() => {})
         })
       }
+      source.addEventListener('session.executionAgentChanged', () => {
+        if (this.eventSource !== source) return
+        void this.refreshSession(sessionId).catch(() => {})
+      })
       const finish = () => {
         if (this.eventSource !== source) return
         const current = this.current?.id === sessionId ? this.current : null

@@ -2368,6 +2368,27 @@ CASES = (
         expected_arguments={"session_id": str(SESSION_ID)},
     ),
     PromptCase(
+        id="computer_list_uses_owned_agent_tool",
+        kind="general",
+        user="Welche MatoLoop-Computer stehen mir für diese Session zur Verfügung?",
+        tools=("list_execution_agents", "select_execution_agent"),
+        expected_tool="list_execution_agents",
+        forbidden_tools=("select_execution_agent",),
+    ),
+    PromptCase(
+        id="computer_switch_uses_listed_agent_id",
+        kind="general",
+        user="Übernimm den aufgelisteten Computer Server für diese Session.",
+        tools=("list_execution_agents", "select_execution_agent"),
+        history=_exchange(
+            "list_execution_agents", {},
+            json.dumps({"items": [{"id": str(OPENSCAD_AGENT_ID), "alias": "Server", "connected": True}]}),
+        ),
+        expected_tool="select_execution_agent",
+        expected_arguments={"agent_id": str(OPENSCAD_AGENT_ID)},
+        forbidden_tools=("list_execution_agents",),
+    ),
+    PromptCase(
         id="session_tool_result_uses_exact_reference",
         kind="general",
         user="Lies das ausgelagerte Tool-Ergebnis und beantworte danach die Frage.",

@@ -110,6 +110,7 @@ _MESSAGES = {
     "executionAgent.revoked": "The MatoLoop Agent has been revoked.",
     "executionAgent.timeout": "The MatoLoop Agent did not answer in time.",
     "executionAgent.unavailable": "The MatoLoop Agent is unavailable.",
+    "executionAgent.exclusiveCallRequired": "Select a computer without other tool calls in the same response.",
     "file.changed": "The file changed since it was opened.",
     "file.accessDenied": "Access to the file was denied.",
     "file.activeDirty": "The file has unsaved changes and cannot be overwritten.",

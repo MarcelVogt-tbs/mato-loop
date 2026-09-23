@@ -61,7 +61,7 @@ _READ_CAPABILITIES = frozenset({
     "mealie.accounts.read", "memory.read", "network.fetch", "network.search",
     "recipes.read", "session.files.read", "session.read", "session.search",
     "session.tool_result.read", "secrets.access",
-    "skills.load", "system.info", "tasks.read", "calendar.read",
+    "skills.load", "system.info", "tasks.read", "calendar.read", "execution_agent.list",
 })
 _WRITE_CAPABILITIES = frozenset({
     "automation.create", "automation.delete", "automation.run", "automation.update",
@@ -74,7 +74,7 @@ _WRITE_CAPABILITIES = frozenset({
     "media.generate.speech",
     "session.files.write", "settings.agent_identity.update",
     "settings.user_profile.update", "skills.write", "tasks.delete", "tasks.write",
-    "secrets.write",
+    "secrets.write", "execution_agent.select",
 })
 
 
@@ -607,6 +607,24 @@ def system_info_permission(agent_id: UUID) -> PermissionRequest:
         title="Systeminformationen lesen?",
         summary="Der Agent möchte grundlegende Informationen des ausgewählten Computers lesen.",
         resource_display="Ausgewählter Computer",
+    )
+
+
+def execution_agents_list_permission(user_id: UUID) -> PermissionRequest:
+    return PermissionRequest(
+        capability="execution_agent.list", resource_type="execution_agent_collection",
+        resource_scope=str(user_id), action_kind="list_execution_agents", risk_level="low",
+        title="Computer anzeigen?", summary="Der Agent möchte Ihre verfügbaren Computer anzeigen.",
+    )
+
+
+def execution_agent_select_permission(agent_id: UUID, alias: str) -> PermissionRequest:
+    return PermissionRequest(
+        capability="execution_agent.select", resource_type="execution_agent",
+        resource_scope=str(agent_id), action_kind="select_execution_agent", risk_level="medium",
+        title="Computer übernehmen?",
+        summary=f"Der Agent möchte für diese Session den Computer {alias} übernehmen.",
+        resource_display=alias, force_ask=True, available_decisions=("allow_once", "deny"),
     )
 
 
@@ -1449,6 +1467,23 @@ class PermissionPolicy:
 
         if request.resource_type == "session_collection":
             if request.resource_scope != "all":
+                return PermissionDecision.DENY
+
+        if request.resource_type == "execution_agent_collection":
+            if request.capability != "execution_agent.list" or request.resource_scope != str(chat_session.user_id):
+                return PermissionDecision.DENY
+
+        if request.resource_type == "execution_agent" and request.capability == "execution_agent.select":
+            try:
+                agent_id = UUID(request.resource_scope)
+            except ValueError:
+                return PermissionDecision.DENY
+            agent = await db.scalar(select(ExecutionAgent).where(
+                ExecutionAgent.id == agent_id,
+                ExecutionAgent.user_id == chat_session.user_id,
+                ExecutionAgent.revoked_at.is_(None),
+            ))
+            if agent is None or agent.user_id != chat_session.user_id or agent.revoked_at is not None:
                 return PermissionDecision.DENY
 
         if request.resource_type == "project":

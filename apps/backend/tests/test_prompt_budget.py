@@ -112,7 +112,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     prompt_tokens = estimate_tokens(prompt, 4.0) + estimate_tokens(memory_prompt, 4.0)
     schema_tokens = estimate_tokens(schemas, 4.0)
 
-    assert len(schemas) == 53
+    assert len(schemas) == 55
     assert {"load_skill", "build_skill", "edit_skill"} <= {
         schema["name"] for schema in schemas
     }
@@ -122,7 +122,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
         "brief",
         "name_hint",
     }
-    assert prompt_tokens <= 7_300, prompt_tokens
+    assert prompt_tokens <= 7_450, prompt_tokens
     # Required permission reasons now include bounds and per-call guidance in every applicable schema.
-    assert schema_tokens <= 11_400, schema_tokens
-    assert prompt_tokens + schema_tokens <= 18_700, prompt_tokens + schema_tokens
+    assert schema_tokens <= 11_700, schema_tokens
+    assert prompt_tokens + schema_tokens <= 19_100, prompt_tokens + schema_tokens

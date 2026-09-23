@@ -14,6 +14,8 @@ from mato_loop_backend.agent.permissions import (
     agent_identity_permission,
     automation_collection_scope,
     automation_scope,
+    execution_agent_select_permission,
+    execution_agents_list_permission,
     execution_directory_permission,
     execution_directory_scope,
     integration_operation_permission,
@@ -1298,6 +1300,31 @@ async def test_current_session_read_honors_automatic_policy(tmp_path) -> None:
 
     assert decision == PermissionDecision.ALLOW
     db.scalars.assert_not_awaited()
+
+
+async def test_computer_list_and_select_permissions_are_owner_scoped(tmp_path) -> None:
+    session = _session(user_id=uuid4())
+    roots = _root_files(tmp_path, session)
+    agent = ExecutionAgent(id=uuid4(), user_id=session.user_id, alias="Server")
+    db = _db_with_grants()
+    db.scalar.return_value = agent
+
+    assert await PermissionPolicy.evaluate(
+        db, session, execution_agents_list_permission(session.user_id), roots,
+        ToolExecutionPolicy.AUTO,
+    ) == PermissionDecision.ALLOW
+    assert await PermissionPolicy.evaluate(
+        db, session, execution_agents_list_permission(uuid4()), roots,
+        ToolExecutionPolicy.AUTO,
+    ) == PermissionDecision.DENY
+    request = execution_agent_select_permission(agent.id, agent.alias)
+    assert await PermissionPolicy.evaluate(
+        db, session, request, roots, ToolExecutionPolicy.AUTO,
+    ) == PermissionDecision.ASK
+    agent.user_id = uuid4()
+    assert await PermissionPolicy.evaluate(
+        db, session, request, roots, ToolExecutionPolicy.ASK,
+    ) == PermissionDecision.DENY
 
 
 @pytest.mark.parametrize("kind", ["url", "root", "execution", "shell"])

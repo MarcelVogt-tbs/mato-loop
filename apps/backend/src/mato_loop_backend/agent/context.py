@@ -690,6 +690,7 @@ def general_system_prompt(
     skill_catalog: tuple[SkillDefinition, ...] = (),
     active_skill: SkillDefinition | None = None,
     execution_agent_name: str | None = None,
+    execution_agent_id: UUID | None = None,
     execution_agent_platform: str | None = None,
     execution_agent_connected: bool = False,
     execution_agent_system_info: SystemInfo | None = None,
@@ -905,7 +906,9 @@ def general_system_prompt(
     if "session_read" in offered_tool_names:
         parts.append(
             "Use session_read for needed compacted details or historical attachments; do not claim visual "
-            "inspection before return. Metadata includes IDs, filenames, and session paths."
+            "inspection before return. Metadata includes IDs, filenames, and session paths. "
+            "Prior-session computer evidence may come from another MatoLoop Agent. Compare its "
+            "executionAgentId with the selected computer before applying it to this machine."
         )
     if {"session_browse", "session_search"} & offered_tool_names:
         parts.append(
@@ -1021,6 +1024,7 @@ def general_system_prompt(
             "Selected computer context:\n"
             + json.dumps(
                 {
+                    "id": str(execution_agent_id) if execution_agent_id else None,
                     "name": execution_agent_name,
                     "status": "connected" if execution_agent_connected else "offline",
                     "platform": execution_agent_platform,
@@ -1040,6 +1044,18 @@ def general_system_prompt(
             "do not assume installed programs or container resource limits. Missing values are unknown. "
             "System information does not grant tool permissions."
             + ("\nNo live computer operations are available." if not execution_agent_connected else "")
+        )
+    elif execution_agent_id is not None:
+        dynamic_parts.append(
+            f"Selected MatoLoop Agent ID: {execution_agent_id}. Its record is unavailable; "
+            "no live computer operations are available."
+        )
+    else:
+        dynamic_parts.append("No MatoLoop Agent is selected for this session.")
+    if "select_execution_agent" in offered_tool_names:
+        parts.append(
+            "To change computers, call select_execution_agent alone. After approval, use the returned "
+            "computer and directory for subsequent tool calls; previous computer results remain historical."
         )
     if "build_skill" in offered_tool_names:
         if "question" in offered_tool_names:

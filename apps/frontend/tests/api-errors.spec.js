@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { apiErrorMessage, decodeBlobApiError, errorDescriptor } from '../src/utils/api-errors'
 
 describe('API error messages', () => {
+  it('localizes an invalid computer-switch batch without leaking backend details', () => {
+    expect(apiErrorMessage({ error: {
+      code: 'executionAgent.exclusiveCallRequired', message: 'internal detail'
+    } })).toBe('Der Computerwechsel muss ohne weitere Tool-Aufrufe erfolgen.')
+  })
   it.each(['browser.snapshotChanged', 'browser.observationUnstable'])('reinspects instead of reconnecting for %s', (code) => {
     const message = apiErrorMessage({ error: { code, message: 'private worker detail' } })
     expect(message).toContain('Prüfe denselben Tab erneut')

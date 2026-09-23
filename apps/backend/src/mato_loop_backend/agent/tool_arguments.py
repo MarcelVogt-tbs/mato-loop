@@ -501,6 +501,14 @@ class ChangeDirectoryArguments(ToolArguments):
     path: str = Field(min_length=1, max_length=4096)
 
 
+class ListExecutionAgentsArguments(ToolArguments):
+    pass
+
+
+class SelectExecutionAgentArguments(ToolArguments):
+    agent_id: UUID
+
+
 class WebSearchArguments(ToolArguments):
     query: str = Field(
         min_length=1,

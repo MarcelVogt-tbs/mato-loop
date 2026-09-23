@@ -31,7 +31,7 @@ Control Center session metadata stores only bounded inert app and resource-tab I
 
 Every adapter declares one static execution location. `backend` adapters execute inside MatoLoop and cannot have a MatoLoop Agent assignment. `agent` adapters represent local operations, require one configured MatoLoop Agent, and contribute only host-declared tools whose operation names and schemas are compiled into MatoLoop. Configuration and the agent's operation advertisement cannot add executable schemas or permission behavior.
 
-An agent-bound integration is offered only when its configured agent matches the immutable agent snapshot of the current run, is connected, and advertises the static operation. Multiple MatoLoop Agents are supported, with at most one instance of an agent adapter kind per agent. There is no model-selected target, automatic failover, backend fallback, retry, or redelivery. The backend still validates arguments and results and owns policies, approvals, credentials, and canonical tool results; the selected outbound MatoLoop Agent performs the local operation.
+An agent-bound integration is offered only when its configured agent matches the current run's selected agent, is connected, and advertises the static operation. Multiple MatoLoop Agents are supported, with at most one instance of an agent adapter kind per agent. A separately approved `select_execution_agent` call can change the run binding between model requests; integration tools never select a target per call. There is no automatic failover, backend fallback, retry, or redelivery. The backend still validates arguments and results and owns policies, approvals, credentials, and canonical tool results; the selected outbound MatoLoop Agent performs the local operation.
 
 ## MCP
 

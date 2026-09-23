@@ -35,6 +35,8 @@ from mato_loop_backend.agent.permissions import (
     agent_identity_permission,
     automation_collection_scope,
     automation_scope,
+    execution_agent_select_permission,
+    execution_agents_list_permission,
     execution_directory_permission,
     media_permission,
     memory_read_permission,
@@ -87,6 +89,7 @@ from mato_loop_backend.agent.tool_arguments import (
     GlobArguments,
     GrepArguments,
     ListAutomationsArguments,
+    ListExecutionAgentsArguments,
     LoadSkillArguments,
     MemoryRetrieveArguments,
     MemoryWriteArguments,
@@ -100,6 +103,7 @@ from mato_loop_backend.agent.tool_arguments import (
     ReadQrCodeArguments,
     RunAutomationArguments,
     SecretInputArguments,
+    SelectExecutionAgentArguments,
     SessionBrowseArguments,
     SessionFileReadArguments,
     SessionReadArguments,
@@ -193,6 +197,7 @@ from mato_loop_backend.execution import (
     WorkspaceStatResult,
     WorkspaceWriteResult,
 )
+from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.execution.protocol import MAX_REQUEST_BYTES, RequestMessage
 from mato_loop_backend.execution.terminals import terminal_coordinator
 from mato_loop_backend.file_archives import (
@@ -229,6 +234,7 @@ from mato_loop_backend.models import (
     AgentRun,
     Automation,
     ChatSession,
+    ExecutionAgent,
     Message,
     MessageAttachment,
     Project,
@@ -490,6 +496,75 @@ async def _get_system_info(
         SystemInfoResult,
     )
     return ToolResult.json(result.model_dump(mode="json", by_alias=True))
+
+
+async def _list_execution_agents(
+    _arguments: ListExecutionAgentsArguments, context: ToolContext,
+) -> ToolResult:
+    if not await _allow(context, execution_agents_list_permission(context.session.user_id)):
+        return ToolResult.error("permission.denied")
+    agents = (await context.db.scalars(select(ExecutionAgent).where(
+        ExecutionAgent.user_id == context.session.user_id,
+        ExecutionAgent.revoked_at.is_(None),
+    ).order_by(ExecutionAgent.created_at, ExecutionAgent.id))).all()
+    return ToolResult.json({"items": [
+        {"id": str(agent.id), "alias": agent.alias, "platform": agent.platform,
+         "connected": execution_agent_connections.is_connected(agent.id),
+         "selected": agent.id == context.session.preferred_execution_agent_id}
+        for agent in agents
+    ]})
+
+
+async def _select_execution_agent(
+    arguments: SelectExecutionAgentArguments, context: ToolContext,
+) -> ToolResult:
+    if context.session.session_type != "chat" or context.session.parent_session_id is not None:
+        return ToolResult.error("tool.unavailable")
+    agent = await context.db.scalar(select(ExecutionAgent).where(
+        ExecutionAgent.id == arguments.agent_id,
+        ExecutionAgent.user_id == context.session.user_id,
+        ExecutionAgent.revoked_at.is_(None),
+    ))
+    if agent is None:
+        return ToolResult.error("executionAgent.notFound")
+    if agent.id == context.session.preferred_execution_agent_id:
+        return ToolResult.json({"id": str(agent.id), "alias": agent.alias, "selected": True})
+    if not await _allow(context, execution_agent_select_permission(agent.id, agent.alias)):
+        return ToolResult.error("permission.denied")
+    from mato_loop_backend.sessions.service import (
+        SessionServiceError,
+        validate_execution_preferences,
+    )
+
+    try:
+        directory, _policy = await validate_execution_preferences(
+            context.db, context.session.user_id, agent.id, None,
+        )
+    except SessionServiceError as exc:
+        return ToolResult.error(exc.code)
+    # Revalidate after approval; the target or its connection may have changed while waiting.
+    agent = await context.db.scalar(select(ExecutionAgent).where(
+        ExecutionAgent.id == arguments.agent_id,
+        ExecutionAgent.user_id == context.session.user_id,
+        ExecutionAgent.revoked_at.is_(None),
+    ).execution_options(populate_existing=True))
+    snapshot = execution_agent_connections.snapshot(arguments.agent_id)
+    if agent is None or snapshot is None:
+        return ToolResult.error("executionAgent.unavailable")
+    run = await context.db.get(AgentRun, context.run_id)
+    if run is None:
+        return ToolResult.error("tool.unavailable")
+    context.session.preferred_execution_agent_id = agent.id
+    context.session.current_directory = directory
+    run.execution_agent_id = agent.id
+    run.execution_agent_revision = agent.revision
+    run.current_directory_snapshot = directory
+    run.execution_operations = sorted(snapshot)
+    await context.db.flush()
+    return ToolResult.json({
+        "id": str(agent.id), "alias": agent.alias, "currentDirectory": directory,
+        "selected": True,
+    }, metadata={"executionAgentChanged": True})
 
 
 async def _change_directory(
@@ -3424,6 +3499,35 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             )
         ).all()
     )
+    runs = (await context.db.scalars(select(AgentRun).where(
+        AgentRun.session_id == target_id,
+        AgentRun.parent_run_id.is_(None),
+    ))).all() if records else []
+    by_run = {str(run.id): run for run in runs}
+    by_input = {run.input_message_id: run for run in runs if run.input_message_id is not None}
+    agent_by_message: dict[UUID, UUID | None] = {}
+    active_agents: dict[str, UUID | None] = {}
+    for message in records:
+        host = (message.provider_data or {}).get("_matoloop")
+        host = host if isinstance(host, dict) else {}
+        run = by_input.get(message.id) or by_run.get(host.get("runId"))
+        if run is None:
+            continue
+        key = str(run.id)
+        if key not in active_agents:
+            initial = host.get("executionAgentId") if message.id == run.input_message_id else None
+            try:
+                active_agents[key] = UUID(initial) if initial else run.execution_agent_id
+            except (TypeError, ValueError):
+                active_agents[key] = run.execution_agent_id
+        if host.get("toolName") == "select_execution_agent" and message.role == "tool":
+            try:
+                changed = json.loads(message.content)
+                if isinstance(changed, dict) and changed.get("selected") is True:
+                    active_agents[key] = UUID(changed["id"])
+            except (ValueError, KeyError, TypeError):
+                pass
+        agent_by_message[message.id] = active_agents[key]
     start = 0
     if arguments.around_message_id is not None:
         anchor = next(
@@ -3471,6 +3575,9 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             context.memory_trust_level,
             reference_tool_results=target_id == context.session.id,
         )
+        if message.id in agent_by_message:
+            agent_id = agent_by_message[message.id]
+            item["executionAgentId"] = str(agent_id) if agent_id is not None else None
         messages.append(item)
         if remaining <= 0:
             break
@@ -3483,6 +3590,10 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             "session": {
                 "id": str(target.id),
                 "title": target.title,
+                "selectedExecutionAgentId": (
+                    str(target.preferred_execution_agent_id)
+                    if target.preferred_execution_agent_id else None
+                ),
             },
             "messages": messages,
             "hasEarlier": start > 0,
@@ -4909,6 +5020,13 @@ _SHELL_WRITE = ToolAction(
 _SYSTEM_INFO = ToolAction(
     "system.info", "Systeminformationen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK
 )
+_EXECUTION_AGENTS_LIST = ToolAction(
+    "execution_agent.list", "Computer anzeigen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK,
+)
+_EXECUTION_AGENT_SELECT = ToolAction(
+    "execution_agent.select", "Computer übernehmen", ToolExecutionPolicy.ASK,
+    ToolExecutionPolicy.ASK, mutates=True,
+)
 _CODING_ANALYZE = ToolAction(
     "coding.analyze", "Projekt analysieren", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK
 )
@@ -5007,6 +5125,20 @@ tool_registry = ToolRegistry(
             group="agent",
             label="Aufgaben aktualisieren",
             icon="checklist",
+        ),
+        ToolDefinition(
+            "list_execution_agents",
+            "List your available MatoLoop Agents and the current session selection.",
+            ListExecutionAgentsArguments, _list_execution_agents,
+            group="agent", label="Computer anzeigen", icon="computer",
+            actions=(_EXECUTION_AGENTS_LIST,),
+        ),
+        ToolDefinition(
+            "select_execution_agent",
+            "Select one listed connected MatoLoop Agent for this session. Call alone; user approval is required for every change. The next model step uses the selected agent and its directory.",
+            SelectExecutionAgentArguments, _select_execution_agent,
+            group="agent", label="Computer übernehmen", icon="computer",
+            actions=(_EXECUTION_AGENT_SELECT,),
         ),
         ToolDefinition(
             "read",

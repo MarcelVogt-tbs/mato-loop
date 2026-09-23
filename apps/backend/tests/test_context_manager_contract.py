@@ -1654,6 +1654,28 @@ def test_general_system_prompt_reports_selected_offline_computer() -> None:
     assert '"systemInfo"' not in prompt
 
 
+def test_computer_identity_changes_prompt_only_when_binding_changes() -> None:
+    agent_id = uuid4()
+    options = {
+        "execution_agent_id": agent_id,
+        "execution_agent_name": "Workstation",
+        "execution_agent_platform": "linux",
+        "execution_agent_connected": True,
+        "current_directory": "/work",
+        "include_local_time": False,
+        "offered_tool_names": frozenset({"list_execution_agents", "select_execution_agent"}),
+    }
+    first = general_system_prompt(_session(), **options)
+
+    assert first == general_system_prompt(_session(), **options)
+    assert f'"id": "{agent_id}"' in first
+    assert first != general_system_prompt(_session(), **{**options, "execution_agent_id": uuid4()})
+    assert "available MatoLoop Agents" not in first
+    assert f"Selected MatoLoop Agent ID: {agent_id}" in general_system_prompt(
+        _session(), execution_agent_id=agent_id,
+    )
+
+
 def test_skill_catalog_contains_selection_metadata_without_instructions() -> None:
     skill = SkillDefinition(
         name="Quellenpruefung",

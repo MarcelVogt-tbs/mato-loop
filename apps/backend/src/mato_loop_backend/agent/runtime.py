@@ -1042,6 +1042,7 @@ class AgentRuntime:
             content=content,
             trust_level=trust_level.value,
             provider_data={"_matoloop": {
+                "executionAgentId": str(execution_agent.id) if execution_agent else None,
                 **({"activeFile": active_file} if active_file is not None else {}),
             }},
             source_type=source_type,
@@ -1984,6 +1985,18 @@ class AgentRuntime:
                 modelRequest=model_requests + 1,
             )
             await db.refresh(chat_session)
+            if run.execution_agent_id != (
+                selected_execution_agent.id if selected_execution_agent is not None else None
+            ):
+                selected_execution_agent = (
+                    await db.get(ExecutionAgent, run.execution_agent_id)
+                    if run.execution_agent_id is not None else None
+                )
+                if not isinstance(selected_execution_agent, ExecutionAgent) or (
+                    selected_execution_agent.user_id != chat_session.user_id
+                    or selected_execution_agent.revoked_at is not None
+                ):
+                    selected_execution_agent = None
             ai_settings = apply_agent_profile_ai(
                 await load_effective_ai(db, chat_session.user_id),
                 prompt_agent_profile,
@@ -2393,7 +2406,9 @@ class AgentRuntime:
             if effective_toolset is not None:
                 if (chat_session.session_type != "chat" or chat_session.parent_session_id is not None
                         or run.parent_run_id is not None):
-                    effective_toolset = effective_toolset.without("browser_request_control")
+                    effective_toolset = effective_toolset.without(
+                        "browser_request_control", "select_execution_agent",
+                    )
                 if ceiling is not None:
                     effective_toolset = effective_toolset.only(*ceiling["toolNames"]).without("task")
                 elif _active_agent_profile is None or not _active_agent_profile.delegation_enabled:
@@ -2402,6 +2417,7 @@ class AgentRuntime:
                     effective_toolset = effective_toolset.without(
                         "provide_file", "generate_qr_code", "generate_image", "edit_image",
                         "generate_speech", "generate_audio", "build_skill", "edit_skill",
+                        "select_execution_agent",
                     )
                     if execution_client is None:
                         effective_toolset = effective_toolset.without(
@@ -2500,6 +2516,7 @@ class AgentRuntime:
                     else ()
                 ),
                 active_skill=skill_state.active,
+                execution_agent_id=run.execution_agent_id,
                 execution_agent_name=(
                     selected_execution_agent.alias if selected_execution_agent else None
                 ),
@@ -3265,11 +3282,16 @@ class AgentRuntime:
             invalid_skill_load_batch = any(
                 call.name == "load_skill" for call in normalized_calls
             ) and len(normalized_calls) != 1
+            invalid_agent_select_batch = any(
+                call.name == "select_execution_agent" for call in normalized_calls
+            ) and len(normalized_calls) != 1
             exclusive_error_code = (
                 "question.exclusiveCallRequired"
                 if invalid_question_batch
                 else (
-                    "skill.loadMustBeExclusive" if invalid_skill_load_batch else None
+                    "skill.loadMustBeExclusive" if invalid_skill_load_batch else (
+                        "executionAgent.exclusiveCallRequired" if invalid_agent_select_batch else None
+                    )
                 )
             )
             for index, call in enumerate(normalized_calls):
@@ -4534,6 +4556,11 @@ class AgentRuntime:
                         attachments_committed = True
                         raise
                     attachments_committed = True
+                    if metadata.get("executionAgentChanged") is True:
+                        await run_events.publish(run.id, {
+                            "type": "session.executionAgentChanged",
+                            "executionAgentId": str(run.execution_agent_id),
+                        })
                 except AttachmentError as exc:
                     await db.rollback()
                     tool_result_content = json.dumps(
@@ -4657,6 +4684,7 @@ class AgentRuntime:
                 elif error_code in {
                     "question.exclusiveCallRequired",
                     "skill.loadMustBeExclusive",
+                    "executionAgent.exclusiveCallRequired",
                 }:
                     failed_tool_call_signatures.pop(call_signature, None)
                     retried_transient_reads.discard(call_signature)

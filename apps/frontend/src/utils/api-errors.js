@@ -206,6 +206,7 @@ const messages = {
   'executionAgent.revoked': () => 'Der Zugriff dieses Computers wurde widerrufen.',
   'executionAgent.timeout': () => 'Der Computer hat nicht rechtzeitig geantwortet.',
   'executionAgent.unavailable': () => 'Der Computer ist derzeit nicht verfügbar.',
+  'executionAgent.exclusiveCallRequired': () => 'Der Computerwechsel muss ohne weitere Tool-Aufrufe erfolgen.',
   'process.inspectionChanged': () => 'Die erkannten Einstiegspfade haben sich vor der Ausführung geändert. Prüfe den Befehl erneut.',
   'file.changed': () => 'Die Datei wurde seit dem Öffnen geändert. Öffne sie erneut und übernimm deine Änderungen in die aktuelle Version.',
   'file.accessDenied': () => 'Der Zugriff auf die Datei wurde verweigert.',

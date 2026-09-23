@@ -76,6 +76,7 @@ TOOL_ACTIVITY_LABELS = {
     "delete_automation": "Automation löschen",
     "load_skill": "Skill laden", "build_skill": "Skill speichern", "edit_skill": "Skill bearbeiten",
     "get_system_info": "Systeminformationen", "change_directory": "Verzeichnis wechseln",
+    "list_execution_agents": "Computer anzeigen", "select_execution_agent": "Computer übernehmen",
     "render_openscad": "OpenSCAD-Modell rendern",
     "browser_tabs": "Browser-Tabs", "browser_navigate": "Website aufrufen",
     "browser_snapshot": "Browser-Snapshot", "browser_take_screenshot": "Browser-Screenshot",
@@ -98,6 +99,7 @@ _TOOL_GROUPS = {
     "create_automation": "automations", "edit_automation": "automations",
     "run_automation": "automations", "delete_automation": "automations",
     "get_system_info": "process", "change_directory": "process",
+    "list_execution_agents": "agent", "select_execution_agent": "agent",
     **{
         name: "filesystem"
         for name in (
