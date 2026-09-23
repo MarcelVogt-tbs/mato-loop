@@ -20,7 +20,7 @@ from mato_loop_backend.agent.tool_registry import (
     ToolResult,
 )
 from mato_loop_backend.agent.tools import resolve_tool_execution_policy, tool_registry
-from mato_loop_backend.api.errors import ApiError, register_error_handlers
+from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import mcp as mcp_routes
 from mato_loop_backend.api.routes.mcp import (
     McpServerRequest,
@@ -119,7 +119,7 @@ class FakeSession:
 
 @asynccontextmanager
 async def fake_transport(url, *, http_client):
-    assert url == "https://mcp.example.test/rpc"
+    assert url in {"https://mcp.example.test/rpc", "http://192.168.1.30:9000/mcp"}
     assert http_client.headers["Authorization"] == "Bearer secret"
     assert http_client.timeout.connect == 10
     assert http_client.timeout.read == 60
@@ -127,7 +127,8 @@ async def fake_transport(url, *, http_client):
     yield object(), object(), lambda: None
 
 
-async def test_mcp_client_uses_streamable_http_transport(monkeypatch) -> None:
+@pytest.mark.parametrize("endpoint", ["https://mcp.example.test/rpc", "http://192.168.1.30:9000/mcp"])
+async def test_mcp_client_uses_streamable_http_transport(monkeypatch, endpoint) -> None:
     real_client = httpx.AsyncClient
     client_settings = []
 
@@ -140,7 +141,7 @@ async def test_mcp_client_uses_streamable_http_transport(monkeypatch) -> None:
     monkeypatch.setattr(client_module.httpx, "AsyncClient", client_factory)
     monkeypatch.setattr(client_module, "streamable_http_client", fake_transport)
     monkeypatch.setattr(client_module, "ClientSession", FakeSession)
-    client = McpClient("https://mcp.example.test/rpc", "secret")
+    client = McpClient(endpoint, "secret")
 
     tools = await client.discover_tools()
     result, is_error = await client.call_tool("lookup", {"query": "x"}, None)
@@ -702,76 +703,75 @@ async def test_failed_refresh_keeps_persisted_catalog(monkeypatch) -> None:
     db.commit.assert_not_awaited()
 
 
-def test_api_request_rejects_new_bearer_over_http() -> None:
-    with pytest.raises(ValueError):
-        McpServerRequest(
-            name="Server",
-            endpoint="http://mcp.example.test/rpc",
-            bearerToken="secret",
-        )
+def test_api_request_accepts_bearer_over_http() -> None:
+    request = McpServerRequest(
+        name="Server",
+        endpoint="http://192.168.1.30:9000/mcp",
+        bearerToken="secret",
+    )
+    assert request.bearer_token == "secret"
 
 
-async def test_api_update_rejects_retained_bearer_downgrade(monkeypatch) -> None:
+async def test_api_update_allows_retained_bearer_over_http(monkeypatch) -> None:
     instance = IntegrationInstance(
         name="Server",
         integration_type="mcp",
         adapter_type="mcp_streamable_http",
         credential_id=uuid4(),
-        config={"endpoint": "https://mcp.example.test/rpc", "tools": []},
+        config={"endpoint": "http://192.168.1.30:9000/mcp", "tools": []},
     )
     monkeypatch.setattr(mcp_routes, "_owner_id", AsyncMock(return_value=None))
-    monkeypatch.setattr(
-        mcp_routes,
-        "_settings",
-        AsyncMock(return_value=IntegrationSettings(instances=[instance])),
-    )
-    update = AsyncMock()
+    update = AsyncMock(return_value=instance)
     monkeypatch.setattr(McpIntegrationService, "update", update)
 
-    with pytest.raises(ApiError) as exc_info:
-        await update_mcp_server(
-            instance.id,
-            McpServerRequest(name="Server", endpoint="http://mcp.example.test/rpc"),
-            AsyncMock(),
-            "instance",
-            SimpleNamespace(is_admin=True),
-        )
+    result = await update_mcp_server(
+        instance.id,
+        McpServerRequest(name="Server", endpoint="http://192.168.1.30:9000/mcp"),
+        AsyncMock(),
+        "instance",
+        SimpleNamespace(is_admin=True),
+    )
 
-    assert exc_info.value.code == "mcp.configurationInvalid"
-    update.assert_not_awaited()
+    assert result["hasBearerToken"] is True
+    assert update.await_args.kwargs["endpoint"] == "http://192.168.1.30:9000/mcp"
+    assert update.await_args.kwargs["token"] is None
 
 
-async def test_service_rejects_retained_bearer_downgrade(monkeypatch) -> None:
+async def test_service_allows_retained_bearer_over_http(monkeypatch) -> None:
     instance = IntegrationInstance(
         name="Server",
         integration_type="mcp",
         adapter_type="mcp_streamable_http",
         credential_id=uuid4(),
-        config={"endpoint": "https://mcp.example.test/rpc", "tools": []},
+        config={"endpoint": "http://192.168.1.30:9000/mcp", "tools": []},
     )
+    integrations = IntegrationSettings(instances=[instance])
+
+    async def load(_db, settings_type, **_kwargs):
+        return integrations if settings_type is IntegrationSettings else ToolSettings()
+
     monkeypatch.setattr(
         SettingsStore,
         "load",
-        AsyncMock(return_value=IntegrationSettings(instances=[instance])),
+        AsyncMock(side_effect=load),
     )
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     monkeypatch.setattr(McpIntegrationService, "_token", AsyncMock(return_value="secret"))
-    discover = AsyncMock()
+    discover = AsyncMock(return_value=[])
     monkeypatch.setattr(McpIntegrationService, "_discover", discover)
 
-    with pytest.raises(IntegrationSettingsError) as exc_info:
-        await McpIntegrationService.update(
-            AsyncMock(),
-            instance.id,
-            name="Server",
-            endpoint="http://mcp.example.test/rpc",
-            token=None,
-            remove_token=False,
-            enabled=True,
-            owner_id=None,
-        )
+    await McpIntegrationService.update(
+        AsyncMock(),
+        instance.id,
+        name="Server",
+        endpoint="http://192.168.1.30:9000/mcp",
+        token=None,
+        remove_token=False,
+        enabled=True,
+        owner_id=None,
+    )
 
-    assert exc_info.value.code == "mcp.configurationInvalid"
-    discover.assert_not_awaited()
+    discover.assert_awaited_once_with("http://192.168.1.30:9000/mcp", "secret")
 
 
 async def test_endpoint_change_clears_server_and_tool_policy_state(monkeypatch) -> None:
@@ -961,15 +961,23 @@ async def test_create_encrypts_bearer_outside_persisted_config(monkeypatch) -> N
     instance = await McpIntegrationService.create(
         db,
         name="Server",
-        endpoint="https://mcp.example.test/rpc",
+        endpoint="http://192.168.1.30:9000/mcp",
         token="secret",
         enabled=True,
         owner_id=None,
     )
 
     assert instance.credential_id == credential_id
+    assert instance.config["endpoint"] == "http://192.168.1.30:9000/mcp"
     assert "secret" not in str(instance.config)
     assert store.await_args.kwargs["payload"] == {"token": "secret"}
+
+
+def test_sonobin_still_requires_https() -> None:
+    with pytest.raises(IntegrationSettingsError, match="mcp.configurationInvalid"):
+        SonoBinIntegrationService._validate_connection(
+            "http://192.168.1.30:9000/mcp/", "secret"
+        )
 
 
 async def test_sonobin_create_initializes_both_trust_branches(monkeypatch) -> None:

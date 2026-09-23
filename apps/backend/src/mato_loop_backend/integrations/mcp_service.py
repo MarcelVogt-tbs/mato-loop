@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,10 +65,8 @@ class McpIntegrationService:
             tools.resource_labels[integration_id] = labels
 
     @classmethod
-    def _require_secure_token_endpoint(cls, endpoint: str, token: str | None) -> None:
-        if (token is not None and urlsplit(endpoint).scheme.lower() != "https") or (
-            cls.token_required and not token
-        ):
+    def _validate_connection(cls, endpoint: str, token: str | None) -> None:
+        if cls.token_required and not token:
             raise IntegrationSettingsError("mcp.configurationInvalid")
         try:
             cls.config_model(endpoint=endpoint)
@@ -164,7 +161,7 @@ class McpIntegrationService:
         enabled: bool,
         owner_id: UUID | None,
     ) -> IntegrationInstance:
-        cls._require_secure_token_endpoint(endpoint, token)
+        cls._validate_connection(endpoint, token)
         tools = await cls._discover(endpoint, token)
         settings = await _load_integrations(db, owner_id, for_update=True)
         instance = IntegrationInstance(
@@ -215,7 +212,7 @@ class McpIntegrationService:
         discovery_token = token
         if discovery_token is None and not remove_token:
             discovery_token = await cls._token(db, current)
-        cls._require_secure_token_endpoint(endpoint, discovery_token)
+        cls._validate_connection(endpoint, discovery_token)
         tools = await cls._discover(endpoint, discovery_token)
         revision = current.model_dump(mode="json")
 
@@ -278,7 +275,7 @@ class McpIntegrationService:
         current.owner_id = owner_id
         config = cls.config_model.model_validate(current.config)
         token = await cls._token(db, current)
-        cls._require_secure_token_endpoint(str(config.endpoint), token)
+        cls._validate_connection(str(config.endpoint), token)
         tools = await cls._discover(str(config.endpoint), token)
         revision = current.model_dump(mode="json")
 
@@ -329,7 +326,7 @@ class McpIntegrationService:
         instance.owner_id = owner_id
         config = cls.config_model.model_validate(instance.config)
         token = await cls._token(db, instance)
-        cls._require_secure_token_endpoint(str(config.endpoint), token)
+        cls._validate_connection(str(config.endpoint), token)
         await cls._discover(str(config.endpoint), token)
 
 

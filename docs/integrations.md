@@ -35,7 +35,7 @@ An agent-bound integration is offered only when its configured agent matches the
 
 ## MCP
 
-MCP is managed under its own settings menu but reuses the integration persistence and permission core. The initial client supports Streamable HTTP with no authentication or one encrypted static Bearer token. Personal MCP servers are disabled by default and require a dedicated administrator setting; MCP does not appear in the normal integration catalog.
+MCP is managed under its own settings menu but reuses the integration persistence and permission core. The initial client supports Streamable HTTP over HTTP or HTTPS with no authentication or one encrypted static Bearer token. The UI warns that HTTP sends MCP data and credentials unencrypted; users may still configure it. Personal MCP servers are disabled by default and require a dedicated administrator setting; MCP does not appear in the normal integration catalog.
 
 Product integrations are identified and presented by their product or service, not by their transport protocol. They use a normal catalog adapter, product-specific configuration routes, capabilities, labels, and policy defaults even when they reuse the MCP client internally. The generic MCP connector remains a separate escape hatch for servers without a dedicated MatoLoop adapter; a product must not be configured in both places as one logical integration.
 

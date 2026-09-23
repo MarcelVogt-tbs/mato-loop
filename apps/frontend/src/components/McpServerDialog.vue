@@ -37,7 +37,6 @@
             :hint="server?.hasBearerToken ? 'Leer lassen, um den gespeicherten Token beizubehalten.' : 'Für Endpunkte ohne Anmeldung leer lassen.'"
             :disable="form.removeBearerToken"
             lazy-rules
-            :rules="[tokenTransportRule]"
             persistent-hint
           />
           <q-toggle
@@ -85,10 +84,6 @@ const urlRule = (value) => {
     return 'Gib eine gültige HTTP- oder HTTPS-Adresse ein.'
   }
 }
-const tokenTransportRule = (value) => (form.endpoint.toLowerCase().startsWith('https://')
-  || (!value && (!props.server?.hasBearerToken || form.removeBearerToken)))
-  || 'Bearer-Token können nur über HTTPS übertragen werden.'
-
 function assignForm() {
   Object.assign(form, {
     name: props.server?.name || '',

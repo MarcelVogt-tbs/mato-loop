@@ -55,7 +55,6 @@ class McpServerRequest(BaseModel):
             or self.endpoint.query is not None
             or self.endpoint.fragment is not None
             or (self.bearer_token is not None and self.remove_bearer_token)
-            or (self.bearer_token is not None and self.endpoint.scheme != "https")
         ):
             raise ValueError("Invalid MCP connection settings")
         return self
@@ -208,16 +207,6 @@ async def update_mcp_server(
     user: Annotated[UserAccount, Depends(require_user)] = None,
 ) -> dict:
     owner_id = await _owner_id(db, scope, user)
-    if (
-        payload.endpoint.scheme != "https"
-        and payload.bearer_token is None
-        and not payload.remove_bearer_token
-    ):
-        existing = McpIntegrationService._find(
-            await _settings(db, owner_id), integration_id
-        )
-        if existing is not None and existing.credential_id is not None:
-            raise ApiError(422, "mcp.configurationInvalid")
     try:
         instance = await McpIntegrationService.update(
             db,
