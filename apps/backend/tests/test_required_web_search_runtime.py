@@ -38,6 +38,7 @@ from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
     ExecutionAgent,
+    MemoryRecord,
     Message,
     MessageAttachment,
     WebSearchPolicy,
@@ -323,6 +324,14 @@ def _tool_messages(db) -> list[Message]:
         for call in db.add.call_args_list
         if isinstance(call.args[0], Message) and call.args[0].role == "tool"
     ]
+
+
+def _clear_continuation_test_state(run_id) -> None:
+    AgentRuntime._tasks.pop(run_id, None)
+    AgentRuntime._cancellable_runs.discard(run_id)
+    AgentRuntime._continuations.pop(run_id, None)
+    AgentRuntime._pending_continuations.discard(run_id)
+    AgentRuntime._provider_active_runs.discard(run_id)
 
 
 async def test_completed_response_persists_canonical_markdown(monkeypatch) -> None:
@@ -2149,6 +2158,180 @@ def test_linked_research_sources_match_rendered_destinations_not_link_labels() -
         content,
         {SOURCE_ID: SOURCE_URL, "other": other_url},
     ) == ["other", SOURCE_ID]
+
+
+async def test_direct_message_restarts_only_model_request_inside_same_run(monkeypatch) -> None:
+    db, run, requests, _, events = await _runtime_setup(
+        monkeypatch,
+        [],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    started = asyncio.Event()
+
+    async def complete(_db, **kwargs):
+        requests.append(kwargs)
+        if len(requests) == 1:
+            await kwargs["on_delta"]("Partial answer")
+            started.set()
+            await asyncio.Future()
+        return ProviderResult(content="Updated answer", finish_reason="stop")
+
+    monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))
+    db.scalars.return_value = SimpleNamespace(all=lambda: [])
+    task = asyncio.create_task(AgentRuntime._execute_loop(db, run))
+    AgentRuntime._tasks[run.id] = task
+    AgentRuntime._cancellable_runs.add(run.id)
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        reservation = AgentRuntime.reserve_continuation(run.id)
+        assert reservation is not None
+        records = AgentRuntime._records.return_value
+        records.append(Message(id=uuid4(), session_id=run.session_id, role="user", content="Change course"))
+        AgentRuntime.finish_continuation(run.id, reservation, accepted=True)
+        await asyncio.wait_for(task, timeout=5)
+
+        assert len(requests) == 2
+        assert "Change course" in str(requests[-1]["messages"])
+        assert [item.content for item in _assistant_messages(db)] == ["Partial answer", "Updated answer"]
+        assert [item["message"]["runId"] for item in events if item["type"] == "message.completed"] == [str(run.id), str(run.id)]
+    finally:
+        _clear_continuation_test_state(run.id)
+
+
+async def test_direct_message_reloads_expired_memories_after_rollback(monkeypatch) -> None:
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch, [], search_policy=WebSearchPolicy.AVAILABLE
+    )
+    db.get.return_value.memory_mode = "full"
+    db.scalars.return_value = SimpleNamespace(all=lambda: [])
+    load_settings = SettingsStore.load
+
+    async def load(_db, settings_type, **kwargs):
+        if settings_type is MemorySettings:
+            return MemorySettings(enabled=True, automatic_memory_snippet_limit=1,
+                                  automatic_session_snippet_limit=0, recent_session_snippet_limit=0)
+        return await load_settings(_db, settings_type, **kwargs)
+
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(runtime_module, "get_runtime_config", lambda: SimpleNamespace(embedding_enabled=False))
+    monkeypatch.setattr(runtime_module.MemoryService, "scope", AsyncMock(return_value=SimpleNamespace(total=0, pinned=0)))
+    monkeypatch.setattr(runtime_module.MemoryService, "pinned_context", AsyncMock(return_value=[]))
+    memories = [
+        MemoryRecord(id=uuid4(), user_id=db.get.return_value.user_id, category="fact",
+                     content="Useful context", revision=1, created_at=datetime.now(UTC), updated_at=datetime.now(UTC))
+        for _ in range(2)
+    ]
+    retrieve = AsyncMock(side_effect=[SimpleNamespace(items=[item]) for item in memories])
+    monkeypatch.setattr(runtime_module.MemoryRetrievalService, "retrieve", retrieve)
+    started = asyncio.Event()
+
+    async def complete(_db, **kwargs):
+        requests.append(kwargs)
+        if len(requests) == 1:
+            started.set()
+            await asyncio.Future()
+        return ProviderResult(content="Updated answer", finish_reason="stop")
+
+    async def rollback():
+        memories[0].__dict__.pop("id", None)
+        memories[0]._sa_instance_state.expired_attributes.add("id")
+
+    monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))
+    db.rollback.side_effect = rollback
+    task = asyncio.create_task(AgentRuntime._execute_loop(db, run))
+    AgentRuntime._tasks[run.id] = task
+    AgentRuntime._cancellable_runs.add(run.id)
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        reservation = AgentRuntime.reserve_continuation(run.id)
+        assert reservation is not None
+        AgentRuntime._records.return_value.append(Message(
+            id=uuid4(), session_id=run.session_id, role="user", content="Change course"
+        ))
+        AgentRuntime.finish_continuation(run.id, reservation, accepted=True)
+        await asyncio.wait_for(task, timeout=5)
+        assert retrieve.await_count == 2
+        assert "Change course" in str(requests[-1]["messages"])
+    finally:
+        _clear_continuation_test_state(run.id)
+
+
+async def test_direct_message_waits_for_active_tool(monkeypatch) -> None:
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(content="", tool_calls=[_search_call("search-1", "Current")], finish_reason="tool_calls"),
+            ProviderResult(content="Updated answer", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    tool_started = asyncio.Event()
+    release_tool = asyncio.Event()
+
+    async def execute(*_args, **_kwargs):
+        tool_started.set()
+        await release_tool.wait()
+        return _search_result()
+
+    tool_registry._execute_definition.side_effect = execute
+    db.scalars.return_value = SimpleNamespace(all=lambda: [])
+    task = asyncio.create_task(AgentRuntime._execute_loop(db, run))
+    AgentRuntime._tasks[run.id] = task
+    AgentRuntime._cancellable_runs.add(run.id)
+    try:
+        await asyncio.wait_for(tool_started.wait(), timeout=5)
+        reservation = AgentRuntime.reserve_continuation(run.id)
+        assert reservation is not None
+        assert run.id not in AgentRuntime._provider_active_runs
+        AgentRuntime._records.return_value.append(Message(
+            id=uuid4(), session_id=run.session_id, role="user", content="Change after tool"
+        ))
+        AgentRuntime.finish_continuation(run.id, reservation, accepted=True)
+        assert not task.done()
+        release_tool.set()
+        await asyncio.wait_for(task, timeout=5)
+        assert len(requests) == 2
+        assert "Change after tool" in str(requests[-1]["messages"])
+    finally:
+        release_tool.set()
+        _clear_continuation_test_state(run.id)
+
+
+async def test_direct_message_arriving_at_final_commit_keeps_run_open(monkeypatch) -> None:
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(content="First answer", finish_reason="stop"),
+            ProviderResult(content="Revised answer", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    db.scalars.return_value = SimpleNamespace(all=lambda: [])
+    accepted = False
+
+    async def commit():
+        nonlocal accepted
+        if not accepted and _assistant_messages(db):
+            accepted = True
+            reservation = AgentRuntime.reserve_continuation(run.id)
+            assert reservation is not None
+            AgentRuntime._records.return_value.append(Message(
+                id=uuid4(), session_id=run.session_id, role="user", content="Correction"
+            ))
+            AgentRuntime.finish_continuation(run.id, reservation, accepted=True)
+
+    db.commit.side_effect = commit
+    task = asyncio.create_task(AgentRuntime._execute_loop(db, run))
+    AgentRuntime._tasks[run.id] = task
+    AgentRuntime._cancellable_runs.add(run.id)
+    try:
+        await asyncio.wait_for(task, timeout=5)
+        assert accepted
+        assert len(requests) == 2
+        assert "Correction" in str(requests[-1]["messages"])
+        assert _assistant_messages(db)[0].provider_data["_matoloop"]["continuationSegment"] is True
+    finally:
+        _clear_continuation_test_state(run.id)
 
 
 async def test_available_can_answer_without_research(monkeypatch) -> None:

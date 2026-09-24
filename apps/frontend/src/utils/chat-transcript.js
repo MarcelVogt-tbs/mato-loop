@@ -10,13 +10,22 @@ export function retryAvailableForMessage(message, messages = [], running = false
 
 export function withLiveTranscriptMessage(messages, liveMessage) {
   const lastUserIndex = messages.reduce((found, message, index) => (
-    message.role === 'user' ? index : found
+    message.role === 'user' && !message.continuationRunId ? index : found
   ), -1)
   const currentIndex = messages.reduce((found, message, index) => (
     message.role === 'assistant' && index > lastUserIndex ? index : found
   ), -1)
   if (liveMessage.content) {
     const displayed = [...messages]
+    if (currentIndex >= 0 && displayed[currentIndex].continuationSegment) {
+      displayed[currentIndex] = {
+        ...displayed[currentIndex],
+        content: `${displayed[currentIndex].content}\n\n${liveMessage.content}`,
+        streaming: true,
+        liveMessageId: liveMessage.id
+      }
+      return displayed
+    }
     if (currentIndex >= 0 && !displayed[currentIndex].agentProfileId && liveMessage.agentProfileId) {
       displayed[currentIndex] = { ...displayed[currentIndex], agentProfileId: liveMessage.agentProfileId }
     }
@@ -99,7 +108,7 @@ export function buildChatTranscript(
 
   let lastUserIndex = -1
   messages.forEach((message, index) => {
-    if (message.role === 'user') lastUserIndex = index
+    if (message.role === 'user' && !(running && message.continuationRunId === runId)) lastUserIndex = index
   })
 
   const matchedApprovalIds = new Set()
@@ -200,13 +209,19 @@ export function buildChatTranscript(
     const reversedSection = [...assistantSection].reverse()
     const lastResponse = reversedSection.find((message) => message.content || message.toolCalls.length)
     const finalAnswer = lastResponse?.content && !lastResponse.toolCalls.length ? lastResponse : null
+    if (finalAnswer && !finalAnswer.continuationSegment) {
+      const partial = assistantSection.filter((message) => message.continuationSegment && message.content)
+      if (partial.length) {
+        finalAnswer.content = `${partial.map((message) => message.content).join('\n\n')}\n\n${finalAnswer.content}`
+      }
+    }
     const workEntries = assistantSection.flatMap((message) => [
       ...(message.contextSummaryEntry ? [message.contextSummaryEntry] : []),
       ...(message.reasoning
         ? [{ key: `reasoning-${message.id || message._sourceIndex}`, type: 'reasoning', reasoning: message.reasoning }]
         : []),
       ...runWarningEntries(message.warnings, message.id || message._sourceIndex),
-      ...(message.content && message !== finalAnswer
+      ...(message.content && message !== finalAnswer && !message.continuationSegment
         ? [{
             key: `commentary-${message.id || message._sourceIndex}`,
             type: 'commentary',
@@ -309,6 +324,14 @@ export function buildChatTranscript(
     if (message.role === 'assistant') {
       if (message.sourceType === 'automationRun') flushAssistantSection()
       assistantSection.push(message)
+      continue
+    }
+    if (
+      message.role === 'user' && message.continuationRunId
+      && assistantSection.some((entry) => entry.runId === message.continuationRunId)
+    ) {
+      delete message._sourceIndex
+      groupedMessages.push(message)
       continue
     }
     flushAssistantSection()

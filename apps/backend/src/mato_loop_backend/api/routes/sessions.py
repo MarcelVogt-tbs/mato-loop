@@ -395,6 +395,22 @@ class SendMessageRequest(BaseModel):
         default_factory=list, alias="voiceAttachmentIndices"
     )
     run_id: UUID | None = None
+    agent_profile_id: UUID | None = Field(
+        default=None, validation_alias=AliasChoices("agentProfileId", "agent_profile_id")
+    )
+    active_file: ActiveFileRequest | None = Field(
+        default=None, validation_alias=AliasChoices("active_file", "activeFile")
+    )
+
+
+class ContinueRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(max_length=200_000)
+    message_id: UUID
+    voice_attachment_indices: list[StrictInt] = Field(
+        default_factory=list, alias="voiceAttachmentIndices"
+    )
     active_file: ActiveFileRequest | None = Field(
         default=None, validation_alias=AliasChoices("active_file", "activeFile")
     )
@@ -1157,6 +1173,61 @@ async def send_message_with_attachments(
             await _attachment_uploads(
                 attachments, instance_limits, request.voice_attachment_indices
             ),
+        )
+    except AttachmentError as exc:
+        raise _attachment_api_error(exc) from exc
+
+
+async def _continue_run_message(
+    session_id: UUID,
+    run_id: UUID,
+    payload: ContinueRunRequest,
+    user: UserAccount,
+    db: AsyncSession,
+    attachments: list[AttachmentInput] | None = None,
+) -> dict[str, Any]:
+    try:
+        return await session_service.continue_run(
+            session_id, run_id, payload, user, db,
+            attachments=attachments,
+            owned_session_query=_mutable_session,
+            message_serializer=message_payload,
+        )
+    except session_service.SessionServiceError as exc:
+        _raise_api_error(exc)
+
+
+@router.post("/{session_id}/runs/{run_id}/messages", status_code=status.HTTP_202_ACCEPTED)
+async def continue_run_message(
+    session_id: UUID,
+    run_id: UUID,
+    payload: ContinueRunRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, Any]:
+    if payload.voice_attachment_indices:
+        raise ApiError(422, "validation.invalid", field="voiceAttachmentIndices")
+    return await _continue_run_message(session_id, run_id, payload, user, db)
+
+
+@router.post("/{session_id}/runs/{run_id}/messages/with-attachments", status_code=status.HTTP_202_ACCEPTED)
+async def continue_run_message_with_attachments(
+    session_id: UUID,
+    run_id: UUID,
+    payload: Annotated[str, Form()],
+    attachments: Annotated[list[UploadFile], File()],
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, Any]:
+    if await _mutable_session(db, session_id, user.id) is None:
+        raise ApiError(404, "session.notFound")
+    request = _multipart_payload(payload, ContinueRunRequest)
+    assert isinstance(request, ContinueRunRequest)
+    instance_limits = await SettingsStore.load(db, InstanceLimits)
+    try:
+        return await _continue_run_message(
+            session_id, run_id, request, user, db,
+            await _attachment_uploads(attachments, instance_limits, request.voice_attachment_indices),
         )
     except AttachmentError as exc:
         raise _attachment_api_error(exc) from exc

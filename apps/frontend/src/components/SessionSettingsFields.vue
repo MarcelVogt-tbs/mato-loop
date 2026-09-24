@@ -55,12 +55,14 @@ const LLM_FIELDS = ['model', 'reasoning']
 const props = defineProps({
   session: { type: Object, default: null },
   disabled: Boolean,
+  agentSelectable: Boolean,
+  agentProfileId: { type: String, default: null },
   compact: Boolean,
   grouped: Boolean,
   showWarning: Boolean,
   fields: { type: Array, default: () => ['agent', 'model', 'reasoning', 'computer', 'memory', 'webSearch'] }
 })
-const emit = defineEmits(['update'])
+const emit = defineEmits(['update', 'agent-popup-hide'])
 const $q = useQuasar()
 const agentProfiles = useAgentProfileStore()
 const executionAgents = useExecutionAgentStore()
@@ -73,6 +75,9 @@ const hasLlmFields = computed(() => LLM_FIELDS.some(has))
 const selectedAgent = computed(() => agentProfiles.byId(
   props.session?.agentProfileId || agentProfiles.defaultAgentProfileId
 ))
+const displayedAgentProfileId = computed(() => (
+  props.agentProfileId || props.session?.agentProfileId || agentProfiles.defaultAgentProfileId
+))
 const agentProfileOptions = computed(() => {
   const options = agentProfiles.agents.map((agent) => ({
     label: agent.name,
@@ -80,10 +85,10 @@ const agentProfileOptions = computed(() => {
     icon: 'smart_toy',
     caption: agent.description
   }))
-  if (props.session?.agentProfileId && !selectedAgent.value) {
+  if (displayedAgentProfileId.value && !agentProfiles.byId(displayedAgentProfileId.value)) {
     options.unshift({
       label: 'Nicht verfügbares Agent-Profil',
-      value: props.session.agentProfileId,
+      value: displayedAgentProfileId.value,
       icon: 'warning_amber',
       caption: 'Nicht mehr verfügbar',
       disable: true
@@ -92,7 +97,7 @@ const agentProfileOptions = computed(() => {
   return options
 })
 const selectedAgentIcon = computed(() => (
-  !props.session?.agentProfileId || selectedAgent.value ? 'smart_toy' : 'warning_amber'
+  !displayedAgentProfileId.value || agentProfiles.byId(displayedAgentProfileId.value) ? 'smart_toy' : 'warning_amber'
 ))
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(props.session?.preferredExecutionAgentId)
@@ -209,7 +214,9 @@ const warning = computed(() => {
 })
 
 function update(patch) {
-  if (props.session && !props.disabled) emit('update', patch)
+  if (props.session && (!props.disabled || (props.agentSelectable && Object.hasOwn(patch, 'agent_profile_id')))) {
+    emit('update', patch)
+  }
 }
 
 function selectModel(modelId) {
@@ -252,13 +259,14 @@ const optionSlot = (scope, icon) => h(QItem, scope.itemProps, {
 })
 
 const AgentField = defineComponent(() => () => h(QSelect, selectProps({
-  modelValue: props.session?.agentProfileId ?? agentProfiles.defaultAgentProfileId,
+  modelValue: displayedAgentProfileId.value,
   options: agentProfileOptions.value,
   label: props.compact ? 'Agent' : 'Agent-Profil',
   class: props.compact ? 'composer-agent-mode' : undefined,
   hint: props.compact ? undefined : 'Agent-Profil für diese Session.',
   persistentHint: !props.compact,
-  disable: props.disabled || agentProfiles.loading,
+  disable: (props.disabled && !props.agentSelectable) || agentProfiles.loading,
+  onPopupHide: () => emit('agent-popup-hide'),
   'onUpdate:modelValue': (value) => update({ agent_profile_id: value })
 }), {
   prepend: () => h(QIcon, { name: selectedAgentIcon.value, size: props.compact ? '18px' : undefined }),

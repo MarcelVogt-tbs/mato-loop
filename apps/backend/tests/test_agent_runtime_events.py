@@ -709,6 +709,45 @@ async def test_start_rejects_unavailable_model_before_persisting(monkeypatch) ->
     db.commit.assert_not_awaited()
 
 
+async def test_start_switches_profile_with_run_and_discards_session_grants(monkeypatch) -> None:
+    from mato_loop_backend.settings.models import AgentProfile
+
+    profile = AgentProfile(name="Next", instructions="Follow the task.")
+    load_profile = AsyncMock(return_value=profile)
+    monkeypatch.setattr(runtime_module, "load_agent_profile", load_profile)
+    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="model")
+    monkeypatch.setattr(
+        SettingsStore, "load", AsyncMock(return_value=AiSettings(
+            providers=[provider], models=[model], default_model_id=model.id
+        )),
+    )
+
+    def create_task(coroutine):
+        coroutine.close()
+        return Mock()
+
+    monkeypatch.setattr(asyncio, "create_task", create_task)
+    session = ChatSession(
+        id=uuid4(), user_id=uuid4(), agent_profile_id=uuid4(), model_config_id=model.id
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session, None, True, True]
+
+    run = await AgentRuntime.start(
+        db, session, "Next message", agent_profile_id_override=profile.id
+    )
+
+    load_profile.assert_awaited_once_with(db, session.user_id, profile.id)
+    assert any(
+        "DELETE FROM permission_grants" in str(call.args[0])
+        for call in db.execute.await_args_list
+    )
+    assert session.agent_profile_id == run.agent_profile_id == profile.id
+    db.commit.assert_awaited_once()
+    AgentRuntime._tasks.pop(run.id, None)
+
+
 async def test_start_schedules_title_generation_after_agent_run(monkeypatch) -> None:
     provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="model")

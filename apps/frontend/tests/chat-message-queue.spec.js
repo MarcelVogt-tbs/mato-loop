@@ -219,6 +219,77 @@ describe('chat message queue', () => {
     })
   })
 
+  it('keeps each queued profile through reload and retries while a later selection remains pending', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.current.agentProfileId = 'agent-a'
+    chat.running = true
+    await chat.updateActive({ agent_profile_id: 'agent-b' })
+    const first = await chat.queueMessage('Erste')
+    await chat.updateActive({ agent_profile_id: 'agent-a' })
+    const second = await chat.queueMessage('Zweite')
+    await chat.updateActive({ agent_profile_id: 'agent-b' })
+
+    setActivePinia(createPinia())
+    const restored = useChatStore()
+    restored.setDraftOwner('user-1')
+    await restored.outboxLoadPromise
+    restored.cancelQueueDrain()
+    activeSession(restored)
+    restored.current.agentProfileId = 'agent-a'
+    vi.spyOn(restored, 'watchRun').mockImplementation(() => {})
+    expect(restored.activeQueuedMessages.map((entry) => entry.agentProfileId)).toEqual(['agent-b', 'agent-a'])
+    expect(restored.activeAgentProfileId).toBe('agent-b')
+
+    api.post.mockRejectedValueOnce({ response: { status: 409 } })
+    await restored.drainOutbox()
+    expect(restored.activeQueuedMessages[0].paused).toBe(true)
+    expect(api.post.mock.calls[0][1].agent_profile_id).toBe('agent-b')
+    restored.cancelQueueDrain()
+    api.post.mockResolvedValueOnce({ data: {
+      message: { id: 'message-1' }, runId: first.id, agentProfileId: 'agent-b'
+    } })
+    await restored.resumeQueuedSend()
+    await vi.waitFor(() => expect(restored.activeQueuedMessages).toHaveLength(1))
+    restored.cancelQueueDrain()
+    expect(restored.current.agentProfileId).toBe('agent-b')
+    expect(restored.activeAgentProfileId).toBe('agent-b')
+    expect(restored.activeQueuedMessages[0].id).toBe(second.id)
+
+    restored.running = false
+    restored.runId = null
+    api.post.mockResolvedValueOnce({ data: {
+      message: { id: 'message-2' }, runId: second.id, agentProfileId: 'agent-a'
+    } })
+    await restored.drainOutbox()
+    expect(api.post.mock.calls.at(-1)[1].agent_profile_id).toBe('agent-a')
+    expect(restored.current.agentProfileId).toBe('agent-a')
+    expect(restored.activeAgentProfileId).toBe('agent-b')
+  })
+
+  it('sends the queued profile when the session is no longer selected', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.current.agentProfileId = 'agent-a'
+    chat.running = true
+    await chat.updateActive({ agent_profile_id: 'agent-b' })
+    const entry = await chat.queueMessage('Im Hintergrund')
+    chat.current = { id: 'session-2', messages: [] }
+    chat.selectedSessionId = 'session-2'
+    vi.spyOn(chat, 'refreshSessions').mockResolvedValue([])
+    api.get.mockResolvedValue({ data: { activeRun: null } })
+    api.post.mockResolvedValue({ data: {
+      message: { id: 'message-1' }, runId: entry.id, agentProfileId: 'agent-b'
+    } })
+
+    await chat.drainOutbox()
+
+    expect(api.post).toHaveBeenCalledWith('/sessions/session-1/messages', {
+      content: 'Im Hintergrund', run_id: entry.id, agent_profile_id: 'agent-b'
+    }, { suppressErrorToast: true })
+    expect(chat.drafts.sessionAgentProfiles['session-1']).toBeUndefined()
+  })
+
   it('queues the first message again immediately after undoing it', async () => {
     const chat = useChatStore()
     const message = { id: 'message-1', role: 'user', content: 'Noch einmal', attachments: [] }
@@ -419,57 +490,42 @@ describe('chat message queue', () => {
     ])
   })
 
-  it('saves a direct message before cancelling and sends it ahead of older queued messages after refresh', async () => {
+  it('saves a direct message before adding it to the active run, ahead of queued messages', async () => {
     const chat = useChatStore()
     activeSession(chat)
     chat.watchRun('session-1', 'run-1', { status: 'running' })
     await chat.queueMessage('Später')
-    let resolveRefresh
-    api.get.mockImplementation((url) => url === '/sessions/session-1'
-      ? new Promise((resolve) => { resolveRefresh = resolve })
-      : Promise.resolve({ data: { items: [], nextCursor: null } }))
-    api.post.mockImplementation(async (url) => {
-      if (url.endsWith('/cancel')) {
-        expect((await loadChatOutbox('user-1')).map((entry) => entry.content)).toEqual([
-          'Jetzt', 'Später'
-        ])
-        return { data: { status: 'cancelled' } }
-      }
-      return { data: { message: { id: 'direct', role: 'user', content: 'Jetzt' }, runId: 'run-2' } }
+    api.post.mockImplementation(async (_url, payload) => {
+      expect((await loadChatOutbox('user-1')).map((entry) => entry.content)).toEqual([
+        'Jetzt', 'Später'
+      ])
+      return { data: { message: { id: payload.message_id, role: 'user', content: 'Jetzt', continuationRunId: 'run-1' }, runId: 'run-1' } }
     })
 
     await chat.send('Jetzt', { interrupt: true })
 
     expect(api.post).toHaveBeenCalledTimes(1)
-    expect(api.post.mock.calls[0][0]).toBe('/sessions/session-1/runs/run-1/cancel')
-    expect(api.post.mock.calls[0][2]).toEqual({ params: { redirect: true } })
-    chat.eventSource.listeners.get('run.cancelled')()
-    await vi.waitFor(() => expect(resolveRefresh).toBeTypeOf('function'))
-    expect(api.post).toHaveBeenCalledTimes(1)
-    resolveRefresh({ data: {
-      id: 'session-1', activeRun: null,
-      messages: [{ id: 'interrupted', role: 'assistant', generationStatus: 'interrupted' }]
-    } })
-
-    await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(2))
-    expect(api.post.mock.calls[1][1]).toMatchObject({ content: 'Jetzt' })
-    expect(chat.eventSource.url).toBe('/api/sessions/session-1/runs/run-2/events')
-    expect(chat.current.messages.map((message) => message.id)).toEqual(['interrupted', 'direct'])
+    expect(api.post.mock.calls[0][0]).toBe('/sessions/session-1/runs/run-1/messages')
+    expect(api.post.mock.calls[0][1]).toMatchObject({ content: 'Jetzt', message_id: expect.any(String) })
+    expect(chat.eventSource.url).toBe('/api/sessions/session-1/runs/run-1/events')
+    expect(chat.current.messages.map((message) => message.content)).toEqual(['Jetzt'])
     expect(chat.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Später'])
   })
 
-  it('keeps direct-message priority after a reload and retains the message when cancellation fails', async () => {
+  it('keeps direct-message priority after a reload and retains the message when appending fails', async () => {
     const chat = useChatStore()
     activeSession(chat)
     chat.watchRun('session-1', 'run-1', { status: 'running' })
     await chat.queueMessage('Später')
-    api.post.mockRejectedValue(new Error('Cancel failed'))
+    api.post.mockRejectedValue(new Error('Append failed'))
 
     await chat.send('Jetzt', { interrupt: true })
     await vi.waitFor(() => expect(chat.running).toBe(true))
 
     expect(api.post).toHaveBeenCalledTimes(1)
     expect(chat.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Jetzt', 'Später'])
+    expect(chat.activeQueuedMessages[0].paused).toBe(true)
+    expect(chat.activeQueuedMessages[0].continuationRunId).toBe('run-1')
     setActivePinia(createPinia())
     const restored = useChatStore()
     restored.setDraftOwner('user-1')
@@ -477,6 +533,35 @@ describe('chat message queue', () => {
     restored.cancelQueueDrain()
     activeSession(restored)
     expect(restored.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Jetzt', 'Später'])
+    api.post.mockResolvedValueOnce({ data: {
+      message: { id: restored.activeQueuedMessages[0].id, role: 'user', content: 'Jetzt', continuationRunId: 'run-1' },
+      runId: 'run-1'
+    } })
+    await restored.resumeQueuedSend()
+    await vi.waitFor(() => expect(restored.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Später']))
+    expect(api.post.mock.calls[1][0]).toBe('/sessions/session-1/runs/run-1/messages')
+    restored.cancelQueueDrain()
+  })
+
+  it('places a direct message before a partial answer that arrived while it was submitting', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.watchRun('session-1', 'run-1', { status: 'running' })
+    let resolveSend
+    api.post.mockReturnValue(new Promise((resolve) => { resolveSend = resolve }))
+    const sending = chat.send('Korrektur', { interrupt: true })
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledOnce())
+    chat.current.messages.push({
+      id: 'partial', role: 'assistant', runId: 'run-1', continuationSegment: true,
+      content: 'Zwischenstand', createdAt: '2026-01-01T00:00:02Z'
+    })
+    resolveSend({ data: {
+      message: { id: api.post.mock.calls[0][1].message_id, role: 'user',
+        content: 'Korrektur', createdAt: '2026-01-01T00:00:01Z', continuationRunId: 'run-1' },
+      runId: 'run-1'
+    } })
+    await sending
+    expect(chat.current.messages.map((message) => message.content)).toEqual(['Korrektur', 'Zwischenstand'])
   })
 
   it('does not cancel a run when the direct message cannot be saved', async () => {
@@ -494,6 +579,33 @@ describe('chat message queue', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+
+  it('keeps an unaccepted direct message when its run has already finished', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.watchRun('session-1', 'run-1', { status: 'running' })
+    api.post.mockRejectedValueOnce({ response: { status: 409, data: { error: { code: 'session.runInactive' } } } })
+
+    await chat.send('Noch wichtig', { interrupt: true })
+
+    chat.cancelQueueDrain()
+    const pending = chat.activeQueuedMessages[0]
+    expect(pending.id).toBeTruthy()
+    expect(pending.continuationRunId).toBeUndefined()
+    expect((await loadChatOutbox('user-1'))[0].id).toBe(pending.id)
+    chat.clearRunTracking()
+    chat.running = false
+    api.post.mockResolvedValueOnce({ data: {
+      message: { id: 'next-message', role: 'user', content: 'Noch wichtig' }, runId: 'run-2'
+    } })
+
+    await chat.drainOutbox()
+
+    expect(api.post.mock.calls.map(([url]) => url)).toEqual([
+      '/sessions/session-1/runs/run-1/messages', '/sessions/session-1/messages'
+    ])
+    expect(api.post.mock.calls[1][1].run_id).toBe(pending.id)
   })
 
   it.each(['run.completed', 'run.failed', 'run.cancelled', 'reconnect', 'navigation', 'session-switch'])(

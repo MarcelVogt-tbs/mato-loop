@@ -439,6 +439,8 @@ def message_payload(
         ),
         "modelName": item.model_name,
         "generationStatus": item.generation_status or "completed",
+        "continuationSegment": item.role == "assistant" and isinstance(runtime_data, dict)
+        and runtime_data.get("continuationSegment") is True,
         "redirected": (
             item.role == "assistant"
             and item.generation_status == "interrupted"
@@ -460,6 +462,12 @@ def message_payload(
             else {}
         ),
         **({"runId": run_id} if item.role == "tool" and run_id is not None else {}),
+        **(
+            {"continuationRunId": runtime_data["continuationRunId"]}
+            if item.role == "user" and isinstance(runtime_data, dict)
+            and isinstance(runtime_data.get("continuationRunId"), str)
+            else {}
+        ),
         "sourceType": (
             "automationRun"
             if isinstance(source, dict) and source.get("type") == "automationRun"

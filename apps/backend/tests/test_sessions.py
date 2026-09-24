@@ -2408,6 +2408,82 @@ async def test_existing_session_retry_reschedules_queued_run(monkeypatch) -> Non
     schedule.assert_called_once_with(run)
 
 
+async def test_existing_session_message_passes_profile_to_next_run(monkeypatch) -> None:
+    from mato_loop_backend.sessions import service as session_service
+
+    user = _user()
+    selected_profile = uuid4()
+    session = ChatSession(id=uuid4(), user_id=user.id, agent_profile_id=uuid4())
+    run = AgentRun(id=uuid4(), session_id=session.id, agent_profile_id=selected_profile)
+    message = Message(id=uuid4(), session_id=session.id, role="user", content="Next")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session, None, message]
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="model")
+    ai = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
+    load_ai = AsyncMock(return_value=ai)
+    monkeypatch.setattr(session_service, "_profile_ai", load_ai)
+    start = AsyncMock(return_value=run)
+    monkeypatch.setattr(AgentRuntime, "start", start)
+
+    result = await send_message(
+        session.id,
+        SendMessageRequest.model_validate({
+            "content": "Next", "agent_profile_id": str(selected_profile)
+        }),
+        user,
+        db,
+    )
+
+    load_ai.assert_awaited_once_with(db, user.id, selected_profile)
+    assert start.await_args.kwargs["agent_profile_id_override"] == selected_profile
+    assert result["agentProfileId"] == str(selected_profile)
+
+
+async def test_direct_message_is_persisted_once_on_active_run(monkeypatch) -> None:
+    from mato_loop_backend.sessions import service as session_service
+
+    user = _user()
+    session = ChatSession(id=uuid4(), user_id=user.id)
+    run = AgentRun(id=uuid4(), session_id=session.id, status="running")
+    message_id = uuid4()
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [None, run]
+    reservation = object()
+    reserve = MagicMock(return_value=reservation)
+    finish = MagicMock()
+    monkeypatch.setattr(AgentRuntime, "reserve_continuation", reserve)
+    monkeypatch.setattr(AgentRuntime, "finish_continuation", finish)
+    monkeypatch.setattr(session_service.EpisodeIndexService, "enqueue", AsyncMock())
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=session_service.InstanceLimits()))
+    payload = SimpleNamespace(content="  Another thought  ", message_id=message_id, active_file=None)
+
+    result = await session_service.continue_run(
+        session.id, run.id, payload, user, db,
+        attachments=None,
+        owned_session_query=AsyncMock(return_value=session),
+        message_serializer=lambda message: {"id": str(message.id), "content": message.content},
+    )
+
+    message = db.add.call_args.args[0]
+    assert message.content == "Another thought"
+    assert message.provider_data["_matoloop"]["continuationRunId"] == str(run.id)
+    assert result == {"message": {"id": str(message_id), "content": "Another thought"}, "runId": str(run.id)}
+    db.commit.assert_awaited_once()
+    finish.assert_called_once_with(run.id, reservation, accepted=True)
+
+    db.scalar.side_effect = [message]
+    duplicate = await session_service.continue_run(
+        session.id, run.id, payload, user, db,
+        attachments=None,
+        owned_session_query=AsyncMock(return_value=session),
+        message_serializer=lambda item: {"id": str(item.id), "content": item.content},
+    )
+    assert duplicate == result
+    reserve.assert_called_once_with(run.id, queued=False)
+    db.commit.assert_awaited_once()
+
+
 async def test_existing_session_retry_rejects_owned_run_from_another_session() -> None:
     user = _user()
     requested = ChatSession(id=uuid4(), user_id=user.id, title="Requested")

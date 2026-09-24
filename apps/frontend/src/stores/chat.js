@@ -149,7 +149,6 @@ export const useChatStore = defineStore('chat', {
     running: false,
     stopping: false,
     cancelRequested: false,
-    cancelRedirectRequested: false,
     streamContent: '',
     streamResearchSources: [],
     streamReasoning: null,
@@ -217,6 +216,9 @@ export const useChatStore = defineStore('chat', {
       state.sessionLists[sessionScopeKey(projectId)] || null
     ),
     activeContext: (state) => state.current || state.drafts.newSession.options,
+    activeAgentProfileId: (state) => state.current
+      ? state.drafts.sessionAgentProfiles[state.current.id] || state.current.agentProfileId
+      : state.drafts.newSession.options.agentProfileId,
     activeDraft: (state) => state.current
       ? state.drafts.sessionMessages[state.current.id] || ''
       : state.drafts.newSession.message,
@@ -242,9 +244,14 @@ export const useChatStore = defineStore('chat', {
     },
     queuedSendReady() {
       if (!this.outboxLoaded || this.queuedSendPaused) return false
-      if (this.loading || this.sessionRequestController || this.running || this.stopping || this.runId) return false
+      if (this.loading || this.sessionRequestController || this.stopping) return false
       if (this.historyActionPending || this.sessionSettingsPending > 0) return false
       if (!this.activeQueuedMessages.length) return false
+      if (this.running || this.runId) {
+        return Boolean(this.current && this.runId
+          && this.runSessionId === this.current.id
+          && this.activeQueuedMessages[0].continuationRunId === this.runId)
+      }
       const sessionId = this.current?.id
       if (!sessionId) return this.selectedSessionId === null
       if (useApprovalStore().forSession(sessionId).length) return false
@@ -393,6 +400,7 @@ export const useChatStore = defineStore('chat', {
       for (const id of sessionIds) {
         this.removeCachedSession(id)
         delete this.drafts.sessionMessages[id]
+        delete this.drafts.sessionAgentProfiles[id]
         this.clearAttachmentDraft(id)
         this.setAudioDictation(null, id)
       }
@@ -799,7 +807,6 @@ export const useChatStore = defineStore('chat', {
           this.running = false
           this.stopping = false
           this.cancelRequested = false
-          this.cancelRedirectRequested = false
           this.clearActivity()
         }
       }
@@ -945,6 +952,9 @@ export const useChatStore = defineStore('chat', {
       for (const id of Object.keys(this.drafts.sessionMessages)) {
         if (!sessionIds.has(id)) delete this.drafts.sessionMessages[id]
       }
+      for (const id of Object.keys(this.drafts.sessionAgentProfiles)) {
+        if (!sessionIds.has(id)) delete this.drafts.sessionAgentProfiles[id]
+      }
       for (const id of Object.keys(this.attachmentDrafts.sessionMessages)) {
         if (!sessionIds.has(id)) this.clearAttachmentDraft(id)
       }
@@ -1010,7 +1020,6 @@ export const useChatStore = defineStore('chat', {
         this.running = false
         this.stopping = false
         this.cancelRequested = false
-        this.cancelRedirectRequested = false
         this.streamContent = ''
         this.streamResearchSources = []
         this.streamReasoning = null
@@ -1143,7 +1152,20 @@ export const useChatStore = defineStore('chat', {
     },
     async updateActive(patch) {
       if (this.current) {
+        const sessionId = this.current.id
+        if (
+          Object.hasOwn(patch, 'agent_profile_id')
+          && (this.running || this.stopping || this.runId || this.activeQueuedMessages.length)
+        ) {
+          this.drafts.sessionAgentProfiles[sessionId] = patch.agent_profile_id
+          this.persistDrafts()
+          return
+        }
         await this.updateCurrent(patch)
+        if (Object.hasOwn(patch, 'agent_profile_id')) {
+          delete this.drafts.sessionAgentProfiles[sessionId]
+          this.persistDrafts()
+        }
         return
       }
       const options = this.drafts.newSession.options
@@ -1295,6 +1317,7 @@ export const useChatStore = defineStore('chat', {
       delete this.queuedSendPausedSessions[id]
       this.removeCachedSession(id)
       delete this.drafts.sessionMessages[id]
+      delete this.drafts.sessionAgentProfiles[id]
       this.clearAttachmentDraft(id)
       this.setAudioDictation(null, id)
       this.persistDrafts()
@@ -1320,7 +1343,6 @@ export const useChatStore = defineStore('chat', {
       this.running = false
       this.stopping = false
       this.cancelRequested = false
-      this.cancelRedirectRequested = false
       this.streamContent = ''
       this.streamResearchSources = []
       this.streamReasoning = null
@@ -1541,8 +1563,6 @@ export const useChatStore = defineStore('chat', {
       this.outboxSaving = true
       const interruptRun = interrupt && this.running && Boolean(this.current)
         && (!this.runSessionId || this.runSessionId === this.current.id)
-      const runId = this.runId
-      const runSessionId = this.runSessionId
       const submitImmediately = !this.running
         && !this.stopping
         && !this.runId
@@ -1565,16 +1585,12 @@ export const useChatStore = defineStore('chat', {
           this.running = false
           this.stopping = false
           this.cancelRequested = false
-          this.cancelRedirectRequested = false
           this.clearActivity()
         }
         return null
       }
       if (submitImmediately) {
         this.running = false
-      }
-      if (interruptRun && this.runId === runId && this.runSessionId === runSessionId) {
-        await this.stop({ redirect: true })
       }
       return this.drainOutbox()
     },
@@ -1601,6 +1617,7 @@ export const useChatStore = defineStore('chat', {
           voiceMessage: attachment.voiceMessage === true
         })),
         options: sessionId ? null : sanitizedSessionOptions({ ...this.drafts.newSession.options }),
+        agentProfileId: sessionId ? this.activeAgentProfileId || null : null,
         controlCenter: sessionId ? null : controlCenterRequestState(useControlCenterStore()),
         activeFile: useWorkspaceStore().activeFileSnapshot(
           this.activeContext?.preferredExecutionAgentId
@@ -1609,6 +1626,8 @@ export const useChatStore = defineStore('chat', {
           (latest, item) => Math.max(latest, Date.parse(item.queuedAt) + 1), Date.now()
         )).toISOString(),
         ...(interrupt ? { interrupt: true } : {}),
+        ...(interrupt && this.runId && this.runSessionId === sessionId
+          ? { continuationRunId: this.runId } : {}),
         paused: false
       }
       try {
@@ -1664,6 +1683,7 @@ export const useChatStore = defineStore('chat', {
       const sessionId = entry.sessionId || null
       if (sessionId) this.drafts.sessionMessages[sessionId] = entry.content
       else this.drafts.newSession.message = entry.content
+      if (sessionId && entry.agentProfileId) this.drafts.sessionAgentProfiles[sessionId] = entry.agentProfileId
       this.replaceAttachmentFiles(entry.attachments.map((attachment) => attachment.file), sessionId, entry.attachments)
       this.persistDrafts()
       return entry
@@ -1735,7 +1755,7 @@ export const useChatStore = defineStore('chat', {
             const { data } = await api.get(`/sessions/${candidate.sessionId}`, {
               suppressErrorToast: true
             })
-            if (!data.activeRun) {
+            if (!data.activeRun || candidate.continuationRunId === data.activeRun.id) {
               entry = candidate
               break
             }
@@ -1775,10 +1795,34 @@ export const useChatStore = defineStore('chat', {
             suppressErrorToast: true
           })
           if (result?.created) this.createdSessionResult = result
+        } else if (entry.continuationRunId) {
+          const payload = {
+            content: entry.content,
+            message_id: entry.id,
+            ...(entry.activeFile ? { active_file: entry.activeFile } : {})
+          }
+          const url = `/sessions/${entry.sessionId}/runs/${entry.continuationRunId}/messages`
+          const { data } = await (entry.attachments.length
+            ? api.post(`${url}/with-attachments`, buildAttachmentFormData(payload, entry.attachments), { suppressErrorToast: true })
+            : api.post(url, payload, { suppressErrorToast: true }))
+          if (this.current?.id === entry.sessionId && this.selectedSessionId === entry.sessionId) {
+            if (!this.current.messages.some((message) => message.id === data.message.id)) {
+              const later = this.current.messages.findIndex((message) => (
+                message.role === 'assistant' && message.runId === entry.continuationRunId
+                && message.createdAt && data.message.createdAt && message.createdAt > data.message.createdAt
+              ))
+              if (later < 0) this.current.messages.push(data.message)
+              else this.current.messages.splice(later, 0, data.message)
+            }
+          } else {
+            void this.refreshSessions(null, entry.projectId).catch(() => {})
+          }
+          result = { created: false, sessionId: entry.sessionId }
         } else if (this.current?.id === entry.sessionId && this.selectedSessionId === entry.sessionId) {
           result = await this.sendToCurrent(entry.content, entry.attachments, {
             clearDraft: false,
             activeFile: entry.activeFile,
+            agentProfileId: entry.agentProfileId,
             runId: entry.id,
             suppressErrorToast: true
           })
@@ -1786,6 +1830,7 @@ export const useChatStore = defineStore('chat', {
           const payload = {
             content: entry.content,
             run_id: entry.id,
+            ...(entry.agentProfileId ? { agent_profile_id: entry.agentProfileId } : {}),
             ...(entry.activeFile ? { active_file: entry.activeFile } : {})
           }
           const config = { suppressErrorToast: true }
@@ -1797,6 +1842,7 @@ export const useChatStore = defineStore('chat', {
               )
             : api.post(`/sessions/${entry.sessionId}/messages`, payload, config))
           if (data?.runId && this.current?.id === entry.sessionId && this.selectedSessionId === entry.sessionId) {
+            if (data.agentProfileId) this.current.agentProfileId = data.agentProfileId
             if (data.message && !this.current.messages.some((message) => message.id === data.message.id)) {
               this.current.messages.push(data.message)
             }
@@ -1806,6 +1852,15 @@ export const useChatStore = defineStore('chat', {
           }
           void this.refreshSessions(null, entry.projectId).catch(() => {})
           result = { created: false, sessionId: entry.sessionId }
+        }
+        if (
+          entry.sessionId
+          && !entry.continuationRunId
+          && this.queuedMessages[queueKeyForEntry(entry)]?.length === 1
+          && this.drafts.sessionAgentProfiles[entry.sessionId] === entry.agentProfileId
+        ) {
+          delete this.drafts.sessionAgentProfiles[entry.sessionId]
+          this.persistDrafts()
         }
         await deleteChatOutboxEntry(entry.id)
         const queue = this.queuedMessages[key] || []
@@ -1818,7 +1873,15 @@ export const useChatStore = defineStore('chat', {
       } catch (error) {
         const stillQueued = this.queuedMessages[key]?.some((item) => item.id === entry.id)
         if (!stillQueued) return null
-        if (errorDescriptor(error)?.code === 'session.runAlreadyActive') {
+        if (entry.continuationRunId && errorDescriptor(error)?.code === 'session.runInactive') {
+          delete entry.continuationRunId
+          try {
+            await saveChatOutboxEntry(toRaw(entry))
+          } catch {
+            notifyError({}, 'Die vorgemerkte Nachricht konnte nicht gespeichert werden.')
+          }
+          this.scheduleQueueDrain(0)
+        } else if (errorDescriptor(error)?.code === 'session.runAlreadyActive') {
           this.scheduleQueueDrain()
         } else {
           entry.paused = true
@@ -1835,10 +1898,9 @@ export const useChatStore = defineStore('chat', {
         if (this.queueSendingEntryId === entry.id) this.queueSendingEntryId = null
       }
     },
-    async stop({ redirect = false } = {}) {
+    async stop() {
       if (!this.running || this.stopping) return
       this.cancelRequested = true
-      this.cancelRedirectRequested = redirect
       this.running = false
       this.stopping = false
       void this.cancelActiveRun()
@@ -1849,15 +1911,10 @@ export const useChatStore = defineStore('chat', {
       const runId = this.runId
       try {
         const url = `/sessions/${sessionId}/runs/${runId}/cancel`
-        if (this.cancelRedirectRequested) {
-          await api.post(url, undefined, { params: { redirect: true } })
-        } else {
-          await api.post(url)
-        }
+        await api.post(url)
       } catch {
         if (this.runSessionId === sessionId && this.runId === runId) {
           this.cancelRequested = false
-          this.cancelRedirectRequested = false
           this.stopping = false
           this.running = true
         }
@@ -1983,7 +2040,6 @@ export const useChatStore = defineStore('chat', {
           this.running = false
           this.stopping = false
           this.cancelRequested = false
-          this.cancelRedirectRequested = false
           this.clearActivity()
         }
         throw error
@@ -1992,7 +2048,7 @@ export const useChatStore = defineStore('chat', {
     async sendToCurrent(
       content,
       attachments = [],
-      { clearDraft = true, activeFile: requestedActiveFile, runId = null, suppressErrorToast = false } = {}
+      { clearDraft = true, activeFile: requestedActiveFile, agentProfileId = null, runId = null, suppressErrorToast = false } = {}
     ) {
       const session = this.current
       const sessionLoadVersion = this.sessionLoadVersion
@@ -2014,6 +2070,7 @@ export const useChatStore = defineStore('chat', {
         const payload = {
           content,
           ...(runId ? { run_id: runId } : {}),
+          ...(agentProfileId ? { agent_profile_id: agentProfileId } : {}),
           ...(activeFile ? { active_file: activeFile } : {})
         }
         const config = suppressErrorToast ? [{ suppressErrorToast: true }] : []
@@ -2027,6 +2084,7 @@ export const useChatStore = defineStore('chat', {
         if (data.message) {
           const targetSession = this.selectedSessionId === session.id && this.current?.id === session.id
             ? this.current : session
+          if (data.agentProfileId) targetSession.agentProfileId = data.agentProfileId
           const canonicalIndex = targetSession.messages.findIndex((message) => message.id === data.message.id)
           if (canonicalIndex >= 0) {
             targetSession.messages[canonicalIndex] = data.message
@@ -2074,7 +2132,6 @@ export const useChatStore = defineStore('chat', {
           this.running = false
           this.stopping = false
           this.cancelRequested = false
-          this.cancelRedirectRequested = false
           this.clearActivity()
         }
         throw error
@@ -2308,6 +2365,12 @@ export const useChatStore = defineStore('chat', {
         promoteStreamedMessage(JSON.parse(event.data).message)
         this.runWarnings = []
       })
+      source.addEventListener('message.continued', () => {
+        if (this.eventSource !== source) return
+        this.streamContent = ''
+        this.streamReasoning = null
+        this.runWarnings = []
+      })
       source.addEventListener('tool.completed', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
@@ -2485,7 +2548,6 @@ export const useChatStore = defineStore('chat', {
         this.running = false
         this.stopping = false
         this.cancelRequested = false
-        this.cancelRedirectRequested = false
         this.streamContent = ''
         this.streamResearchSources = []
         this.streamReasoning = null
@@ -2547,7 +2609,6 @@ export const useChatStore = defineStore('chat', {
           this.running = false
           this.stopping = false
           this.cancelRequested = false
-          this.cancelRedirectRequested = false
           this.streamModelName = null
           this.clearActivity()
           this.setSessionRunStatus(sessionId, null)

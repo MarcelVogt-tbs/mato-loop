@@ -43,7 +43,8 @@ export function emptyDrafts() {
   return {
     newSession,
     newSessions: { standalone: newSession },
-    sessionMessages: {}
+    sessionMessages: {},
+    sessionAgentProfiles: {}
   }
 }
 
@@ -197,6 +198,9 @@ export function loadDrafts(ownerUserId) {
     const sessionMessages = Object.fromEntries(
       Object.entries(stored.sessionMessages || {}).filter(([, value]) => typeof value === 'string')
     )
+    const sessionAgentProfiles = Object.fromEntries(
+      Object.entries(stored.sessionAgentProfiles || {}).filter(([, value]) => typeof value === 'string')
+    )
     const newSessions = Object.fromEntries(
       Object.entries(stored.newSessions || {}).map(([key, value]) => [
         key,
@@ -208,7 +212,8 @@ export function loadDrafts(ownerUserId) {
     return {
       newSession,
       newSessions,
-      sessionMessages
+      sessionMessages,
+      sessionAgentProfiles
     }
   } catch {
     return emptyDrafts()

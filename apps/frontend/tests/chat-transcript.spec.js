@@ -8,6 +8,35 @@ import {
 } from '../src/utils/chat-transcript'
 
 describe('chat transcript', () => {
+  it('keeps a direct in-run message inside the same assistant turn', () => {
+    const transcript = buildChatTranscript([
+      { id: 'start', role: 'user', content: 'Start' },
+      { id: 'partial', role: 'assistant', content: 'Working', runId: 'run-1', continuationSegment: true },
+      { id: 'direct', role: 'user', content: 'Change course', continuationRunId: 'run-1' },
+      { id: 'final', role: 'assistant', content: 'Done', runId: 'run-1' }
+    ])
+
+    expect(transcript.messages.filter((message) => message.role === 'assistant').map((message) => (
+      [message.id, message.showAgentLabel, message.content]
+    ))).toEqual([['final', true, 'Working\n\nDone']])
+    expect(transcript.messages.find((message) => message.id === 'direct').content).toBe('Change course')
+  })
+
+  it('keeps streamed and persisted partial text in the continued answer', () => {
+    const messages = [
+      { id: 'start', role: 'user', content: 'Start' },
+      { id: 'partial', role: 'assistant', content: 'Before', runId: 'run-1', continuationSegment: true },
+      { id: 'direct', role: 'user', content: 'Change', continuationRunId: 'run-1' }
+    ]
+    const live = { id: 'live', role: 'assistant', content: 'After', currentTurn: true }
+
+    expect(withLiveTranscriptMessage(buildChatTranscript(messages, [], { running: true, runId: 'run-1' }).messages, live)
+      .at(-1).content).toBe('Before\n\nAfter')
+    expect(buildChatTranscript([...messages, {
+      id: 'final', role: 'assistant', content: 'After', runId: 'run-1'
+    }]).messages.at(-1).content).toBe('Before\n\nAfter')
+  })
+
   it('hides an empty redirected turn while retaining explicit stops and visible partial responses', () => {
     const user = { id: 'user', role: 'user', content: 'Start' }
     const empty = { id: 'empty', role: 'assistant', content: '', generationStatus: 'interrupted', redirected: true,

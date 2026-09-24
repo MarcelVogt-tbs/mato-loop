@@ -12,7 +12,19 @@ vi.mock('src/composables/audio-recorder', () => ({
   useAudioRecorder: (options) => { mocks.onAutoStopped = options.onAutoStopped; return mocks.recorder },
   recorderErrorMessage: () => 'Aufnahme fehlgeschlagen'
 }))
-vi.mock('components/SessionSettingsFields.vue', () => ({ default: { render: () => null } }))
+vi.mock('components/SessionSettingsFields.vue', () => ({ default: {
+  props: ['disabled'],
+  emits: ['update', 'agent-popup-hide'],
+  render() {
+    return h('button', {
+      type: 'button',
+      onClick: () => {
+        this.$emit('update', { agent_profile_id: 'agent-b' })
+        this.$emit('agent-popup-hide')
+      }
+    }, 'Agent wechseln')
+  }
+} }))
 vi.mock('components/ApprovalCard.vue', () => ({ default: { render: () => null } }))
 vi.mock('components/AgentActivityPanel.vue', () => ({ default: { render: () => null } }))
 vi.mock('components/AppLogo.vue', () => ({ default: { render: () => null } }))
@@ -26,6 +38,7 @@ vi.mock('components/SubagentInspector.vue', () => ({ default: { render: () => nu
 import ChatComposer from '../src/components/ChatComposer.vue'
 import ChatPage from '../src/pages/ChatPage.vue'
 import { useChatStore } from '../src/stores/chat'
+import { useAgentProfileStore } from '../src/stores/agent-profiles'
 import { useProviderStore } from '../src/stores/providers'
 import { useToolSettingsStore } from '../src/stores/tool-settings'
 import { useInstanceLimitsStore } from '../src/stores/instance-limits'
@@ -84,6 +97,7 @@ beforeEach(async () => {
       running: chat.running,
       queueMode: chat.messageQueueActive,
       attachments: chat.activeAttachmentDraft,
+      onUpdate: (patch) => chat.updateActive(patch),
       onSend: (content, options) => sentMessages.push({ content, options }),
       onStop: () => { stoppedCount += 1 },
       'onAdd-attachments': (files, done, options) => done?.(chat.addAttachmentFiles(files, options)),
@@ -103,10 +117,15 @@ beforeEach(async () => {
     emits: ['click'],
     setup: (_, { emit, slots }) => () => h('button', { onClick: () => emit('click') }, slots.default?.())
   }))
-  for (const name of ['QList', 'QItemSection', 'QMenu']) {
+  for (const name of ['QList', 'QItemSection']) {
     app.component(name, { render() { return h('div', this.$slots.default?.()) } })
   }
-  for (const name of ['QCard', 'QForm', 'QInput', 'QIcon', 'QSpace', 'QBanner', 'QTooltip', 'QSpinner', 'QChip', 'QPopupProxy', 'QToolbar', 'QToolbarTitle', 'QSeparator', 'QCardSection']) {
+  app.component('QMenu', defineComponent({
+    emits: ['hide'],
+    setup: (_, { emit, slots }) => () => h('div', { onClick: () => emit('hide') }, slots.default?.())
+  }))
+  app.component('QInput', { methods: { focus() { this.$el.focus() } }, render() { return h('div', { tabindex: 0 }) } })
+  for (const name of ['QCard', 'QForm', 'QIcon', 'QSpace', 'QBanner', 'QTooltip', 'QSpinner', 'QChip', 'QPopupProxy', 'QToolbar', 'QToolbarTitle', 'QSeparator', 'QCardSection']) {
     app.component(name, { methods: { focus() {} }, render() { return h('div', this.$slots.default?.()) } })
   }
   app.directive('close-popup', {})
@@ -129,6 +148,68 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it('cycles agent profiles and toggles the send mode only from the focused composer', async () => {
+    chat.selectedSessionId = 'session-1'
+    chat.current.agentProfileId = 'agent-a'
+    chat.running = true
+    chat.runId = 'run-1'
+    chat.setDraft('Folgenachricht')
+    const profiles = useAgentProfileStore()
+    profiles.defaultAgentProfileId = 'agent-a'
+    profiles.agents = [{ id: 'agent-a' }, { id: 'agent-b' }]
+    await nextTick()
+    const input = root.querySelector('.chat-composer__input')
+    input.focus()
+    const shortcut = (shiftKey = false, options = {}) => {
+      const event = new KeyboardEvent('keydown', {
+        key: shiftKey ? ':' : '.', code: 'Period', ctrlKey: true, shiftKey,
+        bubbles: true, cancelable: true, ...options
+      })
+      input.dispatchEvent(event)
+      return event
+    }
+
+    expect(shortcut().defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(input)
+    expect(chat.activeAgentProfileId).toBe('agent-b')
+    expect(chat.current.agentProfileId).toBe('agent-a')
+    expect(shortcut().defaultPrevented).toBe(true)
+    expect(chat.activeAgentProfileId).toBe('agent-a')
+    shortcut(false, { repeat: true })
+    shortcut(false, { isComposing: true })
+    expect(chat.activeAgentProfileId).toBe('agent-a')
+    expect(shortcut(true).defaultPrevented).toBe(true)
+    await nextTick()
+    expect(root.querySelector('button[aria-label="Nachricht vormerken"]').dataset.icon).toBe('schedule_send')
+    expect(sentMessages).toEqual([])
+    shortcut(true, { metaKey: true, ctrlKey: false })
+    await nextTick()
+    expect(root.querySelector('button[aria-label="Nachricht jetzt senden"]').dataset.icon).toBe('arrow_upward')
+    expect(document.activeElement).toBe(input)
+    expect(sentMessages).toEqual([])
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { code: 'Period', ctrlKey: true, bubbles: true }))
+    expect(chat.activeAgentProfileId).toBe('agent-a')
+  })
+
+  it('returns focus to the composer after selecting an agent or send mode', async () => {
+    chat.selectedSessionId = 'session-1'
+    chat.current.agentProfileId = 'agent-a'
+    chat.running = true
+    chat.runId = 'run-1'
+    chat.setDraft('Weiter schreiben')
+    await nextTick()
+    const input = root.querySelector('.chat-composer__input')
+    const agent = [...root.querySelectorAll('button')].find((item) => item.textContent === 'Agent wechseln')
+    agent.focus()
+    await click('Agent wechseln')
+    expect(chat.activeAgentProfileId).toBe('agent-b')
+    expect(document.activeElement).toBe(input)
+
+    await click('Nach dem Lauf senden')
+    expect(document.activeElement).toBe(input)
+    expect(root.querySelector('button[aria-label="Nachricht vormerken"]')).toBeTruthy()
+  })
+
   it('shows one stop button without a draft and sends text or attachment drafts instead', async () => {
     chat.selectedSessionId = 'session-1'
     chat.running = true

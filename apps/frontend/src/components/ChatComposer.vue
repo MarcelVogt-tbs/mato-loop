@@ -14,6 +14,7 @@
           :placeholder="inputPlaceholder"
           :disable="inputDisabled"
           @update:model-value="$emit('update:draft', $event)"
+          @keydown="handleComposerKeydown"
           @keydown.enter.exact.prevent="submit"
           @paste="handlePaste"
         />
@@ -46,9 +47,12 @@
             ref="settingsFields"
             :session="session"
             :disabled="interactionDisabled"
+            :agent-profile-id="chat.activeAgentProfileId"
+            :agent-selectable="!inputDisabled && (running || queueMode)"
             :fields="['agent', 'model', 'reasoning']"
             compact
             @update="$emit('update', $event)"
+            @agent-popup-hide="input?.focus()"
           />
           <q-chip v-if="pendingCount" dense square color="warning" text-color="dark" icon="pending_actions">
             {{ pendingCount }} offen
@@ -181,7 +185,7 @@
               type="button"
               :disable="stopping"
             >
-              <q-menu anchor="top right" self="bottom right" auto-close>
+              <q-menu anchor="top right" self="bottom right" auto-close @hide="input?.focus()">
                 <q-list>
                   <q-item clickable @click="sendMode = 'interrupt'">
                     <q-item-section>Jetzt senden</q-item-section>
@@ -344,6 +348,25 @@ function submit() {
   const content = props.draft.trim()
   if (sendDisabled.value) return
   emit('send', content, { interrupt: props.running && sendMode.value === 'interrupt' })
+}
+
+function handleComposerKeydown(event) {
+  if (
+    event.defaultPrevented || event.repeat || event.isComposing || event.altKey
+    || event.ctrlKey === event.metaKey || event.code !== 'Period'
+  ) return
+  if (event.shiftKey) {
+    if (!props.running || props.stopping) return
+    sendMode.value = sendMode.value === 'queue' ? 'interrupt' : 'queue'
+  } else {
+    if (inputDisabled.value || agentProfiles.loading || agentProfiles.agents.length < 2) return
+    const agents = agentProfiles.agents
+    const current = chat.activeAgentProfileId || agentProfiles.defaultAgentProfileId
+    const index = agents.findIndex((agent) => agent.id === current)
+    emit('update', { agent_profile_id: agents[(index + 1) % agents.length].id })
+  }
+  event.preventDefault()
+  event.stopPropagation()
 }
 
 async function finishAndSendRecording() {

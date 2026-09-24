@@ -29,7 +29,7 @@ from mato_loop_backend.agent.run_timing import run_timing_payload
 from mato_loop_backend.agent.runtime import AgentRunError
 from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.agent.todos import session_todos
-from mato_loop_backend.attachments import AttachmentInput
+from mato_loop_backend.attachments import AttachmentInput, AttachmentService
 from mato_loop_backend.automations import automation_impact_token
 from mato_loop_backend.chat_history import ChatHistoryService
 from mato_loop_backend.execution import (
@@ -39,6 +39,7 @@ from mato_loop_backend.execution import (
     execution_agent_connections,
 )
 from mato_loop_backend.execution.client import _absolute_path
+from mato_loop_backend.memory.episode_indexing import EpisodeIndexService
 from mato_loop_backend.models import (
     AgentRun,
     Automation,
@@ -61,6 +62,8 @@ from mato_loop_backend.settings import (
     AgentProfile,
     AgentProfileUnavailable,
     AiSettings,
+    InstanceLimits,
+    SettingsStore,
     effective_model_trust,
     load_agent_profile,
     load_agent_profile_ai,
@@ -1140,6 +1143,83 @@ async def active_file_payload(
     }
 
 
+async def continue_run(
+    session_id: UUID,
+    run_id: UUID,
+    payload,
+    user,
+    db: AsyncSession,
+    *,
+    attachments: list[AttachmentInput] | None,
+    owned_session_query,
+    message_serializer: MessageSerializer,
+) -> dict[str, Any]:
+    session = await owned_session_query(db, session_id, user.id, for_update=True)
+    if session is None:
+        raise SessionServiceError(404, "session.notFound")
+    message = await db.scalar(
+        select(Message).where(Message.id == payload.message_id).options(selectinload(Message.attachments))
+    )
+    if message is not None:
+        if message.session_id != session_id or (message.provider_data or {}).get("_matoloop", {}).get("continuationRunId") != str(run_id):
+            raise SessionServiceError(409, "http.conflict")
+        return {"message": message_serializer(message), "runId": str(run_id)}
+    content = payload.content.strip()
+    if not content and not attachments:
+        raise SessionServiceError(422, "validation.required", field="content")
+    run = await db.scalar(select(AgentRun).where(
+        AgentRun.id == run_id,
+        AgentRun.session_id == session_id,
+        AgentRun.parent_run_id.is_(None),
+    ).with_for_update())
+    if run is None or run.status not in ACTIVE_RUN_STATUSES:
+        raise SessionServiceError(409, "session.runInactive")
+    reservation = AgentRuntime.reserve_continuation(run_id, queued=run.status == "queued")
+    if reservation is None:
+        raise SessionServiceError(409, "session.runInactive")
+    attachment_service = AttachmentService()
+    created = []
+    accepted = False
+    try:
+        attachment_service.settings = await SettingsStore.load(db, InstanceLimits)
+        active_file = await active_file_payload(payload.active_file, session, db)
+        message = Message(
+            id=payload.message_id,
+            session_id=session_id,
+            role="user",
+            content=content,
+            trust_level=run.trust_level,
+            source_type="app",
+            provider_data={"_matoloop": {
+                "continuationRunId": str(run_id),
+                **({"activeFile": active_file} if active_file is not None else {}),
+            }},
+        )
+        db.add(message)
+        await db.flush()
+        await EpisodeIndexService.enqueue(db, message)
+        for position, attachment in enumerate(attachments or []):
+            created.append(await attachment_service.create_attachment(
+                db, message, attachment.data, attachment.mime_type,
+                kind=attachment.kind, filename=attachment.filename,
+                position=position, metadata=attachment.metadata, category="user_upload",
+            ))
+        await db.commit()
+        accepted = True
+    except BaseException:
+        await db.rollback()
+        for item in created:
+            try:
+                await attachment_service.discard(item, session_id)
+            except BaseException:
+                logger.exception("Could not discard failed continuation attachment")
+        raise
+    finally:
+        AgentRuntime.finish_continuation(run_id, reservation, accepted=accepted)
+    await db.refresh(message, ["attachments"])
+    return {"message": message_serializer(message), "runId": str(run_id)}
+
+
 async def send_message(
     session_id: UUID,
     payload,
@@ -1171,7 +1251,12 @@ async def send_message(
     )
     if active:
         raise SessionServiceError(409, "session.runAlreadyActive")
-    ai = await _profile_ai(db, user.id, item.agent_profile_id)
+    requested_profile = (
+        payload.agent_profile_id or GENERAL_PROFILE_ID
+        if "agent_profile_id" in payload.model_fields_set
+        else item.agent_profile_id
+    )
+    ai = await _profile_ai(db, user.id, requested_profile)
     model_id = item.model_config_id or ai.default_model_id
     if not model_available(ai, model_id):
         raise SessionServiceError(409, "session.modelUnavailable")
@@ -1185,6 +1270,11 @@ async def send_message(
             run_id=payload.run_id,
             attachments=attachments,
             active_file=await active_file_payload(payload.active_file, item, db),
+            **(
+                {"agent_profile_id_override": requested_profile}
+                if "agent_profile_id" in payload.model_fields_set
+                else {}
+            ),
         )
     except AgentRunError as exc:
         raise SessionServiceError(409, exc.code, params=exc.params) from exc

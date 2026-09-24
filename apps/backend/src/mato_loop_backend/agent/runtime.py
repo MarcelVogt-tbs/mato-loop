@@ -10,14 +10,14 @@ import time
 import traceback
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -177,6 +177,7 @@ from mato_loop_backend.models import (
     ExecutionAgent,
     MemoryRecord,
     Message,
+    PermissionGrant,
     Project,
     QuestionRequest,
     TitleGenerationStatus,
@@ -889,6 +890,9 @@ class AgentRuntime:
     _cancellable_runs: set[UUID] = set()
     _user_cancelled_runs: set[UUID] = set()
     _redirected_runs: set[UUID] = set()
+    _continuations: dict[UUID, set[asyncio.Event]] = {}
+    _pending_continuations: set[UUID] = set()
+    _provider_active_runs: set[UUID] = set()
     _interrupted_runs: set[UUID] = set()
 
     @staticmethod
@@ -950,6 +954,7 @@ class AgentRuntime:
         attachments: list[AttachmentInput] | None = None,
         automation_run: AutomationRun | None = None,
         model_id_override: UUID | None = None,
+        agent_profile_id_override: UUID | None = None,
         required_skill: SkillDefinition | None = None,
         active_file: dict[str, Any] | None = None,
         source_type: str = "app",
@@ -980,9 +985,10 @@ class AgentRuntime:
         if active_run is not None:
             raise AgentRunError("session.runAlreadyActive")
         await cls._ensure_user_active(db, chat_session.user_id, for_update=True)
+        profile_id = agent_profile_id_override or chat_session.agent_profile_id
         try:
             profile = await load_agent_profile(
-                db, chat_session.user_id, chat_session.agent_profile_id
+                db, chat_session.user_id, profile_id
             )
         except AgentProfileUnavailable as exc:
             raise AgentRunError("agentProfile.selectedUnavailable") from exc
@@ -1035,6 +1041,11 @@ class AgentRuntime:
                     assert isinstance(directory, DirectoryResult)
                     current_directory = directory.path
             execution_operations = sorted(snapshot) if snapshot is not None else []
+        if agent_profile_id_override is not None and profile_id != chat_session.agent_profile_id:
+            await db.execute(
+                delete(PermissionGrant).where(PermissionGrant.session_id == chat_session.id)
+            )
+            chat_session.agent_profile_id = profile_id
         run_id = run_id or uuid4()
         message = Message(
             session_id=chat_session.id,
@@ -1053,7 +1064,7 @@ class AgentRuntime:
         run = AgentRun(
             id=run_id,
             session_id=chat_session.id,
-            agent_profile_id=chat_session.agent_profile_id,
+            agent_profile_id=profile_id,
             status="queued",
             model_config_id=model_id,
             model_name=(model.name or model.model_id) if model is not None else None,
@@ -1281,6 +1292,86 @@ class AgentRuntime:
         return True
 
     @classmethod
+    def reserve_continuation(cls, run_id: UUID, *, queued: bool = False) -> asyncio.Event | None:
+        task = cls._tasks.get(run_id)
+        if task is None or task.done() or run_id in cls._user_cancelled_runs:
+            return None
+        if queued or run_id in cls._cancellable_runs or run_id in cls._continuations:
+            reservation = asyncio.Event()
+            cls._continuations.setdefault(run_id, set()).add(reservation)
+            return reservation
+        return None
+
+    @classmethod
+    def finish_continuation(cls, run_id: UUID, reservation: asyncio.Event, *, accepted: bool) -> None:
+        if accepted:
+            cls._pending_continuations.add(run_id)
+        cls._continuations.get(run_id, set()).discard(reservation)
+        if not cls._continuations.get(run_id):
+            cls._continuations.pop(run_id, None)
+        reservation.set()
+        task = cls._tasks.get(run_id)
+        if accepted and run_id in cls._provider_active_runs and task and not task.done() and task.cancelling() == 0:
+            task.cancel()
+
+    @classmethod
+    async def _await_continuations(cls, run_id: UUID) -> bool:
+        reservations = tuple(cls._continuations.get(run_id, ()))
+        if reservations:
+            await asyncio.gather(*(reservation.wait() for reservation in reservations))
+        if run_id in cls._pending_continuations:
+            cls._pending_continuations.discard(run_id)
+            return True
+        return False
+
+    @classmethod
+    async def _resume_continuation(
+        cls, db: AsyncSession, run: AgentRun, visible_response: _VisibleResponse
+    ) -> None:
+        run_id = run.id
+        session_id = run.session_id
+        await db.rollback()
+        await db.refresh(run)
+        session = await db.get(ChatSession, session_id)
+        if session is not None:
+            await db.refresh(session)
+        content = canonical_assistant_content(visible_response.content)
+        if content or visible_response.reasoning:
+            received_at = await db.scalar(select(Message.created_at).where(
+                Message.session_id == session_id,
+                Message.role == "user",
+                Message.provider_data["_matoloop"]["continuationRunId"].as_string() == str(run_id),
+            ).order_by(Message.created_at.desc()).limit(1))
+            assistant = Message(
+                session_id=run.session_id,
+                role="assistant",
+                content=content,
+                model_name=run.model_name,
+                trust_level=run.trust_level,
+                public_reasoning=visible_response.reasoning,
+                provider_data={"_matoloop": _run_metadata(run, continuationSegment=True)},
+                created_at=(received_at - timedelta(microseconds=1)
+                            if isinstance(received_at, datetime) else datetime.now(UTC)),
+            )
+            db.add(assistant)
+            await db.commit()
+            await run_events.publish(run_id, {
+                "type": "message.completed",
+                "message": {
+                    "id": str(assistant.id), "role": "assistant", "content": content,
+                    "createdAt": assistant.created_at.isoformat(),
+                    "modelName": assistant.model_name, "runId": str(run_id),
+                    "agentProfileId": str(run.agent_profile_id) if run.agent_profile_id else None,
+                    "continuationSegment": True,
+                    "reasoning": assistant.public_reasoning,
+                },
+            })
+        else:
+            await run_events.publish(run_id, {"type": "message.continued"})
+        visible_response.reset()
+        await cls._transcribe_continuation_messages(db, run)
+
+    @classmethod
     async def cancel_and_wait(cls, run_id: UUID) -> bool:
         task = cls._tasks.get(run_id)
         if task is None or task.done():
@@ -1386,11 +1477,14 @@ class AgentRuntime:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     @classmethod
-    async def _transcribe_voice_messages(cls, db: AsyncSession, run: AgentRun) -> None:
-        if run.input_message_id is None:
+    async def _transcribe_voice_messages(
+        cls, db: AsyncSession, run: AgentRun, message_id: UUID | None = None
+    ) -> None:
+        message_id = message_id or run.input_message_id
+        if message_id is None:
             return
         message = await db.get(
-            Message, run.input_message_id, options=(selectinload(Message.attachments),)
+            Message, message_id, options=(selectinload(Message.attachments),)
         )
         if message is None or message.role != "user" or message.session_id != run.session_id:
             return
@@ -1422,7 +1516,7 @@ class AgentRuntime:
                     result = await MediaService.transcribe_audio(
                         db, audio=audio, language=None,
                         timeout=tools.transcribe_audio.timeout_seconds,
-                        agent_profile_id=chat_session.agent_profile_id,
+                        agent_profile_id=run.agent_profile_id or chat_session.agent_profile_id,
                         user_id=user_id,
                     )
                     text = result.text.strip()
@@ -1449,6 +1543,16 @@ class AgentRuntime:
             await run_events.publish(
                 run.id, {"type": "message.updated", "messageId": str(message.id)}
             )
+
+    @classmethod
+    async def _transcribe_continuation_messages(cls, db: AsyncSession, run: AgentRun) -> None:
+        message_ids = (await db.scalars(select(Message.id).where(
+            Message.session_id == run.session_id,
+            Message.role == "user",
+            Message.provider_data["_matoloop"]["continuationRunId"].as_string() == str(run.id),
+        ))).all()
+        for message_id in message_ids:
+            await cls._transcribe_voice_messages(db, run, message_id)
 
     @classmethod
     async def _run(cls, run_id: UUID) -> None:
@@ -1767,6 +1871,9 @@ class AgentRuntime:
             cls._user_cancelled_runs.discard(run_id)
             cls._redirected_runs.discard(run_id)
             cls._interrupted_runs.discard(run_id)
+            cls._continuations.pop(run_id, None)
+            cls._pending_continuations.discard(run_id)
+            cls._provider_active_runs.discard(run_id)
 
     @classmethod
     async def _execute_loop(
@@ -1967,8 +2074,22 @@ class AgentRuntime:
         memory_overview_has_more = False
         memory_overview_runtime_state: dict[str, Any] | None = None
         memory_overview_items: list[MemoryRecord] = []
+        continuation_context_stale = False
 
         while True:
+            continuation_received = await cls._await_continuations(run.id)
+            if continuation_received:
+                await cls._transcribe_continuation_messages(db, run)
+            if continuation_received or continuation_context_stale:
+                selected_execution_agent = None
+                automatic_memories = None
+                automatic_relevant_episodes = None
+                automatic_recent_episodes = None
+                pinned_memories = None
+                memory_scope = None
+                memory_overview_required = None
+                memory_overview_items = []
+                continuation_context_stale = False
             tool_budget_exhausted = budget_finalization or (
                 tool_call_limit is not None and tool_calls_used >= tool_call_limit
             )
@@ -2761,8 +2882,8 @@ class AgentRuntime:
                 mark_first_signal("firstTextMs")
                 if pending:
                     return
-                await run_events.publish(run.id, {"type": "message.delta", "delta": text})
                 visible_response.content_parts.append(text)
+                await run_events.publish(run.id, {"type": "message.delta", "delta": text})
 
             streamed_reasoning_state: dict[str, Any] = {
                 "text": "",
@@ -2914,6 +3035,11 @@ class AgentRuntime:
                         "tools": schemas,
                     },
                 )
+            if await cls._await_continuations(run.id):
+                await cls._resume_continuation(db, run, visible_response)
+                continuation_context_stale = True
+                continue
+            cls._provider_active_runs.add(run.id)
             try:
                 result = await ProviderService.complete(
                     db,
@@ -2928,6 +3054,14 @@ class AgentRuntime:
                     on_warning=on_warning,
                     on_retry=on_provider_retry,
                 )
+            except asyncio.CancelledError:
+                if run.id in cls._user_cancelled_runs or run.id not in cls._pending_continuations:
+                    raise
+                asyncio.current_task().uncancel()
+                await cls._await_continuations(run.id)
+                await cls._resume_continuation(db, run, visible_response)
+                continuation_context_stale = True
+                continue
             except Exception as exc:
                 if diagnostics_active:
                     schedule_diagnostic_event(
@@ -2940,6 +3074,12 @@ class AgentRuntime:
                         payload={"exceptionClass": type(exc).__name__},
                     )
                 raise
+            finally:
+                cls._provider_active_runs.discard(run.id)
+            if await cls._await_continuations(run.id):
+                await cls._resume_continuation(db, run, visible_response)
+                continuation_context_stale = True
+                continue
             provider_duration_ms = max(
                 0, round((time.monotonic() - provider_started_at) * 1_000)
             )
@@ -3207,6 +3347,20 @@ class AgentRuntime:
                 await cls._finalize_run_files(db, run)
             await EpisodeIndexService.enqueue(db, assistant)
             await db.commit()
+            if not normalized_calls and await cls._await_continuations(run.id):
+                metadata = (assistant.provider_data or {}).get("_matoloop", {})
+                assistant.provider_data = {
+                    **(assistant.provider_data or {}),
+                    "_matoloop": {**metadata, "continuationSegment": True},
+                }
+                await db.commit()
+                await run_events.publish(run.id, {
+                    "type": "message.updated", "messageId": str(assistant.id),
+                })
+                visible_response.reset()
+                await cls._resume_continuation(db, run, visible_response)
+                continuation_context_stale = True
+                continue
             if not normalized_calls:
                 cls._cancellable_runs.discard(run.id)
             visible_response.reset()
