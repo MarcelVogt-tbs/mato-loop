@@ -122,7 +122,7 @@ import AutomationRunHistory from 'src/components/AutomationRunHistory.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { scheduleDraft, scheduleError, schedulePayload } from 'src/utils/automation-schedules'
 import { automationStatus, automationTiming } from 'src/utils/automation-status'
-import { PWA_BEFORE_UPDATE_EVENT } from 'src/utils/pwa-update'
+import { isPwaUpdateReload } from 'src/utils/pwa-update'
 import { useAutomationStore } from 'stores/automations'
 import { useChannelStore } from 'stores/channels'
 import { useChatStore } from 'stores/chat'
@@ -402,7 +402,7 @@ async function reloadDefinition() {
 }
 
 function preventDiscardOnUnload(event) {
-  if (!dirty.value && !saving.value) return
+  if (isPwaUpdateReload() || (!dirty.value && !saving.value)) return
   event.preventDefault()
   event.returnValue = ''
 }
@@ -427,7 +427,6 @@ onMounted(() => {
   refreshTimer = window.setInterval(refreshStatus, 5000)
   document.addEventListener('visibilitychange', refreshStatus)
   window.addEventListener('beforeunload', preventDiscardOnUnload)
-  window.addEventListener(PWA_BEFORE_UPDATE_EVENT, preventDiscardOnUnload)
 })
 onBeforeUnmount(() => {
   alive = false
@@ -436,7 +435,6 @@ onBeforeUnmount(() => {
   window.clearInterval(refreshTimer)
   document.removeEventListener('visibilitychange', refreshStatus)
   window.removeEventListener('beforeunload', preventDiscardOnUnload)
-  window.removeEventListener(PWA_BEFORE_UPDATE_EVENT, preventDiscardOnUnload)
   automations.clearDetail()
 })
 </script>

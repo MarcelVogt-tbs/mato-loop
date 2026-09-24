@@ -1,5 +1,5 @@
 import { register } from 'register-service-worker'
-import { announcePwaUpdate } from '../src/utils/pwa-update'
+import { announcePwaUpdate, observePwaUpdates } from '../src/utils/pwa-update'
 
 const UPDATE_INTERVAL_MS = 60 * 60 * 1000
 let registration = null
@@ -12,18 +12,20 @@ function updateServiceWorker(force = false) {
 }
 
 function useRegistration(value) {
-  registration ||= value
+  registration = value
   if (registration.waiting) announcePwaUpdate()
   updateServiceWorker()
   window.dispatchEvent(new Event('matoloop:service-worker-ready'))
 }
+
+observePwaUpdates()
 
 register(process.env.SERVICE_WORKER_FILE, {
   registrationOptions: { scope: '/', updateViaCache: 'none' },
   ready: useRegistration,
   registered: useRegistration,
   updated(value) {
-    registration ||= value
+    registration = value
     if (registration.waiting) announcePwaUpdate()
   },
   error(error) {
@@ -35,3 +37,6 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') updateServiceWorker()
 })
 window.addEventListener('online', () => updateServiceWorker(true))
+window.setInterval(() => {
+  if (document.visibilityState === 'visible') updateServiceWorker()
+}, UPDATE_INTERVAL_MS)

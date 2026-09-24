@@ -1,5 +1,5 @@
 import { onBeforeUnmount, ref } from 'vue'
-import { PWA_BEFORE_UPDATE_EVENT } from '../utils/pwa-update'
+import { isPwaUpdateReload } from '../utils/pwa-update'
 
 const TARGET_SAMPLE_RATE = 16_000
 export const MAX_RECORDING_DURATION_MS = 5 * 60 * 1000
@@ -295,15 +295,13 @@ export function createAudioRecorder({
 export function useAudioRecorder(options) {
   const recorder = createAudioRecorder(options)
   const preventUnload = (event) => {
-    if (!recorder.starting.value && !recorder.recording.value && !recorder.finalizing.value) return
+    if (isPwaUpdateReload() || (!recorder.starting.value && !recorder.recording.value && !recorder.finalizing.value)) return
     event.preventDefault()
     event.returnValue = ''
   }
   window.addEventListener('beforeunload', preventUnload)
-  window.addEventListener(PWA_BEFORE_UPDATE_EVENT, preventUnload)
   onBeforeUnmount(() => {
     window.removeEventListener('beforeunload', preventUnload)
-    window.removeEventListener(PWA_BEFORE_UPDATE_EVENT, preventUnload)
     void recorder.dispose()
   })
   return recorder

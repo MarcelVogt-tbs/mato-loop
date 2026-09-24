@@ -25,28 +25,25 @@
     Eine neue Version ist verfügbar.
     <template #action>
       <q-btn flat dense no-caps color="primary" label="Später" @click="snoozeUpdate" />
-      <q-btn flat dense no-caps color="primary" label="Neu starten" :loading="restarting" @click="confirmUpdate" />
+      <q-btn flat dense no-caps color="primary" label="Jetzt aktualisieren" :loading="restarting" @click="applyUpdate" />
     </template>
   </q-banner>
 </template>
 
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { useQuasar } from 'quasar'
 import AppLogo from 'components/AppLogo.vue'
 import { useAuthStore } from 'stores/auth'
 import { notifyError } from 'src/utils/notifications'
 import {
   PWA_UPDATE_EVENT,
   pwaUpdateSnoozeRemaining,
-  pwaWindowCount,
   requestPwaUpdate,
   snoozePwaUpdate
 } from 'src/utils/pwa-update'
 
 defineOptions({ name: 'App' })
 
-const $q = useQuasar()
 const auth = useAuthStore()
 const startupSlow = ref(false)
 const updateAvailable = ref(false)
@@ -75,44 +72,26 @@ function snoozeUpdate() {
 }
 
 async function detectWaitingUpdate() {
-  const registration = await navigator.serviceWorker?.getRegistration?.()
-  if (registration?.waiting) showUpdate()
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration?.()
+    if (registration?.waiting) showUpdate()
+    else updateAvailable.value = false
+  } catch {
+    // Keep the current prompt; the next check can reconcile it.
+  }
 }
 
-async function confirmUpdate() {
-  const windowCount = await pwaWindowCount()
-  if (windowCount !== 1) {
-    $q.dialog({
-      title: 'Weitere Fenster schließen',
-      message: windowCount === null
-        ? 'Die geöffneten MatoLoop-Fenster konnten nicht geprüft werden. Schließe andere Fenster und versuche es erneut.'
-        : 'Schließe zuerst alle anderen MatoLoop-Fenster und Tabs, damit keine unterschiedlichen Versionen gleichzeitig laufen.',
-      ok: { label: 'Verstanden', color: 'primary', noCaps: true }
-    })
-    return
+async function applyUpdate() {
+  if (restarting.value) return
+  restarting.value = true
+  try {
+    if (!await requestPwaUpdate()) await detectWaitingUpdate()
+  } catch (error) {
+    notifyError(error, 'Die Aktualisierung konnte nicht abgeschlossen werden. Versuche es erneut.')
+    await detectWaitingUpdate()
+  } finally {
+    restarting.value = false
   }
-  $q.dialog({
-    title: 'MatoLoop neu starten?',
-    message: 'Speichere offene Änderungen und beende laufende Aufnahmen. MatoLoop wird anschließend neu geladen.',
-    cancel: 'Abbrechen',
-    ok: { label: 'Neu starten', color: 'primary', noCaps: true }
-  }).onOk(async () => {
-    if (restarting.value) return
-    restarting.value = true
-    try {
-      if (!await requestPwaUpdate()) {
-        restarting.value = false
-        $q.dialog({
-          title: 'Neustart noch nicht möglich',
-          message: 'Speichere oder verwirf offene Änderungen und beende laufende Aufnahmen. Versuche den Neustart anschließend erneut.',
-          ok: { label: 'Verstanden', color: 'primary', noCaps: true }
-        })
-      }
-    } catch (error) {
-      restarting.value = false
-      notifyError(error)
-    }
-  })
 }
 
 onMounted(() => {
