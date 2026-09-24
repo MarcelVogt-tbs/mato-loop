@@ -21,21 +21,20 @@ from telegram.constants import ChatAction, ParseMode
 from telegram.error import InvalidToken, NetworkError, RetryAfter, TelegramError, TimedOut
 
 from mato_loop_backend.agent.activity import reasoning_activity_label, run_activity_label
-from mato_loop_backend.agent.approval_decisions import ApprovalDecisionError
 from mato_loop_backend.agent.question_decisions import QuestionDecisionError
-from mato_loop_backend.agent.runtime import AgentRunError, AgentRuntime
-from mato_loop_backend.attachment_processing import (
-    AttachmentProcessingError,
-)
-from mato_loop_backend.attachments import (
+from mato_loop_backend.agent.run_contracts import AgentRunError
+from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.db.session import AsyncSessionFactory
+from mato_loop_backend.events import run_events
+from mato_loop_backend.files.storage import SessionStorage, SessionStorageError
+from mato_loop_backend.media.attachments import (
     AttachmentError,
     AttachmentInput,
     AttachmentService,
     classify_attachment,
     processing_limits,
 )
-from mato_loop_backend.db.session import AsyncSessionFactory
-from mato_loop_backend.events import run_events
+from mato_loop_backend.media.processing import AttachmentProcessingError
 from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.messaging.approvals import (
     ApprovalDecision,
@@ -72,9 +71,9 @@ from mato_loop_backend.models import (
     TitleGenerationStatus,
     UserAccount,
 )
+from mato_loop_backend.permissions.decisions import ApprovalDecisionError
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.security import load_credential, read_credential
-from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
     InstanceLimits,

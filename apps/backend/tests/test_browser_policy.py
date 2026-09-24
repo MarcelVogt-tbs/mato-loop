@@ -9,17 +9,20 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent import runtime as runtime_module
-from mato_loop_backend.agent import tool_registry as registry_module
-from mato_loop_backend.agent import tools as tools_module
-from mato_loop_backend.agent.permissions import PermissionDecision
+import mato_loop_backend.agent.loop as mock_agent_loop
+import mato_loop_backend.agent.runtime as mock_agent_runtime
+import mato_loop_backend.agent.runtime as runtime_module
+import mato_loop_backend.permissions.resolution as mock_permissions_resolution
+import mato_loop_backend.tools.access as tools_module
+import mato_loop_backend.tools.catalog as mock_tools_catalog
+import mato_loop_backend.tools.context as registry_module
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.subagents import permission_snapshot
-from mato_loop_backend.agent.tool_registry import ToolContext
 from mato_loop_backend.execution.browser_contracts import BrowserActionResult
 from mato_loop_backend.execution.client import ExecutionClient
 from mato_loop_backend.integrations.browser import BROWSER_TOOL_ACTIONS
 from mato_loop_backend.models import AgentRun, ChatSession
+from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
     AgentProfile,
@@ -30,6 +33,7 @@ from mato_loop_backend.settings import (
     TrustLevel,
 )
 from mato_loop_backend.settings.models import AgentProfilePermissions
+from mato_loop_backend.tools.context import ToolContext
 
 
 @pytest.fixture(params=list(TrustLevel))
@@ -106,7 +110,7 @@ def browser_policy_case(request, monkeypatch):
     return SimpleNamespace(
         instance=instance, integrations=integrations, settings=settings, run=run,
         context=context, call=call, approval=approval, coordinator=coordinator,
-        effective=tools_module.ToolRegistry([]).effective(integrations),
+        effective=mock_tools_catalog.ToolRegistry([]).effective(integrations),
     )
 
 
@@ -154,7 +158,7 @@ def browser_script_case(browser_policy_case, request):
 
 def test_browser_catalog_defaults_survive_central_trust_resolution(browser_policy_case):
     case = browser_policy_case
-    actions = tools_module.tool_registry.integration_resource_actions(case.instance)
+    actions = mock_tools_catalog.tool_registry.integration_resource_actions(case.instance)
     assert {action.capability for action in actions} == {
         "browser.read", "browser.write", "browser.code", "browser.control", "browser.release",
         "filesystem.read", "session.files.read", "filesystem.write",
@@ -174,7 +178,7 @@ def test_browser_catalog_defaults_survive_central_trust_resolution(browser_polic
         assert action.public_default_policy == public_default
         resolved_default = action.default_policy_for(case.settings.trust_level)
         for integration_id in (None, case.instance.id):
-            resolution = tools_module.resolve_tool_execution_policy(
+            resolution = mock_permissions_resolution.resolve_tool_execution_policy(
                 case.settings,
                 action.capability,
                 action.default_policy_for(case.settings.trust_level),
@@ -279,7 +283,9 @@ async def test_browser_delegation_ceiling_is_not_relaxed(browser_action_case, mo
         ceiling["permissions"]["policies"][case.capability] = policy
     else:
         ceiling["integrationDefaults"][str(case.instance.id)][case.capability] = policy
-    monkeypatch.setattr(runtime_module, "delegation_snapshot", AsyncMock(return_value=ceiling))
+    _mock_value = AsyncMock(return_value=ceiling)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'delegation_snapshot', _mock_value)
     case.settings._delegation_ceiling = ceiling
     result = await case.effective.execute(case.call, case.context)
     assert result.is_error == (policy == "disabled")
@@ -312,7 +318,7 @@ async def test_existing_grant_under_ask_does_not_capture_guard(browser_action_ca
     case = browser_action_case
     case.settings.permissions.policies[case.capability] = "ask"
     evaluate = AsyncMock(return_value=PermissionDecision.ALLOW)
-    monkeypatch.setattr(runtime_module.PermissionPolicy, "evaluate", evaluate)
+    monkeypatch.setattr(mock_agent_runtime.PermissionPolicy, "evaluate", evaluate)
     result = await case.effective.execute(case.call, case.context)
     assert not result.is_error
     assert any(call.args[4].value == "ask" for call in evaluate.await_args_list)
@@ -363,7 +369,7 @@ async def test_multiple_asks_share_one_independent_guard_and_exact_source(browse
 async def test_legacy_availability_and_delegation_never_enable_new_browser_tools(browser_policy_case, monkeypatch):
     case = browser_policy_case
     case.settings.tool_availability = {"browser": False, "browser_run_code": True}
-    assert not set(BROWSER_TOOL_ACTIONS) & tools_module.ToolRegistry([]).effective(
+    assert not set(BROWSER_TOOL_ACTIONS) & mock_tools_catalog.ToolRegistry([]).effective(
         case.integrations, tool_settings=case.settings,
     ).tools.keys()
     case.call.name = "browser_run_code"
@@ -374,7 +380,9 @@ async def test_legacy_availability_and_delegation_never_enable_new_browser_tools
     ceiling = permission_snapshot(case.settings, {"browser"}, case.integrations)
     ceiling["integrationDefaults"][str(case.instance.id)].pop("browser.code")
     ceiling["actionDefaults"].pop("browser.code")
-    monkeypatch.setattr(runtime_module, "delegation_snapshot", AsyncMock(return_value=ceiling))
+    _mock_value = AsyncMock(return_value=ceiling)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'delegation_snapshot', _mock_value)
     result = await case.effective.execute(case.call, case.context)
     assert result.metadata["errorCode"] == "permission.denied"
     case.approval.assert_not_awaited()
@@ -397,7 +405,9 @@ async def test_browser_final_fence_rejects_revoked_earlier_permission_during_cod
         policies = case.settings._agent_permissions.policies
     else:
         ceiling = permission_snapshot(case.settings, set(BROWSER_TOOL_ACTIONS), case.integrations)
-        monkeypatch.setattr(runtime_module, "delegation_snapshot", AsyncMock(return_value=ceiling))
+        _mock_value = AsyncMock(return_value=ceiling)
+        for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+            monkeypatch.setattr(_mock_target, 'delegation_snapshot', _mock_value)
         policies = ceiling["integrationDefaults"][str(case.instance.id)]
     pending, release = asyncio.Event(), asyncio.Event()
 

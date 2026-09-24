@@ -7,15 +7,16 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent import runtime as runtime_module
+import mato_loop_backend.agent.loop as mock_agent_loop
+import mato_loop_backend.agent.run_support as mock_agent_run_support
+import mato_loop_backend.agent.runtime as mock_agent_runtime
+import mato_loop_backend.agent.summarization as mock_agent_summarization
+import mato_loop_backend.agent.titles as mock_agent_titles
 from mato_loop_backend.agent import subagents
-from mato_loop_backend.agent.context import _model_tool_calls
-from mato_loop_backend.agent.permissions import PermissionDecision, PermissionRequest
-from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
-from mato_loop_backend.agent.runtime import (
+from mato_loop_backend.agent.projection import _model_tool_calls
+from mato_loop_backend.agent.run_contracts import AgentRunError
+from mato_loop_backend.agent.run_support import (
     RUN_PHASES,
-    AgentRunError,
-    AgentRuntime,
     _persist_edited_tool_arguments,
     _public_reasoning_payload,
     _public_run_error,
@@ -23,9 +24,12 @@ from mato_loop_backend.agent.runtime import (
     _safe_provider_data,
     _safe_tool_arguments,
 )
-from mato_loop_backend.agent.tool_arguments import QuestionArguments, TaskArguments
-from mato_loop_backend.attachments import AttachmentInput
+from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.events import RunEventBroker, run_events
+from mato_loop_backend.files.service import RootFileService
+from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.media.attachments import AttachmentInput
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
@@ -34,13 +38,13 @@ from mato_loop_backend.models import (
     QuestionRequest,
     TitleGenerationStatus,
 )
+from mato_loop_backend.permissions.policy import PermissionDecision, PermissionRequest
 from mato_loop_backend.providers.base import (
     ProviderError,
     ProviderResult,
     PublicReasoning,
     ToolCall,
 )
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.sessions.serialization import message_payload
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
@@ -57,7 +61,7 @@ from mato_loop_backend.settings.models import (
     ModelConfig,
     build_profile,
 )
-from mato_loop_backend.workspace import RootFileService
+from mato_loop_backend.tools.arguments import QuestionArguments, TaskArguments
 
 
 def test_run_timing_sums_active_segments_and_excludes_user_waits() -> None:
@@ -246,8 +250,10 @@ def delegated_runtime(monkeypatch):
         subagents, "load_agent_profile_tools",
         AsyncMock(return_value=(current_tools, profile)),
     )
-    monkeypatch.setattr(subagents, "load_effective_integrations", AsyncMock(return_value=runtime_module.IntegrationSettings()))
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", factory)
+    monkeypatch.setattr(subagents, "load_effective_integrations", AsyncMock(return_value=mock_agent_run_support.IntegrationSettings()))
+    _mock_value = factory
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(SessionStorage, "provision", Mock())
     monkeypatch.setattr(run_events, "register_subagent", Mock(), raising=False)
     monkeypatch.setattr(run_events, "unregister_subagent", Mock(), raising=False)
@@ -321,7 +327,7 @@ async def test_delegated_children_parallel_normal_lifecycle(monkeypatch, delegat
 
 
 async def test_delegation_intersects_live_spawn_scope_and_both_permission_ceilings(monkeypatch, delegated_runtime):
-    from mato_loop_backend.agent.tools import resolve_tool_execution_policy
+    from mato_loop_backend.permissions.resolution import resolve_tool_execution_policy
     from mato_loop_backend.settings import (
         IntegrationInstance,
         IntegrationSettings,
@@ -374,7 +380,7 @@ async def test_delegation_intersects_live_spawn_scope_and_both_permission_ceilin
             request = PermissionRequest(capability="calendar.read", resource_type="network_service", resource_scope=resource,
                                         action_kind="read", risk_level="low", title="Read", summary="Read",
                                         policy_integration_id=account_id, policy_resource_key=resource)
-            assert runtime_module._tool_policy(subagents.ceiling_settings(snapshot, TrustLevel.PUBLIC), scoped, request, snapshot=snapshot) == ToolExecutionPolicy.ASK
+            assert mock_agent_run_support._tool_policy(subagents.ceiling_settings(snapshot, TrustLevel.PUBLIC), scoped, request, snapshot=snapshot) == ToolExecutionPolicy.ASK
             assert resolve_tool_execution_policy(bounded, "calendar.read", integration_id=account_id, resource_key=resource).policy == ToolExecutionPolicy.ASK
         assert resolve_tool_execution_policy(bounded, "calendar.read", integration_id=account_id, resource_key="other").policy == ToolExecutionPolicy.AUTO
         message = Message(id=uuid4(), session_id=run.session_id, role="assistant", content="Scoped result")
@@ -508,7 +514,9 @@ async def test_cancel_descendants_uses_recursive_sessions_and_never_replays_orph
     )
     write_db.add.side_effect = lambda message: setattr(message, "id", uuid4())
     factory = Mock(side_effect=[read_db, write_db])
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", factory)
+    _mock_value = factory
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
 
     async def cancel(_run_id):
         read_db.__aexit__.assert_awaited_once()
@@ -560,7 +568,7 @@ async def test_delegated_waits_keep_parent_active_and_expire_on_cancel(monkeypat
                 "id": "detail", "type": "free_text", "header": "Detail", "question": "Which detail?",
             }]))
 
-    monkeypatch.setattr(runtime_module.WebPushService, "deliver_after_commit", AsyncMock())
+    monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", AsyncMock())
     monkeypatch.setattr(run_events, "publish", publish)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", execute)
     task = asyncio.create_task(delegate())
@@ -591,10 +599,14 @@ async def test_child_authorization_uses_main_grants_child_roots_and_snapshot(mon
     }})
     db = AsyncMock(spec=AsyncSession)
     db.get.side_effect = lambda model, key: parent if model is ChatSession else message
-    monkeypatch.setattr(runtime_module, "load_agent_profile_tools", AsyncMock(return_value=(ToolSettings(), None)))
-    monkeypatch.setattr(runtime_module, "load_effective_integrations", AsyncMock(return_value=IntegrationSettings()))
+    _mock_value = AsyncMock(return_value=(ToolSettings(), None))
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile_tools', _mock_value)
+    _mock_value = AsyncMock(return_value=IntegrationSettings())
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'load_effective_integrations', _mock_value)
     evaluate = AsyncMock(side_effect=[PermissionDecision.ASK, PermissionDecision.ALLOW])
-    monkeypatch.setattr(runtime_module.PermissionPolicy, "evaluate", evaluate)
+    monkeypatch.setattr(mock_agent_runtime.PermissionPolicy, "evaluate", evaluate)
     approve = AsyncMock(return_value="allow_once")
     monkeypatch.setattr(AgentRuntime, "_request_approval", approve)
     request = PermissionRequest(capability="network.fetch", resource_type="url", resource_scope="https://example.org",
@@ -630,7 +642,9 @@ async def test_start_persists_effective_run_policy_snapshot(
     from mato_loop_backend.settings.models import AgentProfile
 
     profile = AgentProfile(name="Custom", instructions="Follow the task.", maxToolCalls=tool_limit)
-    monkeypatch.setattr(runtime_module, "load_agent_profile", AsyncMock(return_value=profile))
+    _mock_value = AsyncMock(return_value=profile)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
     provider = LlmProviderConfig(
         name="Provider",
         adapter_type="openai-compatible",
@@ -714,7 +728,9 @@ async def test_start_switches_profile_with_run_and_discards_session_grants(monke
 
     profile = AgentProfile(name="Next", instructions="Follow the task.")
     load_profile = AsyncMock(return_value=profile)
-    monkeypatch.setattr(runtime_module, "load_agent_profile", load_profile)
+    _mock_value = load_profile
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
     provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="model")
     monkeypatch.setattr(
@@ -764,9 +780,10 @@ async def test_start_schedules_title_generation_after_agent_run(monkeypatch) -> 
         return_value=Mock(id=uuid4(), filename="urlaub.png")
     )
     attachment_service.discard = AsyncMock()
-    monkeypatch.setattr(
-        runtime_module, "AttachmentService", lambda **_kwargs: attachment_service
-    )
+    def _mock_value(**_kwargs):
+        return attachment_service
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     scheduled = []
     tasks = []
 
@@ -937,13 +954,18 @@ async def test_title_generation_rechecks_user_before_each_provider_request(
     )
     complete = AsyncMock(return_value=ProviderResult())
     fail = AsyncMock()
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
-    monkeypatch.setattr(runtime_module, "load_effective_ai", AsyncMock(return_value=settings))
+    def _mock_value():
+        return _SessionContext(db)
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
+    _mock_value = AsyncMock(return_value=settings)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'load_effective_ai', _mock_value)
     monkeypatch.setattr(
         SettingsStore, "load", AsyncMock(return_value=AgentRuntimeSettings())
     )
     monkeypatch.setattr(AgentRuntime, "_ensure_user_active", ensure_active)
-    monkeypatch.setattr(runtime_module.ProviderService, "complete", complete)
+    monkeypatch.setattr(mock_agent_loop.ProviderService, "complete", complete)
     monkeypatch.setattr(AgentRuntime, "_fail_title_generation", fail)
 
     await AgentRuntime._generate_title(
@@ -992,7 +1014,10 @@ async def test_run_failure_persists_structured_message_before_terminal_event(mon
     async def publish(_run_id, event) -> None:
         events.append(event)
 
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
+    def _mock_value():
+        return _SessionContext(db)
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", fail)
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
     monkeypatch.setattr(AgentRuntime, "_deliver_run_push", AsyncMock())
@@ -1041,7 +1066,7 @@ async def test_normal_run_push_uses_canonical_session_target(
 
     db.get.side_effect = get
     deliver = AsyncMock()
-    monkeypatch.setattr(runtime_module.WebPushService, "deliver_after_commit", deliver)
+    monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", deliver)
 
     await AgentRuntime._deliver_run_push(db, run, failed=failed)
 
@@ -1057,7 +1082,7 @@ async def test_automation_run_does_not_emit_a_second_session_push(monkeypatch) -
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = uuid4()
     deliver = AsyncMock()
-    monkeypatch.setattr(runtime_module.WebPushService, "deliver_after_commit", deliver)
+    monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", deliver)
 
     await AgentRuntime._deliver_run_push(db, run, failed=False)
 
@@ -1093,7 +1118,10 @@ async def test_user_cancel_persists_visible_response_before_terminal_event(monke
     async def publish(_run_id, event) -> None:
         events.append(event)
 
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
+    def _mock_value():
+        return _SessionContext(db)
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", execute_loop)
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
     monkeypatch.setattr(run_events, "publish", publish)
@@ -1136,7 +1164,10 @@ async def test_immediate_user_cancel_persists_empty_interruption_marker(monkeypa
         events.append(event)
 
     execute_loop = AsyncMock()
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
+    def _mock_value():
+        return _SessionContext(db)
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", execute_loop)
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
     monkeypatch.setattr(run_events, "publish", publish)
@@ -1181,7 +1212,10 @@ async def test_shutdown_cancel_is_persisted_as_backend_restart(monkeypatch) -> N
     async def publish(_run_id, event) -> None:
         events.append(event)
 
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
+    def _mock_value():
+        return _SessionContext(db)
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", execute_loop)
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
     monkeypatch.setattr(run_events, "publish", publish)
@@ -1211,7 +1245,10 @@ async def test_cancel_after_completed_response_does_not_add_interruption(monkeyp
     async def publish(_run_id, event) -> None:
         events.append(event)
 
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
+    def _mock_value():
+        return _SessionContext(db)
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", AsyncMock())
 
     async def cancel_after_completion(run_id, event) -> None:
@@ -1551,7 +1588,7 @@ async def test_persisted_edited_tool_call_keeps_final_arguments_and_provenance(
     )
     db = AsyncMock(spec=AsyncSession)
     publish = AsyncMock()
-    monkeypatch.setattr(runtime_module.run_events, "publish", publish)
+    monkeypatch.setattr(mock_agent_runtime.run_events, "publish", publish)
 
     await _persist_edited_tool_arguments(
         db,

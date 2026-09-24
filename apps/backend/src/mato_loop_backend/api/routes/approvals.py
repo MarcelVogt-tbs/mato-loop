@@ -9,15 +9,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.approval_decisions import (
-    ApprovalDecisionError,
-    decide_agent_action,
-)
-from mato_loop_backend.agent.runtime import approval_payload
+from mato_loop_backend.agent.run_support import approval_payload
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.memory.service import MemoryApprovalEdit, MemoryService
 from mato_loop_backend.models import ApprovalRequest, ChatSession, PermissionGrant, UserAccount
+from mato_loop_backend.permissions.decisions import ApprovalDecisionError, decide_agent_action
 from mato_loop_backend.security import require_user
 from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
 

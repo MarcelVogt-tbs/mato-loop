@@ -15,10 +15,9 @@ from pydantic import (
 )
 
 from mato_loop_backend.agent.run_timing import run_timing_payload
-from mato_loop_backend.agent.tool_display import enrich_tool_calls
-from mato_loop_backend.attachment_processing import claimed_audio_format
 from mato_loop_backend.error_contract import describe_error
-from mato_loop_backend.integrations import WebFetchError, canonicalize_url
+from mato_loop_backend.files.service import RootFileError, RootFileService
+from mato_loop_backend.media.processing import claimed_audio_format
 from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.models import (
     AgentRun,
@@ -29,7 +28,8 @@ from mato_loop_backend.models import (
     MessageAttachment,
     WebSearchPolicy,
 )
-from mato_loop_backend.workspace import RootFileError, RootFileService
+from mato_loop_backend.tools.display import enrich_tool_calls
+from mato_loop_backend.web.fetch import WebFetchError, canonicalize_url
 
 LAST_MESSAGE_AT_UNSET = object()
 _PUBLIC_WARNING_CODES = {"privacy.placeholderRestorationIncomplete", "agent.toolCallLimitReached"}

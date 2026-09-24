@@ -12,18 +12,20 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import Headers, UploadFile
 
-from mato_loop_backend.agent import AgentRuntime
-from mato_loop_backend.agent import runtime as runtime_module
-from mato_loop_backend.agent.context import message_dict
+import mato_loop_backend.agent.loop as mock_agent_loop
+import mato_loop_backend.agent.runtime as mock_agent_runtime
+import mato_loop_backend.agent.titles as mock_agent_titles
+from mato_loop_backend.agent.projection import message_dict
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import sessions as sessions_route
 from mato_loop_backend.api.routes.media import create_transcription
-from mato_loop_backend.attachments import AttachmentError, AttachmentInput, AttachmentService
+from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.media.attachments import AttachmentError, AttachmentInput, AttachmentService
 from mato_loop_backend.models import AgentRun, ChatSession, Message, UserAccount
-from mato_loop_backend.providers import TranscriptionResult, azure_speech, lemonade
+from mato_loop_backend.providers import azure_speech, lemonade
 from mato_loop_backend.providers.base import ProviderError
-from mato_loop_backend.providers.media import MediaService
-from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.providers.media import MediaService, TranscriptionResult
 from mato_loop_backend.settings import InstanceLimits, SettingsStore, ToolSettings
 
 
@@ -249,12 +251,15 @@ async def test_common_voice_transcription_preserves_persisted_audio_and_is_idemp
 
     db.get.side_effect = get
     db.scalar.return_value = outcome != "owner_disabled_before"
-    monkeypatch.setattr(runtime_module, "AttachmentService", lambda: service)
-    monkeypatch.setattr(runtime_module, "load_effective_tools", AsyncMock(return_value=ToolSettings(
+    def _mock_value():
+        return service
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
+    monkeypatch.setattr(mock_agent_runtime, 'load_effective_tools', AsyncMock(return_value=ToolSettings(
         tool_availability={"transcribe_audio": outcome != "unavailable"},
     )))
     enqueue = AsyncMock()
-    monkeypatch.setattr(runtime_module.EpisodeIndexService, "enqueue", enqueue)
+    monkeypatch.setattr(mock_agent_runtime.EpisodeIndexService, "enqueue", enqueue)
     transcription = AsyncMock(side_effect=transcribe)
     monkeypatch.setattr(MediaService, "transcribe_audio", transcription)
     events = []
@@ -264,15 +269,15 @@ async def test_common_voice_transcription_preserves_persisted_audio_and_is_idemp
         assert voice.metadata_json["voiceTranscriptionStatus"]
         events.append((run_id, event))
 
-    monkeypatch.setattr(runtime_module.run_events, "publish", publish)
+    monkeypatch.setattr(mock_agent_runtime.run_events, "publish", publish)
     if outcome == "status_commit_error":
         db.commit.side_effect = [None, SQLAlchemyError("commit failed")]
 
     terminal_errors = {
         "cancelled": asyncio.CancelledError,
         "database_error": SQLAlchemyError,
-        "owner_disabled_before": runtime_module.AgentRunError,
-        "owner_disabled_during": runtime_module.AgentRunError,
+        "owner_disabled_before": mock_agent_runtime.AgentRunError,
+        "owner_disabled_during": mock_agent_runtime.AgentRunError,
         "status_commit_error": SQLAlchemyError,
     }
     if outcome in terminal_errors:
@@ -413,7 +418,7 @@ async def test_invalid_image_upload_logs_safe_decoder_context(caplog) -> None:
 async def test_runtime_preserves_stored_audio_when_commit_outcome_is_uncertain(
     monkeypatch,
 ) -> None:
-    from mato_loop_backend.agent import runtime as runtime_module
+    pass
     from mato_loop_backend.models import MessageAttachment
     from mato_loop_backend.settings import AiSettings
     from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
@@ -447,7 +452,10 @@ async def test_runtime_preserves_stored_audio_when_commit_outcome_is_uncertain(
     )
     service = AsyncMock()
     service.create_attachment.return_value = attachment
-    monkeypatch.setattr(runtime_module, "AttachmentService", lambda **_kwargs: service)
+    def _mock_value(**_kwargs):
+        return service
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     db = AsyncMock(spec=AsyncSession)
     db.commit.side_effect = RuntimeError("commit failed")
     session = ChatSession(
@@ -474,7 +482,7 @@ async def test_runtime_preserves_stored_audio_when_commit_outcome_is_uncertain(
 async def test_runtime_waits_for_commit_before_propagating_cancellation(
     monkeypatch,
 ) -> None:
-    from mato_loop_backend.agent import runtime as runtime_module
+    pass
     from mato_loop_backend.models import MessageAttachment
     from mato_loop_backend.settings import AiSettings
     from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
@@ -508,7 +516,10 @@ async def test_runtime_waits_for_commit_before_propagating_cancellation(
     )
     service = AsyncMock()
     service.create_attachment.return_value = attachment
-    monkeypatch.setattr(runtime_module, "AttachmentService", lambda **_kwargs: service)
+    def _mock_value(**_kwargs):
+        return service
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     commit_started = asyncio.Event()
     finish_commit = asyncio.Event()
     committed = False

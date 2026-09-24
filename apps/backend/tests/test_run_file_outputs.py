@@ -15,18 +15,28 @@ from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 from test_context_manager_contract import _build_context
 
-from mato_loop_backend.agent import runtime as runtime_module
-from mato_loop_backend.agent import tools as tools_module
-from mato_loop_backend.agent.context import ContextProjection, message_dict
+import mato_loop_backend.agent.loop as mock_agent_loop
+import mato_loop_backend.agent.run_support as mock_agent_run_support
+import mato_loop_backend.agent.runtime as mock_agent_runtime
+import mato_loop_backend.agent.summarization as mock_agent_summarization
+import mato_loop_backend.agent.titles as mock_agent_titles
+import mato_loop_backend.files.access as mock_files_access
+import mato_loop_backend.tools.access as mock_tools_access
+import mato_loop_backend.tools.catalog as mock_tools_catalog
+import mato_loop_backend.tools.files as mock_tools_files
+import mato_loop_backend.tools.media as mock_tools_media
+import mato_loop_backend.tools.sessions as mock_tools_sessions
+from mato_loop_backend.agent.projection import ContextProjection, message_dict
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.agent.tool_registry import ToolAttachment, ToolResult
-from mato_loop_backend.attachments import (
+from mato_loop_backend.files.service import RootFileError, RootFileService
+from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.integrations.openscad import _zip_project
+from mato_loop_backend.media.attachments import (
     AttachmentError,
     AttachmentService,
     latest_image_references,
     pending_attachments,
 )
-from mato_loop_backend.integrations.openscad import _zip_project
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
@@ -34,7 +44,6 @@ from mato_loop_backend.models import (
     MessageAttachment,
     WebSearchPolicy,
 )
-from mato_loop_backend.providers import MediaResult
 from mato_loop_backend.providers import service as provider_service
 from mato_loop_backend.providers.base import (
     ProviderError,
@@ -42,7 +51,7 @@ from mato_loop_backend.providers.base import (
     ProviderResult,
     ToolCall,
 )
-from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.providers.media import MediaResult
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
     InstanceLimits,
@@ -52,7 +61,8 @@ from mato_loop_backend.settings import (
     TrustLevel,
 )
 from mato_loop_backend.settings.models import IntegrationInstance, ModelConfig
-from mato_loop_backend.workspace import RootFileError, RootFileService
+from mato_loop_backend.tools.arguments import ProvideFileArguments
+from mato_loop_backend.tools.contracts import ToolAttachment, ToolResult
 
 
 def png(color):
@@ -459,13 +469,11 @@ async def test_provided_working_file_and_actions_publish_only_final_output(tmp_p
     files = RootFileService(session.id, session_storage=storage, run_id=run_id)
     files.write_file("session", "model.scad", "cube(1);")
     working = files.working_revision("model.scad")
-    monkeypatch.setattr(
-        tools_module, "_project_read_files", AsyncMock(return_value=(files, session.id))
-    )
-    monkeypatch.setattr(tools_module, "_filesystem_permission", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(tools_module, "_allow", AsyncMock(return_value=True))
-    provided = await tools_module._provide_file(
-        tools_module.ProvideFileArguments(root="session", path="model.scad"),
+    monkeypatch.setattr(mock_files_access, 'project_read_files', AsyncMock(return_value=(files, session.id)))
+    monkeypatch.setattr(mock_files_access, 'filesystem_permission', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(mock_tools_access, 'allow', AsyncMock(return_value=True))
+    provided = await mock_tools_files._provide_file(
+        ProvideFileArguments(root="session", path="model.scad"),
         SimpleNamespace(run_id=run_id, root_files=files, session=session),
     )
     assert provided.attachments[0].file_revision is None
@@ -523,13 +531,11 @@ async def test_provided_zip_persists_fixed_snapshot_after_source_edit(tmp_path, 
     files.create_directory("session", "reports")
     files.write_file("session", "reports/notes.txt", "original")
     source = files.working_revision("reports/notes.txt")
-    monkeypatch.setattr(
-        tools_module, "_project_read_files", AsyncMock(return_value=(files, session.id))
-    )
-    monkeypatch.setattr(tools_module, "_filesystem_permission", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(tools_module, "_allow", AsyncMock(return_value=True))
-    provided = await tools_module._provide_file(
-        tools_module.ProvideFileArguments(root="session", path="reports"),
+    monkeypatch.setattr(mock_files_access, 'project_read_files', AsyncMock(return_value=(files, session.id)))
+    monkeypatch.setattr(mock_files_access, 'filesystem_permission', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(mock_tools_access, 'allow', AsyncMock(return_value=True))
+    provided = await mock_tools_files._provide_file(
+        ProvideFileArguments(root="session", path="reports"),
         SimpleNamespace(run_id=run_id, root_files=files, session=session),
     )
     assert not provided.is_error
@@ -586,9 +592,10 @@ async def test_runtime_finalization_uses_effective_nondefault_quota(
     db.get.return_value = session
     db.scalar.return_value = SimpleNamespace(data=limits.model_dump())
     db.scalars.return_value = Mock(all=Mock(return_value=[message]))
-    monkeypatch.setattr(
-        runtime_module, "AttachmentService", lambda **kwargs: AttachmentService(storage, **kwargs)
-    )
+    def _mock_value(**kwargs):
+        return AttachmentService(storage, **kwargs)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     if recovery:
         db.get.side_effect = lambda model, _id: session if model is ChatSession else run
         db.scalars.side_effect = lambda statement: Mock(
@@ -600,11 +607,10 @@ async def test_runtime_finalization_uses_effective_nondefault_quota(
                 }[statement.column_descriptions[0]["entity"]]
             )
         )
-        monkeypatch.setattr(
-            runtime_module,
-            "RootFileService",
-            lambda *args, **kwargs: RootFileService(*args, session_storage=storage, **kwargs),
-        )
+        def _mock_value(*args, **kwargs):
+            return RootFileService(*args, session_storage=storage, **kwargs)
+        for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+            monkeypatch.setattr(_mock_target, 'RootFileService', _mock_value)
     # Simulate existing usage without allocating hundreds of MiB in the test container.
     monkeypatch.setattr(RootFileService, "_session_usage", lambda _self: used_mib * 1024 * 1024)
     if recovery:
@@ -675,7 +681,7 @@ async def test_other_project_session_reads_its_active_session_root(tmp_path):
     sibling_files.write_file("session", "notes.txt", "NEW_TEXT")
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = sibling
-    selected, target_id = await tools_module._project_read_files(
+    selected, target_id = await mock_files_access.project_read_files(
         SimpleNamespace(session_id=sibling.id, root="session"),
         SimpleNamespace(session=session, root_files=files, db=db),
     )
@@ -705,7 +711,7 @@ def test_hidden_artifact_references_are_omitted_without_redacting_technical_hist
     projected = message_dict(message)
     assert projected["attachments"] == []
     assert projected["content"] == message.content
-    item, _ = tools_module._message_item(
+    item, _ = mock_tools_sessions._message_item(
         message,
         1000,
         {message.id: "render_openscad"},
@@ -762,16 +768,21 @@ async def test_runtime_ephemeral_images_survive_requests_without_files(
 
     db.add.side_effect = add
     if terminal == "bounded-count":
-        monkeypatch.setattr(runtime_module, "MAX_PROVIDER_IMAGES", 1)
+        _mock_value = 1
+        for _mock_target in (mock_agent_run_support, mock_agent_loop, mock_agent_titles,):
+            monkeypatch.setattr(_mock_target, 'MAX_PROVIDER_IMAGES', _mock_value)
     elif terminal == "bounded-bytes":
-        monkeypatch.setattr(runtime_module, "MAX_PROVIDER_IMAGE_BYTES", max(len(png("red")), len(png("blue"))))
-    monkeypatch.setattr(
-        runtime_module, "RootFileService",
-        lambda *args, **kwargs: RootFileService(*args, session_storage=storage, **kwargs),
-    )
-    monkeypatch.setattr(
-        runtime_module, "AttachmentService", lambda **kwargs: AttachmentService(storage, **kwargs),
-    )
+        _mock_value = max(len(png("red")), len(png("blue")))
+        for _mock_target in (mock_agent_run_support, mock_agent_loop, mock_agent_titles,):
+            monkeypatch.setattr(_mock_target, 'MAX_PROVIDER_IMAGE_BYTES', _mock_value)
+    def _mock_value(*args, **kwargs):
+        return RootFileService(*args, session_storage=storage, **kwargs)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'RootFileService', _mock_value)
+    def _mock_value(**kwargs):
+        return AttachmentService(storage, **kwargs)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
 
     async def execute(call, _context, _tool):
         capture = call.arguments["url"].endswith("/one")
@@ -782,7 +793,7 @@ async def test_runtime_ephemeral_images_survive_requests_without_files(
             ),) if capture or terminal.startswith("bounded-") or terminal == "reused-two-images" else (),
         )
 
-    monkeypatch.setattr(tools_module.tool_registry, "_execute_definition", execute)
+    monkeypatch.setattr(mock_tools_catalog.tool_registry, "_execute_definition", execute)
     estimates = []
     prepare = provider_service.ProviderService.prepare_request
 
@@ -791,7 +802,7 @@ async def test_runtime_ephemeral_images_survive_requests_without_files(
         return await prepare(**kwargs)
 
     monkeypatch.setattr(provider_service.ProviderService, "prepare_request", staticmethod(estimate))
-    build = runtime_module.ContextManager.build
+    build = mock_agent_loop.ContextManager.build
 
     async def compacted_build(*args, **kwargs):
         if len(requests) < 2 or reused_ids:
@@ -806,7 +817,7 @@ async def test_runtime_ephemeral_images_survive_requests_without_files(
             input_budget_tokens=1000,
         )
 
-    monkeypatch.setattr(runtime_module.ContextManager, "build", compacted_build)
+    monkeypatch.setattr(mock_agent_loop.ContextManager, "build", compacted_build)
     complete = provider_service.ProviderService.complete
     observed = []
     direct_references = []
@@ -889,7 +900,7 @@ def test_ephemeral_projection_keeps_user_references_and_newest_images(persisted_
         for index in range(8)
     }
     model = ModelConfig(provider_id=uuid4(), model_id="vision", supports_image_input=True)
-    projected, direct = runtime_module._project_ephemeral_images(
+    projected, direct = mock_agent_run_support._project_ephemeral_images(
         messages, images, model=model, target_trust_level=TrustLevel.PUBLIC,
     )
     assert messages == original
@@ -897,7 +908,7 @@ def test_ephemeral_projection_keeps_user_references_and_newest_images(persisted_
     assert direct == list(reversed(images.values()))[:8 - persisted_count]
     assert all(projected[image.message_index]["role"] == "assistant" for image in direct)
     assert "base64" not in json.dumps(projected)
-    assert runtime_module._project_ephemeral_images(
+    assert mock_agent_run_support._project_ephemeral_images(
         messages, images, model=model, target_trust_level=TrustLevel.PUBLIC,
     ) == (projected, direct)
 
@@ -1013,15 +1024,15 @@ async def test_runtime_two_previews_are_internal_and_explicit_stl_is_retained(
     db.add.side_effect = add
     db.scalar.return_value = session
     db.scalars.side_effect = scalars
-    monkeypatch.setattr(
-        runtime_module,
-        "RootFileService",
-        lambda *args, **kwargs: RootFileService(*args, session_storage=storage, **kwargs),
-    )
-    monkeypatch.setattr(
-        runtime_module, "AttachmentService", lambda **kwargs: AttachmentService(storage, **kwargs)
-    )
-    monkeypatch.setattr(tools_module.tool_registry, "_execute_definition", execute)
+    def _mock_value(*args, **kwargs):
+        return RootFileService(*args, session_storage=storage, **kwargs)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'RootFileService', _mock_value)
+    def _mock_value(**kwargs):
+        return AttachmentService(storage, **kwargs)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
+    monkeypatch.setattr(mock_tools_catalog.tool_registry, "_execute_definition", execute)
     await AgentRuntime._execute_loop(db, run)
     public = RootFileService(session.id, session_storage=storage)
     assert public.list_revisions("model.scad")[0].revision == 1
@@ -1120,7 +1131,10 @@ async def test_recovery_retries_failed_active_run_file_finalization(monkeypatch)
     db.get.side_effect = lambda entity, _id: session if entity is ChatSession else run
     files = Mock(pending_run_ids=Mock(return_value=(run.id,)))
     finalize = AsyncMock(return_value=False)
-    monkeypatch.setattr(runtime_module, "RootFileService", lambda *_args, **_kwargs: files)
+    def _mock_value(*_args, **_kwargs):
+        return files
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'RootFileService', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_finalize_run_files", finalize)
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
     monkeypatch.setattr(AgentRuntime, "_persist_error_message", AsyncMock())
@@ -1258,16 +1272,19 @@ async def test_pending_audio_and_image_tools_use_owned_live_sources(tmp_path, mo
     )
     db.scalar.return_value = None
     db.scalars.return_value = Mock(all=Mock(return_value=[message]))
-    monkeypatch.setattr(tools_module, "AttachmentService", lambda **_kwargs: service)
+    def _mock_value(**_kwargs):
+        return service
+    for _mock_target in (mock_tools_files, mock_tools_media,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     target = SimpleNamespace(
         model=SimpleNamespace(id=uuid4(), trust_level=TrustLevel.PUBLIC),
         provider=SimpleNamespace(trust_level=TrustLevel.PUBLIC),
     )
-    monkeypatch.setattr(tools_module.MediaService, "resolve_model", AsyncMock(return_value=target))
-    monkeypatch.setattr(tools_module, "_media_target_matches_binding", lambda *_args: True)
-    monkeypatch.setattr(tools_module, "_authorize_media", AsyncMock(return_value=None))
+    monkeypatch.setattr(mock_tools_media.MediaService, "resolve_model", AsyncMock(return_value=target))
+    monkeypatch.setattr(mock_tools_media, '_media_target_matches_binding', lambda *_args: True)
+    monkeypatch.setattr(mock_tools_media, '_authorize_media', AsyncMock(return_value=None))
     edit = AsyncMock(return_value=MediaResult(png("blue"), "image/png", "image.png"))
-    monkeypatch.setattr(tools_module.MediaService, "edit_image", edit)
+    monkeypatch.setattr(mock_tools_media.MediaService, "edit_image", edit)
     context = SimpleNamespace(
         db=db,
         session=session,
@@ -1276,7 +1293,7 @@ async def test_pending_audio_and_image_tools_use_owned_live_sources(tmp_path, mo
         model_id=target.model.id,
         tool_settings=ToolSettings(),
     )
-    result = await tools_module._edit_image(
+    result = await mock_tools_media._edit_image(
         SimpleNamespace(attachment_ids=[image.id], prompt="Make it blue"), context
     )
     assert result.attachments[0].file_root_id is None
@@ -1309,13 +1326,16 @@ async def test_terminal_events_follow_file_finalization(monkeypatch, terminal):
             assert "finalize" in order
 
     db.__aenter__.return_value = db
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: db)
+    def _mock_value():
+        return db
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", execute)
     monkeypatch.setattr(AgentRuntime, "_finalize_run_files", finalize)
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
     monkeypatch.setattr(AgentRuntime, "_persist_run_duration", AsyncMock())
     monkeypatch.setattr(AgentRuntime, "_deliver_run_push", AsyncMock())
-    monkeypatch.setattr(runtime_module.run_events, "publish", publish)
+    monkeypatch.setattr(mock_agent_runtime.run_events, "publish", publish)
     if terminal == "cancelled":
         with pytest.raises(asyncio.CancelledError):
             await AgentRuntime._run(run.id)
@@ -1368,9 +1388,15 @@ async def test_recovery_finalizes_live_files_and_pending_json_before_errors(
 
     db.scalars.side_effect = scalars
     db.get.side_effect = lambda entity, _id: session if entity is ChatSession else run
-    monkeypatch.setattr(runtime_module, "AttachmentService", lambda **_kwargs: service)
+    def _mock_value(**_kwargs):
+        return service
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=InstanceLimits()))
-    monkeypatch.setattr(runtime_module, "RootFileService", lambda *_args, **_kwargs: files)
+    def _mock_value(*_args, **_kwargs):
+        return files
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'RootFileService', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
     monkeypatch.setattr(AgentRuntime, "_persist_error_message", persist_error)
     await AgentRuntime.recover(db)
@@ -1402,14 +1428,14 @@ async def test_runtime_publishes_attachment_rows_only_before_final_assistant(tmp
     storage = SessionStorage(tmp_path / "sessions")
     storage.provision(session.id)
     public_files = RootFileService(session.id, session_storage=storage)
-    monkeypatch.setattr(
-        runtime_module,
-        "RootFileService",
-        lambda *args, **kwargs: RootFileService(*args, session_storage=storage, **kwargs),
-    )
-    monkeypatch.setattr(
-        runtime_module, "AttachmentService", lambda **kwargs: AttachmentService(storage, **kwargs)
-    )
+    def _mock_value(*args, **kwargs):
+        return RootFileService(*args, session_storage=storage, **kwargs)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'RootFileService', _mock_value)
+    def _mock_value(**kwargs):
+        return AttachmentService(storage, **kwargs)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     records = await AgentRuntime._records(db, session.id)
     public_attachments = []
 
@@ -1463,8 +1489,8 @@ async def test_runtime_publishes_attachment_rows_only_before_final_assistant(tmp
             assert public_attachments[0].file_revision == 1
         events.append(event)
 
-    monkeypatch.setattr(tools_module.tool_registry, "_execute_definition", execute)
-    monkeypatch.setattr(runtime_module.run_events, "publish", publish)
+    monkeypatch.setattr(mock_tools_catalog.tool_registry, "_execute_definition", execute)
+    monkeypatch.setattr(mock_agent_runtime.run_events, "publish", publish)
     await AgentRuntime._execute_loop(db, run)
     assert len(public_attachments) == 1
     assert await AttachmentService(storage).read_image(public_attachments[0], session.id) == png(

@@ -18,12 +18,12 @@ from PIL import Image
 from pypdf import PdfWriter
 from yarl import URL
 
-from mato_loop_backend.integrations import (
+import mato_loop_backend.web.fetch as web_fetch
+from mato_loop_backend.web.fetch import (
     WebFetchError,
     canonicalize_url,
     fetch_web,
     request_web_bytes,
-    webfetch,
 )
 
 Responder = Callable[[str, dict[str, str]], Awaitable[bytes]]
@@ -123,7 +123,7 @@ def test_canonicalizes_urls_with_query_values() -> None:
 async def test_authorization_runs_after_normalization_and_resolution(monkeypatch) -> None:
     authorize = AsyncMock(side_effect=WebFetchError("permission.denied"))
     resolve = AsyncMock(return_value=(ipaddress.ip_address("8.8.8.8"),))
-    monkeypatch.setattr(webfetch, "_resolve_addresses", resolve)
+    monkeypatch.setattr(web_fetch, "_resolve_addresses", resolve)
 
     assert await _error_code(
         fetch_web("HTTPS://ExAmPle.com", authorize_url=authorize)
@@ -143,7 +143,7 @@ async def test_authorization_runs_once_before_post_authorization_resolution(
         ]
     )
     request = AsyncMock(
-        return_value=webfetch._Response(
+        return_value=web_fetch._Response(
             status=200,
             location=None,
             content_type="text/plain",
@@ -152,8 +152,8 @@ async def test_authorization_runs_once_before_post_authorization_resolution(
             body=b"ok",
         )
     )
-    monkeypatch.setattr(webfetch, "_resolve_addresses", resolve)
-    monkeypatch.setattr(webfetch, "_request_once", request)
+    monkeypatch.setattr(web_fetch, "_resolve_addresses", resolve)
+    monkeypatch.setattr(web_fetch, "_request_once", request)
 
     result = await fetch_web(
         "https://example.com/",
@@ -220,7 +220,7 @@ async def test_unrestricted_mode_accepts_non_public_address_classes(
     monkeypatch, address: str
 ) -> None:
     request = AsyncMock(
-        return_value=webfetch._Response(
+        return_value=web_fetch._Response(
             status=200,
             location=None,
             content_type="text/plain",
@@ -229,7 +229,7 @@ async def test_unrestricted_mode_accepts_non_public_address_classes(
             body=b"ok",
         )
     )
-    monkeypatch.setattr(webfetch, "_request_once", request)
+    monkeypatch.setattr(web_fetch, "_request_once", request)
     url = f"http://{address}"
     if ":" in address:
         url = f"http://[{address}]"
@@ -256,7 +256,7 @@ async def test_dns_answers_are_validated_as_a_set(monkeypatch) -> None:
     async def resolve(host: str, port: int):
         return (ipaddress.ip_address("8.8.8.8"), ipaddress.ip_address("127.0.0.1"))
 
-    monkeypatch.setattr(webfetch, "_resolve_addresses", resolve)
+    monkeypatch.setattr(web_fetch, "_resolve_addresses", resolve)
     assert await _error_code(fetch_web("http://mixed.example")) == "webfetch.addressBlocked"
 
 
@@ -273,7 +273,7 @@ async def test_dns_is_pinned_and_request_headers_are_safe(monkeypatch) -> None:
             assert resolved_port == port
             return (ipaddress.ip_address("127.0.0.1"),)
 
-        monkeypatch.setattr(webfetch, "_resolve_addresses", resolve)
+        monkeypatch.setattr(web_fetch, "_resolve_addresses", resolve)
         result = await fetch_web(
             f"http://pinned.test:{port}/resource",
             public_addresses_only=False,
@@ -313,10 +313,10 @@ async def test_tls_failure_has_a_specific_safe_error(monkeypatch, caplog) -> Non
             del args, kwargs
             raise aiohttp.ClientSSLError(None, OSError("certificate mismatch"))
 
-    monkeypatch.setattr(webfetch, "_resolve_addresses", resolve)
-    monkeypatch.setattr(webfetch.aiohttp, "ClientSession", FailingSession)
+    monkeypatch.setattr(web_fetch, "_resolve_addresses", resolve)
+    monkeypatch.setattr(web_fetch.aiohttp, "ClientSession", FailingSession)
 
-    with caplog.at_level(logging.WARNING, logger=webfetch.__name__):
+    with caplog.at_level(logging.WARNING, logger=web_fetch.__name__):
         code = await _error_code(fetch_web("https://tls.example/private?token=secret"))
 
     assert code == "webfetch.tlsFailed"
@@ -528,17 +528,17 @@ async def test_structured_text_preserves_source_without_parsing(
 
 @pytest.mark.parametrize("format", ["markdown", "html"])
 async def test_structured_text_conversion_obeys_remaining_timeout(monkeypatch, format) -> None:
-    target = webfetch._Target(URL("https://example.com/data"), "example.com", 443, ())
-    response = webfetch._Response(200, None, "application/json", None, None, b"{}")
+    target = web_fetch._Target(URL("https://example.com/data"), "example.com", 443, ())
+    response = web_fetch._Response(200, None, "application/json", None, None, b"{}")
     monkeypatch.setattr(
-        webfetch, "_follow_redirects", AsyncMock(return_value=(target, response, 0.01)),
+        web_fetch, "_follow_redirects", AsyncMock(return_value=(target, response, 0.01)),
     )
 
     def slow_decode(*args, **kwargs):
         time.sleep(0.05)
         return "{}"
 
-    monkeypatch.setattr(webfetch, "_decode_text", slow_decode)
+    monkeypatch.setattr(web_fetch, "_decode_text", slow_decode)
 
     assert await _error_code(fetch_web(str(target.url), format=format)) == "webfetch.timeout"
 
@@ -603,7 +603,7 @@ async def test_supported_image_returns_bytes_and_safe_filename() -> None:
 async def test_text_pdf_is_extracted_without_vision(monkeypatch) -> None:
     vision = AsyncMock(side_effect=AssertionError("Vision must not be used"))
     monkeypatch.setattr(
-        webfetch,
+        web_fetch,
         "extract_pdf_pages",
         lambda _data: (["Manual text"], {"pageCount": 1, "imagePages": []}),
     )
@@ -630,11 +630,11 @@ async def test_text_pdf_can_return_selected_page_images(monkeypatch) -> None:
     image = b"\xff\xd8\xffpage"
     render = Mock(return_value=image)
     monkeypatch.setattr(
-        webfetch,
+        web_fetch,
         "extract_pdf_pages",
         lambda _data: (["Diagram labels", "Notes"], {"pageCount": 2, "imagePages": []}),
     )
-    monkeypatch.setattr(webfetch, "_render_pdf_page", render)
+    monkeypatch.setattr(web_fetch, "_render_pdf_page", render)
 
     async def responder(target: str, headers: dict[str, str]) -> bytes:
         return _response(b"%PDF-1.7 fake", headers={"Content-Type": "application/pdf"})
@@ -659,8 +659,8 @@ async def test_text_pdf_can_return_selected_page_images(monkeypatch) -> None:
 async def test_scan_pdf_requires_vision_and_uses_rendered_pages(monkeypatch) -> None:
     document = _scan_pdf()
     seen: list[tuple[int, bytes]] = []
-    render = Mock(wraps=webfetch._render_pdf_page)
-    monkeypatch.setattr(webfetch, "_render_pdf_page", render)
+    render = Mock(wraps=web_fetch._render_pdf_page)
+    monkeypatch.setattr(web_fetch, "_render_pdf_page", render)
 
     async def responder(target: str, headers: dict[str, str]) -> bytes:
         return _response(document, headers={"Content-Type": "application/pdf"})
@@ -839,7 +839,7 @@ async def test_http_error_status_is_returned_without_reading_large_body() -> Non
             status=404,
             headers={
                 "Content-Type": "text/plain",
-                "Content-Length": str(webfetch.MAX_RESPONSE_BYTES + 1),
+                "Content-Length": str(web_fetch.MAX_RESPONSE_BYTES + 1),
             },
             content_length=False,
         )
@@ -883,7 +883,7 @@ async def test_dns_failures_have_a_stable_code(monkeypatch) -> None:
         async def getaddrinfo(self, *args, **kwargs):
             raise socket.gaierror()
 
-    monkeypatch.setattr(webfetch.asyncio, "get_running_loop", FailingLoop)
+    monkeypatch.setattr(web_fetch.asyncio, "get_running_loop", FailingLoop)
     assert await _error_code(fetch_web("https://does-not-resolve.invalid")) == "webfetch.dnsFailed"
 
 
@@ -902,7 +902,7 @@ async def test_download_file_returns_raw_bytes_and_derives_the_filename() -> Non
         )
 
     async with _server(responder) as port:
-        result = await webfetch.download_file(
+        result = await web_fetch.download_file(
             f"{_origin(port)}/redirect",
             public_addresses_only=False,
         )
@@ -921,11 +921,11 @@ async def test_download_file_names_files_from_the_url_when_no_header_is_sent() -
         )
 
     async with _server(responder) as port:
-        named = await webfetch.download_file(
+        named = await web_fetch.download_file(
             f"{_origin(port)}/docs/manual%20v2.pdf",
             public_addresses_only=False,
         )
-        unnamed = await webfetch.download_file(
+        unnamed = await web_fetch.download_file(
             f"{_origin(port)}/",
             public_addresses_only=False,
         )
@@ -942,10 +942,10 @@ async def test_download_file_rejects_unsupported_types_and_oversized_bodies() ->
 
     async with _server(responder) as port:
         unsupported = await _error_code(
-            webfetch.download_file(f"{_origin(port)}/page", public_addresses_only=False)
+            web_fetch.download_file(f"{_origin(port)}/page", public_addresses_only=False)
         )
         oversized = await _error_code(
-            webfetch.download_file(
+            web_fetch.download_file(
                 f"{_origin(port)}/sheet.pdf",
                 public_addresses_only=False,
                 max_response_bytes=16,
@@ -961,7 +961,7 @@ async def test_download_file_applies_the_same_ssrf_protection_as_fetch() -> None
         return _response(_blank_pdf(), headers={"Content-Type": "application/pdf"})
 
     async with _server(responder) as port:
-        blocked = await _error_code(webfetch.download_file(f"{_origin(port)}/sheet.pdf"))
+        blocked = await _error_code(web_fetch.download_file(f"{_origin(port)}/sheet.pdf"))
 
     assert blocked == "webfetch.addressBlocked"
 
@@ -988,19 +988,19 @@ async def test_download_file_resolves_opaque_types_by_extension() -> None:
         )
 
     async with _server(responder) as port:
-        from_path = await webfetch.download_file(
+        from_path = await web_fetch.download_file(
             f"{_origin(port)}/files/sheet.pdf", public_addresses_only=False
         )
-        from_header = await webfetch.download_file(
+        from_header = await web_fetch.download_file(
             f"{_origin(port)}/download", public_addresses_only=False
         )
         rejected = await _error_code(
-            webfetch.download_file(
+            web_fetch.download_file(
                 f"{_origin(port)}/tool.exe", public_addresses_only=False
             )
         )
         unnamed = await _error_code(
-            webfetch.download_file(
+            web_fetch.download_file(
                 f"{_origin(port)}/blob", public_addresses_only=False
             )
         )
@@ -1022,7 +1022,7 @@ async def test_opaque_downloads_still_verify_image_signatures() -> None:
 
     async with _server(responder) as port:
         code = await _error_code(
-            webfetch.download_file(
+            web_fetch.download_file(
                 f"{_origin(port)}/logo.png", public_addresses_only=False
             )
         )

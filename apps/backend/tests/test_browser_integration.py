@@ -14,13 +14,12 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from pydantic import ValidationError
 
-from mato_loop_backend.agent import tool_registry as registry_module
-from mato_loop_backend.agent import tools as tools_module
-from mato_loop_backend.agent.permissions import PermissionDecision
-from mato_loop_backend.agent.runtime import _effective_execution_operations
-from mato_loop_backend.agent.tool_registry import ToolContext
+import mato_loop_backend.api.routes.browser_integrations as api_routes_browser_integrations
+import mato_loop_backend.tools.access as mock_tools_access
+import mato_loop_backend.tools.catalog as mock_tools_catalog
+import mato_loop_backend.tools.context as mock_tools_context
+from mato_loop_backend.agent.run_support import _effective_execution_operations
 from mato_loop_backend.api.errors import register_error_handlers
-from mato_loop_backend.api.routes import browser_integrations as routes
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution.browser_contracts import (
@@ -40,6 +39,7 @@ from mato_loop_backend.execution.browser_contracts import (
 from mato_loop_backend.execution.client import ExecutionClient, ExecutionClientError
 from mato_loop_backend.execution.manager import ExecutionAgentError, disconnect_error_code
 from mato_loop_backend.execution.protocol import SUPPORTED_OPERATIONS, ResponseMessage
+from mato_loop_backend.files.service import RootFileError
 from mato_loop_backend.integrations import browser as browser_module
 from mato_loop_backend.integrations.browser import (
     BROWSER_ADAPTER,
@@ -58,6 +58,7 @@ from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
 )
 from mato_loop_backend.models import ChatSession
+from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
@@ -71,7 +72,7 @@ from mato_loop_backend.settings import (
     load_effective_integrations,
 )
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
-from mato_loop_backend.workspace import RootFileError
+from mato_loop_backend.tools.context import ToolContext
 
 
 def _instance():
@@ -155,7 +156,7 @@ def test_public_browser_tools_have_narrow_static_schemas_and_no_legacy_tool():
         *BROWSER_TOOLS, BROWSER_UPLOAD, BROWSER_DOWNLOADS,
         BROWSER_REQUEST_CONTROL, BROWSER_RELEASE_CONTROL,
     )
-    upload = tools_module.ToolRegistry._contributed_definition(BROWSER_UPLOAD).schema()
+    upload = mock_tools_catalog.ToolRegistry._contributed_definition(BROWSER_UPLOAD).schema()
     assert set(upload["parameters"]["properties"]) == {
         "_reason", "root", "path", "tabId", "ref", "element", "observe",
     }
@@ -165,7 +166,7 @@ def test_public_browser_tools_have_narrow_static_schemas_and_no_legacy_tool():
     )
     assert set(BROWSER_DOWNLOADS.arguments_model.model_json_schema()["properties"]) == {"downloadId"}
     assert not BROWSER_REQUEST_CONTROL.arguments_model.model_json_schema()["properties"]
-    control = tools_module.ToolRegistry._contributed_definition(
+    control = mock_tools_catalog.ToolRegistry._contributed_definition(
         BROWSER_REQUEST_CONTROL
     ).schema()
     assert "browser-only interaction" in control["parameters"]["properties"][
@@ -433,7 +434,7 @@ def browser_case(monkeypatch):
     monkeypatch.setitem(sys.modules, "mato_loop_backend.execution.browsers", SimpleNamespace(browser_coordinator=coordinator))
     current = AsyncMock(return_value=settings)
     monkeypatch.setattr(ToolContext, "current_integrations", current)
-    monkeypatch.setattr(tools_module, "_profile_tool_settings", AsyncMock(return_value=ToolSettings()))
+    monkeypatch.setattr(mock_tools_access, 'profile_tool_settings', AsyncMock(return_value=ToolSettings()))
     call = ToolCall("browser-call", "browser_navigate", {"tabId": str(uuid4()), "url": "https://example.org"})
     context = ToolContext(
         db=AsyncMock(), run_id=uuid4(), session=session, tool_call=call,
@@ -441,7 +442,7 @@ def browser_case(monkeypatch):
         execution_client=ExecutionClient(instance.execution_agent_id, frozenset({"integration.browser.execute"})),
     )
     context.db.get.return_value = SimpleNamespace(execution_agent_id=instance.execution_agent_id, execution_operations=["integration.browser.execute"])
-    effective = tools_module.ToolRegistry([]).effective(settings)
+    effective = mock_tools_catalog.ToolRegistry([]).effective(settings)
     return SimpleNamespace(
         instance=instance, settings=settings, connection=connection, coordinator=coordinator,
         current=current, context=context, call=call, effective=effective,
@@ -1042,7 +1043,7 @@ def browser_api(monkeypatch):
     db.scalars.return_value = SimpleNamespace(all=lambda: [agent])
     app = FastAPI()
     register_error_handlers(app)
-    app.include_router(routes.router, prefix="/api")
+    app.include_router(api_routes_browser_integrations.router, prefix="/api")
     app.dependency_overrides[require_user] = lambda: user
     app.dependency_overrides[get_db_session] = lambda: db
     return SimpleNamespace(client=TestClient(app), user=user, agent=agent, other_agent=other_agent, db=db, documents=documents)
@@ -1091,7 +1092,9 @@ def test_status_test_reset_use_only_fixed_owner_bound_rpc(browser_api, monkeypat
     url = f"{base}/{item['id']}"
     client = SimpleNamespace(request=AsyncMock(return_value=BrowserStatusResult(state="missing", missing=["chromium"])))
     factory = Mock(return_value=client)
-    monkeypatch.setattr(routes, "browser_client", factory)
+    from mato_loop_backend.api.routes import browser_integrations
+
+    monkeypatch.setattr(browser_integrations, "browser_client", factory)
     for method, suffix in (("get", "status"), ("post", "test")):
         response = case.client.request(method, f"{url}/{suffix}")
         assert response.status_code == 200 and response.json()["state"] == "missing"
@@ -1122,8 +1125,8 @@ async def test_current_tool_context_cannot_bypass_profile_with_attachment(monkey
     instance = _instance()
     session = ChatSession(id=uuid4(), user_id=instance.owner_id, agent_profile_id=uuid4())
     profile = AgentProfile(id=session.agent_profile_id, name="Browser excluded", instructions="Test profile", integration_availability={str(instance.id): False})
-    monkeypatch.setattr(registry_module, "load_effective_integrations", AsyncMock(return_value=IntegrationSettings(instances=[instance])))
-    monkeypatch.setattr(registry_module, "load_agent_profile", AsyncMock(return_value=profile))
+    monkeypatch.setattr(mock_tools_context, 'load_effective_integrations', AsyncMock(return_value=IntegrationSettings(instances=[instance])))
+    monkeypatch.setattr(mock_tools_context, 'load_agent_profile', AsyncMock(return_value=profile))
     coordinator = SimpleNamespace(attached_for=Mock())
     monkeypatch.setitem(sys.modules, "mato_loop_backend.execution.browsers", SimpleNamespace(browser_coordinator=coordinator))
     context = ToolContext(
@@ -1144,9 +1147,9 @@ async def test_profile_disabled_browser_actions_are_not_offered():
     tools = ToolSettings()
     for permissions in (tools.private_permissions, tools.public_permissions):
         permissions.policies.update({"browser.read": "disabled", "browser.write": "disabled"})
-    effective = tools_module.tool_registry.effective(settings, tool_settings=tools)
+    effective = mock_tools_catalog.tool_registry.effective(settings, tool_settings=tools)
     assert not set(BROWSER_TOOL_ACTIONS) & effective.tools.keys()
-    assert {action.capability for action in tools_module.tool_registry.integration_resource_actions(instance)} == {
+    assert {action.capability for action in mock_tools_catalog.tool_registry.integration_resource_actions(instance)} == {
         "browser.read", "browser.write", "browser.code", "browser.control", "browser.release",
         "filesystem.read", "session.files.read", "filesystem.write",
     }
@@ -1169,7 +1172,7 @@ def test_narrow_write_and_code_tools_are_not_offered_with_write_disabled():
     instance._browser_attached = True
     settings = ToolSettings()
     settings.permissions.policies["browser.write"] = "disabled"
-    effective = tools_module.ToolRegistry([]).effective(IntegrationSettings(instances=[instance]), tool_settings=settings)
+    effective = mock_tools_catalog.ToolRegistry([]).effective(IntegrationSettings(instances=[instance]), tool_settings=settings)
     assert set(effective.tools) == {
         "browser_tabs", "browser_snapshot", "browser_take_screenshot", "browser_diagnostics",
         "browser_downloads", "browser_request_control", "browser_release_control",

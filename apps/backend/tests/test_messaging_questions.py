@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.question_decisions import QuestionDecisionError
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.agent.tools import QuestionArguments
 from mato_loop_backend.events import run_events
 from mato_loop_backend.messaging.questions import (
     MessagingQuestionEnvelope,
@@ -30,6 +29,7 @@ from mato_loop_backend.models import (
     MessagingOutbox,
     QuestionRequest,
 )
+from mato_loop_backend.tools.arguments import QuestionArguments
 
 
 def _arguments() -> QuestionArguments:

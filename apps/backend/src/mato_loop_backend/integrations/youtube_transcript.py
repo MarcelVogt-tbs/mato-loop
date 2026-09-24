@@ -11,12 +11,8 @@ from dataclasses import dataclass
 from defusedxml import ElementTree
 from yarl import URL
 
-from mato_loop_backend.integrations.webfetch import (
-    WebFetchBytesResult,
-    WebFetchError,
-    request_web_bytes,
-)
 from mato_loop_backend.settings.models import DEFAULT_WEBFETCH_USER_AGENT
+from mato_loop_backend.web.fetch import WebFetchBytesResult, WebFetchError, request_web_bytes
 
 _VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _API_KEY = re.compile(rb'"INNERTUBE_API_KEY"\s*:\s*"([A-Za-z0-9_-]{10,100})"')

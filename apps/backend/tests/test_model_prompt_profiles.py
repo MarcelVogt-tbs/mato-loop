@@ -2,8 +2,8 @@ from uuid import uuid4
 
 import pytest
 
-from mato_loop_backend.agent.context import general_system_prompt
 from mato_loop_backend.agent.model_prompt_profiles import build_model_instructions
+from mato_loop_backend.agent.prompts import general_system_prompt
 from mato_loop_backend.models import ChatSession
 from mato_loop_backend.settings import (
     AgentProfileOverrides,

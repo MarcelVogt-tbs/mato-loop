@@ -4,7 +4,7 @@ from uuid import UUID
 import httpx
 import pytest
 
-from mato_loop_backend.integrations.caldav_client import (
+from mato_loop_backend.integrations.caldav.client import (
     CalDavCalendar,
     CalDavClient,
     CalDavError,

@@ -296,7 +296,7 @@ async def test_resolution_authorizes_relations_and_delegates_idempotently(
     db.scalar.side_effect = [inbox, outbox]
     decide = AsyncMock(return_value={"status": "approved", "decision": "allow_once"})
     monkeypatch.setattr(
-        "mato_loop_backend.agent.approval_decisions.decide_agent_action", decide
+        "mato_loop_backend.permissions.decisions.decide_agent_action", decide
     )
 
     result = await resolve_approval_action(
@@ -331,7 +331,7 @@ async def test_resolution_allows_same_decision_retry_after_run_resumed(monkeypat
     db.scalar.side_effect = [inbox, outbox]
     decide = AsyncMock(return_value={"status": "approved", "decision": "allow_once"})
     monkeypatch.setattr(
-        "mato_loop_backend.agent.approval_decisions.decide_agent_action", decide
+        "mato_loop_backend.permissions.decisions.decide_agent_action", decide
     )
 
     result = await resolve_approval_action(db, endpoint, approval.id, "allow_once")
@@ -367,7 +367,7 @@ async def test_resolution_fails_closed_without_disclosing_invariant(
     db.scalar.side_effect = [inbox, outbox]
     decide = AsyncMock()
     monkeypatch.setattr(
-        "mato_loop_backend.agent.approval_decisions.decide_agent_action", decide
+        "mato_loop_backend.permissions.decisions.decide_agent_action", decide
     )
 
     with pytest.raises(MessagingApprovalError) as exc_info:

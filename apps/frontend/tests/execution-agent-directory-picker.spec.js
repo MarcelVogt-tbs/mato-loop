@@ -10,7 +10,7 @@ import {
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn() } }))
 
-import ExecutionAgentDirectoryPickerDialog from '../src/components/ExecutionAgentDirectoryPickerDialog.vue'
+import ExecutionAgentDirectoryPickerDialog from '../src/features/computers/ExecutionAgentDirectoryPickerDialog.vue'
 import { api } from 'src/boot/axios'
 
 let app, root

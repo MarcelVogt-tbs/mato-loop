@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent import AgentRuntime
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.sessions import (
     ActiveFileRequest,
@@ -39,11 +39,10 @@ from mato_loop_backend.api.routes.sessions import (
     stream_run_events,
     update_session,
 )
-from mato_loop_backend.attachments import (
-    AttachmentInput,
-    AttachmentService,
-)
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.files.service import FileRoot, RootFileService
+from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.media.attachments import AttachmentInput, AttachmentService
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
@@ -56,7 +55,6 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.security import require_user
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.sessions.service import (
     SessionServiceError,
     _latest_model_context,
@@ -79,7 +77,6 @@ from mato_loop_backend.settings.models import (
     ModelAvailability,
     ModelConfig,
 )
-from mato_loop_backend.workspace import FileRoot, RootFileService
 
 
 def _user() -> UserAccount:

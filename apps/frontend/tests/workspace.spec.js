@@ -19,7 +19,7 @@ import {
   withFileSuffix,
   useWorkspaceStore
 } from '../src/stores/workspace'
-import { parentPath, persistedFileView } from '../src/features/workspace/state'
+import { parentPath, persistedFileView } from '../src/features/files/state'
 import { useControlCenterStore } from '../src/stores/control-center'
 
 function liveContext(operations) {

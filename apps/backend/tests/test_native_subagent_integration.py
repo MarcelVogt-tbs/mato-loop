@@ -13,8 +13,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from sqlalchemy.schema import CreateSchema, DropSchema
 
-from mato_loop_backend.agent import runtime, subagents, tools
-from mato_loop_backend.agent.approval_decisions import decide_agent_action
+import mato_loop_backend.agent.runtime as mock_agent_runtime
+import mato_loop_backend.agent.summarization as mock_agent_summarization
+import mato_loop_backend.agent.titles as mock_agent_titles
+import mato_loop_backend.tools.web as mock_tools_web
+from mato_loop_backend.agent import subagents
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import approvals, sessions
@@ -22,12 +25,12 @@ from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.base import Base
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.events import run_events
-from mato_loop_backend.integrations import WebFetchResult
+from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.models import AgentRun, ApprovalRequest, ChatSession, Message, UserAccount
+from mato_loop_backend.permissions.decisions import decide_agent_action
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.security import require_user
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import AiSettings, SettingsStore, ToolSettings
 from mato_loop_backend.settings.models import (
     BUILD_PROFILE_ID,
@@ -36,6 +39,7 @@ from mato_loop_backend.settings.models import (
     ModelConfig,
     ToolExecutionPolicy,
 )
+from mato_loop_backend.web.fetch import WebFetchResult
 
 
 @pytest.fixture
@@ -56,7 +60,9 @@ async def native_database(request, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "data_dir", tmp_path)
     monkeypatch.setattr(config, "embedding_enabled", False)
     monkeypatch.setattr(config, "web_push_enabled", False)
-    monkeypatch.setattr(runtime, "AsyncSessionFactory", factory)
+    _mock_value = factory
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(subagents, "AsyncSessionFactory", factory)
     async with admin.begin() as db:
         await db.execute(CreateSchema(schema))
@@ -301,7 +307,7 @@ async def test_webfetch_dispatch_cannot_bypass_spawn_ask_after_live_auto(native_
         return ProviderResult(content="No fetch performed.", finish_reason="stop")
 
     monkeypatch.setattr(ProviderService, "complete", complete)
-    monkeypatch.setattr(tools, "fetch_web", fetch)
+    monkeypatch.setattr(mock_tools_web, 'fetch_web', fetch)
     async with fixture.factory() as db:
         await SettingsStore.save(db, ToolSettings(public_permissions={"policies": {"network.fetch": "ask"}}))
         parent = ChatSession(id=parent_id, user_id=fixture.user.id, title="Ceiling regression",

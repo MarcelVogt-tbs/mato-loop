@@ -5,13 +5,6 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.agent.tool_arguments import (
-    ProtectedQuestionArguments,
-    ProtectedQuestionResolution,
-    QuestionArguments,
-    validate_protected_question_answers,
-    validate_question_answers,
-)
 from mato_loop_backend.events import run_events
 from mato_loop_backend.models import AgentRun, ChatSession, QuestionRequest
 from mato_loop_backend.personal_variables import (
@@ -23,6 +16,13 @@ from mato_loop_backend.settings import (
     AgentProfileUnavailable,
     ToolExecutionPolicy,
     load_agent_profile_tools,
+)
+from mato_loop_backend.tools.arguments import (
+    ProtectedQuestionArguments,
+    ProtectedQuestionResolution,
+    QuestionArguments,
+    validate_protected_question_answers,
+    validate_question_answers,
 )
 
 
@@ -133,7 +133,7 @@ async def answer_question(
                 except AgentProfileUnavailable:
                     await policy_changed()
                     raise QuestionDecisionError(409, "approval.policyChanged") from None
-                from mato_loop_backend.agent.tools import resolve_tool_execution_policy
+                from mato_loop_backend.permissions.resolution import resolve_tool_execution_policy
 
                 if resolve_tool_execution_policy(
                     settings, "secrets.write", ToolExecutionPolicy.ASK

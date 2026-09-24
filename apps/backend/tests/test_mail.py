@@ -11,8 +11,6 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.permissions import PermissionDecision
-from mato_loop_backend.agent.tools import ToolContext, ToolRegistry
 from mato_loop_backend.api.request_body_limit import _request_limit
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.integrations import registry as integration_registry
@@ -39,6 +37,7 @@ from mato_loop_backend.integrations.mail_client import (
 )
 from mato_loop_backend.integrations.service import MailIntegrationService
 from mato_loop_backend.models import ChatSession
+from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.security import CredentialCipher
 from mato_loop_backend.settings import (
@@ -47,6 +46,8 @@ from mato_loop_backend.settings import (
     SettingsStore,
     ToolExecutionPolicy,
 )
+from mato_loop_backend.tools.catalog import ToolRegistry
+from mato_loop_backend.tools.context import ToolContext
 
 
 def _account() -> IntegrationInstance:
@@ -176,7 +177,7 @@ async def test_mail_read_rejects_invalid_tokens_before_permission_request(
         token = CredentialCipher().encrypt(payload).decode("ascii")
     permission = Mock(side_effect=AssertionError("invalid tokens must not request approval"))
     monkeypatch.setattr(
-        "mato_loop_backend.agent.permissions.integration_operation_permission", permission
+        "mato_loop_backend.permissions.policy.integration_operation_permission", permission
     )
     model = AttachmentArguments if field == "attachment_token" else MailTokenArguments
     arguments = model(integration_id=account.id, **{field: token})

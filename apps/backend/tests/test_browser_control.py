@@ -9,11 +9,11 @@ from weakref import WeakValueDictionary
 import pytest
 from test_browser_transport import ORIGIN, env, open_view, other_session  # noqa: F401
 
-from mato_loop_backend.agent import runtime as runtime_module
-from mato_loop_backend.agent import tool_registry as registry_module
-from mato_loop_backend.agent import tools as tools_module
+import mato_loop_backend.agent.runtime as runtime_module
+import mato_loop_backend.tools.access as tools_module
+import mato_loop_backend.tools.catalog as mock_tools_catalog
+import mato_loop_backend.tools.context as registry_module
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.agent.tool_registry import ToolContext
 from mato_loop_backend.execution import browser_control as control
 from mato_loop_backend.execution import browsers as execution
 from mato_loop_backend.execution.client import ExecutionClient
@@ -21,6 +21,7 @@ from mato_loop_backend.integrations.registry import effective_execution_integrat
 from mato_loop_backend.models import AgentRun
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import IntegrationSettings, ToolSettings, TrustLevel
+from mato_loop_backend.tools.context import ToolContext
 
 
 @pytest.fixture(params=list(TrustLevel))
@@ -41,9 +42,9 @@ def request_case(monkeypatch, request):
     effective = effective_execution_integration_settings(
         integrations, case.agent.id, {"integration.browser.execute"}
     )
-    registry = tools_module.ToolRegistry([]).effective(effective)
+    registry = mock_tools_catalog.ToolRegistry([]).effective(effective)
     assert set(registry.tools) == {"browser_request_control"}
-    assert "browser_request_control" not in tools_module.ToolRegistry([]).effective(
+    assert "browser_request_control" not in mock_tools_catalog.ToolRegistry([]).effective(
         effective, tool_settings=ToolSettings(tool_availability={"browser": False})
     ).tools
     factory = execution.AsyncSessionFactory

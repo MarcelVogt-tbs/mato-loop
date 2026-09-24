@@ -14,14 +14,16 @@ import pytest
 from pydantic import ValidationError
 from test_agent_tools_contract import _context
 
-import mato_loop_backend.agent.tools as tools_module
-import mato_loop_backend.file_archives as archive_module
-from mato_loop_backend.agent.permissions import PermissionDecision
-from mato_loop_backend.agent.tools import ToolAttachment, tool_registry
+import mato_loop_backend.files.access as mock_files_access
+import mato_loop_backend.files.archives as files_archives
+import mato_loop_backend.tools.files as mock_tools_files
 from mato_loop_backend.execution.client import WorkspaceListResult, WorkspaceStatResult
-from mato_loop_backend.file_archives import ArchiveEntry, ArchivePage, FileArchiveError
-from mato_loop_backend.providers import ToolCall
-from mato_loop_backend.workspace import RootFileService
+from mato_loop_backend.files.archives import ArchiveEntry, ArchivePage, FileArchiveError
+from mato_loop_backend.files.service import RootFileService
+from mato_loop_backend.permissions.policy import PermissionDecision
+from mato_loop_backend.providers.base import ToolCall
+from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.tools.contracts import ToolAttachment
 
 
 def _zip_contents(result, filename, context):
@@ -275,7 +277,7 @@ async def test_cancelled_import_discards_only_the_new_run_output(
     created, release = Event(), Event()
     archives = []
     create_output = RootFileService.create_output_stream
-    create_archive = tools_module.create_zip_archive
+    create_archive = mock_tools_files.create_zip_archive
 
     def blocked_create(files, *args, **kwargs):
         revision = create_output(files, *args, **kwargs)
@@ -289,7 +291,7 @@ async def test_cancelled_import_discards_only_the_new_run_output(
         return archive
 
     monkeypatch.setattr(RootFileService, "create_output_stream", blocked_create)
-    monkeypatch.setattr(tools_module, "create_zip_archive", capture_archive)
+    monkeypatch.setattr(mock_tools_files, 'create_zip_archive', capture_archive)
     task = asyncio.create_task(tool_registry.execute(call, context))
     try:
         assert await asyncio.to_thread(created.wait, 5)
@@ -376,11 +378,15 @@ async def test_zip_limits_use_small_budgets(tmp_path, monkeypatch, limit):
     for path in ("a.txt", "b.txt"):
         context.root_files.write_file("session", f"reports/{path}", "12345678")
     if limit == "source":
-        monkeypatch.setattr(tools_module, "MAX_EXPORT_BYTES", 12)
+        _mock_value = 12
+        for _mock_target in (mock_tools_files, mock_files_access,):
+            monkeypatch.setattr(_mock_target, 'MAX_EXPORT_BYTES', _mock_value)
     elif limit == "entries":
-        monkeypatch.setattr(tools_module, "MAX_EXPORT_ENTRIES", 1)
+        monkeypatch.setattr(mock_tools_files, 'MAX_EXPORT_ENTRIES', 1)
     else:
-        monkeypatch.setattr(tools_module, "MAX_EXPORT_BYTES", 64)
+        _mock_value = 64
+        for _mock_target in (mock_tools_files, mock_files_access,):
+            monkeypatch.setattr(_mock_target, 'MAX_EXPORT_BYTES', _mock_value)
 
     result = await tool_registry.execute(call, context)
 
@@ -419,7 +425,7 @@ async def test_zip_rejects_file_replaced_after_listing(tmp_path, monkeypatch, re
 async def test_archive_streams_a_simulated_source_above_64_mib_in_bounded_chunks():
     class Source(BytesIO):
         def read(self, size=-1):
-            assert 0 < size <= archive_module.EXPORT_CHUNK_BYTES
+            assert 0 < size <= files_archives.EXPORT_CHUNK_BYTES
             return super().read(size)
 
     source = Source(bytes(range(128)) * 16_384)
@@ -433,7 +439,7 @@ async def test_archive_streams_a_simulated_source_above_64_mib_in_bounded_chunks
     async def open_file(_path, _limit):
         return source
 
-    result = await archive_module.create_zip_archive(
+    result = await files_archives.create_zip_archive(
         ["large.bin"], stat_path=stat, list_directory=unused_list,
         open_file=open_file, file_list=True, max_source_bytes=66 * 1024 * 1024,
     )
@@ -460,7 +466,7 @@ async def test_archive_limit_failure_closes_source_and_temporary_output(monkeypa
         outputs.append(output)
         return output
 
-    monkeypatch.setattr(archive_module, "SpooledTemporaryFile", temporary)
+    monkeypatch.setattr(files_archives, "SpooledTemporaryFile", temporary)
 
     async def stat(_path):
         return ArchiveEntry("data.bin", "data.bin", "file", len(source.getvalue()))
@@ -469,7 +475,7 @@ async def test_archive_limit_failure_closes_source_and_temporary_output(monkeypa
         return source
 
     with pytest.raises(FileArchiveError, match="file.operationTooLarge"):
-        await archive_module.create_zip_archive(
+        await files_archives.create_zip_archive(
             ["data.bin"], stat_path=stat,
             list_directory=lambda *_args: ArchivePage((), False),
             open_file=open_file, file_list=True, max_output_bytes=32,
@@ -502,7 +508,7 @@ async def test_archive_cancellation_waits_for_read_and_closes_handles(
 
     source = Source(b"content")
     monkeypatch.setattr(
-        archive_module,
+        files_archives,
         "SpooledTemporaryFile",
         lambda **_kwargs: outputs.append(Output()) or outputs[-1],
     )
@@ -514,7 +520,7 @@ async def test_archive_cancellation_waits_for_read_and_closes_handles(
         return source
 
     task = asyncio.create_task(
-        archive_module.create_zip_archive(
+        files_archives.create_zip_archive(
             ["data.bin"],
             stat_path=stat,
             list_directory=lambda *_args: ArchivePage((), False),
@@ -557,7 +563,7 @@ async def test_archive_cancellation_closes_handle_returned_by_blocked_opener(ope
         return await asyncio.to_thread(blocking_open)
 
     task = asyncio.create_task(
-        archive_module.create_zip_archive(
+        files_archives.create_zip_archive(
             ["data.bin"],
             stat_path=stat,
             list_directory=lambda *_args: ArchivePage((), False),
@@ -592,15 +598,15 @@ async def test_archive_closes_output_when_zip_lifecycle_fails(monkeypatch, failu
             super().close()
 
     monkeypatch.setattr(
-        archive_module,
+        files_archives,
         "SpooledTemporaryFile",
         lambda **_kwargs: outputs.append(Output()) or outputs[-1],
     )
-    original = archive_module.zipfile.ZipFile
+    original = files_archives.zipfile.ZipFile
 
     if failure == "constructor":
         monkeypatch.setattr(
-            archive_module.zipfile,
+            files_archives.zipfile,
             "ZipFile",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("constructor")),
         )
@@ -614,7 +620,7 @@ async def test_archive_closes_output_when_zip_lifecycle_fails(monkeypatch, failu
                     self.failed = True
                     raise RuntimeError("close")
 
-        monkeypatch.setattr(archive_module.zipfile, "ZipFile", CloseFailure)
+        monkeypatch.setattr(files_archives.zipfile, "ZipFile", CloseFailure)
 
     async def stat(_path):
         return ArchiveEntry("empty", "empty", "directory", None)
@@ -623,7 +629,7 @@ async def test_archive_closes_output_when_zip_lifecycle_fails(monkeypatch, failu
         return ArchivePage((), False)
 
     with pytest.raises(RuntimeError, match=failure):
-        await archive_module.create_zip_archive(
+        await files_archives.create_zip_archive(
             ["empty"],
             stat_path=stat,
             list_directory=list_directory,

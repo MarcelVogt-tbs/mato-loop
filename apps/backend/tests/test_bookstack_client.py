@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from mato_loop_backend.integrations.bookstack_client import (
+from mato_loop_backend.integrations.bookstack.client import (
     MAX_ATTACHMENT_BYTES,
     MAX_MARKDOWN_CHARS,
     BookStackClient,

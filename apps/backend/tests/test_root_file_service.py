@@ -10,14 +10,14 @@ from uuid import UUID, uuid4
 import pytest
 
 from mato_loop_backend.config import RuntimeConfig
-from mato_loop_backend.filesystem_search import RootFileSearch
-from mato_loop_backend.session_storage import SessionStorage
-from mato_loop_backend.workspace import (
+from mato_loop_backend.files.search import RootFileSearch
+from mato_loop_backend.files.service import (
     MAX_EDITABLE_TEXT_BYTES,
     FileRoot,
     RootFileError,
     RootFileService,
 )
+from mato_loop_backend.files.storage import SessionStorage
 
 
 def make_service(tmp_path: Path) -> tuple[RootFileService, Path]:
@@ -825,7 +825,7 @@ def test_run_storage_rejects_symlinked_private_root(tmp_path: Path) -> None:
     outside.mkdir()
     (root / "revisions").rmdir()
     (root / "revisions").symlink_to(outside, target_is_directory=True)
-    from mato_loop_backend.session_storage import SessionStorageError
+    from mato_loop_backend.files.storage import SessionStorageError
 
     with pytest.raises((RootFileError, SessionStorageError)):
         run_service(published, uuid4()).write_file(FileRoot.SESSION, "file.txt", "unsafe")

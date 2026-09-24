@@ -4,10 +4,10 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import mato_loop_backend.agent.runtime as agent_runtime
+import mato_loop_backend.agent.titles as mock_agent_titles
 from mato_loop_backend import prompt_eval
-from mato_loop_backend.agent import runtime
-from mato_loop_backend.agent.context import MEMORY_CONTEXT_CONTRACT
-from mato_loop_backend.agent.tools import PROJECT_CODING_TOOL_NAMES, tool_registry
+from mato_loop_backend.agent.prompts import MEMORY_CONTEXT_CONTRACT
 from mato_loop_backend.api.routes import providers
 from mato_loop_backend.memory import dreaming
 from mato_loop_backend.prompt_eval import (
@@ -35,6 +35,7 @@ from mato_loop_backend.prompt_eval import (
 )
 from mato_loop_backend.providers import openai_compatible
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
+from mato_loop_backend.tools.catalog import PROJECT_CODING_TOOL_NAMES, tool_registry
 
 
 def _case(case_id: str):
@@ -315,7 +316,7 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
     )
     rule = (
         "Tool routing: Prefer shell_run for direct API requests, custom HTTP, pagination, multiple "
-        "requests, local processing, or downloads. Use webfetch when available for web pages and static "
+        "requests, local processing, or computer downloads. Use webfetch when available for web pages and static "
         "documents. Use a browser only for page interaction or browser-authenticated access. Verify saved "
         "downloads before claiming success."
     )
@@ -1238,7 +1239,7 @@ def test_title_repair_matches_actual_second_runtime_request() -> None:
 
     assert tools == []
     assert messages == [
-        {"role": "system", "content": runtime.TITLE_SYSTEM_PROMPT + TITLE_REPAIR_PROMPT},
+        {"role": "system", "content": mock_agent_titles.TITLE_SYSTEM_PROMPT + TITLE_REPAIR_PROMPT},
         {"role": "user", "content": "Plane eine Zugreise nach Wien."},
     ]
 
@@ -2283,7 +2284,13 @@ def test_research_budget_question_and_search_reformulation_are_material() -> Non
 
 
 def test_inline_production_prompts_and_markers_have_not_drifted() -> None:
-    runtime_constants = _source_constants(Path(runtime.__file__))
+    from mato_loop_backend.agent import loop, titles
+
+    runtime_constants = (
+        _source_constants(Path(agent_runtime.__file__))
+        | _source_constants(Path(loop.__file__))
+        | _source_constants(Path(titles.__file__))
+    )
     provider_route_constants = _source_constants(Path(providers.__file__))
     transport_constants = _source_constants(Path(openai_compatible.__file__))
     dreaming_constants = _source_constants(Path(dreaming.__file__))
@@ -2351,10 +2358,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 138
-    assert payload["contractCount"] == 360
-    assert "Cases: 222" in report
+    assert payload["contractCount"] == 361
+    assert "Cases: 223" in report
     assert "Semantic contracts: 138" in report
-    assert "All inventory rows: 360" in report
+    assert "All inventory rows: 361" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

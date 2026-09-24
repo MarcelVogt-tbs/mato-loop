@@ -10,16 +10,16 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import mato_loop_backend.api.integration_access as api_integration_access
+import mato_loop_backend.api.integration_resources as api_integration_resources
+import mato_loop_backend.api.routes.integrations as api_routes_integrations
+import mato_loop_backend.integrations.bookstack.adapter as integrations_bookstack_adapter
+import mato_loop_backend.integrations.caldav.adapter as integrations_caldav_adapter
 import mato_loop_backend.integrations.registry as integration_registry
+import mato_loop_backend.integrations.search as integrations_search
 import mato_loop_backend.integrations.search as search_module
-from mato_loop_backend.agent.permissions import PermissionRequest
-from mato_loop_backend.agent.tools import (
-    ToolAction,
-    ToolResult,
-    tool_registry,
-)
+import mato_loop_backend.security as security
 from mato_loop_backend.api.errors import ApiError, register_error_handlers
-from mato_loop_backend.api.routes import integrations as integrations_route_module
 from mato_loop_backend.api.routes.integrations import (
     CalendarIntegrationRequest,
     IntegrationDefaultsRequest,
@@ -35,22 +35,25 @@ from mato_loop_backend.api.routes.integrations import (
     update_search_selection,
 )
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.integrations import (
-    SearchIntegrationError,
-    SearchIntegrationService,
-    search_available,
-    search_provider_options,
-    search_web,
-)
 from mato_loop_backend.integrations import service as integration_service_module
-from mato_loop_backend.integrations.caldav_client import CalDavError
+from mato_loop_backend.integrations.caldav.client import CalDavError
 from mato_loop_backend.integrations.contracts import (
     IntegrationContributions,
     IntegrationResource,
     ToolContribution,
 )
-from mato_loop_backend.integrations.service import BookStackIntegrationService
+from mato_loop_backend.integrations.search import (
+    SearchIntegrationError,
+    search_available,
+    search_provider_options,
+    search_web,
+)
+from mato_loop_backend.integrations.service import (
+    BookStackIntegrationService,
+    SearchIntegrationService,
+)
 from mato_loop_backend.models import Credential, UserAccount
+from mato_loop_backend.permissions.policy import PermissionRequest
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
     DefaultCalendarSettings,
@@ -64,6 +67,9 @@ from mato_loop_backend.settings import (
     UserToolSettings,
     WebSearchToolSettings,
 )
+from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.tools.contracts import ToolResult
 
 
 class _StreamResponse:
@@ -92,7 +98,7 @@ class _StreamResponse:
 def _catalog_app(db, user=None) -> FastAPI:
     app = FastAPI()
     register_error_handlers(app)
-    app.include_router(integrations_route_module.router, prefix="/api")
+    app.include_router(api_routes_integrations.router, prefix="/api")
 
     async def override_db():
         yield db
@@ -232,7 +238,7 @@ async def test_disabled_adapter_blocks_create_but_allows_delete(
         await create_search_integration(
             _request(), db, scope=scope, user=user
         )
-    listed = await integrations_route_module.get_search_integrations(
+    listed = await api_routes_integrations.get_search_integrations(
         db, scope=scope, user=user
     )
     await delete_search_integration(
@@ -278,15 +284,15 @@ async def test_nonadmin_cannot_read_instance_integration_or_use_credential_test(
     load = AsyncMock(return_value=IntegrationSettings())
     discover = AsyncMock()
     monkeypatch.setattr(SettingsStore, "load", load)
-    monkeypatch.setattr(integrations_route_module, "load_caldav_resources", discover)
+    monkeypatch.setattr(integrations_caldav_adapter, "load_caldav_resources", discover)
     db = AsyncMock(spec=AsyncSession)
 
     with pytest.raises(ApiError, match="auth.adminRequired"):
-        await integrations_route_module.get_calendar_integrations(
+        await api_routes_integrations.get_calendar_integrations(
             db, scope="instance", user=user
         )
     with pytest.raises(ApiError, match="auth.adminRequired"):
-        await integrations_route_module.test_calendar_integration(
+        await api_routes_integrations.test_calendar_integration(
             uuid4(), db, scope="instance", user=user
         )
 
@@ -308,7 +314,7 @@ async def test_personal_policy_read_exposes_no_integration_configuration(
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
 
-    result = await integrations_route_module.get_personal_integration_settings(
+    result = await api_routes_integrations.get_personal_integration_settings(
         SimpleNamespace(id=uuid4(), is_admin=False), AsyncMock(spec=AsyncSession)
     )
 
@@ -487,30 +493,30 @@ async def test_revoked_personal_adapters_block_external_clients(monkeypatch) -> 
     execution_client = Mock()
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
     monkeypatch.setattr(
-        integrations_route_module, "search_with_provider", search_client
+        integrations_search, "search_with_provider", search_client
     )
     monkeypatch.setattr(
-        integrations_route_module, "load_caldav_resources", calendar_client
+        integrations_caldav_adapter, "load_caldav_resources", calendar_client
     )
     monkeypatch.setattr(
-        integrations_route_module, "load_bookstack_resources", knowledge_client
+        integrations_bookstack_adapter, "load_bookstack_resources", knowledge_client
     )
     monkeypatch.setattr(
-        integrations_route_module, "_connected_client", execution_client
+        api_routes_integrations, "_connected_client", execution_client
     )
     user = SimpleNamespace(id=uuid4(), is_admin=False)
     db = AsyncMock(spec=AsyncSession)
     operations = (
-        integrations_route_module.test_search_integration(
+        api_routes_integrations.test_search_integration(
             search.id, db, scope="personal", user=user
         ),
-        integrations_route_module.test_calendar_integration(
+        api_routes_integrations.test_calendar_integration(
             calendar.id, db, scope="personal", user=user
         ),
-        integrations_route_module.test_knowledge_integration(
+        api_routes_integrations.test_knowledge_integration(
             knowledge.id, db, scope="personal", user=user
         ),
-        integrations_route_module.test_openscad_integration(
+        api_routes_integrations.test_openscad_integration(
             openscad.id, user, db, scope="personal"
         ),
     )
@@ -599,7 +605,7 @@ async def test_resource_discovery_cannot_invent_adapter_capabilities(
     )
     integration = _searxng()
     with pytest.raises(ApiError) as exc_info:
-        await integrations_route_module._integration_resources(
+        await api_integration_resources._integration_resources(
             AsyncMock(spec=AsyncSession), integration
         )
 
@@ -807,17 +813,17 @@ async def test_personal_search_selection_uses_effective_provider_options(
     tools = UserToolSettings()
     save = AsyncMock()
     monkeypatch.setattr(
-        integrations_route_module,
+        api_integration_access,
         "_load_scoped_integrations",
         AsyncMock(return_value=(personal_integrations, owner_id)),
     )
     monkeypatch.setattr(
-        integrations_route_module,
+        api_routes_integrations,
         "load_effective_integrations",
         AsyncMock(return_value=effective_integrations),
     )
     monkeypatch.setattr(
-        integrations_route_module,
+        api_routes_integrations,
         "_load_scoped_tools",
         AsyncMock(return_value=tools),
     )
@@ -1412,18 +1418,18 @@ async def test_caldav_test_endpoint_maps_remote_failure_to_controlled_error(
     db.get.return_value = record
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
     monkeypatch.setattr(
-        integrations_route_module,
+        security,
         "read_credential",
         Mock(return_value={"password": "secret"}),
     )
     monkeypatch.setattr(
-        integrations_route_module,
+        integrations_caldav_adapter,
         "load_caldav_resources",
         AsyncMock(side_effect=CalDavError("caldav.authenticationFailed", status_code=401)),
     )
 
     with pytest.raises(ApiError) as exc_info:
-        await integrations_route_module.test_calendar_integration(account.id, db)
+        await api_routes_integrations.test_calendar_integration(account.id, db)
 
     assert exc_info.value.status_code == 502
     assert exc_info.value.code == "integration.authenticationFailed"

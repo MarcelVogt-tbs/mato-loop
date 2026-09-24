@@ -4,12 +4,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 import mato_loop_backend.integrations.youtube_transcript as youtube_transcript
-from mato_loop_backend.integrations.webfetch import WebFetchBytesResult
 from mato_loop_backend.integrations.youtube_transcript import (
     TranscriptError,
     canonicalize_youtube_video_url,
     fetch_youtube_transcript,
 )
+from mato_loop_backend.web.fetch import WebFetchBytesResult
 
 
 def _response(data: bytes, content_type: str) -> WebFetchBytesResult:

@@ -5,10 +5,8 @@ from collections.abc import Awaitable, Callable
 
 from starlette.types import Message, Receive, Scope, Send
 
-from mato_loop_backend.attachments import (
-    ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES,
-)
 from mato_loop_backend.error_contract import error_payload
+from mato_loop_backend.media.attachments import ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES
 
 _MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 TRANSCRIPTION_REQUEST_LIMIT = ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES + _MULTIPART_OVERHEAD_BYTES

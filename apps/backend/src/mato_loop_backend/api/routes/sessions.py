@@ -31,11 +31,17 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from mato_loop_backend.agent import AgentRuntime
+from mato_loop_backend.agent.run_contracts import AgentRunError
 from mato_loop_backend.agent.run_timing import run_timing_payload
-from mato_loop_backend.agent.runtime import AgentRunError
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
-from mato_loop_backend.attachments import (
+from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
+from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.error_contract import describe_error
+from mato_loop_backend.events import run_events
+from mato_loop_backend.files.service import RootFileError, RootFileService
+from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.media.attachments import (
     AttachmentError,
     AttachmentInput,
     AttachmentService,
@@ -44,10 +50,6 @@ from mato_loop_backend.attachments import (
     processing_limits,
     safe_filename,
 )
-from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
-from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.error_contract import describe_error
-from mato_loop_backend.events import run_events
 from mato_loop_backend.memory import effective_memory
 from mato_loop_backend.models import (
     AgentRun,
@@ -61,7 +63,6 @@ from mato_loop_backend.models import (
     WebSearchPolicy,
 )
 from mato_loop_backend.security import require_user
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.sessions import service as session_service
 from mato_loop_backend.sessions.serialization import (
     LAST_MESSAGE_AT_UNSET as _LAST_MESSAGE_AT_UNSET,
@@ -82,7 +83,6 @@ from mato_loop_backend.settings import (
     UserPreferences,
 )
 from mato_loop_backend.settings.models import ReasoningEffort
-from mato_loop_backend.workspace import RootFileError, RootFileService
 
 router = APIRouter(prefix="/sessions", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)

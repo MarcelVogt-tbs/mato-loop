@@ -12,14 +12,6 @@ from fastapi.testclient import TestClient
 from jsonschema import ValidationError as JsonSchemaValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.tool_registry import (
-    PERMISSION_REASON_ARGUMENT,
-    DynamicToolArgumentsError,
-    ToolDefinition,
-    ToolRegistry,
-    ToolResult,
-)
-from mato_loop_backend.agent.tools import resolve_tool_execution_policy, tool_registry
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import mcp as mcp_routes
 from mato_loop_backend.api.routes.mcp import (
@@ -49,6 +41,7 @@ from mato_loop_backend.integrations.mcp_service import (
 from mato_loop_backend.integrations.registry import integration_adapters
 from mato_loop_backend.integrations.service import IntegrationSettingsError
 from mato_loop_backend.integrations.sonobin import SONOBIN, SONOBIN_ADAPTER
+from mato_loop_backend.permissions.resolution import resolve_tool_execution_policy
 from mato_loop_backend.security import require_admin, require_user
 from mato_loop_backend.settings import (
     AgentProfilePermissions,
@@ -61,6 +54,14 @@ from mato_loop_backend.settings import (
     UserIntegrationSettings,
     load_effective_integrations,
 )
+from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.tools.contracts import (
+    PERMISSION_REASON_ARGUMENT,
+    DynamicToolArgumentsError,
+    ToolDefinition,
+    ToolResult,
+)
+from mato_loop_backend.tools.registry import ToolRegistry
 
 
 class FakeSession:

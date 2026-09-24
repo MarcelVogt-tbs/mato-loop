@@ -5,20 +5,10 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent import runtime as runtime_module
-from mato_loop_backend.agent.approval_decisions import (
-    ApprovalDecisionError,
-    decide_agent_action,
-)
-from mato_loop_backend.agent.permissions import (
-    PermissionRequest,
-    execution_directory_scope,
-    integration_operation_permission,
-    session_grants_fingerprint,
-    session_grants_payload,
-    shell_command_scope,
-)
-from mato_loop_backend.agent.runtime import AgentRuntime, ApprovalResolution
+import mato_loop_backend.agent.runtime as mock_agent_runtime
+import mato_loop_backend.permissions.requests as mock_permissions_requests
+from mato_loop_backend.agent.run_contracts import ApprovalResolution
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.approvals import ApprovalDecisionRequest, decide_approval
 from mato_loop_backend.events import run_events
@@ -29,6 +19,15 @@ from mato_loop_backend.models import (
     Message,
     PermissionGrant,
     UserAccount,
+)
+from mato_loop_backend.permissions.decisions import ApprovalDecisionError, decide_agent_action
+from mato_loop_backend.permissions.policy import (
+    PermissionRequest,
+    execution_directory_scope,
+    integration_operation_permission,
+    session_grants_fingerprint,
+    session_grants_payload,
+    shell_command_scope,
 )
 from mato_loop_backend.providers.base import ToolCall
 
@@ -616,9 +615,11 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch, reusable) ->
     db.flush.side_effect = flush
     monkeypatch.setattr(run_events, "publish", publish)
     push = AsyncMock(side_effect=deliver)
-    monkeypatch.setattr(runtime_module.WebPushService, "deliver_after_commit", push)
+    monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", push)
     enqueue = AsyncMock()
-    monkeypatch.setattr(runtime_module, "enqueue_approval_prompt", enqueue)
+    _mock_value = enqueue
+    for _mock_target in (mock_permissions_requests,):
+        monkeypatch.setattr(_mock_target, 'enqueue_approval_prompt', _mock_value)
     wait_for = AsyncMock(side_effect=AssertionError("approval wait must not time out"))
     monkeypatch.setattr(asyncio, "wait_for", wait_for)
 

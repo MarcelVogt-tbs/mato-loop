@@ -8,11 +8,11 @@ const mocks = vi.hoisted(() => ({ notify: vi.fn(), api: { post: vi.fn(), get: vi
 vi.mock('src/boot/axios', () => ({ api: mocks.api }))
 vi.mock('quasar', () => ({ useQuasar: () => ({ notify: mocks.notify, screen: { gt: { sm: true } } }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: async () => true }) }))
-vi.mock('src/composables/audio-recorder', () => ({
+vi.mock('src/features/chat/audio-recorder', () => ({
   useAudioRecorder: (options) => { mocks.onAutoStopped = options.onAutoStopped; return mocks.recorder },
   recorderErrorMessage: () => 'Aufnahme fehlgeschlagen'
 }))
-vi.mock('components/SessionSettingsFields.vue', () => ({ default: {
+vi.mock('src/features/chat/components/SessionSettingsFields.vue', () => ({ default: {
   props: ['disabled'],
   emits: ['update', 'agent-popup-hide'],
   render() {
@@ -25,18 +25,18 @@ vi.mock('components/SessionSettingsFields.vue', () => ({ default: {
     }, 'Agent wechseln')
   }
 } }))
-vi.mock('components/ApprovalCard.vue', () => ({ default: { render: () => null } }))
-vi.mock('components/AgentActivityPanel.vue', () => ({ default: { render: () => null } }))
-vi.mock('components/AppLogo.vue', () => ({ default: { render: () => null } }))
-vi.mock('components/ChatQueuedMessages.vue', () => ({ default: { render: () => null } }))
-vi.mock('components/ControlCenterPanel.vue', () => ({ default: { render: () => null } }))
-vi.mock('components/MessageContent.vue', () => ({ default: { render: () => null } }))
-vi.mock('components/MessageAttachments.vue', () => ({ default: { render: () => null } }))
-vi.mock('components/QuestionDock.vue', () => ({ default: { render: () => null } }))
-vi.mock('components/SubagentInspector.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/approvals/ApprovalCard.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/chat/components/AgentActivityPanel.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/shared/ui/AppLogo.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/chat/components/ChatQueuedMessages.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/app/control-center/ControlCenterPanel.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/chat/components/MessageAttachments.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/questions/QuestionDock.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/subagents/SubagentInspector.vue', () => ({ default: { render: () => null } }))
 
-import ChatComposer from '../src/components/ChatComposer.vue'
-import ChatPage from '../src/pages/ChatPage.vue'
+import ChatComposer from '../src/features/chat/components/ChatComposer.vue'
+import ChatPage from '../src/features/chat/ChatPage.vue'
 import { useChatStore } from '../src/stores/chat'
 import { useAgentProfileStore } from '../src/stores/agent-profiles'
 import { useProviderStore } from '../src/stores/providers'

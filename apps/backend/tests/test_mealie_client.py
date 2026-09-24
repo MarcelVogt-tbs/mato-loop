@@ -5,10 +5,7 @@ from datetime import date
 import httpx
 import pytest
 
-from mato_loop_backend.integrations.mealie_client import (
-    MealieClient,
-    MealieError,
-)
+from mato_loop_backend.integrations.mealie.client import MealieClient, MealieError
 
 RECIPE_ID = "12345678-1234-5678-9234-567812345678"
 GROUP_ID = "22345678-1234-5678-9234-567812345678"

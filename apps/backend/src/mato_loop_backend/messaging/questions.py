@@ -10,11 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.tools import (
-    QuestionArguments,
-    QuestionItem,
-    validate_question_answers,
-)
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
@@ -23,6 +18,11 @@ from mato_loop_backend.models import (
     MessagingInbox,
     MessagingOutbox,
     QuestionRequest,
+)
+from mato_loop_backend.tools.arguments import (
+    QuestionArguments,
+    QuestionItem,
+    validate_question_answers,
 )
 
 QuestionInteractionAction = Literal[

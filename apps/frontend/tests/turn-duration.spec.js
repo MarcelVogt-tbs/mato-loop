@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 
-import TurnDuration from '../src/components/TurnDuration.vue'
+import TurnDuration from '../src/features/chat/components/TurnDuration.vue'
 
 let app, root
 afterEach(() => {

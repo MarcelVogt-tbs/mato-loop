@@ -4,7 +4,7 @@ import {
   createAudioContext,
   createAudioRecorder,
   encodePcmWav
-} from '../src/composables/audio-recorder'
+} from '../src/features/chat/audio-recorder'
 
 function deferred() {
   let resolve

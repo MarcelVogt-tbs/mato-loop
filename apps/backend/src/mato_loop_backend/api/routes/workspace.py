@@ -90,12 +90,6 @@ from mato_loop_backend.api.workspace_service import (
 from mato_loop_backend.api.workspace_service import (
     _stream_file as _stream_file,
 )
-from mato_loop_backend.attachments import (
-    MAX_FILE_ATTACHMENT_BYTES,
-    AttachmentError,
-    image_mime_type,
-    validate_image,
-)
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.execution import (
     EXPORT_TIMEOUT_SECONDS,
@@ -109,11 +103,18 @@ from mato_loop_backend.execution import (
     stream_ticket,
     transfer_tickets,
 )
-from mato_loop_backend.file_archives import (
+from mato_loop_backend.files.archives import (
     ArchiveEntry,
     ArchivePage,
     FileArchiveError,
     create_zip_archive,
+)
+from mato_loop_backend.files.service import (
+    MAX_EDITABLE_TEXT_BYTES,
+    FileRoot,
+    RootFileError,
+    RootFileService,
+    validate_upload_filename,
 )
 from mato_loop_backend.integrations.openscad import (
     OpenScadConfig,
@@ -123,17 +124,16 @@ from mato_loop_backend.integrations.openscad import (
     validate_binary_stl,
     validate_off,
 )
+from mato_loop_backend.media.attachments import (
+    MAX_FILE_ATTACHMENT_BYTES,
+    AttachmentError,
+    image_mime_type,
+    validate_image,
+)
+from mato_loop_backend.media.svg import MAX_SAFE_SVG_BYTES, validate_svg
 from mato_loop_backend.models import ChatSession, ExecutionAgent, UserAccount
-from mato_loop_backend.safe_svg import MAX_SAFE_SVG_BYTES, validate_svg
 from mato_loop_backend.security import hash_token, require_user
 from mato_loop_backend.settings import load_effective_integrations
-from mato_loop_backend.workspace import (
-    MAX_EDITABLE_TEXT_BYTES,
-    FileRoot,
-    RootFileError,
-    RootFileService,
-    validate_upload_filename,
-)
 
 router = APIRouter(prefix="/workspace")
 _validate_svg = validate_svg

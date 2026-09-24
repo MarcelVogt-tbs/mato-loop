@@ -11,12 +11,12 @@ from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.session_secrets import session_secrets
+from mato_loop_backend.files.storage import SessionStorage, SessionStorageError
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
     Message,
 )
-from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 from mato_loop_backend.sessions.cleanup import deleting_child_sessions
 
 logger = logging.getLogger(__name__)

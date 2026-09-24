@@ -5,13 +5,13 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.tool_references import (
+from mato_loop_backend.models import Message
+from mato_loop_backend.settings import TrustLevel
+from mato_loop_backend.tools.references import (
     InvalidToolReference,
     model_tool_references,
     resolve_tool_references,
 )
-from mato_loop_backend.models import Message
-from mato_loop_backend.settings import TrustLevel
 
 
 def _message(tool_name: str, content: dict) -> Message:

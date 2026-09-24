@@ -17,6 +17,7 @@ from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.memory.dreaming import DreamingService
 from mato_loop_backend.models import (
     AgentRun,
@@ -27,7 +28,7 @@ from mato_loop_backend.models import (
     ProjectPlanExecution,
     UserAccount,
 )
-from mato_loop_backend.project_coding import ProjectCodingError, ProjectCodingService
+from mato_loop_backend.projects.coding import ProjectCodingError, ProjectCodingService
 from mato_loop_backend.security import (
     hash_password,
     require_admin,
@@ -35,7 +36,6 @@ from mato_loop_backend.security import (
     revoke_login_sessions,
     verify_password,
 )
-from mato_loop_backend.session_storage import SessionStorage
 
 router = APIRouter(prefix="/users")
 logger = logging.getLogger(__name__)

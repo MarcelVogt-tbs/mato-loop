@@ -16,21 +16,22 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
-from mato_loop_backend.agent.context import (
-    MEMORY_CONTEXT_CONTRACT,
-    _historical_tool_result,
-    _local_time_prompt,
-    compaction_messages,
-    estimate_tokens,
-    general_system_prompt,
-    memory_context_prompt,
-    message_dict,
-)
-from mato_loop_backend.agent.file_roots import model_file_roots
 from mato_loop_backend.agent.media_prompt_profiles import (
     GPT_IMAGE_2_EDIT_INSTRUCTIONS,
     GPT_IMAGE_2_GENERATE_INSTRUCTIONS,
     Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS,
+)
+from mato_loop_backend.agent.projection import (
+    _historical_tool_result,
+    compaction_messages,
+    estimate_tokens,
+    message_dict,
+)
+from mato_loop_backend.agent.prompts import (
+    MEMORY_CONTEXT_CONTRACT,
+    _local_time_prompt,
+    general_system_prompt,
+    memory_context_prompt,
 )
 from mato_loop_backend.agent.title_generation import (
     TITLE_MAX_CHARACTERS,
@@ -39,13 +40,8 @@ from mato_loop_backend.agent.title_generation import (
     initial_title_output_budget,
     repair_title_output_budget,
 )
-from mato_loop_backend.agent.tool_registry import DynamicToolArgumentsError
-from mato_loop_backend.agent.tools import (
-    SESSION_TOOL_RESULT_CHUNK_CHARACTERS,
-    EffectiveToolSet,
-    tool_registry,
-)
 from mato_loop_backend.error_contract import error_payload
+from mato_loop_backend.files.roots import model_file_roots
 from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.memory.dreaming import (
     DREAMING_SYSTEM_PROMPT,
@@ -68,6 +64,10 @@ from mato_loop_backend.settings.models import (
     SkillDefinition,
     plan_profile,
 )
+from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.tools.contracts import DynamicToolArgumentsError
+from mato_loop_backend.tools.registry import EffectiveToolSet
+from mato_loop_backend.tools.sessions import SESSION_TOOL_RESULT_CHUNK_CHARACTERS
 
 DEFAULT_MODELS = (
     "Gemma-4-26B-A4B-it-MTP-GGUF",
@@ -247,19 +247,47 @@ TEXT_ONLY_IMAGE_MARKER = "[Image saved but not sent to the current text-only mod
 
 SOURCE_FILES = (
     "src/mato_loop_backend/agent/context.py",
-    "src/mato_loop_backend/agent/file_roots.py",
-    "src/mato_loop_backend/agent/tool_arguments.py",
-    "src/mato_loop_backend/agent/tool_registry.py",
+    "src/mato_loop_backend/files/roots.py",
+    "src/mato_loop_backend/tools/arguments.py",
+    "src/mato_loop_backend/tools/actions.py",
+    "src/mato_loop_backend/tools/access.py",
+    "src/mato_loop_backend/files/access.py",
+    "src/mato_loop_backend/web/access.py",
+    "src/mato_loop_backend/permissions/resolution.py",
+    "src/mato_loop_backend/tools/registry.py",
+    "src/mato_loop_backend/tools/contracts.py",
+    "src/mato_loop_backend/tools/context.py",
+    "src/mato_loop_backend/tools/executor.py",
+    "src/mato_loop_backend/agent/prompts.py",
+    "src/mato_loop_backend/agent/projection.py",
+    "src/mato_loop_backend/agent/loop.py",
+    "src/mato_loop_backend/agent/run_support.py",
+    "src/mato_loop_backend/agent/run_contracts.py",
+    "src/mato_loop_backend/agent/summarization.py",
+    "src/mato_loop_backend/agent/titles.py",
+    "src/mato_loop_backend/agent/questions.py",
+    "src/mato_loop_backend/permissions/requests.py",
     "src/mato_loop_backend/agent/media_prompt_profiles.py",
     "src/mato_loop_backend/agent/model_prompt_profiles.py",
     "src/mato_loop_backend/agent/runtime.py",
     "src/mato_loop_backend/agent/title_generation.py",
-    "src/mato_loop_backend/agent/tools.py",
+    "src/mato_loop_backend/tools/catalog.py",
+    "src/mato_loop_backend/tools/files.py",
+    "src/mato_loop_backend/tools/web.py",
+    "src/mato_loop_backend/tools/media.py",
+    "src/mato_loop_backend/tools/memory.py",
+    "src/mato_loop_backend/tools/sessions.py",
+    "src/mato_loop_backend/tools/skills.py",
+    "src/mato_loop_backend/tools/identity.py",
+    "src/mato_loop_backend/tools/interaction.py",
+    "src/mato_loop_backend/tools/computer.py",
+    "src/mato_loop_backend/tools/automations.py",
+    "src/mato_loop_backend/tools/coding.py",
     "src/mato_loop_backend/error_contract.py",
-    "src/mato_loop_backend/integrations/caldav.py",
-    "src/mato_loop_backend/integrations/bookstack.py",
+    "src/mato_loop_backend/integrations/caldav/adapter.py",
+    "src/mato_loop_backend/integrations/bookstack/adapter.py",
     "src/mato_loop_backend/integrations/mail.py",
-    "src/mato_loop_backend/integrations/mealie.py",
+    "src/mato_loop_backend/integrations/mealie/adapter.py",
     "src/mato_loop_backend/integrations/openscad.py",
     "src/mato_loop_backend/integrations/registry.py",
     "src/mato_loop_backend/memory/dreaming.py",
@@ -1703,6 +1731,14 @@ CASES = (
         tools=("provide_file",),
         expected_tool="provide_file",
         expected_arguments={"root": "files", "path": "report.pdf"},
+    ),
+    PromptCase(
+        id="download_file_saves_original_without_computer",
+        kind="general",
+        user="Lade https://example.com/manual.pdf als manual.pdf in die Session-Dateien herunter.",
+        tools=("webfetch", "download_file", "write_file"),
+        expected_tool="download_file",
+        expected_arguments={"url": "https://example.com/manual.pdf", "path": "manual.pdf"},
     ),
     PromptCase(
         id="initial_email_creates_one_session_markdown_file",

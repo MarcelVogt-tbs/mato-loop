@@ -1,13 +1,9 @@
 from datetime import UTC, datetime
 
-from mato_loop_backend.agent.context import (
-    estimate_tokens,
-    general_system_prompt,
-    memory_context_prompt,
-)
 from mato_loop_backend.agent.media_prompt_profiles import Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS
-from mato_loop_backend.agent.tools import tool_registry
-from mato_loop_backend.integrations.caldav import CalDavConfig
+from mato_loop_backend.agent.projection import estimate_tokens
+from mato_loop_backend.agent.prompts import general_system_prompt, memory_context_prompt
+from mato_loop_backend.integrations.caldav.adapter import CalDavConfig
 from mato_loop_backend.models import ChatSession
 from mato_loop_backend.settings import (
     DefaultCalendarSettings,
@@ -18,6 +14,7 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
 )
+from mato_loop_backend.tools.catalog import tool_registry
 
 
 def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
@@ -112,7 +109,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     prompt_tokens = estimate_tokens(prompt, 4.0) + estimate_tokens(memory_prompt, 4.0)
     schema_tokens = estimate_tokens(schemas, 4.0)
 
-    assert len(schemas) == 55
+    assert len(schemas) == 56
     assert {"load_skill", "build_skill", "edit_skill"} <= {
         schema["name"] for schema in schemas
     }
@@ -124,5 +121,5 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     }
     assert prompt_tokens <= 7_450, prompt_tokens
     # Required permission reasons now include bounds and per-call guidance in every applicable schema.
-    assert schema_tokens <= 11_700, schema_tokens
-    assert prompt_tokens + schema_tokens <= 19_100, prompt_tokens + schema_tokens
+    assert schema_tokens <= 11_850, schema_tokens
+    assert prompt_tokens + schema_tokens <= 19_300, prompt_tokens + schema_tokens

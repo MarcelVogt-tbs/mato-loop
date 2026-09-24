@@ -14,44 +14,34 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import mato_loop_backend.agent.tools as tools_module
+import mato_loop_backend.files.access as mock_files_access
 import mato_loop_backend.integrations.registry as integration_registry
-from mato_loop_backend.agent.context import _projection_messages, _tool_result_reference
-from mato_loop_backend.agent.permissions import (
-    PermissionDecision,
-    PermissionPolicy,
-    PermissionRequest,
-)
-from mato_loop_backend.agent.runtime import _argument_edit_payload, _tool_policy
-from mato_loop_backend.agent.tool_arguments import ReadArguments, TaskArguments
-from mato_loop_backend.agent.tool_contracts import ApprovalEditField
-from mato_loop_backend.agent.tool_registry import ToolArgumentsEdited
-from mato_loop_backend.agent.tools import (
-    BoundTool,
-    EffectiveToolSet,
-    ToolAction,
-    ToolAttachment,
-    ToolContext,
-    ToolDefinition,
-    ToolRegistry,
-    ToolResult,
-    tool_execution_policy,
-    tool_registry,
-)
-from mato_loop_backend.attachments import AttachmentService
-from mato_loop_backend.filesystem_search import MAX_MATCH_TEXT, MAX_SEARCH_RESULTS, RootFileSearch
-from mato_loop_backend.integrations import (
-    TranscriptResult,
-    WebFetchError,
-    WebFetchImage,
-    WebFetchResult,
-)
+import mato_loop_backend.tools.access as mock_tools_access
+import mato_loop_backend.tools.automations as mock_tools_automations
+import mato_loop_backend.tools.catalog as mock_tools_catalog
+import mato_loop_backend.tools.coding as mock_tools_coding
+import mato_loop_backend.tools.computer as mock_tools_computer
+import mato_loop_backend.tools.files as mock_tools_files
+import mato_loop_backend.tools.identity as mock_tools_identity
+import mato_loop_backend.tools.media as mock_tools_media
+import mato_loop_backend.tools.memory as mock_tools_memory
+import mato_loop_backend.tools.sessions as mock_tools_sessions
+import mato_loop_backend.tools.skills as mock_tools_skills
+import mato_loop_backend.tools.web as mock_tools_web
+import mato_loop_backend.tools.web as tools_web
+from mato_loop_backend.agent.projection import _projection_messages, _tool_result_reference
+from mato_loop_backend.agent.run_support import _argument_edit_payload, _tool_policy
+from mato_loop_backend.files.search import MAX_MATCH_TEXT, MAX_SEARCH_RESULTS, RootFileSearch
+from mato_loop_backend.files.service import FileRoot, RootFileError, RootFileService
+from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     IntegrationContributions,
     IntegrationResource,
     ToolContribution,
 )
+from mato_loop_backend.integrations.youtube_transcript import TranscriptResult
+from mato_loop_backend.media.attachments import AttachmentService
 from mato_loop_backend.memory.retrieval import (
     MemoryRetrieval,
     MemoryRetrievalService,
@@ -69,8 +59,13 @@ from mato_loop_backend.models import (
     Message,
     MessageAttachment,
 )
-from mato_loop_backend.providers import ToolCall
-from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.permissions.policy import (
+    PermissionDecision,
+    PermissionPolicy,
+    PermissionRequest,
+)
+from mato_loop_backend.permissions.resolution import tool_execution_policy
+from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
     AgentProfilesSettings,
@@ -90,7 +85,24 @@ from mato_loop_backend.settings import (
     UserProfileSettings,
 )
 from mato_loop_backend.skills import SkillDraft
-from mato_loop_backend.workspace import FileRoot, RootFileService
+from mato_loop_backend.tools.actions import ApprovalEditField, ToolAction
+from mato_loop_backend.tools.arguments import (
+    CreateAutomationArguments,
+    EditAutomationArguments,
+    MemoryWriteArguments,
+    ReadArguments,
+    TaskArguments,
+)
+from mato_loop_backend.tools.catalog import ToolRegistry, tool_registry
+from mato_loop_backend.tools.context import ToolContext
+from mato_loop_backend.tools.contracts import (
+    ToolArgumentsEdited,
+    ToolAttachment,
+    ToolDefinition,
+    ToolResult,
+)
+from mato_loop_backend.tools.registry import BoundTool, EffectiveToolSet
+from mato_loop_backend.web.fetch import DownloadedFile, WebFetchError, WebFetchImage, WebFetchResult
 
 
 class _RequiredArguments(BaseModel):
@@ -354,7 +366,7 @@ async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkey
     context = _context(tmp_path, listing)
     first.user_id = context.session.user_id
     context.db.scalars.return_value = Mock(all=Mock(return_value=[first]))
-    monkeypatch.setattr(tools_module.execution_agent_connections, "is_connected", lambda agent_id: agent_id == first.id)
+    monkeypatch.setattr(mock_tools_computer.execution_agent_connections, "is_connected", lambda agent_id: agent_id == first.id)
 
     result = await tool_registry.execute(listing, context)
 
@@ -371,7 +383,7 @@ async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkey
     context.db.scalar.return_value = first
     run = AgentRun(id=context.run_id, session_id=context.session.id)
     context.db.get.return_value = run
-    monkeypatch.setattr(tools_module.execution_agent_connections, "snapshot", lambda _id: frozenset({"filesystem.resolve", "shell.run"}))
+    monkeypatch.setattr(mock_tools_computer.execution_agent_connections, "snapshot", lambda _id: frozenset({"filesystem.resolve", "shell.run"}))
     monkeypatch.setattr(
         "mato_loop_backend.sessions.service.validate_execution_preferences",
         AsyncMock(return_value=("/srv/new", "ask")),
@@ -420,7 +432,7 @@ async def test_execution_agent_switch_rechecks_connection_after_approval(monkeyp
         "mato_loop_backend.sessions.service.validate_execution_preferences",
         AsyncMock(return_value=(None, None)),
     )
-    monkeypatch.setattr(tools_module.execution_agent_connections, "snapshot", lambda _id: None)
+    monkeypatch.setattr(mock_tools_computer.execution_agent_connections, "snapshot", lambda _id: None)
 
     result = await tool_registry.execute(call, context)
 
@@ -465,15 +477,11 @@ async def test_missing_profile_reload_keeps_private_trust(monkeypatch, tmp_path)
     context = _context(tmp_path, call)
     context.model_trust_level = TrustLevel.PRIVATE
     fallback = ToolSettings()
-    monkeypatch.setattr(
-        tools_module,
-        "load_agent_profile_tools",
-        AsyncMock(side_effect=AgentProfileUnavailable),
-    )
+    monkeypatch.setattr(mock_tools_access, 'load_agent_profile_tools', AsyncMock(side_effect=AgentProfileUnavailable))
     load_fallback = AsyncMock(return_value=fallback)
-    monkeypatch.setattr(tools_module, "load_effective_tools", load_fallback)
+    monkeypatch.setattr(mock_tools_access, 'load_effective_tools', load_fallback)
 
-    result = await tools_module._profile_tool_settings(context)
+    result = await mock_tools_access.profile_tool_settings(context)
 
     load_fallback.assert_awaited_once_with(
         context.db, context.session.user_id, TrustLevel.PRIVATE
@@ -487,9 +495,9 @@ async def test_tool_reload_uses_run_profile_snapshot(monkeypatch, tmp_path) -> N
     context.session.agent_profile_id = uuid4()
     context.agent_profile_id = uuid4()
     load = AsyncMock(return_value=(ToolSettings(), None))
-    monkeypatch.setattr(tools_module, "load_agent_profile_tools", load)
+    monkeypatch.setattr(mock_tools_access, 'load_agent_profile_tools', load)
 
-    await tools_module._profile_tool_settings(context)
+    await mock_tools_access.profile_tool_settings(context)
 
     assert load.await_args.args[2] == context.agent_profile_id
 
@@ -682,7 +690,7 @@ async def test_read_qr_code_rejects_stale_attachment_id(tmp_path, monkeypatch) -
         id="qr-read", name="read_qr_code", arguments={"attachment_id": str(attachment_id)}
     )
     context = _context(tmp_path, call)
-    data = tools_module._qr_code_png("original")
+    data = mock_tools_media._qr_code_png("original")
     revision = context.root_files.create_output_file("qr.png", data)
     attachment = MessageAttachment(
         id=attachment_id,
@@ -700,7 +708,7 @@ async def test_read_qr_code_rejects_stale_attachment_id(tmp_path, monkeypatch) -
     monkeypatch.setattr(
         AttachmentService, "_root_files", lambda *_args, **_kwargs: context.root_files
     )
-    context.root_files.append_output_revision(revision.file_id, tools_module._qr_code_png("new"))
+    context.root_files.append_output_revision(revision.file_id, mock_tools_media._qr_code_png("new"))
 
     result = await tool_registry.execute(call, context)
 
@@ -737,11 +745,7 @@ def test_effective_toolset_accepts_host_registered_integration_tools(monkeypatch
         ),
         prompt_fragments=("Trusted integration instruction.",),
     )
-    monkeypatch.setattr(
-        tools_module,
-        "effective_integration_contributions",
-        Mock(return_value=contributions),
-    )
+    monkeypatch.setattr(mock_tools_catalog, 'effective_integration_contributions', Mock(return_value=contributions))
 
     effective = ToolRegistry([]).effective(IntegrationSettings())
 
@@ -763,11 +767,7 @@ async def test_bound_integration_tool_rejects_changed_source(tmp_path, monkeypat
         handler=_successful_handler,
         integration_id=str(integration.id),
     )
-    monkeypatch.setattr(
-        tools_module,
-        "effective_integration_contributions",
-        Mock(return_value=IntegrationContributions(tools=(contribution,))),
-    )
+    monkeypatch.setattr(mock_tools_catalog, 'effective_integration_contributions', Mock(return_value=IntegrationContributions(tools=(contribution,))))
     effective = ToolRegistry([]).effective(
         IntegrationSettings(instances=[integration])
     )
@@ -824,11 +824,7 @@ async def test_bound_integration_tool_rechecks_source_after_approval(
         integration_id=str(integration.id),
         authorization_factory=lambda _arguments, _context: (request,),
     )
-    monkeypatch.setattr(
-        tools_module,
-        "effective_integration_contributions",
-        Mock(return_value=IntegrationContributions(tools=(contribution,))),
-    )
+    monkeypatch.setattr(mock_tools_catalog, 'effective_integration_contributions', Mock(return_value=IntegrationContributions(tools=(contribution,))))
     effective = ToolRegistry([]).effective(
         IntegrationSettings(instances=[integration])
     )
@@ -947,7 +943,7 @@ async def test_shared_tool_rejects_action_irrelevant_to_selected_resource(
     integration = _shared_integration("First")
     settings = IntegrationSettings(instances=[integration])
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
-    monkeypatch.setattr(tools_module, "_profile_tool_settings", AsyncMock(return_value=ToolSettings()))
+    monkeypatch.setattr(mock_tools_access, 'profile_tool_settings', AsyncMock(return_value=ToolSettings()))
     effective = ToolRegistry([]).effective(settings)
     call = ToolCall(
         id="irrelevant",
@@ -1087,11 +1083,7 @@ async def test_contributed_authorization_must_cover_every_declared_action(
         integration_id=str(integration.id),
         authorization_factory=lambda _arguments, _context: (request,),
     )
-    monkeypatch.setattr(
-        tools_module,
-        "effective_integration_contributions",
-        Mock(return_value=IntegrationContributions(tools=(contribution,))),
-    )
+    monkeypatch.setattr(mock_tools_catalog, 'effective_integration_contributions', Mock(return_value=IntegrationContributions(tools=(contribution,))))
     settings = IntegrationSettings(instances=[integration])
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
     effective = ToolRegistry([]).effective(settings)
@@ -1139,11 +1131,7 @@ async def test_resource_policy_disabled_blocks_contributed_tool_effect(
         integration_id=str(integration.id),
         authorization_factory=lambda _arguments, _context: (request,),
     )
-    monkeypatch.setattr(
-        tools_module,
-        "effective_integration_contributions",
-        Mock(return_value=IntegrationContributions(tools=(contribution,))),
-    )
+    monkeypatch.setattr(mock_tools_catalog, 'effective_integration_contributions', Mock(return_value=IntegrationContributions(tools=(contribution,))))
     integration_settings = IntegrationSettings(instances=[integration])
     effective = ToolRegistry([]).effective(integration_settings)
     settings = _tool_settings(
@@ -1437,10 +1425,10 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
         assert "Empty for manual runs only" in schema["properties"]["schedules"]["description"]
 
 
-@pytest.mark.parametrize("arguments", [tools_module.CreateAutomationArguments, tools_module.EditAutomationArguments])
+@pytest.mark.parametrize("arguments", [CreateAutomationArguments, EditAutomationArguments])
 def test_manual_automation_arguments_require_explicit_schedules_and_forbid_archiving(arguments):
     draft = {"name": "Manual", "task": "Do work"}
-    if arguments is tools_module.EditAutomationArguments:
+    if arguments is EditAutomationArguments:
         draft.update(automation_id=uuid4(), expected_revision=1)
     assert arguments(**draft, schedules=[]).schedules == []
     with pytest.raises(ValidationError):
@@ -1489,7 +1477,7 @@ async def test_automation_argument_validation_rejects_invalid_schedule_and_outpu
 
 
 def test_automation_schedule_arguments_accept_one_time_schedule() -> None:
-    schedule = tools_module.AutomationScheduleArguments.model_validate(
+    schedule = mock_tools_automations.AutomationScheduleArguments.model_validate(
         {
             "cron": None,
             "timezone": "Europe/Berlin",
@@ -1500,14 +1488,14 @@ def test_automation_schedule_arguments_accept_one_time_schedule() -> None:
     assert schedule.run_at == datetime(2026, 8, 21, 8, 30, tzinfo=UTC)
     assert schedule.timezone is None
     with pytest.raises(ValueError):
-        tools_module.AutomationScheduleArguments.model_validate(
+        mock_tools_automations.AutomationScheduleArguments.model_validate(
             {
                 "cron": "0 8 * * *",
                 "run_at": "2026-08-21T10:30:00+02:00",
             }
         )
 
-    without_skill = tools_module.CreateAutomationArguments.model_validate(
+    without_skill = CreateAutomationArguments.model_validate(
         {
             "name": "Bericht",
             "task": "Erstellen",
@@ -1517,7 +1505,7 @@ def test_automation_schedule_arguments_accept_one_time_schedule() -> None:
     )
     assert without_skill.skill_id is None
     with pytest.raises(ValueError):
-        tools_module.CreateAutomationArguments.model_validate(
+        CreateAutomationArguments.model_validate(
             {
                 "name": "Bericht",
                 "task": "Erstellen",
@@ -1526,7 +1514,7 @@ def test_automation_schedule_arguments_accept_one_time_schedule() -> None:
             }
         )
     with pytest.raises(ValueError):
-        tools_module.CreateAutomationArguments.model_validate(
+        CreateAutomationArguments.model_validate(
             {
                 "name": "Bericht",
                 "task": "Erstellen",
@@ -1535,7 +1523,7 @@ def test_automation_schedule_arguments_accept_one_time_schedule() -> None:
             }
         )
 
-    recurring = tools_module.AutomationScheduleArguments.model_validate(
+    recurring = mock_tools_automations.AutomationScheduleArguments.model_validate(
         {
             "cron": "0 8 * * *",
             "timezone": "Europe/Berlin",
@@ -1544,7 +1532,7 @@ def test_automation_schedule_arguments_accept_one_time_schedule() -> None:
     )
     assert recurring.valid_until == datetime(2026, 8, 28, 6, tzinfo=UTC)
     with pytest.raises(ValueError):
-        tools_module.AutomationScheduleArguments.model_validate(
+        mock_tools_automations.AutomationScheduleArguments.model_validate(
             {
                 "run_at": "2026-08-21T10:30:00+02:00",
                 "valid_until": "2026-08-28T10:30:00+02:00",
@@ -1585,12 +1573,12 @@ async def test_create_automation_approval_uses_current_session_boundaries(
         enabled=True,
     )
     monkeypatch.setattr(
-        tools_module.AutomationService, "skill", AsyncMock(return_value=None)
+        mock_tools_automations.AutomationService, "skill", AsyncMock(return_value=None)
     )
     create = AsyncMock(return_value=created)
-    monkeypatch.setattr(tools_module.AutomationService, "create", create)
+    monkeypatch.setattr(mock_tools_automations.AutomationService, "create", create)
     monkeypatch.setattr(
-        tools_module.AutomationService, "provision_and_commit", AsyncMock()
+        mock_tools_automations.AutomationService, "provision_and_commit", AsyncMock()
     )
 
     result = await tool_registry.execute(call, context)
@@ -1630,10 +1618,10 @@ async def test_edit_automation_approval_labels_removing_schedules_as_manual(tmp_
             cron_expression="0 8 * * *", timezone="UTC", enabled=True,
         )],
     )
-    monkeypatch.setattr(tools_module.AutomationService, "owned", AsyncMock(return_value=automation))
-    monkeypatch.setattr(tools_module.AutomationService, "skill", AsyncMock(return_value=None))
+    monkeypatch.setattr(mock_tools_automations.AutomationService, "owned", AsyncMock(return_value=automation))
+    monkeypatch.setattr(mock_tools_automations.AutomationService, "skill", AsyncMock(return_value=None))
     replace = AsyncMock(return_value=automation)
-    monkeypatch.setattr(tools_module.AutomationService, "replace", replace)
+    monkeypatch.setattr(mock_tools_automations.AutomationService, "replace", replace)
     result = await tool_registry.execute(call, context)
     assert not result.is_error
     permission = context.ask_handler.await_args.args[0]
@@ -1671,12 +1659,12 @@ async def test_run_automation_rechecks_revision_after_approval_and_queues_only(
         definition_snapshot={},
     )
     monkeypatch.setattr(
-        tools_module.AutomationService, "owned", AsyncMock(return_value=automation)
+        mock_tools_automations.AutomationService, "owned", AsyncMock(return_value=automation)
     )
     enqueue = AsyncMock(return_value=run)
-    monkeypatch.setattr(tools_module.AutomationService, "enqueue_manual", enqueue)
+    monkeypatch.setattr(mock_tools_automations.AutomationService, "enqueue_manual", enqueue)
     start = Mock()
-    monkeypatch.setattr(tools_module.AutomationScheduler, "start", start)
+    monkeypatch.setattr(mock_tools_automations.AutomationScheduler, "start", start)
 
     result = await tool_registry.execute(call, context)
     await asyncio.sleep(0)
@@ -1706,10 +1694,10 @@ async def test_delete_automation_approval_calls_central_revision_checked_service
         revision=7,
     )
     monkeypatch.setattr(
-        tools_module.AutomationService, "owned", AsyncMock(return_value=automation)
+        mock_tools_automations.AutomationService, "owned", AsyncMock(return_value=automation)
     )
     delete = AsyncMock()
-    monkeypatch.setattr(tools_module.AutomationService, "delete", delete)
+    monkeypatch.setattr(mock_tools_automations.AutomationService, "delete", delete)
 
     result = await tool_registry.execute(call, context)
 
@@ -1729,7 +1717,7 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
         adapter_availability={"caldav": "disabled"}
     )
     settings = ToolSettings()
-    capabilities = tools_module.effective_tool_capabilities(settings)
+    capabilities = mock_tools_catalog.effective_tool_capabilities(settings)
     effective = tool_registry.effective(
         integrations,
         tool_capabilities=capabilities,
@@ -1932,7 +1920,7 @@ async def test_web_search_normalizes_a_removed_provider_to_no_key_search(
             ]
         )
     )
-    monkeypatch.setattr(tools_module, "search_web", search)
+    monkeypatch.setattr(mock_tools_web, 'search_web', search)
 
     result = await effective.execute(call, context)
 
@@ -1985,7 +1973,7 @@ async def test_web_search_rejects_changed_bound_provider_configuration(
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
     search = AsyncMock(side_effect=AssertionError("Changed provider must not be used"))
-    monkeypatch.setattr(tools_module, "search_web", search)
+    monkeypatch.setattr(mock_tools_web, 'search_web', search)
     call = ToolCall(
         id="search", name="web_search", arguments={"query": "MatoLoop"}
     )
@@ -2012,7 +2000,7 @@ async def test_web_search_rejects_an_invalid_provider_result(tmp_path, monkeypat
         )
 
     monkeypatch.setattr(SettingsStore, "load", load_settings)
-    monkeypatch.setattr(tools_module, "search_web", AsyncMock(return_value="not-json"))
+    monkeypatch.setattr(mock_tools_web, 'search_web', AsyncMock(return_value="not-json"))
 
     result = await tool_registry.execute(call, context)
 
@@ -2059,18 +2047,18 @@ async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> N
     )
     context = _context(tmp_path, call)
     persona.owner_id = context.session.user_id
-    monkeypatch.setattr(tools_module, "load_agent_profile", AsyncMock(return_value=object()))
-    monkeypatch.setattr(
-        tools_module,
-        "load_effective_agent_identity",
-        AsyncMock(
+    _mock_value = AsyncMock(return_value=object())
+    for _mock_target in (mock_tools_identity, mock_tools_coding,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
+    _mock_value = AsyncMock(
             return_value=EffectiveAgentIdentity(
                 display_name="MatoLoop",
                 persona=persona,
                 persona_editable=True,
             )
-        ),
-    )
+        )
+    for _mock_target in (mock_tools_identity, mock_tools_coding,):
+        monkeypatch.setattr(_mock_target, 'load_effective_agent_identity', _mock_value)
 
     result = await tool_registry.execute(call, context)
 
@@ -2114,18 +2102,18 @@ async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) 
     context = _context(tmp_path, call, decision=PermissionDecision.DENY)
     _set_profile_settings(context, tool_settings)
     persona.owner_id = context.session.user_id
-    monkeypatch.setattr(tools_module, "load_agent_profile", AsyncMock(return_value=object()))
-    monkeypatch.setattr(
-        tools_module,
-        "load_effective_agent_identity",
-        AsyncMock(
+    _mock_value = AsyncMock(return_value=object())
+    for _mock_target in (mock_tools_identity, mock_tools_coding,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
+    _mock_value = AsyncMock(
             return_value=EffectiveAgentIdentity(
                 display_name="MatoLoop",
                 persona=persona,
                 persona_editable=True,
             )
-        ),
-    )
+        )
+    for _mock_target in (mock_tools_identity, mock_tools_coding,):
+        monkeypatch.setattr(_mock_target, 'load_effective_agent_identity', _mock_value)
 
     result = await tool_registry.execute(call, context)
 
@@ -2161,11 +2149,10 @@ async def test_update_agent_identity_rejects_changed_approved_persona(
     )
     for persona in (first, second):
         persona.owner_id = context.session.user_id
-    monkeypatch.setattr(tools_module, "load_agent_profile", AsyncMock(return_value=object()))
-    monkeypatch.setattr(
-        tools_module,
-        "load_effective_agent_identity",
-        AsyncMock(
+    _mock_value = AsyncMock(return_value=object())
+    for _mock_target in (mock_tools_identity, mock_tools_coding,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
+    _mock_value = AsyncMock(
             side_effect=[
                 EffectiveAgentIdentity(
                     display_name="MatoLoop", persona=first, persona_editable=True
@@ -2174,8 +2161,9 @@ async def test_update_agent_identity_rejects_changed_approved_persona(
                     display_name="MatoLoop", persona=second, persona_editable=True
                 ),
             ]
-        ),
-    )
+        )
+    for _mock_target in (mock_tools_identity, mock_tools_coding,):
+        monkeypatch.setattr(_mock_target, 'load_effective_agent_identity', _mock_value)
 
     result = await tool_registry.execute(context.tool_call, context)
 
@@ -2199,16 +2187,16 @@ async def test_update_agent_identity_rejects_persona_changed_since_run_start(
     )
     context.agent_persona_id = prompted.id
     current.owner_id = context.session.user_id
-    monkeypatch.setattr(tools_module, "load_agent_profile", AsyncMock(return_value=object()))
-    monkeypatch.setattr(
-        tools_module,
-        "load_effective_agent_identity",
-        AsyncMock(
+    _mock_value = AsyncMock(return_value=object())
+    for _mock_target in (mock_tools_identity, mock_tools_coding,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
+    _mock_value = AsyncMock(
             return_value=EffectiveAgentIdentity(
                 display_name="MatoLoop", persona=current, persona_editable=True
             )
-        ),
-    )
+        )
+    for _mock_target in (mock_tools_identity, mock_tools_coding,):
+        monkeypatch.setattr(_mock_target, 'load_effective_agent_identity', _mock_value)
     monkeypatch.setattr(
         SettingsStore,
         "load",
@@ -2377,7 +2365,9 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
         draft_services.append(service)
         return service
 
-    monkeypatch.setattr(tools_module, "RootFileService", approval_files)
+    _mock_value = approval_files
+    for _mock_target in (mock_tools_files, mock_tools_skills, mock_files_access,):
+        monkeypatch.setattr(_mock_target, 'RootFileService', _mock_value)
     context.skill_draft_handler = AsyncMock(
         return_value=SkillDraft(
             name="API research",
@@ -2394,7 +2384,7 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
                 ui_files.read_bytes(
                     "session",
                     draft_file["path"],
-                    limit=tools_module.SKILL_DRAFT_MAX_BYTES,
+                    limit=mock_tools_skills.SKILL_DRAFT_MAX_BYTES,
                 )
             )["name"]
             == "API research"
@@ -2431,7 +2421,7 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
     draft_file = request.approval_details["draftFile"]
     assert draft_file["path"].startswith("skill-draft-")
     draft_bytes = ui_files.read_bytes(
-        "session", draft_file["path"], limit=tools_module.SKILL_DRAFT_MAX_BYTES
+        "session", draft_file["path"], limit=mock_tools_skills.SKILL_DRAFT_MAX_BYTES
     )
     assert (
         context.approval_resolution["expected_revision"] == hashlib.sha256(draft_bytes).hexdigest()
@@ -2482,7 +2472,7 @@ async def test_build_skill_rejects_a_draft_changed_after_approval(monkeypatch, t
     async def approve_then_change(request):
         draft = request.approval_details["draftFile"]
         initial = ui_files.read_bytes(
-            "session", draft["path"], limit=tools_module.SKILL_DRAFT_MAX_BYTES
+            "session", draft["path"], limit=mock_tools_skills.SKILL_DRAFT_MAX_BYTES
         )
         assert hashlib.sha256(initial).hexdigest() == draft["initialRevision"]
         context.approval_resolution["expected_revision"] = draft["initialRevision"]
@@ -3319,7 +3309,7 @@ async def test_session_tool_result_read_pages_survive_projection(tmp_path, tool_
         assert payload["hasMore"] is (offset == 0)
         assert payload["nextOffset"] == (12_000 if offset == 0 else None)
         chunks.append(payload["content"])
-    expected = tools_module._sanitize_tool_result_reference_fields(content)
+    expected = mock_tools_sessions._sanitize_tool_result_reference_fields(content)
     statement = context.db.scalars.await_args.args[0]
     assert "messages.session_id =" in str(statement)
     assert "ORDER BY messages.created_at, messages.id" in str(statement)
@@ -3981,8 +3971,8 @@ async def test_memory_write_forget_checks_visibility_revision_and_hard_deletes(
     )
     get_memory = AsyncMock(side_effect=[item, item])
     delete_memory = AsyncMock()
-    monkeypatch.setattr(tools_module.MemoryService, "get", get_memory)
-    monkeypatch.setattr(tools_module.MemoryService, "delete", delete_memory)
+    monkeypatch.setattr(mock_tools_memory.MemoryService, "get", get_memory)
+    monkeypatch.setattr(mock_tools_memory.MemoryService, "delete", delete_memory)
     call = ToolCall(
         id="forget",
         name="memory_write",
@@ -3997,9 +3987,9 @@ async def test_memory_write_forget_checks_visibility_revision_and_hard_deletes(
     context.session.user_id = item.user_id
     context.assistant_message_id = uuid4()
     context.memory_trust_level = TrustLevel.PRIVATE
-    arguments = tools_module.MemoryWriteArguments.model_validate(call.arguments)
+    arguments = MemoryWriteArguments.model_validate(call.arguments)
 
-    result = await tools_module._memory_write(arguments, context)
+    result = await mock_tools_memory._memory_write(arguments, context)
 
     assert json.loads(result.content) == {"id": str(memory_id), "forgotten": True}
     assert result.metadata == {"memoryWriteOutcome": "forgotten"}
@@ -4036,9 +4026,9 @@ async def test_memory_write_forget_rejects_invisible_or_changed_target(
         audience=audience,
         revision=revision,
     )
-    monkeypatch.setattr(tools_module.MemoryService, "get", AsyncMock(return_value=item))
+    monkeypatch.setattr(mock_tools_memory.MemoryService, "get", AsyncMock(return_value=item))
     delete_memory = AsyncMock()
-    monkeypatch.setattr(tools_module.MemoryService, "delete", delete_memory)
+    monkeypatch.setattr(mock_tools_memory.MemoryService, "delete", delete_memory)
     call = ToolCall(
         id="forget",
         name="memory_write",
@@ -4053,9 +4043,9 @@ async def test_memory_write_forget_rejects_invisible_or_changed_target(
     context.session.user_id = item.user_id
     context.assistant_message_id = uuid4()
     context.memory_trust_level = TrustLevel.PRIVATE
-    arguments = tools_module.MemoryWriteArguments.model_validate(call.arguments)
+    arguments = MemoryWriteArguments.model_validate(call.arguments)
 
-    result = await tools_module._memory_write(arguments, context)
+    result = await mock_tools_memory._memory_write(arguments, context)
 
     assert result.metadata == {"errorCode": error_code}
     context.ask_handler.assert_not_awaited()
@@ -4106,11 +4096,11 @@ async def test_workspace_video_uses_execution_client_bytes(tmp_path) -> None:
     context.root_files.open_file = Mock(side_effect=AssertionError("must not read locally"))
     arguments = tool_registry._definitions["analyze_video"].validate_arguments(call.arguments)
 
-    result = await tools_module._analyze_video(arguments, context)
+    result = await mock_tools_media._analyze_video(arguments, context)
 
     assert not result.is_error
     context.execution_client.read_bytes.assert_awaited_once_with(
-        "video.mp4", limit=tools_module.MAX_VIDEO_BYTES
+        "video.mp4", limit=mock_tools_media.MAX_VIDEO_BYTES
     )
     context.root_files.open_file.assert_not_called()
 
@@ -4131,7 +4121,7 @@ async def test_memory_write_requires_session_permission_before_mutation(
     monkeypatch, tmp_path
 ) -> None:
     create_memory = AsyncMock()
-    monkeypatch.setattr(tools_module.MemoryService, "create_tool", create_memory)
+    monkeypatch.setattr(mock_tools_memory.MemoryService, "create_tool", create_memory)
     call = ToolCall(
         id="memory",
         name="memory_write",
@@ -4247,7 +4237,7 @@ async def test_public_model_can_select_same_project_session_files(tmp_path) -> N
     )
     arguments = tool_registry._definitions["read"].validate_arguments(call.arguments)
 
-    selected = await tools_module._project_read_files(arguments, context)
+    selected = await mock_files_access.project_read_files(arguments, context)
 
     assert selected is not None
     assert selected[1] == target_id
@@ -4461,7 +4451,7 @@ async def test_webfetch_applies_the_effective_policy(
             title="  Example   page  ",
         )
 
-    monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", fake_fetch)
+    monkeypatch.setattr(mock_tools_web, 'fetch_web', fake_fetch)
     call = ToolCall(
         id="fetch",
         name="webfetch",
@@ -4516,6 +4506,62 @@ async def test_webfetch_applies_the_effective_policy(
         assert "https://example.com/page?token=secret" in request.summary
 
 
+@pytest.mark.parametrize("path", [None, "manual.pdf"])
+async def test_download_file_saves_original_pdf_without_computer(
+    tmp_path, monkeypatch, path
+) -> None:
+    url = "https://example.com/manual.pdf"
+    pdf = b"%PDF-1.4\n\x80\xff\n%%EOF\n"
+    call = ToolCall("download", "download_file", {"url": url, **({"path": path} if path else {})})
+    context = _context(tmp_path, call, web_fetch_policy=ToolExecutionPolicy.AUTO)
+    context.root_files = RootFileService(
+        context.session.id,
+        run_id=context.run_id,
+        session_storage=context.root_files.session_storage,
+    )
+    assert context.execution_client is None
+
+    async def fake_download(_url, **kwargs):
+        assert _url == url
+        assert kwargs["max_response_bytes"] == 64 * 1024 * 1024
+        await kwargs["authorize_url"](url)
+        return DownloadedFile(url, "application/pdf", "manual.pdf", pdf)
+
+    monkeypatch.setattr(tools_web, "download_file", fake_download)
+    result = await tool_registry.execute(call, context)
+
+    assert json.loads(result.content) == {"root": "files", "path": "manual.pdf", "sizeBytes": len(pdf)}
+    assert context.root_files.read_bytes("session", "manual.pdf", limit=100) == pdf
+    assert result.file_actions[0].path == "manual.pdf"
+    assert result.file_actions[0].size_bytes == len(pdf)
+    assert [call.args[0].capability for call in context.ask_handler.await_args_list] == [
+        "session.files.write"
+    ]
+
+    repeated = await tool_registry.execute(call, context)
+    assert repeated.metadata == {"errorCode": "file.pathAlreadyExists"}
+    assert context.root_files.read_bytes("session", "manual.pdf", limit=100) == pdf
+    revisions = context.root_files.finalize_run(context.run_id)
+    assert len(revisions) == 1 and revisions[0].sha256 == hashlib.sha256(pdf).hexdigest()
+
+
+async def test_download_file_denied_write_does_not_fetch(tmp_path, monkeypatch) -> None:
+    call = ToolCall("download", "download_file", {
+        "url": "https://example.com/manual.pdf", "path": "manual.pdf",
+    })
+    context = _context(tmp_path, call, decision=PermissionDecision.DENY,
+                       web_fetch_policy=ToolExecutionPolicy.AUTO)
+    fetch = AsyncMock(side_effect=AssertionError("Denied download must not fetch"))
+    monkeypatch.setattr(tools_web, "download_file", fetch)
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata == {"errorCode": "permission.denied"}
+    fetch.assert_not_awaited()
+    with pytest.raises(RootFileError):
+        context.root_files.open_file("session", "manual.pdf")
+
+
 @pytest.mark.parametrize(
     ("policy", "expected_asks"),
     [(ToolExecutionPolicy.ASK, 1), (ToolExecutionPolicy.AUTO, 0)],
@@ -4537,7 +4583,7 @@ async def test_fetch_transcript_uses_one_video_approval_and_returns_evidence(
             content="[00:00:01] Hallo",
         )
 
-    monkeypatch.setattr(tools_module, "fetch_youtube_transcript", fake_fetch)
+    monkeypatch.setattr(mock_tools_web, 'fetch_youtube_transcript', fake_fetch)
     call = ToolCall(
         id="transcript",
         name="fetch_transcript",
@@ -4590,12 +4636,8 @@ async def test_fetch_transcript_rechecks_availability_before_each_request(
 
     enabled = ToolSettings()
     disabled = ToolSettings(tool_availability={"webfetch": False})
-    monkeypatch.setattr(tools_module, "fetch_youtube_transcript", fake_fetch)
-    monkeypatch.setattr(
-        tools_module,
-        "_profile_tool_settings",
-        AsyncMock(side_effect=[enabled, disabled]),
-    )
+    monkeypatch.setattr(mock_tools_web, 'fetch_youtube_transcript', fake_fetch)
+    monkeypatch.setattr(mock_tools_access, 'profile_tool_settings', AsyncMock(side_effect=[enabled, disabled]))
     call = ToolCall(
         id="transcript",
         name="fetch_transcript",
@@ -4628,12 +4670,8 @@ async def test_fetch_transcript_requests_approval_when_policy_becomes_ask(
     ask = ToolSettings(
         private_permissions={"policies": {"network.fetch": "ask"}}
     )
-    monkeypatch.setattr(tools_module, "fetch_youtube_transcript", fake_fetch)
-    monkeypatch.setattr(
-        tools_module,
-        "_profile_tool_settings",
-        AsyncMock(side_effect=[automatic, ask, ask]),
-    )
+    monkeypatch.setattr(mock_tools_web, 'fetch_youtube_transcript', fake_fetch)
+    monkeypatch.setattr(mock_tools_access, 'profile_tool_settings', AsyncMock(side_effect=[automatic, ask, ask]))
     call = ToolCall(
         id="transcript",
         name="fetch_transcript",
@@ -4682,7 +4720,7 @@ async def test_effective_dispatch_preserves_ceiling_across_live_settings_reload(
         return WebFetchResult(final_url=url, content_type="text/plain", content="Fetched",
                               status_code=200, output_format="text")
 
-    monkeypatch.setattr(tools_module, "fetch_web", fetch)
+    monkeypatch.setattr(mock_tools_web, 'fetch_web', fetch)
     # Use a previously offered live toolset; dispatch must still retain the child's ceiling.
     effective = tool_registry.effective(IntegrationSettings(), webfetch_enabled=True, tool_settings=live)
     assert tool_name in effective.tools
@@ -4713,7 +4751,7 @@ async def test_webfetch_denial_stops_before_the_fetch_continues(tmp_path, monkey
         continued = True
         raise AssertionError("The request must not continue after denial")
 
-    monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", fake_fetch)
+    monkeypatch.setattr(mock_tools_web, 'fetch_web', fake_fetch)
     call = ToolCall(id="fetch", name="webfetch", arguments={"url": "https://example.com"})
     context = _context(
         tmp_path,
@@ -4741,7 +4779,7 @@ async def test_webfetch_rejects_changed_bound_settings(tmp_path, monkeypatch) ->
         SettingsStore, "load_optional", AsyncMock(return_value=None)
     )
     fetch = AsyncMock(side_effect=AssertionError("Disabled webfetch must not run"))
-    monkeypatch.setattr(tools_module, "fetch_web", fetch)
+    monkeypatch.setattr(mock_tools_web, 'fetch_web', fetch)
     call = ToolCall(
         id="fetch", name="webfetch", arguments={"url": "https://example.com"}
     )
@@ -4776,7 +4814,7 @@ async def test_webfetch_sources_preserve_distinct_query_values(
             output_format=output_format,
         )
 
-    monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", fake_fetch)
+    monkeypatch.setattr(mock_tools_web, 'fetch_web', fake_fetch)
     results = []
     for value in ("first", "second"):
         call = ToolCall(
@@ -4813,7 +4851,7 @@ async def test_webfetch_sources_preserve_distinct_query_values(
 async def test_webfetch_rejects_empty_content(
     tmp_path, monkeypatch, content,
 ) -> None:
-    monkeypatch.setattr(tools_module, "fetch_web", AsyncMock(return_value=WebFetchResult(
+    monkeypatch.setattr(mock_tools_web, 'fetch_web', AsyncMock(return_value=WebFetchResult(
         final_url="https://example.com/data", content_type="application/json",
         content=content, status_code=200, output_format="text",
     )))
@@ -4845,7 +4883,7 @@ async def test_webfetch_returns_images_as_tool_attachments(tmp_path, monkeypatch
             images=(WebFetchImage(image, "image/png", "diagram.png"),),
         )
 
-    monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", fake_fetch)
+    monkeypatch.setattr(mock_tools_web, 'fetch_web', fake_fetch)
     call = ToolCall(id="fetch", name="webfetch", arguments={"url": "https://example.com/a"})
     context = _context(
         tmp_path,
@@ -4898,7 +4936,7 @@ async def test_webfetch_returns_pdf_text_and_selected_page_images(
             unavailable_pages=(4,),
         )
 
-    monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", fake_fetch)
+    monkeypatch.setattr(mock_tools_web, 'fetch_web', fake_fetch)
     call = ToolCall(
         id="fetch",
         name="webfetch",
@@ -4950,7 +4988,7 @@ async def test_webfetch_returns_stable_integration_errors(
     async def failing_fetch(*args, **kwargs):
         raise WebFetchError(code, params=params)
 
-    monkeypatch.setattr("mato_loop_backend.agent.tools.fetch_web", failing_fetch)
+    monkeypatch.setattr(mock_tools_web, 'fetch_web', failing_fetch)
     call = ToolCall(id="fetch", name="webfetch", arguments={"url": "https://example.com"})
     context = _context(
         tmp_path,

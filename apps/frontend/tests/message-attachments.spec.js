@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { createApp, h } from 'vue'
 import { afterEach, expect, it, vi } from 'vitest'
-import MessageAttachments from '../src/components/MessageAttachments.vue'
+import MessageAttachments from '../src/features/chat/components/MessageAttachments.vue'
 import { supportedAttachments } from '../src/utils/attachments'
 
-vi.mock('components/FileViewerPanel.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/files/components/FileViewerPanel.vue', () => ({ default: { render: () => null } }))
 
 const url = '/api/sessions/550e8400-e29b-41d4-a716-446655440000/messages/550e8400-e29b-41d4-a716-446655440001/attachments/550e8400-e29b-41d4-a716-446655440002'
 let app

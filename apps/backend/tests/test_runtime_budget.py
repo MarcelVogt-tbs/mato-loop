@@ -9,15 +9,14 @@ from test_required_web_search_runtime import (
     _tool_messages,
 )
 
-import mato_loop_backend.agent.runtime as runtime_module
-from mato_loop_backend.agent.runtime import (
-    AgentRunError,
-    AgentRuntime,
-    _retryable_transient_read,
-    _tool_call_signature,
-)
+import mato_loop_backend.agent.loop as mock_agent_loop
+import mato_loop_backend.agent.run_support as mock_agent_run_support
+import mato_loop_backend.agent.runtime as mock_agent_runtime
+import mato_loop_backend.agent.titles as mock_agent_titles
+from mato_loop_backend.agent.run_contracts import AgentRunError
+from mato_loop_backend.agent.run_support import _retryable_transient_read, _tool_call_signature
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.subagents import integration_ceiling_ids, permission_snapshot
-from mato_loop_backend.agent.tools import ToolResult, tool_registry
 from mato_loop_backend.models import Message, WebSearchPolicy
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
@@ -25,6 +24,8 @@ from mato_loop_backend.sessions.serialization import message_payload
 from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings, ToolSettings
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
 from mato_loop_backend.settings.models import AgentProfile
+from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.tools.contracts import ToolResult
 
 
 @pytest.mark.parametrize("transmitted", [30_000, None])
@@ -78,7 +79,9 @@ async def test_profile_budget_snapshot_and_unlimited_run(monkeypatch, limit, cal
         search_policy=WebSearchPolicy.AVAILABLE,
     )
     profile = AgentProfile(name="Custom", instructions="Follow the task.", maxToolCalls=1)
-    monkeypatch.setattr(runtime_module, "load_agent_profile_tools", AsyncMock(return_value=(ToolSettings(), profile)))
+    _mock_value = AsyncMock(return_value=(ToolSettings(), profile))
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile_tools', _mock_value)
 
     await AgentRuntime._execute_loop(db, run)
 
@@ -235,8 +238,12 @@ async def test_retry_snapshots_current_budget_without_overwriting_failed_run(mon
     failed.model_config_id = session.model_config_id
     profile = AgentProfile(name="Custom", instructions="Follow the task.", maxToolCalls=new_limit)
     failed.agent_profile_id = session.agent_profile_id = profile.id
-    monkeypatch.setattr(runtime_module, "load_agent_profile", AsyncMock(return_value=profile))
-    monkeypatch.setattr(runtime_module, "load_agent_profile_tools", AsyncMock(return_value=(ToolSettings(), profile)))
+    _mock_value = AsyncMock(return_value=profile)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
+    _mock_value = AsyncMock(return_value=(ToolSettings(), profile))
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile_tools', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_schedule_run", Mock())
     db.get.side_effect = lambda model, _key, **_kw: message if model is Message else session
 
@@ -311,8 +318,8 @@ def test_child_integration_snapshot_is_concrete_and_legacy_fails_closed():
 
 @pytest.mark.parametrize(("offered_allow", "spawn_allow"), [(False, True), (True, False), (True, True)])
 def test_delegation_intersects_shell_prefix_permissions(offered_allow, spawn_allow):
-    from mato_loop_backend.agent.permissions import PermissionRequest, shell_command_scope
     from mato_loop_backend.agent.subagents import ceiling_settings
+    from mato_loop_backend.permissions.policy import PermissionRequest, shell_command_scope
     from mato_loop_backend.settings import ToolExecutionPolicy, TrustLevel
 
     snapshots = [permission_snapshot(
@@ -326,6 +333,6 @@ def test_delegation_intersects_shell_prefix_permissions(offered_allow, spawn_all
         resource_scope=shell_command_scope(uuid4(), "/work", "read", [["pytest"]], [], True),
         action_kind="shell_run", risk_level="low", title="Run", summary="Run tests",
     )
-    assert runtime_module._tool_policy(
+    assert mock_agent_run_support._tool_policy(
         ceiling_settings(snapshot, TrustLevel.PUBLIC), IntegrationSettings(), request, snapshot=snapshot,
     ) == (ToolExecutionPolicy.AUTO if offered_allow and spawn_allow else ToolExecutionPolicy.ASK)

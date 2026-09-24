@@ -14,7 +14,6 @@ from uuid import UUID
 from cryptography.fernet import Fernet
 from sqlalchemy import text
 
-from mato_loop_backend.agent.tool_registry import ToolRegistry
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.execution.browser_contracts import (
@@ -26,6 +25,7 @@ from mato_loop_backend.models import UserAccount
 from mato_loop_backend.providers import service as provider_service
 from mato_loop_backend.security import load_credential
 from mato_loop_backend.settings import ReasoningEffort, load_effective_ai
+from mato_loop_backend.tools.registry import ToolRegistry
 
 TAB = "11111111-1111-4111-8111-111111111111"
 FIELDS = {"e1": "Name", "e2": "City", "e3": "Note"}

@@ -11,7 +11,8 @@ from fastapi import FastAPI, WebSocketDisconnect
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError
 
-from mato_loop_backend.api.routes import terminals
+import mato_loop_backend.api.routes.terminals as api_routes_terminals
+import mato_loop_backend.api.websocket_access as api_websocket_access
 from mato_loop_backend.execution import (
     ExecutionClientError,
     SharedTerminalStatus,
@@ -90,14 +91,14 @@ def env(monkeypatch):
 
     db = Db()
     coordinator = execution.TerminalCoordinator()
-    monkeypatch.setattr(terminals, "get_runtime_config", lambda: SimpleNamespace(cors_origin_list=["https://ui.test"]))
-    monkeypatch.setattr(terminals, "_browser_login", AsyncMock(return_value=terminals._BrowserLogin(user, login.id, login.expires_at)))
-    monkeypatch.setattr(terminals, "AsyncSessionFactory", lambda: db)
+    monkeypatch.setattr(api_routes_terminals, "get_runtime_config", lambda: SimpleNamespace(cors_origin_list=["https://ui.test"]))
+    monkeypatch.setattr(api_websocket_access, "_browser_login", AsyncMock(return_value=api_websocket_access._BrowserLogin(user, login.id, login.expires_at)))
+    monkeypatch.setattr(api_websocket_access, "AsyncSessionFactory", lambda: db)
     monkeypatch.setattr(execution, "AsyncSessionFactory", lambda: db)
     monkeypatch.setattr(execution, "ExecutionClient", Client)
     monkeypatch.setattr(execution.execution_agent_connections, "generation", lambda _id: 1)
     monkeypatch.setattr(execution.execution_agent_connections, "snapshot", lambda _id: execution.TERMINAL_OPERATIONS)
-    monkeypatch.setattr(terminals, "terminal_coordinator", coordinator)
+    monkeypatch.setattr(api_routes_terminals, "terminal_coordinator", coordinator)
     return SimpleNamespace(user=user, agent=agent, session=session, login=login, db=db, objects=objects,
                            calls=calls, coordinator=coordinator)
 
@@ -134,7 +135,7 @@ async def test_access_checked_before_open_or_replay(env, monkeypatch, invalid):
     if invalid == "origin":
         socket.headers["origin"] = "https://evil.test"
     elif invalid == "login":
-        monkeypatch.setattr(terminals, "_browser_login", AsyncMock(return_value=None))
+        monkeypatch.setattr(api_websocket_access, "_browser_login", AsyncMock(return_value=None))
     elif invalid == "session":
         socket.query_params = {}
     elif invalid == "owner":
@@ -151,13 +152,13 @@ async def test_access_checked_before_open_or_replay(env, monkeypatch, invalid):
         env.agent.revoked_at = datetime.now(UTC)
     else:
         monkeypatch.setattr(execution.execution_agent_connections, "snapshot", lambda _id: frozenset({"terminal.open"}))
-    await terminals.browser_terminal(socket, env.agent.id)
+    await api_routes_terminals.browser_terminal(socket, env.agent.id)
     assert not socket.accepted and socket.closed and not env.calls
 
 
 def test_actual_websocket_resume_takeover_and_native_input(env):
     app = FastAPI()
-    app.include_router(terminals.router)
+    app.include_router(api_routes_terminals.router)
     url = f"/terminals/{env.agent.id}?sessionId={env.session.id}"
     with TestClient(app) as client:
         with client.websocket_connect(url, headers={"origin": "https://ui.test"}) as first:
@@ -169,6 +170,9 @@ def test_actual_websocket_resume_takeover_and_native_input(env):
             runtime = next(iter(env.coordinator._runtimes.values()))
             client.portal.call(runtime.send_bytes, b"shared history")
             assert first.receive_bytes() == b"shared history"
+            # Await the server close before TestClient cancels its application task.
+            first.close()
+            assert first.receive()["type"] == "websocket.close"
         with client.websocket_connect(url, headers={"origin": "https://ui.test"}) as second:
             restored = second.receive_json()
             assert restored["restored"] and restored["attached"]
@@ -183,6 +187,7 @@ def test_actual_websocket_resume_takeover_and_native_input(env):
                     event = second.receive_json()
                 assert event == {"type": "terminal.replaced", "reason": "replaced"}
                 second.send_json({"type": "close"})
+                assert second.receive()["type"] == "websocket.close"
                 third.send_json({"type": "resize", "rows": 30, "columns": 100})
                 third.send_json({"type": "input", "data": "eA=="})
                 assert third.receive_json()["error"]["code"] == "terminal.alreadyAttached"
@@ -192,6 +197,7 @@ def test_actual_websocket_resume_takeover_and_native_input(env):
                 assert third.receive_json()["error"]["code"] == "terminal.messageInvalid"
                 third.send_json({"type": "close"})
                 assert third.receive_json()["reason"] == "terminated"
+                assert third.receive()["type"] == "websocket.close"
         client.portal.call(env.coordinator.shutdown)
     assert sum(op == "terminal.shared.open" for op, _ in env.calls) == 1
     assert sum(op == "terminal.close" for op, _ in env.calls) == 1
@@ -256,7 +262,7 @@ async def test_login_takeover_and_stale_controls(env):
     second = await env.coordinator.open(env.user.id, env.session.id, env.agent.id, login.id, FakeWebSocket())
     env.objects.pop((LoginSession, env.login.id))
     first.websocket.receive_json = AsyncMock(return_value={"type": "close"})
-    await terminals._handle_browser(first)
+    await api_routes_terminals._handle_browser(first)
     await env.coordinator.release(first)
     await second.runtime.check_access()
     assert second.runtime.viewer is second and not second.runtime.closed
@@ -273,7 +279,7 @@ async def test_shell_exit_rejects_new_work_but_allows_browser_close(env):
         with pytest.raises(ExecutionClientError, match="terminal.disconnected"):
             await runtime.check_access()
         viewer.websocket.receive_json = AsyncMock(return_value={"type": "close"})
-        await asyncio.wait_for(terminals._handle_browser(viewer), 1)
+        await asyncio.wait_for(api_routes_terminals._handle_browser(viewer), 1)
         assert runtime.command_task.cancelled()
         assert not env.coordinator._runtimes
         assert env.calls[-1][0] == "terminal.close"
@@ -383,7 +389,7 @@ async def test_explicit_close_queued_during_open_precedes_failed_snapshot_send(e
     socket = FakeWebSocket(env.session.id)
     socket.receive_json = AsyncMock(return_value={"type": "close"})
     socket.send_text = AsyncMock(side_effect=WebSocketDisconnect())
-    browser = asyncio.create_task(terminals.browser_terminal(socket, env.agent.id))
+    browser = asyncio.create_task(api_routes_terminals.browser_terminal(socket, env.agent.id))
     await started.wait()
     release.set()
     await asyncio.wait_for(browser, 1)

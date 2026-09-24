@@ -20,11 +20,6 @@ from anyio import CancelScope
 from fastapi import WebSocket
 from pydantic import ValidationError
 
-from mato_loop_backend.agent.permissions import (
-    PermissionDecision,
-    execution_directory_permission,
-    integration_operation_permission,
-)
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution.browser_contracts import (
@@ -49,6 +44,7 @@ from mato_loop_backend.execution.client import (
     WorkspaceStatResult,
 )
 from mato_loop_backend.execution.manager import execution_agent_connections
+from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.integrations.browser import browser_client, load_browser_integration
 from mato_loop_backend.models import (
     AgentRun,
@@ -57,9 +53,13 @@ from mato_loop_backend.models import (
     LoginSession,
     UserAccount,
 )
+from mato_loop_backend.permissions.policy import (
+    PermissionDecision,
+    execution_directory_permission,
+    integration_operation_permission,
+)
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings.effective import AgentProfileUnavailable, load_agent_profile
-from mato_loop_backend.workspace import RootFileService
 
 if TYPE_CHECKING:
     from mato_loop_backend.execution.browser_control import ControlRequest
@@ -869,7 +869,7 @@ class BrowserCoordinator:
         if origin.kind == "human":
             return PermissionDecision.ALLOW
         from mato_loop_backend.agent.runtime import AgentRuntime
-        from mato_loop_backend.agent.tool_registry import _model_revision
+        from mato_loop_backend.tools.registry import _model_revision
 
         async with AsyncSessionFactory() as db:
             session = await db.get(ChatSession, origin.session_id)

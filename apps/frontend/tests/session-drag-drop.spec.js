@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createApp, h, nextTick, reactive } from 'vue'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import MainLayout from '../src/layouts/MainLayout.vue'
+import MainLayout from '../src/app/MainLayout.vue'
 import { useChatStore } from 'stores/chat'
 import { useBrowserStore } from 'stores/browser'
 import { useControlCenterStore } from 'stores/control-center'
@@ -99,10 +99,10 @@ vi.mock('stores/workspace', () => ({ useWorkspaceStore: () => workspace }))
 vi.mock('stores/search', () => ({ useSearchStore: () => ({ openDialog: vi.fn() }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
-vi.mock('components/AccountDialog.vue', () => ({ default: { render: () => null } }))
-vi.mock('components/SearchDialog.vue', () => ({ default: { render: () => null } }))
-vi.mock('components/ControlCenterPanel.vue', () => ({ default: { render: () => null } }))
-vi.mock('components/ExecutionAgentDirectoryPickerDialog.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/auth/AccountDialog.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/search/SearchDialog.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/app/control-center/ControlCenterPanel.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/computers/ExecutionAgentDirectoryPickerDialog.vue', () => ({ default: { render: () => null } }))
 
 let app, root
 beforeEach(async () => {
@@ -340,6 +340,22 @@ it.each([
   dialog.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
   await nextTick()
   expect(chat.moveSession).toHaveBeenCalledExactlyOnceWith(id, destination)
+})
+
+it('keeps a move dialog active after closing the mobile drawer', async () => {
+  quasar.screen.lt.md = true
+  const transfer = { setData: vi.fn() }
+  await drag(source('standalone'), 'dragstart', transfer)
+  await drag(target('a'), 'drop', transfer)
+  root.querySelector('[aria-label="Navigation schließen"]').click()
+  await nextTick()
+
+  expect(root.querySelector('#app-navigation-toggle')).not.toBeNull()
+  const dialog = root.querySelector('[role="dialog"]')
+  expect(dialog.textContent).toContain('Session verschieben')
+  dialog.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+  await nextTick()
+  expect(chat.moveSession).toHaveBeenCalledExactlyOnceWith('standalone', 'a')
 })
 
 it('moves the current session to another project without guarding its unchanged file root', async () => {

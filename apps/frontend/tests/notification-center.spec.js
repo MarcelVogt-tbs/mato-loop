@@ -9,7 +9,7 @@ vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn() } }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
 
-import NotificationCenterApp from '../src/components/NotificationCenterApp.vue'
+import NotificationCenterApp from '../src/features/notifications/NotificationCenterApp.vue'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useQuestionStore } from '../src/stores/questions'
 import { useInAppNotificationStore } from '../src/stores/in-app-notifications'

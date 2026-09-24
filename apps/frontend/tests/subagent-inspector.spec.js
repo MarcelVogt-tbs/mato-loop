@@ -7,15 +7,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() } }))
-vi.mock('components/MessageContent.vue', () => ({ default: defineComponent({ props: ['content'], setup: (props) => () => h('div', props.content) }) }))
-vi.mock('components/MessageAttachments.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: defineComponent({ props: ['content'], setup: (props) => () => h('div', props.content) }) }))
+vi.mock('src/features/chat/components/MessageAttachments.vue', () => ({ default: { render: () => null } }))
 
-import SubagentInspector from '../src/components/SubagentInspector.vue'
-import SubagentRows from '../src/components/SubagentRows.vue'
-import AgentActivityPanel from '../src/components/AgentActivityPanel.vue'
-import ApprovalCard from '../src/components/ApprovalCard.vue'
-import QuestionDock from '../src/components/QuestionDock.vue'
-import SubagentRequestLink from '../src/components/SubagentRequestLink.vue'
+import SubagentInspector from '../src/features/subagents/SubagentInspector.vue'
+import SubagentRows from '../src/features/subagents/SubagentRows.vue'
+import AgentActivityPanel from '../src/features/chat/components/AgentActivityPanel.vue'
+import ApprovalCard from '../src/features/approvals/ApprovalCard.vue'
+import QuestionDock from '../src/features/questions/QuestionDock.vue'
+import SubagentRequestLink from '../src/features/subagents/SubagentRequestLink.vue'
 import { useSubagentStore } from '../src/stores/subagents'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useQuestionStore } from '../src/stores/questions'

@@ -2,7 +2,7 @@
 import { createApp, h, nextTick, reactive } from 'vue'
 import { Quasar, QBtn, QIcon } from 'quasar'
 import { afterEach, expect, it, vi } from 'vitest'
-import AppStateMessage from '../src/components/AppStateMessage.vue'
+import AppStateMessage from '../src/shared/ui/AppStateMessage.vue'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 

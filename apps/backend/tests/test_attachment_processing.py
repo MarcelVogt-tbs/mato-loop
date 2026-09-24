@@ -17,16 +17,16 @@ from pptx import Presentation
 from pypdf import PdfWriter
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import mato_loop_backend.attachment_processing as processing
-import mato_loop_backend.attachments as attachment_module
-from mato_loop_backend.attachments import (
+import mato_loop_backend.media.attachments as media_attachments
+import mato_loop_backend.media.processing as media_processing
+from mato_loop_backend.files.service import RootFileService
+from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.media.attachments import (
     AttachmentError,
     AttachmentService,
     classify_attachment,
 )
 from mato_loop_backend.models import ChatSession, Message
-from mato_loop_backend.session_storage import SessionStorage
-from mato_loop_backend.workspace import RootFileService
 
 
 def wav_bytes(*, frames: int = 80, sample_rate: int = 8_000) -> bytes:
@@ -108,10 +108,10 @@ def test_audio_only_mp4_and_webm_are_classified_by_streams(
     media_format: str,
     expected_mime: str,
 ) -> None:
-    from mato_loop_backend.video_processing import MediaInfo
+    from mato_loop_backend.media.video_processing import MediaInfo
 
     monkeypatch.setattr(
-        attachment_module,
+        media_attachments,
         "probe_media",
         lambda _data: MediaInfo(media_format, f"video/{media_format}", 1_000, None, None, None, 0),
     )
@@ -122,10 +122,10 @@ def test_audio_only_mp4_and_webm_are_classified_by_streams(
 
 
 def test_video_stream_wins_over_audio_mime_and_webm_signature(monkeypatch) -> None:
-    from mato_loop_backend.video_processing import MediaInfo
+    from mato_loop_backend.media.video_processing import MediaInfo
 
     monkeypatch.setattr(
-        attachment_module,
+        media_attachments,
         "probe_media",
         lambda _data: MediaInfo("webm", "video/webm", 1_000, 640, 360, 0, 1),
     )
@@ -140,7 +140,7 @@ def test_modern_documents_are_classified_and_extracted(document_format: str) -> 
     data = document_bytes(document_format)
     attachment = classify_attachment(data, "application/octet-stream", f"datei.{document_format}")
 
-    result = processing.process_attachment(
+    result = media_processing.process_attachment(
         data,
         kind=attachment.kind,
         mime_type=attachment.mime_type,
@@ -160,8 +160,8 @@ def test_modern_documents_are_classified_and_extracted(document_format: str) -> 
 def test_claimed_corrupt_readable_formats_are_not_downgraded_to_generic_files() -> None:
     claimed = classify_attachment(b"kaputt", "application/pdf", "bericht.pdf")
     assert claimed.kind == "document"
-    with pytest.raises(processing.AttachmentProcessingError, match="attachment.invalidDocument"):
-        processing.process_attachment(
+    with pytest.raises(media_processing.AttachmentProcessingError, match="attachment.invalidDocument"):
+        media_processing.process_attachment(
             claimed.data,
             kind=claimed.kind,
             mime_type=claimed.mime_type,
@@ -173,12 +173,12 @@ def test_claimed_corrupt_readable_formats_are_not_downgraded_to_generic_files() 
 
 
 def test_text_character_limit_has_a_specific_error() -> None:
-    limits = processing.AttachmentProcessingLimits(max_extracted_characters=3)
+    limits = media_processing.AttachmentProcessingLimits(max_extracted_characters=3)
 
     with pytest.raises(
-        processing.AttachmentProcessingError, match="attachment.textTooLarge"
+        media_processing.AttachmentProcessingError, match="attachment.textTooLarge"
     ):
-        processing.process_attachment(
+        media_processing.process_attachment(
             b"four",
             kind="text",
             mime_type="text/csv",
@@ -193,8 +193,8 @@ def test_ooxml_zip_bomb_ratio_is_rejected_before_parsing() -> None:
         archive.writestr("[Content_Types].xml", "types")
         archive.writestr("word/document.xml", "x" * 2_000_000)
 
-    with pytest.raises(processing.AttachmentProcessingError, match="attachment.invalidDocument"):
-        processing.process_attachment(
+    with pytest.raises(media_processing.AttachmentProcessingError, match="attachment.invalidDocument"):
+        media_processing.process_attachment(
             buffer.getvalue(),
             kind="document",
             mime_type=(
@@ -205,10 +205,10 @@ def test_ooxml_zip_bomb_ratio_is_rejected_before_parsing() -> None:
 
 
 def test_document_character_limit_is_enforced(monkeypatch) -> None:
-    monkeypatch.setattr(processing, "MAX_EXTRACTED_CHARACTERS", 10)
+    monkeypatch.setattr(media_processing, "MAX_EXTRACTED_CHARACTERS", 10)
 
-    with pytest.raises(processing.AttachmentProcessingError, match="attachment.invalidDocument"):
-        processing.process_attachment(
+    with pytest.raises(media_processing.AttachmentProcessingError, match="attachment.invalidDocument"):
+        media_processing.process_attachment(
             document_bytes("docx"),
             kind="document",
             mime_type=(
@@ -219,10 +219,10 @@ def test_document_character_limit_is_enforced(monkeypatch) -> None:
 
 
 def test_pdf_page_limit_is_enforced(monkeypatch) -> None:
-    monkeypatch.setattr(processing, "MAX_PDF_PAGES", 0)
+    monkeypatch.setattr(media_processing, "MAX_PDF_PAGES", 0)
 
-    with pytest.raises(processing.AttachmentProcessingError, match="attachment.invalidDocument"):
-        processing.process_attachment(
+    with pytest.raises(media_processing.AttachmentProcessingError, match="attachment.invalidDocument"):
+        media_processing.process_attachment(
             document_bytes("pdf"),
             kind="document",
             mime_type="application/pdf",
@@ -231,19 +231,19 @@ def test_pdf_page_limit_is_enforced(monkeypatch) -> None:
 
 
 def test_empty_password_pdf_is_extracted() -> None:
-    pages, metadata = processing.extract_pdf_pages(pdf_bytes(password=""))
+    pages, metadata = media_processing.extract_pdf_pages(pdf_bytes(password=""))
 
     assert pages == [""]
     assert metadata["pageCount"] == 1
 
 
 def test_password_protected_pdf_is_rejected() -> None:
-    with pytest.raises(processing.AttachmentProcessingError, match="attachment.invalidDocument"):
-        processing.extract_pdf_pages(pdf_bytes(password="secret"))
+    with pytest.raises(media_processing.AttachmentProcessingError, match="attachment.invalidDocument"):
+        media_processing.extract_pdf_pages(pdf_bytes(password="secret"))
 
 
 def test_large_pdf_manual_is_within_page_limit() -> None:
-    pages, metadata = processing.extract_pdf_pages(pdf_bytes(pages=627))
+    pages, metadata = media_processing.extract_pdf_pages(pdf_bytes(pages=627))
 
     assert len(pages) == 627
     assert metadata["pageCount"] == 627
@@ -261,10 +261,10 @@ def test_compressed_audio_duration_limit_is_checked_before_conversion(monkeypatc
         }
         return subprocess.CompletedProcess(command, 0, json.dumps(payload).encode(), b"")
 
-    monkeypatch.setattr(processing, "_run_media", run_media)
+    monkeypatch.setattr(media_processing, "_run_media", run_media)
 
-    with pytest.raises(processing.AttachmentProcessingError, match="attachment.invalidAudio"):
-        processing.process_attachment(
+    with pytest.raises(media_processing.AttachmentProcessingError, match="attachment.invalidAudio"):
+        media_processing.process_attachment(
             b"ID3too-long",
             kind="audio",
             mime_type="audio/mpeg",
@@ -300,7 +300,7 @@ async def test_compressed_audio_stores_only_original_and_converts_on_read(
             return subprocess.CompletedProcess(command, 0, json.dumps(payload).encode(), b"")
         return subprocess.CompletedProcess(command, 0, b"\x00\x00" * 160, b"")
 
-    monkeypatch.setattr(processing, "_run_media", run_media)
+    monkeypatch.setattr(media_processing, "_run_media", run_media)
     original = b"ID3compressed-test-audio"
 
     attachment = await service.create_attachment(
@@ -347,7 +347,7 @@ async def test_invalid_compressed_audio_is_rejected_without_persisted_files(
     message = Message(id=uuid4(), session_id=session_id, role="user", content="Audio")
     db = AsyncMock(spec=AsyncSession)
     monkeypatch.setattr(
-        processing,
+        media_processing,
         "_run_media",
         lambda command, data, timeout: subprocess.CompletedProcess(command, 1, b"", b"invalid"),
     )
@@ -374,7 +374,7 @@ async def test_session_quota_includes_new_derived_content(
     message = Message(id=uuid4(), session_id=session_id, role="user", content="Text")
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [ChatSession(id=session_id, user_id=uuid4(), title="Test")]
-    monkeypatch.setattr(attachment_module, "SESSION_ATTACHMENT_QUOTA_BYTES", 150)
+    monkeypatch.setattr(media_attachments, "SESSION_ATTACHMENT_QUOTA_BYTES", 150)
 
     with pytest.raises(AttachmentError, match="attachment.sessionQuotaExceeded"):
         await service.create_attachment(
@@ -415,7 +415,7 @@ async def test_audio_artifact_stores_only_original_revision(
             return subprocess.CompletedProcess(command, 0, json.dumps(payload).encode(), b"")
         return subprocess.CompletedProcess(command, 0, b"\x00\x00" * 160, b"")
 
-    monkeypatch.setattr(processing, "_run_media", run_media)
+    monkeypatch.setattr(media_processing, "_run_media", run_media)
     original = b"ID3generated-audio"
 
     attachment = await service.create_attachment(

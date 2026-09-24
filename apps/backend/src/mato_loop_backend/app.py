@@ -17,13 +17,14 @@ from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.request_body_limit import MediaRequestBodyLimitMiddleware
 from mato_loop_backend.api.router import api_router
-from mato_loop_backend.attachments import AttachmentService
 from mato_loop_backend.automations import AutomationScheduler, AutomationService
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
-from mato_loop_backend.debug_mcp import create_debug_mcp, debug_mcp_mount
-from mato_loop_backend.diagnostics import diagnostic_retention_loop
+from mato_loop_backend.diagnostics.mcp import create_debug_mcp, debug_mcp_mount
+from mato_loop_backend.diagnostics.service import diagnostic_retention_loop
 from mato_loop_backend.execution.terminals import terminal_coordinator
+from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.media.attachments import AttachmentService
 from mato_loop_backend.memory.dreaming import DreamingScheduler, DreamingService
 from mato_loop_backend.memory.embeddings import embedding_client
 from mato_loop_backend.memory.episode_indexing import (
@@ -39,8 +40,7 @@ from mato_loop_backend.models import (
     QuestionRequest,
     TitleGenerationStatus,
 )
-from mato_loop_backend.project_coding import CodingScheduler
-from mato_loop_backend.session_storage import SessionStorage
+from mato_loop_backend.projects.coding import CodingScheduler
 from mato_loop_backend.settings import InstanceLimits, SettingsStore
 
 runtime_config = get_runtime_config()

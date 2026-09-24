@@ -4,7 +4,7 @@ import json
 import httpx
 import pytest
 
-from mato_loop_backend.integrations.opencode_client import (
+from mato_loop_backend.integrations.opencode.client import (
     OpenCodeClient,
     OpenCodeError,
     OpenCodeFileContent,

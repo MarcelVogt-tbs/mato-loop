@@ -15,7 +15,9 @@ from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.context import ContextManager
-from mato_loop_backend.attachments import AttachmentService, validate_image
+from mato_loop_backend.files.service import RootFileService
+from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.media.attachments import AttachmentService, validate_image
 from mato_loop_backend.models import ChatSession, Message
 from mato_loop_backend.providers import lemonade
 from mato_loop_backend.providers import service as service_module
@@ -43,7 +45,6 @@ from mato_loop_backend.providers.output_budget import (
     raw_input_budget,
 )
 from mato_loop_backend.providers.service import ProviderService, _with_retries
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings.models import (
     AgentRuntimeSettings,
     LlmProviderConfig,
@@ -53,7 +54,6 @@ from mato_loop_backend.settings.models import (
     ReasoningEffort,
     TrustLevel,
 )
-from mato_loop_backend.workspace import RootFileService
 
 
 def _png_bytes() -> bytes:

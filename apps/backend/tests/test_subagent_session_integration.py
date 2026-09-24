@@ -13,13 +13,21 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import selectinload
 from sqlalchemy.pool import NullPool
 
+import mato_loop_backend.agent.loop as mock_agent_loop
+import mato_loop_backend.agent.runtime as mock_agent_runtime
+import mato_loop_backend.agent.summarization as mock_agent_summarization
+import mato_loop_backend.agent.titles as mock_agent_titles
+import mato_loop_backend.api.routes.terminals as api_routes_terminals
+import mato_loop_backend.db.session as db_session
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api import workspace_service
 from mato_loop_backend.api.errors import register_error_handlers
-from mato_loop_backend.api.routes import approvals, projects, sessions, terminals, workspace
+from mato_loop_backend.api.routes import approvals, projects, sessions, workspace
 from mato_loop_backend.automations import AutomationError, AutomationService
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.files.service import FileRoot, RootFileService
+from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.models import (
     AgentRun,
     Automation,
@@ -30,10 +38,8 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.security import require_user
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.sessions import cleanup
 from mato_loop_backend.settings.models import AiSettings, LlmProviderConfig, ModelConfig
-from mato_loop_backend.workspace import FileRoot, RootFileService
 
 
 @pytest.fixture
@@ -41,7 +47,9 @@ async def tree(request, tmp_path, monkeypatch):
     if not request.config.getoption("--subagent-db"):
         pytest.skip("requires the migrated development PostgreSQL database")
     engine = create_async_engine(get_runtime_config().database_url, poolclass=NullPool)
-    monkeypatch.setattr("mato_loop_backend.agent.runtime.AsyncSessionFactory", async_sessionmaker(engine, expire_on_commit=False))
+    _mock_value = async_sessionmaker(engine, expire_on_commit=False)
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     storage = SessionStorage(tmp_path / "sessions")
     monkeypatch.setattr(workspace_service, "RootFileService", lambda *args, **kwargs: RootFileService(
         *args, session_storage=storage, **kwargs
@@ -149,7 +157,9 @@ async def test_http_repeat_retry_preserves_failed_runs_and_original_input(tree, 
     run.pseudonymization_enabled = False
     schedule = Mock()
     monkeypatch.setattr(AgentRuntime, "_schedule_run", schedule)
-    monkeypatch.setattr("mato_loop_backend.agent.runtime.load_effective_ai", AsyncMock(return_value=settings))
+    _mock_value = AsyncMock(return_value=settings)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'load_effective_ai', _mock_value)
     # Descendant cancellation uses a separate connection outside the fixture transaction.
     monkeypatch.setattr(AgentRuntime, "cancel_descendants", AsyncMock())
     run_ids = [run.id]
@@ -380,14 +390,14 @@ async def test_automation_and_terminal_attach_reject_real_child(tree, monkeypatc
     async def database():
         yield tree.db
 
-    monkeypatch.setattr(terminals, "AsyncSessionFactory", database)
+    monkeypatch.setattr(db_session, "AsyncSessionFactory", database)
     connection = SimpleNamespace(
         user_id=tree.user.id, agent_id=uuid4(), error=AsyncMock(),
         websocket=SimpleNamespace(receive_json=AsyncMock(side_effect=[
             {"type": "attach", "sessionId": str(child.id)}, {"type": "close"},
         ])),
     )
-    await terminals._handle_browser(connection)
+    await api_routes_terminals._handle_browser(connection)
     connection.error.assert_awaited_once_with("session.readOnly")
 
 

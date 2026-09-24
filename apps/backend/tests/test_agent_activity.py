@@ -7,7 +7,7 @@ from mato_loop_backend.agent.activity import (
     reasoning_activity_label,
     run_activity_label,
 )
-from mato_loop_backend.agent.tool_display import tool_display
+from mato_loop_backend.tools.display import tool_display
 
 
 @pytest.mark.parametrize(

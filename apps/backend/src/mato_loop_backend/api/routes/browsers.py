@@ -16,9 +16,9 @@ from pydantic import Field, TypeAdapter, ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.responses import StreamingResponse
 
+from mato_loop_backend.api.browser_errors import browser_api_error
 from mato_loop_backend.api.errors import ApiError
-from mato_loop_backend.api.routes.browser_integrations import browser_api_error
-from mato_loop_backend.api.routes.terminals import _browser_login, _origin_allowed
+from mato_loop_backend.api.websocket_access import _browser_login, _origin_allowed
 from mato_loop_backend.api.workspace_service import _normalize_agent_path
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
@@ -49,9 +49,9 @@ from mato_loop_backend.execution.browsers import (
 )
 from mato_loop_backend.execution.client import ExecutionClientError
 from mato_loop_backend.execution.protocol import WireModel
+from mato_loop_backend.files.service import FileRoot, RootFileError, RootFileService
 from mato_loop_backend.integrations.browser import browser_client
 from mato_loop_backend.models import ChatSession
-from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

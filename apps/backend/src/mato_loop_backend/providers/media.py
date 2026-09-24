@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.attachments import AttachmentError, image_mime_type, validate_image
+from mato_loop_backend.media.attachments import AttachmentError, image_mime_type, validate_image
 from mato_loop_backend.models import Credential
 from mato_loop_backend.privacy import PseudonymizationError, RequestPseudonymizer
 from mato_loop_backend.providers import azure_speech, codex_images, lemonade

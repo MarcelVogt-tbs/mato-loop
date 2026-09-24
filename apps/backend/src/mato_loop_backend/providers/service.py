@@ -15,7 +15,7 @@ import httpx
 from PIL import Image, ImageOps
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.attachments import (
+from mato_loop_backend.media.attachments import (
     MAX_IMAGE_ATTACHMENT_BYTES,
     AttachmentError,
     AttachmentService,

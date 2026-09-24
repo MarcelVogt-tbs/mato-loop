@@ -9,9 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
-from mato_loop_backend.api.routes.integrations import _load_scoped_integrations
+from mato_loop_backend.api.integration_access import _load_scoped_integrations
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.integrations.tbs_desk import (
+from mato_loop_backend.integrations.tbs_desk.adapter import (
     TBS_DESK_CREDENTIAL_KIND,
     TbsDeskConfig,
     TbsDeskIntegrationService,
@@ -21,7 +21,7 @@ from mato_loop_backend.integrations.tbs_desk import (
     set_support_state,
     support_state,
 )
-from mato_loop_backend.integrations.tbs_desk_client import TbsDeskClient, TbsDeskError
+from mato_loop_backend.integrations.tbs_desk.client import TbsDeskClient, TbsDeskError
 from mato_loop_backend.models import ChatSession, QuestionRequest, UserAccount
 from mato_loop_backend.security import load_credential, read_credential, require_user
 from mato_loop_backend.settings import IntegrationInstance, load_effective_integrations

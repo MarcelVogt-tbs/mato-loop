@@ -11,10 +11,10 @@ from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import sessions as routes
 from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
+from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.memory.episode_indexing import EpisodeIndexService, _eligible_filters
 from mato_loop_backend.memory.episode_retrieval import _candidate_filters
 from mato_loop_backend.models import AgentRun, ChatSession, Message, UserAccount
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.sessions import cleanup, service
 from mato_loop_backend.settings import TrustLevel
 

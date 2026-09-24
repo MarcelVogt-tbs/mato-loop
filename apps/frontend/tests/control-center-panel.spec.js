@@ -8,9 +8,9 @@ vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), patch: vi.fn() } }))
 const { confirm } = vi.hoisted(() => ({ confirm: vi.fn() }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
-vi.mock('src/control-center/apps', async () => {
+vi.mock('src/app/control-center/apps', async () => {
   const { h } = await import('vue')
-  const { controlCenterIntegrationManifest, controlCenterGlobalSectionManifest } = await import('src/control-center/manifest')
+  const { controlCenterIntegrationManifest, controlCenterGlobalSectionManifest } = await import('src/app/control-center/manifest')
   const withViews = (items) => items.map((item) => ({
     ...item,
     component: { render: () => h('div', { 'data-app': item.id }, item.label) },
@@ -25,7 +25,7 @@ vi.mock('src/control-center/apps', async () => {
   }
 })
 
-import ControlCenterPanel from '../src/components/ControlCenterPanel.vue'
+import ControlCenterPanel from '../src/app/control-center/ControlCenterPanel.vue'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useQuestionStore } from '../src/stores/questions'

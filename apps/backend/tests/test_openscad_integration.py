@@ -15,7 +15,6 @@ from PIL import Image, ImageChops
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.tools import tool_registry
 from mato_loop_backend.api.routes.integrations import (
     OpenScadIntegrationRequest,
     create_openscad_integration,
@@ -24,6 +23,8 @@ from mato_loop_backend.api.routes.integrations import (
     update_openscad_integration,
 )
 from mato_loop_backend.execution.client import ExecutionClientError
+from mato_loop_backend.files.service import RootFileError, RootFileService
+from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.integrations import openscad as openscad_module
 from mato_loop_backend.integrations.openscad import (
     OPENSCAD_ADAPTER,
@@ -42,7 +43,6 @@ from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
     integration_adapter,
 )
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
@@ -50,7 +50,7 @@ from mato_loop_backend.settings import (
     ToolSettings,
     UserIntegrationSettings,
 )
-from mato_loop_backend.workspace import RootFileError, RootFileService
+from mato_loop_backend.tools.catalog import tool_registry
 
 
 def _instance(agent_id=None) -> IntegrationInstance:

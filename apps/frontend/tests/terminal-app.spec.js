@@ -3,13 +3,13 @@ import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Terminal } from '@xterm/xterm'
-import TerminalApp from '../src/components/TerminalApp.vue'
-import TerminalFooter from '../src/components/TerminalFooter.vue'
+import TerminalApp from '../src/features/terminal/TerminalApp.vue'
+import TerminalFooter from '../src/features/terminal/TerminalFooter.vue'
 import { useTerminalStore } from '../src/stores/terminal'
 import { useChatStore } from 'stores/chat'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useControlCenterStore } from 'stores/control-center'
-import { TERMINAL_OPERATIONS } from '../src/control-center/manifest'
+import { TERMINAL_OPERATIONS } from '../src/app/control-center/manifest'
 import { FakeWebSocket } from './terminal-websocket'
 
 vi.hoisted(() => {
@@ -28,7 +28,7 @@ vi.mock('stores/control-center', async () => {
 })
 vi.mock('stores/execution-agents', async () => {
   const { reactive } = await import('vue')
-  const { TERMINAL_OPERATIONS } = await import('../src/control-center/manifest')
+  const { TERMINAL_OPERATIONS } = await import('../src/app/control-center/manifest')
   const agent = reactive({ connected: true, operations: TERMINAL_OPERATIONS })
   return { useExecutionAgentStore: () => ({ byId: (id = 'agent-1') => id === 'agent-1' ? agent : null }) }
 })

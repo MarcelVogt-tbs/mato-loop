@@ -6,12 +6,9 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import BaseModel
 
-from mato_loop_backend.agent import tool_registry as registry_module
-from mato_loop_backend.agent import tools as tools_module
-from mato_loop_backend.agent.permissions import PermissionDecision, PermissionRequest
-from mato_loop_backend.agent.tool_contracts import ToolAction
-from mato_loop_backend.agent.tool_registry import ToolContext, ToolResult
-from mato_loop_backend.agent.tools import _profile_tool_settings
+import mato_loop_backend.tools.access as mock_tools_access
+import mato_loop_backend.tools.catalog as mock_tools_catalog
+import mato_loop_backend.tools.executor as mock_tools_executor
 from mato_loop_backend.integrations import registry as integration_registry
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
@@ -19,6 +16,7 @@ from mato_loop_backend.integrations.contracts import (
     ToolContribution,
 )
 from mato_loop_backend.models import ChatSession
+from mato_loop_backend.permissions.policy import PermissionDecision, PermissionRequest
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
     AgentProfilePermissions,
@@ -28,6 +26,10 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
 )
+from mato_loop_backend.tools.access import profile_tool_settings
+from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.context import ToolContext
+from mato_loop_backend.tools.contracts import ToolResult
 
 
 class _Arguments(BaseModel):
@@ -129,12 +131,14 @@ def preflight(monkeypatch):
     )
     current = AsyncMock(return_value=integrations)
     monkeypatch.setattr(ToolContext, "current_integrations", current)
-    monkeypatch.setattr(tools_module, "_profile_tool_settings", AsyncMock(return_value=settings))
+    monkeypatch.setattr(mock_tools_access, 'profile_tool_settings', AsyncMock(return_value=settings))
     credential = AsyncMock(return_value=object())
-    monkeypatch.setattr(registry_module, "load_credential", credential)
-    monkeypatch.setattr(
-        registry_module, "read_credential", Mock(return_value={"token": "host-only-credential"})
-    )
+    _mock_value = credential
+    for _mock_target in (mock_tools_executor,):
+        monkeypatch.setattr(_mock_target, 'load_credential', _mock_value)
+    _mock_value = Mock(return_value={"token": "host-only-credential"})
+    for _mock_target in (mock_tools_executor,):
+        monkeypatch.setattr(_mock_target, 'read_credential', _mock_value)
     call = ToolCall(
         "preflight", "preflight_write",
         {"integration_id": str(instance.id), "resource_key": resource.key},
@@ -149,7 +153,7 @@ def preflight(monkeypatch):
         tool_settings=settings,
         ask_handler=AsyncMock(side_effect=authorize),
     )
-    effective = tools_module.ToolRegistry([]).effective(integrations)
+    effective = mock_tools_catalog.ToolRegistry([]).effective(integrations)
     return SimpleNamespace(
         effective=effective, call=call, context=context, instance=instance,
         integrations=integrations, settings=settings, resource=resource, resources=resources,
@@ -314,9 +318,9 @@ async def test_refreshed_settings_block_metadata_before_approval(preflight, monk
     load = AsyncMock(return_value=(refreshed, None))
     if restriction == "missing_profile":
         load.side_effect = AgentProfileUnavailable
-        monkeypatch.setattr(tools_module, "load_effective_tools", AsyncMock(return_value=refreshed))
-    monkeypatch.setattr(tools_module, "load_agent_profile_tools", load)
-    monkeypatch.setattr(tools_module, "_profile_tool_settings", _profile_tool_settings)
+        monkeypatch.setattr(mock_tools_access, 'load_effective_tools', AsyncMock(return_value=refreshed))
+    monkeypatch.setattr(mock_tools_access, 'load_agent_profile_tools', load)
+    monkeypatch.setattr(mock_tools_access, 'profile_tool_settings', profile_tool_settings)
 
     result = await case.effective.execute(case.call, case.context)
 
@@ -367,7 +371,7 @@ async def test_preflight_does_not_bypass_handler_source_permission(preflight, so
     )
 
     async def with_source_permission(arguments, context):
-        if not await tools_module._allow(context, source_request):
+        if not await mock_tools_access.allow(context, source_request):
             return ToolResult.error("permission.denied")
         return await execute(arguments, context)
 

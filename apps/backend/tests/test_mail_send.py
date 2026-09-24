@@ -5,7 +5,6 @@ from uuid import uuid4
 import pytest
 
 # Initialize the agent package before the integrations package's public imports.
-from mato_loop_backend.agent import tools as _agent_tools  # noqa: F401
 from mato_loop_backend.integrations import mail_send
 from mato_loop_backend.integrations.mail_client import MailError
 

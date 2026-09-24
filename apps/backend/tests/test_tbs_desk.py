@@ -15,7 +15,7 @@ from mato_loop_backend.api.routes.tbs_desk import (
     get_tbs_desk_state,
 )
 from mato_loop_backend.integrations.registry import effective_integration_contributions
-from mato_loop_backend.integrations.tbs_desk import (
+from mato_loop_backend.integrations.tbs_desk.adapter import (
     SelectCustomerArguments,
     TbsDeskConfig,
     TbsDeskIntegrationService,
@@ -27,7 +27,7 @@ from mato_loop_backend.integrations.tbs_desk import (
     support_state,
     tbs_desk_select_customer,
 )
-from mato_loop_backend.integrations.tbs_desk_client import (
+from mato_loop_backend.integrations.tbs_desk.client import (
     TbsCustomer,
     TbsDeskClient,
     TbsDeskError,
@@ -131,7 +131,7 @@ async def test_customer_selection_uses_only_persisted_erp_candidates(monkeypatch
         yield instance, client
 
     monkeypatch.setattr(
-        "mato_loop_backend.integrations.tbs_desk.selected_client", selected_client
+        "mato_loop_backend.integrations.tbs_desk.adapter.selected_client", selected_client
     )
     context = SimpleNamespace(
         session=session, db=SimpleNamespace(commit=AsyncMock())
@@ -196,7 +196,7 @@ async def test_customer_selection_uses_active_call_only_without_query(monkeypatc
         yield instance, client
 
     monkeypatch.setattr(
-        "mato_loop_backend.integrations.tbs_desk.selected_client", selected_client
+        "mato_loop_backend.integrations.tbs_desk.adapter.selected_client", selected_client
     )
     context = SimpleNamespace(session=session, db=SimpleNamespace(commit=AsyncMock()))
 
@@ -281,7 +281,7 @@ async def test_configuration_stores_password_only_in_credential(monkeypatch) -> 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
     monkeypatch.setattr(SettingsStore, "save", save)
     monkeypatch.setattr(
-        "mato_loop_backend.integrations.tbs_desk.store_credential", store_credential
+        "mato_loop_backend.integrations.tbs_desk.adapter.store_credential", store_credential
     )
     db = AsyncMock(spec=AsyncSession)
 

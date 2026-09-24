@@ -8,12 +8,12 @@ import {
 } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
-vi.mock('components/SubagentRequestLink.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/subagents/SubagentRequestLink.vue', () => ({ default: { render: () => null } }))
 
 const { api } = vi.hoisted(() => ({ api: { post: vi.fn() } }))
 vi.mock('src/boot/axios', () => ({ api }))
 
-import QuestionDock from '../src/components/QuestionDock.vue'
+import QuestionDock from '../src/features/questions/QuestionDock.vue'
 
 let app
 let root

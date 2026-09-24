@@ -10,8 +10,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.session_secrets import session_secrets
+from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.models import ChatSession
-from mato_loop_backend.session_storage import SessionStorage
 
 logger = logging.getLogger(__name__)
 

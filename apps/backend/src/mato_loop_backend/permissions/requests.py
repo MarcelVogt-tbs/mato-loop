@@ -1,0 +1,176 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+import mato_loop_backend.agent.run_support as agent_run_support
+from mato_loop_backend.agent.activity import run_activity_label
+from mato_loop_backend.agent.run_contracts import ApprovalResolution
+from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
+from mato_loop_backend.agent.subagents import permission_origin, provenance
+from mato_loop_backend.events import run_events
+from mato_loop_backend.messaging.approvals import enqueue_approval_prompt
+from mato_loop_backend.models import AgentRun, ApprovalRequest, ChatSession, Message
+from mato_loop_backend.permissions.coordinator import approval_coordinator
+from mato_loop_backend.permissions.policy import (
+    PermissionRequest,
+    session_grants_display,
+    session_grants_fingerprint,
+    session_grants_payload,
+)
+from mato_loop_backend.providers.base import ToolCall
+from mato_loop_backend.tools.contracts import PERMISSION_REASON_ARGUMENT
+from mato_loop_backend.tools.display import tool_display
+from mato_loop_backend.web_push import WebPushActionsTarget, WebPushService, web_push_payload
+
+
+async def request_approval(
+    cls,
+    db: AsyncSession,
+    run: AgentRun,
+    chat_session: ChatSession,
+    call: ToolCall,
+    permission: PermissionRequest,
+    *,
+    display: dict[str, str] | None = None,
+    argument_edit: dict[str, Any] | None = None,
+) -> str | ApprovalResolution:
+    origin = await permission_origin(db, chat_session)
+    grant_payload = session_grants_payload(permission)
+    available_decisions = [
+        decision for decision in permission.available_decisions
+        if decision != "allow_session" or grant_payload
+    ]
+    resource_display = permission.resource_display
+    if (
+        resource_display is None
+        and permission.capability == "session.read"
+        and permission.resource_type == "session"
+    ):
+        resource_display = await db.scalar(
+            select(ChatSession.title).where(
+                ChatSession.id == UUID(permission.resource_scope),
+                ChatSession.user_id == chat_session.user_id,
+                ChatSession.session_type == "chat",
+            )
+        )
+    reason = call.arguments.get(PERMISSION_REASON_ARGUMENT)
+    if not isinstance(reason, str) or not (reason := reason.strip()):
+        reason = "Vom Agent angeforderte Tool-Aktion"
+    approval = ApprovalRequest(
+        request_type="agent_action",
+        user_id=chat_session.user_id,
+        session_id=origin.id,
+        run_id=run.id,
+        action_kind=permission.action_kind,
+        risk_level=permission.risk_level,
+        title=permission.title,
+        reason=reason,
+        summary=permission.summary,
+        capability=permission.capability,
+        resource_type=permission.resource_type,
+        resource_scope=permission.resource_scope,
+        payload={
+            "toolCallId": call.id,
+            "tool": call.name,
+            "arguments": agent_run_support._safe_tool_arguments(call.name, call.arguments),
+            "toolDisplay": display
+            or tool_display(call.name, agent_run_support._safe_tool_arguments(call.name, call.arguments)),
+            "resourceDisplay": resource_display,
+            "policyIntegrationId": (
+                str(permission.policy_integration_id)
+                if permission.policy_integration_id is not None
+                else None
+            ),
+            "policyResourceKey": permission.policy_resource_key,
+            "agentProfileId": (
+                str(run.agent_profile_id or chat_session.agent_profile_id)
+                if run.agent_profile_id is not None
+                or chat_session.agent_profile_id is not None
+                else None
+            ),
+            "trustLevel": run.trust_level,
+            "sessionGrants": grant_payload,
+            "sessionGrantsFingerprint": session_grants_fingerprint(
+                permission.capability,
+                permission.resource_type,
+                permission.resource_scope,
+                grant_payload,
+            ),
+            **(permission.approval_details or {}),
+            **provenance(chat_session),
+            **({"argumentEdit": argument_edit} if argument_edit else {}),
+            "displayItems": [
+                {
+                    "label": item.label,
+                    "value": list(item.value) if isinstance(item.value, tuple) else item.value,
+                    "format": item.format,
+                }
+                for item in permission.display_items
+            ] + ([{
+                "label": "Für diese Session",
+                "value": session_grants_display(permission),
+                "format": "list",
+            }] if "allow_session" in available_decisions else []),
+        },
+        available_decisions=available_decisions,
+    )
+    db.add(approval)
+    transition_run_status(run, "waiting_approval")
+    await db.flush()
+    if run.input_message_id is not None:
+        input_message = await db.get(Message, run.input_message_id)
+        if (
+            input_message is not None
+            and input_message.source_type == "endpoint"
+            and input_message.source_endpoint_id is not None
+        ):
+            await enqueue_approval_prompt(db, approval)
+    approval_id, run_id = approval.id, run.id
+    waiter = approval_coordinator.register(approval_id)
+    try:
+        await db.commit()
+        await run_events.publish(
+            run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}
+        )
+        await run_events.publish(
+            run.id,
+            {
+                "type": "approval.created",
+                "approval": agent_run_support.approval_payload(approval),
+                "activityLabel": run_activity_label("waiting_approval"),
+            },
+        )
+        await WebPushService.deliver_after_commit(
+            chat_session.user_id,
+            web_push_payload(
+                title="Freigabe erforderlich",
+                body=permission.summary,
+                tag=f"approval:{approval.id}",
+                target=WebPushActionsTarget(type="actions"),
+            ),
+        )
+        decision = await asyncio.shield(waiter)
+    except asyncio.CancelledError:
+        await db.rollback()
+        current = await db.get(ApprovalRequest, approval_id)
+        if current is not None and current.status == "pending":
+            current.status = "expired"
+            current.resolved_at = datetime.now(UTC)
+            await db.commit()
+            await run_events.publish(run_id, {"type": "approval.expired", "approvalId": str(approval_id)})
+        raise
+    finally:
+        approval_coordinator.discard(approval_id)
+    await db.refresh(approval)
+    transition_run_status(run, "running")
+    await db.commit()
+    await run_events.publish(
+        run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}
+    )
+    return decision

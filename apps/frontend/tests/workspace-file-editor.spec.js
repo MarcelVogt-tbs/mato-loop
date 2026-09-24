@@ -4,7 +4,7 @@ import { Quasar, ClosePopup, QBtn, QCard, QDialog, QIcon, QItem, QItemSection, Q
 import { EditorView } from '@codemirror/view'
 import { isolateHistory, redo, undo, undoDepth } from '@codemirror/commands'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import WorkspaceFileEditor from '../src/components/WorkspaceFileEditor.vue'
+import WorkspaceFileEditor from '../src/features/files/components/WorkspaceFileEditor.vue'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 

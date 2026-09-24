@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useTerminalStore } from '../src/stores/terminal'
 import { useControlCenterStore } from '../src/stores/control-center'
-import { TERMINAL_OPERATIONS, terminalControlCenterState } from '../src/control-center/manifest'
+import { TERMINAL_OPERATIONS, terminalControlCenterState } from '../src/app/control-center/manifest'
 import { FakeWebSocket } from './terminal-websocket'
 
 const { api, notifyError } = vi.hoisted(() => ({ api: { patch: vi.fn() }, notifyError: vi.fn() }))

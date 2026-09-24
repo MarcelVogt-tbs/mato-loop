@@ -13,7 +13,7 @@ import {
 import {
   controlCenterGlobalSectionIds,
   controlCenterIntegrationIds
-} from 'src/control-center/manifest'
+} from 'src/app/control-center/manifest'
 
 const originalLocalStorage = globalThis.localStorage
 const testIntegrationIds = ['calendar', 'test-app']

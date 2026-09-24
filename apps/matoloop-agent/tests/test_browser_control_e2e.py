@@ -27,9 +27,9 @@ async def storage(mode):
     from uuid import UUID
 
     from mato_loop_backend.db.session import AsyncSessionFactory
+    from mato_loop_backend.files.storage import SessionStorage
     from mato_loop_backend.models import ChatSession, UserAccount
     from mato_loop_backend.security import verify_password
-    from mato_loop_backend.session_storage import SessionStorage
 
     seed = json.load(sys.stdin)
     async with AsyncSessionFactory() as db:

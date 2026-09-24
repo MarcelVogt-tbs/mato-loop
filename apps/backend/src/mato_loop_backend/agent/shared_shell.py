@@ -5,8 +5,6 @@ import json
 from contextlib import suppress
 from uuid import uuid4
 
-from mato_loop_backend.agent.permissions import PermissionDecision, shell_command_permission
-from mato_loop_backend.agent.tool_registry import ToolContext, ToolResult
 from mato_loop_backend.events import run_events
 from mato_loop_backend.execution import (
     ExecutionClientError,
@@ -16,6 +14,9 @@ from mato_loop_backend.execution import (
 )
 from mato_loop_backend.execution.protocol import MAX_REQUEST_BYTES, RequestMessage
 from mato_loop_backend.execution.terminals import TerminalRuntime
+from mato_loop_backend.permissions.policy import PermissionDecision, shell_command_permission
+from mato_loop_backend.tools.context import ToolContext
+from mato_loop_backend.tools.contracts import ToolResult
 
 
 async def run_shared_shell(

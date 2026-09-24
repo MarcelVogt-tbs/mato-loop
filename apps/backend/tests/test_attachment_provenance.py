@@ -6,10 +6,10 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from test_attachment_processing import document_bytes
 
-from mato_loop_backend.attachments import AttachmentError, AttachmentService
+from mato_loop_backend.files.service import RootFileError, RootFileService
+from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.media.attachments import AttachmentError, AttachmentService
 from mato_loop_backend.models import ChatSession, Message, MessageAttachment
-from mato_loop_backend.session_storage import SessionStorage
-from mato_loop_backend.workspace import RootFileError, RootFileService
 
 
 @pytest.mark.parametrize("state", ["published", "pending", "finalized"])

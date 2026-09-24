@@ -12,11 +12,6 @@ from weakref import WeakValueDictionary
 from anyio import CancelScope
 from fastapi import WebSocket
 
-from mato_loop_backend.agent.permissions import (
-    PermissionDecision,
-    PermissionRequest,
-    integration_operation_permission,
-)
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.execution.browsers import (
     BrowserConnection,
@@ -25,15 +20,20 @@ from mato_loop_backend.execution.browsers import (
 from mato_loop_backend.execution.client import ExecutionClientError
 from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.execution.protocol import WireModel
+from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.integrations.browser import load_browser_integration
 from mato_loop_backend.models import AgentRun, ChatSession, UserAccount
+from mato_loop_backend.permissions.policy import (
+    PermissionDecision,
+    PermissionRequest,
+    integration_operation_permission,
+)
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import TrustLevel
 from mato_loop_backend.settings.effective import AgentProfileUnavailable, load_agent_profile_tools
-from mato_loop_backend.workspace import RootFileService
 
 if TYPE_CHECKING:
-    from mato_loop_backend.agent.tool_registry import ToolContext
+    from mato_loop_backend.tools.context import ToolContext
 
 CONTROL_TIMEOUT = 90
 
@@ -90,7 +90,7 @@ class ControlRequest:
 
     async def validate(self, *, authorized: bool = True) -> None:
         from mato_loop_backend.agent.runtime import AgentRuntime
-        from mato_loop_backend.agent.tool_registry import _model_revision, _tool_available
+        from mato_loop_backend.tools.registry import _model_revision, _tool_available
 
         self.check_binding()
         async with asyncio.timeout(5), AsyncSessionFactory() as db:
@@ -202,7 +202,7 @@ class BrowserControlRequests:
                 self.finish(request, "browser.bindingChanged")
 
     async def wait(self, request: ControlRequest, context: ToolContext):
-        from mato_loop_backend.agent.tool_registry import ToolResult
+        from mato_loop_backend.tools.contracts import ToolResult
 
         request.proof = dict(context.approval_resolution)
         request.task = asyncio.current_task()

@@ -11,8 +11,8 @@ import {
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: {} }))
 
-import ProviderConfigDialog from '../src/components/ProviderConfigDialog.vue'
-import ModelConfigDialog from '../src/components/ModelConfigDialog.vue'
+import ProviderConfigDialog from '../src/features/providers/ProviderConfigDialog.vue'
+import ModelConfigDialog from '../src/features/providers/ModelConfigDialog.vue'
 import { useProviderStore } from '../src/stores/providers'
 
 let app, root

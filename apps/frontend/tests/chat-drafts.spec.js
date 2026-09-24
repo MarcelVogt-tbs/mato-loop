@@ -17,7 +17,7 @@ vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 import { buildAttachmentFormData, MAX_ATTACHMENT_DRAFT_BYTES, useChatStore } from '../src/stores/chat'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { useBrowserStore } from '../src/stores/browser'
-import { controlCenterIntegrationIds } from 'src/control-center/manifest'
+import { controlCenterIntegrationIds } from 'src/app/control-center/manifest'
 import { useQuestionStore } from '../src/stores/questions'
 import { useWorkspaceStore } from '../src/stores/workspace'
 import {

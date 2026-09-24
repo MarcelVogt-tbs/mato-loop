@@ -5,7 +5,7 @@ import {
   controlCenterIntegrationManifest,
   codingControlCenterAvailable,
   mailControlCenterAvailable
-} from '../src/control-center/manifest'
+} from '../src/app/control-center/manifest'
 
 describe('mail Control Center manifest', () => {
   const item = controlCenterIntegrationManifest.find((entry) => entry.id === 'mail')

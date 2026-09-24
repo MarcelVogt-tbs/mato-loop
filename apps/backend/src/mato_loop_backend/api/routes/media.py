@@ -5,12 +5,8 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
-from mato_loop_backend.attachments import (
-    AttachmentError,
-    processing_limits,
-    validate_audio,
-)
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.media.attachments import AttachmentError, processing_limits, validate_audio
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.media import MediaService

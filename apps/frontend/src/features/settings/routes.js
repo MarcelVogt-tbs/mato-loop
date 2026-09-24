@@ -2,69 +2,69 @@ export const settingsRoutes = [
   {
     path: 'providers',
     name: 'settings-providers',
-    component: () => import('pages/settings/ProviderSettingsPage.vue'),
+    component: () => import('src/features/providers/ProviderSettingsPage.vue'),
     meta: { settingsLabel: 'Provider', settingsIcon: 'dns' }
   },
   {
     path: 'agents',
     name: 'settings-agents',
-    component: () => import('pages/settings/AgentProfileSettingsPage.vue'),
+    component: () => import('src/features/agent-profiles/AgentProfileSettingsPage.vue'),
     meta: { settingsLabel: 'Agenten', settingsIcon: 'smart_toy' },
     children: [
       {
         path: 'new',
         name: 'settings-agent-create',
-        component: () => import('pages/settings/AgentProfileEditorPage.vue')
+        component: () => import('src/features/agent-profiles/AgentProfileEditorPage.vue')
       },
       {
         path: ':agentId',
         name: 'settings-agent-edit',
-        component: () => import('pages/settings/AgentProfileEditorPage.vue')
+        component: () => import('src/features/agent-profiles/AgentProfileEditorPage.vue')
       }
     ]
   },
   {
     path: 'integrations',
     name: 'settings-integrations',
-    component: () => import('pages/settings/IntegrationSettingsPage.vue'),
+    component: () => import('src/features/integrations/IntegrationSettingsPage.vue'),
     meta: { settingsLabel: 'Integrationen', settingsIcon: 'extension' },
     children: [
       {
         path: ':integrationId/resources',
         name: 'settings-integration-resources',
-        component: () => import('pages/settings/IntegrationAccessPage.vue')
+        component: () => import('src/features/integrations/IntegrationAccessPage.vue')
       }
     ]
   },
   {
     path: 'mcp',
     name: 'settings-mcp',
-    component: () => import('pages/settings/McpSettingsPage.vue'),
+    component: () => import('src/features/mcp/McpSettingsPage.vue'),
     meta: { settingsLabel: 'MCP-Server', settingsIcon: 'hub' },
     children: [
       {
         path: ':serverId/tools',
         name: 'settings-mcp-tools',
-        component: () => import('pages/settings/McpAccessPage.vue')
+        component: () => import('src/features/mcp/McpAccessPage.vue')
       }
     ]
   },
   {
     path: 'channels',
     name: 'settings-channels',
-    component: () => import('pages/settings/ChannelSettingsPage.vue'),
+    component: () => import('src/features/channels/ChannelSettingsPage.vue'),
     meta: { settingsLabel: 'Kanäle', settingsIcon: 'forum' }
   },
   {
     path: 'tools',
     name: 'settings-tools',
-    component: () => import('pages/settings/ToolSettingsPage.vue'),
+    component: () => import('src/features/settings/ToolSettingsPage.vue'),
     meta: { settingsLabel: 'Tools', settingsIcon: 'build', requiresAdmin: true }
   },
   {
     path: 'personal-variables',
     name: 'settings-personal-variables',
-    component: () => import('pages/settings/PersonalVariablesSettingsPage.vue'),
+    component: () => import('src/features/personal-variables/PersonalVariablesSettingsPage.vue'),
     meta: { settingsLabel: 'Variablen & Secrets', settingsIcon: 'key' }
   },
   {
@@ -75,25 +75,25 @@ export const settingsRoutes = [
   {
     path: 'execution-agents',
     name: 'settings-execution-agents',
-    component: () => import('pages/settings/ExecutionAgentSettingsPage.vue'),
+    component: () => import('src/features/computers/ExecutionAgentSettingsPage.vue'),
     meta: { settingsLabel: 'Computer', settingsIcon: 'computer' }
   },
   {
     path: 'skills',
     name: 'settings-skills',
-    component: () => import('pages/settings/SkillSettingsPage.vue'),
+    component: () => import('src/features/skills/SkillSettingsPage.vue'),
     meta: { settingsLabel: 'Skills', settingsIcon: 'school' }
   },
   {
     path: 'automations',
     name: 'settings-automations',
-    component: () => import('pages/settings/AutomationSettingsPage.vue'),
+    component: () => import('src/features/automations/AutomationSettingsPage.vue'),
     meta: { settingsLabel: 'Automationen', settingsIcon: 'schedule' },
     children: [
       {
         path: 'new',
         name: 'settings-automation-create',
-        component: () => import('pages/settings/AutomationEditorPage.vue')
+        component: () => import('src/features/automations/AutomationEditorPage.vue')
       },
       {
         path: ':automationId/edit',
@@ -103,14 +103,14 @@ export const settingsRoutes = [
       {
         path: ':automationId',
         name: 'settings-automation-detail',
-        component: () => import('pages/settings/AutomationEditorPage.vue')
+        component: () => import('src/features/automations/AutomationEditorPage.vue')
       }
     ]
   },
   {
     path: 'personalization',
     name: 'settings-personalization',
-    component: () => import('pages/settings/PersonalizationSettingsPage.vue'),
+    component: () => import('src/features/personalization/PersonalizationSettingsPage.vue'),
     meta: { settingsLabel: 'Personalisierung', settingsIcon: 'manage_accounts' }
   },
   {
@@ -121,31 +121,31 @@ export const settingsRoutes = [
   {
     path: 'memory',
     name: 'settings-memory',
-    component: () => import('pages/settings/MemorySettingsPage.vue'),
+    component: () => import('src/features/memory/MemorySettingsPage.vue'),
     meta: { settingsLabel: 'Memory', settingsIcon: 'psychology' }
   },
   {
     path: 'notifications',
     name: 'settings-notifications',
-    component: () => import('pages/settings/NotificationSettingsPage.vue'),
+    component: () => import('src/features/notifications/NotificationSettingsPage.vue'),
     meta: { settingsLabel: 'Benachrichtigungen', settingsIcon: 'notifications_active', requiresAdmin: true }
   },
   {
     path: 'users',
     name: 'settings-users',
-    component: () => import('pages/settings/UserSettingsPage.vue'),
+    component: () => import('src/features/auth/UserSettingsPage.vue'),
     meta: { settingsLabel: 'Benutzer', settingsIcon: 'group', requiresAdmin: true }
   },
   {
     path: 'debug-access',
     name: 'settings-debug-access',
-    component: () => import('pages/settings/DebugAccessSettingsPage.vue'),
+    component: () => import('src/features/settings/DebugAccessSettingsPage.vue'),
     meta: { settingsLabel: 'Debug-Zugang', settingsIcon: 'bug_report', requiresAdmin: true }
   },
   {
     path: 'instance-limits',
     name: 'settings-instance-limits',
-    component: () => import('pages/settings/InstanceLimitsPage.vue'),
+    component: () => import('src/features/settings/InstanceLimitsPage.vue'),
     meta: { settingsLabel: 'Instanzlimits', settingsIcon: 'tune', requiresAdmin: true }
   }
 ]

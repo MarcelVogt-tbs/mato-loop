@@ -32,7 +32,7 @@
 
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import AppLogo from 'components/AppLogo.vue'
+import AppLogo from 'src/shared/ui/AppLogo.vue'
 import { useAuthStore } from 'stores/auth'
 import { notifyError } from 'src/utils/notifications'
 import {

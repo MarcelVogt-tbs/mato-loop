@@ -7,12 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.tools import tool_registry
 from mato_loop_backend.api.errors import ApiError
-from mato_loop_backend.api.routes.integrations import (
-    _access_payload,
-    _integration_resources,
-)
+from mato_loop_backend.api.integration_resources import _access_payload, _integration_resources
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.models import ChatSession, PermissionGrant, UserAccount
@@ -50,6 +46,7 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.settings.models import (
     AgentProfileAccessOverrides,
 )
+from mato_loop_backend.tools.catalog import tool_registry
 
 router = APIRouter(prefix="/agent-profiles", dependencies=[Depends(require_user)])
 SettingsApiScope = Literal["instance", "personal"]

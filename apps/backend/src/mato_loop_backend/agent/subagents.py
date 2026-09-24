@@ -8,13 +8,11 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.tool_arguments import TaskArguments
-from mato_loop_backend.agent.tool_registry import ToolResult
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.events import run_events
+from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.models import AgentRun, ChatSession, Message, WebSearchPolicy
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     AgentProfileUnavailable,
     IntegrationSettings,
@@ -25,6 +23,8 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
 from mato_loop_backend.settings.models import AgentProfilePermissions
+from mato_loop_backend.tools.arguments import TaskArguments
+from mato_loop_backend.tools.contracts import ToolResult
 
 if TYPE_CHECKING:
     from mato_loop_backend.agent.runtime import AgentRuntime
@@ -35,7 +35,7 @@ def permission_snapshot(
     settings: ToolSettings, tool_names: set[str],
     integration_settings: IntegrationSettings | None = None,
 ) -> dict[str, Any]:
-    from mato_loop_backend.agent.tools import tool_registry
+    from mato_loop_backend.tools.catalog import tool_registry
 
     integrations = integration_settings or IntegrationSettings()
     # Only permission data belongs here, never integration configuration or credentials.
@@ -128,7 +128,7 @@ async def delegation_snapshot(
     metadata = (message.provider_data or {}).get("_matoloop", {}) if message else {}
     snapshot = metadata.get("delegationCeiling")
     if not isinstance(snapshot, dict):
-        from mato_loop_backend.agent.runtime import AgentRunError
+        from mato_loop_backend.agent.run_contracts import AgentRunError
 
         raise AgentRunError("tool.unavailable")
     return snapshot
@@ -139,7 +139,7 @@ async def permission_origin(db: AsyncSession, session: ChatSession) -> ChatSessi
         return session
     parent = await db.get(ChatSession, session.parent_session_id)
     if parent is None or parent.user_id != session.user_id or parent.parent_session_id is not None:
-        from mato_loop_backend.agent.runtime import AgentRunError
+        from mato_loop_backend.agent.run_contracts import AgentRunError
 
         raise AgentRunError("session.notFound")
     return parent

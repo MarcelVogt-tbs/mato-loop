@@ -8,8 +8,6 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.permissions import PermissionDecision
-from mato_loop_backend.agent.tools import MemoryWriteArguments, ToolContext, tool_registry
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.memories import (
     DreamRunRequest,
@@ -25,6 +23,8 @@ from mato_loop_backend.api.routes.memories import (
     start_dream_runs,
     update_memory,
 )
+from mato_loop_backend.files.service import RootFileService
+from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.memory.dreaming import (
     DREAMING_RECONCILIATION_OUTPUT_TOKENS,
     DREAMING_SYSTEM_PROMPT,
@@ -68,11 +68,10 @@ from mato_loop_backend.models import (
     Message,
     UserAccount,
 )
-from mato_loop_backend.providers import ToolCall
-from mato_loop_backend.providers.base import ProviderError, ProviderResult
+from mato_loop_backend.permissions.policy import PermissionDecision
+from mato_loop_backend.providers.base import ProviderError, ProviderResult, ToolCall
 from mato_loop_backend.providers.output_budget import allocate_output_tokens, raw_input_budget
 from mato_loop_backend.providers.service import ProviderService
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
     AiSettings,
@@ -90,7 +89,9 @@ from mato_loop_backend.settings.models import (
     effective_model_pseudonymization,
     effective_model_trust,
 )
-from mato_loop_backend.workspace import RootFileService
+from mato_loop_backend.tools.arguments import MemoryWriteArguments
+from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.tools.context import ToolContext
 
 
 def _root_files(tmp_path, session: ChatSession) -> RootFileService:

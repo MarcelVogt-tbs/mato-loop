@@ -8,17 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from mato_loop_backend.providers.media import resolve_media_target
-from mato_loop_backend.settings.models import (
-    AiSettings,
-    LlmProviderConfig,
-    ModelAvailability,
-    ModelCapability,
-    ModelConfig,
-    ModelInputModality,
-    TrustLevel,
-)
-from mato_loop_backend.video_processing import (
+from mato_loop_backend.media.video_processing import (
     AudioSegment,
     MediaInfo,
     VideoAnalysisMode,
@@ -29,6 +19,16 @@ from mato_loop_backend.video_processing import (
     extract_video_frames,
     probe_video,
     split_wav_audio,
+)
+from mato_loop_backend.providers.media import resolve_media_target
+from mato_loop_backend.settings.models import (
+    AiSettings,
+    LlmProviderConfig,
+    ModelAvailability,
+    ModelCapability,
+    ModelConfig,
+    ModelInputModality,
+    TrustLevel,
 )
 
 logger = logging.getLogger(__name__)

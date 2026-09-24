@@ -5,7 +5,6 @@ from typing import Any
 
 from pydantic import model_validator
 
-from mato_loop_backend.agent.tool_contracts import ToolAction
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     IntegrationContributions,
@@ -17,6 +16,7 @@ from mato_loop_backend.integrations.mcp import (
     mcp_resources,
 )
 from mato_loop_backend.settings import ToolExecutionPolicy
+from mato_loop_backend.tools.actions import ToolAction
 
 SONOBIN_ACTION = ToolAction(
     "sonobin.call", "SonoBin-Funktion ausführen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK

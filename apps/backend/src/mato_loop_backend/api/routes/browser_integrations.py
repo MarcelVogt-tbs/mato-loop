@@ -8,7 +8,7 @@ from pydantic import Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.api.errors import ApiError
+import mato_loop_backend.api.browser_errors as api_browser_errors
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.execution.browser_contracts import (
     BrowserConfig,
@@ -28,7 +28,11 @@ from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import UserIntegrationSettings
 
 router = APIRouter(prefix="/integrations/browser", dependencies=[Depends(require_user)])
+
+
 Db = Annotated[AsyncSession, Depends(get_db_session)]
+
+
 User = Annotated[UserAccount, Depends(require_user)]
 
 
@@ -52,16 +56,6 @@ class BrowserIntegrationPatch(WireModel):
         return self
 
 
-def browser_api_error(exc: ExecutionClientError) -> ApiError:
-    code = exc.code
-    status = 404 if code in {"integration.notFound", "executionAgent.notFound", "session.notFound"} else (
-        409 if code in {"browser.busy", "browser.bindingChanged", "browser.snapshotChanged", "browser.observationUnstable", "browser.profileOwnerMismatch", "browser.profileInUse"}
-        else 503 if code in {"browser.unavailable", "browser.notReady", "browser.notConnected"}
-        or code.startswith("executionAgent.") else 502
-    )
-    return ApiError(status, code)
-
-
 async def browser_settings_payload(db: AsyncSession, owner_id: UUID, settings: UserIntegrationSettings) -> dict:
     owned = set((await db.scalars(select(ExecutionAgent.id).where(
         ExecutionAgent.user_id == owner_id, ExecutionAgent.revoked_at.is_(None),
@@ -81,7 +75,7 @@ async def get_browser_integrations(db: Db, user: User, scope: Literal["personal"
     try:
         settings = await browser_settings(db, user.id)
     except ExecutionClientError as exc:
-        raise browser_api_error(exc) from exc
+        raise api_browser_errors.browser_api_error(exc) from exc
     return await browser_settings_payload(db, user.id, settings)
 
 
@@ -93,7 +87,7 @@ async def create_browser_integration(payload: BrowserIntegrationCreate, db: Db, 
             name=payload.name, enabled=payload.enabled,
         )
     except ExecutionClientError as exc:
-        raise browser_api_error(exc) from exc
+        raise api_browser_errors.browser_api_error(exc) from exc
     return await browser_settings_payload(db, user.id, settings)
 
 
@@ -105,7 +99,7 @@ async def update_browser_integration(integration_id: UUID, payload: BrowserInteg
             changes=payload.model_dump(exclude_unset=True, by_alias=False),
         )
     except ExecutionClientError as exc:
-        raise browser_api_error(exc) from exc
+        raise api_browser_errors.browser_api_error(exc) from exc
     return await browser_settings_payload(db, user.id, settings)
 
 
@@ -114,7 +108,7 @@ async def delete_browser_integration(integration_id: UUID, db: Db, user: User, s
     try:
         settings = await BrowserIntegrationService.delete(db, integration_id, owner_id=user.id)
     except ExecutionClientError as exc:
-        raise browser_api_error(exc) from exc
+        raise api_browser_errors.browser_api_error(exc) from exc
     return await browser_settings_payload(db, user.id, settings)
 
 
@@ -127,7 +121,7 @@ async def browser_integration_status(integration_id: UUID, db: Db, user: User, s
             "integration.browser.status", {}, BrowserStatusResult,
         )
     except ExecutionClientError as exc:
-        raise browser_api_error(exc) from exc
+        raise api_browser_errors.browser_api_error(exc) from exc
 
 
 @router.post("/{integration_id}/reset")
@@ -141,4 +135,4 @@ async def reset_browser_integration(integration_id: UUID, db: Db, user: User, sc
             raise ExecutionClientError("browser.actionFailed")
         return result
     except ExecutionClientError as exc:
-        raise browser_api_error(exc) from exc
+        raise api_browser_errors.browser_api_error(exc) from exc

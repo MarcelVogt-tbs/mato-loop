@@ -10,8 +10,10 @@ import pytest
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.context import message_dict
-from mato_loop_backend.attachments import (
+from mato_loop_backend.agent.projection import message_dict
+from mato_loop_backend.files.service import RootFileService
+from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.media.attachments import (
     MAX_FILE_ATTACHMENT_BYTES,
     MAX_IMAGE_ATTACHMENT_BYTES,
     SESSION_ATTACHMENT_QUOTA_BYTES,
@@ -21,10 +23,8 @@ from mato_loop_backend.attachments import (
     validate_audio,
     validate_image,
 )
+from mato_loop_backend.media.video_processing import MediaInfo
 from mato_loop_backend.models import ChatSession, Message
-from mato_loop_backend.session_storage import SessionStorage
-from mato_loop_backend.video_processing import MediaInfo
-from mato_loop_backend.workspace import RootFileService
 
 
 def image_bytes(image_format: str) -> bytes:
@@ -549,7 +549,7 @@ async def test_service_persists_video_metadata_without_derivatives(
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [chat_session(session_id), None]
     monkeypatch.setattr(
-        "mato_loop_backend.attachment_processing.probe_video",
+        "mato_loop_backend.media.processing.probe_video",
         lambda _data: MediaInfo("mp4", "video/mp4", 2_500, 640, 360, 0, 1),
     )
 

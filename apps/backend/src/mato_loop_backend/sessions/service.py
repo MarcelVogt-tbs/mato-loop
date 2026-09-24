@@ -23,13 +23,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
-from mato_loop_backend.agent import AgentRuntime
-from mato_loop_backend.agent.permissions import execution_directory_scope
+from mato_loop_backend.agent.run_contracts import AgentRunError
 from mato_loop_backend.agent.run_timing import run_timing_payload
-from mato_loop_backend.agent.runtime import AgentRunError
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.agent.todos import session_todos
-from mato_loop_backend.attachments import AttachmentInput, AttachmentService
 from mato_loop_backend.automations import automation_impact_token
 from mato_loop_backend.chat_history import ChatHistoryService
 from mato_loop_backend.execution import (
@@ -39,6 +37,9 @@ from mato_loop_backend.execution import (
     execution_agent_connections,
 )
 from mato_loop_backend.execution.client import _absolute_path
+from mato_loop_backend.files.service import RootFileError, RootFileService
+from mato_loop_backend.files.storage import SessionMoveReceipt, SessionStorageError
+from mato_loop_backend.media.attachments import AttachmentInput, AttachmentService
 from mato_loop_backend.memory.episode_indexing import EpisodeIndexService
 from mato_loop_backend.models import (
     AgentRun,
@@ -53,10 +54,7 @@ from mato_loop_backend.models import (
     Project,
     TitleGenerationStatus,
 )
-from mato_loop_backend.session_storage import (
-    SessionMoveReceipt,
-    SessionStorageError,
-)
+from mato_loop_backend.permissions.policy import execution_directory_scope
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
     AgentProfile,
@@ -69,7 +67,6 @@ from mato_loop_backend.settings import (
     load_agent_profile_ai,
 )
 from mato_loop_backend.settings.models import ModelAvailability, ModelCapability
-from mato_loop_backend.workspace import RootFileError, RootFileService
 
 from .cleanup import descendant_sessions
 

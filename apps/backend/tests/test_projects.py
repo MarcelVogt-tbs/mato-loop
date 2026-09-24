@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from sqlalchemy import CheckConstraint, ForeignKeyConstraint, UniqueConstraint
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent import AgentRuntime
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError, register_error_handlers
 from mato_loop_backend.api.routes.projects import (
     ProjectCreateRequest,
@@ -254,7 +254,7 @@ async def test_delete_project_with_sessions_trashes_tree_and_database_rows(
     tmp_path, monkeypatch
 ) -> None:
     from mato_loop_backend.api.routes import projects as projects_route
-    from mato_loop_backend.session_storage import SessionStorage
+    from mato_loop_backend.files.storage import SessionStorage
 
     user = _user()
     project = _project(user.id)
@@ -499,7 +499,7 @@ async def test_delete_project_restores_storage_when_commit_fails(
     tmp_path, monkeypatch
 ) -> None:
     from mato_loop_backend.api.routes import projects as projects_route
-    from mato_loop_backend.session_storage import SessionStorage
+    from mato_loop_backend.files.storage import SessionStorage
 
     user = _user()
     project = _project(user.id)

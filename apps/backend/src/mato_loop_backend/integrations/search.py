@@ -11,21 +11,17 @@ import httpx
 from bs4 import BeautifulSoup
 from ddgs import DDGS
 
-from mato_loop_backend.integrations.evidence import evidence_source_id
 from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
     search_provider_key,
-)
-from mato_loop_backend.integrations.webfetch import (
-    WebFetchError,
-    canonicalize_url,
-    normalize_source_title,
 )
 from mato_loop_backend.settings.models import (
     IntegrationInstance,
     IntegrationSettings,
     ToolSettings,
 )
+from mato_loop_backend.web.evidence import evidence_source_id
+from mato_loop_backend.web.fetch import WebFetchError, canonicalize_url, normalize_source_title
 
 logger = logging.getLogger(__name__)
 _SEARXNG_RECOVERY_ENGINES = "bing,mojeek,presearch"

@@ -16,8 +16,6 @@ from pydantic import Field, ValidationError, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.tool_contracts import ToolAction
-from mato_loop_backend.attachments import validate_image
 from mato_loop_backend.execution.browser_contracts import (
     BROWSER_SNAPSHOT_ACTIONS,
     MAX_BROWSER_FILE_BYTES,
@@ -37,7 +35,9 @@ from mato_loop_backend.execution.browser_contracts import (
 from mato_loop_backend.execution.client import ExecutionClient, ExecutionClientError
 from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.execution.protocol import WireModel
+from mato_loop_backend.files.service import FileRoot
 from mato_loop_backend.integrations.contracts import IntegrationAdapterDefinition, ToolContribution
+from mato_loop_backend.media.attachments import validate_image
 from mato_loop_backend.models import AgentRun, ExecutionAgent
 from mato_loop_backend.settings import (
     IntegrationAdapterAvailability,
@@ -47,7 +47,7 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     UserIntegrationSettings,
 )
-from mato_loop_backend.workspace import FileRoot
+from mato_loop_backend.tools.actions import ToolAction
 
 
 async def browser_settings(
@@ -318,8 +318,8 @@ class BrowserUploadArguments(_BrowserPageArguments):
 
 
 async def _control_authorization(_arguments: BrowserRequestControlArguments, context: Any):
-    from mato_loop_backend.agent.tool_registry import PERMISSION_REASON_ARGUMENT
     from mato_loop_backend.execution.browser_control import capture_control_request
+    from mato_loop_backend.tools.contracts import PERMISSION_REASON_ARGUMENT
 
     request = await capture_control_request(
         context.tool_call.arguments[PERMISSION_REASON_ARGUMENT], context
@@ -335,7 +335,7 @@ async def _request_control(arguments: BrowserRequestControlArguments, context: A
 
 
 async def _release_authorization(_arguments: BrowserReleaseControlArguments, context: Any):
-    from mato_loop_backend.agent.permissions import integration_operation_permission
+    from mato_loop_backend.permissions.policy import integration_operation_permission
 
     connection = _bound_browser(context)
     context.bound_options["browser_id"] = connection.browser_id
@@ -357,8 +357,8 @@ async def _release_authorization(_arguments: BrowserReleaseControlArguments, con
 
 
 async def _release_control(_arguments: BrowserReleaseControlArguments, context: Any):
-    from mato_loop_backend.agent.tool_registry import ToolResult
     from mato_loop_backend.execution.browsers import browser_coordinator
+    from mato_loop_backend.tools.contracts import ToolResult
 
     connection = _bound_browser(context)
     if (
@@ -371,7 +371,7 @@ async def _release_control(_arguments: BrowserReleaseControlArguments, context: 
 
 
 async def _downloads_authorization(arguments: BrowserDownloadsArguments, context: Any):
-    from mato_loop_backend.agent.permissions import (
+    from mato_loop_backend.permissions.policy import (
         execution_directory_permission,
         integration_operation_permission,
     )
@@ -433,7 +433,7 @@ async def _downloads_authorization(arguments: BrowserDownloadsArguments, context
 
 
 async def _publish_download(arguments: BrowserDownloadsArguments, context: Any):
-    from mato_loop_backend.agent.tool_registry import ToolResult
+    from mato_loop_backend.tools.contracts import ToolResult
 
     connection = _bound_browser(context)
     if (
@@ -454,7 +454,7 @@ async def _publish_download(arguments: BrowserDownloadsArguments, context: Any):
         captured = connection.origins.get(download.origin or "")
         if captured is None or captured[1] != download.control_epoch or captured[0].run_id != context.run_id:
             raise ExecutionClientError("browser.bindingChanged")
-        from mato_loop_backend.agent.permissions import PermissionDecision
+        from mato_loop_backend.permissions.policy import PermissionDecision
 
         for request in context.bound_options["browser_download_permissions"]:
             if await context.ask_handler(request, check_only=True) != PermissionDecision.ALLOW:
@@ -476,14 +476,14 @@ async def _publish_download(arguments: BrowserDownloadsArguments, context: Any):
 
 
 async def _upload_authorization(arguments: BrowserUploadArguments, context: Any):
-    from mato_loop_backend.agent.tools import _execution_path, _filesystem_permission
+    from mato_loop_backend.files.access import execution_path, filesystem_permission
 
     source_path = (
-        _execution_path(context, arguments.path)
+        execution_path(context, arguments.path)
         if arguments.root == "workspace"
         else context.root_files.normalize_relative_path(arguments.path)
     )
-    source = _filesystem_permission(
+    source = filesystem_permission(
         context, root=arguments.root, path=source_path, capability="filesystem.read",
         action_kind="browser_upload_source", action_label="Upload-Datei lesen",
     )
@@ -579,7 +579,7 @@ async def _delete_browser_upload(connection: Any, file_id: str) -> None:
 
 
 async def _execute_upload(arguments: BrowserUploadArguments, context: Any):
-    from mato_loop_backend.agent.permissions import PermissionDecision
+    from mato_loop_backend.permissions.policy import PermissionDecision
 
     connection = _bound_browser(context)
     staging = asyncio.create_task(_stage_browser_upload(arguments, context, connection))
@@ -593,7 +593,7 @@ async def _execute_upload(arguments: BrowserUploadArguments, context: Any):
     try:
         for request in context.bound_options["browser_upload_permissions"]:
             if await context.ask_handler(request, check_only=True) != PermissionDecision.ALLOW:
-                from mato_loop_backend.agent.tool_registry import ToolResult
+                from mato_loop_backend.tools.contracts import ToolResult
 
                 return ToolResult.error("permission.denied")
         current = _bound_browser(context)
@@ -609,7 +609,7 @@ async def _execute_upload(arguments: BrowserUploadArguments, context: Any):
 
 
 async def _authorization(arguments: BrowserActionArguments | _BrowserArguments, context: Any) -> tuple[Any, ...]:
-    from mato_loop_backend.agent.permissions import integration_operation_permission
+    from mato_loop_backend.permissions.policy import integration_operation_permission
 
     if isinstance(arguments, _BrowserArguments):
         arguments = arguments.to_action()
@@ -659,7 +659,7 @@ async def capture_browser_approval(request, call, session, run, approval_resolut
     if tool is None:
         return request
     if tool is BROWSER_UPLOAD:
-        from mato_loop_backend.agent.file_roots import internal_file_roots
+        from mato_loop_backend.files.roots import internal_file_roots
 
         arguments = BrowserUploadArguments.model_validate(
             internal_file_roots(call.arguments)
@@ -709,14 +709,11 @@ async def capture_browser_approval(request, call, session, run, approval_resolut
 
 
 async def execute_browser(arguments: BrowserActionArguments | _BrowserArguments, context: Any):
-    from mato_loop_backend.agent.tool_registry import (
-        ToolAttachment,
-        ToolResult,
-        _model_revision,
-    )
-    from mato_loop_backend.agent.tools import _create_output_stream
     from mato_loop_backend.execution.browsers import browser_coordinator
-    from mato_loop_backend.workspace import RootFileError
+    from mato_loop_backend.files.access import create_output_stream
+    from mato_loop_backend.files.service import RootFileError
+    from mato_loop_backend.tools.contracts import ToolAttachment, ToolResult
+    from mato_loop_backend.tools.registry import _model_revision
 
     if isinstance(arguments, _BrowserArguments):
         arguments = arguments.to_action()
@@ -784,7 +781,7 @@ async def execute_browser(arguments: BrowserActionArguments | _BrowserArguments,
         if stream is None:
             raise ExecutionClientError("executionAgent.protocolError")
         try:
-            revision = await _create_output_stream(
+            revision = await create_output_stream(
                 context.root_files, "browser-snapshot.yml", stream
             )
         except RootFileError as exc:

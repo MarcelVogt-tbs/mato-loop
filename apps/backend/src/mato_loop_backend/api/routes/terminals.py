@@ -4,41 +4,25 @@ import asyncio
 import base64
 import binascii
 from contextlib import suppress
-from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Annotated, Literal
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
-from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
-from mato_loop_backend.auth.sessions import hash_token
+import mato_loop_backend.api.websocket_access as api_websocket_access
 from mato_loop_backend.config import get_runtime_config
-from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import describe_error
-from mato_loop_backend.execution import (
-    ExecutionClientError,
-    TerminalControlResult,
-)
+from mato_loop_backend.execution import ExecutionClientError, TerminalControlResult
 from mato_loop_backend.execution.terminals import (
     BrowserTerminalConnection,
     agent_generation,
     terminal_coordinator,
     validate_terminal_access,
 )
-from mato_loop_backend.models import LoginSession, UserAccount
 
 router = APIRouter(prefix="/terminals")
-
-
-@dataclass(frozen=True, slots=True)
-class _BrowserLogin:
-    user: UserAccount
-    login_id: UUID
-    expires_at: datetime
 
 
 class _BrowserMessage(BaseModel):
@@ -80,42 +64,6 @@ _MESSAGES = TypeAdapter(
         Field(discriminator="type"),
     ]
 )
-
-
-async def _browser_login(websocket: WebSocket) -> _BrowserLogin | None:
-    config = get_runtime_config()
-    token = websocket.cookies.get(config.session_cookie_name)
-    if not token:
-        return None
-    async with AsyncSessionFactory() as db:
-        login = await db.scalar(
-            select(LoginSession).where(
-                LoginSession.token_hash == hash_token(token),
-                LoginSession.expires_at > datetime.now(UTC),
-            )
-        )
-        user = await db.get(UserAccount, login.user_id) if login is not None else None
-        if login is None or user is None or not user.is_active:
-            return None
-        return _BrowserLogin(user, login.id, login.expires_at)
-
-
-def _origin_allowed(websocket: WebSocket, configured_origins: list[str]) -> bool:
-    origin = websocket.headers.get("origin")
-    if origin is None:
-        return False
-    if origin in configured_origins:
-        return True
-    parsed = urlsplit(origin)
-    host = websocket.headers.get("host")
-    return (
-        parsed.scheme in {"http", "https"}
-        and parsed.path in {"", "/"}
-        and not parsed.query
-        and not parsed.fragment
-        and host is not None
-        and parsed.netloc.casefold() == host.casefold()
-    )
 
 
 async def _reject(websocket: WebSocket, close_code: int, error_code: str) -> None:
@@ -184,11 +132,11 @@ async def _handle_control(viewer: BrowserTerminalConnection, raw: object) -> boo
 @router.websocket("/{agent_id}")
 async def browser_terminal(websocket: WebSocket, agent_id: UUID) -> None:
     config = get_runtime_config()
-    if not _origin_allowed(websocket, config.cors_origin_list):
+    if not api_websocket_access._origin_allowed(websocket, config.cors_origin_list):
         await _reject(websocket, 4403, "terminal.originDenied")
         return
     try:
-        login = await _browser_login(websocket)
+        login = await api_websocket_access._browser_login(websocket)
     except (SQLAlchemyError, TimeoutError):
         await _reject(websocket, 1013, "terminal.unavailable")
         return

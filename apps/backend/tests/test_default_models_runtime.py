@@ -6,9 +6,15 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent import runtime as runtime_module
-from mato_loop_backend.agent.context import compaction_messages, estimate_tokens
-from mato_loop_backend.agent.runtime import AgentRuntime, _generated_session_title
+import mato_loop_backend.agent.loop as mock_agent_loop
+import mato_loop_backend.agent.runtime as mock_agent_runtime
+import mato_loop_backend.agent.summarization as mock_agent_summarization
+import mato_loop_backend.agent.titles as mock_agent_titles
+from mato_loop_backend.agent.projection import compaction_messages, estimate_tokens
+from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.title_generation import (
+    generated_session_title as _generated_session_title,
+)
 from mato_loop_backend.agent.title_generation import (
     initial_title_output_budget,
     repair_title_output_budget,
@@ -95,7 +101,10 @@ def compaction_db(monkeypatch):
         await db.close()
 
     db.__aexit__.side_effect = close
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: db)
+    def _mock_value():
+        return db
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     return db
 
 
@@ -121,7 +130,7 @@ async def test_compaction_uses_global_model_before_session_model(
     complete = AsyncMock(return_value=SimpleNamespace(content=_VALID_SUMMARY))
     monkeypatch.setattr(ProviderService, "complete", complete)
     timeout = Mock(wraps=asyncio.timeout)
-    monkeypatch.setattr(runtime_module.asyncio, "timeout", timeout)
+    monkeypatch.setattr(mock_agent_runtime.asyncio, "timeout", timeout)
 
     result = await AgentRuntime._summarize(
         "USER: Test",
@@ -384,7 +393,7 @@ async def test_compaction_deadline_covers_retries_and_candidates(
         update={"request_timeout_seconds": 0.05}
     )
     timeout = Mock(wraps=asyncio.timeout)
-    monkeypatch.setattr(runtime_module.asyncio, "timeout", timeout)
+    monkeypatch.setattr(mock_agent_runtime.asyncio, "timeout", timeout)
     on_update = AsyncMock()
 
     result = await asyncio.wait_for(
@@ -447,9 +456,11 @@ async def test_compaction_disposes_cancelled_credential_session_before_fallback(
         update={"request_timeout_seconds": 0.05}
     )
     factory = Mock(side_effect=[AsyncSession(), compaction_db])
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", factory)
+    _mock_value = factory
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
 
-    async with runtime_module.AsyncSessionFactory() as parent_db:
+    async with mock_agent_runtime.AsyncSessionFactory() as parent_db:
         record = ChatSession(id=uuid4(), title="Pending parent context")
         parent_db.add(record)
         monkeypatch.setattr(parent_db, "rollback", AsyncMock(wraps=parent_db.rollback))
@@ -545,7 +556,10 @@ async def test_title_generation_falls_back_to_session_model(monkeypatch, context
         return settings if settings_type is AiSettings else AgentRuntimeSettings(safety_reserve_tokens=safety)
 
     monkeypatch.setattr(SettingsStore, "load", load)
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
+    def _mock_value():
+        return _SessionContext(db)
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     transport = AsyncMock(return_value=ProviderResult(content="Standardmodelle konfigurieren"))
     monkeypatch.setattr(service_module, "chat_completions", transport)
     complete = AsyncMock(wraps=ProviderService.complete)
@@ -595,7 +609,9 @@ async def test_title_generation_waits_for_agent_run(monkeypatch) -> None:
         factory_calls += 1
         return _SessionContext(db)
 
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", session_factory)
+    _mock_value = session_factory
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     run_task = asyncio.create_task(run_worker())
     title_task = asyncio.create_task(
         AgentRuntime._generate_title(
@@ -618,7 +634,10 @@ async def test_title_generation_skips_cancelled_agent_run(monkeypatch) -> None:
     )
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
+    def _mock_value():
+        return _SessionContext(db)
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     complete = AsyncMock()
     monkeypatch.setattr(ProviderService, "complete", complete)
     run_task = asyncio.create_task(asyncio.sleep(10))
@@ -641,7 +660,10 @@ async def test_title_generation_does_not_overwrite_manual_title(monkeypatch) -> 
     )
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
+    def _mock_value():
+        return _SessionContext(db)
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     complete = AsyncMock()
     monkeypatch.setattr(ProviderService, "complete", complete)
 
@@ -719,7 +741,10 @@ async def test_title_generation_repairs_empty_visible_output(
         ]
     )
     monkeypatch.setattr(SettingsStore, "load", load)
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
+    def _mock_value():
+        return _SessionContext(db)
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(ProviderService, "complete", complete)
     monkeypatch.setattr(run_events, "publish", AsyncMock())
 
@@ -758,7 +783,10 @@ async def test_title_generation_persists_failed_status(monkeypatch) -> None:
         return settings if settings_type is AiSettings else AgentRuntimeSettings()
 
     monkeypatch.setattr(SettingsStore, "load", load)
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
+    def _mock_value():
+        return _SessionContext(db)
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(
         ProviderService, "complete", AsyncMock(side_effect=RuntimeError("kaputt"))
     )
@@ -882,8 +910,14 @@ async def test_title_generation_routes_current_images_in_one_request(
     )
     complete = AsyncMock(return_value=ProviderResult(content="Quarterly report"))
     monkeypatch.setattr(SettingsStore, "load", load)
-    monkeypatch.setattr(runtime_module, "AsyncSessionFactory", lambda: _SessionContext(db))
-    monkeypatch.setattr(runtime_module, "AttachmentService", lambda: attachment_service)
+    def _mock_value():
+        return _SessionContext(db)
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
+    def _mock_value():
+        return attachment_service
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     monkeypatch.setattr(ProviderService, "complete", complete)
     monkeypatch.setattr(run_events, "publish", AsyncMock())
 

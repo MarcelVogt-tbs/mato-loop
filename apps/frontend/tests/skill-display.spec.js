@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { skillDisplayDescription, skillDisplayName } from '../src/features/settings/skill-display'
+import { skillDisplayDescription, skillDisplayName } from '../src/features/skills/skill-display'
 
 const weather = {
   id: '00000000-0000-4000-8000-000000000101',

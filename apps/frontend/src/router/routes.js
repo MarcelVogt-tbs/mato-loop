@@ -3,21 +3,21 @@ import { settingsRoutes } from 'src/features/settings/routes'
 export { settingsRoutes } from 'src/features/settings/routes'
 
 const routes = [
-  { path: '/login', name: 'login', component: () => import('pages/AuthPage.vue'), meta: { public: true } },
+  { path: '/login', name: 'login', component: () => import('src/features/auth/AuthPage.vue'), meta: { public: true } },
   {
     path: '/print/markdown',
     name: 'markdown-print',
-    component: () => import('pages/MarkdownPrintPage.vue')
+    component: () => import('src/features/markdown-print/MarkdownPrintPage.vue')
   },
   {
     path: '/',
-    component: () => import('layouts/MainLayout.vue'),
+    component: () => import('src/app/MainLayout.vue'),
     children: [
-      { path: '', name: 'chat', component: () => import('pages/ChatPage.vue') },
+      { path: '', name: 'chat', component: () => import('src/features/chat/ChatPage.vue') },
       {
         path: 'settings',
         name: 'settings',
-        component: () => import('pages/SettingsPage.vue'),
+        component: () => import('src/features/settings/SettingsPage.vue'),
         redirect: { name: 'settings-providers' },
         children: settingsRoutes
       }
@@ -25,7 +25,7 @@ const routes = [
   },
   {
     path: '/:catchAll(.*)*',
-    component: () => import('pages/NotFoundPage.vue')
+    component: () => import('src/app/NotFoundPage.vue')
   }
 ]
 

@@ -3,8 +3,8 @@ import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { copyToClipboard } from 'quasar'
-import FileViewerApp from '../src/components/FileViewerApp.vue'
-import FileViewerPanel from '../src/components/FileViewerPanel.vue'
+import FileViewerApp from '../src/features/files/components/FileViewerApp.vue'
+import FileViewerPanel from '../src/features/files/components/FileViewerPanel.vue'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { useWorkspaceStore } from '../src/stores/workspace'
 
@@ -17,13 +17,13 @@ vi.mock('quasar', () => ({
 }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ resolve: () => ({ href: '/print' }) }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: mocks.confirm }) }))
-vi.mock('components/MessageContent.vue', () => ({ default: {
+vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: {
   props: ['content'], render() { return h('article', this.content) }
 } }))
-vi.mock('components/StlViewerPanel.vue', () => ({ default: {
+vi.mock('src/features/files/components/StlViewerPanel.vue', () => ({ default: {
   props: ['src'], render() { return h('div', { 'data-model-src': this.src }) }
 } }))
-vi.mock('components/WorkspaceFileEditor.vue', () => ({ __esModule: true, default: {
+vi.mock('src/features/files/components/WorkspaceFileEditor.vue', () => ({ __esModule: true, default: {
   props: ['modelValue', 'filename', 'markdown', 'saving', 'dirty', 'session', 'showToolbar'],
   emits: ['update:modelValue', 'save', 'cancel'],
   render() {
@@ -43,7 +43,7 @@ vi.mock('components/WorkspaceFileEditor.vue', () => ({ __esModule: true, default
     ])
   }
 } }))
-vi.mock('components/ImageViewerPanel.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/files/components/ImageViewerPanel.vue', () => ({ default: { render: () => null } }))
 
 let app
 beforeEach(() => { mocks.confirm.mockReset(); mocks.api.get.mockReset(); mocks.api.put.mockReset(); copyToClipboard.mockReset() })

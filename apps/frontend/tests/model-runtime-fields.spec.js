@@ -5,7 +5,7 @@ import { Quasar, QBtn, QCardSection, QExpansionItem, QForm, QInput, QSelect, QTo
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 
-import ModelRuntimeFields from '../src/components/ModelRuntimeFields.vue'
+import ModelRuntimeFields from '../src/features/providers/ModelRuntimeFields.vue'
 import { modelRuntimeForm, modelRuntimePayload } from '../src/utils/model-runtime'
 
 let app, root

@@ -6,7 +6,6 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.tools import resolve_tool_execution_policy, tool_registry
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.tool_settings import (
     MediaTimeoutRequest,
@@ -14,6 +13,7 @@ from mato_loop_backend.api.routes.tool_settings import (
     get_tool_configuration,
     tool_configuration_payload,
 )
+from mato_loop_backend.permissions.resolution import resolve_tool_execution_policy
 from mato_loop_backend.settings import (
     AgentProfilePermissions,
     IntegrationSettings,
@@ -27,6 +27,7 @@ from mato_loop_backend.settings import (
     plan_profile,
     sysadmin_profile,
 )
+from mato_loop_backend.tools.catalog import tool_registry
 
 
 def _db() -> AsyncMock:

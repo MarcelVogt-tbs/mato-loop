@@ -8,7 +8,7 @@ vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 const mocks = vi.hoisted(() => ({ store: null, confirm: vi.fn(async () => true) }))
 vi.mock('stores/automations', () => ({ useAutomationStore: () => mocks.store }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: mocks.confirm }) }))
-import List from '../src/pages/settings/AutomationSettingsPage.vue'
+import List from '../src/features/automations/AutomationSettingsPage.vue'
 
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks() })

@@ -6,13 +6,16 @@ from uuid import uuid4
 import pytest
 from test_required_web_search_runtime import _runtime_setup, _tool_messages
 
-from mato_loop_backend.agent.context import message_dict
-from mato_loop_backend.agent.runtime import AgentRunError, AgentRuntime, _safe_tool_arguments
-from mato_loop_backend.agent.tool_registry import ToolRegistry, ToolResult
-from mato_loop_backend.agent.tools import tool_registry
+from mato_loop_backend.agent.projection import message_dict
+from mato_loop_backend.agent.run_contracts import AgentRunError
+from mato_loop_backend.agent.run_support import _safe_tool_arguments
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.models import Message, WebSearchPolicy
 from mato_loop_backend.prompt_eval import PromptCase, _validate_tool_calls
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
+from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.tools.contracts import ToolResult
+from mato_loop_backend.tools.registry import ToolRegistry
 
 
 def read_call(identifier, path="note.txt", **extra):

@@ -14,23 +14,19 @@ from mato_loop_backend.agent.media_prompt_profiles import (
     Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS,
     with_media_prompt_profiles,
 )
-from mato_loop_backend.agent.permissions import PermissionDecision, media_permission
-from mato_loop_backend.agent.tools import (
-    ToolContext,
-    effective_tool_capabilities,
-    tool_registry,
-)
-from mato_loop_backend.attachments import AttachmentService
+from mato_loop_backend.files.service import RootFileService
+from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.media.attachments import AttachmentService
 from mato_loop_backend.models import ChatSession, Message, MessageAttachment
-from mato_loop_backend.providers import MediaResult, ToolCall
-from mato_loop_backend.providers.base import ProviderError
+from mato_loop_backend.permissions.policy import PermissionDecision, media_permission
+from mato_loop_backend.providers.base import ProviderError, ToolCall
 from mato_loop_backend.providers.media import (
+    MediaResult,
     MediaService,
     available_media_capabilities,
     media_model_available,
     resolve_media_target,
 )
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
     AgentProfilesSettings,
@@ -47,7 +43,8 @@ from mato_loop_backend.settings.models import (
     ModelConfig,
     TrustLevel,
 )
-from mato_loop_backend.workspace import RootFileService
+from mato_loop_backend.tools.catalog import effective_tool_capabilities, tool_registry
+from mato_loop_backend.tools.context import ToolContext
 
 
 def wav_bytes() -> bytes:

@@ -19,12 +19,6 @@ from uuid import UUID
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import Field, field_validator, model_validator
 
-from mato_loop_backend.agent.tool_contracts import ToolAction
-from mato_loop_backend.attachments import (
-    MAX_FILE_ATTACHMENT_BYTES,
-    AttachmentError,
-    validate_image,
-)
 from mato_loop_backend.execution.client import (
     ExecutionClient,
     ExecutionClientError,
@@ -37,10 +31,16 @@ from mato_loop_backend.execution.manager import (
 )
 from mato_loop_backend.execution.protocol import WireModel
 from mato_loop_backend.execution.transfers import MAX_TRANSFER_BYTES, transfer_tickets
+from mato_loop_backend.files.service import FileRoot, RootFileError, RootFileService
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     IntegrationContributions,
     ToolContribution,
+)
+from mato_loop_backend.media.attachments import (
+    MAX_FILE_ATTACHMENT_BYTES,
+    AttachmentError,
+    validate_image,
 )
 from mato_loop_backend.models import AgentRun
 from mato_loop_backend.settings import (
@@ -48,7 +48,7 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     load_effective_integrations,
 )
-from mato_loop_backend.workspace import FileRoot, RootFileError, RootFileService
+from mato_loop_backend.tools.actions import ToolAction
 
 
 def _relative_path(value: str) -> str:
@@ -646,11 +646,11 @@ def _preview_contact_sheet(images: list[tuple[str, bytes]]) -> bytes:
 
 
 def _authorization(arguments: OpenScadRenderArguments, context: Any) -> tuple[Any, ...]:
-    from mato_loop_backend.agent.permissions import integration_operation_permission
-    from mato_loop_backend.agent.tools import _filesystem_permission
+    from mato_loop_backend.files.access import filesystem_permission
+    from mato_loop_backend.permissions.policy import integration_operation_permission
 
     project_path, _ = _project_parts(arguments)
-    read = _filesystem_permission(
+    read = filesystem_permission(
         context,
         root=arguments.root,
         path=project_path,
@@ -703,10 +703,7 @@ def _diagnostic_params(exc: ExecutionClientError) -> dict[str, Any] | None:
 
 
 async def render_openscad(arguments: OpenScadRenderArguments, context: Any):
-    from mato_loop_backend.agent.tools import (
-        ToolAttachment,
-        ToolResult,
-    )
+    from mato_loop_backend.tools.contracts import ToolAttachment, ToolResult
 
     integration_id = context.bound_options.get("integration_id")
     expected_revision = context.bound_options.get("binding_revision")

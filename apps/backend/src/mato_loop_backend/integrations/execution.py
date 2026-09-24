@@ -18,9 +18,9 @@ def execution_tool_handler(
         raise ValueError("invalid agent integration binding")
 
     async def execute(arguments: Any, context: Any):
-        from mato_loop_backend.agent.tools import ToolResult
         from mato_loop_backend.execution.client import ExecutionClientError
         from mato_loop_backend.models import AgentRun
+        from mato_loop_backend.tools.contracts import ToolResult
 
         run = await context.db.get(AgentRun, context.run_id)
         if (

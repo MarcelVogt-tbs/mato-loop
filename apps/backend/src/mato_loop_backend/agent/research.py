@@ -6,11 +6,7 @@ from typing import Any
 
 import httpx
 
-from mato_loop_backend.integrations import (
-    WebFetchError,
-    canonicalize_url,
-    normalize_source_title,
-)
+from mato_loop_backend.web.fetch import WebFetchError, canonicalize_url, normalize_source_title
 
 _HTML_COMMENT_PATTERN = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
 _INLINE_CODE_PATTERN = re.compile(r"(`+).*?\1", re.DOTALL)

@@ -30,13 +30,13 @@ vi.mock('stores/control-center', () => ({ useControlCenterStore: () => ({ ready:
 vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({ byId: () => null, workspaceContextFor: () => null }) }))
 vi.mock('stores/instance-limits', () => ({ useInstanceLimitsStore: () => ({ maxUploadBytes: 1, maxUploadMib: 1 }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: vi.fn() }) }))
-vi.mock('components/FileTreeNode.vue', () => ({ default: {
+vi.mock('src/features/files/components/FileTreeNode.vue', () => ({ default: {
   props: ['entry'], emits: ['open-directory'],
   template: '<button role="treeitem" :data-file-path="entry.path" :data-current-session="entry.currentSession || undefined" @click="$emit(\'open-directory\', entry)">{{ entry.name }}</button>'
 } }))
 
-import FileExplorerPanel from '../src/components/FileExplorerPanel.vue'
-import FileExplorerFooter from '../src/components/FileExplorerFooter.vue'
+import FileExplorerPanel from '../src/features/files/components/FileExplorerPanel.vue'
+import FileExplorerFooter from '../src/features/files/components/FileExplorerFooter.vue'
 
 const components = {
   QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions, QCardSection, QDialog, QForm,

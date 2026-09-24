@@ -8,7 +8,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from mato_loop_backend.agent.tool_contracts import ToolAction
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     IntegrationContributions,
@@ -26,6 +25,7 @@ from mato_loop_backend.integrations.mail_send import send_once, send_status
 from mato_loop_backend.models import Credential
 from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
+from mato_loop_backend.tools.actions import ToolAction
 
 MAIL_CREDENTIAL_KIND = "mail.password"
 _HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|[0-9A-Fa-f:]+)$")
@@ -345,13 +345,13 @@ def attachment_payload(
 
 
 def _result(payload: dict[str, Any]):
-    from mato_loop_backend.agent.tools import ToolResult
+    from mato_loop_backend.tools.contracts import ToolResult
 
     return ToolResult.json({**payload, "contentIsUntrusted": True})
 
 
 def _error(error: MailError):
-    from mato_loop_backend.agent.tools import ToolResult
+    from mato_loop_backend.tools.contracts import ToolResult
 
     return ToolResult.error(mail_error_code(error))
 
@@ -425,7 +425,7 @@ async def mail_get_message(arguments: MailTokenArguments, context: Any):
             }
         )
     except ValueError:
-        from mato_loop_backend.agent.tools import ToolResult
+        from mato_loop_backend.tools.contracts import ToolResult
 
         return ToolResult.error("integration.staleReference", field="message_token")
     except MailError as exc:
@@ -481,7 +481,7 @@ async def mail_update_draft(arguments: MailUpdateDraftArguments, context: Any):
             }
         )
     except ValueError:
-        from mato_loop_backend.agent.tools import ToolResult
+        from mato_loop_backend.tools.contracts import ToolResult
 
         return ToolResult.error("integration.staleReference", field="message_token")
     except MailError as exc:
@@ -504,7 +504,7 @@ async def mail_delete_draft(arguments: MailTokenArguments, context: Any):
         await client.delete_draft(locator)
         return _result({"deleted": True})
     except ValueError:
-        from mato_loop_backend.agent.tools import ToolResult
+        from mato_loop_backend.tools.contracts import ToolResult
 
         return ToolResult.error("integration.staleReference", field="message_token")
     except MailError as exc:
@@ -550,7 +550,7 @@ async def mail_send_draft(arguments: MailTokenArguments, context: Any):
             pass
         return _result({"sent": True})
     except ValueError:
-        from mato_loop_backend.agent.tools import ToolResult
+        from mato_loop_backend.tools.contracts import ToolResult
 
         return ToolResult.error("integration.staleReference", field="message_token")
     except MailError as exc:
@@ -600,7 +600,7 @@ async def _delete(arguments: MailTokenArguments, context: Any):
         await client.delete_message(locator)
         return _result({"deleted": True})
     except ValueError:
-        from mato_loop_backend.agent.tools import ToolResult
+        from mato_loop_backend.tools.contracts import ToolResult
 
         return ToolResult.error("integration.staleReference", field="message_token")
     except MailError as exc:
@@ -614,7 +614,7 @@ async def mail_delete_message(arguments: MailTokenArguments, context: Any):
 async def _permission(capability: str, operation: str, arguments: Any, context: Any):
     from dataclasses import replace
 
-    from mato_loop_backend.agent.permissions import (
+    from mato_loop_backend.permissions.policy import (
         PermissionDecision,
         PermissionDisplayItem,
         integration_operation_permission,
@@ -733,7 +733,7 @@ async def _permission(capability: str, operation: str, arguments: Any, context: 
 
 
 def _accounts_permission(_arguments: Any, _context: Any):
-    from mato_loop_backend.agent.permissions import PermissionRequest
+    from mato_loop_backend.permissions.policy import PermissionRequest
 
     return (
         PermissionRequest(

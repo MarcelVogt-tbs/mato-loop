@@ -5,9 +5,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, HttpUrl
 
-from mato_loop_backend.integrations.bookstack import BOOKSTACK_ADAPTER
+from mato_loop_backend.integrations.bookstack.adapter import BOOKSTACK_ADAPTER
 from mato_loop_backend.integrations.browser import BROWSER_ADAPTER
-from mato_loop_backend.integrations.caldav import CALDAV_ADAPTER
+from mato_loop_backend.integrations.caldav.adapter import CALDAV_ADAPTER
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     IntegrationContributions,
@@ -16,11 +16,11 @@ from mato_loop_backend.integrations.contracts import (
 )
 from mato_loop_backend.integrations.mail import MAIL_ADAPTER
 from mato_loop_backend.integrations.mcp import MCP_ADAPTER
-from mato_loop_backend.integrations.mealie import MEALIE_ADAPTER
-from mato_loop_backend.integrations.opencode import OPENCODE_ADAPTER
+from mato_loop_backend.integrations.mealie.adapter import MEALIE_ADAPTER
+from mato_loop_backend.integrations.opencode.adapter import OPENCODE_ADAPTER
 from mato_loop_backend.integrations.openscad import OPENSCAD_ADAPTER
 from mato_loop_backend.integrations.sonobin import SONOBIN_ADAPTER
-from mato_loop_backend.integrations.tbs_desk import TBS_DESK_ADAPTER
+from mato_loop_backend.integrations.tbs_desk.adapter import TBS_DESK_ADAPTER
 from mato_loop_backend.settings.models import (
     IntegrationAdapterAvailability,
     IntegrationInstance,

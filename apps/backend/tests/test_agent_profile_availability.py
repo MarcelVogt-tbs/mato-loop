@@ -6,9 +6,9 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from mato_loop_backend.agent.permissions import PermissionDecision
-from mato_loop_backend.agent.tool_registry import ToolContext, ToolResult
-from mato_loop_backend.agent.tools import _coding_analyze, _web_search, tool_registry
+import mato_loop_backend.tools.access as mock_tools_access
+import mato_loop_backend.tools.coding as mock_tools_coding
+import mato_loop_backend.tools.web as mock_tools_web
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.agent_profiles import (
     AgentProfileRequest,
@@ -17,6 +17,7 @@ from mato_loop_backend.api.routes.agent_profiles import (
 )
 from mato_loop_backend.integrations.registry import effective_integration_contributions
 from mato_loop_backend.models import ChatSession, Project, UserAccount
+from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings.effective import (
     filter_agent_profile_integrations,
@@ -38,6 +39,11 @@ from mato_loop_backend.settings.models import (
     plan_profile,
 )
 from mato_loop_backend.settings.store import SettingsStore
+from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.tools.coding import _coding_analyze
+from mato_loop_backend.tools.context import ToolContext
+from mato_loop_backend.tools.contracts import ToolResult
+from mato_loop_backend.tools.web import _web_search
 
 
 @pytest.mark.parametrize("profile,enabled", [
@@ -381,8 +387,8 @@ async def test_shared_binding_guards_selection_before_and_after_approval(monkeyp
 
 @pytest.mark.parametrize("kind,adapter", [("search", "searxng"), ("coding", "opencode")])
 async def test_search_and_coding_recheck_selection_after_approval(monkeypatch, kind, adapter):
-    from mato_loop_backend.agent import tools as tools_module
-    from mato_loop_backend.agent.tool_arguments import CodingAnalyzeArguments, WebSearchArguments
+    pass
+    from mato_loop_backend.tools.arguments import CodingAnalyzeArguments, WebSearchArguments
 
     integration = account(kind, adapter)
     profile = AgentProfile(name="Agent", instructions="Task")
@@ -397,9 +403,9 @@ async def test_search_and_coding_recheck_selection_after_approval(monkeypatch, k
     context.ask_handler = approve
     if integration.adapter_type == "searxng":
         tools = ToolSettings(web_search={"primary_provider": f"searxng:{integration.id}"})
-        monkeypatch.setattr(tools_module, "_profile_tool_settings", AsyncMock(return_value=tools))
+        monkeypatch.setattr(mock_tools_access, 'profile_tool_settings', AsyncMock(return_value=tools))
         execute = AsyncMock()
-        monkeypatch.setattr(tools_module, "search_web", execute)
+        monkeypatch.setattr(mock_tools_web, 'search_web', execute)
         result = await _web_search(WebSearchArguments(query="test"), context)
     else:
         context.session.project_id = uuid4()
@@ -410,7 +416,7 @@ async def test_search_and_coding_recheck_selection_after_approval(monkeypatch, k
             coding_integration_id=integration.id,
         )
         execute = AsyncMock()
-        monkeypatch.setattr(tools_module.ProjectCodingService, "analyze", execute)
+        monkeypatch.setattr(mock_tools_coding.ProjectCodingService, "analyze", execute)
         result = await _coding_analyze(
             CodingAnalyzeArguments(title="Task", brief="Inspect"), context
         )

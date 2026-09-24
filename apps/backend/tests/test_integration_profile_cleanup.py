@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import mato_loop_backend.agent.tool_registry  # noqa: F401
+import mato_loop_backend.tools.registry  # noqa: F401
 from mato_loop_backend.integrations.service import (
     clear_profile_integration_policies,
 )

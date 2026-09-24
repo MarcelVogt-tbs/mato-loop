@@ -10,20 +10,13 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent import runtime as runtime_module
+import mato_loop_backend.agent.loop as mock_agent_loop
+import mato_loop_backend.agent.questions as mock_agent_questions
+import mato_loop_backend.agent.runtime as mock_agent_runtime
+import mato_loop_backend.permissions.requests as mock_permissions_requests
 from mato_loop_backend.agent import shared_shell
-from mato_loop_backend.agent.approval_decisions import decide_agent_action
-from mato_loop_backend.agent.permissions import PermissionPolicy
-from mato_loop_backend.agent.runtime import AgentRuntime, _argument_edit_permission_binding
-from mato_loop_backend.agent.tool_arguments import ShellRunArguments
-from mato_loop_backend.agent.tool_contracts import ApprovalEditField
-from mato_loop_backend.agent.tool_registry import (
-    BoundTool,
-    EffectiveToolSet,
-    ToolContext,
-    ToolDefinition,
-    ToolRegistry,
-)
+from mato_loop_backend.agent.run_support import _argument_edit_permission_binding
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.execution import (
     ExecutionClientError,
     SharedPrepareResult,
@@ -35,6 +28,7 @@ from mato_loop_backend.execution import (
 )
 from mato_loop_backend.execution import terminals as terminal_module
 from mato_loop_backend.execution.terminals import TerminalCoordinator, TerminalRuntime
+from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
@@ -42,6 +36,8 @@ from mato_loop_backend.models import (
     ExecutionAgent,
     PermissionGrant,
 )
+from mato_loop_backend.permissions.decisions import decide_agent_action
+from mato_loop_backend.permissions.policy import PermissionPolicy
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
     IntegrationSettings,
@@ -49,7 +45,11 @@ from mato_loop_backend.settings import (
     ToolSettings,
     TrustLevel,
 )
-from mato_loop_backend.workspace import RootFileService
+from mato_loop_backend.tools.actions import ApprovalEditField
+from mato_loop_backend.tools.arguments import ShellRunArguments
+from mato_loop_backend.tools.context import ToolContext
+from mato_loop_backend.tools.contracts import ToolDefinition
+from mato_loop_backend.tools.registry import BoundTool, EffectiveToolSet, ToolRegistry
 
 
 @pytest.fixture
@@ -97,8 +97,12 @@ def env(monkeypatch):
         None if statement.column_descriptions[0]["entity"] is PermissionGrant else agent
     )
     db.scalars.return_value = Mock(all=Mock(side_effect=lambda: grants))
-    monkeypatch.setattr(runtime_module, "permission_origin", AsyncMock(return_value=session))
-    monkeypatch.setattr(runtime_module, "delegation_snapshot", AsyncMock(return_value=None))
+    _mock_value = AsyncMock(return_value=session)
+    for _mock_target in (mock_agent_runtime, mock_permissions_requests, mock_agent_questions,):
+        monkeypatch.setattr(_mock_target, 'permission_origin', _mock_value)
+    _mock_value = AsyncMock(return_value=None)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'delegation_snapshot', _mock_value)
 
     async def load_tools(*_args):
         settings = ToolSettings().select_trust(TrustLevel.PUBLIC)
@@ -106,17 +110,18 @@ def env(monkeypatch):
         settings.permissions.policies["shell.write"] = state.policy
         return settings, object()
 
-    monkeypatch.setattr(runtime_module, "load_agent_profile_tools", load_tools)
-    monkeypatch.setattr(
-        runtime_module, "load_effective_integrations",
-        AsyncMock(return_value=IntegrationSettings()),
-    )
-    monkeypatch.setattr(
-        runtime_module, "filter_agent_profile_integrations",
-        lambda settings, *_args, **_kwargs: settings,
-    )
-    monkeypatch.setattr(runtime_module.WebPushService, "deliver_after_commit", AsyncMock())
-    monkeypatch.setattr(runtime_module.run_events, "publish", AsyncMock())
+    _mock_value = load_tools
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile_tools', _mock_value)
+    _mock_value = AsyncMock(return_value=IntegrationSettings())
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'load_effective_integrations', _mock_value)
+    def _mock_value(settings, *_args, **_kwargs):
+        return settings
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'filter_agent_profile_integrations', _mock_value)
+    monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", AsyncMock())
+    monkeypatch.setattr(mock_agent_runtime.run_events, "publish", AsyncMock())
     monkeypatch.setattr(shared_shell.run_events, "publish", AsyncMock())
     monkeypatch.setattr(TerminalRuntime, "check_access", AsyncMock())
     evaluate = PermissionPolicy.evaluate

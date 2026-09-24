@@ -398,7 +398,7 @@ async def resolve_approval_action(
     ):
         raise MessagingApprovalError
 
-    from mato_loop_backend.agent.approval_decisions import decide_agent_action
+    from mato_loop_backend.permissions.decisions import decide_agent_action
 
     return await decide_agent_action(
         db, approval, decision, idempotent_same_decision=True

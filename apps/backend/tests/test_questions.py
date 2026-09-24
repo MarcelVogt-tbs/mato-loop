@@ -7,8 +7,8 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import mato_loop_backend.agent.runtime as mock_agent_runtime
 from mato_loop_backend.agent import question_decisions as question_decisions_module
-from mato_loop_backend.agent import runtime as runtime_module
 from mato_loop_backend.agent.question_decisions import QuestionDecisionError
 from mato_loop_backend.agent.question_decisions import (
     answer_question as answer_question_decision,
@@ -17,16 +17,6 @@ from mato_loop_backend.agent.question_decisions import (
     reject_question as reject_question_decision,
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.agent.tool_arguments import (
-    ProtectedQuestionArguments,
-    ProtectedQuestionResolution,
-)
-from mato_loop_backend.agent.tools import (
-    QuestionArguments,
-    ToolContext,
-    tool_registry,
-    validate_question_answers,
-)
 from mato_loop_backend.api.routes.questions import (
     QuestionAnswerRequest,
     answer_question,
@@ -37,6 +27,14 @@ from mato_loop_backend.models import AgentRun, ChatSession, QuestionRequest, Use
 from mato_loop_backend.personal_variables import PersonalVariableError
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import ToolSettings
+from mato_loop_backend.tools.arguments import (
+    ProtectedQuestionArguments,
+    ProtectedQuestionResolution,
+    QuestionArguments,
+    validate_question_answers,
+)
+from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.tools.context import ToolContext
 
 
 def _arguments() -> QuestionArguments:
@@ -191,7 +189,7 @@ async def test_agent_question_push_is_sent_after_commit(monkeypatch) -> None:
     db.flush.side_effect = flush
     monkeypatch.setattr(run_events, "publish", publish)
     push = AsyncMock(side_effect=deliver)
-    monkeypatch.setattr(runtime_module.WebPushService, "deliver_after_commit", push)
+    monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", push)
     task = asyncio.create_task(
         AgentRuntime._request_question(
             db,

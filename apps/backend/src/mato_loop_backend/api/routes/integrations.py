@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import logging
-import re
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -10,64 +8,73 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl, model_
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.tools import resolve_tool_execution_policy, tool_registry
+import mato_loop_backend.api.integration_access as api_integration_access
+import mato_loop_backend.api.integration_resources as api_integration_resources
 from mato_loop_backend.api.errors import ApiError
+from mato_loop_backend.api.integration_access import IntegrationSettingsDocument, SettingsApiScope
+from mato_loop_backend.api.integration_resources import ToolSettingsDocument, logger
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.execution import ExecutionClient, ExecutionClientError
 from mato_loop_backend.execution.manager import execution_agent_connections
-from mato_loop_backend.integrations import (
+from mato_loop_backend.integrations.bookstack.adapter import (
     BOOKSTACK_CREDENTIAL_KIND,
-    CALDAV_CREDENTIAL_KIND,
-    MAIL_CREDENTIAL_KIND,
-    MEALIE_CREDENTIAL_KIND,
-    BookStackIntegrationService,
-    CalDavIntegrationService,
-    IntegrationSettingsError,
-    MailIntegrationService,
-    MealieClient,
-    MealieConfig,
-    MealieError,
-    MealieIntegrationService,
-    OpenCodeError,
-    OpenCodeIntegrationService,
-    OpenCodeSettingsError,
-    OpenScadIntegrationService,
-    SearchIntegrationError,
-    SearchIntegrationService,
     bookstack_error_code,
-    caldav_error_code,
-    effective_search_providers,
     load_bookstack_resources,
-    load_caldav_resources,
-    mealie_error_code,
-    search_provider_options,
-    search_with_provider,
 )
-from mato_loop_backend.integrations.bookstack_client import BookStackError
-from mato_loop_backend.integrations.caldav_client import CalDavError
+from mato_loop_backend.integrations.bookstack.client import BookStackError
+from mato_loop_backend.integrations.caldav.adapter import (
+    CALDAV_CREDENTIAL_KIND,
+    caldav_error_code,
+    load_caldav_resources,
+)
+from mato_loop_backend.integrations.caldav.client import CalDavError
 from mato_loop_backend.integrations.contracts import IntegrationResource
-from mato_loop_backend.integrations.mail import MailConfig, client_for, mail_error_code
+from mato_loop_backend.integrations.mail import (
+    MAIL_CREDENTIAL_KIND,
+    MailConfig,
+    client_for,
+    mail_error_code,
+)
 from mato_loop_backend.integrations.mail_client import MailError
-from mato_loop_backend.integrations.mcp import MCP_CREDENTIAL_KIND
 from mato_loop_backend.integrations.mcp_client import McpClientError
 from mato_loop_backend.integrations.mcp_service import SonoBinIntegrationService
+from mato_loop_backend.integrations.mealie.adapter import (
+    MEALIE_CREDENTIAL_KIND,
+    MealieConfig,
+    mealie_error_code,
+)
+from mato_loop_backend.integrations.mealie.client import MealieClient, MealieError
+from mato_loop_backend.integrations.opencode.adapter import (
+    OpenCodeIntegrationService,
+    OpenCodeSettingsError,
+)
+from mato_loop_backend.integrations.opencode.client import OpenCodeError
 from mato_loop_backend.integrations.openscad import (
     OpenScadConfig,
     OpenScadDiscoverResult,
     OpenScadTestResult,
 )
 from mato_loop_backend.integrations.registry import (
-    integration_adapter,
     integration_adapter_type_registered,
     integration_adapters,
 )
-from mato_loop_backend.models import ExecutionAgent, UserAccount
-from mato_loop_backend.security import (
-    load_credential,
-    read_credential,
-    require_admin,
-    require_user,
+from mato_loop_backend.integrations.search import (
+    SearchIntegrationError,
+    effective_search_providers,
+    search_provider_options,
+    search_with_provider,
 )
+from mato_loop_backend.integrations.service import (
+    BookStackIntegrationService,
+    CalDavIntegrationService,
+    IntegrationSettingsError,
+    MailIntegrationService,
+    MealieIntegrationService,
+    OpenScadIntegrationService,
+    SearchIntegrationService,
+)
+from mato_loop_backend.models import ExecutionAgent, UserAccount
+from mato_loop_backend.security import load_credential, read_credential, require_admin, require_user
 from mato_loop_backend.settings import (
     DefaultCalendarSettings,
     DefaultTaskListSettings,
@@ -75,7 +82,6 @@ from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
-    ToolExecutionPolicy,
     ToolSettings,
     UserIntegrationSettings,
     UserToolSettings,
@@ -86,55 +92,6 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.settings.effective import personal_integration_tool_settings
 
 router = APIRouter(prefix="/integrations", dependencies=[Depends(require_user)])
-logger = logging.getLogger(__name__)
-_RESOURCE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,499}$")
-SettingsApiScope = Literal["instance", "personal"]
-IntegrationSettingsDocument = IntegrationSettings | UserIntegrationSettings
-ToolSettingsDocument = ToolSettings | UserToolSettings
-
-
-async def _load_scoped_integrations(
-    db: AsyncSession,
-    scope: SettingsApiScope,
-    user: UserAccount | None,
-    *,
-    for_update: bool = False,
-    mutation: bool = False,
-    adapter_type: str | None = None,
-) -> tuple[IntegrationSettingsDocument, UUID | None]:
-    if scope == "instance":
-        if user is not None and not getattr(user, "is_admin", False):
-            raise ApiError(403, "auth.adminRequired")
-        adapter = next(
-            (item for item in integration_adapters() if item.adapter_type == adapter_type),
-            None,
-        )
-        if adapter is not None and adapter.personal_only:
-            raise ApiError(409, "integration.personalOnly")
-        settings = await SettingsStore.load(
-            db, IntegrationSettings, for_update=for_update
-        )
-        if adapter_type is not None and settings.availability_for(
-            adapter_type
-        ) == IntegrationAdapterAvailability.DISABLED:
-            raise ApiError(409, "integration.adapterDisabled")
-        return settings, None
-    if user is None:
-        raise ApiError(401, "auth.notAuthenticated")
-    instance = await SettingsStore.load(db, IntegrationSettings)
-    availability = (
-        instance.availability_for(adapter_type) if adapter_type is not None else None
-    )
-    if availability == IntegrationAdapterAvailability.DISABLED:
-        raise ApiError(409, "integration.adapterDisabled")
-    if availability == IntegrationAdapterAvailability.INSTANCE_ONLY:
-        raise ApiError(409, "integration.personalAdapterDisabled")
-    settings = await SettingsStore.load(
-        db, UserIntegrationSettings, user_id=user.id, for_update=for_update
-    )
-    for item in settings.instances:
-        item.owner_id = user.id
-    return settings, user.id
 
 
 async def _load_scoped_tools(
@@ -438,209 +395,6 @@ def _provider_payload(provider: IntegrationInstance) -> dict:
             }
         ),
     }
-
-
-def _integration(
-    settings: IntegrationSettings, integration_id: UUID
-) -> IntegrationInstance | None:
-    return next((item for item in settings.instances if item.id == integration_id), None)
-
-
-async def _integration_resources(
-    db: AsyncSession, instance: IntegrationInstance
-) -> tuple:
-    adapter = integration_adapter(instance.integration_type, instance.adapter_type)
-    if adapter is None or not adapter.resource_actions:
-        raise ApiError(409, "integration.resourcePoliciesUnsupported")
-    if not tool_registry.integration_resource_actions(instance):
-        raise ApiError(409, "integration.resourcePoliciesUnsupported")
-    credential = None
-    try:
-        if adapter.resource_loader is not None and instance.credential_id is not None:
-            record = await load_credential(
-                db,
-                instance.credential_id,
-                owner_id=instance.owner_id,
-                populate_existing=True,
-            )
-            if record is None:
-                raise ValueError("missing integration credential")
-            if (
-                instance.integration_type == "calendar"
-                and instance.adapter_type == "caldav"
-                and record.kind != CALDAV_CREDENTIAL_KIND
-            ):
-                raise ValueError("invalid integration credential kind")
-            if (
-                instance.integration_type == "knowledge"
-                and instance.adapter_type == "bookstack"
-                and record.kind != BOOKSTACK_CREDENTIAL_KIND
-            ):
-                raise ValueError("invalid integration credential kind")
-            if instance.adapter_type == "sonobin" and record.kind != MCP_CREDENTIAL_KIND:
-                raise ValueError("invalid integration credential kind")
-            credential = read_credential(record)
-        await db.rollback()
-        resources = await adapter.resources(instance, credential)
-    except Exception as exc:
-        await db.rollback()
-        logger.warning(
-            "Resource discovery for integration %s failed with %s",
-            instance.id,
-            type(exc).__name__,
-        )
-        raise ApiError(502, "integration.resourceDiscoveryFailed") from exc
-    keys = set()
-    for resource in resources:
-        if (
-            not isinstance(resource, IntegrationResource)
-            or not isinstance(resource.key, str)
-            or _RESOURCE_KEY.fullmatch(resource.key) is None
-            or not isinstance(resource.label, str)
-            or not 1 <= len(resource.label) <= 160
-            or resource.label != resource.label.strip()
-            or (
-                resource.group_key is not None
-                and (
-                    not isinstance(resource.group_key, str)
-                    or _RESOURCE_KEY.fullmatch(resource.group_key) is None
-                )
-            )
-            or resource.key in keys
-        ):
-            raise ApiError(502, "integration.resourceDiscoveryFailed")
-        keys.add(resource.key)
-    return resources
-
-
-def _access_payload(
-    instance: IntegrationInstance,
-    resources: tuple,
-    tools: ToolSettingsDocument,
-) -> dict:
-    adapter = integration_adapter(instance.integration_type, instance.adapter_type)
-    if adapter is None:
-        raise ApiError(409, "integration.resourcePoliciesUnsupported")
-    integration_policies = tools.permissions.integration_policies.get(
-        str(instance.id), {}
-    )
-    resource_policies = tools.permissions.resource_policies.get(str(instance.id), {})
-    resource_actions = tool_registry.integration_resource_actions(instance)
-    if not resource_actions:
-        raise ApiError(409, "integration.resourcePoliciesUnsupported")
-    capabilities = {action.capability for action in resource_actions}
-    actions_by_capability = {
-        action.capability: action for action in resource_actions
-    }
-
-    def supported_policy(action, policy: ToolExecutionPolicy) -> ToolExecutionPolicy:
-        if policy == ToolExecutionPolicy.AUTO and policy not in action.allowed_policies:
-            return ToolExecutionPolicy.ASK
-        return policy
-
-    def applicable_capabilities(resource: IntegrationResource) -> set[str]:
-        return (
-            set(resource.applicable_capabilities)
-            if resource.applicable_capabilities is not None
-            else capabilities
-        )
-
-    actions = [
-        {
-            "capability": action.capability,
-            "label": action.label,
-            "allowedPolicies": [policy.value for policy in action.allowed_policies],
-            "globalPolicy": supported_policy(
-                action,
-                resolve_tool_execution_policy(
-                    tools,
-                    action.capability,
-                    action.default_policy_for(tools.trust_level),
-                ).policy,
-            ).value,
-            "integrationPolicy": (
-                supported_policy(
-                    action, integration_policies[action.capability]
-                ).value
-                if action.capability in integration_policies
-                else None
-            ),
-            "effectiveIntegrationPolicy": supported_policy(
-                action,
-                resolve_tool_execution_policy(
-                    tools,
-                    action.capability,
-                    action.default_policy_for(tools.trust_level),
-                    integration_id=instance.id,
-                ).policy,
-            ).value,
-        }
-        for action in resource_actions
-    ]
-    payload = {
-        "integrationId": str(instance.id),
-        "actions": actions,
-        "resources": [
-            {
-                "key": resource.key,
-                "groupKey": resource.group_key,
-                "label": resource.label.strip(),
-                "hardUnavailableCapabilities": sorted(
-                    resource.hard_unavailable_capabilities
-                ),
-                "applicableCapabilities": sorted(applicable_capabilities(resource)),
-                "policies": {
-                    capability: supported_policy(
-                        actions_by_capability[capability],
-                        policy,
-                    ).value
-                    for capability, policy in resource_policies.get(
-                        resource.key, {}
-                    ).items()
-                    if capability in applicable_capabilities(resource)
-                },
-                "effectivePolicies": {
-                    action.capability: supported_policy(
-                        action,
-                        resolve_tool_execution_policy(
-                            tools,
-                            action.capability,
-                            action.default_policy_for(tools.trust_level),
-                            integration_id=instance.id,
-                            resource_key=resource.key,
-                            hard_unavailable_capabilities=(
-                                resource.hard_unavailable_capabilities
-                            ),
-                        ).policy,
-                    ).value
-                    for action in resource_actions
-                    if action.capability in applicable_capabilities(resource)
-                },
-            }
-            for resource in resources
-        ],
-    }
-    if instance.integration_type == "calendar" and instance.adapter_type == "caldav":
-        default_calendar = tools.default_calendar
-        payload["defaultResourceKey"] = (
-            default_calendar.calendar_key
-            if default_calendar is not None
-            and default_calendar.integration_id == instance.id
-            and any(resource.key == default_calendar.calendar_key for resource in resources)
-            else None
-        )
-        default_task_list = tools.default_task_list
-        payload["defaultTaskListKey"] = (
-            default_task_list.task_list_key
-            if default_task_list is not None
-            and default_task_list.integration_id == instance.id
-            and any(
-                resource.key == default_task_list.task_list_key
-                for resource in resources
-            )
-            else None
-        )
-    return payload
 
 
 def _default_resources_payload(
@@ -949,7 +703,7 @@ async def get_search_integrations(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings, owner_id = await _load_scoped_integrations(db, scope, user)
+    settings, owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
     tools = await _load_scoped_tools(db, owner_id)
     available_settings = (
         await load_effective_integrations(db, owner_id)
@@ -966,7 +720,7 @@ async def update_search_selection(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings, owner_id = await _load_scoped_integrations(
+    settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, for_update=True, mutation=True
     )
     available_settings = (
@@ -997,7 +751,7 @@ async def get_openscad_integrations(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     scope: SettingsApiScope = "instance",
 ) -> dict:
-    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
     return openscad_settings_payload(
         settings, await _owned_execution_agent_ids(db, user.id)
     )
@@ -1012,7 +766,7 @@ async def create_openscad_integration(
 ) -> dict:
     if scope != "personal":
         raise ApiError(409, "integration.agentPersonalOnly")
-    await _load_scoped_integrations(
+    await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="openscad"
     )
     try:
@@ -1041,7 +795,7 @@ async def update_openscad_integration(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     scope: SettingsApiScope = "personal",
 ) -> dict:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="openscad"
     )
     try:
@@ -1075,7 +829,7 @@ async def delete_openscad_integration(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     scope: SettingsApiScope = "personal",
 ) -> None:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True
     )
     try:
@@ -1098,7 +852,7 @@ async def discover_openscad(
 ) -> dict:
     if scope != "personal":
         raise ApiError(409, "integration.agentPersonalOnly")
-    await _load_scoped_integrations(
+    await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="openscad"
     )
     try:
@@ -1123,7 +877,7 @@ async def test_openscad_integration(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     scope: SettingsApiScope = "personal",
 ) -> dict:
-    settings, _owner_id = await _load_scoped_integrations(
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, adapter_type="openscad"
     )
     instance = OpenScadIntegrationService._find(settings, integration_id)
@@ -1156,7 +910,7 @@ async def get_calendar_integrations(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
     return calendar_settings_payload(settings)
 
 
@@ -1167,7 +921,7 @@ async def create_calendar_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="caldav"
     )
     settings = await CalDavIntegrationService.create(
@@ -1190,7 +944,7 @@ async def update_calendar_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="caldav"
     )
     try:
@@ -1219,7 +973,7 @@ async def delete_calendar_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> None:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True
     )
     try:
@@ -1235,7 +989,7 @@ async def test_calendar_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict[str, str]:
-    settings, _owner_id = await _load_scoped_integrations(
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, adapter_type="caldav"
     )
     account = next(
@@ -1287,7 +1041,7 @@ async def get_mail_integrations(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
     return mail_settings_payload(settings)
 
 
@@ -1298,7 +1052,7 @@ async def create_mail_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="imap_smtp"
     )
     try:
@@ -1327,7 +1081,7 @@ async def update_mail_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="imap_smtp"
     )
     try:
@@ -1359,7 +1113,7 @@ async def delete_mail_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> None:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True
     )
     try:
@@ -1375,7 +1129,7 @@ async def test_mail_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict[str, str]:
-    settings, _owner_id = await _load_scoped_integrations(
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, adapter_type="imap_smtp"
     )
     account = MailIntegrationService._find(settings, integration_id)
@@ -1417,7 +1171,7 @@ async def get_knowledge_integrations(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
     return knowledge_settings_payload(settings)
 
 
@@ -1428,7 +1182,7 @@ async def create_knowledge_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="bookstack"
     )
     settings = await BookStackIntegrationService.create(
@@ -1451,7 +1205,7 @@ async def update_knowledge_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="bookstack"
     )
     try:
@@ -1480,7 +1234,7 @@ async def delete_knowledge_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> None:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True
     )
     try:
@@ -1496,7 +1250,7 @@ async def test_knowledge_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict[str, str]:
-    settings, _owner_id = await _load_scoped_integrations(
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, adapter_type="bookstack"
     )
     base = next(
@@ -1546,7 +1300,7 @@ async def get_recipe_integrations(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
     return recipe_settings_payload(settings)
 
 
@@ -1557,7 +1311,7 @@ async def create_recipe_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="mealie"
     )
     settings = await MealieIntegrationService.create(
@@ -1579,7 +1333,7 @@ async def update_recipe_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="mealie"
     )
     try:
@@ -1607,7 +1361,7 @@ async def delete_recipe_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> None:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True
     )
     try:
@@ -1623,7 +1377,7 @@ async def test_recipe_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict[str, str]:
-    settings, _owner_id = await _load_scoped_integrations(
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, adapter_type="mealie"
     )
     account = MealieIntegrationService._find(settings, integration_id)
@@ -1673,7 +1427,7 @@ async def get_sonobin_integrations(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
     return sonobin_settings_payload(settings)
 
 
@@ -1684,7 +1438,7 @@ async def create_sonobin_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="sonobin"
     )
     try:
@@ -1700,7 +1454,7 @@ async def create_sonobin_integration(
         await db.rollback()
         logger.warning("SonoBin integration creation failed: %s", exc.code)
         raise ApiError(502, exc.code) from exc
-    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
     return sonobin_settings_payload(settings)
 
 
@@ -1712,7 +1466,7 @@ async def update_sonobin_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="sonobin"
     )
     try:
@@ -1731,7 +1485,7 @@ async def update_sonobin_integration(
         status_code = 404 if exc.code == "mcp.notFound" else 409 if exc.code == "integration.changed" else 502
         logger.warning("SonoBin integration update failed: %s", exc.code)
         raise ApiError(status_code, exc.code) from exc
-    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
     return sonobin_settings_payload(settings)
 
 
@@ -1744,7 +1498,7 @@ async def delete_sonobin_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> None:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True
     )
     try:
@@ -1760,7 +1514,7 @@ async def test_sonobin_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict[str, str]:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, adapter_type="sonobin"
     )
     try:
@@ -1781,16 +1535,16 @@ async def get_integration_access(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    integrations, owner_id = await _load_scoped_integrations(db, scope, user)
-    instance = _integration(integrations, integration_id)
+    integrations, owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
+    instance = api_integration_access._integration(integrations, integration_id)
     if instance is None:
         raise ApiError(404, "integration.notFound")
     if instance.integration_type != "calendar" or instance.adapter_type != "caldav":
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
-    await _load_scoped_integrations(
+    await api_integration_access._load_scoped_integrations(
         db, scope, user, adapter_type=instance.adapter_type
     )
-    resources = await _integration_resources(db, instance)
+    resources = await api_integration_resources._integration_resources(db, instance)
     tools = await load_effective_tools(db, owner_id) if owner_id is not None else await _load_scoped_tools(db, owner_id)
     return _default_resources_payload(instance, resources, tools)
 
@@ -1803,18 +1557,18 @@ async def update_integration_access(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    integrations, owner_id = await _load_scoped_integrations(
+    integrations, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True
     )
-    instance = _integration(integrations, integration_id)
+    instance = api_integration_access._integration(integrations, integration_id)
     if instance is None:
         raise ApiError(404, "integration.notFound")
     if instance.integration_type != "calendar" or instance.adapter_type != "caldav":
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
-    await _load_scoped_integrations(
+    await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type=instance.adapter_type
     )
-    resources = await _integration_resources(db, instance)
+    resources = await api_integration_resources._integration_resources(db, instance)
     revision = instance.model_dump(mode="json")
     resource_keys = {resource.key for resource in resources}
     default_resource_changed = "default_resource_key" in payload.model_fields_set
@@ -1846,12 +1600,12 @@ async def update_integration_access(
         )
     ):
         raise ApiError(422, "validation.invalidChoice", field="default_task_list_key")
-    current_integrations, current_owner_id = await _load_scoped_integrations(
+    current_integrations, current_owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, for_update=True, mutation=True
     )
     if current_owner_id != owner_id:
         raise ApiError(409, "integration.changed")
-    current = _integration(current_integrations, integration_id)
+    current = api_integration_access._integration(current_integrations, integration_id)
     if current is None:
         raise ApiError(404, "integration.notFound")
     if current.model_dump(mode="json") != revision:
@@ -1910,7 +1664,7 @@ async def create_search_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="searxng"
     )
     settings = await SearchIntegrationService.create(
@@ -1932,7 +1686,7 @@ async def update_search_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True, adapter_type="searxng"
     )
     try:
@@ -1959,7 +1713,7 @@ async def delete_search_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> None:
-    _settings, owner_id = await _load_scoped_integrations(
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, mutation=True
     )
     try:
@@ -1975,7 +1729,7 @@ async def test_search_integration(
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict[str, str]:
-    settings, _owner_id = await _load_scoped_integrations(db, scope, user)
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
     provider = next(
         (
             item
@@ -1986,7 +1740,7 @@ async def test_search_integration(
     )
     if provider is None:
         raise ApiError(404, "integration.notFound")
-    await _load_scoped_integrations(
+    await api_integration_access._load_scoped_integrations(
         db, scope, user, adapter_type=provider.adapter_type
     )
     try:
@@ -2017,7 +1771,7 @@ async def get_coding_integrations(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
-    settings, _owner_id = await _load_scoped_integrations(
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(
         db, "personal", user, adapter_type="opencode"
     )
     return coding_settings_payload(settings)
@@ -2031,7 +1785,7 @@ async def create_opencode_integration(
 ) -> dict:
     if payload.remove_password:
         raise ApiError(422, "validation.invalidChoice", field="removePassword")
-    await _load_scoped_integrations(db, "personal", user, adapter_type="opencode")
+    await api_integration_access._load_scoped_integrations(db, "personal", user, adapter_type="opencode")
     try:
         settings = await OpenCodeIntegrationService.create(
             db,
@@ -2054,7 +1808,7 @@ async def update_opencode_integration(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
-    await _load_scoped_integrations(db, "personal", user, adapter_type="opencode")
+    await api_integration_access._load_scoped_integrations(db, "personal", user, adapter_type="opencode")
     try:
         settings = await OpenCodeIntegrationService.update(
             db,

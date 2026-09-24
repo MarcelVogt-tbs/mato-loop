@@ -10,9 +10,9 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-import mato_loop_backend.integrations.mealie as mealie_module
+import mato_loop_backend.integrations.mealie.adapter as integrations_mealie_adapter
 import mato_loop_backend.integrations.service as service_module
-from mato_loop_backend.integrations.mealie import (
+from mato_loop_backend.integrations.mealie.adapter import (
     MEALIE_ADAPTER,
     MEALIE_CREDENTIAL_KIND,
     MealieConfig,
@@ -31,7 +31,7 @@ from mato_loop_backend.integrations.mealie import (
     recipe_get,
     recipes_search,
 )
-from mato_loop_backend.integrations.mealie_client import (
+from mato_loop_backend.integrations.mealie.client import (
     MealieError,
     MealieMealPlanEntry,
     MealieRecipe,
@@ -166,7 +166,7 @@ def _mock_client(monkeypatch, client, revision: str) -> None:
     async def selected_client(_integration_id, _context):
         yield client, revision
 
-    monkeypatch.setattr(mealie_module, "_selected_client", selected_client)
+    monkeypatch.setattr(integrations_mealie_adapter, "_selected_client", selected_client)
 
 
 def test_adapter_is_a_standalone_shared_tool_definition() -> None:
@@ -236,8 +236,8 @@ def test_config_accepts_http_and_a_deployment_path() -> None:
 
 def test_argument_models_are_strict_and_enforce_ranges_and_sparse_updates() -> None:
     account = _account()
-    recipe_token = mealie_module._recipe_token(_summary(), account.id, _revision(account))
-    meal_token = mealie_module._meal_plan_token(_entry(), account.id, _revision(account))
+    recipe_token = integrations_mealie_adapter._recipe_token(_summary(), account.id, _revision(account))
+    meal_token = integrations_mealie_adapter._meal_plan_token(_entry(), account.id, _revision(account))
 
     assert RecipesSearchArguments(integration_id=account.id).limit == 20
     assert MealPlanAddArguments(
@@ -318,14 +318,14 @@ async def test_selected_client_loads_the_exact_owner_credential(monkeypatch) -> 
     context.db = object()
     record = SimpleNamespace(kind=MEALIE_CREDENTIAL_KIND)
     load = AsyncMock(return_value=record)
-    monkeypatch.setattr(mealie_module, "load_credential", load)
-    monkeypatch.setattr(mealie_module, "read_credential", lambda _record: {"token": "secret"})
+    monkeypatch.setattr(integrations_mealie_adapter, "load_credential", load)
+    monkeypatch.setattr(integrations_mealie_adapter, "read_credential", lambda _record: {"token": "secret"})
     client_context = AsyncMock()
     client_context.__aenter__.return_value = object()
     constructor = Mock(return_value=client_context)
-    monkeypatch.setattr(mealie_module, "MealieClient", constructor)
+    monkeypatch.setattr(integrations_mealie_adapter, "MealieClient", constructor)
 
-    async with mealie_module._selected_client(account.id, context) as (_client, selected):
+    async with integrations_mealie_adapter._selected_client(account.id, context) as (_client, selected):
         assert selected == revision
 
     load.assert_awaited_once_with(
@@ -335,12 +335,12 @@ async def test_selected_client_loads_the_exact_owner_credential(monkeypatch) -> 
         "http://mealie.example.test/kitchen", "secret"
     )
     monkeypatch.setattr(
-        mealie_module,
+        integrations_mealie_adapter,
         "read_credential",
         lambda _record: {"token": "x", "extra": "y"},
     )
     with pytest.raises(MealieError, match="mealie.authenticationFailed"):
-        mealie_module._credential_payload(record)
+        integrations_mealie_adapter._credential_payload(record)
 
 
 async def test_service_stores_the_token_outside_integration_settings(monkeypatch) -> None:
@@ -382,21 +382,21 @@ async def test_service_stores_the_token_outside_integration_settings(monkeypatch
 def test_tokens_are_encrypted_secret_and_binding_scoped() -> None:
     account = _account()
     revision = _revision(account)
-    recipe_token = mealie_module._recipe_token(_summary(), account.id, revision)
-    meal_token = mealie_module._meal_plan_token(_entry(), account.id, revision)
+    recipe_token = integrations_mealie_adapter._recipe_token(_summary(), account.id, revision)
+    meal_token = integrations_mealie_adapter._meal_plan_token(_entry(), account.id, revision)
 
     assert RECIPE_ID not in recipe_token
     assert "Kartoffelsuppe" not in recipe_token
     assert GROUP_ID not in meal_token
-    decrypted = mealie_module.CredentialCipher().decrypt(recipe_token.encode("ascii"))
+    decrypted = integrations_mealie_adapter.CredentialCipher().decrypt(recipe_token.encode("ascii"))
     assert decrypted["binding_revision"] == hashlib.sha256(revision.encode()).hexdigest()
     assert decrypted["recipe_id"] == RECIPE_ID
-    assert mealie_module._decode_token(
-        mealie_module._RecipeToken, recipe_token, account.id, revision
+    assert integrations_mealie_adapter._decode_token(
+        integrations_mealie_adapter._RecipeToken, recipe_token, account.id, revision
     ).name == "Kartoffelsuppe"
     with pytest.raises(ValueError, match="binding"):
-        mealie_module._decode_token(
-            mealie_module._RecipeToken, recipe_token, uuid4(), revision
+        integrations_mealie_adapter._decode_token(
+            integrations_mealie_adapter._RecipeToken, recipe_token, uuid4(), revision
         )
 
 
@@ -444,7 +444,7 @@ async def test_recipe_detail_rejects_incomplete_bounded_output(monkeypatch) -> N
     result = await recipe_get(
         RecipeGetArguments(
             integration_id=account.id,
-            recipe_token=mealie_module._recipe_token(
+            recipe_token=integrations_mealie_adapter._recipe_token(
                 _summary(), account.id, revision
             ),
         ),
@@ -549,7 +549,7 @@ async def test_meal_plan_mutations_reject_a_remotely_changed_entry(
 ) -> None:
     account = _account()
     revision = _revision(account)
-    token = mealie_module._meal_plan_token(_entry(), account.id, revision)
+    token = integrations_mealie_adapter._meal_plan_token(_entry(), account.id, revision)
     client = AsyncMock()
     client.get_meal_plan.return_value = _entry(text="Fremde Änderung")
     _mock_client(monkeypatch, client, revision)
@@ -578,28 +578,28 @@ async def test_meal_plan_mutations_reject_a_remotely_changed_entry(
 
 
 def test_error_mapping_covers_mealie_client_failures() -> None:
-    assert mealie_module.mealie_error_code(
+    assert integrations_mealie_adapter.mealie_error_code(
         MealieError("mealie.invalidRequest")
     ) == "tool.invalidArguments"
-    assert mealie_module.mealie_error_code(
+    assert integrations_mealie_adapter.mealie_error_code(
         MealieError("mealie.authenticationFailed")
     ) == "integration.authenticationFailed"
-    assert mealie_module.mealie_error_code(
+    assert integrations_mealie_adapter.mealie_error_code(
         MealieError("mealie.permissionDenied")
     ) == "integration.permissionDenied"
-    assert mealie_module.mealie_error_code(
+    assert integrations_mealie_adapter.mealie_error_code(
         MealieError("mealie.notFound")
     ) == "integration.remoteNotFound"
-    assert mealie_module.mealie_error_code(
+    assert integrations_mealie_adapter.mealie_error_code(
         MealieError("mealie.outcomeUnknown")
     ) == "integration.outcomeUnknown"
-    assert mealie_module.mealie_error_code(
+    assert integrations_mealie_adapter.mealie_error_code(
         MealieError("mealie.responseTooLarge")
     ) == "integration.responseTooLarge"
-    assert mealie_module.mealie_error_code(
+    assert integrations_mealie_adapter.mealie_error_code(
         MealieError("mealie.malformedResponse")
     ) == "integration.invalidResponse"
-    assert mealie_module.mealie_error_code(
+    assert integrations_mealie_adapter.mealie_error_code(
         MealieError("mealie.rateLimited")
     ) == "integration.rateLimited"
 
@@ -638,7 +638,7 @@ def test_permissions_name_the_account_and_offer_scoped_writes() -> None:
     assert write.display_items
     scope = json.loads(write.resource_scope)
     operation = scope["operationKey"]
-    assert operation == mealie_module._operation_key(
+    assert operation == integrations_mealie_adapter._operation_key(
         "meal-plan-add", write_arguments
     )
     assert operation.startswith("meal-plan-add:") and len(operation) == 78

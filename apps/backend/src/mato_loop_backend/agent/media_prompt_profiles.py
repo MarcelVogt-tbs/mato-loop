@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import replace
 from uuid import UUID
 
-from mato_loop_backend.agent.tools import EffectiveToolSet
 from mato_loop_backend.providers.codex_oauth import CODEX_IMAGE_MODEL_ID
 from mato_loop_backend.providers.media import resolve_media_target
 from mato_loop_backend.settings import AiSettings
 from mato_loop_backend.settings.models import ModelCapability
+from mato_loop_backend.tools.registry import EffectiveToolSet
 
 GPT_IMAGE_2_GENERATE_INSTRUCTIONS = (
     "GPT Image 2 generation prompt contract: Write prompt in clear English unless the user "

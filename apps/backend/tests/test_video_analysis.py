@@ -9,18 +9,18 @@ from mato_loop_backend.agent.video_analysis import (
     resolve_native_video_target,
     resolve_video_vision_targets,
 )
-from mato_loop_backend.settings import AiSettings, TrustLevel
-from mato_loop_backend.settings.models import (
-    LlmProviderConfig,
-    ModelConfig,
-    ModelInputModality,
-)
-from mato_loop_backend.video_processing import (
+from mato_loop_backend.media.video_processing import (
     AudioSegment,
     MediaInfo,
     VideoFrame,
     VideoProcessingError,
     VideoProcessingTimeout,
+)
+from mato_loop_backend.settings import AiSettings, TrustLevel
+from mato_loop_backend.settings.models import (
+    LlmProviderConfig,
+    ModelConfig,
+    ModelInputModality,
 )
 
 

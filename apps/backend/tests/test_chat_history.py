@@ -4,7 +4,11 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.runtime import AgentRunError, AgentRuntime
+import mato_loop_backend.agent.loop as mock_agent_loop
+import mato_loop_backend.agent.runtime as mock_agent_runtime
+import mato_loop_backend.agent.titles as mock_agent_titles
+from mato_loop_backend.agent.run_contracts import AgentRunError
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
 from mato_loop_backend.models import AgentRun, ChatSession, Message, UserAccount
 
@@ -167,7 +171,7 @@ async def test_retry_rejects_a_non_latest_error(monkeypatch) -> None:
 
 
 async def test_runtime_retry_reuses_failed_run_model(monkeypatch) -> None:
-    from mato_loop_backend.agent import runtime as runtime_module
+    pass
     from mato_loop_backend.settings import AiSettings, SettingsStore
     from mato_loop_backend.settings.models import AgentProfile, LlmProviderConfig, ModelConfig
 
@@ -199,11 +203,9 @@ async def test_runtime_retry_reuses_failed_run_model(monkeypatch) -> None:
         "load",
         AsyncMock(return_value=AiSettings(providers=[provider], models=[model])),
     )
-    monkeypatch.setattr(
-        runtime_module,
-        "load_agent_profile",
-        AsyncMock(return_value=current_profile),
-    )
+    _mock_value = AsyncMock(return_value=current_profile)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
     schedule = Mock()
     monkeypatch.setattr(AgentRuntime, "_schedule_run", schedule)
 

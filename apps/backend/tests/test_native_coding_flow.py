@@ -14,14 +14,16 @@ from test_required_web_search_runtime import (
     _tool_messages,
 )
 
-from mato_loop_backend.agent.permissions import PermissionDecision, PermissionPolicy
+import mato_loop_backend.agent.loop as mock_agent_loop
+import mato_loop_backend.agent.runtime as mock_agent_runtime
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.agent.tools import tool_registry
 from mato_loop_backend.execution.protocol import EventMessage, ResponseMessage
+from mato_loop_backend.files.service import RootFileService, SessionStorage
 from mato_loop_backend.models import Message, WebSearchPolicy
+from mato_loop_backend.permissions.policy import PermissionDecision, PermissionPolicy
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
-from mato_loop_backend.workspace import RootFileService, SessionStorage
+from mato_loop_backend.tools.catalog import tool_registry
 
 
 async def test_native_coding_replays_revision_errors_checks_and_diff(tmp_path, monkeypatch):
@@ -55,12 +57,10 @@ async def test_native_coding_replays_revision_errors_checks_and_diff(tmp_path, m
     )
     storage = SessionStorage(tmp_path / "sessions")
     storage.provision(run.session_id)
-    monkeypatch.setattr(
-        "mato_loop_backend.agent.runtime.RootFileService",
-        lambda session_id, **kwargs: RootFileService(
-            session_id, session_storage=storage, **kwargs,
-        ),
-    )
+    def _mock_value(session_id, **kwargs):
+        return RootFileService(session_id, session_storage=storage, **kwargs)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'RootFileService', _mock_value)
 
     patch = '''*** Begin Patch
 *** Update File: check.sh

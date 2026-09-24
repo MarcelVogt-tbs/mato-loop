@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from mato_loop_backend.attachments import MAX_IMAGE_ATTACHMENT_BYTES
+from mato_loop_backend.media.attachments import MAX_IMAGE_ATTACHMENT_BYTES
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.codex_auth import codex_headers
 from mato_loop_backend.providers.codex_oauth import (

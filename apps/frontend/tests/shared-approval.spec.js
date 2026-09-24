@@ -3,13 +3,13 @@ import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, expect, it, vi } from 'vitest'
 import { Quasar, QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QSelect, QSeparator, QSpace, QToggle, QTooltip } from 'quasar'
-import ApprovalCard from '../src/components/ApprovalCard.vue'
+import ApprovalCard from '../src/features/approvals/ApprovalCard.vue'
 import { useApprovalStore } from '../src/stores/approvals'
 import { api } from 'src/boot/axios'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn() } }))
-vi.mock('components/SubagentRequestLink.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/subagents/SubagentRequestLink.vue', () => ({ default: { render: () => null } }))
 
 let app, root
 afterEach(() => {

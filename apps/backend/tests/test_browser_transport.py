@@ -15,14 +15,14 @@ from fastapi import FastAPI, UploadFile, WebSocketDisconnect
 from fastapi.testclient import TestClient
 from PIL import Image
 
+import mato_loop_backend.tools.access as mock_tools_access
+import mato_loop_backend.tools.catalog as mock_tools_catalog
+
 # Initialize the runtime before routes, matching application import order.
-from mato_loop_backend.agent import tools as tools_module
-from mato_loop_backend.agent.permissions import PermissionDecision
 from mato_loop_backend.agent.runtime import AgentRuntime  # noqa: F401
-from mato_loop_backend.agent.tool_registry import ToolContext
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import browsers as routes
-from mato_loop_backend.api.routes.terminals import _BrowserLogin
+from mato_loop_backend.api.websocket_access import _BrowserLogin
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.execution import browsers as execution
 from mato_loop_backend.execution.client import ExecutionClientError
@@ -35,6 +35,7 @@ from mato_loop_backend.models import (
     LoginSession,
     UserAccount,
 )
+from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
@@ -45,6 +46,7 @@ from mato_loop_backend.settings import (
     ToolSettings,
     UserIntegrationSettings,
 )
+from mato_loop_backend.tools.context import ToolContext
 
 ORIGIN = {"origin": "https://ui.test"}
 
@@ -584,7 +586,7 @@ def test_browser_auto_read_from_registry_through_coordinator(env, monkeypatch, a
     integrations = IntegrationSettings(instances=[env.instance])
     monkeypatch.setattr(execution, "browser_coordinator", env.coordinator)
     monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
-    monkeypatch.setattr(tools_module, "_profile_tool_settings", AsyncMock(return_value=ToolSettings()))
+    monkeypatch.setattr(mock_tools_access, 'profile_tool_settings', AsyncMock(return_value=ToolSettings()))
     output = BytesIO()
     Image.new("RGB", (2, 2), "white").save(output, format="PNG")
     image = output.getvalue()
@@ -621,7 +623,7 @@ def test_browser_auto_read_from_registry_through_coordinator(env, monkeypatch, a
             context.db.get.return_value = SimpleNamespace(
                 execution_agent_id=env.agent.id, execution_operations=["integration.browser.execute"],
             )
-            registry = tools_module.ToolRegistry([]).effective(integrations)
+            registry = mock_tools_catalog.ToolRegistry([]).effective(integrations)
             result = env.client.portal.call(registry.execute, call, context)
             assert not result.is_error, result.content
             context.ask_handler.assert_awaited_once()
@@ -644,7 +646,7 @@ def test_structured_browser_upload_stages_revalidates_executes_and_cleans(
     integrations = IntegrationSettings(instances=[env.instance])
     monkeypatch.setattr(execution, "browser_coordinator", env.coordinator)
     monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
-    monkeypatch.setattr(tools_module, "_profile_tool_settings", AsyncMock(return_value=ToolSettings()))
+    monkeypatch.setattr(mock_tools_access, 'profile_tool_settings', AsyncMock(return_value=ToolSettings()))
     root_files = Mock()
     root_files.normalize_relative_path.side_effect = lambda path: path
     root_files.root_identity.return_value = "session-files"
@@ -693,7 +695,7 @@ def test_structured_browser_upload_stages_revalidates_executes_and_cleans(
                 execution_operations=["integration.browser.execute"],
             )
             result = env.client.portal.call(
-                tools_module.ToolRegistry([]).effective(integrations).execute, call, context,
+                mock_tools_catalog.ToolRegistry([]).effective(integrations).execute, call, context,
             )
             assert result.is_error is deny_after_transfer
             requests = [item.args[0] for item in context.ask_handler.await_args_list]
@@ -714,7 +716,7 @@ def browser_tool(env, monkeypatch, wire):
     integrations = IntegrationSettings(instances=[env.instance])
     monkeypatch.setattr(execution, "browser_coordinator", env.coordinator)
     monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
-    monkeypatch.setattr(tools_module, "_profile_tool_settings", AsyncMock(return_value=ToolSettings()))
+    monkeypatch.setattr(mock_tools_access, 'profile_tool_settings', AsyncMock(return_value=ToolSettings()))
 
     async def reply(operation, arguments):
         if operation != "integration.browser.execute":
@@ -753,7 +755,7 @@ def browser_tool(env, monkeypatch, wire):
             )
             yield SimpleNamespace(
                 env=env, call=call, context=context, connection=connection, frames=wire,
-                registry=tools_module.ToolRegistry([]).effective(integrations),
+                registry=mock_tools_catalog.ToolRegistry([]).effective(integrations),
             )
 
 
@@ -1939,7 +1941,7 @@ def test_foreground_download_freezes_candidate_and_never_retries_after_approval(
     integrations = IntegrationSettings(instances=[env.instance])
     monkeypatch.setattr(execution, "browser_coordinator", env.coordinator)
     monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
-    monkeypatch.setattr(tools_module, "_profile_tool_settings", AsyncMock(return_value=ToolSettings()))
+    monkeypatch.setattr(mock_tools_access, 'profile_tool_settings', AsyncMock(return_value=ToolSettings()))
     run_id = uuid4()
 
     async def reply(operation, arguments):
@@ -1982,7 +1984,7 @@ def test_foreground_download_freezes_candidate_and_never_retries_after_approval(
 
             context.db.get.side_effect = get
             result = env.client.portal.call(
-                tools_module.ToolRegistry([]).effective(integrations).execute, call, context,
+                mock_tools_catalog.ToolRegistry([]).effective(integrations).execute, call, context,
             )
             assert result.is_error and result.metadata["errorCode"] == "file.pathAlreadyExists"
             assert context.bound_options["download_destination"] == "/home/user/browser/downloads/sample (1).txt"

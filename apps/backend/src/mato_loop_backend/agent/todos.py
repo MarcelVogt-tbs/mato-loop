@@ -5,8 +5,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from mato_loop_backend.agent.tool_arguments import TodoWriteArguments
 from mato_loop_backend.models import Message
+from mato_loop_backend.tools.arguments import TodoWriteArguments
 
 
 def session_todos(messages: Iterable[Message]) -> list[dict[str, Any]]:

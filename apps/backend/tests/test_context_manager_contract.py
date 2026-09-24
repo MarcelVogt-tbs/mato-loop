@@ -7,11 +7,11 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.context import (
+from mato_loop_backend.agent.context import ContextManager
+from mato_loop_backend.agent.projection import (
     _SHORTENED_TOOL_OUTPUT,
     MAX_ATTACHMENT_EXCERPT_CHARACTERS,
     ContextError,
-    ContextManager,
     SummaryResult,
     _compaction_boundary,
     _limit_tool_output_tokens,
@@ -20,11 +20,10 @@ from mato_loop_backend.agent.context import (
     _shorten_evidence_output,
     _summary_source,
     compaction_messages,
-    general_system_prompt,
-    memory_context_prompt,
     message_dict,
     model_browser_observations,
 )
+from mato_loop_backend.agent.prompts import general_system_prompt, memory_context_prompt
 from mato_loop_backend.models import ChatSession, ContextSummary, Message, MessageAttachment
 from mato_loop_backend.providers import service as service_module
 from mato_loop_backend.providers.base import ProviderError, ProviderResult
@@ -1450,7 +1449,7 @@ async def test_empty_session_envelope_can_be_omitted_below_200_characters(alloca
 
 @pytest.mark.parametrize("remaining", [0, 1, 25])
 def test_session_message_chunk_respects_even_tiny_content_limits(remaining) -> None:
-    from mato_loop_backend.agent.tools import _message_item
+    from mato_loop_backend.tools.sessions import _message_item
 
     message = _message(uuid4(), "tool", json.dumps({
         "exitCode": 0, "output": {"stdout": "x" * 1_000, "stderr": ""},
@@ -3521,7 +3520,7 @@ async def test_privacy_expansion_compacts_original_candidates_and_final_request_
 @pytest.mark.parametrize("historical", [False, True])
 @pytest.mark.parametrize("revision", [None, 1])
 async def test_run_attachment_filter_precedes_dedup_and_provider_estimate(monkeypatch, historical, revision):
-    from mato_loop_backend.attachments import AttachmentService
+    from mato_loop_backend.media.attachments import AttachmentService
 
     session = _session()
     run_id = uuid4()

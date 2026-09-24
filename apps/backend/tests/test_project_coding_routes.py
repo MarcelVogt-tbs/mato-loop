@@ -11,7 +11,7 @@ from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import project_coding as routes
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import Project, ProjectPlan, ProjectPlanExecution, UserAccount
-from mato_loop_backend.project_coding import ProjectCodingError, ProjectCodingService
+from mato_loop_backend.projects.coding import ProjectCodingError, ProjectCodingService
 from mato_loop_backend.security import require_user
 
 

@@ -9,7 +9,7 @@ vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { delete: vi.fn(), get: vi.fn() } }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: async () => true }) }))
 
-import Page from '../src/pages/settings/AgentProfileSettingsPage.vue'
+import Page from '../src/features/agent-profiles/AgentProfileSettingsPage.vue'
 import { api } from 'src/boot/axios'
 import { useAuthStore } from '../src/stores/auth'
 

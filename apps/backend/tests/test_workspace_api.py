@@ -20,10 +20,10 @@ from mato_loop_backend.api.routes.workspace import (
     UpdateFileRequest,
 )
 from mato_loop_backend.execution.client import ExecutionClientError
+from mato_loop_backend.files.service import FileRoot, RootFileService
+from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.models import ChatSession, PermissionGrant, UserAccount
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import InstanceLimits
-from mato_loop_backend.workspace import FileRoot, RootFileService
 
 
 def _user() -> UserAccount:

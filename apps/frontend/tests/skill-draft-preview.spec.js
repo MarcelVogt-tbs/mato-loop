@@ -7,13 +7,13 @@ import { Quasar, QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QChe
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() } }))
-vi.mock('components/ChatComposer.vue', () => ({ default: { methods: { focus() {} }, render: () => null } }))
-vi.mock('components/ControlCenterPanel.vue', () => ({ default: { render: () => null } }))
-vi.mock('components/ChatQueuedMessages.vue', () => ({ default: { render: () => null } }))
-vi.mock('components/MessageContent.vue', () => ({ default: { render: () => null } }))
-vi.mock('components/MessageAttachments.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/chat/components/ChatComposer.vue', () => ({ default: { methods: { focus() {} }, render: () => null } }))
+vi.mock('src/app/control-center/ControlCenterPanel.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/chat/components/ChatQueuedMessages.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/chat/components/MessageAttachments.vue', () => ({ default: { render: () => null } }))
 
-import ChatPage from '../src/pages/ChatPage.vue'
+import ChatPage from '../src/features/chat/ChatPage.vue'
 import { api } from 'src/boot/axios'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useChatStore } from '../src/stores/chat'

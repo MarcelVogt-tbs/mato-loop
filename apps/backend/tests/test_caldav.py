@@ -10,9 +10,8 @@ from uuid import uuid4, uuid5
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import mato_loop_backend.integrations.caldav as caldav_module
-from mato_loop_backend.agent.tools import tool_registry
-from mato_loop_backend.integrations.caldav import (
+import mato_loop_backend.integrations.caldav.adapter as integrations_caldav_adapter
+from mato_loop_backend.integrations.caldav.adapter import (
     CALDAV_ADAPTER,
     CalendarIntegrationArguments,
     CalendarListAccountsArguments,
@@ -21,7 +20,7 @@ from mato_loop_backend.integrations.caldav import (
     calendar_update_event,
     load_caldav_resources,
 )
-from mato_loop_backend.integrations.caldav_client import (
+from mato_loop_backend.integrations.caldav.client import (
     CalDavCalendar,
     CalDavDiscovery,
     CalDavEvent,
@@ -37,6 +36,7 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
 )
+from mato_loop_backend.tools.catalog import tool_registry
 
 
 def _account(*, name: str = "Kalender") -> IntegrationInstance:
@@ -85,8 +85,8 @@ def _mock_task_client(monkeypatch, client, revision: str) -> None:
     async def selected_client(_integration_id, _context):
         yield client, revision
 
-    monkeypatch.setattr(caldav_module, "_selected_client", selected_client)
-    monkeypatch.setattr(caldav_module, "_task_list", AsyncMock())
+    monkeypatch.setattr(integrations_caldav_adapter, "_selected_client", selected_client)
+    monkeypatch.setattr(integrations_caldav_adapter, "_task_list", AsyncMock())
 
 
 async def _updated_task(existing, draft) -> CalDavTask:
@@ -137,7 +137,7 @@ async def test_resource_loader_maps_components_and_remote_privilege_limits(
     context = AsyncMock()
     context.__aenter__.return_value = client
     constructor = Mock(return_value=context)
-    monkeypatch.setattr(caldav_module, "CalDavClient", constructor)
+    monkeypatch.setattr(integrations_caldav_adapter, "CalDavClient", constructor)
 
     resources = await load_caldav_resources(_account(), {"password": "secret"})
 
@@ -523,13 +523,13 @@ def test_calendar_permissions_describe_the_requested_action() -> None:
             resource_labels={str(account.id): {key: "Teamkalender"}}
         ),
     )
-    timing = caldav_module.TimedEventTiming(
+    timing = integrations_caldav_adapter.TimedEventTiming(
         type="timed",
         start=datetime(2026, 8, 7, 14, tzinfo=UTC),
         end=datetime(2026, 8, 7, 15, tzinfo=UTC),
     )
-    query = caldav_module._query_permission(
-        caldav_module.CalendarQueryEventsArguments(
+    query = integrations_caldav_adapter._query_permission(
+        integrations_caldav_adapter.CalendarQueryEventsArguments(
             integration_id=account.id,
             calendar_key=key,
             start=timing.start,
@@ -537,8 +537,8 @@ def test_calendar_permissions_describe_the_requested_action() -> None:
         ),
         context,
     )[0]
-    create = caldav_module._create_permission(
-        caldav_module.CalendarCreateEventArguments(
+    create = integrations_caldav_adapter._create_permission(
+        integrations_caldav_adapter.CalendarCreateEventArguments(
             integration_id=account.id,
             calendar_key=key,
             summary="Projektbesprechung",
@@ -576,8 +576,8 @@ def test_calendar_permissions_describe_the_requested_action() -> None:
         description="Alt",
         location="Büro",
     )
-    token = caldav_module._token(event, account.id, revision, key)
-    update = caldav_module._update_permission(
+    token = integrations_caldav_adapter._token(event, account.id, revision, key)
+    update = integrations_caldav_adapter._update_permission(
         CalendarUpdateEventArguments(
             integration_id=account.id,
             calendar_key=key,
@@ -586,8 +586,8 @@ def test_calendar_permissions_describe_the_requested_action() -> None:
         ),
         context,
     )[0]
-    delete = caldav_module._delete_permission(
-        caldav_module.CalendarDeleteEventArguments(
+    delete = integrations_caldav_adapter._delete_permission(
+        integrations_caldav_adapter.CalendarDeleteEventArguments(
             integration_id=account.id,
             calendar_key=key,
             event_token=token,
@@ -633,9 +633,9 @@ async def test_calendar_listing_remembers_resource_labels(monkeypatch) -> None:
     tools = ToolSettings()
     load = AsyncMock(return_value=tools)
     save = AsyncMock()
-    monkeypatch.setattr(caldav_module, "_selected_client", selected_client)
-    monkeypatch.setattr(caldav_module.SettingsStore, "load", load)
-    monkeypatch.setattr(caldav_module.SettingsStore, "save", save)
+    monkeypatch.setattr(integrations_caldav_adapter, "_selected_client", selected_client)
+    monkeypatch.setattr(integrations_caldav_adapter.SettingsStore, "load", load)
+    monkeypatch.setattr(integrations_caldav_adapter.SettingsStore, "save", save)
     context = SimpleNamespace(
         db=AsyncMock(spec=AsyncSession),
         bound_options={
@@ -646,7 +646,7 @@ async def test_calendar_listing_remembers_resource_labels(monkeypatch) -> None:
         tool_settings=ToolSettings(),
     )
 
-    result = await caldav_module.calendar_list_calendars(
+    result = await integrations_caldav_adapter.calendar_list_calendars(
         CalendarIntegrationArguments(integration_id=account.id), context
     )
 
@@ -665,7 +665,7 @@ def test_task_permissions_use_task_capabilities_and_exact_task_list_scope() -> N
     revision = _revision(account)
     key = f"tasklist:{'a' * 32}"
     task = _task(due=date(2026, 8, 8))
-    token = caldav_module._task_token(task, account.id, revision, key)
+    token = integrations_caldav_adapter._task_token(task, account.id, revision, key)
     context = _task_context(
         account,
         revision,
@@ -682,17 +682,17 @@ def test_task_permissions_use_task_capabilities_and_exact_task_list_scope() -> N
 
     accounts = tools["tasks_list_accounts"].authorization_factory(None, context)[0]
     listing = tools["tasks_list_lists"].authorization_factory(
-        caldav_module.TaskIntegrationArguments(integration_id=account.id), context
+        integrations_caldav_adapter.TaskIntegrationArguments(integration_id=account.id), context
     )[0]
     query = tools["tasks_query"].authorization_factory(
-        caldav_module.TaskQueryArguments(
+        integrations_caldav_adapter.TaskQueryArguments(
             integration_id=account.id,
             task_list_key=key,
         ),
         context,
     )[0]
     create = tools["tasks_create"].authorization_factory(
-        caldav_module.TaskCreateArguments(
+        integrations_caldav_adapter.TaskCreateArguments(
             integration_id=account.id,
             task_list_key=key,
             title="Bericht abgeben",
@@ -700,18 +700,18 @@ def test_task_permissions_use_task_capabilities_and_exact_task_list_scope() -> N
         context,
     )[0]
     create_many = tools["tasks_create_many"].authorization_factory(
-        caldav_module.TaskCreateManyArguments(
+        integrations_caldav_adapter.TaskCreateManyArguments(
             integration_id=account.id,
             task_list_key=key,
             tasks=[
-                caldav_module.TaskBatchItem(title="Milch"),
-                caldav_module.TaskBatchItem(title="Brot"),
+                integrations_caldav_adapter.TaskBatchItem(title="Milch"),
+                integrations_caldav_adapter.TaskBatchItem(title="Brot"),
             ],
         ),
         context,
     )[0]
     update = tools["tasks_update"].authorization_factory(
-        caldav_module.TaskUpdateArguments(
+        integrations_caldav_adapter.TaskUpdateArguments(
             integration_id=account.id,
             task_list_key=key,
             task_token=token,
@@ -721,7 +721,7 @@ def test_task_permissions_use_task_capabilities_and_exact_task_list_scope() -> N
         context,
     )[0]
     completed = tools["tasks_set_completed"].authorization_factory(
-        caldav_module.TaskSetCompletedArguments(
+        integrations_caldav_adapter.TaskSetCompletedArguments(
             integration_id=account.id,
             task_list_key=key,
             task_token=token,
@@ -730,7 +730,7 @@ def test_task_permissions_use_task_capabilities_and_exact_task_list_scope() -> N
         context,
     )[0]
     delete = tools["tasks_delete"].authorization_factory(
-        caldav_module.TaskDeleteArguments(
+        integrations_caldav_adapter.TaskDeleteArguments(
             integration_id=account.id,
             task_list_key=key,
             task_token=token,
@@ -827,11 +827,11 @@ async def test_calendar_query_identifies_empty_selected_calendar(monkeypatch) ->
     async def selected_client(_integration_id, _context):
         yield client, revision
 
-    monkeypatch.setattr(caldav_module, "_selected_client", selected_client)
-    monkeypatch.setattr(caldav_module, "_calendar", AsyncMock(return_value=calendar))
+    monkeypatch.setattr(integrations_caldav_adapter, "_selected_client", selected_client)
+    monkeypatch.setattr(integrations_caldav_adapter, "_calendar", AsyncMock(return_value=calendar))
 
-    result = await caldav_module.calendar_query_events(
-        caldav_module.CalendarQueryEventsArguments(
+    result = await integrations_caldav_adapter.calendar_query_events(
+        integrations_caldav_adapter.CalendarQueryEventsArguments(
             integration_id=account.id,
             calendar_key=key,
             start=datetime(2026, 8, 19, tzinfo=UTC),
@@ -872,9 +872,9 @@ async def test_create_uses_a_stable_host_generated_idempotency_key(monkeypatch) 
     async def selected_client(_integration_id, _context):
         yield client, revision
 
-    monkeypatch.setattr(caldav_module, "_selected_client", selected_client)
+    monkeypatch.setattr(integrations_caldav_adapter, "_selected_client", selected_client)
     monkeypatch.setattr(
-        caldav_module,
+        integrations_caldav_adapter,
         "_calendar",
         AsyncMock(
             return_value=CalDavCalendar(
@@ -890,19 +890,19 @@ async def test_create_uses_a_stable_host_generated_idempotency_key(monkeypatch) 
         run_id=run_id,
         tool_call=SimpleNamespace(name="calendar_create_event", id="call-1"),
     )
-    arguments = caldav_module.CalendarCreateEventArguments(
+    arguments = integrations_caldav_adapter.CalendarCreateEventArguments(
         integration_id=account.id,
         calendar_key=key,
         summary="Planung",
         reminders_minutes_before=[1440, 60],
-        timing=caldav_module.TimedEventTiming(
+        timing=integrations_caldav_adapter.TimedEventTiming(
             type="timed",
             start=datetime(2026, 8, 7, 20, tzinfo=UTC),
             end=datetime(2026, 8, 7, 21, tzinfo=UTC),
         ),
     )
 
-    result = await caldav_module.calendar_create_event(arguments, context)
+    result = await integrations_caldav_adapter.calendar_create_event(arguments, context)
 
     assert result.is_error is False
     assert client.create_event.await_args.args[1].reminders_minutes_before == (1440, 60)
@@ -936,8 +936,8 @@ async def test_task_query_hides_remote_fields_and_returns_binding_token(
     client = AsyncMock()
     client.query_tasks.return_value = (task,)
     _mock_task_client(monkeypatch, client, revision)
-    result = await caldav_module.tasks_query(
-        caldav_module.TaskQueryArguments(
+    result = await integrations_caldav_adapter.tasks_query(
+        integrations_caldav_adapter.TaskQueryArguments(
             integration_id=account.id,
             task_list_key=key,
         ),
@@ -960,7 +960,7 @@ async def test_task_query_hides_remote_fields_and_returns_binding_token(
     }
     assert "remote-secret" not in result.content
     assert client.query_tasks.await_args.kwargs == {"include_completed": False}
-    decrypted = caldav_module.CredentialCipher().decrypt(
+    decrypted = integrations_caldav_adapter.CredentialCipher().decrypt(
         returned["taskToken"].encode("ascii")
     )
     assert decrypted["integration_id"] == str(account.id)
@@ -986,8 +986,8 @@ async def test_task_create_uses_one_stable_host_idempotency_key(monkeypatch) -> 
         run_id=uuid4(),
         tool_call=SimpleNamespace(name="tasks_create", id="call-1"),
     )
-    result = await caldav_module.tasks_create(
-        caldav_module.TaskCreateArguments(
+    result = await integrations_caldav_adapter.tasks_create(
+        integrations_caldav_adapter.TaskCreateArguments(
             integration_id=account.id,
             task_list_key=key,
             title="Bericht abgeben",
@@ -1023,14 +1023,14 @@ async def test_task_create_many_skips_existing_and_duplicate_open_titles(
         tool_call=SimpleNamespace(name="tasks_create_many", id="call-2"),
     )
 
-    result = await caldav_module.tasks_create_many(
-        caldav_module.TaskCreateManyArguments(
+    result = await integrations_caldav_adapter.tasks_create_many(
+        integrations_caldav_adapter.TaskCreateManyArguments(
             integration_id=account.id,
             task_list_key=key,
             tasks=[
-                caldav_module.TaskBatchItem(title="  MILCH "),
-                caldav_module.TaskBatchItem(title="Brot"),
-                caldav_module.TaskBatchItem(title=" brot "),
+                integrations_caldav_adapter.TaskBatchItem(title="  MILCH "),
+                integrations_caldav_adapter.TaskBatchItem(title="Brot"),
+                integrations_caldav_adapter.TaskBatchItem(title=" brot "),
             ],
         ),
         context,
@@ -1040,7 +1040,7 @@ async def test_task_create_many_skips_existing_and_duplicate_open_titles(
     assert [task["title"] for task in payload["created"]] == ["Brot"]
     assert payload["skippedExistingTitles"] == ["  MILCH ", " brot "]
     client.query_tasks.assert_awaited_once_with(
-        caldav_module._task_list.return_value, include_completed=False
+        integrations_caldav_adapter._task_list.return_value, include_completed=False
     )
     client.create_task.assert_awaited_once()
     assert client.create_task.await_args.args[2] == uuid5(
@@ -1056,7 +1056,7 @@ async def test_task_create_many_reports_known_partial_effects(monkeypatch) -> No
     client.query_tasks.return_value = ()
     client.create_task.side_effect = [
         _task(uid="milk", title="Milch"),
-        caldav_module.CalDavError("caldav.outcomeUnknown"),
+        integrations_caldav_adapter.CalDavError("caldav.outcomeUnknown"),
     ]
     _mock_task_client(monkeypatch, client, revision)
     context = _task_context(
@@ -1067,13 +1067,13 @@ async def test_task_create_many_reports_known_partial_effects(monkeypatch) -> No
         tool_call=SimpleNamespace(name="tasks_create_many", id="call-3"),
     )
 
-    result = await caldav_module.tasks_create_many(
-        caldav_module.TaskCreateManyArguments(
+    result = await integrations_caldav_adapter.tasks_create_many(
+        integrations_caldav_adapter.TaskCreateManyArguments(
             integration_id=account.id,
             task_list_key=key,
             tasks=[
-                caldav_module.TaskBatchItem(title="Milch"),
-                caldav_module.TaskBatchItem(title="Brot"),
+                integrations_caldav_adapter.TaskBatchItem(title="Milch"),
+                integrations_caldav_adapter.TaskBatchItem(title="Brot"),
             ],
         ),
         context,
@@ -1107,7 +1107,7 @@ async def test_update_token_is_binding_scoped_and_preserves_omitted_fields(
         location="Büro",
         reminders_minutes_before=(60,),
     )
-    token = caldav_module._token(event, account.id, revision, key)
+    token = integrations_caldav_adapter._token(event, account.id, revision, key)
     client = AsyncMock()
     client.update_event.return_value = replace(event, description=None)
 
@@ -1115,9 +1115,9 @@ async def test_update_token_is_binding_scoped_and_preserves_omitted_fields(
     async def selected_client(_integration_id, _context):
         yield client, revision
 
-    monkeypatch.setattr(caldav_module, "_selected_client", selected_client)
+    monkeypatch.setattr(integrations_caldav_adapter, "_selected_client", selected_client)
     monkeypatch.setattr(
-        caldav_module,
+        integrations_caldav_adapter,
         "_calendar",
         AsyncMock(
             return_value=CalDavCalendar(
@@ -1158,17 +1158,17 @@ async def test_update_token_is_binding_scoped_and_preserves_omitted_fields(
     assert "etag" not in result.content.lower()
     assert "internal-uid" not in result.content
 
-    decrypted = caldav_module.CredentialCipher().decrypt(token.encode("ascii"))
+    decrypted = integrations_caldav_adapter.CredentialCipher().decrypt(token.encode("ascii"))
     assert decrypted["version"] == 2
     decrypted.pop("reminders_minutes_before")
-    existing_v2_token = caldav_module.CredentialCipher().encrypt(decrypted).decode("ascii")
+    existing_v2_token = integrations_caldav_adapter.CredentialCipher().encrypt(decrypted).decode("ascii")
     existing_v2 = await calendar_update_event(
         arguments.model_copy(update={"event_token": existing_v2_token}), context
     )
     assert existing_v2.is_error is False
 
     decrypted.pop("version")
-    legacy_token = caldav_module.CredentialCipher().encrypt(decrypted).decode("ascii")
+    legacy_token = integrations_caldav_adapter.CredentialCipher().encrypt(decrypted).decode("ascii")
     legacy = await calendar_update_event(
         arguments.model_copy(update={"event_token": legacy_token}), context
     )
@@ -1199,15 +1199,15 @@ async def test_task_update_preserves_omitted_and_clears_explicit_fields(
         created=datetime(2026, 8, 1, 8, tzinfo=UTC),
         sequence=4,
     )
-    token = caldav_module._task_token(task, account.id, revision, key)
+    token = integrations_caldav_adapter._task_token(task, account.id, revision, key)
     client = AsyncMock()
     client.update_task.side_effect = _updated_task
 
     _mock_task_client(monkeypatch, client, revision)
     context = _task_context(account, revision)
 
-    preserved = await caldav_module.tasks_update(
-        caldav_module.TaskUpdateArguments(
+    preserved = await integrations_caldav_adapter.tasks_update(
+        integrations_caldav_adapter.TaskUpdateArguments(
             integration_id=account.id,
             task_list_key=key,
             task_token=token,
@@ -1216,8 +1216,8 @@ async def test_task_update_preserves_omitted_and_clears_explicit_fields(
         context,
     )
     preserved_draft = client.update_task.await_args.args[1]
-    cleared = await caldav_module.tasks_update(
-        caldav_module.TaskUpdateArguments(
+    cleared = await integrations_caldav_adapter.tasks_update(
+        integrations_caldav_adapter.TaskUpdateArguments(
             integration_id=account.id,
             task_list_key=key,
             task_token=json.loads(preserved.content)["task"]["taskToken"],
@@ -1244,7 +1244,7 @@ async def test_task_completion_sets_timestamp_and_reopen_clears_it(monkeypatch) 
     revision = _revision(account)
     key = f"tasklist:{'a' * 32}"
     task = _task()
-    token = caldav_module._task_token(task, account.id, revision, key)
+    token = integrations_caldav_adapter._task_token(task, account.id, revision, key)
     client = AsyncMock()
     client.update_task.side_effect = _updated_task
 
@@ -1252,8 +1252,8 @@ async def test_task_completion_sets_timestamp_and_reopen_clears_it(monkeypatch) 
     context = _task_context(account, revision)
     before = datetime.now(UTC)
 
-    completed = await caldav_module.tasks_set_completed(
-        caldav_module.TaskSetCompletedArguments(
+    completed = await integrations_caldav_adapter.tasks_set_completed(
+        integrations_caldav_adapter.TaskSetCompletedArguments(
             integration_id=account.id,
             task_list_key=key,
             task_token=token,
@@ -1262,8 +1262,8 @@ async def test_task_completion_sets_timestamp_and_reopen_clears_it(monkeypatch) 
         context,
     )
     completed_draft = client.update_task.await_args.args[1]
-    reopened = await caldav_module.tasks_set_completed(
-        caldav_module.TaskSetCompletedArguments(
+    reopened = await integrations_caldav_adapter.tasks_set_completed(
+        integrations_caldav_adapter.TaskSetCompletedArguments(
             integration_id=account.id,
             task_list_key=key,
             task_token=json.loads(completed.content)["task"]["taskToken"],
@@ -1285,13 +1285,13 @@ async def test_task_delete_uses_token_target(monkeypatch) -> None:
     revision = _revision(account)
     key = f"tasklist:{'a' * 32}"
     task = _task()
-    token = caldav_module._task_token(task, account.id, revision, key)
+    token = integrations_caldav_adapter._task_token(task, account.id, revision, key)
     client = AsyncMock()
     _mock_task_client(monkeypatch, client, revision)
     context = _task_context(account, revision)
 
-    result = await caldav_module.tasks_delete(
-        caldav_module.TaskDeleteArguments(
+    result = await integrations_caldav_adapter.tasks_delete(
+        integrations_caldav_adapter.TaskDeleteArguments(
             integration_id=account.id,
             task_list_key=key,
             task_token=token,
@@ -1313,19 +1313,19 @@ async def test_task_mutation_rejects_invalid_or_wrong_binding_tokens() -> None:
     task = _task()
     context = _task_context(account, revision)
 
-    invalid = await caldav_module.tasks_delete(
-        caldav_module.TaskDeleteArguments.model_construct(
+    invalid = await integrations_caldav_adapter.tasks_delete(
+        integrations_caldav_adapter.TaskDeleteArguments.model_construct(
             integration_id=account.id,
             task_list_key=key,
             task_token="invalid",
         ),
         context,
     )
-    wrong_binding = await caldav_module.tasks_delete(
-        caldav_module.TaskDeleteArguments(
+    wrong_binding = await integrations_caldav_adapter.tasks_delete(
+        integrations_caldav_adapter.TaskDeleteArguments(
             integration_id=account.id,
             task_list_key=key,
-            task_token=caldav_module._task_token(task, uuid4(), revision, key),
+            task_token=integrations_caldav_adapter._task_token(task, uuid4(), revision, key),
         ),
         context,
     )
@@ -1336,12 +1336,12 @@ async def test_task_mutation_rejects_invalid_or_wrong_binding_tokens() -> None:
 
 def test_timed_event_schema_requires_aware_datetimes() -> None:
     with pytest.raises(ValueError):
-        caldav_module.TimedEventTiming(
+        integrations_caldav_adapter.TimedEventTiming(
             type="timed",
             start=datetime(2026, 8, 6, 9),
             end=datetime(2026, 8, 6, 10),
         )
-    timing = caldav_module.TimedEventTiming(
+    timing = integrations_caldav_adapter.TimedEventTiming(
         type="timed",
         start=datetime(2026, 8, 6, 9, tzinfo=UTC),
         end=datetime(2026, 8, 6, 10, tzinfo=UTC),

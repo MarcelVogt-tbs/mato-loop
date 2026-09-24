@@ -6,12 +6,8 @@ import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.permissions import (
-    PermissionDecision,
-    PermissionPolicy,
-    execution_directory_permission,
-)
-from mato_loop_backend.agent.runtime import AgentRuntime, _effective_execution_operations
+from mato_loop_backend.agent.run_support import _effective_execution_operations
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.sessions import (
     SessionUpdateRequest,
@@ -23,8 +19,14 @@ from mato_loop_backend.execution import (
     ExecutionClient,
     execution_agent_connections,
 )
+from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.memory.episode_indexing import EpisodeIndexService
 from mato_loop_backend.models import AgentRun, ChatSession, ExecutionAgent, PermissionGrant
+from mato_loop_backend.permissions.policy import (
+    PermissionDecision,
+    PermissionPolicy,
+    execution_directory_permission,
+)
 from mato_loop_backend.sessions.service import (
     SessionServiceError,
     add_directory_grant,
@@ -32,7 +34,6 @@ from mato_loop_backend.sessions.service import (
 )
 from mato_loop_backend.settings import AiSettings, SettingsStore, ToolExecutionPolicy, TrustLevel
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
-from mato_loop_backend.workspace import RootFileService
 
 
 def _agent(user_id=None, **values):

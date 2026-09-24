@@ -13,9 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
-from mato_loop_backend import debug_mcp
+import mato_loop_backend.diagnostics.mcp as diagnostics_mcp
 from mato_loop_backend.db.session import AsyncSessionFactory
-from mato_loop_backend.diagnostics import record_diagnostic_event
+from mato_loop_backend.diagnostics.service import record_diagnostic_event
 from mato_loop_backend.models import (
     ApprovalRequest,
     ChatSession,
@@ -41,9 +41,9 @@ async def test_debug_token_verifier_binds_active_admin(monkeypatch) -> None:
     async def session_factory():
         yield db
 
-    monkeypatch.setattr(debug_mcp, "AsyncSessionFactory", session_factory)
+    monkeypatch.setattr(diagnostics_mcp, "AsyncSessionFactory", session_factory)
 
-    access = await debug_mcp.DebugTokenVerifier().verify_token("secret")
+    access = await diagnostics_mcp.DebugTokenVerifier().verify_token("secret")
 
     assert access is not None
     assert access.subject == str(user.id)
@@ -64,16 +64,16 @@ async def test_debug_token_verifier_rejects_unknown_token(monkeypatch) -> None:
     async def session_factory():
         yield db
 
-    monkeypatch.setattr(debug_mcp, "AsyncSessionFactory", session_factory)
+    monkeypatch.setattr(diagnostics_mcp, "AsyncSessionFactory", session_factory)
 
-    assert await debug_mcp.DebugTokenVerifier().verify_token("unknown") is None
+    assert await diagnostics_mcp.DebugTokenVerifier().verify_token("unknown") is None
 
 
 async def test_debug_tool_errors_do_not_expose_exception_text() -> None:
     async def broken() -> dict:
         raise RuntimeError("database password leaked")
 
-    result = await debug_mcp._safe_tool(broken)()
+    result = await diagnostics_mcp._safe_tool(broken)()
 
     assert result == {
         "error": {"code": "debug.queryFailed", "message": "The debug query failed."}
@@ -81,7 +81,7 @@ async def test_debug_tool_errors_do_not_expose_exception_text() -> None:
 
 
 def test_debug_list_content_is_bounded() -> None:
-    payload = debug_mcp._compact_message(
+    payload = diagnostics_mcp._compact_message(
         {"content": "x" * 3_000, "toolCalls": [{"arguments": "y" * 3_000}]}
     )
 
@@ -111,7 +111,7 @@ def test_debug_approval_payload_includes_resolution_without_duplicate_details() 
         resolved_at=resolved_at,
     )
 
-    payload = debug_mcp._debug_approval_payload(approval)
+    payload = diagnostics_mcp._debug_approval_payload(approval)
 
     assert payload["decision"] == "allow_once"
     assert payload["resolvedAt"] == resolved_at.isoformat()
@@ -121,7 +121,7 @@ def test_debug_approval_payload_includes_resolution_without_duplicate_details() 
 
 async def test_unavailable_debug_mount_returns_controlled_error() -> None:
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=debug_mcp.DebugMcpMount()),
+        transport=httpx.ASGITransport(app=diagnostics_mcp.DebugMcpMount()),
         base_url="https://matoloop.test",
     ) as client:
         response = await client.get("/mcp")
@@ -155,8 +155,8 @@ async def test_debug_mcp_http_authenticates_and_filters_sessions(monkeypatch) ->
     async def session_factory():
         yield db
 
-    monkeypatch.setattr(debug_mcp, "AsyncSessionFactory", session_factory)
-    server, mcp_app = debug_mcp.create_debug_mcp()
+    monkeypatch.setattr(diagnostics_mcp, "AsyncSessionFactory", session_factory)
+    server, mcp_app = diagnostics_mcp.create_debug_mcp()
     app = Starlette(routes=[Mount("/api/debug", app=mcp_app)])
     transport = httpx.ASGITransport(app=app)
 
@@ -203,10 +203,10 @@ async def test_debug_mcp_uses_session_profile_for_ai_defaults(monkeypatch) -> No
         yield db
 
     profile_ai = AsyncMock(side_effect=RuntimeError("stop after profile lookup"))
-    monkeypatch.setattr(debug_mcp, "AsyncSessionFactory", session_factory)
-    monkeypatch.setattr(debug_mcp, "_owned_session", AsyncMock(return_value=session))
-    monkeypatch.setattr(debug_mcp, "load_agent_profile_ai", profile_ai)
-    server, mcp_app = debug_mcp.create_debug_mcp()
+    monkeypatch.setattr(diagnostics_mcp, "AsyncSessionFactory", session_factory)
+    monkeypatch.setattr(diagnostics_mcp, "_owned_session", AsyncMock(return_value=session))
+    monkeypatch.setattr(diagnostics_mcp, "load_agent_profile_ai", profile_ai)
+    server, mcp_app = diagnostics_mcp.create_debug_mcp()
     app = Starlette(routes=[Mount("/api/debug", app=mcp_app)])
 
     async with server.session_manager.run():
@@ -284,7 +284,7 @@ async def test_debug_mcp_postgres_isolates_two_admins(request) -> None:
         )
     assert event_types == {"test.recorded"}
 
-    server, mcp_app = debug_mcp.create_debug_mcp()
+    server, mcp_app = diagnostics_mcp.create_debug_mcp()
     app = Starlette(routes=[Mount("/api/debug", app=mcp_app)])
     transport = httpx.ASGITransport(app=app)
     try:

@@ -5,10 +5,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.integrations.bookstack import BOOKSTACK_CREDENTIAL_KIND
-from mato_loop_backend.integrations.caldav import CALDAV_CREDENTIAL_KIND
+from mato_loop_backend.integrations.bookstack.adapter import BOOKSTACK_CREDENTIAL_KIND
+from mato_loop_backend.integrations.caldav.adapter import CALDAV_CREDENTIAL_KIND
 from mato_loop_backend.integrations.mail import MAIL_CREDENTIAL_KIND
-from mato_loop_backend.integrations.mealie import MEALIE_CREDENTIAL_KIND
+from mato_loop_backend.integrations.mealie.adapter import MEALIE_CREDENTIAL_KIND
 from mato_loop_backend.integrations.registry import validate_integration
 from mato_loop_backend.integrations.search import normalize_search_tool_settings
 from mato_loop_backend.models import ExecutionAgent

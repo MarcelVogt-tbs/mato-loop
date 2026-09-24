@@ -4,7 +4,7 @@ import {
   controlCenterIntegrationIds,
   controlCenterIntegrationManifest,
   tbsDeskControlCenterAvailable
-} from '../src/control-center/manifest'
+} from '../src/app/control-center/manifest'
 
 describe('tbs.Desk Control Center manifest', () => {
   it('registers the ticket app', () => {

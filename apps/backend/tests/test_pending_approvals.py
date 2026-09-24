@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import Text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.runtime import approval_payload
+from mato_loop_backend.agent.run_support import approval_payload
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.approvals import (
     all_permissions,

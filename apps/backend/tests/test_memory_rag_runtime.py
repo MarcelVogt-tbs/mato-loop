@@ -6,12 +6,11 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.context import ContextError, ContextManager, ContextProjection
-from mato_loop_backend.agent.runtime import (
-    MEMORY_OVERVIEW_MAX_CHARACTERS,
-    AgentRuntime,
-)
+from mato_loop_backend.agent.context import ContextManager
+from mato_loop_backend.agent.projection import ContextError, ContextProjection
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.runtime_memory import (
+    MEMORY_OVERVIEW_MAX_CHARACTERS,
     _automatic_context_character_budget,
     _automatic_context_suppressed,
     _bounded_automatic_payload,
@@ -21,7 +20,6 @@ from mato_loop_backend.agent.runtime_memory import (
     _memory_rag_query,
     _recent_episode_overview_requested,
 )
-from mato_loop_backend.agent.tools import EffectiveToolSet, ToolResult
 from mato_loop_backend.events import run_events
 from mato_loop_backend.memory.embeddings import EmbeddingError, embedding_client
 from mato_loop_backend.memory.episode_retrieval import (
@@ -63,6 +61,8 @@ from mato_loop_backend.settings import (
     UserProfileSettings,
 )
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+from mato_loop_backend.tools.contracts import ToolResult
+from mato_loop_backend.tools.registry import EffectiveToolSet
 
 
 @pytest.mark.parametrize(

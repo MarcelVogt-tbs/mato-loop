@@ -3,16 +3,16 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from mato_loop_backend.agent.tool_arguments import (
-    ProtectedQuestionArguments,
-    ShellRunArguments,
-    validate_protected_question_answers,
-)
 from mato_loop_backend.models import Credential
 from mato_loop_backend.personal_variables import (
     PersonalVariableError,
     normalize_personal_variable_description,
     personal_variable_payload,
+)
+from mato_loop_backend.tools.arguments import (
+    ProtectedQuestionArguments,
+    ShellRunArguments,
+    validate_protected_question_answers,
 )
 
 

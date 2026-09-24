@@ -17,8 +17,8 @@ from telegram import (
 )
 
 from mato_loop_backend.api.routes import channels as routes
-from mato_loop_backend.attachments import AttachmentInput
 from mato_loop_backend.automations import AutomationService
+from mato_loop_backend.media.attachments import AttachmentInput
 from mato_loop_backend.messaging import telegram
 from mato_loop_backend.messaging.approvals import (
     MessagingApprovalAction,

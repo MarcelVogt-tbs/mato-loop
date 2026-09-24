@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 
-import SessionTodoStrip from '../src/components/SessionTodoStrip.vue'
+import SessionTodoStrip from '../src/features/chat/components/SessionTodoStrip.vue'
 
 let app, root
 afterEach(() => {

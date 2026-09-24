@@ -13,11 +13,12 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent import AgentRuntime
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.automations import ACTIVE_STATUSES, automation_impact_token
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.files.storage import SessionStorage, SessionStorageError
 from mato_loop_backend.models import (
     AgentRun,
     Automation,
@@ -30,7 +31,6 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.security import require_user
-from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 from mato_loop_backend.sessions.cleanup import descendant_sessions
 from mato_loop_backend.sessions.service import (
     SessionServiceError,

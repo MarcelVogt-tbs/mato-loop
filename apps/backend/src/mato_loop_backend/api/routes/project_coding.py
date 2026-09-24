@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import Project, ProjectPlan, ProjectPlanExecution, UserAccount
-from mato_loop_backend.project_coding import (
+from mato_loop_backend.projects.coding import (
     MAX_BRIEF_CHARS,
     MAX_PLAN_CHARS,
     MAX_TITLE_CHARS,

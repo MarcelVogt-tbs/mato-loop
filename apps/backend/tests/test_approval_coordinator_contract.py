@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import pytest
 
-from mato_loop_backend.agent.coordinator import ApprovalCoordinator
+from mato_loop_backend.permissions.coordinator import ApprovalCoordinator
 
 
 async def test_approval_coordinator_registers_and_resolves_waiter() -> None:

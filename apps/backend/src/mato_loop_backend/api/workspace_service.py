@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.execution import ExecutionAgentError, execution_agent_connections
+from mato_loop_backend.files.service import FileRoot, RootFileEntry, RootFileError, RootFileService
 from mato_loop_backend.models import (
     ChatSession,
     ExecutionAgent,
@@ -23,12 +24,6 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
 from mato_loop_backend.settings import InstanceLimits, SettingsStore
-from mato_loop_backend.workspace import (
-    FileRoot,
-    RootFileEntry,
-    RootFileError,
-    RootFileService,
-)
 
 logger = logging.getLogger(__name__)
 

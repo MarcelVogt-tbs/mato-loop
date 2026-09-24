@@ -9,31 +9,27 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import mato_loop_backend.agent.runtime as runtime_module
+import mato_loop_backend.agent.loop as mock_agent_loop
+import mato_loop_backend.agent.runtime as agent_runtime
+import mato_loop_backend.agent.runtime as mock_agent_runtime
+import mato_loop_backend.agent.titles as mock_agent_titles
 import mato_loop_backend.agent.video_analysis as video_analysis
-from mato_loop_backend.agent.context import ContextManager, ContextProjection, message_dict
-from mato_loop_backend.agent.permissions import (
-    PermissionDecision,
-    PermissionPolicy,
-    PermissionRequest,
-)
-from mato_loop_backend.agent.runtime import (
+import mato_loop_backend.memory as memory
+from mato_loop_backend.agent.context import ContextManager
+from mato_loop_backend.agent.projection import ContextProjection, message_dict
+from mato_loop_backend.agent.research import _linked_research_source_ids
+from mato_loop_backend.agent.run_contracts import (
     AgentRunError,
-    AgentRuntime,
     ApprovalResolution,
-    _linked_research_source_ids,
     _VisibleResponse,
 )
-from mato_loop_backend.agent.tools import (
-    ToolAttachment,
-    ToolFileAction,
-    ToolRegistry,
-    ToolResult,
-    tool_registry,
-)
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.events import run_events
 from mato_loop_backend.execution.manager import ExecutionAgentConnectionManager
 from mato_loop_backend.execution.protocol import HelloMessage, SystemInfo
+from mato_loop_backend.files.service import RootFileService
+from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.media.video_processing import MediaInfo, VideoFrame
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
@@ -43,9 +39,13 @@ from mato_loop_backend.models import (
     MessageAttachment,
     WebSearchPolicy,
 )
+from mato_loop_backend.permissions.policy import (
+    PermissionDecision,
+    PermissionPolicy,
+    PermissionRequest,
+)
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
     AgentIdentitySettings,
@@ -69,8 +69,8 @@ from mato_loop_backend.settings.models import (
     ModelInputModality,
     TrustLevel,
 )
-from mato_loop_backend.video_processing import MediaInfo, VideoFrame
-from mato_loop_backend.workspace import RootFileService
+from mato_loop_backend.tools.catalog import ToolRegistry, tool_registry
+from mato_loop_backend.tools.contracts import ToolAttachment, ToolFileAction, ToolResult
 
 SOURCE_ID = "src-test"
 SOURCE_URL = "https://example.test/source"
@@ -370,7 +370,9 @@ async def test_runtime_projects_only_selected_connected_computer_system_info(
         revoked_at=datetime.now(UTC) if state == "revoked" else None,
     )
     db.get.side_effect = lambda model, _id, **_: agent if model is ExecutionAgent else session
-    monkeypatch.setattr(runtime_module, "delegation_snapshot", AsyncMock(return_value=None))
+    _mock_value = AsyncMock(return_value=None)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'delegation_snapshot', _mock_value)
     monkeypatch.setattr(SessionStorage, "provision", lambda *_args: None)
     manager = ExecutionAgentConnectionManager()
     info = SystemInfo(
@@ -388,7 +390,9 @@ async def test_runtime_projects_only_selected_connected_computer_system_info(
     await manager.register(hello.model_copy(update={
         "agent_id": uuid4(), "system_info": SystemInfo(cpu_model="Unselected CPU"),
     }), AsyncMock())
-    monkeypatch.setattr(runtime_module, "execution_agent_connections", manager)
+    _mock_value = manager
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'execution_agent_connections', _mock_value)
 
     await AgentRuntime._execute_loop(db, run)
 
@@ -422,8 +426,8 @@ async def test_runtime_rebinds_computer_after_exclusive_switch_without_new_run(m
     session.session_type = "chat"
     agent = ExecutionAgent(id=new_id, user_id=session.user_id, alias="Other computer", platform="linux")
     db.get.side_effect = lambda model, _id, **_: agent if model is ExecutionAgent else session
-    monkeypatch.setattr(runtime_module.execution_agent_connections, "snapshot", lambda _id: frozenset({"shell.run"}))
-    monkeypatch.setattr(runtime_module.execution_agent_connections, "is_connected", lambda _id: True)
+    monkeypatch.setattr(mock_agent_runtime.execution_agent_connections, "snapshot", lambda _id: frozenset({"shell.run"}))
+    monkeypatch.setattr(mock_agent_runtime.execution_agent_connections, "is_connected", lambda _id: True)
 
     async def switch(_tool, _context, _bound):
         session.preferred_execution_agent_id = new_id
@@ -510,13 +514,17 @@ async def test_child_reuses_context_and_only_inherited_computer_files(
                           settings, {"task", "question", "read", "web_search", "write_file", "memory_retrieve"}
                       )}})
     db.get.side_effect = lambda model, _key, **kw: message if model is Message else session
-    monkeypatch.setattr(runtime_module, "load_agent_profile", AsyncMock(return_value=profile))
-    monkeypatch.setattr(runtime_module, "load_agent_profile_tools", AsyncMock(return_value=(settings, profile)))
+    _mock_value = AsyncMock(return_value=profile)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
+    _mock_value = AsyncMock(return_value=(settings, profile))
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile_tools', _mock_value)
     provision = Mock(side_effect=AssertionError("Delegated runs must not provision session storage"))
     monkeypatch.setattr(SessionStorage, "provision", provision)
-    monkeypatch.setattr(runtime_module.memory_policy, "effective_memory", lambda *_args: runtime_module.memory_policy.EffectiveMemory(True, True, True))
+    monkeypatch.setattr(memory.policy, "effective_memory", lambda *_args: memory.policy.EffectiveMemory(True, True, True))
     retrieve = AsyncMock(side_effect=AssertionError("Children must not retrieve automatic memory"))
-    monkeypatch.setattr(runtime_module.MemoryService, "pinned_context", retrieve)
+    monkeypatch.setattr(mock_agent_loop.MemoryService, "pinned_context", retrieve)
     await AgentRuntime._execute_loop(db, run)
     tools = {tool["name"] for tool in requests[0]["tools"]}
     assert tools == {"question", "web_search"} | (
@@ -817,7 +825,9 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
             assert current_only is True
             return (attachment.filename or "image").encode()
 
-    monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
+    _mock_value = FakeAttachmentService
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     monkeypatch.setattr(
         tool_registry,
         "_execute_definition",
@@ -997,7 +1007,9 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
             assert current_only is True
             return f"reference-{attachment.position}".encode()
 
-    monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
+    _mock_value = FakeAttachmentService
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     monkeypatch.setattr(
         tool_registry,
         "_execute_definition",
@@ -1120,7 +1132,9 @@ async def test_private_openscad_source_uses_public_active_vision_model(monkeypat
         async def create_attachment(self, _db, _message, _data, _mime_type, **kwargs):
             return SimpleNamespace(id=uuid4(), kind=kwargs["kind"])
 
-    monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
+    _mock_value = FakeAttachmentService
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     monkeypatch.setattr(
         tool_registry,
         "_execute_definition",
@@ -1191,7 +1205,9 @@ async def test_failed_active_openscad_verifier_does_not_fallback_and_counts_budg
             raise RuntimeError("vision unavailable")
         return ProviderResult(content="Fertig.", finish_reason="stop")
 
-    monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
+    _mock_value = FakeAttachmentService
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))
     monkeypatch.setattr(
         tool_registry,
@@ -1290,7 +1306,9 @@ async def test_each_successful_openscad_preview_runs_a_verifier(monkeypatch) -> 
         async def create_attachment(self, _db, _message, _data, _mime_type, **kwargs):
             return SimpleNamespace(id=uuid4(), kind=kwargs["kind"])
 
-    monkeypatch.setattr(runtime_module, "AttachmentService", FakeAttachmentService)
+    _mock_value = FakeAttachmentService
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+        monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     monkeypatch.setattr(
         tool_registry,
         "_execute_definition",
@@ -1637,7 +1655,7 @@ async def test_load_skill_is_rejected_when_called_with_another_tool(monkeypatch)
 async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
     monkeypatch, tmp_path, caplog
 ) -> None:
-    caplog.set_level(logging.WARNING, logger=runtime_module.__name__)
+    caplog.set_level(logging.WARNING, logger=agent_runtime.__name__)
     skills = SkillsSettings()
     original_execute = ToolRegistry._execute_definition
     db, run, requests, _projections, _events = await _runtime_setup(
@@ -1697,14 +1715,10 @@ async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
     tool_registry._execute_definition.side_effect = execute
     storage = SessionStorage(tmp_path / "sessions")
     storage.provision(run.session_id)
-    monkeypatch.setattr(
-        runtime_module,
-        "RootFileService",
-        lambda session_id, **kwargs: RootFileService(
-            session_id,
-            session_storage=storage,
-        ),
-    )
+    def _mock_value(session_id, **kwargs):
+        return RootFileService(session_id, session_storage=storage)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'RootFileService', _mock_value)
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     monkeypatch.setattr(
         AgentRuntime,
@@ -1820,14 +1834,10 @@ async def test_skill_editor_sends_current_skill_and_merges_partial_patch(
     tool_registry._execute_definition.side_effect = execute
     storage = SessionStorage(tmp_path / "sessions")
     storage.provision(run.session_id)
-    monkeypatch.setattr(
-        runtime_module,
-        "RootFileService",
-        lambda session_id, **kwargs: RootFileService(
-            session_id,
-            session_storage=storage,
-        ),
-    )
+    def _mock_value(session_id, **kwargs):
+        return RootFileService(session_id, session_storage=storage)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'RootFileService', _mock_value)
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     monkeypatch.setattr(
         AgentRuntime,
@@ -2213,16 +2223,19 @@ async def test_direct_message_reloads_expired_memories_after_rollback(monkeypatc
         return await load_settings(_db, settings_type, **kwargs)
 
     monkeypatch.setattr(SettingsStore, "load", load)
-    monkeypatch.setattr(runtime_module, "get_runtime_config", lambda: SimpleNamespace(embedding_enabled=False))
-    monkeypatch.setattr(runtime_module.MemoryService, "scope", AsyncMock(return_value=SimpleNamespace(total=0, pinned=0)))
-    monkeypatch.setattr(runtime_module.MemoryService, "pinned_context", AsyncMock(return_value=[]))
+    def _mock_value():
+        return SimpleNamespace(embedding_enabled=False)
+    for _mock_target in (mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'get_runtime_config', _mock_value)
+    monkeypatch.setattr(mock_agent_loop.MemoryService, "scope", AsyncMock(return_value=SimpleNamespace(total=0, pinned=0)))
+    monkeypatch.setattr(mock_agent_loop.MemoryService, "pinned_context", AsyncMock(return_value=[]))
     memories = [
         MemoryRecord(id=uuid4(), user_id=db.get.return_value.user_id, category="fact",
                      content="Useful context", revision=1, created_at=datetime.now(UTC), updated_at=datetime.now(UTC))
         for _ in range(2)
     ]
     retrieve = AsyncMock(side_effect=[SimpleNamespace(items=[item]) for item in memories])
-    monkeypatch.setattr(runtime_module.MemoryRetrievalService, "retrieve", retrieve)
+    monkeypatch.setattr(mock_agent_loop.MemoryRetrievalService, "retrieve", retrieve)
     started = asyncio.Event()
 
     async def complete(_db, **kwargs):

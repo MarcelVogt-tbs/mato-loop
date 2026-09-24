@@ -9,32 +9,11 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from mato_loop_backend.agent import tools as tools_module
-from mato_loop_backend.agent.permissions import (
-    PermissionDecision,
-    PermissionDisplayItem,
-    PermissionPolicy,
-    PermissionRequest,
-    SessionGrantScope,
-    execution_directory_permission,
-    execution_directory_scope,
-    session_grant_matches_request,
-    shell_command_permission,
-    shell_command_scope,
-    shell_prefix_allowed,
-)
-from mato_loop_backend.agent.runtime import _external_working_directory_policy, _tool_policy
+import mato_loop_backend.tools.computer as mock_tools_computer
+import mato_loop_backend.tools.interaction as mock_tools_interaction
+from mato_loop_backend.agent.run_support import _external_working_directory_policy, _tool_policy
 from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.agent.subagents import permission_snapshot
-from mato_loop_backend.agent.tool_arguments import (
-    ProtectedQuestionResolution,
-    ShellRunArguments,
-)
-from mato_loop_backend.agent.tool_registry import ToolContext, ToolResult
-from mato_loop_backend.agent.tools import (
-    _execution_path,
-    tool_registry,
-)
 from mato_loop_backend.execution import (
     DirectoryResult,
     ExecutionClient,
@@ -63,7 +42,22 @@ from mato_loop_backend.execution.transfers import (
     TransferError,
     TransferTicketStore,
 )
+from mato_loop_backend.files.access import execution_path
+from mato_loop_backend.files.service import RootFileService, SessionStorage
 from mato_loop_backend.models import ChatSession, Credential, ExecutionAgent, PermissionGrant
+from mato_loop_backend.permissions.policy import (
+    PermissionDecision,
+    PermissionDisplayItem,
+    PermissionPolicy,
+    PermissionRequest,
+    SessionGrantScope,
+    execution_directory_permission,
+    execution_directory_scope,
+    session_grant_matches_request,
+    shell_command_permission,
+    shell_command_scope,
+    shell_prefix_allowed,
+)
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
     IntegrationSettings,
@@ -74,7 +68,10 @@ from mato_loop_backend.settings import (
     plan_profile,
     sysadmin_profile,
 )
-from mato_loop_backend.workspace import RootFileService, SessionStorage
+from mato_loop_backend.tools.arguments import ProtectedQuestionResolution, ShellRunArguments
+from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.tools.context import ToolContext
+from mato_loop_backend.tools.contracts import ToolResult
 
 
 class FakeExecutionClient:
@@ -345,8 +342,8 @@ def test_model_paths_resolve_against_current_directory(tmp_path) -> None:
         ToolCall("call", "read", {}),
         FakeExecutionClient({}, {"filesystem.read"}),
     )
-    assert _execution_path(context, "src/../README.md") == "/home/user/project/README.md"
-    assert _execution_path(context, "/etc/hosts") == "/etc/hosts"
+    assert execution_path(context, "src/../README.md") == "/home/user/project/README.md"
+    assert execution_path(context, "/etc/hosts") == "/etc/hosts"
 
 
 async def test_workspace_read_dispatches_absolute_filesystem_path(tmp_path) -> None:
@@ -1181,12 +1178,10 @@ async def test_shell_resolves_variable_reference_only_for_process_transport(
         encrypted_payload=b"encrypted",
         metadata_json={"secret": True},
     )
-    monkeypatch.setattr(
-        tools_module, "get_personal_variable", AsyncMock(return_value=variable)
-    )
-    monkeypatch.setattr(
-        tools_module, "personal_variable_value", lambda _variable: "host-secret"
-    )
+    _mock_value = AsyncMock(return_value=variable)
+    for _mock_target in (mock_tools_computer, mock_tools_interaction,):
+        monkeypatch.setattr(_mock_target, 'get_personal_variable', _mock_value)
+    monkeypatch.setattr(mock_tools_computer, 'personal_variable_value', lambda _variable: "host-secret")
 
     result = await _tools(client.operations).execute(call, context)
 

@@ -6,19 +6,18 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import mato_loop_backend.agent.tools as tools_module
-import mato_loop_backend.project_coding as project_coding_module
-from mato_loop_backend.agent.permissions import PermissionDecision
-from mato_loop_backend.agent.tool_arguments import CodingAnalyzeArguments
-from mato_loop_backend.agent.tools import _coding_analyze
-from mato_loop_backend.integrations.opencode_client import (
+import mato_loop_backend.projects.coding as projects_coding
+import mato_loop_backend.tools.coding as mock_tools_coding
+import mato_loop_backend.tools.identity as mock_tools_identity
+from mato_loop_backend.integrations.opencode.client import (
     OpenCodeFileStatus,
     OpenCodeMessageResult,
     OpenCodeModel,
     OpenCodeSession,
 )
 from mato_loop_backend.models import Project, ProjectPlan, ProjectPlanExecution
-from mato_loop_backend.project_coding import (
+from mato_loop_backend.permissions.policy import PermissionDecision
+from mato_loop_backend.projects.coding import (
     CodingAnalysisResult,
     CodingFileStatus,
     CodingScheduler,
@@ -27,6 +26,8 @@ from mato_loop_backend.project_coding import (
     _BoundCodingProject,
     _redact_permission_pattern,
 )
+from mato_loop_backend.tools.arguments import CodingAnalyzeArguments
+from mato_loop_backend.tools.coding import _coding_analyze
 
 
 def _project(user_id, **values) -> Project:
@@ -379,7 +380,7 @@ async def test_execution_rejects_a_disappeared_snapshot_variant(monkeypatch) -> 
     session = MagicMock()
     session.__aenter__ = AsyncMock(return_value=db)
     session.__aexit__ = AsyncMock(return_value=None)
-    monkeypatch.setattr(project_coding_module, "AsyncSessionFactory", MagicMock(return_value=session))
+    monkeypatch.setattr(projects_coding, "AsyncSessionFactory", MagicMock(return_value=session))
     client = AsyncMock()
     client.list_models.return_value = (
         OpenCodeModel("provider/build", "provider", "build", "Provider", "Build", ("high",)),
@@ -474,12 +475,12 @@ async def test_coding_analyze_tool_uses_bound_project_and_permission(monkeypatch
                             integration_type="coding", adapter_type="opencode")
         ])),
     )
-    monkeypatch.setattr(tools_module, "load_agent_profile", AsyncMock(return_value=object()))
-    monkeypatch.setattr(
-        tools_module,
-        "load_effective_agent_identity",
-        AsyncMock(return_value=SimpleNamespace(persona=SimpleNamespace(instructions="User rules"))),
-    )
+    _mock_value = AsyncMock(return_value=object())
+    for _mock_target in (mock_tools_identity, mock_tools_coding,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
+    _mock_value = AsyncMock(return_value=SimpleNamespace(persona=SimpleNamespace(instructions="User rules")))
+    for _mock_target in (mock_tools_identity, mock_tools_coding,):
+        monkeypatch.setattr(_mock_target, 'load_effective_agent_identity', _mock_value)
     analyze = AsyncMock(return_value=CodingAnalysisResult("Findings", "remote-1"))
     monkeypatch.setattr(ProjectCodingService, "analyze", analyze)
 

@@ -4,14 +4,11 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from mato_loop_backend.agent.context import (
-    _projection_messages,
-    _prune_tool_outputs_to_budget,
-)
+from mato_loop_backend.agent.projection import _projection_messages, _prune_tool_outputs_to_budget
 from mato_loop_backend.agent.todos import session_todos
-from mato_loop_backend.agent.tool_arguments import TodoWriteArguments
 from mato_loop_backend.models import ContextSummary, Message
 from mato_loop_backend.settings import TrustLevel
+from mato_loop_backend.tools.arguments import TodoWriteArguments
 
 
 def _todo_message(todos, *, error_code=None):

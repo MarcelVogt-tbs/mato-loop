@@ -9,7 +9,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl, model_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
-from mato_loop_backend.api.routes.integrations import _integration
+from mato_loop_backend.api.integration_access import _integration
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.integrations.mcp import McpConfig
 from mato_loop_backend.integrations.mcp_client import McpClientError

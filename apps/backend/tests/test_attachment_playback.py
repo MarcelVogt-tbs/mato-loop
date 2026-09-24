@@ -9,15 +9,15 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import mato_loop_backend.attachment_processing as processing
-from mato_loop_backend.agent.context import message_dict
+import mato_loop_backend.media.processing as media_processing
+from mato_loop_backend.agent.projection import message_dict
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import sessions as routes
-from mato_loop_backend.attachments import AttachmentService
+from mato_loop_backend.files.service import RootFileService
+from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.media.attachments import AttachmentService
 from mato_loop_backend.models import Message, MessageAttachment, UserAccount
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.sessions.serialization import message_payload
-from mato_loop_backend.workspace import RootFileService
 
 
 @pytest.mark.parametrize("mime_type", [
@@ -46,7 +46,7 @@ async def test_persisted_audio_playback(tmp_path, monkeypatch, mime_type):
         }).encode() if command[0] == "ffprobe" else b"\0\0" * 160
         return subprocess.CompletedProcess(command, 0, output, b"")
 
-    monkeypatch.setattr(processing, "_run_media", run_media)
+    monkeypatch.setattr(media_processing, "_run_media", run_media)
     companion = files.create_output_file("playback.wav", pcm)
     service = AttachmentService(storage)
     attachment = MessageAttachment(
@@ -108,12 +108,12 @@ async def test_persisted_audio_playback(tmp_path, monkeypatch, mime_type):
     assert await service.read_audio(attachment, session_id) == pcm
     assert not companion_path.exists()
 
-    monkeypatch.setattr(processing, "_run_media", lambda command, *_: subprocess.CompletedProcess(command, 1, b"", b"private error"))
+    monkeypatch.setattr(media_processing, "_run_media", lambda command, *_: subprocess.CompletedProcess(command, 1, b"", b"private error"))
     with pytest.raises(ApiError, match="attachment.notFound"):
         await routes.download_attachment(
             session_id, message_id, attachment_id, user, db, playback=True
         )
-    monkeypatch.setattr(processing, "_run_media", run_media)
+    monkeypatch.setattr(media_processing, "_run_media", run_media)
     files.revision_path(source.file_id, source.revision).write_bytes(b"corrupt")
     with pytest.raises(ApiError, match="attachment.notFound"):
         await routes.download_attachment(

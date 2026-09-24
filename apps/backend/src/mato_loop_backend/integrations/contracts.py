@@ -7,8 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from mato_loop_backend.agent.tool_contracts import ApprovalEditField, ToolAction
 from mato_loop_backend.settings.models import AgentProfile, IntegrationInstance
+from mato_loop_backend.tools.actions import ApprovalEditField, ToolAction
 
 ToolHandler = Callable[[Any, Any], Awaitable[Any]]
 

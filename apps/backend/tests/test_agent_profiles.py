@@ -6,7 +6,6 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from mato_loop_backend.agent.tools import ToolAction, tool_registry
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import agent_profiles as agent_profiles_module
 from mato_loop_backend.api.routes.agent_profiles import (
@@ -22,7 +21,7 @@ from mato_loop_backend.api.routes.agent_profiles import (
     update_agent_profile,
 )
 from mato_loop_backend.integrations.contracts import IntegrationResource
-from mato_loop_backend.integrations.tbs_desk import profile_id as tbs_profile_id
+from mato_loop_backend.integrations.tbs_desk.adapter import profile_id as tbs_profile_id
 from mato_loop_backend.models import ChatSession, UserAccount
 from mato_loop_backend.settings import (
     BUILD_PROFILE_ID,
@@ -45,6 +44,8 @@ from mato_loop_backend.settings import (
     load_effective_agent_profiles,
     resolve_agent_profile,
 )
+from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.catalog import tool_registry
 
 
 def test_builtin_agent_profile_defaults() -> None:

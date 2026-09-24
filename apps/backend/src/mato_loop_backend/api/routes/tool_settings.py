@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.tools import tool_registry
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import UserAccount
@@ -16,6 +15,7 @@ from mato_loop_backend.settings import (
     WebFetchSettings,
     load_effective_tools,
 )
+from mato_loop_backend.tools.catalog import tool_registry
 
 router = APIRouter(prefix="/tools", dependencies=[Depends(require_user)])
 

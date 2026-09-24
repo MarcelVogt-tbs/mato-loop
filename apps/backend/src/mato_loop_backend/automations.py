@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.db.session import AsyncSessionFactory
+from mato_loop_backend.files.storage import SessionStorage, SessionStorageError
 from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.messaging.policy import channel_provider_allowed
 from mato_loop_backend.models import (
@@ -29,7 +30,6 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.notifications import NotificationDraft, NotificationService
-from mato_loop_backend.session_storage import SessionStorage, SessionStorageError
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
     SkillDefinition,
@@ -766,7 +766,8 @@ class AutomationService:
 
     @staticmethod
     async def process_next(db: AsyncSession) -> bool:
-        from mato_loop_backend.agent.runtime import AgentRunError, AgentRuntime
+        from mato_loop_backend.agent.run_contracts import AgentRunError
+        from mato_loop_backend.agent.runtime import AgentRuntime
 
         run = await db.scalar(
             select(AutomationRun)

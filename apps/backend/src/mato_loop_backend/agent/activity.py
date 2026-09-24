@@ -1,6 +1,6 @@
 import re
 
-from mato_loop_backend.agent.tool_display import TOOL_ACTIVITY_LABELS
+from mato_loop_backend.tools.display import TOOL_ACTIVITY_LABELS
 
 PHASE_ACTIVITY_LABELS = {
     "submitting": "Verarbeite Anfrage",

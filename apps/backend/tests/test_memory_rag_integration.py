@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from mato_loop_backend.agent.context import message_dict
+from mato_loop_backend.agent.projection import message_dict
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
 from mato_loop_backend.memory.embeddings import (
     ACTIVE_EMBEDDING_PROFILE,

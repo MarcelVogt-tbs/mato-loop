@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
-from mato_loop_backend.api.routes.integrations import _load_scoped_integrations
+from mato_loop_backend.api.integration_access import _load_scoped_integrations
 from mato_loop_backend.settings import (
     AiSettings,
     IntegrationAdapterAvailability,

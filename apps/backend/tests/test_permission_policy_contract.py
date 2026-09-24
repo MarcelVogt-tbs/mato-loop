@@ -5,8 +5,21 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent import runtime as runtime_module
-from mato_loop_backend.agent.permissions import (
+import mato_loop_backend.agent.loop as mock_agent_loop
+import mato_loop_backend.agent.run_support as mock_agent_run_support
+import mato_loop_backend.agent.runtime as mock_agent_runtime
+from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.subagents import permission_snapshot
+from mato_loop_backend.files.service import RootFileService
+from mato_loop_backend.files.storage import SessionStorage
+from mato_loop_backend.models import (
+    AgentRun,
+    ChatSession,
+    ExecutionAgent,
+    Message,
+    PermissionGrant,
+)
+from mato_loop_backend.permissions.policy import (
     PermissionDecision,
     PermissionPolicy,
     PermissionRequest,
@@ -34,22 +47,8 @@ from mato_loop_backend.agent.permissions import (
     user_profile_permission,
     webfetch_permission,
 )
-from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.agent.subagents import permission_snapshot
-from mato_loop_backend.agent.tools import (
-    ToolAction,
-    resolve_tool_execution_policy,
-    tool_registry,
-)
-from mato_loop_backend.models import (
-    AgentRun,
-    ChatSession,
-    ExecutionAgent,
-    Message,
-    PermissionGrant,
-)
+from mato_loop_backend.permissions.resolution import resolve_tool_execution_policy
 from mato_loop_backend.providers.base import ToolCall
-from mato_loop_backend.session_storage import SessionStorage
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
     AgentProfilesSettings,
@@ -61,7 +60,8 @@ from mato_loop_backend.settings import (
     TrustLevel,
 )
 from mato_loop_backend.settings.models import AgentProfilePermissions
-from mato_loop_backend.workspace import RootFileService
+from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.catalog import tool_registry
 
 
 def _session(**values) -> ChatSession:
@@ -1466,8 +1466,12 @@ async def test_child_integration_ceiling_cannot_widen_ask_to_auto(tmp_path, monk
             ToolExecutionPolicy.AUTO,
         ),
     )
-    monkeypatch.setattr(runtime_module, "load_agent_profile_tools", AsyncMock(return_value=(ToolSettings().select_trust(TrustLevel.PUBLIC), None)))
-    monkeypatch.setattr(runtime_module, "load_effective_integrations", AsyncMock(return_value=integrations))
+    _mock_value = AsyncMock(return_value=(ToolSettings().select_trust(TrustLevel.PUBLIC), None))
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'load_agent_profile_tools', _mock_value)
+    _mock_value = AsyncMock(return_value=integrations)
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
+        monkeypatch.setattr(_mock_target, 'load_effective_integrations', _mock_value)
     approve = AsyncMock(return_value="deny")
     monkeypatch.setattr(AgentRuntime, "_request_approval", approve)
     request = PermissionRequest(capability=capability, resource_type="network_service", resource_scope="calendar:test",
@@ -1498,7 +1502,7 @@ def test_external_working_directory_delegation_ceiling(current, offered) -> None
         offered_settings, {"change_directory"}
     )
 
-    assert runtime_module._external_working_directory_policy(
+    assert mock_agent_run_support._external_working_directory_policy(
         settings, snapshot=snapshot
     ) == max(
         (current, offered),
@@ -1515,7 +1519,7 @@ def test_legacy_delegation_ceiling_disables_external_working_directory() -> None
     snapshot = permission_snapshot(settings, {"change_directory"})
     snapshot["actionDefaults"].pop("working_directory.external")
 
-    assert runtime_module._external_working_directory_policy(
+    assert mock_agent_run_support._external_working_directory_policy(
         settings, snapshot=snapshot
     ) == ToolExecutionPolicy.DISABLED
 

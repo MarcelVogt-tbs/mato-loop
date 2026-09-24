@@ -13,7 +13,7 @@ vi.mock('stores/chat', () => ({ useChatStore: () => mocks.stores.chat }))
 vi.mock('stores/skills', () => ({ useSkillStore: () => mocks.stores.skills }))
 vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => mocks.stores.executionAgents }))
 
-import Editor from '../src/pages/settings/AutomationEditorPage.vue'
+import Editor from '../src/features/automations/AutomationEditorPage.vue'
 import { scheduleDraft } from '../src/utils/automation-schedules'
 
 let app, root

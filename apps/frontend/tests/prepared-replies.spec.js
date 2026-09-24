@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 
-import MessageContent from '../src/components/MessageContent.vue'
+import MessageContent from '../src/features/chat/components/MessageContent.vue'
 
 let app, root
 

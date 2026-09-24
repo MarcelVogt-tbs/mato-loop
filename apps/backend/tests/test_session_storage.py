@@ -6,11 +6,7 @@ from uuid import uuid4
 import pytest
 
 from mato_loop_backend.config import RuntimeConfig
-from mato_loop_backend.session_storage import (
-    SESSION_DIRECTORIES,
-    SessionStorage,
-    SessionStorageError,
-)
+from mato_loop_backend.files.storage import SESSION_DIRECTORIES, SessionStorage, SessionStorageError
 
 
 def test_runtime_config_derives_sessions_directory_from_data_directory(tmp_path: Path) -> None:
@@ -327,7 +323,7 @@ def test_project_storage_rejects_symlinked_project_root(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("project", [False, True])
 def test_reconcile_preserves_live_files_and_discovers_pending_owners(tmp_path: Path, project: bool) -> None:
-    from mato_loop_backend.workspace import FileRoot, RootFileService
+    from mato_loop_backend.files.service import FileRoot, RootFileService
 
     storage = SessionStorage(tmp_path / "sessions")
     session_id, run_id = uuid4(), uuid4()
@@ -352,7 +348,7 @@ def test_reconcile_preserves_live_files_and_discovers_pending_owners(tmp_path: P
 
 
 def test_pending_project_runs_are_session_bound(tmp_path: Path) -> None:
-    from mato_loop_backend.workspace import FileRoot, RootFileService
+    from mato_loop_backend.files.service import FileRoot, RootFileService
 
     storage = SessionStorage(tmp_path / "sessions")
     first, second, project, run = uuid4(), uuid4(), uuid4(), uuid4()
@@ -367,7 +363,7 @@ def test_pending_project_runs_are_session_bound(tmp_path: Path) -> None:
 
 
 def test_session_move_preserves_explicit_derived_ownership(tmp_path: Path) -> None:
-    from mato_loop_backend.workspace import FileRoot, RootFileService
+    from mato_loop_backend.files.service import FileRoot, RootFileService
 
     storage = SessionStorage(tmp_path / "sessions")
     session_id, project_id = uuid4(), uuid4()

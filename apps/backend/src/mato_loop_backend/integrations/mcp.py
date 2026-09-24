@@ -9,7 +9,6 @@ from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
-from mato_loop_backend.agent.tool_contracts import ToolAction
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     IntegrationContributions,
@@ -19,6 +18,7 @@ from mato_loop_backend.integrations.contracts import (
 from mato_loop_backend.integrations.mcp_client import McpClient, McpClientError
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
+from mato_loop_backend.tools.actions import ToolAction
 
 MCP_CREDENTIAL_KIND = "mcp.bearer"
 MCP_ACTION = ToolAction("mcp.call", "MCP-Tool aufrufen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK)
@@ -167,7 +167,7 @@ def mcp_tool_contribution(
     resource_key = mcp_resource_key(item.name)
 
     async def call(arguments: dict[str, Any], context: Any) -> Any:
-        from mato_loop_backend.agent.tool_registry import ToolResult
+        from mato_loop_backend.tools.contracts import ToolResult
 
         current = next(
             (
@@ -191,7 +191,7 @@ def mcp_tool_contribution(
         return result
 
     def authorize(_arguments: Any, context: Any) -> tuple[Any, ...]:
-        from mato_loop_backend.agent.permissions import integration_operation_permission
+        from mato_loop_backend.permissions.policy import integration_operation_permission
 
         binding_revision = json.dumps(
             {
