@@ -8,12 +8,6 @@
         </p>
       </div>
       <div class="settings-scope-actions row items-center col-auto">
-        <SettingsScopeToggle
-          :model-value="scope"
-          :is-admin="auth.isAdmin"
-          :disable="identity.settingsLoading || identity.settingsSaving"
-          @update:model-value="changeScope"
-        />
         <q-btn
           unelevated
           no-caps
@@ -21,7 +15,7 @@
           color="primary"
           icon="add"
           label="Persona erstellen"
-          :disable="personasBlocked"
+          :disable="personasBlocked && !auth.isAdmin"
           @click="openCreateDialog"
         />
       </div>
@@ -38,12 +32,12 @@
     </div>
 
     <template v-if="settingsReady">
-    <template v-if="auth.isAdmin && scope === 'instance'">
+    <template v-if="auth.isAdmin">
       <q-card flat class="app-surface-tonal q-mb-md">
         <q-card-section class="row items-center justify-between q-gutter-md">
           <div>
             <div class="text-subtitle2 text-weight-bold">Persönliche Anzeigenamen</div>
-            <div class="text-caption app-muted">Erlaubt Benutzern, den Instanznamen zu überschreiben.</div>
+            <div class="text-caption app-muted">Erlaubt Benutzern, den globalen Anzeigenamen zu überschreiben.</div>
           </div>
           <q-toggle
             :model-value="identity.personalDisplayNamesEnabled"
@@ -72,7 +66,7 @@
     </template>
 
     <q-banner
-      v-if="scope === 'personal' && (!identity.personalDisplayNamesEnabled || !identity.personalPersonasEnabled)"
+      v-if="!identity.personalDisplayNamesEnabled || !identity.personalPersonasEnabled"
       rounded
       class="app-surface-tonal q-mb-md"
     >
@@ -84,9 +78,7 @@
       <q-card-section>
         <div class="text-subtitle1 text-weight-bold">Anzeigename</div>
         <div class="text-caption app-muted">
-          {{ scope === 'instance'
-            ? 'Instanzweiter Sprechername im Chat.'
-            : 'Optionaler persönlicher Sprechername statt des Instanznamens.' }}
+          Optionaler persönlicher Sprechername statt des globalen Anzeigenamens.
         </div>
       </q-card-section>
       <q-separator />
@@ -98,18 +90,16 @@
             label="Agent-Name"
             maxlength="80"
             counter
-            :placeholder="scope === 'personal' ? identity.effectiveDisplayName : undefined"
-            :rules="scope === 'instance' ? [requiredRule] : []"
+            :placeholder="identity.effectiveDisplayName"
             :disable="nameBlocked"
           >
             <template #prepend><q-icon name="badge" /></template>
           </q-input>
           <div class="row justify-end q-gutter-sm q-mt-md">
             <q-btn
-              v-if="scope === 'personal'"
               flat
               no-caps
-              label="Auf Instanzstandard zurücksetzen"
+              label="Auf globalen Standard zurücksetzen"
               :disable="nameBlocked || !identity.configuredDisplayName"
               @click="resetDisplayName"
             />
@@ -128,6 +118,16 @@
       </q-card-section>
     </q-card>
 
+    <q-card v-if="auth.isAdmin && instanceIdentity" flat class="app-surface q-mb-md">
+      <q-card-section class="text-subtitle1 text-weight-bold">Globaler Anzeigename</q-card-section>
+      <q-card-section>
+        <q-input v-model="instanceDisplayName" outlined label="Agent-Name" maxlength="80" />
+        <div class="row justify-end q-mt-md">
+          <q-btn unelevated no-caps color="primary" label="Speichern" :disable="!instanceDisplayName.trim() || instanceDisplayName === instanceIdentity?.configuredDisplayName" @click="saveInstanceDisplayName" />
+        </div>
+      </q-card-section>
+    </q-card>
+
     <q-card flat class="app-surface relative-position">
       <q-card-section class="row items-center justify-between q-gutter-md">
         <div>
@@ -137,17 +137,19 @@
           </div>
         </div>
         <q-btn
-          v-if="scope === 'personal'"
           flat
           no-caps
-          label="Instanzstandard verwenden"
+          label="Globalen Standard verwenden"
           :disable="personasBlocked || identity.defaultPersonaId === null"
           @click="resetDefaultPersona"
         />
       </q-card-section>
+      <q-card-section v-if="auth.isAdmin && instanceIdentity" class="q-pt-none">
+        <q-select :model-value="instanceIdentity?.defaultPersonaId" outlined emit-value map-options label="Globale Standard-Persona" :options="instancePersonas.map((persona) => ({ label: persona.name, value: persona.id }))" @update:model-value="setInstanceDefaultPersona" />
+      </q-card-section>
       <q-separator />
       <q-list separator>
-        <q-item v-for="persona in visiblePersonas" :key="persona.id" class="q-py-md">
+        <q-item v-for="persona in identity.personas" :key="persona.id" class="q-py-md">
           <q-item-section avatar top>
             <q-avatar rounded color="primary" text-color="white" icon="face" />
           </q-item-section>
@@ -155,7 +157,7 @@
             <q-item-label class="row items-center q-gutter-sm">
               <span class="text-subtitle1 text-weight-medium">{{ persona.name }}</span>
               <q-badge v-if="persona.id === identity.effectiveDefaultPersonaId" color="primary" label="Standard" />
-              <q-badge outline color="grey-7" :label="persona.scope === 'instance' ? 'Instanz' : 'Persönlich'" />
+              <q-badge outline color="grey-7" :label="persona.scope === 'instance' ? 'Global' : 'Persönlich'" />
               <q-badge v-if="persona.effective === false" outline color="warning" label="Deaktiviert" />
             </q-item-label>
             <q-item-label caption lines="2" class="text-body2 q-mt-xs">
@@ -170,29 +172,29 @@
                 dense
                 icon="star_outline"
                 :color="persona.id === identity.effectiveDefaultPersonaId ? 'primary' : undefined"
-                :aria-label="`${persona.name} als Standard verwenden`"
+                :aria-label="`${persona.name} als meinen Standard verwenden`"
                 :disable="personasBlocked || persona.id === identity.defaultPersonaId"
                 @click="setDefaultPersona(persona)"
-              ><q-tooltip>Als Standard verwenden</q-tooltip></q-btn>
+              ><q-tooltip>Als meinen Standard verwenden</q-tooltip></q-btn>
               <q-btn
-                v-if="persona.scope === scope"
+                v-if="persona.scope === 'personal' || auth.isAdmin"
                 flat
                 round
                 dense
                 icon="edit"
                 :aria-label="`${persona.name} bearbeiten`"
-                :disable="personasBlocked || persona.protected"
+                :disable="(persona.scope === 'personal' && personasBlocked) || persona.protected"
                 @click="openEditDialog(persona)"
               ><q-tooltip>Bearbeiten</q-tooltip></q-btn>
               <q-btn
-                v-if="persona.scope === scope"
+                v-if="persona.scope === 'personal' || auth.isAdmin"
                 flat
                 round
                 dense
                 color="negative"
                 icon="delete_outline"
                 :aria-label="`${persona.name} löschen`"
-                :disable="personasBlocked || persona.protected || (scope === 'instance' && persona.id === identity.defaultPersonaId)"
+                :disable="(persona.scope === 'personal' && personasBlocked) || persona.protected || (persona.scope === 'instance' && persona.id === instanceIdentity?.defaultPersonaId)"
                 @click="removePersona(persona)"
               ><q-tooltip>Löschen</q-tooltip></q-btn>
             </div>
@@ -247,11 +249,12 @@
               <template #avatar><q-icon name="privacy_tip" color="primary" /></template>
               Die Persona wird an das ausgewählte Modell übertragen. Speichere hier keine Secrets.
             </q-banner>
+            <q-checkbox v-if="auth.isAdmin && !editingPersona" v-model="shared" label="Global" class="q-mt-md" />
           </q-card-section>
           <q-separator />
           <q-card-actions align="right" class="q-pa-md">
             <q-btn flat no-caps label="Abbrechen" :disable="identity.settingsSaving" v-close-popup />
-            <q-btn unelevated no-caps color="primary" label="Speichern" type="submit" :loading="identity.settingsSaving" />
+            <q-btn unelevated no-caps color="primary" label="Speichern" type="submit" :loading="identity.settingsSaving" :disable="personasBlocked && !(auth.isAdmin && (shared || editingPersona?.scope === 'instance'))" />
           </q-card-actions>
         </q-form>
       </q-card>
@@ -260,20 +263,17 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import SettingsScopeToggle from 'src/features/settings/SettingsScopeToggle.vue'
+import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
+import { api } from 'src/boot/axios'
 import { useConfirm } from 'src/composables/confirm'
-import { resolveSettingsScope } from 'src/features/settings/scope'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'AgentIdentitySettingsPage' })
 
 const $q = useQuasar()
-const route = useRoute()
-const router = useRouter()
 const { confirm } = useConfirm()
 const identity = useAgentIdentityStore()
 const auth = useAuthStore()
@@ -284,25 +284,21 @@ const savedDisplayName = ref('')
 const dialogOpen = ref(false)
 const editingPersona = ref(null)
 const personaForm = reactive({ name: '', instructions: '' })
+const shared = ref(false)
+const instanceIdentity = ref(null)
+const instanceDisplayName = ref('')
 
-const scope = computed(() => resolveSettingsScope(route.query.scope, auth.isAdmin))
 const settingsReady = computed(() => (
-  identity.settingsLoaded && !identity.settingsLoading && identity.scope === scope.value
+  identity.settingsLoaded && !identity.settingsLoading && identity.scope === 'personal'
 ))
 const nameBlocked = computed(() => (
-  !settingsReady.value || identity.settingsSaving || (
-    scope.value === 'personal' && !identity.personalDisplayNamesEnabled
-  )
+  !settingsReady.value || identity.settingsSaving || !identity.personalDisplayNamesEnabled
 ))
 const personasBlocked = computed(() => (
-  !settingsReady.value || identity.settingsSaving || (
-    scope.value === 'personal' && !identity.personalPersonasEnabled
-  )
+  !settingsReady.value || identity.settingsSaving || !identity.personalPersonasEnabled
 ))
 const nameDirty = computed(() => displayName.value.trim() !== savedDisplayName.value)
-const visiblePersonas = computed(() => identity.personas.filter((persona) => (
-  scope.value === 'personal' || persona.scope === 'instance'
-)))
+const instancePersonas = computed(() => identity.personas.filter((persona) => persona.scope === 'instance'))
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtfeld'
 
 function assignDisplayName() {
@@ -311,22 +307,27 @@ function assignDisplayName() {
 }
 
 async function load() {
+  const personalDraft = nameDirty.value ? displayName.value : null
+  const sharedDraft = instanceIdentity.value && instanceDisplayName.value !== instanceIdentity.value.configuredDisplayName
+    ? instanceDisplayName.value : null
   try {
-    await identity.fetchSettings(scope.value)
+    await identity.fetchSettings('personal')
     assignDisplayName()
+    if (personalDraft !== null) displayName.value = personalDraft
+    if (auth.isAdmin) {
+      instanceIdentity.value = (await api.get('/agent-identity/settings', { params: { scope: 'instance' } })).data
+      instanceDisplayName.value = instanceIdentity.value.configuredDisplayName || ''
+      if (sharedDraft !== null) instanceDisplayName.value = sharedDraft
+    }
   } catch {
     // The central Axios interceptor displays the error message.
   }
 }
 
-async function changeScope(nextScope) {
-  await router.replace({ query: { ...route.query, scope: nextScope } })
-}
-
 async function saveDisplayName() {
   if (!await nameFormRef.value?.validate()) return
   const value = displayName.value.trim()
-  if (scope.value === 'personal' && !value) {
+  if (!value) {
     await resetDisplayName()
     return
   }
@@ -339,11 +340,32 @@ async function saveDisplayName() {
   }
 }
 
+async function saveInstanceDisplayName() {
+  if (!instanceDisplayName.value.trim()) return
+  try {
+    instanceIdentity.value = (await api.patch('/agent-identity/settings/display-name', { displayName: instanceDisplayName.value.trim() }, { params: { scope: 'instance' } })).data
+    await load()
+    $q.notify({ type: 'positive', message: 'Globaler Anzeigename gespeichert' })
+  } catch {
+    // The central Axios interceptor displays the error.
+  }
+}
+
+async function setInstanceDefaultPersona(personaId) {
+  try {
+    await api.patch('/agent-identity/personas/default', { personaId }, { params: { scope: 'instance' } })
+    await load()
+    $q.notify({ type: 'positive', message: 'Globale Standard-Persona gespeichert' })
+  } catch {
+    // The central Axios interceptor displays the error.
+  }
+}
+
 async function resetDisplayName() {
   try {
     await identity.resetDisplayName()
     assignDisplayName()
-    $q.notify({ type: 'positive', message: 'Instanzname wird wieder verwendet' })
+    $q.notify({ type: 'positive', message: 'Globaler Anzeigename wird wieder verwendet' })
   } catch {
     // The central Axios interceptor displays the error message.
   }
@@ -367,6 +389,7 @@ async function setPersonalPersonasEnabled(enabled) {
 
 function openCreateDialog() {
   editingPersona.value = null
+  shared.value = false
   Object.assign(personaForm, { name: '', instructions: '' })
   dialogOpen.value = true
 }
@@ -384,11 +407,14 @@ async function savePersona() {
     instructions: personaForm.instructions.trim()
   }
   try {
+    await identity.fetchSettings(editingPersona.value?.scope || (shared.value ? 'instance' : 'personal'))
     if (editingPersona.value) await identity.updatePersona(editingPersona.value.id, payload)
     else await identity.createPersona(payload)
+    await load()
     dialogOpen.value = false
     $q.notify({ type: 'positive', message: 'Persona gespeichert' })
   } catch {
+    await load()
     // The central Axios interceptor displays the error message.
   }
 }
@@ -405,7 +431,7 @@ async function setDefaultPersona(persona) {
 async function resetDefaultPersona() {
   try {
     await identity.setDefaultPersona(null)
-    $q.notify({ type: 'positive', message: 'Instanzstandard wird wieder verwendet' })
+    $q.notify({ type: 'positive', message: 'Globaler Standard wird wieder verwendet' })
   } catch {
     // The central Axios interceptor displays the error message.
   }
@@ -419,17 +445,20 @@ async function removePersona(persona) {
   )
   if (!accepted) return
   try {
+    await identity.fetchSettings(persona.scope)
     await identity.deletePersona(persona.id)
+    await load()
     $q.notify({ type: 'positive', message: 'Persona gelöscht' })
   } catch {
+    await load()
     // The central Axios interceptor displays the error message.
   }
 }
 
-watch(scope, load, { immediate: true })
+void load()
 
 const confirmDiscardedChanges = async () => (
-  !nameDirty.value || await confirm('Ungespeicherte Änderungen verwerfen?')
+  (!nameDirty.value && (!auth.isAdmin || instanceDisplayName.value === instanceIdentity.value?.configuredDisplayName)) || await confirm('Ungespeicherte Änderungen verwerfen?')
 )
 
 onBeforeRouteUpdate(confirmDiscardedChanges)

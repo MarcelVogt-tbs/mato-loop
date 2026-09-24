@@ -41,6 +41,7 @@ from mato_loop_backend.settings import (
     load_effective_integrations,
     load_effective_tools,
     resolve_agent_persona,
+    resolve_agent_profile,
     shipped_profiles,
 )
 from mato_loop_backend.settings.models import (
@@ -178,6 +179,21 @@ async def _response(
         )
         for profile in effective.profiles
     ]
+    disabled_personal_profiles = []
+    if scope == "personal" and not effective.personal_agents_enabled and personal_profiles is not None:
+        base_ids = {profile.id for profile in shipped_profiles()}
+        bases = {profile.id: profile for profile in effective.profiles if profile.id in base_ids}
+        disabled_personal_profiles = [
+            {
+                **_profile_payload(
+                    resolve_agent_profile(profile, bases[profile.base_profile_id], user.id),
+                    "personal", instance_identity, personal_identity, profile,
+                ),
+                "effective": False,
+            }
+            for profile in personal_profiles.profiles
+            if profile.base_profile_id in bases
+        ]
     for profile in effective_profiles:
         builtin = builtins.get(profile["id"])
         if builtin is None:
@@ -243,12 +259,9 @@ async def _response(
         ),
         "personalPersonasEnabled": instance_identity.personal_personas_enabled,
         "effectiveAgents": effective_profiles,
-        "agents": (
-            effective_profiles
-            if settings is None or scope is None
-            else [
-                profile for profile in effective_profiles
-                if profile["scope"] == scope
+        "agents": disabled_personal_profiles if disabled_personal_profiles else (
+            effective_profiles if settings is None or scope is None else [
+                profile for profile in effective_profiles if profile["scope"] == scope
             ]
         ),
     }

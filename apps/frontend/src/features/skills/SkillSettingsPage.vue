@@ -8,12 +8,6 @@
         </p>
       </div>
       <div class="settings-scope-actions row items-center col-auto">
-        <SettingsScopeToggle
-          :model-value="skills.scope"
-          :is-admin="auth.isAdmin"
-          :disable="skills.loading || skills.saving"
-          @update:model-value="changeScope"
-        />
         <q-btn
           unelevated
           no-caps
@@ -40,18 +34,16 @@
         <q-spinner color="primary" size="36px" />
         <div class="app-muted q-mt-sm">Skills werden geladen ...</div>
       </q-card-section>
-      <q-card-section v-else-if="loaded && !skills.scopedItems.length" class="q-pa-xl">
+      <q-card-section v-else-if="loaded && !skills.items.length" class="q-pa-xl">
         <AppStateMessage
           icon="school"
           title="Noch keine Skills"
-          :description="skills.scope === 'instance'
-            ? 'Erstelle einen Skill, der allen Usern zur Verfügung steht.'
-            : 'Erstelle einen persönlichen Skill mit wiederverwendbaren Anweisungen.'"
+          description="Erstelle einen persönlichen Skill oder stelle ihn als Administrator allen zur Verfügung."
         />
       </q-card-section>
 
       <q-list v-else separator>
-        <q-item v-for="skill in skills.scopedItems" :key="skill.id" class="q-py-md">
+        <q-item v-for="skill in skills.items" :key="skill.id" class="q-py-md">
           <q-item-section avatar top>
             <q-avatar rounded color="primary" text-color="white" icon="school" />
           </q-item-section>
@@ -59,6 +51,7 @@
             <q-item-label class="text-subtitle1 text-weight-medium">
               {{ skillDisplayName(skill) }}
               <q-badge v-if="skill.isDefault" outline color="primary" label="Standard" class="q-ml-xs" />
+              <q-badge outline color="grey-7" :label="skill.scope === 'instance' ? 'Global' : 'Persönlich'" class="q-ml-xs" />
             </q-item-label>
             <q-item-label caption class="text-body2 q-mt-xs">{{ skillDisplayDescription(skill) }}</q-item-label>
           </q-item-section>
@@ -67,16 +60,16 @@
               <q-toggle
                 :model-value="skill.enabled"
                 :aria-label="`${skillDisplayName(skill)} ${skill.enabled ? 'deaktivieren' : 'aktivieren'}`"
-                :disable="skills.saving"
+                :disable="skills.saving || (skill.scope === 'instance' && !auth.isAdmin)"
                 @update:model-value="setEnabled(skill, $event)"
               />
-              <q-btn flat round dense icon="edit" :aria-label="`${skillDisplayName(skill)} bearbeiten`" @click="openEditDialog(skill)">
+              <q-btn v-if="skill.scope === 'personal' || auth.isAdmin" flat round dense icon="edit" :aria-label="`${skillDisplayName(skill)} bearbeiten`" @click="openEditDialog(skill)">
                 <q-tooltip>Bearbeiten</q-tooltip>
               </q-btn>
-              <q-btn v-if="skill.isDefault && skill.modified" flat round dense icon="restart_alt" :aria-label="`${skillDisplayName(skill)} auf Standard zurücksetzen`" @click="resetSkill(skill)">
+              <q-btn v-if="skill.isDefault && skill.modified && auth.isAdmin" flat round dense icon="restart_alt" :aria-label="`${skillDisplayName(skill)} auf Standard zurücksetzen`" @click="resetSkill(skill)">
                 <q-tooltip>Auf Standard zurücksetzen</q-tooltip>
               </q-btn>
-              <q-btn v-if="!skill.isDefault" flat round dense color="negative" icon="delete_outline" :aria-label="`${skill.name} löschen`" @click="removeSkill(skill)">
+              <q-btn v-if="!skill.isDefault && (skill.scope === 'personal' || auth.isAdmin)" flat round dense color="negative" icon="delete_outline" :aria-label="`${skill.name} löschen`" @click="removeSkill(skill)">
                 <q-tooltip>Löschen</q-tooltip>
               </q-btn>
             </div>
@@ -134,6 +127,7 @@
               :rules="[requiredRule]"
               hint="Beschreibe konkret, wie der Skill arbeiten soll."
             />
+            <q-checkbox v-if="auth.isAdmin && !editingSkill" v-model="shared" label="Global" />
           </q-card-section>
           <q-separator />
           <q-card-actions align="right" class="q-pa-md">
@@ -149,11 +143,8 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
-import { useRoute, useRouter } from 'vue-router'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
-import SettingsScopeToggle from 'src/features/settings/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
-import { resolveSettingsScope } from 'src/features/settings/scope'
 import { skillDisplayDescription, skillDisplayName } from 'src/features/skills/skill-display'
 import { useSkillStore } from 'stores/skills'
 import { useAuthStore } from 'stores/auth'
@@ -161,8 +152,6 @@ import { useAuthStore } from 'stores/auth'
 defineOptions({ name: 'SkillSettingsPage' })
 
 const $q = useQuasar()
-const route = useRoute()
-const router = useRouter()
 const { confirm } = useConfirm()
 const skills = useSkillStore()
 const auth = useAuthStore()
@@ -172,6 +161,7 @@ const dialogOpen = ref(false)
 const formRef = ref(null)
 const editingSkill = ref(null)
 const saving = ref(false)
+const shared = ref(false)
 const form = reactive({ name: '', description: '', instructions: '' })
 
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtfeld'
@@ -179,29 +169,23 @@ const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtf
 async function load() {
   loadFailed.value = false
   try {
-    await skills.fetchSkills(skills.scope)
+    await skills.fetchSkills()
     loaded.value = true
   } catch {
     loadFailed.value = true
   }
 }
 
-async function changeScope(scope) {
-  dialogOpen.value = false
-  loaded.value = false
-  skills.selectScope(scope)
-  await router.replace({ query: { ...route.query, scope: skills.scope } })
-  await load()
-}
-
 function openCreateDialog() {
   editingSkill.value = null
+  shared.value = false
   Object.assign(form, { name: '', description: '', instructions: '' })
   dialogOpen.value = true
 }
 
 function openEditDialog(skill) {
   editingSkill.value = skill
+  skills.selectScope(skill.scope)
   Object.assign(form, {
     name: skill.name,
     description: skill.description,
@@ -223,10 +207,12 @@ async function saveSkill() {
       await skills.updateSkill(editingSkill.value.id, payload)
       $q.notify({ type: 'positive', message: 'Skill gespeichert' })
     } else {
+      skills.selectScope(auth.isAdmin && shared.value ? 'instance' : 'personal')
       await skills.createSkill(payload)
       $q.notify({ type: 'positive', message: 'Skill erstellt' })
     }
     dialogOpen.value = false
+    await load()
   } catch {
     // The central Axios interceptor displays the error; keep the dialog open.
   } finally {
@@ -242,7 +228,9 @@ async function removeSkill(skill) {
   )
   if (!accepted) return
   try {
+    skills.selectScope(skill.scope)
     await skills.deleteSkill(skill.id)
+    await load()
     $q.notify({ type: 'positive', message: 'Skill gelöscht' })
   } catch {
     // The central Axios interceptor displays the error.
@@ -251,7 +239,9 @@ async function removeSkill(skill) {
 
 async function setEnabled(skill, enabled) {
   try {
+    skills.selectScope(skill.scope)
     await skills.setEnabled(skill.id, enabled)
+    await load()
     $q.notify({ type: 'positive', message: enabled ? 'Skill aktiviert' : 'Skill deaktiviert' })
   } catch {
     // The central Axios interceptor displays the error.
@@ -266,17 +256,16 @@ async function resetSkill(skill) {
   )
   if (!accepted) return
   try {
+    skills.selectScope(skill.scope)
     await skills.resetSkill(skill.id)
+    await load()
     $q.notify({ type: 'positive', message: 'Skill auf Standard zurückgesetzt' })
   } catch {
     // The central Axios interceptor displays the error.
   }
 }
 
-onMounted(() => {
-  skills.selectScope(resolveSettingsScope(route.query.scope, auth.isAdmin))
-  void load()
-})
+onMounted(load)
 </script>
 
 <style scoped>

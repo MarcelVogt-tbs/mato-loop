@@ -20,12 +20,6 @@
         </div>
       </q-toolbar-title>
       <div class="settings-scope-actions row items-center col-auto">
-        <SettingsScopeToggle
-          :model-value="scope"
-          :is-admin="auth.isAdmin"
-          :disable="loading || saving"
-          @update:model-value="switchScope"
-        />
         <q-btn
           class="col-auto"
           unelevated
@@ -77,7 +71,7 @@
         <q-card-section>
           <div class="text-subtitle1 text-weight-bold">Standardressourcen dieses Kontos</div>
           <div class="text-caption app-muted">
-            Gilt {{ scope === 'instance' ? 'instanzweit' : 'persönlich' }} für unspezifische Kalender- und Aufgabenanfragen sowie neue
+            Gilt {{ scope === 'instance' ? 'global' : 'persönlich' }} für unspezifische Kalender- und Aufgabenanfragen sowie neue
             Einträge. Beide Standards können unabhängig festgelegt werden.
           </div>
         </q-card-section>
@@ -138,8 +132,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import SettingsScopeToggle from 'src/features/settings/SettingsScopeToggle.vue'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import { useConfirm } from 'src/composables/confirm'
 import { resolveSettingsScope } from 'src/features/settings/scope'
 import {
@@ -153,7 +146,6 @@ defineOptions({ name: 'IntegrationAccessPage' })
 
 const $q = useQuasar()
 const route = useRoute()
-const router = useRouter()
 const { confirm } = useConfirm()
 const integrations = useIntegrationStore()
 const auth = useAuthStore()
@@ -242,13 +234,6 @@ async function load() {
   } finally {
     if (token === loadToken) loading.value = false
   }
-}
-
-async function switchScope(value) {
-  const failure = await router.push({ name: 'settings-integrations', query: { scope: value } })
-  if (failure) return
-  integrations.selectScope(value)
-  await integrations.fetchAll().catch(() => {})
 }
 
 async function save() {

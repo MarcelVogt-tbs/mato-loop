@@ -8,7 +8,7 @@ Das erste bei der Ersteinrichtung angelegte lokale Konto erhält Administratorre
 
 Administratoren können unter **Einstellungen > Benutzer** lokale Konten anlegen, Passwörter zurücksetzen, Konten aktivieren oder deaktivieren und Administratorrechte zuweisen oder entziehen. Vor dem endgültigen Löschen muss ein Konto deaktiviert werden. Das eigene Konto kann nicht deaktiviert oder gelöscht werden; außerdem muss mindestens ein aktiver Administrator bestehen bleiben.
 
-Administratorrechte erlauben die Benutzerverwaltung und Änderungen an gemeinsamen Instanzeinstellungen. Sie erlauben keinen Zugriff auf Sessions, Nachrichten, Dateien, Erinnerungen, Zugangsdaten, Arbeitsbereiche oder Computer anderer Benutzer. Der Umschalter **Persönlich** / **Instanz** bearbeitet beim Administrator entweder die eigenen Einstellungen oder die gemeinsam genutzte Instanz, niemals das persönliche Profil eines anderen Benutzers.
+Administratorrechte erlauben die Benutzerverwaltung und Änderungen an globalen Einstellungen. Sie erlauben keinen Zugriff auf Sessions, Nachrichten, Dateien, Erinnerungen, Zugangsdaten, Arbeitsbereiche oder Computer anderer Benutzer. **Persönlich** und **Global** gekennzeichnete Einträge erscheinen in einer Liste; Administratoren können beim Anlegen geeigneter Einträge **Global** wählen. Persönliche Einträge anderer Benutzer werden dabei nicht angezeigt.
 
 Beim Löschen entfernt MatoLoop die zugehörigen Datenbankdaten und Session-Bäume. Dateien, Caches und Konfigurationen auf Computern, einschließlich des mitgelieferten Compose-Computers, sowie Daten in externen Diensten werden nicht gelöscht und müssen dort bei Bedarf separat entfernt werden. Gemeinsam konfigurierte Instanzressourcen bleiben erhalten.
 

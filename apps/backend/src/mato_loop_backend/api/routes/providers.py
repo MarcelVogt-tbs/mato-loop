@@ -64,6 +64,7 @@ from mato_loop_backend.settings.models import (
     ModelInputModality,
     ReasoningEffort,
     TrustLevel,
+    UserAiSettings,
 )
 
 router = APIRouter(prefix="/providers", dependencies=[Depends(require_user)])
@@ -492,7 +493,13 @@ async def list_providers(
             user.id,
             include_configuration=False,
         )
-    settings, owner_id = await _load_scoped_ai(db, scope or "instance", user)
+    if scope == "personal" and user is not None and not (
+        await SettingsStore.load(db, AiSettings)
+    ).personal_providers_enabled:
+        # Keep the owner's stored configuration visible while mutations remain gated.
+        settings, owner_id = await SettingsStore.load(db, UserAiSettings, user_id=user.id), user.id
+    else:
+        settings, owner_id = await _load_scoped_ai(db, scope or "instance", user)
     response = await _settings_response(
         db,
         settings,

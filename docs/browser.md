@@ -4,7 +4,7 @@ The optional `browser` integration runs Playwright-managed Chromium on an owner-
 
 ## Availability and Setup
 
-- Configure Browser under **Einstellungen > Integrationen > Persönlich**. It reuses the existing administrator-controlled adapter availability (`full` or `disabled`), with no separate global browser switch. Disabling availability retains configuration and permits deletion, but blocks use and setup.
+- Configure the personal Browser connection under **Einstellungen > Integrationen**. It reuses the existing administrator-controlled adapter availability (`full` or `disabled`), with no separate global browser switch. Disabling availability retains configuration and permits deletion, but blocks use and setup.
 - Each owned agent permits one personal browser integration with an immutable agent assignment and empty technical configuration. There are no configurable commands, executable paths, browser endpoints or remote setup scripts.
 - Native browser installation is optional and starts only through the integration's **Browser einrichten** dialog and explicit **Einrichtung starten** confirmation. It installs the pinned Playwright and Pillow packages into the current Agent environment, downloads matching Chromium and offers missing browser host packages. Neither the general Agent installer, Agent startup, a status check, opening the viewer nor a model call installs browser dependencies.
 - The bundled `browser-setup.sh` downloads the Playwright-matched Chromium as the runtime user and probes it before offering missing Debian/Ubuntu runtime packages. System package installation requires an interactive confirmation and defaults to yes.

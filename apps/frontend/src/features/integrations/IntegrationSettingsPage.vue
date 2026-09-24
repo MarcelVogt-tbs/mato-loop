@@ -9,12 +9,7 @@
         </p>
       </div>
       <div v-if="showInstances" class="settings-scope-actions row items-center col-auto">
-        <SettingsScopeToggle
-          :model-value="integrations.scope"
-          :is-admin="auth.isAdmin"
-          :disable="integrations.loading || integrations.catalogLoading || testingId !== null || removingId !== null"
-          @update:model-value="changeScope"
-        />
+        <q-checkbox v-if="auth.isAdmin" v-model="shared" label="Global" />
         <q-btn
           class="col-auto"
           color="primary"
@@ -110,7 +105,7 @@
       </q-card>
     </template>
 
-    <q-banner v-if="showInstances && integrations.scope === 'personal'" rounded class="app-surface-tonal q-mb-md">
+    <q-banner v-if="showInstances && !personalCreatable" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="person" color="primary" /></template>
       Die Verfügbarkeit wird je Integrationstyp festgelegt. Nur persönlich verfügbare Typen können hinzugefügt oder bearbeitet werden. Vorhandene Integrationen anderer Typen bleiben sichtbar und können gelöscht werden.
     </q-banner>
@@ -131,7 +126,7 @@
 
     <q-card v-if="showInstances" flat class="app-surface q-mb-md">
       <q-card-section>
-        <div class="text-subtitle1 text-weight-bold">Suchprovider</div>
+        <div class="text-subtitle1 text-weight-bold">Persönliche Suchprovider</div>
         <div class="text-body2 app-muted q-mt-xs">
           Primären Dienst und optionalen Fallback für die Websuche auswählen.
         </div>
@@ -140,7 +135,7 @@
       <q-card-section class="row q-col-gutter-md">
         <div class="col-12 col-md-6">
           <q-select
-            :model-value="integrations.search.primaryProvider"
+            :model-value="personalSearch.primaryProvider"
             outlined
             emit-value
             map-options
@@ -154,7 +149,7 @@
         </div>
         <div class="col-12 col-md-6">
           <q-select
-            :model-value="integrations.search.fallbackProvider"
+            :model-value="personalSearch.fallbackProvider"
             outlined
             emit-value
             map-options
@@ -168,6 +163,14 @@
             @update:model-value="setFallbackSearchProvider"
           />
         </div>
+      </q-card-section>
+    </q-card>
+
+    <q-card v-if="showInstances && auth.isAdmin" flat class="app-surface q-mb-md">
+      <q-card-section class="text-subtitle1 text-weight-bold">Globale Suchprovider</q-card-section>
+      <q-card-section class="row q-col-gutter-md">
+        <q-select :model-value="instanceSearch.primaryProvider" class="col-12 col-md-6" outlined emit-value map-options label="Primärprovider" :options="instanceSearch.providerOptions.map((item) => ({ label: item.name, value: item.value }))" :disable="searchSelectionSaving" @update:model-value="saveInstanceSearch($event, instanceSearch.fallbackProvider === $event ? null : instanceSearch.fallbackProvider)" />
+        <q-select :model-value="instanceSearch.fallbackProvider" class="col-12 col-md-6" outlined clearable emit-value map-options label="Fallback-Provider" :options="instanceSearch.providerOptions.filter((item) => item.value !== instanceSearch.primaryProvider).map((item) => ({ label: item.name, value: item.value }))" :disable="searchSelectionSaving" @update:model-value="saveInstanceSearch(instanceSearch.primaryProvider, $event)" />
       </q-card-section>
     </q-card>
 
@@ -194,6 +197,7 @@
           <q-item-section>
             <div class="row items-center q-gutter-sm">
               <q-item-label class="text-weight-medium">{{ integration.name }}</q-item-label>
+              <q-badge outline color="grey-7" :label="integration.scope === 'instance' ? 'Global' : 'Persönlich'" />
               <q-chip dense :color="integrationAvailable(integration) && integration.enabled ? 'positive' : 'grey-7'" text-color="white">
                 {{ integrationAvailable(integration) ? (integration.enabled ? 'Aktiv' : 'Deaktiviert') : 'Nicht verfügbar' }}
               </q-chip>
@@ -206,7 +210,7 @@
               Computer: {{ executionAgentName(integration) }} ·
               {{ integration.config.binaryPath }}
             </q-item-label>
-            <q-item-label v-else-if="integration.integrationType === 'mail'" caption lines="1">
+            <q-item-label v-else-if="integration.integrationType === 'mail' && integration.config?.imapHost" caption lines="1">
               IMAP: {{ integration.config.imapHost }}:{{ integration.config.imapPort }} · SMTP: {{ integration.config.smtpHost }}:{{ integration.config.smtpPort }}
             </q-item-label>
             <template v-else-if="integration.integrationType === 'browser'">
@@ -218,7 +222,7 @@
               </div>
             </template>
             <q-item-label v-else caption lines="1">
-              {{ integration.config.baseUrl }}{{ integration.config.username ? ` · ${integration.config.username}` : '' }}
+              {{ integration.config?.baseUrl || (integration.scope === 'instance' ? 'Globale Verbindung' : '') }}{{ integration.config?.username ? ` · ${integration.config.username}` : '' }}
             </q-item-label>
           </q-item-section>
           <q-item-section side top>
@@ -233,7 +237,7 @@
                 :label="$q.screen.gt.sm ? 'Standardressourcen' : undefined"
                 aria-label="Standardressourcen verwalten"
                 :disable="!canEditIntegration(integration)"
-                :to="{ name: 'settings-integration-resources', params: { integrationId: integration.id }, query: { scope: integrations.scope } }"
+                :to="{ name: 'settings-integration-resources', params: { integrationId: integration.id }, query: { scope: integration.scope } }"
               />
               <q-btn
                 flat
@@ -266,7 +270,7 @@
                 icon="delete"
                 :aria-label="`${integration.name} löschen`"
                 :loading="removingId === integration.id"
-                :disable="removingId !== null"
+                :disable="removingId !== null || (integration.scope === 'instance' && !auth.isAdmin)"
                 @click="removeIntegration(integration)"
               />
             </div>
@@ -276,7 +280,7 @@
       <q-inner-loading :showing="integrations.loading || (integrations.catalogLoading && !integrations.catalogLoaded)" />
     </q-card>
 
-    <IntegrationConfigDialog v-if="showInstances" v-model="dialogOpen" :integration="selectedIntegration" />
+    <IntegrationConfigDialog v-if="showInstances" v-model="dialogOpen" :integration="selectedIntegration" @update:model-value="onDialogChange" />
     <BrowserSetupDialog v-if="setupId" :model-value="Boolean(setupId)" :integration-id="setupId" @update:model-value="setupId = null" />
   </section>
 </template>
@@ -285,12 +289,11 @@
 import { computed, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'
+import { api } from 'src/boot/axios'
 import IntegrationConfigDialog from 'src/features/integrations/IntegrationConfigDialog.vue'
 import BrowserSetupDialog from 'src/features/browser/BrowserSetupDialog.vue'
 import { browserStatusLabel } from 'src/utils/browser'
-import SettingsScopeToggle from 'src/features/settings/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
-import { resolveSettingsScope } from 'src/features/settings/scope'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import { useAuthStore } from 'stores/auth'
@@ -311,6 +314,11 @@ const testingId = ref(null)
 const removingId = ref(null)
 const searchSelectionSaving = ref(false)
 const section = ref('instances')
+const shared = ref(false)
+const instanceIntegrations = ref([])
+const storedPersonalIntegrations = ref([])
+const instanceSearch = ref({ primaryProvider: 'no_key', fallbackProvider: null, providerOptions: [{ name: 'Websuche ohne API-Key', value: 'no_key' }] })
+const personalSearch = ref({ primaryProvider: 'no_key', fallbackProvider: null, providerOptions: [{ name: 'Websuche ohne API-Key', value: 'no_key' }] })
 const showAccessPage = computed(() => route.name === 'settings-integration-resources')
 const showInstances = computed(() => !auth.isAdmin || section.value === 'instances')
 const searchProviders = computed(() => integrations.search.providers)
@@ -322,39 +330,45 @@ const recipeAccounts = computed(() => integrations.recipes.accounts)
 const musicInstances = computed(() => integrations.music.instances)
 const openScadInstances = computed(() => integrations.openscad.instances)
 const codingInstances = computed(() => integrations.coding.instances)
-const searchProviderOptions = computed(() => integrations.search.providerOptions.map((provider) => ({
+const searchProviderOptions = computed(() => personalSearch.value.providerOptions.map((provider) => ({
   label: provider.integrationId ? `${provider.name} · SearXNG` : provider.name,
   value: provider.value
 })))
 const fallbackSearchProviderOptions = computed(() => searchProviderOptions.value.filter(
-  (provider) => provider.value !== integrations.search.primaryProvider
+  (provider) => provider.value !== personalSearch.value.primaryProvider
 ))
-const configuredIntegrations = computed(
+const personalIntegrations = computed(
   () => [
     ...searchProviders.value,
     ...calendarAccounts.value,
     ...mailAccounts.value,
-    ...(integrations.scope === 'personal' ? tbsDeskAccounts.value : []),
+    ...tbsDeskAccounts.value,
     ...knowledgeBases.value,
     ...recipeAccounts.value,
     ...musicInstances.value,
     ...openScadInstances.value,
     ...codingInstances.value,
-    ...(integrations.scope === 'personal' ? integrations.browser.instances.map((item) => ({ ...item, integrationType: 'browser', providerType: 'browser' })) : [])
+    ...integrations.browser.instances.map((item) => ({ ...item, integrationType: 'browser', providerType: 'browser' }))
   ]
 )
+const configuredIntegrations = computed(() => [
+  ...personalIntegrations.value.map((item) => ({ ...item, scope: 'personal' })),
+  ...storedPersonalIntegrations.value.filter((item) => !personalIntegrations.value.some((own) => own.id === item.id)),
+  ...instanceIntegrations.value.map((item) => ({ ...item, scope: 'instance' }))
+])
 const backendAvailabilityOptions = [
-  { label: 'Instanz und persönlich', value: 'full' },
-  { label: 'Nur Instanz', value: 'instance_only' },
+  { label: 'Global und persönlich', value: 'full' },
+  { label: 'Nur global', value: 'instance_only' },
   { label: 'Nicht verfügbar', value: 'disabled' }
 ]
 const agentAvailabilityOptions = [
   { label: 'Persönlich verfügbar', value: 'full' },
   { label: 'Nicht verfügbar', value: 'disabled' }
 ]
+const personalCreatable = computed(() => integrations.catalog.some((adapter) => integrations.adapterAvailable(adapter.adapterType, 'personal')))
 const canCreateIntegration = computed(() => (
   integrations.catalogLoaded
-  && integrations.catalog.some((adapter) => integrations.adapterAvailable(adapter.adapterType))
+  && integrations.catalog.some((adapter) => integrations.adapterAvailable(adapter.adapterType, shared.value ? 'instance' : 'personal'))
 ))
 
 function availabilityOptions(adapter) {
@@ -364,24 +378,18 @@ function availabilityOptions(adapter) {
 }
 
 function canEditIntegration(integration) {
-  return integrationAvailable(integration)
+  return (integration.scope === 'personal' || auth.isAdmin) && integrationAvailable(integration)
 }
 
 function integrationAvailable(integration) {
-  return integrations.adapterAvailable(integration.providerType)
-}
-
-async function changeScope(scope) {
-  setupId.value = null
-  dialogOpen.value = false
-  integrations.selectScope(scope)
-  await reload()
+  return integrations.adapterAvailable(integration.providerType, integration.scope)
 }
 
 async function saveSearchSelection(primaryProvider, fallbackProvider) {
   searchSelectionSaving.value = true
   try {
-    await integrations.saveSearchSelection(primaryProvider, fallbackProvider)
+    const { data } = await api.put('/integrations/search', { primaryProvider, fallbackProvider }, { params: { scope: 'personal' } })
+    personalSearch.value = data
     $q.notify({ type: 'positive', message: 'Suchprovider gespeichert' })
   } catch {
     // The central API interceptor displays the error as a toast.
@@ -393,24 +401,46 @@ async function saveSearchSelection(primaryProvider, fallbackProvider) {
 async function setPrimarySearchProvider(primaryProvider) {
   await saveSearchSelection(
     primaryProvider,
-    integrations.search.fallbackProvider === primaryProvider
+    personalSearch.value.fallbackProvider === primaryProvider
       ? null
-      : integrations.search.fallbackProvider
+      : personalSearch.value.fallbackProvider
   )
 }
 
 async function setFallbackSearchProvider(fallbackProvider) {
-  await saveSearchSelection(integrations.search.primaryProvider, fallbackProvider)
+  await saveSearchSelection(personalSearch.value.primaryProvider, fallbackProvider)
 }
 
 function openCreateDialog() {
+  integrations.selectScope(shared.value ? 'instance' : 'personal')
   selectedIntegration.value = null
   dialogOpen.value = true
 }
 
 function openEditDialog(integration) {
+  integrations.selectScope(integration.scope)
   selectedIntegration.value = integration
   dialogOpen.value = true
+}
+
+function onDialogChange(open) {
+  if (!open) {
+    shared.value = false
+    void reload()
+  }
+}
+
+async function saveInstanceSearch(primaryProvider, fallbackProvider) {
+  searchSelectionSaving.value = true
+  try {
+    const { data } = await api.put('/integrations/search', { primaryProvider, fallbackProvider }, { params: { scope: 'instance' } })
+    instanceSearch.value = data
+    $q.notify({ type: 'positive', message: 'Suchprovider gespeichert' })
+  } catch {
+    // The central API interceptor displays the error.
+  } finally {
+    searchSelectionSaving.value = false
+  }
 }
 
 function providerLabel(providerType) {
@@ -461,6 +491,7 @@ function executionAgentName(integration) {
 }
 
 async function testIntegration(integration) {
+  integrations.selectScope(integration.scope)
   testingId.value = integration.id
   try {
     let result
@@ -490,6 +521,7 @@ async function testIntegration(integration) {
     // The central API interceptor displays the error as a toast.
   } finally {
     testingId.value = null
+    if (integration.scope === 'instance') await reload()
   }
 }
 
@@ -500,6 +532,7 @@ async function removeIntegration(integration) {
     { okLabel: 'Löschen' }
   )
   if (!confirmed) return
+  integrations.selectScope(integration.scope)
   removingId.value = integration.id
   try {
     if (integration.integrationType === 'calendar') await integrations.removeCalendar(integration.id)
@@ -515,16 +548,35 @@ async function removeIntegration(integration) {
     $q.notify({ type: 'positive', message: 'Integration gelöscht' })
   } finally {
     removingId.value = null
+    await reload()
   }
 }
 
 async function reload() {
   try {
+    integrations.selectScope('personal')
     await Promise.all([
       integrations.fetchCatalog(),
       integrations.fetchAll(),
       executionAgents.fetchAll()
     ])
+    personalSearch.value = { ...integrations.search }
+    const visible = (await api.get('/integrations/visible')).data
+    storedPersonalIntegrations.value = visible.filter((item) => item.scope === 'personal')
+    if (auth.isAdmin) {
+      integrations.selectScope('instance')
+      await integrations.fetchAll()
+      instanceIntegrations.value = [
+        ...integrations.search.providers, ...integrations.calendar.accounts,
+        ...integrations.mail.accounts, ...integrations.knowledge.bases,
+        ...integrations.recipes.accounts, ...integrations.music.instances
+      ]
+      instanceSearch.value = { ...integrations.search }
+      integrations.selectScope('personal')
+      await integrations.fetchAll()
+    } else {
+      instanceIntegrations.value = visible.filter((item) => item.scope === 'instance')
+    }
   } catch {
     // The central API interceptor displays the error as a toast.
   }
@@ -557,7 +609,6 @@ async function setAdapterAvailability(adapterType, availability) {
 }
 
 onMounted(() => {
-  integrations.selectScope(resolveSettingsScope(route.query.scope, auth.isAdmin))
   if (!showAccessPage.value) void reload()
 })
 </script>

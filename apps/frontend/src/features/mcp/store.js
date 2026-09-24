@@ -12,6 +12,7 @@ function branchConfig(scope) {
 export const useMcpServerStore = defineStore('mcp-servers', {
   state: () => ({
     servers: [],
+    visibleServers: [],
     loading: false,
     loaded: false,
     loadFailed: false,
@@ -49,6 +50,21 @@ export const useMcpServerStore = defineStore('mcp-servers', {
         throw error
       } finally {
         if (this.loadVersion === version) this.loading = false
+      }
+    },
+    async fetchVisibleServers() {
+      this.loading = true
+      this.loadFailed = false
+      try {
+        const { data } = await api.get('/mcp/servers/visible')
+        this.visibleServers = serversFrom(data)
+        this.loaded = true
+        return this.visibleServers
+      } catch (error) {
+        this.loadFailed = true
+        throw error
+      } finally {
+        this.loading = false
       }
     },
     async fetchSettings() {

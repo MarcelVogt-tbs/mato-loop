@@ -1109,6 +1109,35 @@ async def test_normal_provider_read_is_effective_and_hides_configuration(
     assert all(item["config"] == {} for item in result["providers"])
 
 
+async def test_owner_can_list_stored_providers_when_personal_creation_is_disabled(monkeypatch) -> None:
+    user = SimpleNamespace(id=uuid4(), is_admin=False)
+    instance_provider = LlmProviderConfig(
+        name="Shared", adapter_type="openai-compatible",
+        config={"base_url": "https://shared.example/v1"},
+    )
+    personal_provider = LlmProviderConfig(
+        name="Mine", adapter_type="openai-compatible",
+        config={"base_url": "https://mine.example/v1"},
+    )
+    instance = AiSettings(providers=[instance_provider], personal_providers_enabled=False)
+    personal = UserAiSettings(providers=[personal_provider])
+
+    async def load(_db, settings_type, **kwargs):
+        if settings_type is UserAiSettings:
+            assert kwargs["user_id"] == user.id
+            return personal
+        return instance
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(provider_routes, "load_effective_ai", AsyncMock(return_value=instance))
+
+    result = await list_providers(_db(), scope="personal", user=user)
+
+    assert [item["name"] for item in result["providers"]] == ["Mine"]
+    assert result["providers"][0]["config"]["baseUrl"] == "https://mine.example/v1"
+    assert result["availableProviders"][0]["config"] == {}
+
+
 async def test_personal_provider_read_includes_effective_selection_catalog(
     monkeypatch,
 ) -> None:

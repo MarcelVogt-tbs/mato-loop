@@ -11,19 +11,14 @@
       <div class="settings-scope-actions row items-center col-auto">
         <q-toggle
           class="col-auto"
-          v-if="auth.isAdmin && agents.scope === 'instance'"
+          v-if="auth.isAdmin"
           :model-value="agents.personalAgentsEnabled"
           label="Persönliche Agenten"
           @update:model-value="setPersonalAgentsEnabled"
         />
-        <SettingsScopeToggle
-          :model-value="agents.scope"
-          :is-admin="auth.isAdmin"
-          :disable="agents.loading || agents.saving"
-          @update:model-value="changeScope"
-        />
+        <q-checkbox v-if="auth.isAdmin" v-model="shared" label="Global" />
         <q-btn
-          v-if="!personalBlocked"
+          v-if="auth.isAdmin || !personalBlocked"
           class="col-auto"
           unelevated
           no-caps
@@ -31,27 +26,25 @@
           color="primary"
           icon="add"
           label="Neues Profil erstellen"
-          :disable="personalBlocked || agents.loading"
-          :to="{ name: 'settings-agent-create', query: { scope: agents.scope } }"
+          :disable="agents.loading || (personalBlocked && !shared)"
+          :to="{ name: 'settings-agent-create', query: { scope: shared ? 'instance' : 'personal' } }"
         />
       </div>
     </header>
 
-    <q-banner v-if="agents.scope === 'personal'" rounded class="app-surface-tonal q-mb-md">
+    <q-banner v-if="personalBlocked" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="person" color="primary" /></template>
-      {{ personalBlocked
-        ? 'Persönliche Agenten wurden für diese Instanz deaktiviert.'
-        : 'Persönliche Agenten stehen nur dir zur Verfügung. Instanz-Agenten bleiben zusätzlich auswählbar.' }}
+      Persönliche Agenten wurden für diese Instanz deaktiviert.
     </q-banner>
 
-    <q-banner v-if="agents.loadFailed && !personalBlocked" rounded class="bg-negative text-white q-mb-md">
+    <q-banner v-if="agents.loadFailed" rounded class="bg-negative text-white q-mb-md">
       <template #avatar><q-icon name="error_outline" /></template>
       Die Agentenprofile konnten nicht geladen werden.
       <template #action><q-btn flat no-caps color="white" label="Erneut laden" @click="load" /></template>
     </q-banner>
 
-    <q-card v-if="!personalBlocked" flat class="app-surface relative-position">
-      <q-card-section v-if="agents.loaded && !agents.scopedAgents.length" class="q-pa-xl">
+    <q-card flat class="app-surface relative-position">
+      <q-card-section v-if="agents.loaded && !visibleAgents.length" class="q-pa-xl">
         <AppStateMessage
           icon="smart_toy"
           title="Noch keine Agentenprofile"
@@ -59,12 +52,15 @@
         />
       </q-card-section>
       <q-list v-else separator>
-        <q-item v-for="agent in agents.scopedAgents" :key="agent.id" class="q-py-md">
+        <q-item v-for="agent in visibleAgents" :key="agent.id" class="q-py-md">
           <q-item-section avatar top>
             <q-avatar rounded color="primary" text-color="white" icon="smart_toy" />
           </q-item-section>
           <q-item-section>
-            <q-item-label class="text-subtitle1 text-weight-medium">{{ agent.name }}</q-item-label>
+            <q-item-label class="text-subtitle1 text-weight-medium">
+              {{ agent.name }} <q-badge outline color="grey-7" :label="agent.scope === 'instance' ? 'Global' : 'Persönlich'" />
+              <q-badge v-if="agent.effective === false" outline color="warning" label="Nicht verfügbar" />
+            </q-item-label>
             <q-item-label caption class="text-body2 q-mt-xs">
               {{ agent.description || 'Keine Beschreibung' }}
             </q-item-label>
@@ -78,11 +74,11 @@
                 flat
                 round
                 dense
-                :icon="agent.protected && !agent.accessEditable ? 'visibility' : 'edit'"
-                :aria-label="`${agent.name} ${agent.protected && !agent.accessEditable ? 'ansehen' : 'bearbeiten'}`"
-                :disable="personalBlocked"
-                :to="{ name: 'settings-agent-edit', params: { agentId: agent.id }, query: { scope: agents.scope } }"
-              ><q-tooltip>{{ agent.protected && !agent.accessEditable ? 'Ansehen' : 'Bearbeiten' }}</q-tooltip></q-btn>
+                :icon="agent.scope === 'instance' && !auth.isAdmin ? 'visibility' : 'edit'"
+                :aria-label="`${agent.name} ${agent.scope === 'instance' && !auth.isAdmin ? 'ansehen' : 'bearbeiten'}`"
+                :disable="agent.scope === 'personal' && personalBlocked"
+                :to="{ name: 'settings-agent-edit', params: { agentId: agent.id }, query: { scope: agent.scope } }"
+              ><q-tooltip>{{ agent.scope === 'instance' && !auth.isAdmin ? 'Ansehen' : 'Bearbeiten' }}</q-tooltip></q-btn>
               <q-btn
                 flat
                 round
@@ -90,7 +86,8 @@
                 color="negative"
                 icon="delete_outline"
                 :aria-label="`${agent.name} löschen`"
-                :disable="personalBlocked || agent.protected"
+                v-if="agent.scope === 'personal' || auth.isAdmin"
+                :disable="(agent.scope === 'personal' && personalBlocked) || agent.protected"
                 @click="removeAgent(agent)"
               ><q-tooltip>Löschen</q-tooltip></q-btn>
             </div>
@@ -103,13 +100,12 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
+import { api } from 'src/boot/axios'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
-import SettingsScopeToggle from 'src/features/settings/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
-import { resolveSettingsScope } from 'src/features/settings/scope'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useAuthStore } from 'stores/auth'
 
@@ -117,21 +113,27 @@ defineOptions({ name: 'AgentProfileSettingsPage' })
 
 const $q = useQuasar()
 const route = useRoute()
-const router = useRouter()
 const { confirm } = useConfirm()
 const agents = useAgentProfileStore()
 const auth = useAuthStore()
 const showEditor = computed(() => ['settings-agent-create', 'settings-agent-edit'].includes(route.name))
-const personalBlocked = computed(() => agents.scope === 'personal' && !agents.personalAgentsEnabled)
+const shared = ref(false)
+const storedAgents = ref([])
+const visibleAgents = computed(() => [
+  ...agents.agents.filter((agent) => agent.scope !== 'integration'),
+  ...storedAgents.value
+])
+const personalBlocked = computed(() => !agents.personalAgentsEnabled)
 
 async function load() {
-  await agents.fetchAgents(agents.scope)
-}
-
-async function changeScope(scope) {
-  agents.selectScope(scope)
-  await router.replace({ query: { ...route.query, scope: agents.scope } })
-  await load()
+  try {
+    const result = await agents.fetchAgents()
+    storedAgents.value = result.personalAgentsEnabled === false
+      ? (await api.get('/agent-profiles', { params: { scope: 'personal' } })).data.agents || []
+      : []
+  } catch {
+    agents.loadFailed = true
+  }
 }
 
 async function removeAgent(agent) {
@@ -142,7 +144,9 @@ async function removeAgent(agent) {
   )
   if (!accepted) return
   try {
+    agents.selectScope(agent.scope)
     await agents.deleteAgent(agent.id)
+    await load()
     $q.notify({ type: 'positive', message: 'Agent gelöscht' })
   } catch {
     // The central Axios interceptor displays the error.
@@ -152,6 +156,7 @@ async function removeAgent(agent) {
 async function setPersonalAgentsEnabled(enabled) {
   try {
     await agents.setPersonalAgentsEnabled(enabled)
+    await load()
     $q.notify({ type: 'positive', message: 'Einstellung gespeichert' })
   } catch {
     // The central Axios interceptor displays the error.
@@ -159,7 +164,12 @@ async function setPersonalAgentsEnabled(enabled) {
 }
 
 onMounted(() => {
-  agents.selectScope(resolveSettingsScope(route.query.scope, auth.isAdmin))
   if (!showEditor.value) void load()
+})
+watch(showEditor, (editing) => {
+  if (!editing) {
+    shared.value = false
+    void load()
+  }
 })
 </script>

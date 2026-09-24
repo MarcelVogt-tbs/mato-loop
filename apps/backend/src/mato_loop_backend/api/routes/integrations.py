@@ -697,6 +697,31 @@ async def update_integration_catalog(
     return _catalog_item(adapter, settings)
 
 
+@router.get("/visible")
+async def visible_instance_integrations(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[UserAccount, Depends(require_user)],
+) -> list[dict]:
+    instance = await SettingsStore.load(db, IntegrationSettings)
+    personal = await SettingsStore.load_optional(db, UserIntegrationSettings, user_id=user.id)
+    return [
+        {
+            "id": str(item.id),
+            "name": item.name,
+            "integrationType": item.integration_type,
+            "providerType": item.adapter_type,
+            "adapterType": item.adapter_type,
+            "enabled": item.enabled,
+            "scope": scope,
+            "config": {},
+        }
+        for scope, settings in (("instance", instance), ("personal", personal))
+        if settings is not None
+        for item in settings.instances
+        if item.integration_type != "mcp"
+    ]
+
+
 @router.get("/search")
 async def get_search_integrations(
     db: Annotated[AsyncSession, Depends(get_db_session)],

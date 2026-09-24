@@ -4,7 +4,7 @@
 
 Unter **Einstellungen > Provider** können Sie Provider hinzufügen, bearbeiten, aktivieren, testen und löschen.
 
-Administratoren wechseln mit **Persönlich** / **Instanz** zwischen ihren eigenen und den gemeinsamen Einstellungen. Nur Administratoren dürfen die Instanz ändern und festlegen, ob persönliche Provider erlaubt sind. Normale Benutzer verwalten ausschließlich ihre persönliche Seite. Instanz-Provider und ihre Modelle stehen allen Benutzern zur Verfügung; persönliche Provider und ihre verschlüsselten Zugangsdaten bleiben dem jeweiligen Benutzer zugeordnet.
+Die Provider-Liste zeigt **Persönlich** und **Global** gekennzeichnete Einträge zusammen. Beim Anlegen können Administratoren **Global** wählen; der Geltungsbereich bleibt danach fest. Nur Administratoren ändern globale Provider und legen fest, ob persönliche Provider erlaubt sind. Globale Provider und ihre Modelle stehen allen Benutzern zur Verfügung; persönliche Provider und ihre verschlüsselten Zugangsdaten bleiben dem jeweiligen Benutzer zugeordnet.
 
 ### ChatGPT Codex
 

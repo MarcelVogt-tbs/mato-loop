@@ -1074,3 +1074,28 @@ def test_generic_mcp_servers_are_available_only_from_dedicated_route(monkeypatch
     assert response.json()["servers"][0]["tools"][0]["name"] == "lookup"
     assert all(adapter.adapter_type != "mcp_streamable_http" for adapter in integration_adapters())
     assert any(adapter.adapter_type == "sonobin" for adapter in integration_adapters())
+
+
+@pytest.mark.asyncio
+async def test_visible_mcp_servers_include_only_shared_and_owned_entries(monkeypatch) -> None:
+    shared = IntegrationInstance(
+        name="Shared", integration_type="mcp", adapter_type="mcp_streamable_http",
+        config={"endpoint": "https://shared.example/mcp", "tools": []},
+    )
+    personal = shared.model_copy(update={
+        "id": uuid4(), "name": "Mine",
+        "config": {"endpoint": "https://mine.example/mcp", "tools": []},
+    })
+    user_id = uuid4()
+    load = AsyncMock(return_value=IntegrationSettings(instances=[shared]))
+    load_optional = AsyncMock(return_value=UserIntegrationSettings(instances=[personal]))
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
+
+    result = await mcp_routes.list_visible_mcp_servers(AsyncMock(), SimpleNamespace(id=user_id))
+
+    assert [(item["name"], item["scope"]) for item in result["servers"]] == [
+        ("Shared", "instance"), ("Mine", "personal")
+    ]
+    assert all("bearerToken" not in item for item in result["servers"])
+    assert load_optional.await_args.kwargs["user_id"] == user_id

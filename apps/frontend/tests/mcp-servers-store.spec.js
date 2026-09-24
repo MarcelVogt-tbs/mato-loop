@@ -73,4 +73,20 @@ describe('MCP server store', () => {
     expect(store.settingsLoaded).toBe(true)
   })
 
+  it('shows shared and personal servers without changing the mutation scope', async () => {
+    const items = [
+      { ...list.servers[0], scope: 'instance' },
+      { ...list.servers[0], id: 'mine', scope: 'personal' }
+    ]
+    api.get.mockResolvedValueOnce({ data: { servers: items } })
+    const store = useMcpServerStore()
+    store.selectScope('personal')
+
+    await store.fetchVisibleServers()
+
+    expect(api.get).toHaveBeenCalledWith('/mcp/servers/visible')
+    expect(store.visibleServers).toEqual(items)
+    expect(store.scope).toBe('personal')
+  })
+
 })

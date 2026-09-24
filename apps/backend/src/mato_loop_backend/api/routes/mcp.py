@@ -174,6 +174,24 @@ async def list_mcp_servers(
     }
 
 
+@router.get("/servers/visible")
+async def list_visible_mcp_servers(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[UserAccount, Depends(require_user)],
+) -> dict:
+    instance = await SettingsStore.load(db, IntegrationSettings)
+    personal = await SettingsStore.load_optional(db, UserIntegrationSettings, user_id=user.id)
+    return {
+        "servers": [
+            {**_payload(item), "scope": scope}
+            for scope, settings in (("instance", instance), ("personal", personal))
+            if settings is not None
+            for item in settings.instances
+            if item.integration_type == "mcp" and item.adapter_type == "mcp_streamable_http"
+        ]
+    }
+
+
 @router.post("/servers", status_code=status.HTTP_201_CREATED)
 async def create_mcp_server(
     payload: McpServerCreateRequest,

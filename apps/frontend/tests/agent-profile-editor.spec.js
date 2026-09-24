@@ -18,7 +18,7 @@ const first = '00000000-0000-4000-8000-000000000010'
 const second = '00000000-0000-4000-8000-000000000011'
 const builtinId = '00000000-0000-4000-8000-000000000001'
 
-async function mountEditor(path = '/agents/agent?scope=personal', extraAgents = [], personalAgentsEnabled = true, groups = []) {
+async function mountEditor(path = '/agents/agent?scope=personal', extraAgents = [], personalAgentsEnabled = true, groups = [], isAdmin = true) {
   const builtin = {
     id: builtinId, scope: 'instance', protected: true, name: 'Allgemein', description: 'Standard',
     personaId: null, instructions: 'Follow the request.', answerDisplay: 'compact', maxToolCalls: 25,
@@ -69,7 +69,7 @@ async function mountEditor(path = '/agents/agent?scope=personal', extraAgents = 
   }) })
   const pinia = createPinia()
   app.use(pinia).use(router).use(Quasar, { components: { QAvatar, QBadge, QBanner, QBtn, QBtnToggle, QCard, QCardSection, QChip, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QList, QSelect, QSeparator, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar, QToolbarTitle } })
-  useAuthStore(pinia).isAdmin = true
+  useAuthStore(pinia).isAdmin = isAdmin
   app.config.globalProperties.$q.notify = vi.fn()
   app.mount(root)
   await vi.waitFor(() => expect(
@@ -119,6 +119,22 @@ it('shows only the disabled state for a direct personal editor link', async () =
   expect(root.textContent).toContain('Persönliche Agenten wurden für diese Instanz deaktiviert.')
   expect(root.textContent).not.toContain('Das Agentenprofil konnte nicht geladen werden.')
   expect(root.querySelector('form')).toBeNull()
+})
+
+it('opens a shared profile read-only for a regular user without requesting instance settings', async () => {
+  const page = await mountEditor('/agents/shared?scope=instance', [{
+    id: 'shared', scope: 'instance', protected: false, name: 'Team Agent',
+    baseProfileId: builtinId, overrides: {}, instructions: 'Team instructions',
+    privatePermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} },
+    publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} }
+  }], true, [], false)
+
+  expect(page.scope).toBe('instance')
+  expect(page.accessProtected).toBe(true)
+  expect(page.loadFailed).toBe(false)
+  expect(root.textContent).toContain('Team Agent ansehen')
+  expect(api.get).toHaveBeenCalledWith('/agent-profiles')
+  expect(api.get).not.toHaveBeenCalledWith('/agent-profiles', { params: { scope: 'instance' } })
 })
 
 it('shows the external working directory policy without a host tool', async () => {

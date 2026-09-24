@@ -147,6 +147,41 @@ async def test_disabled_personal_agent_profiles_remain_readable(monkeypatch) -> 
     scoped.assert_not_awaited()
 
 
+async def test_disabled_personal_profiles_are_manageable_but_not_runtime_effective(monkeypatch) -> None:
+    user = UserAccount(id=uuid4(), username="user", password_hash="hash")
+    custom = CustomAgentProfile(
+        name="Mine", description="", base_profile_id=GENERAL_PROFILE_ID,
+        overrides=AgentProfileOverrides(),
+    )
+    instance = AgentProfilesSettings(personal_agents_enabled=False)
+
+    async def load(_db, settings_type, **_kwargs):
+        if settings_type is AgentProfilesSettings:
+            return instance
+        if settings_type is AgentIdentitySettings:
+            return AgentIdentitySettings()
+        if settings_type is IntegrationSettings:
+            return IntegrationSettings()
+        return ToolSettings()
+
+    async def load_optional(_db, settings_type, **_kwargs):
+        if settings_type is AgentProfilesSettings:
+            return instance
+        if settings_type is UserAgentProfilesSettings:
+            return UserAgentProfilesSettings(profiles=[custom])
+        return None
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=load_optional))
+    db = AsyncMock()
+
+    management = await list_agent_profiles(user, db, scope="personal")
+    runtime = await list_agent_profiles(user, db)
+
+    assert [(item["name"], item["effective"]) for item in management["agents"]] == [("Mine", False)]
+    assert all(item["id"] != str(custom.id) for item in runtime["effectiveAgents"])
+
+
 def test_custom_profile_stores_only_sparse_typed_overrides() -> None:
     profile = CustomAgentProfile(
         name="Custom",

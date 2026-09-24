@@ -8,12 +8,7 @@
         </p>
       </div>
       <div class="settings-scope-actions row items-center col-auto">
-        <SettingsScopeToggle
-          :model-value="providers.scope"
-          :is-admin="auth.isAdmin"
-          :disable="scopeBusy"
-          @update:model-value="changeScope"
-        />
+        <q-checkbox v-if="auth.isAdmin" v-model="shared" label="Global" :disable="scopeBusy" />
         <q-btn
           class="col-auto"
           color="primary"
@@ -22,13 +17,13 @@
           no-wrap
           icon="add"
           label="Provider hinzufügen"
-          :disable="personalBlocked"
+          :disable="pageLoading || (personalBlocked && !shared)"
           @click="openCreateDialog"
         />
       </div>
     </header>
 
-    <q-card v-if="auth.isAdmin && providers.scope === 'instance'" flat class="app-surface-tonal q-mb-md">
+    <q-card v-if="auth.isAdmin" flat class="app-surface-tonal q-mb-md">
       <q-card-section class="row items-center justify-between q-gutter-md">
         <div>
           <div class="text-subtitle2 text-weight-bold">Persönliche Provider</div>
@@ -44,14 +39,17 @@
       </q-card-section>
     </q-card>
 
-    <q-banner v-if="providers.scope === 'personal'" rounded class="app-surface-tonal q-mb-md">
+    <q-banner v-if="personalBlocked" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="person" color="primary" /></template>
-      {{ personalBlocked
-        ? 'Persönliche Provider wurden für diese Instanz deaktiviert. Vorhandene Einstellungen bleiben gespeichert, können aber nicht bearbeitet werden.'
-        : 'Hier verwaltest du deine persönlichen Provider und Modelle. Instanzmodelle bleiben zusätzlich für Agentenprofile verfügbar.' }}
+      Persönliche Provider wurden für diese Instanz deaktiviert. Globale Provider bleiben verfügbar.
     </q-banner>
 
-    <q-card v-if="!llmProviders.length && !providers.loading" flat class="app-surface q-pa-lg">
+    <q-banner v-if="loadFailed" rounded class="app-surface-tonal q-mb-md">
+      Die Provider konnten nicht geladen werden.
+      <template #action><q-btn flat no-caps color="primary" label="Erneut laden" @click="loadPage" /></template>
+    </q-banner>
+
+    <q-card v-if="!llmProviders.length && !pageLoading && !loadFailed" flat class="app-surface q-pa-lg">
       <div class="row items-center no-wrap q-gutter-md">
         <q-avatar color="grey-7" text-color="white" icon="hub" />
         <div>
@@ -79,6 +77,7 @@
                 <q-chip dense :color="providerStatus(provider).color" text-color="white">
                   {{ providerStatus(provider).label }}
                 </q-chip>
+                <q-badge outline color="grey-7" :label="provider.scope === 'instance' ? 'Global' : 'Persönlich'" />
               </div>
               <q-item-label caption class="ellipsis">{{ providerDescription(provider) }}</q-item-label>
               <q-item-label caption>{{ activeModelCount(provider) }} aktiv · {{ providerModels(provider).length }} Modelle</q-item-label>
@@ -89,7 +88,7 @@
                 color="primary"
                 label="Provider aktiv"
                 :aria-label="`${provider.name}: Provider aktiv`"
-                :disable="personalBlocked || providerToggleLoading[provider.id]"
+                :disable="!canEdit(provider) || providerToggleLoading[provider.id]"
                 @click.stop
                 @update:model-value="toggleProvider(provider, $event)"
               />
@@ -97,17 +96,17 @@
                 <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${provider.name}`">
                   <q-menu class="app-menu-popup app-action-menu">
                     <q-list dense style="min-width: 190px">
-                      <q-item v-close-popup clickable :disable="personalBlocked" @click="openEditDialog(provider)">
+                      <q-item v-close-popup clickable :disable="!canEdit(provider)" @click="openEditDialog(provider)">
                         <q-item-section avatar><q-icon name="edit" /></q-item-section>
                         <q-item-section>Bearbeiten</q-item-section>
                       </q-item>
-                      <q-item v-close-popup clickable :disable="personalBlocked || !canTest(provider)" @click="testProvider(provider.id)">
+                      <q-item v-close-popup clickable :disable="!canEdit(provider) || !canTest(provider)" @click="testProvider(provider.id)">
                         <q-item-section avatar><q-icon name="network_check" /></q-item-section>
                         <q-item-section>Verbindung testen</q-item-section>
                         <q-inner-loading :showing="testingProviderId === provider.id" />
                       </q-item>
                       <q-separator />
-                      <q-item v-close-popup clickable :disable="personalBlocked" class="text-negative" @click="removeProvider(provider)">
+                      <q-item v-close-popup clickable :disable="!canEdit(provider)" class="text-negative" @click="removeProvider(provider)">
                         <q-item-section avatar><q-icon name="delete" /></q-item-section>
                         <q-item-section>Löschen</q-item-section>
                       </q-item>
@@ -135,7 +134,7 @@
                 icon="refresh"
                 aria-label="Modelle aktualisieren"
                 :loading="syncing[provider.id]"
-                :disable="personalBlocked || !supportsDiscovery(provider)"
+                :disable="!canEdit(provider) || !supportsDiscovery(provider)"
                 @click="syncProviderModels(provider)"
               >
                 <q-tooltip>{{ supportsDiscovery(provider) ? 'Modelle vom Provider aktualisieren' : 'Automatische Erkennung wird nicht unterstützt' }}</q-tooltip>
@@ -147,13 +146,13 @@
                 color="primary"
                 icon="add"
                 label="Modell manuell hinzufügen"
-                :disable="personalBlocked"
+                :disable="!canEdit(provider)"
                 @click="openModelDialog(provider)"
               />
               <q-btn v-else-if="supportsManualModels(provider)" flat round dense icon="more_vert" aria-label="Weitere Modellaktionen">
                 <q-menu class="app-menu-popup app-action-menu">
                   <q-list dense style="min-width: 230px">
-                    <q-item v-close-popup clickable :disable="personalBlocked" @click="openModelDialog(provider)">
+                    <q-item v-close-popup clickable :disable="!canEdit(provider)" @click="openModelDialog(provider)">
                       <q-item-section avatar><q-icon name="add" /></q-item-section>
                       <q-item-section>Modell manuell hinzufügen</q-item-section>
                     </q-item>
@@ -228,8 +227,8 @@
                     color="primary"
                     label="Aktiv"
                     :aria-label="`${model.name || model.modelId}: Modell aktiv`"
-                    :disable="personalBlocked || !provider.enabled || !isModelPresent(model) || modelToggleLoading[model.id]"
-                    @update:model-value="toggleModel(model, $event)"
+                    :disable="!canEdit(provider) || !provider.enabled || !isModelPresent(model) || modelToggleLoading[model.id]"
+                    @update:model-value="toggleModel(model, provider, $event)"
                   />
                   <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${model.name || model.modelId}`">
                     <q-menu class="app-menu-popup app-action-menu">
@@ -238,18 +237,18 @@
                           v-if="modelSupportsCapability(model, 'chat')"
                           v-close-popup
                           clickable
-                          :disable="personalBlocked || !canTestModel(model, provider)"
-                          @click="testModel(model)"
+                          :disable="!canEdit(provider) || !canTestModel(model, provider)"
+                          @click="testModel(model, provider)"
                         >
                           <q-item-section avatar><q-icon name="network_check" /></q-item-section>
                           <q-item-section>Testen</q-item-section>
                         </q-item>
-                        <q-item v-close-popup clickable :disable="personalBlocked" @click="openModelDialog(provider, model)">
+                        <q-item v-close-popup clickable :disable="!canEdit(provider)" @click="openModelDialog(provider, model)">
                           <q-item-section avatar><q-icon name="tune" /></q-item-section>
                           <q-item-section>{{ modelSupportsCapability(model, 'chat') ? 'Laufzeit bearbeiten' : 'Modell bearbeiten' }}</q-item-section>
                         </q-item>
                         <q-separator />
-                        <q-item v-close-popup clickable :disable="personalBlocked" class="text-negative" @click="removeModel(model)">
+                        <q-item v-close-popup clickable :disable="!canEdit(provider)" class="text-negative" @click="removeModel(model, provider)">
                           <q-item-section avatar><q-icon name="delete" /></q-item-section>
                           <q-item-section>Löschen</q-item-section>
                         </q-item>
@@ -267,17 +266,19 @@
       </q-card>
     </div>
 
-    <q-inner-loading :showing="providers.loading && !llmProviders.length" />
+    <q-inner-loading :showing="pageLoading && !llmProviders.length" />
     <ProviderConfigDialog
       v-model="dialogOpen"
       :provider="selectedProvider"
       @provider-created="handleProviderCreated"
       @provider-updated="handleProviderUpdated"
+      @update:model-value="onDialogChange"
     />
     <ModelConfigDialog
       v-model="modelDialogOpen"
       :provider="selectedModelProvider"
       :model="selectedModel"
+      @update:model-value="onDialogChange"
     />
   </section>
 </template>
@@ -285,10 +286,10 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
+import { api } from 'src/boot/axios'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import ModelConfigDialog from 'src/features/providers/ModelConfigDialog.vue'
 import ProviderConfigDialog from 'src/features/providers/ProviderConfigDialog.vue'
-import SettingsScopeToggle from 'src/features/settings/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
 import {
   discoveryState,
@@ -322,23 +323,55 @@ const syncFailed = reactive({})
 const providerToggleLoading = reactive({})
 const modelToggleLoading = reactive({})
 const modelSearch = reactive({})
-const llmProviders = computed(() => providers.providers.filter((item) => (
+const shared = ref(false)
+const pageLoading = ref(true)
+const loadFailed = ref(false)
+const listedProviders = ref([])
+const listedModels = ref([])
+const llmProviders = computed(() => listedProviders.value.filter((item) => (
   ['openai-codex', 'openai-compatible', 'lemonade', 'azure-speech'].includes(item.adapterType)
 )))
-const personalBlocked = computed(() => (
-  providers.scope === 'personal' && !providers.personalProvidersEnabled
-))
-const scopeBusy = computed(() => providers.loading
+const personalBlocked = computed(() => !providers.personalProvidersEnabled)
+const canEdit = (provider) => (provider.scope === 'instance' ? auth.isAdmin : !personalBlocked.value)
+const codexFor = (provider) => ({ authenticated: provider.hasCredential })
+const scopeBusy = computed(() => pageLoading.value || providers.loading
   || gateLoading.value
   || Object.values(syncing).some(Boolean)
   || Object.values(providerToggleLoading).some(Boolean)
   || Object.values(modelToggleLoading).some(Boolean))
 
-async function changeScope(scope) {
-  dialogOpen.value = false
-  modelDialogOpen.value = false
+async function prepareScope(scope) {
   providers.selectScope(scope)
-  await providers.fetchAll().catch(() => {})
+  await providers.fetchAll()
+}
+
+async function loadPage() {
+  pageLoading.value = true
+  loadFailed.value = false
+  try {
+    const policy = (await api.get('/providers/personal-policy')).data
+    providers.personalProvidersEnabled = policy.personalProvidersEnabled !== false
+    const instance = (await api.get('/providers', auth.isAdmin ? { params: { scope: 'instance' } } : {})).data
+    const personal = (await api.get('/providers', { params: { scope: 'personal' } })).data
+    const personalIds = new Set(personal.providers.map((provider) => provider.id))
+    listedProviders.value = [
+      ...instance.providers.filter((provider) => !personalIds.has(provider.id)).map((provider) => ({ ...provider, scope: 'instance' })),
+      ...personal.providers.map((provider) => ({ ...provider, scope: 'personal' }))
+    ]
+    listedModels.value = [...instance.models.filter((model) => !personalIds.has(model.providerId)), ...personal.models]
+  } catch {
+    loadFailed.value = true
+    // The central API interceptor displays the error.
+  } finally {
+    pageLoading.value = false
+  }
+}
+
+function onDialogChange(open) {
+  if (!open) {
+    shared.value = false
+    void loadPage()
+  }
 }
 
 async function togglePersonalProviders(enabled) {
@@ -352,22 +385,22 @@ async function togglePersonalProviders(enabled) {
 
 function openCreateDialog() {
   selectedProvider.value = null
-  dialogOpen.value = true
+  void prepareScope(shared.value ? 'instance' : 'personal').then(() => { dialogOpen.value = true }).catch(() => {})
 }
 
 function openEditDialog(provider) {
   selectedProvider.value = provider
-  dialogOpen.value = true
+  void prepareScope(provider.scope).then(() => { dialogOpen.value = true }).catch(() => {})
 }
 
 function openModelDialog(provider, model = null) {
   selectedModelProvider.value = provider
   selectedModel.value = model
-  modelDialogOpen.value = true
+  void prepareScope(provider.scope).then(() => { modelDialogOpen.value = true }).catch(() => {})
 }
 
 function providerModels(provider) {
-  return providers.models.filter((model) => model.providerId === provider.id)
+  return listedModels.value.filter((model) => model.providerId === provider.id)
 }
 
 function filteredModels(provider) {
@@ -380,7 +413,7 @@ function filteredModels(provider) {
 
 function activeModelCount(provider) {
   return providerModels(provider).filter((model) => (
-    isModelEffective(model, provider, providers.codex)
+    isModelEffective(model, provider, codexFor(provider))
   )).length
 }
 
@@ -396,7 +429,7 @@ function providerStatus(provider) {
   if (provider.adapterType === 'azure-speech' && !provider.hasCredential) {
     return { label: 'API-Key fehlt', color: 'warning' }
   }
-  if (provider.adapterType === 'openai-codex' && !providers.codex.authenticated) {
+  if (provider.adapterType === 'openai-codex' && !provider.hasCredential) {
     return { label: 'Nicht verbunden', color: 'warning' }
   }
   return { label: 'Aktiv', color: 'positive' }
@@ -404,6 +437,7 @@ function providerStatus(provider) {
 
 function providerDescription(provider) {
   if (provider.adapterType === 'openai-codex') return 'ChatGPT-Abonnement · Codex OAuth'
+  if (provider.scope === 'instance' && !Object.keys(provider.config || {}).length) return 'Globale Verbindung'
   if (provider.adapterType === 'lemonade') {
     return `${provider.config?.baseUrl || provider.config?.base_url || 'Keine URL'} · Lemonade`
   }
@@ -418,13 +452,13 @@ function providerDescription(provider) {
 function canTest(provider) {
   return providerModels(provider).some((model) => (
     modelSupportsCapability(model, 'chat')
-    && isModelEffective(model, provider, providers.codex)
+    && isModelEffective(model, provider, codexFor(provider))
   ))
 }
 
 function canTestModel(model, provider) {
   return isModelPresent(model)
-    && isProviderEffective(provider, providers.codex)
+    && isProviderEffective(provider, codexFor(provider))
     && modelSupportsCapability(model, 'chat')
 }
 
@@ -462,40 +496,49 @@ function formatDate(value) {
 
 async function handleProviderCreated(id) {
   expandedProviders[id] = true
-  const provider = providers.providers.find((item) => item.id === id)
+  const found = providers.providers.find((item) => item.id === id)
+  const provider = found && { ...found, scope: providers.scope }
   if (provider) await syncProviderModels(provider)
+  await loadPage()
 }
 
 async function handleProviderUpdated(id) {
   expandedProviders[id] = true
-  const provider = providers.providers.find((item) => item.id === id)
+  const found = providers.providers.find((item) => item.id === id)
+  const provider = found && { ...found, scope: providers.scope }
   if (provider && supportsDiscovery(provider)) await syncProviderModels(provider)
+  await loadPage()
 }
 
 async function toggleProvider(provider, enabled) {
   providerToggleLoading[provider.id] = true
   try {
+    await prepareScope(provider.scope)
     await providers.setProviderEnabled(provider.id, enabled)
   } catch {
     await providers.fetchAll().catch(() => {})
   } finally {
     providerToggleLoading[provider.id] = false
+    await loadPage()
   }
 }
 
-async function toggleModel(model, enabled) {
+async function toggleModel(model, provider, enabled) {
   modelToggleLoading[model.id] = true
   try {
+    await prepareScope(provider.scope)
     await providers.setModelEnabled(model.id, enabled)
   } catch {
     await providers.fetchAll().catch(() => {})
   } finally {
     modelToggleLoading[model.id] = false
+    await loadPage()
   }
 }
 
 async function syncProviderModels(provider) {
   if (!supportsDiscovery(provider)) return
+  await prepareScope(provider.scope)
   syncing[provider.id] = true
   syncFailed[provider.id] = false
   try {
@@ -504,12 +547,14 @@ async function syncProviderModels(provider) {
     syncFailed[provider.id] = true
   } finally {
     syncing[provider.id] = false
+    await loadPage()
   }
 }
 
 async function testProvider(id) {
   testingProviderId.value = id
   try {
+    await prepareScope(listedProviders.value.find((item) => item.id === id).scope)
     await providers.testProvider(id)
     $q.notify({ type: 'positive', message: 'Verbindung erfolgreich' })
   } finally {
@@ -517,19 +562,22 @@ async function testProvider(id) {
   }
 }
 
-async function testModel(model) {
+async function testModel(model, provider) {
+  await prepareScope(provider.scope)
   await providers.testModel(model.id)
   $q.notify({ type: 'positive', message: 'Modell erfolgreich getestet' })
 }
 
-async function removeModel(model) {
+async function removeModel(model, provider) {
   const confirmed = await confirm(
     `Modell „${model.name || model.modelId}“ löschen? Zugewiesene Sessions verwenden danach das Standardmodell.`,
     'Modell löschen',
     { okLabel: 'Löschen' }
   )
   if (!confirmed) return
+  await prepareScope(provider.scope)
   await providers.removeModel(model.id)
+  await loadPage()
   $q.notify({ type: 'positive', message: 'Modell gelöscht' })
 }
 
@@ -540,9 +588,11 @@ async function removeProvider(provider) {
     { okLabel: 'Löschen' }
   )
   if (!confirmed) return
+  await prepareScope(provider.scope)
   await providers.removeProvider(provider.id)
+  await loadPage()
   $q.notify({ type: 'positive', message: 'Provider gelöscht' })
 }
 
-onMounted(() => changeScope('personal'))
+onMounted(loadPage)
 </script>

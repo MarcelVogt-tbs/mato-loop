@@ -23,12 +23,6 @@
         </div>
       </q-toolbar-title>
       <div class="settings-scope-actions row items-center col-auto">
-        <SettingsScopeToggle
-          :model-value="scope"
-          :is-admin="auth.isAdmin"
-          :disable="agents.loading || agents.saving"
-          @update:model-value="switchScope"
-        />
         <q-btn
           v-if="!accessProtected"
           class="col-auto"
@@ -94,7 +88,7 @@
         transition-next="fade"
         class="bg-transparent"
       >
-        <q-tab-panel name="profile" class="q-pa-none">
+        <q-tab-panel name="profile" class="q-pa-none" :inert="accessProtected ? '' : null">
           <q-card flat class="app-surface q-mb-md">
             <q-card-section>
               <div class="text-subtitle1 text-weight-bold">Profil</div>
@@ -751,7 +745,6 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import SettingsScopeToggle from 'src/features/settings/SettingsScopeToggle.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { resolveSettingsScope } from 'src/features/settings/scope'
 import { policyOverride, setPolicyOverride } from 'src/utils/agent-permissions'
@@ -871,7 +864,11 @@ const additionalModelSettings = [
   { field: 'audioGenerationModelId', title: 'Audio und Musik', description: 'Erzeugt Audio oder Musik.', label: 'Audiomodell', capability: 'audio_generation' },
   { field: 'audioTranscriptionModelId', title: 'Transkription', description: 'Wandelt Audioaufnahmen in Text um.', label: 'Transkriptionsmodell', capability: 'audio_transcription' }
 ]
-const scope = computed(() => resolveSettingsScope(route.query.scope, auth.isAdmin))
+const scope = computed(() => (
+  !isCreate.value && route.query.scope === 'instance'
+    ? 'instance'
+    : resolveSettingsScope(route.query.scope, auth.isAdmin)
+))
 const baseProfiles = computed(() => agents.agents.filter((agent) => (
   agent.protected && agent.scope !== 'integration'
 )))
@@ -909,7 +906,7 @@ const personaOptions = computed(() => [
   ...agents.personas
     .filter((persona) => scope.value === 'personal' || persona.scope === 'instance')
     .map((persona) => ({
-      label: `${persona.name} (${persona.scope === 'instance' ? 'Instanz' : 'Persönlich'})`,
+      label: `${persona.name} (${persona.scope === 'instance' ? 'Global' : 'Persönlich'})`,
       value: persona.id,
       disable: persona.effective === false
     }))
@@ -918,7 +915,10 @@ const policyLabels = { disabled: 'Deaktiviert', ask: 'Nachfragen', auto: 'Automa
 const clone = (value) => JSON.parse(JSON.stringify(value))
 const isCreate = computed(() => route.name === 'settings-agent-create')
 const isProtected = computed(() => editingAgent.value?.protected === true)
-const accessProtected = computed(() => isProtected.value && !editingAgent.value?.accessEditable)
+const accessProtected = computed(() => (
+  (scope.value === 'instance' && !auth.isAdmin)
+  || (isProtected.value && !editingAgent.value?.accessEditable)
+))
 const blocked = computed(() => scope.value === 'personal' && !agents.personalAgentsEnabled)
 const dirty = computed(() => !accessProtected.value && Boolean(savedPayload.value) && JSON.stringify(requestPayload()) !== savedPayload.value)
 const integrationAvailabilityOptions = (id) => [
@@ -1292,6 +1292,7 @@ function resourceActions(integrationId, resource) {
 }
 
 async function loadIntegration(integrationId, force = false) {
+  if (accessProtected.value && !auth.isAdmin && !agents.personalAgentsEnabled) return
   if (!agents.integrations.find((item) => item.id === integrationId)?.supportsPolicies) return
   if (!force && (metadata(integrationId) || agents.integrationMetadataLoading[integrationId])) return
   try {
@@ -1306,11 +1307,14 @@ async function load() {
   savedPayload.value = ''
   loadFailed.value = false
   notFound.value = false
-  agents.selectScope(scope.value)
-  providers.selectScope(scope.value)
+  agents.selectScope(auth.isAdmin ? scope.value : 'personal')
+  providers.selectScope(auth.isAdmin ? scope.value : 'personal')
   agents.resetIntegrationMetadata()
   try {
-    await Promise.all([agents.fetchAgents(scope.value), providers.fetchAll()])
+    await Promise.all([
+      agents.fetchAgents(scope.value === 'instance' && !auth.isAdmin ? null : scope.value),
+      auth.isAdmin ? providers.fetchAll() : providers.fetchEffective()
+    ])
     if (blocked.value) return
     if (isCreate.value) {
       editingAgent.value = null
@@ -1362,13 +1366,6 @@ async function saveAgent() {
   } catch {
     // The central Axios interceptor displays the error.
   }
-}
-
-async function switchScope(value) {
-  const failure = await router.push({ name: 'settings-agents', query: { scope: value } })
-  if (failure) return
-  agents.selectScope(value)
-  await agents.fetchAgents(value).catch(() => {})
 }
 
 async function confirmDiscardedChanges() {

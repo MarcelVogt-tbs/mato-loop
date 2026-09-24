@@ -33,6 +33,7 @@ from mato_loop_backend.api.routes.integrations import (
     update_integration_access,
     update_search_integration,
     update_search_selection,
+    visible_instance_integrations,
 )
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.integrations import service as integration_service_module
@@ -70,6 +71,27 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.tools.actions import ToolAction
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.contracts import ToolResult
+
+
+@pytest.mark.asyncio
+async def test_visible_integrations_do_not_expose_shared_or_personal_connection_config(monkeypatch) -> None:
+    shared = IntegrationInstance(
+        name="Team", integration_type="calendar", adapter_type="caldav",
+        config={"base_url": "https://private.example", "username": "secret"},
+    )
+    own = shared.model_copy(update={"id": uuid4(), "name": "Mine"})
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=IntegrationSettings(instances=[shared])))
+    load_optional = AsyncMock(return_value=UserIntegrationSettings(instances=[own]))
+    monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
+    user_id = uuid4()
+
+    items = await visible_instance_integrations(AsyncMock(), SimpleNamespace(id=user_id))
+
+    assert [(item["name"], item["scope"]) for item in items] == [
+        ("Team", "instance"), ("Mine", "personal")
+    ]
+    assert all(item["config"] == {} for item in items)
+    assert load_optional.await_args.kwargs["user_id"] == user_id
 
 
 class _StreamResponse:
