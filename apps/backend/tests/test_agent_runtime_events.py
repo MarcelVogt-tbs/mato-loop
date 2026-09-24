@@ -965,7 +965,7 @@ async def test_title_generation_rechecks_user_before_each_provider_request(
         SettingsStore, "load", AsyncMock(return_value=AgentRuntimeSettings())
     )
     monkeypatch.setattr(AgentRuntime, "_ensure_user_active", ensure_active)
-    monkeypatch.setattr(mock_agent_loop.ProviderService, "complete", complete)
+    monkeypatch.setattr(mock_agent_titles.ProviderService, "complete", complete)
     monkeypatch.setattr(AgentRuntime, "_fail_title_generation", fail)
 
     await AgentRuntime._generate_title(

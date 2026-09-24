@@ -10,6 +10,8 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.agent.loop as mock_agent_loop
+import mato_loop_backend.agent.memory_context as mock_memory_context
+import mato_loop_backend.agent.openscad_preview as mock_openscad_preview
 import mato_loop_backend.agent.runtime as agent_runtime
 import mato_loop_backend.agent.runtime as mock_agent_runtime
 import mato_loop_backend.agent.titles as mock_agent_titles
@@ -524,7 +526,7 @@ async def test_child_reuses_context_and_only_inherited_computer_files(
     monkeypatch.setattr(SessionStorage, "provision", provision)
     monkeypatch.setattr(memory.policy, "effective_memory", lambda *_args: memory.policy.EffectiveMemory(True, True, True))
     retrieve = AsyncMock(side_effect=AssertionError("Children must not retrieve automatic memory"))
-    monkeypatch.setattr(mock_agent_loop.MemoryService, "pinned_context", retrieve)
+    monkeypatch.setattr(mock_memory_context.MemoryService, "pinned_context", retrieve)
     await AgentRuntime._execute_loop(db, run)
     tools = {tool["name"] for tool in requests[0]["tools"]}
     assert tools == {"question", "web_search"} | (
@@ -826,7 +828,7 @@ async def test_openscad_contact_sheet_is_required_for_active_vision_model(monkey
             return (attachment.filename or "image").encode()
 
     _mock_value = FakeAttachmentService
-    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles, mock_openscad_preview):
         monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     monkeypatch.setattr(
         tool_registry,
@@ -1008,7 +1010,7 @@ async def test_text_model_marks_or_runs_openscad_visual_verification(
             return f"reference-{attachment.position}".encode()
 
     _mock_value = FakeAttachmentService
-    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles, mock_openscad_preview):
         monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     monkeypatch.setattr(
         tool_registry,
@@ -2227,15 +2229,15 @@ async def test_direct_message_reloads_expired_memories_after_rollback(monkeypatc
         return SimpleNamespace(embedding_enabled=False)
     for _mock_target in (mock_agent_loop,):
         monkeypatch.setattr(_mock_target, 'get_runtime_config', _mock_value)
-    monkeypatch.setattr(mock_agent_loop.MemoryService, "scope", AsyncMock(return_value=SimpleNamespace(total=0, pinned=0)))
-    monkeypatch.setattr(mock_agent_loop.MemoryService, "pinned_context", AsyncMock(return_value=[]))
+    monkeypatch.setattr(mock_memory_context.MemoryService, "scope", AsyncMock(return_value=SimpleNamespace(total=0, pinned=0)))
+    monkeypatch.setattr(mock_memory_context.MemoryService, "pinned_context", AsyncMock(return_value=[]))
     memories = [
         MemoryRecord(id=uuid4(), user_id=db.get.return_value.user_id, category="fact",
                      content="Useful context", revision=1, created_at=datetime.now(UTC), updated_at=datetime.now(UTC))
         for _ in range(2)
     ]
     retrieve = AsyncMock(side_effect=[SimpleNamespace(items=[item]) for item in memories])
-    monkeypatch.setattr(mock_agent_loop.MemoryRetrievalService, "retrieve", retrieve)
+    monkeypatch.setattr(mock_memory_context.MemoryRetrievalService, "retrieve", retrieve)
     started = asyncio.Event()
 
     async def complete(_db, **kwargs):

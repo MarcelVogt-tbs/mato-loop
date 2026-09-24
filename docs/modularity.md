@@ -22,6 +22,14 @@ are organized by responsibility; small cohesive domains may remain single files.
 | `projects/` | Project coding workflows and durable execution queue. |
 | `diagnostics/` | Durable diagnostic recording and the read-only diagnostic MCP. |
 
+Within `agent/`, `loop.py` coordinates model steps and retry decisions. Each
+step gets revalidated memory context from `memory_context.py`, effective tools
+from `turn_tools.py`, and a projection from `turn_context.py`. `model_turn.py`
+handles provider streaming and assistant persistence; `tool_round.py` executes
+and persists each tool call. Run-bound skill drafts, media model calls, and
+OpenSCAD preview verification live in their corresponding agent modules.
+`runtime.py` continues to own cancellation, continuation, and run lifetime.
+
 Memory, settings, authentication, messaging, automations and notification modules
 retain their existing ownership. SQLAlchemy models remain grouped by aggregate
 under `models/`, with one metadata graph and the existing migrations.

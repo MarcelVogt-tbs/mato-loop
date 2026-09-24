@@ -20,12 +20,14 @@ import mato_loop_backend.agent.run_support as mock_agent_run_support
 import mato_loop_backend.agent.runtime as mock_agent_runtime
 import mato_loop_backend.agent.summarization as mock_agent_summarization
 import mato_loop_backend.agent.titles as mock_agent_titles
+import mato_loop_backend.agent.tool_round as mock_tool_round
 import mato_loop_backend.files.access as mock_files_access
 import mato_loop_backend.tools.access as mock_tools_access
 import mato_loop_backend.tools.catalog as mock_tools_catalog
 import mato_loop_backend.tools.files as mock_tools_files
 import mato_loop_backend.tools.media as mock_tools_media
 import mato_loop_backend.tools.sessions as mock_tools_sessions
+from mato_loop_backend.agent.context import ContextManager
 from mato_loop_backend.agent.projection import ContextProjection, message_dict
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.files.service import RootFileError, RootFileService
@@ -769,11 +771,11 @@ async def test_runtime_ephemeral_images_survive_requests_without_files(
     db.add.side_effect = add
     if terminal == "bounded-count":
         _mock_value = 1
-        for _mock_target in (mock_agent_run_support, mock_agent_loop, mock_agent_titles,):
+        for _mock_target in (mock_agent_run_support, mock_tool_round, mock_agent_titles,):
             monkeypatch.setattr(_mock_target, 'MAX_PROVIDER_IMAGES', _mock_value)
     elif terminal == "bounded-bytes":
         _mock_value = max(len(png("red")), len(png("blue")))
-        for _mock_target in (mock_agent_run_support, mock_agent_loop, mock_agent_titles,):
+        for _mock_target in (mock_agent_run_support, mock_tool_round, mock_agent_titles,):
             monkeypatch.setattr(_mock_target, 'MAX_PROVIDER_IMAGE_BYTES', _mock_value)
     def _mock_value(*args, **kwargs):
         return RootFileService(*args, session_storage=storage, **kwargs)
@@ -802,7 +804,7 @@ async def test_runtime_ephemeral_images_survive_requests_without_files(
         return await prepare(**kwargs)
 
     monkeypatch.setattr(provider_service.ProviderService, "prepare_request", staticmethod(estimate))
-    build = mock_agent_loop.ContextManager.build
+    build = ContextManager.build
 
     async def compacted_build(*args, **kwargs):
         if len(requests) < 2 or reused_ids:
@@ -817,7 +819,7 @@ async def test_runtime_ephemeral_images_survive_requests_without_files(
             input_budget_tokens=1000,
         )
 
-    monkeypatch.setattr(mock_agent_loop.ContextManager, "build", compacted_build)
+    monkeypatch.setattr(ContextManager, "build", compacted_build)
     complete = provider_service.ProviderService.complete
     observed = []
     direct_references = []

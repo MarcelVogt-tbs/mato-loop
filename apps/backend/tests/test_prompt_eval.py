@@ -2284,11 +2284,12 @@ def test_research_budget_question_and_search_reformulation_are_material() -> Non
 
 
 def test_inline_production_prompts_and_markers_have_not_drifted() -> None:
-    from mato_loop_backend.agent import loop, titles
+    from mato_loop_backend.agent import loop, media_model_helpers, titles
 
     runtime_constants = (
         _source_constants(Path(agent_runtime.__file__))
         | _source_constants(Path(loop.__file__))
+        | _source_constants(Path(media_model_helpers.__file__))
         | _source_constants(Path(titles.__file__))
     )
     provider_route_constants = _source_constants(Path(providers.__file__))
