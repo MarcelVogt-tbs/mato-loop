@@ -15,6 +15,7 @@ from PIL import Image
 from pydantic import ValidationError
 
 import mato_loop_backend.api.routes.browser_integrations as api_routes_browser_integrations
+import mato_loop_backend.integrations.browser.adapter as browser_module
 import mato_loop_backend.tools.access as mock_tools_access
 import mato_loop_backend.tools.catalog as mock_tools_catalog
 import mato_loop_backend.tools.context as mock_tools_context
@@ -40,8 +41,7 @@ from mato_loop_backend.execution.client import ExecutionClient, ExecutionClientE
 from mato_loop_backend.execution.manager import ExecutionAgentError, disconnect_error_code
 from mato_loop_backend.execution.protocol import SUPPORTED_OPERATIONS, ResponseMessage
 from mato_loop_backend.files.service import RootFileError
-from mato_loop_backend.integrations import browser as browser_module
-from mato_loop_backend.integrations.browser import (
+from mato_loop_backend.integrations.browser.adapter import (
     BROWSER_ADAPTER,
     BROWSER_DOWNLOADS,
     BROWSER_RELEASE_CONTROL,

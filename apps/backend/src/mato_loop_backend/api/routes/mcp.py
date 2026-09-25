@@ -11,9 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.integration_access import _integration
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.integrations.mcp import McpConfig
-from mato_loop_backend.integrations.mcp_client import McpClientError
-from mato_loop_backend.integrations.mcp_service import McpIntegrationService
+from mato_loop_backend.integrations.mcp.adapter import McpConfig
+from mato_loop_backend.integrations.mcp.client import McpClientError
+from mato_loop_backend.integrations.mcp.service import McpIntegrationService
 from mato_loop_backend.integrations.service import IntegrationSettingsError
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import require_admin, require_user

@@ -10,7 +10,7 @@ from sqlalchemy import delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from mato_loop_backend.db.session import AsyncSessionFactory
-from mato_loop_backend.integrations.mail_client import MailClient, MailError
+from mato_loop_backend.integrations.mail.client import MailClient, MailError
 from mato_loop_backend.models import MailSendOperation
 
 

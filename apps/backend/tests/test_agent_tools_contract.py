@@ -40,7 +40,7 @@ from mato_loop_backend.integrations.contracts import (
     IntegrationResource,
     ToolContribution,
 )
-from mato_loop_backend.integrations.youtube_transcript import TranscriptResult
+from mato_loop_backend.integrations.youtube_transcript.client import TranscriptResult
 from mato_loop_backend.media.attachments import AttachmentService
 from mato_loop_backend.memory.retrieval import (
     MemoryRetrieval,

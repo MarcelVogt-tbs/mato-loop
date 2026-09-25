@@ -10,7 +10,7 @@ import mato_loop_backend.tools.access as tools_access
 import mato_loop_backend.web.access as web_access
 from mato_loop_backend.files.service import FileRoot
 from mato_loop_backend.integrations.search import effective_search_providers, search_web
-from mato_loop_backend.integrations.youtube_transcript import (
+from mato_loop_backend.integrations.youtube_transcript.client import (
     TranscriptError,
     canonicalize_youtube_video_url,
     fetch_youtube_transcript,

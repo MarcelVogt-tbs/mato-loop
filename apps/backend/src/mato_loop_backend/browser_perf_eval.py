@@ -20,7 +20,7 @@ from mato_loop_backend.execution.browser_contracts import (
     BrowserActionArguments,
     BrowserActionResult,
 )
-from mato_loop_backend.integrations.browser import BROWSER_TOOL, BROWSER_TOOLS
+from mato_loop_backend.integrations.browser.adapter import BROWSER_TOOL, BROWSER_TOOLS
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.providers import service as provider_service
 from mato_loop_backend.security import load_credential

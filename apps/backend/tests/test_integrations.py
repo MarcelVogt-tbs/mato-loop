@@ -15,9 +15,11 @@ import mato_loop_backend.api.integration_resources as api_integration_resources
 import mato_loop_backend.api.routes.integrations as api_routes_integrations
 import mato_loop_backend.integrations.bookstack.adapter as integrations_bookstack_adapter
 import mato_loop_backend.integrations.caldav.adapter as integrations_caldav_adapter
+import mato_loop_backend.integrations.caldav.service as caldav_service_module
 import mato_loop_backend.integrations.registry as integration_registry
-import mato_loop_backend.integrations.search as integrations_search
 import mato_loop_backend.integrations.search as search_module
+import mato_loop_backend.integrations.searxng.client as searxng_client
+import mato_loop_backend.integrations.service as shared_integration_service
 import mato_loop_backend.security as security
 from mato_loop_backend.api.errors import ApiError, register_error_handlers
 from mato_loop_backend.api.routes.integrations import (
@@ -36,7 +38,7 @@ from mato_loop_backend.api.routes.integrations import (
     visible_instance_integrations,
 )
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.integrations import service as integration_service_module
+from mato_loop_backend.integrations.bookstack.service import BookStackIntegrationService
 from mato_loop_backend.integrations.caldav.client import CalDavError
 from mato_loop_backend.integrations.contracts import (
     IntegrationContributions,
@@ -49,10 +51,7 @@ from mato_loop_backend.integrations.search import (
     search_provider_options,
     search_web,
 )
-from mato_loop_backend.integrations.service import (
-    BookStackIntegrationService,
-    SearchIntegrationService,
-)
+from mato_loop_backend.integrations.searxng.service import SearchIntegrationService
 from mato_loop_backend.models import Credential, UserAccount
 from mato_loop_backend.permissions.policy import PermissionRequest
 from mato_loop_backend.security import require_user
@@ -286,7 +285,7 @@ async def test_bookstack_policy_cleanup_removes_resource_labels(monkeypatch) -> 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=tools))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     monkeypatch.setattr(
-        integration_service_module,
+        shared_integration_service,
         "clear_profile_integration_policies",
         AsyncMock(),
     )
@@ -343,6 +342,7 @@ async def test_personal_policy_read_exposes_no_integration_configuration(
     assert result == {
         "enabled": True,
         "allowedAdapterTypes": [
+            "arcane",
             "browser",
             "caldav",
             "imap_smtp",
@@ -515,7 +515,7 @@ async def test_revoked_personal_adapters_block_external_clients(monkeypatch) -> 
     execution_client = Mock()
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
     monkeypatch.setattr(
-        integrations_search, "search_with_provider", search_client
+        api_routes_integrations, "search_with_provider", search_client
     )
     monkeypatch.setattr(
         integrations_caldav_adapter, "load_caldav_resources", calendar_client
@@ -974,11 +974,11 @@ async def test_searxng_reports_unresponsive_engines_as_transient_failure(
     context = AsyncMock()
     context.__aenter__.return_value = client
     monkeypatch.setattr(
-        search_module.httpx, "AsyncClient", Mock(return_value=context)
+        searxng_client.httpx, "AsyncClient", Mock(return_value=context)
     )
 
     with pytest.raises(SearchIntegrationError) as exc_info:
-        await search_module.search_with_provider(_searxng(), "MatoLoop")
+        await searxng_client.search_with_provider(_searxng(), "MatoLoop")
 
     assert exc_info.value.code == "integration.unavailable"
     assert exc_info.value.transient is True
@@ -1008,10 +1008,10 @@ async def test_searxng_retries_unresponsive_default_engines(monkeypatch) -> None
     context = AsyncMock()
     context.__aenter__.return_value = client
     monkeypatch.setattr(
-        search_module.httpx, "AsyncClient", Mock(return_value=context)
+        searxng_client.httpx, "AsyncClient", Mock(return_value=context)
     )
 
-    result = await search_module.search_with_provider(_searxng(), "MatoLoop")
+    result = await searxng_client.search_with_provider(_searxng(), "MatoLoop")
 
     assert json.loads(result)[0]["url"] == "https://example.com/result"
     assert client.stream.call_args_list[1].kwargs["params"]["engines"] == (
@@ -1038,10 +1038,10 @@ async def test_searxng_supports_image_search(monkeypatch) -> None:
     context = AsyncMock()
     context.__aenter__.return_value = client
     monkeypatch.setattr(
-        search_module.httpx, "AsyncClient", Mock(return_value=context)
+        searxng_client.httpx, "AsyncClient", Mock(return_value=context)
     )
 
-    result = await search_module.search_with_provider(
+    result = await searxng_client.search_with_provider(
         _searxng(), "product rear view", search_type="images"
     )
 
@@ -1065,11 +1065,11 @@ async def test_searxng_rejects_oversized_streamed_responses(monkeypatch) -> None
     context = AsyncMock()
     context.__aenter__.return_value = client
     monkeypatch.setattr(
-        search_module.httpx, "AsyncClient", Mock(return_value=context)
+        searxng_client.httpx, "AsyncClient", Mock(return_value=context)
     )
 
     with pytest.raises(SearchIntegrationError) as exc_info:
-        await search_module.search_with_provider(_searxng(), "MatoLoop")
+        await searxng_client.search_with_provider(_searxng(), "MatoLoop")
 
     assert exc_info.value.code == "integration.invalidResponse"
 
@@ -1084,11 +1084,11 @@ async def test_searxng_rejects_compressed_responses(monkeypatch) -> None:
     context = AsyncMock()
     context.__aenter__.return_value = client
     monkeypatch.setattr(
-        search_module.httpx, "AsyncClient", Mock(return_value=context)
+        searxng_client.httpx, "AsyncClient", Mock(return_value=context)
     )
 
     with pytest.raises(SearchIntegrationError) as exc_info:
-        await search_module.search_with_provider(_searxng(), "MatoLoop")
+        await searxng_client.search_with_provider(_searxng(), "MatoLoop")
 
     assert exc_info.value.code == "integration.invalidResponse"
     assert client.stream.call_args.kwargs["headers"] == {"Accept-Encoding": "identity"}
@@ -1312,12 +1312,12 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     monkeypatch.setattr(
-        integration_service_module,
+        caldav_service_module,
         "clear_profile_integration_policies",
         AsyncMock(),
     )
     monkeypatch.setattr(
-        integration_service_module, "store_credential", store_credential
+        caldav_service_module, "store_credential", store_credential
     )
 
     first_payload = await create_calendar_integration(_calendar_request(), db)

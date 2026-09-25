@@ -222,7 +222,7 @@ def _model_browser_inspection(content: str) -> str:
 
 
 def _browser_action(call: dict[str, Any]) -> str | None:
-    from mato_loop_backend.integrations.browser import BROWSER_TOOL_ACTIONS
+    from mato_loop_backend.integrations.browser.adapter import BROWSER_TOOL_ACTIONS
 
     arguments = call.get("arguments")
     name = call.get("name")

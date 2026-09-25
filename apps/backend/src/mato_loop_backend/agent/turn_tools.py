@@ -89,7 +89,7 @@ def select_turn_tools(
         run_support._effective_execution_operations(run)
         if run.execution_agent_id is not None else frozenset()
     )
-    from mato_loop_backend.integrations.browser import attached_browser_integration_id
+    from mato_loop_backend.integrations.browser.adapter import attached_browser_integration_id
 
     integration_settings = effective_execution_integration_settings(
         integration_settings, run.execution_agent_id, execution_operations,

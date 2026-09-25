@@ -50,7 +50,7 @@ from mato_loop_backend.execution.browsers import (
 from mato_loop_backend.execution.client import ExecutionClientError
 from mato_loop_backend.execution.protocol import WireModel
 from mato_loop_backend.files.service import FileRoot, RootFileError, RootFileService
-from mato_loop_backend.integrations.browser import browser_client
+from mato_loop_backend.integrations.browser.adapter import browser_client
 from mato_loop_backend.models import ChatSession
 
 router = APIRouter()

@@ -20,7 +20,7 @@ from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.subagents import permission_snapshot
 from mato_loop_backend.execution.browser_contracts import BrowserActionResult
 from mato_loop_backend.execution.client import ExecutionClient
-from mato_loop_backend.integrations.browser import BROWSER_TOOL_ACTIONS
+from mato_loop_backend.integrations.browser.adapter import BROWSER_TOOL_ACTIONS
 from mato_loop_backend.models import AgentRun, ChatSession
 from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.providers.base import ToolCall

@@ -19,7 +19,7 @@ from mato_loop_backend.agent.video_analysis import video_analysis_available
 from mato_loop_backend.execution import ExecutionClientError
 from mato_loop_backend.files.service import RootFileError
 from mato_loop_backend.integrations.contracts import IntegrationResource
-from mato_loop_backend.integrations.mail_client import MailError
+from mato_loop_backend.integrations.mail.client import MailError
 from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.integrations.search import SearchIntegrationError
 from mato_loop_backend.integrations.tbs_desk.client import TbsDeskError

@@ -13,7 +13,7 @@ from mato_loop_backend.integrations.contracts import (
     IntegrationContributions,
     ToolContribution,
 )
-from mato_loop_backend.integrations.mail_client import (
+from mato_loop_backend.integrations.mail.client import (
     Attachment,
     MailClient,
     MailError,
@@ -21,7 +21,7 @@ from mato_loop_backend.integrations.mail_client import (
     ParsedMessage,
     build_message,
 )
-from mato_loop_backend.integrations.mail_send import send_once, send_status
+from mato_loop_backend.integrations.mail.send import send_once, send_status
 from mato_loop_backend.models import Credential
 from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy

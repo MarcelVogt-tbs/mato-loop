@@ -32,7 +32,7 @@ from mato_loop_backend.agent.projection import ContextProjection, message_dict
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.files.service import RootFileError, RootFileService
 from mato_loop_backend.files.storage import SessionStorage
-from mato_loop_backend.integrations.openscad import _zip_project
+from mato_loop_backend.integrations.openscad.adapter import _zip_project
 from mato_loop_backend.media.attachments import (
     AttachmentError,
     AttachmentService,

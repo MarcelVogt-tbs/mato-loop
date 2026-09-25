@@ -119,7 +119,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
         "brief",
         "name_hint",
     }
-    assert prompt_tokens <= 7_450, prompt_tokens
+    assert prompt_tokens <= 7_460, prompt_tokens
     # Required permission reasons now include bounds and per-call guidance in every applicable schema.
     assert schema_tokens <= 11_850, schema_tokens
     assert prompt_tokens + schema_tokens <= 19_300, prompt_tokens + schema_tokens

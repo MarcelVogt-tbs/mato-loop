@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.integrations.mail import (
+from mato_loop_backend.integrations.mail.adapter import (
     MAIL_CREDENTIAL_KIND,
     MailComposeArguments,
     MailConfig,
@@ -25,14 +25,14 @@ from mato_loop_backend.integrations.mail import (
     message_payload,
     token_for,
 )
-from mato_loop_backend.integrations.mail_client import (
+from mato_loop_backend.integrations.mail.client import (
     MailError,
     MessageLocator,
     attachment_bytes,
     build_message,
     parse_message,
 )
-from mato_loop_backend.integrations.mail_send import send_once, send_status
+from mato_loop_backend.integrations.mail.send import send_once, send_status
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import load_credential, read_credential, require_user
 from mato_loop_backend.settings import (

@@ -8,7 +8,7 @@ import pytest
 
 # Initialize the agent package first; integrations and agent display metadata import each other.
 importlib.import_module("mato_loop_backend.agent")
-mail_client = importlib.import_module("mato_loop_backend.integrations.mail_client")
+mail_client = importlib.import_module("mato_loop_backend.integrations.mail.client")
 MailClient = mail_client.MailClient
 MailError = mail_client.MailError
 _imap_mailbox = mail_client._imap_mailbox

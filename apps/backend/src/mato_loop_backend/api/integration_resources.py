@@ -9,7 +9,7 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.integrations.bookstack.adapter import BOOKSTACK_CREDENTIAL_KIND
 from mato_loop_backend.integrations.caldav.adapter import CALDAV_CREDENTIAL_KIND
 from mato_loop_backend.integrations.contracts import IntegrationResource
-from mato_loop_backend.integrations.mcp import MCP_CREDENTIAL_KIND
+from mato_loop_backend.integrations.mcp.adapter import MCP_CREDENTIAL_KIND
 from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.permissions.resolution import resolve_tool_execution_policy
 from mato_loop_backend.security import load_credential, read_credential

@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import mato_loop_backend.integrations.youtube_transcript as youtube_transcript
-from mato_loop_backend.integrations.youtube_transcript import (
+import mato_loop_backend.integrations.youtube_transcript.client as youtube_transcript
+from mato_loop_backend.integrations.youtube_transcript.client import (
     TranscriptError,
     canonicalize_youtube_video_url,
     fetch_youtube_transcript,

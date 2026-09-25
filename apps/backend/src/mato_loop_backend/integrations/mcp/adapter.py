@@ -15,7 +15,7 @@ from mato_loop_backend.integrations.contracts import (
     IntegrationResource,
     ToolContribution,
 )
-from mato_loop_backend.integrations.mcp_client import McpClient, McpClientError
+from mato_loop_backend.integrations.mcp.client import McpClient, McpClientError
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
 from mato_loop_backend.tools.actions import ToolAction

@@ -116,7 +116,7 @@ from mato_loop_backend.files.service import (
     RootFileService,
     validate_upload_filename,
 )
-from mato_loop_backend.integrations.openscad import (
+from mato_loop_backend.integrations.openscad.adapter import (
     OpenScadConfig,
     OpenScadRenderArguments,
     export_artifact,

@@ -845,7 +845,7 @@ def test_fill_form_stale_or_denied_never_dispatches(browser_tool, change, code):
         case.call.arguments["snapshotSha256"] = "0" * 64
 
     async def approve(request):
-        from mato_loop_backend.integrations.browser import capture_browser_approval
+        from mato_loop_backend.integrations.browser.adapter import capture_browser_approval
 
         await capture_browser_approval(
             request, case.call, case.context.session,

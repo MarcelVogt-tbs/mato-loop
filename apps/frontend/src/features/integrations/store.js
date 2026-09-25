@@ -45,6 +45,8 @@ const emptyRecipes = () => ({
   accounts: []
 })
 
+const emptyArcane = () => ({ configured: false, instances: [] })
+
 const emptyMusic = () => ({
   configured: false,
   instances: []
@@ -84,6 +86,7 @@ function clearIntegrations(store) {
   store.tbsDesk = emptyTbsDesk()
   store.knowledge = emptyKnowledge()
   store.recipes = emptyRecipes()
+  store.arcane = emptyArcane()
   store.music = emptyMusic()
   store.openscad = emptyOpenScad()
   store.coding = emptyCoding()
@@ -101,6 +104,7 @@ export const useIntegrationStore = defineStore('integrations', {
     tbsDesk: emptyTbsDesk(),
     knowledge: emptyKnowledge(),
     recipes: emptyRecipes(),
+    arcane: emptyArcane(),
     music: emptyMusic(),
     openscad: emptyOpenScad(),
     coding: emptyCoding(),
@@ -179,6 +183,7 @@ export const useIntegrationStore = defineStore('integrations', {
           this.fetchMail(),
           this.fetchKnowledge(),
           this.fetchRecipes(),
+          this.fetchArcane(),
           this.fetchMusic(),
           this.fetchOpenScad(),
           ...(context.scope === 'personal' ? [this.fetchCoding(), this.fetchBrowser(), this.fetchTbsDesk()] : [])
@@ -391,6 +396,29 @@ export const useIntegrationStore = defineStore('integrations', {
     async testRecipes(id) {
       const scope = this.scope
       return (await api.post(`/integrations/recipes/accounts/${id}/test`, null, scopeConfig(scope))).data
+    },
+    fetchArcane() {
+      return this.fetchResource('arcane', '/integrations/infrastructure/arcane')
+    },
+    async createArcane(payload) {
+      const context = scopeContext(this)
+      await api.post('/integrations/infrastructure/arcane', payload, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchArcane()
+    },
+    async updateArcane(id, payload) {
+      const context = scopeContext(this)
+      const request = { ...payload }
+      if (!request.api_key) delete request.api_key
+      await api.put(`/integrations/infrastructure/arcane/${id}`, request, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchArcane()
+    },
+    async removeArcane(id) {
+      const context = scopeContext(this)
+      await api.delete(`/integrations/infrastructure/arcane/${id}`, scopeConfig(context.scope))
+      if (contextIsCurrent(this, context)) await this.fetchArcane()
+    },
+    async testArcane(id) {
+      return (await api.post(`/integrations/infrastructure/arcane/${id}/test`, null, scopeConfig(this.scope))).data
     },
     fetchMusic() {
       return this.fetchResource('music', '/integrations/music/sonobin')

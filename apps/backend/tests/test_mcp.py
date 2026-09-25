@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 from jsonschema import ValidationError as JsonSchemaValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import mato_loop_backend.integrations.mcp.client as client_module
+import mato_loop_backend.integrations.mcp.service as service_module
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import mcp as mcp_routes
 from mato_loop_backend.api.routes.mcp import (
@@ -22,25 +24,23 @@ from mato_loop_backend.api.routes.mcp import (
     router as mcp_router,
 )
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.integrations import mcp_client as client_module
-from mato_loop_backend.integrations import mcp_service as service_module
-from mato_loop_backend.integrations.mcp import (
+from mato_loop_backend.integrations.mcp.adapter import (
     MCP_ADAPTER,
     McpConfig,
     mcp_resource_key,
 )
-from mato_loop_backend.integrations.mcp_client import (
+from mato_loop_backend.integrations.mcp.client import (
     McpClient,
     McpClientError,
     _BoundedTransport,
 )
-from mato_loop_backend.integrations.mcp_service import (
+from mato_loop_backend.integrations.mcp.service import (
     McpIntegrationService,
-    SonoBinIntegrationService,
 )
 from mato_loop_backend.integrations.registry import integration_adapters
 from mato_loop_backend.integrations.service import IntegrationSettingsError
-from mato_loop_backend.integrations.sonobin import SONOBIN, SONOBIN_ADAPTER
+from mato_loop_backend.integrations.sonobin.adapter import SONOBIN, SONOBIN_ADAPTER
+from mato_loop_backend.integrations.sonobin.service import SonoBinIntegrationService
 from mato_loop_backend.permissions.resolution import resolve_tool_execution_policy
 from mato_loop_backend.security import require_admin, require_user
 from mato_loop_backend.settings import (

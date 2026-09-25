@@ -1573,7 +1573,7 @@ class AgentRuntime:
                 approval_resolution["expected_revision"] = draft_file["initialRevision"]
             return decision
         if request.action_kind == "browser_action":
-            from mato_loop_backend.integrations.browser import capture_browser_approval
+            from mato_loop_backend.integrations.browser.adapter import capture_browser_approval
 
             request = await capture_browser_approval(
                 request, call, chat_session, run, approval_resolution,

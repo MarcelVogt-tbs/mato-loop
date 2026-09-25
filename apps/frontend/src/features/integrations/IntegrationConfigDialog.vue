@@ -83,7 +83,7 @@
               />
             </template>
             <q-banner
-              v-if="['recipes', 'coding'].includes(form.integration_type) && form.base_url.trim().toLowerCase().startsWith('http://')"
+              v-if="['recipes', 'coding', 'infrastructure'].includes(form.integration_type) && form.base_url.trim().toLowerCase().startsWith('http://')"
               dense
               rounded
               class="app-surface-tonal"
@@ -218,6 +218,16 @@
               :rules="isEditing ? [] : [requiredRule]"
             />
             <q-input
+              v-if="form.integration_type === 'infrastructure'"
+              v-model="form.apiKey"
+              outlined
+              type="password"
+              :label="integration?.hasCredential ? 'Neuer API-Schlüssel (optional)' : 'API-Schlüssel'"
+              hint="Unter Arcane → Einstellungen → API Keys erstellen. Für die gewünschten Umgebungen Docker-Rechte vergeben."
+              lazy-rules
+              :rules="isEditing ? [] : [requiredRule]"
+            />
+            <q-input
               v-if="form.integration_type === 'music'"
               v-model="form.bearerToken"
               outlined
@@ -292,6 +302,7 @@ const allIntegrationTypes = [
   { label: 'Support', value: 'support' },
   { label: 'Wissensdatenbank', value: 'knowledge' },
   { label: 'Rezepte & Essensplanung', value: 'recipes' },
+  { label: 'Docker-Verwaltung', value: 'infrastructure' },
   { label: 'Musikbibliothek', value: 'music' },
   { label: '3D-Modellierung', value: 'openscad' },
   { label: 'Programmierung', value: 'coding' },
@@ -304,6 +315,7 @@ const PROVIDER_DEFAULTS = {
   support: { provider: 'tbs-desk', label: 'tbs.Desk', placeholder: 'http://192.168.1.30:9000' },
   knowledge: { provider: 'bookstack', label: 'BookStack', placeholder: 'https://wiki.example.com' },
   recipes: { provider: 'mealie', label: 'Mealie', placeholder: 'http://mealie.example.com' },
+  infrastructure: { provider: 'arcane', label: 'Arcane', placeholder: 'https://arcane.example.com' },
   music: { provider: 'sonobin', label: 'SonoBin', placeholder: 'https://sonobin.example.com/mcp/' },
   openscad: { provider: 'openscad', label: 'OpenSCAD', placeholder: '' },
   coding: { provider: 'opencode', label: 'OpenCode', placeholder: 'http://localhost:4096' },
@@ -323,8 +335,8 @@ const baseUrlLabel = computed(
 const baseUrlPlaceholder = computed(
   () => (PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).placeholder
 )
-const requiresHttps = computed(() => !['search', 'recipes', 'coding', 'support'].includes(form.integration_type))
-const dialogIcon = computed(() => ({ coding: 'code', mail: 'mail', support: 'confirmation_number', music: 'library_music', openscad: 'view_in_ar', browser: 'web' })[form.integration_type] || 'extension')
+const requiresHttps = computed(() => !['search', 'recipes', 'coding', 'support', 'infrastructure'].includes(form.integration_type))
+const dialogIcon = computed(() => ({ coding: 'code', mail: 'mail', support: 'confirmation_number', music: 'library_music', infrastructure: 'dns', openscad: 'view_in_ar', browser: 'web' })[form.integration_type] || 'extension')
 const securityOptions = [
   { label: 'TLS', value: 'tls' },
   { label: 'STARTTLS', value: 'starttls' }
@@ -366,6 +378,7 @@ function defaultForm() {
     token_id: '',
     token_secret: '',
     token: '',
+    apiKey: '',
     bearerToken: '',
     executionAgentId: null,
     binaryPath: '/usr/bin/openscad',
@@ -558,6 +571,14 @@ async function save() {
       close()
       return
     }
+    if (form.integration_type === 'infrastructure') {
+      const payload = { name: form.name.trim(), base_url: form.base_url.trim(), api_key: form.apiKey, enabled: form.enabled }
+      if (props.integration) await integrations.updateArcane(props.integration.id, payload)
+      else await integrations.createArcane(payload)
+      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
+      close()
+      return
+    }
     const payload = {
       integration_type: form.integration_type,
       provider_type: form.provider_type,
@@ -615,6 +636,7 @@ watch([() => props.modelValue, () => props.integration?.id], ([open]) => {
     token_id: '',
     token_secret: '',
     token: '',
+    apiKey: '',
     bearerToken: '',
     executionAgentId: props.integration.executionAgentId
       || props.integration.config?.executionAgentId

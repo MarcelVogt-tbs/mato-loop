@@ -10,7 +10,7 @@ from mato_loop_backend.integrations.contracts import (
     IntegrationContributions,
     IntegrationResource,
 )
-from mato_loop_backend.integrations.mcp import (
+from mato_loop_backend.integrations.mcp.adapter import (
     McpConfig,
     mcp_contributions,
     mcp_resources,

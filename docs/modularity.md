@@ -16,7 +16,7 @@ are organized by responsibility; small cohesive domains may remain single files.
 | `files/` | Managed session storage, revisions, quotas, archives, search and file-access coordination. Computer operations continue to use `execution/`. |
 | `media/` | Attachments, input validation, document extraction and video processing. |
 | `web/` | Bounded HTTP retrieval, downloads, URL authorization and source identities. |
-| `integrations/` | Product adapters and generic connectors. Larger products colocate `adapter.py` and `client.py`; small adapters remain individual files. |
+| `integrations/` | Product adapters and generic connectors each live in their own package, even when the package contains only `adapter.py`. Product clients and services are colocated; shared contracts, registry, execution, settings helpers, and cross-integration coordination remain at the root. |
 | `providers/` | LLM and media transports plus their application services. |
 | `execution/` | Owner-bound connections, protocol validation and transfers to MatoLoop Agents. |
 | `projects/` | Project coding workflows and durable execution queue. |
@@ -71,6 +71,18 @@ files and computer workspaces remain distinct storage and authorization domains.
 imports. `tests/test_refactoring_contract.py` freezes representative public/private
 tool schemas and prompts with and without Webfetch. Existing behavior tests remain
 the authority for runtime effects, error contracts, storage and protocols.
+
+Each registered adapter has a package named for its product (`mail` for IMAP/SMTP,
+`mcp` for the generic connector, `searxng` for search). The registry imports
+its `adapter.py` explicitly; adding an adapter means adding its package, not a
+root-level adapter file. `client.py`, `service.py`, and other modules belong in
+that same package when needed. Transport reuse across products is explicit:
+SonoBin uses the bounded MCP client and service without presenting itself as
+an MCP connector. The root `search.py` coordinates no-key search, SearXNG and
+fallback selection; SearXNG's configuration and HTTP client stay in `searxng/`.
+The unregistered YouTube transcript helper has its own package too. API routes,
+frontend components, tool names, permissions, and persisted adapter IDs do not
+move with Python modules.
 
 ## Frontend
 

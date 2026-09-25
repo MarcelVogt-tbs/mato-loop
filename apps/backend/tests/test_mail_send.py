@@ -5,8 +5,8 @@ from uuid import uuid4
 import pytest
 
 # Initialize the agent package before the integrations package's public imports.
-from mato_loop_backend.integrations import mail_send
-from mato_loop_backend.integrations.mail_client import MailError
+import mato_loop_backend.integrations.mail.send as mail_send
+from mato_loop_backend.integrations.mail.client import MailError
 
 
 class _Session:
@@ -70,7 +70,7 @@ async def test_unknown_send_is_persisted_and_never_retried(monkeypatch) -> None:
 
 
 def test_message_digest_ignores_generated_mime_boundaries_and_date() -> None:
-    from mato_loop_backend.integrations.mail_client import build_message
+    from mato_loop_backend.integrations.mail.client import build_message
 
     arguments = {
         "from_address": "sender@example.com",

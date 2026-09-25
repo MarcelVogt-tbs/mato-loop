@@ -58,6 +58,7 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Additive settings fields require Pydantic defaults.
 - Do not bind the agent core to provider-specific SDK types.
 - Model product integrations as normal product/service adapters; keep protocols such as MCP as reusable transport details. Generic connectors remain separate fallbacks and must not expose product profiles.
+- Put every integration adapter in its own package under `apps/backend/src/mato_loop_backend/integrations/<product>/`, even when it needs only `adapter.py`. Keep its client and product-specific service in that package. Keep only shared contracts, registry, execution, and cross-integration coordination at the `integrations/` root. Do not add root-level adapter files or compatibility re-exports for moved internal modules.
 - Log technical errors server-side without exposing secrets or tokens.
 
 ## Providers and Agent

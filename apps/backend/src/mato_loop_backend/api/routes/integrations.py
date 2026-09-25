@@ -16,44 +16,51 @@ from mato_loop_backend.api.integration_resources import ToolSettingsDocument, lo
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.execution import ExecutionClient, ExecutionClientError
 from mato_loop_backend.execution.manager import execution_agent_connections
+from mato_loop_backend.integrations.arcane.adapter import ARCANE_CREDENTIAL_KIND
+from mato_loop_backend.integrations.arcane.client import ArcaneClient, ArcaneConfig, ArcaneError
+from mato_loop_backend.integrations.arcane.service import ArcaneIntegrationService
 from mato_loop_backend.integrations.bookstack.adapter import (
     BOOKSTACK_CREDENTIAL_KIND,
     bookstack_error_code,
     load_bookstack_resources,
 )
 from mato_loop_backend.integrations.bookstack.client import BookStackError
+from mato_loop_backend.integrations.bookstack.service import BookStackIntegrationService
 from mato_loop_backend.integrations.caldav.adapter import (
     CALDAV_CREDENTIAL_KIND,
     caldav_error_code,
     load_caldav_resources,
 )
 from mato_loop_backend.integrations.caldav.client import CalDavError
+from mato_loop_backend.integrations.caldav.service import CalDavIntegrationService
 from mato_loop_backend.integrations.contracts import IntegrationResource
-from mato_loop_backend.integrations.mail import (
+from mato_loop_backend.integrations.mail.adapter import (
     MAIL_CREDENTIAL_KIND,
     MailConfig,
     client_for,
     mail_error_code,
 )
-from mato_loop_backend.integrations.mail_client import MailError
-from mato_loop_backend.integrations.mcp_client import McpClientError
-from mato_loop_backend.integrations.mcp_service import SonoBinIntegrationService
+from mato_loop_backend.integrations.mail.client import MailError
+from mato_loop_backend.integrations.mail.service import MailIntegrationService
+from mato_loop_backend.integrations.mcp.client import McpClientError
 from mato_loop_backend.integrations.mealie.adapter import (
     MEALIE_CREDENTIAL_KIND,
     MealieConfig,
     mealie_error_code,
 )
 from mato_loop_backend.integrations.mealie.client import MealieClient, MealieError
+from mato_loop_backend.integrations.mealie.service import MealieIntegrationService
 from mato_loop_backend.integrations.opencode.adapter import (
     OpenCodeIntegrationService,
     OpenCodeSettingsError,
 )
 from mato_loop_backend.integrations.opencode.client import OpenCodeError
-from mato_loop_backend.integrations.openscad import (
+from mato_loop_backend.integrations.openscad.adapter import (
     OpenScadConfig,
     OpenScadDiscoverResult,
     OpenScadTestResult,
 )
+from mato_loop_backend.integrations.openscad.service import OpenScadIntegrationService
 from mato_loop_backend.integrations.registry import (
     integration_adapter_type_registered,
     integration_adapters,
@@ -62,17 +69,11 @@ from mato_loop_backend.integrations.search import (
     SearchIntegrationError,
     effective_search_providers,
     search_provider_options,
-    search_with_provider,
 )
-from mato_loop_backend.integrations.service import (
-    BookStackIntegrationService,
-    CalDavIntegrationService,
-    IntegrationSettingsError,
-    MailIntegrationService,
-    MealieIntegrationService,
-    OpenScadIntegrationService,
-    SearchIntegrationService,
-)
+from mato_loop_backend.integrations.searxng.client import search_with_provider
+from mato_loop_backend.integrations.searxng.service import SearchIntegrationService
+from mato_loop_backend.integrations.service import IntegrationSettingsError
+from mato_loop_backend.integrations.sonobin.service import SonoBinIntegrationService
 from mato_loop_backend.models import ExecutionAgent, UserAccount
 from mato_loop_backend.security import load_credential, read_credential, require_admin, require_user
 from mato_loop_backend.settings import (
@@ -237,6 +238,26 @@ class RecipeIntegrationRequest(BaseModel):
 
 class RecipeIntegrationCreateRequest(RecipeIntegrationRequest):
     token: str = Field(min_length=1, max_length=10_000)
+
+
+class ArcaneIntegrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=160)
+    base_url: HttpUrl
+    api_key: str | None = Field(default=None, min_length=1, max_length=10_000)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_arcane(self) -> ArcaneIntegrationRequest:
+        ArcaneConfig(base_url=self.base_url)
+        if self.api_key is not None and any(ord(char) < 33 or ord(char) > 126 for char in self.api_key):
+            raise ValueError("Arcane API key must contain visible ASCII without spaces")
+        return self
+
+
+class ArcaneIntegrationCreateRequest(ArcaneIntegrationRequest):
+    api_key: str = Field(min_length=1, max_length=10_000)
 
 
 class SonoBinIntegrationRequest(BaseModel):
@@ -580,6 +601,12 @@ def sonobin_settings_payload(settings: IntegrationSettingsDocument) -> dict:
             for instance in instances
         ],
     }
+
+
+def arcane_settings_payload(settings: IntegrationSettingsDocument) -> dict:
+    instances = [item for item in settings.instances
+                 if item.integration_type == "infrastructure" and item.adapter_type == "arcane"]
+    return {"configured": bool(instances), "instances": [_provider_payload(item) for item in instances]}
 
 
 def coding_settings_payload(settings: UserIntegrationSettings) -> dict:
@@ -1442,6 +1469,85 @@ async def test_recipe_integration(
     except Exception as exc:
         await db.rollback()
         logger.warning("Mealie integration test failed with %s", type(exc).__name__)
+        raise ApiError(502, "integration.unavailable") from exc
+    return {"status": "ok"}
+
+
+@router.get("/infrastructure/arcane")
+async def get_arcane_integrations(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
+    return arcane_settings_payload(settings)
+
+
+@router.post("/infrastructure/arcane", status_code=status.HTTP_201_CREATED)
+async def create_arcane_integration(
+    payload: ArcaneIntegrationCreateRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(db, scope, user, mutation=True, adapter_type="arcane")
+    settings = await ArcaneIntegrationService.create(db, name=payload.name, base_url=str(payload.base_url),
+                                                      api_key=payload.api_key, enabled=payload.enabled, owner_id=owner_id)
+    return arcane_settings_payload(settings)
+
+
+@router.put("/infrastructure/arcane/{integration_id}")
+async def update_arcane_integration(
+    integration_id: UUID, payload: ArcaneIntegrationRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(db, scope, user, mutation=True, adapter_type="arcane")
+    try:
+        settings = await ArcaneIntegrationService.update(db, integration_id, name=payload.name,
+            base_url=str(payload.base_url), api_key=payload.api_key, enabled=payload.enabled, owner_id=owner_id)
+    except IntegrationSettingsError as exc:
+        raise ApiError(404, exc.code) from exc
+    return arcane_settings_payload(settings)
+
+
+@router.delete("/infrastructure/arcane/{integration_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_arcane_integration(
+    integration_id: UUID, db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> None:
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(db, scope, user, mutation=True)
+    try:
+        await ArcaneIntegrationService.delete(db, integration_id, owner_id=owner_id)
+    except IntegrationSettingsError as exc:
+        raise ApiError(404, exc.code) from exc
+
+
+@router.post("/infrastructure/arcane/{integration_id}/test")
+async def test_arcane_integration(
+    integration_id: UUID, db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict[str, str]:
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(db, scope, user, adapter_type="arcane")
+    instance = ArcaneIntegrationService._find(settings, integration_id)
+    if instance is None:
+        raise ApiError(404, "integration.notFound")
+    try:
+        record = await load_credential(db, instance.credential_id, owner_id=instance.owner_id) if instance.credential_id else None
+        if record is None or record.kind != ARCANE_CREDENTIAL_KIND:
+            raise ArcaneError("integration.authenticationFailed")
+        credential = read_credential(record)
+        config = ArcaneConfig.model_validate(instance.config)
+        await db.rollback()
+        async with ArcaneClient(str(config.base_url), credential["api_key"]) as client:
+            await client.request("GET", "/environments", params={"start": 0, "limit": 1})
+    except ArcaneError as exc:
+        raise ApiError(502, exc.code) from exc
+    except Exception as exc:
+        logger.warning("Arcane integration test failed with %s", type(exc).__name__)
         raise ApiError(502, "integration.unavailable") from exc
     return {"status": "ok"}
 

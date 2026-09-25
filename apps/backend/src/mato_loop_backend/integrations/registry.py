@@ -3,23 +3,22 @@ from __future__ import annotations
 from dataclasses import replace
 from uuid import UUID
 
-from pydantic import BaseModel, HttpUrl
-
+from mato_loop_backend.integrations.arcane.adapter import ARCANE_ADAPTER
 from mato_loop_backend.integrations.bookstack.adapter import BOOKSTACK_ADAPTER
-from mato_loop_backend.integrations.browser import BROWSER_ADAPTER
+from mato_loop_backend.integrations.browser.adapter import BROWSER_ADAPTER
 from mato_loop_backend.integrations.caldav.adapter import CALDAV_ADAPTER
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     IntegrationContributions,
     ToolContribution,
-    ToolOptionContribution,
 )
-from mato_loop_backend.integrations.mail import MAIL_ADAPTER
-from mato_loop_backend.integrations.mcp import MCP_ADAPTER
+from mato_loop_backend.integrations.mail.adapter import MAIL_ADAPTER
+from mato_loop_backend.integrations.mcp.adapter import MCP_ADAPTER
 from mato_loop_backend.integrations.mealie.adapter import MEALIE_ADAPTER
 from mato_loop_backend.integrations.opencode.adapter import OPENCODE_ADAPTER
-from mato_loop_backend.integrations.openscad import OPENSCAD_ADAPTER
-from mato_loop_backend.integrations.sonobin import SONOBIN_ADAPTER
+from mato_loop_backend.integrations.openscad.adapter import OPENSCAD_ADAPTER
+from mato_loop_backend.integrations.searxng.adapter import SEARXNG_ADAPTER
+from mato_loop_backend.integrations.sonobin.adapter import SONOBIN_ADAPTER
 from mato_loop_backend.integrations.tbs_desk.adapter import TBS_DESK_ADAPTER
 from mato_loop_backend.settings.models import (
     IntegrationAdapterAvailability,
@@ -27,14 +26,6 @@ from mato_loop_backend.settings.models import (
     IntegrationSettings,
     ToolSettings,
 )
-
-
-class SearxngConfig(BaseModel):
-    base_url: HttpUrl
-
-
-def search_provider_key(instance: IntegrationInstance) -> str:
-    return f"{instance.adapter_type}:{instance.id}"
 
 
 def agent_profile_search_available(
@@ -45,31 +36,13 @@ def agent_profile_search_available(
     return primary.split(":", 1)[-1] not in settings._agent_profile_excluded_ids
 
 
-def _searxng_contributions(instance: IntegrationInstance) -> IntegrationContributions:
-    return IntegrationContributions(
-        tool_options=(
-            ToolOptionContribution(
-                tool_name="web_search",
-                option_name="provider",
-                value=search_provider_key(instance),
-                label=instance.name,
-                integration_id=str(instance.id),
-            ),
-        )
-    )
-
-
 _ADAPTERS = {
-    ("search", "searxng"): IntegrationAdapterDefinition(
-        integration_type="search",
-        adapter_type="searxng",
-        config_model=SearxngConfig,
-        contribution_factory=_searxng_contributions,
-    ),
+    ("search", "searxng"): SEARXNG_ADAPTER,
     ("calendar", "caldav"): CALDAV_ADAPTER,
     ("mail", "imap_smtp"): MAIL_ADAPTER,
     ("knowledge", "bookstack"): BOOKSTACK_ADAPTER,
     ("recipes", "mealie"): MEALIE_ADAPTER,
+    ("infrastructure", "arcane"): ARCANE_ADAPTER,
     ("openscad", "openscad"): OPENSCAD_ADAPTER,
     ("coding", "opencode"): OPENCODE_ADAPTER,
     ("browser", "browser"): BROWSER_ADAPTER,

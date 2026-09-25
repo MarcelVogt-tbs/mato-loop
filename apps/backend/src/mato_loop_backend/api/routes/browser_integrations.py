@@ -17,7 +17,7 @@ from mato_loop_backend.execution.browser_contracts import (
 )
 from mato_loop_backend.execution.client import ExecutionClientError
 from mato_loop_backend.execution.protocol import WireModel
-from mato_loop_backend.integrations.browser import (
+from mato_loop_backend.integrations.browser.adapter import (
     BrowserIntegrationService,
     browser_client,
     browser_settings,

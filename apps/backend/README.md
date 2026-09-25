@@ -31,11 +31,9 @@ The backend container uses reload mode and mounts the source tree through `/work
 - `src/mato_loop_backend/workspace.py`: backend-managed file roots and revisions
 - `src/mato_loop_backend/models`: relational models split by aggregate and exported through one package
 - `src/mato_loop_backend/settings`: typed operational settings
-- `src/mato_loop_backend/integrations/contracts.py`: static adapter and tool contribution contracts
-- `src/mato_loop_backend/integrations/search.py`: no-key metasearch and SearXNG with controlled fallback
-- `src/mato_loop_backend/integrations/caldav.py`: CalDAV accounts, static tools, resource policies, and encrypted event references
-- `src/mato_loop_backend/integrations/caldav_client.py`: bounded asynchronous DAV and iCalendar transport
-- `src/mato_loop_backend/integrations/webfetch.py`: bounded fetching of concrete HTTP(S) URLs with configurable public-address enforcement
+- `src/mato_loop_backend/integrations/<product>/`: product adapters, clients, and services; the root contains shared contracts, registry, and cross-integration coordination
+- `src/mato_loop_backend/integrations/search.py`: no-key metasearch and provider fallback; SearXNG's adapter and HTTP client live in `integrations/searxng/`
+- `src/mato_loop_backend/web/fetch.py`: bounded fetching of concrete HTTP(S) URLs with configurable public-address enforcement
 - `src/mato_loop_backend/attachments.py`: validated persistent image storage
 - `src/mato_loop_backend/memory`: durable-memory CRUD, optional dreaming, local indexing, and hybrid durable/episodic retrieval
 - `alembic`: migrations and Alembic runtime

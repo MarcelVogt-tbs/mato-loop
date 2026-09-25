@@ -4,12 +4,12 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.integrations.mcp import (
+from mato_loop_backend.integrations.mcp.adapter import (
     MCP_CREDENTIAL_KIND,
     McpConfig,
     mcp_resource_key,
 )
-from mato_loop_backend.integrations.mcp_client import McpClient, McpClientError
+from mato_loop_backend.integrations.mcp.client import McpClient, McpClientError
 from mato_loop_backend.integrations.registry import validate_integration
 from mato_loop_backend.integrations.service import (
     IntegrationSettingsDocument,
@@ -20,7 +20,6 @@ from mato_loop_backend.integrations.service import (
     _save_settings,
     clear_profile_integration_policies,
 )
-from mato_loop_backend.integrations.sonobin import SONOBIN, SonoBinConfig
 from mato_loop_backend.security import (
     delete_credential,
     load_credential,
@@ -328,12 +327,3 @@ class McpIntegrationService:
         token = await cls._token(db, instance)
         cls._validate_connection(str(config.endpoint), token)
         await cls._discover(str(config.endpoint), token)
-
-
-class SonoBinIntegrationService(McpIntegrationService):
-    integration_type = "music"
-    adapter_type = "sonobin"
-    config_model = SonoBinConfig
-    capability = "sonobin.call"
-    defaults = SONOBIN
-    token_required = True

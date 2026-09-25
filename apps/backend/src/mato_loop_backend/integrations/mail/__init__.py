@@ -1,0 +1,1 @@
+"""IMAP/SMTP mail integration."""

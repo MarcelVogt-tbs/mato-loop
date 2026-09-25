@@ -22,7 +22,7 @@ from mato_loop_backend.events import run_events
 from mato_loop_backend.files.roots import internal_file_roots
 from mato_loop_backend.files.service import RootFileError
 from mato_loop_backend.integrations.search import SearchIntegrationError
-from mato_loop_backend.integrations.youtube_transcript import (
+from mato_loop_backend.integrations.youtube_transcript.client import (
     TranscriptError,
     canonicalize_youtube_video_url,
 )

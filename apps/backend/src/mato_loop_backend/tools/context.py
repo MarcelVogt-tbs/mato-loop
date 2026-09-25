@@ -126,7 +126,9 @@ class ToolContext:
             ),
         )
         if any(item.adapter_type == "browser" for item in settings.instances):
-            from mato_loop_backend.integrations.browser import attached_browser_integration_id
+            from mato_loop_backend.integrations.browser.adapter import (
+                attached_browser_integration_id,
+            )
 
             integration_id = attached_browser_integration_id(
                 self.session.id,

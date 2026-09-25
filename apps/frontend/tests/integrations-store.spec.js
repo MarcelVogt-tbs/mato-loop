@@ -217,6 +217,20 @@ describe('integration store', () => {
     expect(store.coding).toEqual(codingResponse)
   })
 
+  it('keeps the stored Arcane API key when updating its connection', async () => {
+    const response = { configured: true, instances: [{ id: 'arcane-id', name: 'Server', integrationType: 'infrastructure', providerType: 'arcane', hasCredential: true }] }
+    api.get.mockResolvedValue({ data: response })
+    api.put.mockResolvedValue({ data: response })
+    const store = useIntegrationStore()
+
+    await store.updateArcane('arcane-id', { name: 'Server', base_url: 'https://arcane.example.test', api_key: '', enabled: true })
+
+    expect(api.put).toHaveBeenCalledWith('/integrations/infrastructure/arcane/arcane-id', {
+      name: 'Server', base_url: 'https://arcane.example.test', enabled: true
+    }, { params: { scope: 'instance' } })
+    expect(store.arcane).toEqual(response)
+  })
+
   it('discovers personal OpenCode integrations independently of the settings scope', async () => {
     api.get.mockResolvedValue({ data: codingResponse })
     const store = useIntegrationStore()
@@ -488,6 +502,7 @@ describe('integration store', () => {
       '/integrations/mail': { configured: false, accounts: [] },
       '/integrations/knowledge': knowledgeResponse,
       '/integrations/recipes': recipesResponse,
+      '/integrations/infrastructure/arcane': { configured: false, instances: [] },
       '/integrations/music/sonobin': musicResponse,
       '/integrations/openscad': openScadResponse,
       '/integrations/coding': codingResponse,

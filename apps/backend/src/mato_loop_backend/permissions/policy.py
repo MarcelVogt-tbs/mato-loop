@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.files.service import FileRoot, RootFileError, RootFileService
-from mato_loop_backend.integrations.youtube_transcript import canonicalize_youtube_video_url
+from mato_loop_backend.integrations.youtube_transcript.client import canonicalize_youtube_video_url
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
 from mato_loop_backend.settings import (
     ToolExecutionPolicy,
@@ -53,6 +53,7 @@ class SessionGrantScope:
 
 
 _READ_CAPABILITIES = frozenset({
+    "arcane.accounts.read", "arcane.read",
     "automation.read", "browser.read", "coding.analyze", "coding.plan.read", "file.provide",
     "filesystem.read", "knowledge.read", "mail.read", "meal_plan.read",
     "media.analyze.video", "media.transcribe.audio",
@@ -62,6 +63,7 @@ _READ_CAPABILITIES = frozenset({
     "skills.load", "support.read", "system.info", "tasks.read", "calendar.read", "execution_agent.list",
 })
 _WRITE_CAPABILITIES = frozenset({
+    "arcane.manage", "arcane.delete",
     "automation.create", "automation.delete", "automation.run", "automation.update",
     "browser.code", "browser.control", "browser.release", "browser.write",
     "cad.render", "calendar.delete", "calendar.write", "coding.execute.enqueue",

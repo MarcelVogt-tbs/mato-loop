@@ -21,7 +21,7 @@ from mato_loop_backend.execution.client import ExecutionClientError
 from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.execution.protocol import WireModel
 from mato_loop_backend.files.service import RootFileService
-from mato_loop_backend.integrations.browser import load_browser_integration
+from mato_loop_backend.integrations.browser.adapter import load_browser_integration
 from mato_loop_backend.models import AgentRun, ChatSession, UserAccount
 from mato_loop_backend.permissions.policy import (
     PermissionDecision,

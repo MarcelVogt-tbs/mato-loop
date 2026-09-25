@@ -45,7 +45,7 @@ from mato_loop_backend.execution.client import (
 )
 from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.files.service import RootFileService
-from mato_loop_backend.integrations.browser import browser_client, load_browser_integration
+from mato_loop_backend.integrations.browser.adapter import browser_client, load_browser_integration
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,

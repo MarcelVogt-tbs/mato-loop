@@ -262,7 +262,7 @@ async def load_effective_tools(
 ) -> ToolSettings:
     instance = (await SettingsStore.load(db, ToolSettings)).model_copy(deep=True)
     if not instance.tool_availability.get("browser", True):
-        from mato_loop_backend.integrations.browser import BROWSER_TOOL_ACTIONS
+        from mato_loop_backend.integrations.browser.adapter import BROWSER_TOOL_ACTIONS
 
         instance.tool_availability.update(dict.fromkeys(BROWSER_TOOL_ACTIONS, False))
     personal = await SettingsStore.load_optional(db, UserToolSettings, user_id=user_id)

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.api.request_body_limit import _request_limit
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.integrations import registry as integration_registry
-from mato_loop_backend.integrations.mail import (
+from mato_loop_backend.integrations.mail.adapter import (
     MAIL_ADAPTER,
     MAIL_CREDENTIAL_KIND,
     MailConfig,
@@ -28,14 +28,14 @@ from mato_loop_backend.integrations.mail import (
     locator_from_token,
     token_for,
 )
-from mato_loop_backend.integrations.mail_client import (
+from mato_loop_backend.integrations.mail.client import (
     MailClient,
     MailError,
     MessageLocator,
     build_message,
     parse_message,
 )
-from mato_loop_backend.integrations.service import MailIntegrationService
+from mato_loop_backend.integrations.mail.service import MailIntegrationService
 from mato_loop_backend.models import ChatSession
 from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.providers.base import ToolCall
@@ -348,7 +348,7 @@ async def test_disabled_mail_mutation_does_not_read_remote_message(
         side_effect=AssertionError("disabled mail actions must not access IMAP")
     )
     monkeypatch.setattr(
-        "mato_loop_backend.integrations.mail._selected_client", selected_client
+        "mato_loop_backend.integrations.mail.adapter._selected_client", selected_client
     )
     arguments = MailTokenArguments(
         integration_id=account.id,
@@ -385,7 +385,7 @@ async def test_mail_send_rejects_incomplete_approval_preview(
     )
     client = SimpleNamespace(get_message=AsyncMock(return_value=message))
     monkeypatch.setattr(
-        "mato_loop_backend.integrations.mail._selected_client",
+        "mato_loop_backend.integrations.mail.adapter._selected_client",
         AsyncMock(return_value=(client, account, binding_revision(account))),
     )
     arguments = MailTokenArguments(
@@ -425,7 +425,7 @@ async def test_mail_service_stores_only_encrypted_password_credential(monkeypatc
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     monkeypatch.setattr(
-        "mato_loop_backend.integrations.service.store_credential", store_credential
+        "mato_loop_backend.integrations.mail.service.store_credential", store_credential
     )
     db = AsyncMock(spec=AsyncSession)
 

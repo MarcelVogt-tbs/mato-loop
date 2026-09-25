@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 import mato_loop_backend.integrations.mealie.adapter as integrations_mealie_adapter
+import mato_loop_backend.integrations.mealie.service as mealie_service_module
 import mato_loop_backend.integrations.service as service_module
 from mato_loop_backend.integrations.mealie.adapter import (
     MEALIE_ADAPTER,
@@ -39,7 +40,7 @@ from mato_loop_backend.integrations.mealie.client import (
     MealieRecipeInstruction,
     MealieRecipeSummary,
 )
-from mato_loop_backend.integrations.service import MealieIntegrationService
+from mato_loop_backend.integrations.mealie.service import MealieIntegrationService
 from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
@@ -350,9 +351,9 @@ async def test_service_stores_the_token_outside_integration_settings(monkeypatch
     load = AsyncMock(return_value=settings)
     save = AsyncMock()
     store = AsyncMock(return_value=SimpleNamespace(id=credential_id))
-    monkeypatch.setattr(service_module, "_load_integrations", load)
+    monkeypatch.setattr(mealie_service_module, "_load_integrations", load)
     monkeypatch.setattr(service_module, "_save_settings", save)
-    monkeypatch.setattr(service_module, "store_credential", store)
+    monkeypatch.setattr(mealie_service_module, "store_credential", store)
     db = AsyncMock()
 
     result = await MealieIntegrationService.create(
