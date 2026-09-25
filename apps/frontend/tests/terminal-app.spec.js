@@ -11,6 +11,7 @@ import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useControlCenterStore } from 'stores/control-center'
 import { TERMINAL_OPERATIONS } from '../src/app/control-center/manifest'
 import { FakeWebSocket } from './terminal-websocket'
+import { notifyError } from 'src/utils/notifications'
 
 vi.hoisted(() => {
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
@@ -67,6 +68,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   app?.unmount()
+  vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -276,6 +278,28 @@ it('releases on unavailability and reconnects when the agent returns', async () 
   await nextTick()
   expect(FakeWebSocket.instances).toHaveLength(2)
   expect(store.status).toBe('connecting')
+})
+
+it('automatically reconnects after viewer loss and restores shell output', async () => {
+  socket.output('before\r\n')
+  await mountTerminal()
+  vi.useFakeTimers()
+  socket.onclose({ code: 1006 })
+  await nextTick()
+  expect(root.textContent).toContain('Terminalverbindung wird wiederhergestellt')
+  expect(FakeWebSocket.instances).toHaveLength(1)
+  vi.advanceTimersByTime(1000)
+  await nextTick()
+  const resumed = FakeWebSocket.instances.at(-1)
+  expect(resumed).not.toBe(socket)
+  expect(store.ready).toBe(false)
+  vi.useRealTimers()
+  resumed.open()
+  resumed.snapshot({ personalData: btoa('before\r\nafter\r\n') })
+  await flushOutput()
+  expect(lines(3)).toEqual(['before', 'after', ''])
+  expect(store.ready).toBe(true)
+  expect(notifyError).not.toHaveBeenCalled()
 })
 
 it('shows replacement without reclaiming on remount or stale control actions', async () => {

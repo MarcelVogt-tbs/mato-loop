@@ -15,10 +15,10 @@
       :title="disconnectedTitle"
       :description="terminal.status === 'replaced'
           ? 'Diese Ansicht steuert das Terminal nicht mehr. Verwende die andere Ansicht oder lade diese Seite bewusst neu.'
-          : 'Die Ansicht ist getrennt. Beim erneuten Verbinden wird der verfügbare Terminalzustand geladen.'"
+          : 'Der verfügbare Terminalzustand wird nach der Verbindung geladen.'"
     >
       <template v-if="terminal.status !== 'replaced'" #actions>
-        <q-btn unelevated no-caps color="primary" icon="refresh" label="Neu verbinden" @click="reconnect" />
+        <q-btn unelevated no-caps color="primary" icon="refresh" label="Jetzt verbinden" @click="reconnect()" />
       </template>
     </AppStateMessage>
     <template v-else>
@@ -68,10 +68,8 @@ const disconnected = computed(() => Boolean(
   && terminal.sessionId === chat.current?.id
   && terminal.agentId === chat.current?.preferredExecutionAgentId
 ))
-const disconnectedTitle = computed(() => ({
-  replaced: 'In einer anderen Ansicht geöffnet',
-  resyncRequired: 'Terminalverlauf muss neu geladen werden'
-})[terminal.status] || 'Terminalverbindung getrennt')
+const disconnectedTitle = computed(() => terminal.status === 'replaced'
+  ? 'In einer anderen Ansicht geöffnet' : 'Terminalverbindung wird wiederhergestellt')
 const unavailableMessage = computed(() => {
   if (!chat.current) return 'Es ist keine Session geöffnet.'
   if (!chat.current.preferredExecutionAgentId) return 'Für diese Session ist kein Agent ausgewählt.'
@@ -86,6 +84,8 @@ let fitAddon
 let resizeObserver
 let viewerSocket
 let pendingReplays = 0
+let reconnectTimer
+let reconnectAttempts = 0
 
 function initializeTerminal() {
   if (xterm || !terminalHost.value) return
@@ -142,10 +142,29 @@ function disposeTerminal() {
   pendingReplays = 0
 }
 
-function reconnect() {
+function reconnect(automatic = false) {
   if (!connectionAvailable.value || !chat.current?.id || terminal.status === 'replaced') return
-  terminal.connect({ sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId })
+  clearTimeout(reconnectTimer)
+  reconnectTimer = null
+  terminal.connect({ sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId, automatic })
   viewerSocket = terminal.socket
+}
+
+function scheduleReconnect() {
+  clearTimeout(reconnectTimer)
+  reconnectTimer = null
+  if (!connectionAvailable.value || terminal.socket || !['closed', 'resyncRequired'].includes(terminal.status)
+    || terminal.sessionId !== chat.current?.id || terminal.agentId !== chat.current?.preferredExecutionAgentId
+    || document.visibilityState === 'hidden') return
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
+    reconnect(true)
+  }, Math.min(1000 * 2 ** reconnectAttempts++, 30000))
+}
+
+function reconnectWhenVisible() {
+  if (document.visibilityState === 'visible' && !terminal.socket) reconnect(true)
+  else if (document.visibilityState === 'hidden') clearTimeout(reconnectTimer)
 }
 
 watch(
@@ -170,13 +189,16 @@ watch(disconnected, (value) => {
   if (value) disposeTerminal()
   else void nextTick(initializeTerminal)
 })
+watch(() => [terminal.status, terminal.socket, connectionAvailable.value], () => {
+  if (terminal.ready || !connectionAvailable.value) reconnectAttempts = 0
+  scheduleReconnect()
+}, { immediate: true })
 watch(
   () => [chat.current?.id, chat.current?.preferredExecutionAgentId, connectionAvailable.value],
   () => {
     if (connectionAvailable.value && chat.current?.id) {
-      if (terminal.sessionId !== chat.current.id || terminal.agentId !== chat.current.preferredExecutionAgentId) {
-        terminal.connect({ sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId })
-      }
+      if (terminal.sessionId !== chat.current.id || terminal.agentId !== chat.current.preferredExecutionAgentId
+        || (!terminal.socket && terminal.status !== 'replaced')) reconnect()
       viewerSocket = terminal.socket
       void nextTick(initializeTerminal)
     } else {
@@ -189,10 +211,15 @@ watch(
 
 onMounted(() => {
   if (!disconnected.value) initializeTerminal()
+  document.addEventListener('visibilitychange', reconnectWhenVisible)
+  window.addEventListener('online', reconnectWhenVisible)
   window.visualViewport?.addEventListener('resize', fitVisibleTerminal)
   void nextTick(fitVisibleTerminal)
 })
 onBeforeUnmount(() => {
+  clearTimeout(reconnectTimer)
+  document.removeEventListener('visibilitychange', reconnectWhenVisible)
+  window.removeEventListener('online', reconnectWhenVisible)
   terminal.release(viewerSocket)
   window.visualViewport?.removeEventListener('resize', fitVisibleTerminal)
   disposeTerminal()

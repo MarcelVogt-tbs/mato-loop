@@ -54,7 +54,7 @@ export const useTerminalStore = defineStore('terminal', {
     removalBlocked: (state) => Boolean(state.busy || state.submitting)
   },
   actions: {
-    connect({ sessionId, agentId }) {
+    connect({ sessionId, agentId, automatic = false }) {
       if (!sessionId || !agentId) return
       if (this.sessionId === sessionId && this.agentId === agentId && this.socket
         && !['closed', 'resyncRequired'].includes(this.status)) return
@@ -75,11 +75,11 @@ export const useTerminalStore = defineStore('terminal', {
         this.status = 'acquiring'
         this.errorNotified = false
       }
-      socket.onmessage = (event) => void this.receive(event.data, generation, socket)
+      socket.onmessage = (event) => void this.receive(event.data, generation, socket, automatic)
       socket.onerror = () => {
         if (this.generation !== generation || this.socket !== socket || this.errorNotified) return
         this.errorNotified = true
-        notifyError({}, 'Die Terminalverbindung ist fehlgeschlagen.')
+        if (!automatic) notifyError({}, 'Die Terminalverbindung ist fehlgeschlagen.')
       }
       socket.onclose = (event) => {
         if (this.generation !== generation || this.socket !== socket) return
@@ -90,7 +90,7 @@ export const useTerminalStore = defineStore('terminal', {
         this.submitting = null
       }
     },
-    async receive(raw, generation = this.generation, socket = this.socket) {
+    async receive(raw, generation = this.generation, socket = this.socket, automatic = false) {
       if (generation !== this.generation || socket !== this.socket) return
       if (raw instanceof ArrayBuffer) {
         if (this.ready) this.appendOutput(this.decoder.decode(new Uint8Array(raw), { stream: true }))
@@ -135,7 +135,7 @@ export const useTerminalStore = defineStore('terminal', {
       } else if (message.type === 'error') {
         this.errorNotified = true
         this.submitting = null
-        notifyError({ error: message.error }, 'Die Terminalaktion ist fehlgeschlagen.')
+        if (!automatic || this.ready) notifyError({ error: message.error }, 'Die Terminalaktion ist fehlgeschlagen.')
       }
     },
     applyStatus(message) {
