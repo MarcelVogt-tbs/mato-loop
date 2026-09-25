@@ -243,13 +243,16 @@ class ProcessExecutionTests(unittest.IsolatedAsyncioTestCase):
         script.write_text(
             "import os, signal, time\n"
             "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-            "open('pid', 'w').write(str(os.getpid()))\n"
+            "with open('pid.tmp', 'w') as marker:\n"
+            "    marker.write(str(os.getpid()))\n"
+            "os.replace('pid.tmp', 'pid')\n"
             "time.sleep(30)\n"
         )
         for pty in (False, True):
             for cancel in (False, True):
                 with self.subTest(pty=pty, cancel=cancel):
                     pid_file = self.current / "pid"
+                    pid_file.unlink(missing_ok=True)
                     before = set(os.listdir("/proc/self/fd"))
                     task = asyncio.create_task(
                         self.execute(
@@ -258,24 +261,29 @@ class ProcessExecutionTests(unittest.IsolatedAsyncioTestCase):
                             timeout=0.5 if not cancel else 30,
                         )
                     )
-                    async with asyncio.timeout(5):
-                        while not pid_file.exists():
-                            await asyncio.sleep(0.01)
-                    pid = int(pid_file.read_text())
-                    if cancel:
-                        task.cancel()
-                        with self.assertRaises(asyncio.CancelledError):
-                            await task
-                    else:
-                        result, _ = await task
-                        self.assertTrue(result["timedOut"])
-                    async with asyncio.timeout(3):
-                        while Path(f"/proc/{pid}/stat").exists():
-                            if Path(f"/proc/{pid}/stat").read_text().split()[2] == "Z":
-                                break
-                            await asyncio.sleep(0.01)
-                    pid_file.unlink()
-                    self.assertEqual(set(os.listdir("/proc/self/fd")), before)
+                    try:
+                        async with asyncio.timeout(5):
+                            while not pid_file.exists():
+                                await asyncio.sleep(0.01)
+                        pid = int(pid_file.read_text())
+                        if cancel:
+                            task.cancel()
+                            with self.assertRaises(asyncio.CancelledError):
+                                await task
+                        else:
+                            result, _ = await task
+                            self.assertTrue(result["timedOut"])
+                        async with asyncio.timeout(3):
+                            while Path(f"/proc/{pid}/stat").exists():
+                                if Path(f"/proc/{pid}/stat").read_text().split()[2] == "Z":
+                                    break
+                                await asyncio.sleep(0.01)
+                    finally:
+                        if not task.done():
+                            task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                        pid_file.unlink(missing_ok=True)
+                    self.assertFalse(set(os.listdir("/proc/self/fd")) - before)
 
     async def test_start_failure_and_cancellation_close_descriptors(self) -> None:
         for failure in (OSError(), asyncio.CancelledError()):
