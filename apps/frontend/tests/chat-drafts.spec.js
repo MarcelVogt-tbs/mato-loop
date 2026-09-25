@@ -223,6 +223,99 @@ describe('chat drafts', () => {
     expect(chat.current.userRequestCount).toBe(1)
   })
 
+  it('creates one session on the first app action and carries the draft into it', async () => {
+    const chat = useChatStore()
+    const center = useControlCenterStore()
+    chat.setDraft('Browser prüfen')
+    const attachment = { file: new Blob(['draft']), kind: 'text' }
+    chat.attachmentDrafts.newSession.push(attachment)
+    api.post.mockImplementation(async (_url, payload) => ({ data: {
+      session: {
+        id: 'session-browser', projectId: null, title: 'Neue Session',
+        controlCenter: {
+          tabs: payload.control_center.tabs.map((tab) => ({ appId: tab.app_id, pinned: false })),
+          activeAppId: payload.control_center.active_app_id,
+          open: payload.control_center.open
+        }
+      }
+    } }))
+
+    await center.setOpen(true)
+    expect(api.post).not.toHaveBeenCalled()
+    await center.openApp('browser')
+
+    expect(api.post).toHaveBeenCalledOnce()
+    expect(api.post.mock.calls[0][1]).toMatchObject({
+      content: null,
+      control_center: { active_app_id: 'browser', open: true }
+    })
+    expect(chat.current.id).toBe('session-browser')
+    expect(center.sessionId).toBe('session-browser')
+    expect(center.activeAppId).toBe('browser')
+    expect(chat.activeDraft).toBe('Browser prüfen')
+    expect(chat.activeAttachmentDraft).toEqual([attachment])
+    expect(chat.drafts.newSession.message).toBe('')
+    expect(chat.attachmentDrafts.newSession).toEqual([])
+    expect((await chat.queueMessage(chat.activeDraft)).sessionId).toBe('session-browser')
+  })
+
+  it('keeps the new-session draft when app-triggered creation fails', async () => {
+    const chat = useChatStore()
+    const center = useControlCenterStore()
+    chat.setDraft('Nicht verlieren')
+    api.post.mockRejectedValueOnce(new Error('request failed'))
+
+    await expect(center.openApp('browser')).rejects.toThrow('request failed')
+
+    expect(chat.current).toBeNull()
+    expect(center.sessionId).toBeNull()
+    expect(chat.activeDraft).toBe('Nicht verlieren')
+  })
+
+  it('creates the session when the already visible Ablage tab is activated', async () => {
+    const center = useControlCenterStore()
+    api.post.mockImplementation(async (_url, payload) => ({ data: { session: {
+      id: 'session-files', projectId: null, controlCenter: {
+        tabs: payload.control_center.tabs.map((tab) => ({ appId: tab.app_id })),
+        activeAppId: payload.control_center.active_app_id,
+        open: true
+      }
+    } } }))
+
+    await center.activate('files')
+
+    expect(api.post).toHaveBeenCalledOnce()
+    expect(useChatStore().current.id).toBe('session-files')
+    expect(center.activeAppId).toBe('files')
+  })
+
+  it('creates only one empty session for overlapping app actions', async () => {
+    const chat = useChatStore()
+    const center = useControlCenterStore()
+    let finishCreate
+    api.post.mockReturnValue(new Promise((resolve) => { finishCreate = resolve }))
+    api.patch.mockResolvedValue({ data: {
+      controlCenter: {
+        tabs: [{ appId: 'session' }, { appId: 'files' }, { appId: 'browser' }, { appId: 'mail' }],
+        activeAppId: 'mail', open: true
+      }
+    } })
+
+    const browser = center.openApp('browser')
+    const mail = center.openApp('mail')
+    await vi.waitFor(() => expect(finishCreate).toBeTypeOf('function'))
+    finishCreate({ data: { session: { id: 'session-1', projectId: null, controlCenter: {
+      tabs: [{ appId: 'session' }, { appId: 'files' }, { appId: 'browser' }],
+      activeAppId: 'browser', open: true
+    } } } })
+    await Promise.all([browser, mail])
+
+    expect(api.post).toHaveBeenCalledOnce()
+    expect(api.patch).toHaveBeenCalledOnce()
+    expect(chat.current.id).toBe('session-1')
+    expect(center.activeAppId).toBe('mail')
+  })
+
   it('persists and snapshots the selected agent profile for session creation', async () => {
     api.post.mockResolvedValue({
       data: {
@@ -300,7 +393,11 @@ describe('chat drafts', () => {
     const chat = useChatStore()
     const controlCenter = useControlCenterStore()
     vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
-    await controlCenter.openApp('calendar')
+    await controlCenter.save({
+      tabs: [...controlCenter.tabs, { appId: 'calendar' }],
+      activeAppId: 'calendar',
+      open: true
+    })
 
     const creating = chat.startSession('Neue Session')
     await vi.waitFor(() => expect(api.patch).toHaveBeenCalled())
@@ -2580,7 +2677,6 @@ describe('chat drafts', () => {
     }))
     api.post.mockResolvedValue({
       data: {
-        sessionDeleted: false,
         session: canonicalSession,
         draft: { content: 'Noch einmal bearbeiten' }
       }
@@ -2612,7 +2708,7 @@ describe('chat drafts', () => {
   it('undoes the first user message while its run is active', async () => {
     global.EventSource = EventSourceMock
     let resolveUndo
-    api.get.mockResolvedValue({ data: [] })
+    api.get.mockResolvedValue({ data: { id: 'session-1', title: 'Neue Session', messages: [], activeRun: null } })
     api.post.mockImplementation((url) => url.endsWith('/undo')
       ? new Promise((resolve) => { resolveUndo = resolve })
       : Promise.resolve({ data: {} }))
@@ -2637,13 +2733,14 @@ describe('chat drafts', () => {
     source.emit('run.cancelled', { runId: 'run-1' })
 
     expect(api.get.mock.calls.some(([url]) => url === '/sessions/session-1')).toBe(false)
-    resolveUndo({ data: { sessionDeleted: true, draft: { content: 'Noch einmal' } } })
+    resolveUndo({ data: { draft: { content: 'Noch einmal' } } })
     await undoing
 
-    expect(chat.current).toBeNull()
+    expect(chat.current.id).toBe('session-1')
+    expect(chat.current.messages).toEqual([])
     expect(chat.running).toBe(false)
     expect(chat.activeDraft).toBe('Noch einmal')
-    expect(api.get.mock.calls.some(([url]) => url === '/sessions/session-1')).toBe(false)
+    expect(api.get.mock.calls.some(([url]) => url === '/sessions/session-1')).toBe(true)
   })
 
   it.each([
@@ -2665,7 +2762,6 @@ describe('chat drafts', () => {
     }))
     api.post.mockResolvedValue({
       data: {
-        sessionDeleted: false,
         session: { id: sessionId, messages: [], activeRun: null },
         draft: { content: 'Mit Datei' }
       }
@@ -2763,7 +2859,7 @@ describe('chat drafts', () => {
     const undoing = chat.undoUserMessage(message)
     chat.current = { id: 'session-2', messages: [] }
     chat.selectedSessionId = 'session-2'
-    resolveUndo({ data: { sessionDeleted: false, draft: { content: 'Später bearbeiten' } } })
+    resolveUndo({ data: { draft: { content: 'Später bearbeiten' } } })
     await undoing
 
     expect(chat.current.id).toBe('session-2')
@@ -2793,7 +2889,7 @@ describe('chat drafts', () => {
 
     const result = await chat.undoUserMessage(message)
 
-    expect(result.sessionDeleted).toBe(false)
+    expect(result.draft.content).toBe('Wiederherstellen')
     expect(chat.current.messages).toEqual([{ id: 'user-1', role: 'user', content: 'Bleibt' }])
     expect(chat.activeDraft).toBe('Wiederherstellen')
   })

@@ -261,7 +261,6 @@ async def test_undo_cleans_child_storage_for_only_removed_turns(tmp_path, monkey
     ]
     storage = SessionStorage(tmp_path / "sessions")
     paths = {item_id: storage.provision(item_id) for item_id in (parent.id, child_id, earlier_child_id)}
-    monkeypatch.setattr("mato_loop_backend.chat_history.SessionStorage", lambda: storage)
     monkeypatch.setattr(cleanup, "SessionStorage", lambda: storage)
     descendants = AsyncMock(return_value=[(child_id, None)] + ([(earlier_child_id, None)] if first_message else []))
     monkeypatch.setattr(cleanup, "descendant_sessions", descendants)
@@ -273,14 +272,13 @@ async def test_undo_cleans_child_storage_for_only_removed_turns(tmp_path, monkey
     result = await ChatHistoryService.undo_user_message(
         db, session_id=parent.id, user_id=parent.user_id, message_id=target.id,
     )
-    assert result.session_deleted is first_message
     assert result.content == target.content
     descendants.assert_awaited_once_with(
         db, [parent.id], spawned_by_run_ids=None if first_message else [run_id],
     )
     assert not paths[child_id].exists()
     assert paths[earlier_child_id].exists() is not first_message
-    assert paths[parent.id].exists() is not first_message
+    assert paths[parent.id].exists()
     assert list(storage.trash_dir.iterdir()) == []
 
 

@@ -964,8 +964,8 @@ async def create_session(
     duplicate = await duplicate_submission(db, payload.run_id, user.id)
     if duplicate is not None:
         return duplicate
-    content = payload.content.strip()
-    if not content and not attachments:
+    content = payload.content.strip() if payload.content is not None else None
+    if content == "" and not attachments:
         raise SessionServiceError(422, "validation.required", field="content")
     project = None
     if payload.project_id is not None:
@@ -980,9 +980,9 @@ async def create_session(
     await validate_agent_profile(db, user.id, agent_profile_id)
     ai = await _profile_ai(db, user.id, agent_profile_id)
     model_id = payload.model_id or ai.default_model_id
-    if not model_available(ai, model_id):
+    if content is not None and not model_available(ai, model_id):
         raise SessionServiceError(409, "session.modelUnavailable", field="modelId")
-    if not model_supports_tools(ai, model_id):
+    if content is not None and not model_supports_tools(ai, model_id):
         raise SessionServiceError(409, "session.modelToolsUnavailable", field="modelId")
     fields = payload.model_fields_set
     agent_id = (
@@ -1023,30 +1023,34 @@ async def create_session(
     db.add(item)
     item_id = item.id
     item_project_id = item.project_id
-    selected_model = model_for_session(ai, model_id)
-    selected_provider = provider_for_session(ai, selected_model)
-    assert selected_model is not None and selected_provider is not None
-    await add_directory_grant(
-        db,
-        item.id,
-        agent_id,
-        current_directory,
-        directory_policy,
-        item.agent_profile_id,
-        effective_model_trust(selected_provider, selected_model).value,
-    )
+    if content is not None:
+        selected_model = model_for_session(ai, model_id)
+        selected_provider = provider_for_session(ai, selected_model)
+        assert selected_model is not None and selected_provider is not None
+        await add_directory_grant(
+            db,
+            item.id,
+            agent_id,
+            current_directory,
+            directory_policy,
+            item.agent_profile_id,
+            effective_model_trust(selected_provider, selected_model).value,
+        )
     await db.flush()
     session_storage = storage_factory()
     try:
         await asyncio.to_thread(session_storage.provision, item_id, item_project_id)
-        run = await AgentRuntime.start(
-            db,
-            item,
-            content,
-            run_id=payload.run_id,
-            attachments=attachments,
-            active_file=await active_file_payload(payload.active_file, item, db),
-        )
+        if content is None:
+            await ChatHistoryService._commit(db)
+        else:
+            run = await AgentRuntime.start(
+                db,
+                item,
+                content,
+                run_id=payload.run_id,
+                attachments=attachments,
+                active_file=await active_file_payload(payload.active_file, item, db),
+            )
     except (OSError, SessionStorageError) as exc:
         await db.rollback()
         logger.exception("Session storage could not be provisioned")
@@ -1076,6 +1080,8 @@ async def create_session(
         await db.rollback()
         raise
     await db.refresh(item)
+    if content is None:
+        return {"session": await session_serializer(db, item, last_message_at=None)}
     user_message = await latest_user_message(db, item.id)
     return {
         "session": await session_serializer(
@@ -1259,6 +1265,17 @@ async def send_message(
         raise SessionServiceError(409, "session.modelUnavailable")
     if not model_supports_tools(ai, model_id):
         raise SessionServiceError(409, "session.modelToolsUnavailable")
+    if await db.scalar(select(Message.id).where(Message.session_id == session_id).limit(1)) is None:
+        directory, directory_policy = await validate_execution_preferences(
+            db, user.id, item.preferred_execution_agent_id, item.current_directory
+        )
+        model = model_for_session(ai, model_id)
+        provider = provider_for_session(ai, model)
+        assert model is not None and provider is not None
+        await add_directory_grant(
+            db, session_id, item.preferred_execution_agent_id, directory, directory_policy,
+            requested_profile, effective_model_trust(provider, model).value,
+        )
     try:
         run = await AgentRuntime.start(
             db,

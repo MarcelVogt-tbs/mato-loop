@@ -215,7 +215,7 @@ def test_send_message_http_response_accepts_nested_message(monkeypatch) -> None:
         content="Nachricht",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, message]
+    db.scalar.side_effect = [session, None, None, message]
     monkeypatch.setattr(AgentRuntime, "start", AsyncMock(return_value=run))
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="agent")
@@ -671,6 +671,50 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
         db, user.id, project.default_execution_agent_id, "/srv/project"
     )
     storage.provision.assert_called_once_with(session.id, project.id)
+
+
+@pytest.mark.parametrize("with_model", [False, True])
+async def test_opening_an_app_creates_an_empty_session_with_storage(monkeypatch, with_model) -> None:
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    user = _user()
+    provider = LlmProviderConfig(name="Test", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="test-model")
+    ai_settings = AiSettings(
+        providers=[provider] if with_model else [],
+        models=[model] if with_model else [],
+        default_model_id=model.id if with_model else None,
+    )
+
+    async def load_settings(_db, settings_type, **_kwargs):
+        return ai_settings if settings_type is AiSettings else MemorySettings()
+
+    monkeypatch.setattr(SettingsStore, "load", load_settings)
+    start = AsyncMock()
+    monkeypatch.setattr(AgentRuntime, "start", start)
+    storage = MagicMock()
+    monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+
+    result = await create_session(SessionCreateRequest(
+        content=None,
+        control_center={
+            "tabs": [{"app_id": "session", "pinned": False}, {"app_id": "browser", "pinned": False}],
+            "active_app_id": "browser",
+            "open": True,
+        },
+    ), user, db)
+
+    session = db.add.call_args.args[0]
+    storage.provision.assert_called_once_with(session.id, None)
+    db.commit.assert_awaited_once()
+    start.assert_not_awaited()
+    assert result["session"]["id"] == str(session.id)
+    assert result["session"]["controlCenter"]["activeAppId"] == "browser"
+    assert result["session"]["titleGenerationStatus"] == "pending"
+    assert result["session"]["lastMessageAt"] is None
+    assert "message" not in result and "runId" not in result
 
 
 async def test_first_session_retry_returns_canonical_session_and_attachment() -> None:
@@ -2328,7 +2372,7 @@ async def test_required_search_unavailability_does_not_reject_user_message(monke
         id=uuid4(), session_id=session.id, role="user", content="Aktuelle Frage"
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, user_message]
+    db.scalar.side_effect = [session, None, None, user_message]
     start = AsyncMock(return_value=run)
     monkeypatch.setattr(AgentRuntime, "start", start)
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
@@ -2414,12 +2458,14 @@ async def test_existing_session_message_passes_profile_to_next_run(monkeypatch) 
     run = AgentRun(id=uuid4(), session_id=session.id, agent_profile_id=selected_profile)
     message = Message(id=uuid4(), session_id=session.id, role="user", content="Next")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, message]
+    db.scalar.side_effect = [session, None, None, message]
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="model")
     ai = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
     load_ai = AsyncMock(return_value=ai)
     monkeypatch.setattr(session_service, "_profile_ai", load_ai)
+    grant = AsyncMock()
+    monkeypatch.setattr(session_service, "add_directory_grant", grant)
     start = AsyncMock(return_value=run)
     monkeypatch.setattr(AgentRuntime, "start", start)
 
@@ -2433,6 +2479,8 @@ async def test_existing_session_message_passes_profile_to_next_run(monkeypatch) 
     )
 
     load_ai.assert_awaited_once_with(db, user.id, selected_profile)
+    assert grant.await_args.args[:2] == (db, session.id)
+    assert grant.await_args.args[5] == selected_profile
     assert start.await_args.kwargs["agent_profile_id_override"] == selected_profile
     assert result["agentProfileId"] == str(selected_profile)
 
@@ -2510,7 +2558,7 @@ async def test_run_id_collision_with_another_owner_is_a_controlled_conflict(monk
     model = ModelConfig(provider_id=provider.id, model_id="agent")
     session.model_config_id = model.id
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, None, None]
+    db.scalar.side_effect = [session, None, None, None, None]
     monkeypatch.setattr(
         SettingsStore,
         "load",
@@ -2547,7 +2595,7 @@ async def test_attachment_only_message_starts_run(monkeypatch) -> None:
     run = AgentRun(id=uuid4(), session_id=session.id, status="queued")
     user_message = Message(id=uuid4(), session_id=session.id, role="user", content="")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, user_message]
+    db.scalar.side_effect = [session, None, None, user_message]
     start = AsyncMock(return_value=run)
     monkeypatch.setattr(AgentRuntime, "start", start)
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")

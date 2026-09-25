@@ -3,7 +3,7 @@ import { api } from 'src/boot/axios'
 import { controlCenterRequestState, useControlCenterStore } from 'src/stores/control-center'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildAttachmentFormData, releaseAttachmentDrafts } from 'src/features/chat/attachments'
-import { queueKeyForEntry, sanitizedSessionOptions, sortSessions } from 'src/features/chat/state'
+import { queueKeyForEntry, sanitizedSessionOptions, sessionCreatePayload, sortSessions } from 'src/features/chat/state'
 import { errorDescriptor } from 'src/utils/api-errors'
 import { compareChatOutboxEntries, deleteChatOutboxEntry, deleteChatOutboxEntries, saveChatOutboxEntry } from 'src/utils/chat-outbox'
 import { notifyError } from 'src/utils/notifications'
@@ -407,17 +407,10 @@ export const outboxActions = {
         const payload = {
           content,
           ...(runId ? { run_id: runId } : {}),
-          project_id: projectId,
-          ...(options.agentProfileId ? { agent_profile_id: options.agentProfileId } : {}),
-          model_id: options.modelId,
-          reasoning_effort: options.reasoningEffort,
-          memory_mode: options.memoryMode,
-          web_search_policy: options.webSearchPolicy,
-          preferred_execution_agent_id: options.preferredExecutionAgentId,
-          ...(options.preferredExecutionAgentId
-            ? { current_directory: options.currentDirectory }
-            : {}),
-          control_center: requestedControlCenter || controlCenterRequestState(useControlCenterStore()),
+          ...sessionCreatePayload(
+            options, projectId,
+            requestedControlCenter || controlCenterRequestState(useControlCenterStore())
+          ),
           ...(activeFile ? { active_file: activeFile } : {})
         }
         const config = suppressErrorToast ? [{ suppressErrorToast: true }] : []

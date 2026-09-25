@@ -467,7 +467,7 @@ Permission requests persist optional structured display items alongside their au
 
 Destructive actions use `useConfirm` or `v-confirm`. More complex input and approval decisions use Quasar dialogs. Success messages appear at the initiating UI point; API failures are notified centrally only.
 
-Unsent chat text is a browser-local draft and never reaches the backend. Drafts are separate for the new session and each persisted session. A new session, first message, and first agent run are persisted together only on send, so navigation has no empty sessions.
+Unsent chat text is a browser-local draft and never reaches the backend. Drafts are separate for the new session and each persisted session. Sending the first message creates the session, internal storage, message, and run together. Opening a session-bound Control Center app first creates an empty session and its internal storage without a message or run; the existing draft moves to that session. App-only creation does not require an available chat model; the first message checks the model and grants the selected execution directory under the normal run policy. Viewing available apps, opening the panel, and using global sections do not create a session. Undoing the first user message retains the session, storage, and app selection while restoring the message to its session draft.
 
 Session switching updates navigation immediately, closes the mobile drawer, and replaces stale transcript and composer content with skeletons. Session loading is independent of provider, integration, approval, and tool bootstrap, which continue in parallel. Stale requests are cancelled and cannot overwrite a later session's transcript or active run.
 

@@ -48,7 +48,6 @@ async def test_undo_removes_user_message_suffix_and_returns_draft(monkeypatch) -
     )
 
     assert result.content == "Wiederherstellen"
-    assert result.session_deleted is False
     remove_suffix.assert_awaited_once_with(db, messages, 2, include_boundary=True)
     commit.assert_awaited_once_with(db)
 
@@ -87,26 +86,49 @@ async def test_undo_cancels_active_run_before_locking_session(monkeypatch) -> No
     assert db.rollback.await_count == 2
 
 
-async def test_undo_of_first_user_message_deletes_session(monkeypatch) -> None:
+async def test_undo_of_first_user_message_keeps_session_and_resets_generated_title(monkeypatch) -> None:
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     session = ChatSession(id=uuid4(), user_id=user.id, title="Test")
     messages = _records(session.id)
     db = AsyncMock(spec=AsyncSession)
     db.execute.return_value = MagicMock(all=lambda: [])
-    delete_session = AsyncMock()
+    remove_suffix = AsyncMock()
+    commit = AsyncMock()
     monkeypatch.setattr(
         ChatHistoryService, "_lock_after_cancelling_active_run", AsyncMock(return_value=session)
     )
     monkeypatch.setattr(ChatHistoryService, "_messages", AsyncMock(return_value=messages))
-    monkeypatch.setattr(ChatHistoryService, "_delete_session", delete_session)
+    monkeypatch.setattr(ChatHistoryService, "_delete_message_suffix", remove_suffix)
+    monkeypatch.setattr(ChatHistoryService, "_commit", commit)
 
     result = await ChatHistoryService.undo_user_message(
         db, session_id=session.id, user_id=user.id, message_id=messages[0].id
     )
 
-    assert result.session_deleted is True
     assert result.content == "Erster Auftrag"
-    delete_session.assert_awaited_once_with(db, session)
+    assert session.title == "Neue Session"
+    assert session.title_generation_status == "pending"
+    remove_suffix.assert_awaited_once_with(db, messages, 0, include_boundary=True)
+    commit.assert_awaited_once_with(db)
+
+
+async def test_undo_of_first_user_message_preserves_manual_title(monkeypatch) -> None:
+    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Manueller Titel", title_generation_status="skipped")
+    messages = _records(session.id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = MagicMock(all=lambda: [])
+    db.execute.return_value = MagicMock(all=lambda: [])
+    monkeypatch.setattr(ChatHistoryService, "_lock_after_cancelling_active_run", AsyncMock(return_value=session))
+    monkeypatch.setattr(ChatHistoryService, "_messages", AsyncMock(return_value=messages))
+    monkeypatch.setattr(ChatHistoryService, "_delete_message_suffix", AsyncMock())
+
+    await ChatHistoryService.undo_user_message(
+        db, session_id=session.id, user_id=user.id, message_id=messages[0].id
+    )
+
+    assert session.title == "Manueller Titel"
+    assert session.title_generation_status == "skipped"
 
 
 async def test_retry_keeps_user_message_and_restarts_original_failed_run(monkeypatch) -> None:

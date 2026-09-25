@@ -348,7 +348,7 @@ class ActiveFileRequest(BaseModel):
 class SessionCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    content: str = Field(max_length=200_000)
+    content: str | None = Field(max_length=200_000)
     voice_attachment_indices: list[StrictInt] = Field(
         default_factory=list, alias="voiceAttachmentIndices"
     )
@@ -671,6 +671,8 @@ async def create_session(
 ) -> dict:
     if payload.voice_attachment_indices:
         raise ApiError(422, "validation.invalid", field="voiceAttachmentIndices")
+    if payload.content is None and (payload.run_id is not None or payload.active_file is not None):
+        raise ApiError(422, "validation.invalid", field="content")
     return await _create_session(payload, user, db)
 
 
@@ -683,6 +685,8 @@ async def create_session_with_attachments(
 ) -> dict:
     request = _multipart_payload(payload, SessionCreateRequest)
     assert isinstance(request, SessionCreateRequest)
+    if request.content is None:
+        raise ApiError(422, "validation.required", field="content")
     duplicate = await _duplicate_submission_response(db, request.run_id, user.id)
     if duplicate is not None:
         return duplicate
@@ -1013,7 +1017,6 @@ async def undo_user_message(
     except ChatHistoryError as exc:
         raise ApiError(exc.status_code, exc.code) from exc
     return {
-        "sessionDeleted": result.session_deleted,
         "draft": {"content": result.content},
     }
 

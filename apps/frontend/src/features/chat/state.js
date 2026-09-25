@@ -22,6 +22,20 @@ export function sanitizedSessionOptions(options) {
   return sanitized
 }
 
+export function sessionCreatePayload(options, projectId, controlCenter) {
+  return {
+    project_id: projectId,
+    ...(options.agentProfileId ? { agent_profile_id: options.agentProfileId } : {}),
+    model_id: options.modelId,
+    reasoning_effort: options.reasoningEffort,
+    memory_mode: options.memoryMode,
+    web_search_policy: options.webSearchPolicy,
+    preferred_execution_agent_id: options.preferredExecutionAgentId,
+    ...(options.preferredExecutionAgentId ? { current_directory: options.currentDirectory } : {}),
+    control_center: controlCenter
+  }
+}
+
 export function optionsFromSession(session) {
   return sanitizedSessionOptions({
     agentProfileId: session.agentProfileId ?? null,

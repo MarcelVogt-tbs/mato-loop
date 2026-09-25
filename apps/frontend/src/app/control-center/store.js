@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
+import { useChatStore } from 'src/stores/chat'
 import {
   controlCenterFixedAppIds,
   controlCenterGlobalSectionIds,
@@ -380,6 +381,7 @@ export const useControlCenterStore = defineStore('control-center', {
     },
     async openApp(appId) {
       if (appId === 'approvals') appId = 'notifications'
+      if (appId === 'file-viewer') return null
       if (controlCenterGlobalSectionIds.has(appId)) {
         this.activeGlobalSectionId = appId
         if (!this.ready) {
@@ -390,6 +392,18 @@ export const useControlCenterStore = defineStore('control-center', {
         }
         this.requestedAppId = null
         return this.setOpen(true)
+      }
+      if (!this.sessionId && this.ready && appId !== 'session' && controlCenterIntegrationIds.has(appId)) {
+        const session = await useChatStore().createEmptySession({
+          tabs: this.tabs.some((tab) => tab.appId === appId) ? this.tabs : [...this.tabs, appTab(appId)],
+          activeAppId: appId,
+          open: true,
+          fileView: this.fileView,
+          fileViews: this.fileViews
+        })
+        if (!session) return null
+        if (this.sessionId !== session.id) return null
+        if (this.activeAppId === appId && this.open) return copyState(this)
       }
       if (this.tabs.some((tab) => tab.tabId === appId)) {
         this.activeGlobalSectionId = null
@@ -444,6 +458,7 @@ export const useControlCenterStore = defineStore('control-center', {
     },
     async activate(appId) {
       if (!this.tabs.some((tab) => tab.tabId === appId)) return
+      if (!this.sessionId && appId !== 'session') return this.openApp(appId)
       this.activeGlobalSectionId = null
       if (appId === this.activeAppId) return
       return this.save({ tabs: this.tabs, activeAppId: appId, open: this.open, fileView: this.fileView })

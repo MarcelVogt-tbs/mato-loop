@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -10,16 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.agent.session_secrets import session_secrets
-from mato_loop_backend.files.storage import SessionStorage, SessionStorageError
+from mato_loop_backend.files.storage import SessionStorageError
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
     Message,
+    TitleGenerationStatus,
 )
 from mato_loop_backend.sessions.cleanup import deleting_child_sessions
 
-logger = logging.getLogger(__name__)
 _ACTIVE_RUN_STATUSES = ("queued", "running", "waiting_approval", "waiting_input")
 
 
@@ -33,7 +31,6 @@ class ChatHistoryError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class UndoUserMessageResult:
     content: str
-    session_deleted: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,70 +166,6 @@ class ChatHistoryService:
             await db.rollback()
             raise
 
-    @staticmethod
-    async def _delete_session(db: AsyncSession, session: ChatSession) -> None:
-        storage = SessionStorage()
-        trash_task = asyncio.create_task(
-            asyncio.to_thread(storage.trash_session, session.id, session.project_id)
-        )
-        try:
-            trashed = await asyncio.shield(trash_task)
-        except asyncio.CancelledError:
-            try:
-                trashed = await trash_task
-            except (OSError, SessionStorageError):
-                raise
-            if trashed is not None:
-                try:
-                    await asyncio.to_thread(
-                        storage.restore_session,
-                        session.id,
-                        trashed,
-                        session.project_id,
-                    )
-                except BaseException:
-                    logger.exception("Could not restore session storage after cancelled undo")
-            raise
-        except (OSError, SessionStorageError) as exc:
-            raise ChatHistoryError("session.storageUnavailable", 500) from exc
-
-        async def restore() -> None:
-            if trashed is None:
-                return
-            try:
-                await asyncio.to_thread(
-                    storage.restore_session,
-                    session.id,
-                    trashed,
-                    session.project_id,
-                )
-            except BaseException:
-                logger.exception("Could not restore session storage after undo failure")
-
-        async def commit_and_purge() -> None:
-            await db.delete(session)
-            await db.commit()
-            session_secrets.clear_session(session.id)
-            try:
-                await asyncio.to_thread(storage.purge_trashed, trashed)
-            except BaseException:
-                logger.exception("Could not purge session storage after undo")
-
-        task = asyncio.create_task(commit_and_purge())
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            try:
-                await task
-            except BaseException:
-                await db.rollback()
-                await restore()
-            raise
-        except BaseException:
-            await db.rollback()
-            await restore()
-            raise
-
     @classmethod
     async def undo_user_message(
         cls,
@@ -260,16 +193,16 @@ class ChatHistoryService:
         )
         try:
             async with deleting_child_sessions(db, session_id, spawned_by_run_ids=run_ids):
-                if target_index == 0:
-                    await cls._delete_session(db, session)
-                else:
-                    await cls._delete_message_suffix(
-                        db, messages, target_index, include_boundary=True
-                    )
-                    await cls._commit(db)
+                await cls._delete_message_suffix(
+                    db, messages, target_index, include_boundary=True
+                )
+                if target_index == 0 and session.title_generation_status != TitleGenerationStatus.SKIPPED.value:
+                    session.title = "Neue Session"
+                    session.title_generation_status = TitleGenerationStatus.PENDING.value
+                await cls._commit(db)
         except (OSError, SessionStorageError) as exc:
             raise ChatHistoryError("session.storageUnavailable", 500) from exc
-        return UndoUserMessageResult(content, target_index == 0)
+        return UndoUserMessageResult(content)
 
     @classmethod
     async def retry_failed_message(

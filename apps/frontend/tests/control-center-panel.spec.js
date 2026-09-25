@@ -71,6 +71,16 @@ async function mountPanel() {
   await nextTick()
 }
 
+async function draftApp(appId) {
+  await controlCenter.save({
+    tabs: controlCenter.tabs.some((tab) => tab.appId === appId)
+      ? controlCenter.tabs
+      : [...controlCenter.tabs, { appId }],
+    activeAppId: appId,
+    open: true
+  })
+}
+
 function notificationButton() {
   return root.querySelector('[aria-label^="Benachrichtigungen öffnen"]')
 }
@@ -165,7 +175,7 @@ describe('control center panel', () => {
     if (appId === 'file-viewer') {
       await controlCenter.openFile({ scope: 'session', rootIdentity: 'draft', path: 'notes.md' })
     } else {
-      await controlCenter.openApp(appId)
+      await draftApp(appId)
     }
     const activeTabId = controlCenter.activeAppId
     await mountPanel()
@@ -183,6 +193,10 @@ describe('control center panel', () => {
     expect(content.style.display).toBe('none')
     expect(notifications.style.display).not.toBe('none')
 
+    vi.spyOn(controlCenter, 'activate').mockImplementation(async (tabId) => {
+      controlCenter.activeGlobalSectionId = null
+      controlCenter.activeAppId = tabId
+    })
     root.querySelector(`[id="control-center-tab-${activeTabId}"]`).click()
     await nextTick()
     expect(controlCenter.activeGlobalSectionId).toBeNull()
@@ -205,8 +219,8 @@ describe('control center panel', () => {
   })
 
   it('navigates shared tab shells without consuming close-button keys or selecting on focus', async () => {
-    await controlCenter.openApp('agent-coding')
-    await controlCenter.openApp('mail')
+    await draftApp('agent-coding')
+    await draftApp('mail')
     await mountPanel()
     const tabs = [...root.querySelectorAll('.app-closable-tab__tab')]
     expect(tabs).toHaveLength(3)
@@ -235,7 +249,7 @@ describe('control center panel', () => {
   })
 
   it('forwards drag events and drop markers on the shared shell without selecting it', async () => {
-    await controlCenter.openApp('mail')
+    await draftApp('mail')
     const reorder = vi.spyOn(controlCenter, 'reorderIntegration').mockResolvedValue()
     await mountPanel()
     const source = root.querySelector('#control-center-tab-files').parentElement
@@ -267,7 +281,7 @@ describe('control center panel', () => {
   })
 
   it('activates a tab through the real desktop overflow menu', async () => {
-    await controlCenter.openApp('agent-coding')
+    await draftApp('agent-coding')
     await controlCenter.openApp('notifications')
     await mountPanel()
     await vi.waitFor(() => expect(Screen.gt.sm).toBe(true))
@@ -277,6 +291,10 @@ describe('control center panel', () => {
     await vi.waitFor(() => expect(document.querySelector('.q-menu')).not.toBeNull())
     const item = [...document.querySelectorAll('.q-menu .q-item')].find((item) => item.textContent.includes('Ablage'))
     expect(item).toBeDefined()
+    vi.spyOn(controlCenter, 'activate').mockImplementation(async (tabId) => {
+      controlCenter.activeGlobalSectionId = null
+      controlCenter.activeAppId = tabId
+    })
     item.click()
     await nextTick()
     expect(controlCenter.activeAppId).toBe('files')

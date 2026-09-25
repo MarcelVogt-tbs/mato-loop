@@ -748,18 +748,10 @@ async function undoMessage(message) {
     })
     return
   }
-  const sessionId = chat.current?.id
   const runningHint = chat.running ? ' Die laufende Anfrage wird dabei abgebrochen.' : ''
-  const firstMessage = chat.current?.messages?.[0]?.id === message.id
-  const hasNewSessionDraft = Boolean(
-    chat.drafts.newSession.message.trim() || chat.attachmentDrafts.newSession.length
-  )
-  const newSessionHint = firstMessage && hasNewSessionDraft
-    ? ' Der vorhandene Entwurf für eine neue Session wird ebenfalls ersetzt.'
-    : ''
   const accepted = await confirm(
     `Diese Nachricht und alle späteren Chatnachrichten werden entfernt.${runningHint} `
-      + `Der aktuelle Entwurf, seine Anhänge und ein vorhandenes Diktat werden ersetzt.${newSessionHint} `
+      + 'Der aktuelle Entwurf, seine Anhänge und ein vorhandenes Diktat werden ersetzt. '
       + 'Bereits ausgeführte Tool-, Datei-, Berechtigungs- und Memory-Aktionen bleiben bestehen.',
     'Nachricht rückgängig machen?',
     { okLabel: 'Rückgängig machen' }
@@ -767,14 +759,7 @@ async function undoMessage(message) {
   if (!accepted) return
   messageActionId.value = message.id
   try {
-    const result = await chat.undoUserMessage(message)
-    if (result?.sessionDeleted && routeSessionId.value === sessionId) {
-      if (routeProjectId.value) void projects.fetchAll().catch(() => {})
-      await router.replace({
-        name: 'chat',
-        query: routeProjectId.value ? { project: routeProjectId.value } : {}
-      })
-    }
+    await chat.undoUserMessage(message)
     await nextTick()
     composer.value?.focus()
   } finally {
@@ -1332,7 +1317,8 @@ watch(
       name: 'chat',
       query: {
         ...(routeProjectId.value ? { project: routeProjectId.value } : {}),
-        session: result.sessionId
+        session: result.sessionId,
+        ...(result.appId ? { controlCenter: result.appId } : {})
       }
     })
   }

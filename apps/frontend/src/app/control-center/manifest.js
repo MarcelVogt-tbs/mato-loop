@@ -26,8 +26,8 @@ export function mailControlCenterAvailable(mail) {
   return mail.accountsLoaded && mail.accounts.length > 0
 }
 
-export function tbsDeskControlCenterAvailable(session, integrations) {
-  return Boolean(session?.id && integrations.tbsDesk.accounts.some((account) => account.enabled))
+export function tbsDeskControlCenterAvailable(integrations) {
+  return Boolean(integrations.tbsDesk.accounts.some((account) => account.enabled))
 }
 
 export function codingControlCenterAvailable(project) {
@@ -40,7 +40,7 @@ export function computerFilesControlCenterAvailable(context, executionAgents) {
 }
 
 export function browserControlCenterAvailable(context, executionAgents, integrations, integrationId = null) {
-  return Boolean(context?.id && integrations.adapterAvailable('browser', 'personal')
+  return Boolean(context?.preferredExecutionAgentId && integrations.adapterAvailable('browser', 'personal')
     && executionAgents.byId(context.preferredExecutionAgentId)?.connected
     && integrations.browser.instances.some((item) => item.enabled
       && item.executionAgentId === context.preferredExecutionAgentId

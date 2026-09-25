@@ -299,28 +299,29 @@ describe('chat message queue', () => {
       workspaceContext: { connected: true, operations: ['filesystem.list'] }
     }
     chat.selectedSessionId = 'session-1'
-    api.get.mockResolvedValue({ data: [] })
+    api.get.mockResolvedValue({ data: { id: 'session-1', messages: [], activeRun: null } })
     api.post.mockResolvedValue({
-      data: { sessionDeleted: true, draft: { content: message.content } }
+      data: { draft: { content: message.content } }
     })
 
     await chat.undoUserMessage(message)
     const queued = await chat.queueMessage(chat.activeDraft)
 
     expect(queued).not.toBeNull()
-    expect(queued.options.workspaceContext).toBeNull()
+    expect(queued.sessionId).toBe('session-1')
 
     setActivePinia(createPinia())
     const restored = useChatStore()
     restored.setDraftOwner('user-1')
     await restored.outboxLoadPromise
     restored.cancelQueueDrain()
+    activeSession(restored)
 
     expect(restored.activeQueuedMessages).toHaveLength(1)
     expect(restored.activeQueuedMessages[0]).toMatchObject({
       id: queued.id,
       content: 'Noch einmal',
-      options: { workspaceContext: null }
+      sessionId: 'session-1'
     })
   })
 

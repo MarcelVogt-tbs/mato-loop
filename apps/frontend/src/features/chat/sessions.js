@@ -2,15 +2,62 @@ import { markRaw, toRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { useApprovalStore } from 'src/stores/approvals'
 import { useBrowserStore } from 'src/stores/browser'
-import { useControlCenterStore } from 'src/stores/control-center'
+import { controlCenterRequestState, useControlCenterStore } from 'src/stores/control-center'
 import { useQuestionStore } from 'src/stores/questions'
 import { downloadMessageAttachmentFiles, releaseAttachmentDrafts } from 'src/features/chat/attachments'
-import { defaultSessionOptions, lastAssistantMessage, optionsFromSession, sanitizedSessionOptions, sessionBeforeFailedResponse, sessionBeforeUserMessage, sessionScopeKey, sessionScopeParams, sortSessions } from 'src/features/chat/state'
+import { defaultSessionOptions, lastAssistantMessage, sanitizedSessionOptions, sessionBeforeFailedResponse, sessionBeforeUserMessage, sessionCreatePayload, sessionScopeKey, sessionScopeParams, sortSessions } from 'src/features/chat/state'
 import { deleteChatOutboxEntries, saveChatOutboxEntries } from 'src/utils/chat-outbox'
 import { notifyError } from 'src/utils/notifications'
 import { SESSION_PAGE_SIZE, ACTIVE_TITLE_GENERATION_STATUSES, mergeMessages, sessionStateAfterMutation } from 'src/features/chat/model'
 
 export const sessionsActions = {
+    async createEmptySession(controlCenterState) {
+      if (this.current || this.selectedSessionId) return this.current
+      if (this.emptySessionPromise) return this.emptySessionPromise
+      if (this.activeQueuedMessages.length || this.outboxSaving || this.queueDrainPromise) return null
+      const version = this.sessionLoadVersion
+      const projectId = this.sessionsProjectId
+      const scope = sessionScopeKey(projectId)
+      const draft = this.drafts.newSession
+      const request = (async () => {
+        const { data } = await api.post('/sessions', {
+          content: null,
+          ...sessionCreatePayload(
+            sanitizedSessionOptions(draft.options), projectId,
+            controlCenterRequestState(controlCenterState)
+          )
+        })
+        const session = { ...data.session, messages: [], contextSummaries: [] }
+        const list = this.ensureSessionList(projectId)
+        list.version += 1
+        list.items = sortSessions([session, ...list.items.filter((item) => item.id !== session.id)])
+        this.drafts.sessionMessages[session.id] = draft.message
+        this.attachmentDrafts.sessionMessages[session.id] = this.attachmentDrafts.newSessions[scope] || []
+        const dictation = this.getAudioDictation(null, projectId)
+        if (dictation) this.setAudioDictation(dictation, session.id)
+        this.attachmentDrafts.newSessions[scope] = []
+        this.resetNewDraft(projectId)
+        if (this.sessionLoadVersion === version && !this.current && !this.selectedSessionId) {
+          this.current = session
+          this.selectedSessionId = session.id
+          useControlCenterStore().syncSession(session)
+          this.createdSessionResult = {
+            sessionId: session.id,
+            appId: controlCenterState.activeAppId,
+            created: true
+          }
+        }
+        return session
+      })()
+      this.emptySessionPromise = markRaw(request)
+      this.sessionSettingsPending += 1
+      try {
+        return await request
+      } finally {
+        if (this.emptySessionPromise === request) this.emptySessionPromise = null
+        this.sessionSettingsPending = Math.max(0, this.sessionSettingsPending - 1)
+      }
+    },
     async setSessionScope(projectId = null) {
       const normalizedProjectId = projectId || null
       const targetList = this.ensureSessionList(normalizedProjectId)
@@ -615,17 +662,15 @@ export const sessionsActions = {
           notifyError(error, 'Die Anhänge konnten nicht wiederhergestellt werden.')
           throw error
         }
-        const deletesSession = !session.nextMessageCursor && session.messages?.[0]?.id === message.id
         const replacementError = this.attachmentReplacementError(
           files,
-          deletesSession ? null : session.id,
+          session.id,
           session.id
         )
         if (replacementError) {
           notifyError({}, replacementError)
           throw new Error(replacementError)
         }
-        const options = optionsFromSession(session)
         let data
         let recoveredSession = null
         let mutationKnownUnchanged = false
@@ -638,12 +683,9 @@ export const sessionsActions = {
           if (ambiguous) {
             try {
               const recovered = await sessionStateAfterMutation(session.id, message.id)
-              if (recovered.messageRemoved) {
+              if (recovered.messageRemoved && recovered.session) {
                 recoveredSession = recovered.session
-                data = {
-                  sessionDeleted: recovered.deleted,
-                  draft: { content: message.content }
-                }
+                data = { draft: { content: message.content } }
               } else {
                 mutationKnownUnchanged = true
               }
@@ -652,13 +694,8 @@ export const sessionsActions = {
             }
           }
           if (!data && ambiguous && !mutationKnownUnchanged) {
-            if (deletesSession) {
-              this.drafts.newSession = { message: message.content, options }
-              this.replaceAttachmentFiles(files, null, message.attachments)
-            } else {
-              this.drafts.sessionMessages[session.id] = message.content
-              this.replaceAttachmentFiles(files, session.id, message.attachments)
-            }
+            this.drafts.sessionMessages[session.id] = message.content
+            this.replaceAttachmentFiles(files, session.id, message.attachments)
             this.persistDrafts()
           }
           if (!data) {
@@ -679,27 +716,12 @@ export const sessionsActions = {
         delete this.drafts.sessionMessages[session.id]
         this.clearAttachmentDraft(session.id)
         this.setAudioDictation(null, session.id)
-        if (data.sessionDeleted) {
-          try {
-            await this.clearQueuedMessages(session.id)
-          } catch {
-            notifyError({}, 'Vorgemerkte Nachrichten konnten nicht gelöscht werden.')
-          }
-          this.removeCachedSession(session.id)
-          if (stillSelected) {
-            this.current = null
-            this.selectedSessionId = null
-          }
-          this.drafts.newSession = { message: data.draft.content, options }
-          this.replaceAttachmentFiles(files, null, message.attachments)
-        } else {
-          if (stillSelected) this.applySessionResult(updatedSession)
-          else this.updateSessionSummary(updatedSession)
-          this.drafts.sessionMessages[session.id] = data.draft.content
-          this.replaceAttachmentFiles(files, session.id, message.attachments)
-          if (stillSelected && !recoveredSession) {
-            void this.refreshSession(session.id).catch(() => {})
-          }
+        if (stillSelected) this.applySessionResult(updatedSession)
+        else this.updateSessionSummary(updatedSession)
+        this.drafts.sessionMessages[session.id] = data.draft.content
+        this.replaceAttachmentFiles(files, session.id, message.attachments)
+        if (stillSelected && !recoveredSession) {
+          void this.refreshSession(session.id).catch(() => {})
         }
         this.persistDrafts()
         void useApprovalStore().fetchPending()

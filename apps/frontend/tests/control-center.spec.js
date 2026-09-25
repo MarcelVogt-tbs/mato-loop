@@ -11,6 +11,7 @@ import {
   useControlCenterStore
 } from '../src/stores/control-center'
 import {
+  browserControlCenterAvailable,
   controlCenterGlobalSectionIds,
   controlCenterIntegrationIds
 } from 'src/app/control-center/manifest'
@@ -93,6 +94,17 @@ describe('control center store', () => {
     expect(controlCenterIntegrationIds.has('agent-coding')).toBe(true)
     expect(controlCenterIntegrationIds.has('notifications')).toBe(false)
     expect(controlCenterIntegrationIds.has('approvals')).toBe(false)
+  })
+
+  it('offers a configured browser with the draft computer before a session exists', () => {
+    const draft = { preferredExecutionAgentId: 'agent-1' }
+    const agents = { byId: () => ({ connected: true }) }
+    const integrations = {
+      adapterAvailable: () => true,
+      browser: { instances: [{ id: 'browser-1', enabled: true, executionAgentId: 'agent-1' }] }
+    }
+    expect(browserControlCenterAvailable(draft, agents, integrations)).toBe(true)
+    expect(browserControlCenterAvailable({ ...draft, preferredExecutionAgentId: null }, agents, integrations)).toBe(false)
   })
 
   it('loads and persists the existing validated split ratio', () => {
@@ -284,7 +296,7 @@ describe('control center store', () => {
 
   it('persists draft integration changes made after session creation starts', async () => {
     const store = useControlCenterStore()
-    await store.openApp('calendar')
+    await store.save({ tabs: [...store.tabs, tab('calendar')], activeAppId: 'calendar', open: true })
     api.patch.mockResolvedValue(response([tab('files'), tab('calendar')], 'calendar'))
 
     const state = await store.attachCreatedSession('session-1', {

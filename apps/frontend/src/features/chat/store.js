@@ -70,6 +70,7 @@ export const useChatStore = defineStore('chat', {
     queueDrainPromise: null,
     queueDrainTimer: null,
     queueSendingEntryId: null,
+    emptySessionPromise: null,
     createdSessionResult: null
   }),
   getters: {

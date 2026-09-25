@@ -46,7 +46,7 @@
           icon="add"
           class="control-center__tab-add self-stretch"
           aria-label="App hinzufügen"
-          :disable="controlCenter.saving || !controlCenter.ready"
+          :disable="controlCenter.saving || !controlCenter.ready || (!chat.current && chat.activeQueuedMessages.length > 0)"
         >
           <q-tooltip>App hinzufügen</q-tooltip>
           <q-menu anchor="bottom right" self="top right" class="app-action-menu">
@@ -195,7 +195,7 @@
               color="primary"
               icon="add"
               label="App hinzufügen"
-              :disable="!launcherIntegrations.length || !controlCenter.ready"
+              :disable="!launcherIntegrations.length || !controlCenter.ready || (!chat.current && chat.activeQueuedMessages.length > 0)"
             >
               <q-menu anchor="bottom middle" self="top middle" class="app-action-menu">
                 <q-list padding>
@@ -287,11 +287,11 @@ const activeProject = computed(() => projects.items.find(
 ))
 const launcherIntegrations = computed(() => closedIntegrations.value.filter((item) => (
   (item.id !== 'mail' || mailControlCenterAvailable(mail))
-  && (item.id !== 'tbs-desk' || tbsDeskControlCenterAvailable(chat.current, integrations))
+  && (item.id !== 'tbs-desk' || tbsDeskControlCenterAvailable(integrations))
   && (item.id !== 'coding' || codingControlCenterAvailable(activeProject.value))
   && (item.id !== 'computer-files' || computerFilesControlCenterAvailable(chat.activeContext, executionAgents))
-  && (item.id !== 'terminal' || terminalControlCenterState(chat.current, executionAgents).available)
-  && (item.id !== 'browser' || browserControlCenterAvailable(chat.current, executionAgents, integrations))
+  && (item.id !== 'terminal' || terminalControlCenterState(chat.activeContext, executionAgents).available)
+  && (item.id !== 'browser' || browserControlCenterAvailable(chat.activeContext, executionAgents, integrations))
 )))
 function content(contentId) {
   return controlCenterContentsById.get(contentId)

@@ -14,9 +14,8 @@ describe('tbs.Desk Control Center manifest', () => {
     expect(controlCenterIntegrationIds.has('tbs-desk')).toBe(true)
   })
 
-  it('requires a persisted session and an enabled personal account', () => {
-    expect(tbsDeskControlCenterAvailable(null, { tbsDesk: { accounts: [{ enabled: true }] } })).toBe(false)
-    expect(tbsDeskControlCenterAvailable({ id: 'session-1' }, { tbsDesk: { accounts: [{ enabled: false }] } })).toBe(false)
-    expect(tbsDeskControlCenterAvailable({ id: 'session-1' }, { tbsDesk: { accounts: [{ enabled: true }] } })).toBe(true)
+  it('offers an enabled personal account before the session is persisted', () => {
+    expect(tbsDeskControlCenterAvailable({ tbsDesk: { accounts: [{ enabled: false }] } })).toBe(false)
+    expect(tbsDeskControlCenterAvailable({ tbsDesk: { accounts: [{ enabled: true }] } })).toBe(true)
   })
 })

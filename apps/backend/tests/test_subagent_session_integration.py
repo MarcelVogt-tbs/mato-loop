@@ -334,13 +334,14 @@ async def test_project_delete_cleans_cross_project_descendants_and_preserves_oth
     assert list(storage.trash_dir.iterdir()) == []
 
 
-async def test_first_message_undo_deletes_native_fk_cycle_and_storage(tree):
+async def test_first_message_undo_keeps_parent_and_storage_but_deletes_children(tree):
     parent, _, message = tree.records[0]
     ids = [item[0].id for item in tree.records]
     response = await sessions.undo_user_message(parent.id, message.id, tree.user, tree.db)
-    assert response["sessionDeleted"] is True
-    assert not (await tree.db.scalars(select(ChatSession.id).where(ChatSession.id.in_(ids)))).all()
-    assert all(not tree.storage.session_path(item_id).exists() for item_id in ids)
+    assert response["draft"]["content"] == message.content
+    assert (await tree.db.scalars(select(ChatSession.id).where(ChatSession.id.in_(ids)))).all() == [parent.id]
+    assert tree.storage.session_path(parent.id).exists()
+    assert all(not tree.storage.session_path(item_id).exists() for item_id in ids[1:])
 
 
 async def test_suffix_undo_preserves_earlier_children_and_removes_child_run_cycle(tree):
@@ -372,7 +373,7 @@ async def test_suffix_undo_preserves_earlier_children_and_removes_child_run_cycl
     storage.provision(child_id)
     await db.commit()
     result = await sessions.undo_user_message(parent_id, request_id, tree.user, db)
-    assert result["sessionDeleted"] is False
+    assert result["draft"]["content"] == "Remove this turn"
     assert set((await db.scalars(select(ChatSession.id).where(ChatSession.id.in_(retained_ids)))).all()) == set(retained_ids)
     assert await db.scalar(select(ChatSession.id).where(ChatSession.id == child_id)) is None
     assert await db.scalar(select(AgentRun.id).where(AgentRun.id == child_run_id)) is None
