@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('workbox-precaching', () => ({
+  precache: vi.fn(),
+  cleanupOutdatedCaches: vi.fn(),
+  getCacheKeyForURL: vi.fn(),
+  matchPrecache: vi.fn()
+}))
+
 const originalNavigator = globalThis.navigator
 const originalSessionStorage = globalThis.sessionStorage
 const originalWindow = globalThis.window
@@ -13,6 +20,7 @@ beforeEach(async () => {
 afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: originalNavigator })
   Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, value: originalSessionStorage })
   Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
@@ -63,6 +71,36 @@ describe('PWA updates', () => {
     serviceWorker.controller = worker
     serviceWorker.dispatchEvent(new Event('controllerchange'))
     expect(reload).not.toHaveBeenCalled()
+  })
+
+  it('answers the old page window count request on the waiting worker', async () => {
+    const clients = { matchAll: vi.fn().mockResolvedValue([{}]) }
+    const worker = Object.assign(new EventTarget(), {
+      __WB_MANIFEST: [], clients, skipWaiting: vi.fn().mockResolvedValue()
+    })
+    vi.stubGlobal('self', worker)
+    await import('../src-pwa/custom-service-worker')
+
+    const channel = new MessageChannel()
+    const answer = new Promise((resolve) => { channel.port1.onmessage = (event) => resolve(event.data) })
+    let pending
+    worker.dispatchEvent(Object.assign(new Event('message'), {
+      data: { type: 'WINDOW_COUNT' },
+      ports: [channel.port2],
+      waitUntil: (promise) => { pending = promise }
+    }))
+
+    expect(pending).toBeDefined()
+    await pending
+    await expect(answer).resolves.toBe(1)
+    expect(clients.matchAll).toHaveBeenCalledWith({ type: 'window', includeUncontrolled: true })
+    worker.dispatchEvent(Object.assign(new Event('message'), {
+      data: { type: 'SKIP_WAITING' }, waitUntil: (promise) => { pending = promise }
+    }))
+    await pending
+    expect(worker.skipWaiting).toHaveBeenCalledOnce()
+    channel.port1.close()
+    channel.port2.close()
   })
 
   it('does not reload if no update is waiting', async () => {
