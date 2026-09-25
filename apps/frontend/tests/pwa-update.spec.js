@@ -74,33 +74,20 @@ describe('PWA updates', () => {
   })
 
   it('answers the old page window count request on the waiting worker', async () => {
-    const clients = { matchAll: vi.fn().mockResolvedValue([{}]) }
-    const worker = Object.assign(new EventTarget(), {
-      __WB_MANIFEST: [], clients, skipWaiting: vi.fn().mockResolvedValue()
-    })
+    const matchAll = vi.fn().mockResolvedValue([{}])
+    const worker = { __WB_MANIFEST: [], clients: { matchAll }, addEventListener: vi.fn() }
     vi.stubGlobal('self', worker)
     await import('../src-pwa/custom-service-worker')
 
-    const channel = new MessageChannel()
-    const answer = new Promise((resolve) => { channel.port1.onmessage = (event) => resolve(event.data) })
+    const port = { postMessage: vi.fn() }
+    const [, onMessage] = worker.addEventListener.mock.calls.find(([type]) => type === 'message')
     let pending
-    worker.dispatchEvent(Object.assign(new Event('message'), {
-      data: { type: 'WINDOW_COUNT' },
-      ports: [channel.port2],
-      waitUntil: (promise) => { pending = promise }
-    }))
+    onMessage({ data: { type: 'WINDOW_COUNT' }, ports: [port], waitUntil: (promise) => { pending = promise } })
 
     expect(pending).toBeDefined()
     await pending
-    await expect(answer).resolves.toBe(1)
-    expect(clients.matchAll).toHaveBeenCalledWith({ type: 'window', includeUncontrolled: true })
-    worker.dispatchEvent(Object.assign(new Event('message'), {
-      data: { type: 'SKIP_WAITING' }, waitUntil: (promise) => { pending = promise }
-    }))
-    await pending
-    expect(worker.skipWaiting).toHaveBeenCalledOnce()
-    channel.port1.close()
-    channel.port2.close()
+    expect(port.postMessage).toHaveBeenCalledWith(1)
+    expect(matchAll).toHaveBeenCalledWith({ type: 'window', includeUncontrolled: true })
   })
 
   it('does not reload if no update is waiting', async () => {

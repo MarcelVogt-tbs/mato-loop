@@ -118,6 +118,8 @@ Example:
 
 ## Validation
 
+When a regression test is warranted, test the reported failure with the smallest observable assertion. Mock only unavoidable boundaries; include adjacent workflows only when they address a separate regression risk.
+
 Prefer checks through the Docker development stack:
 
 ```bash
