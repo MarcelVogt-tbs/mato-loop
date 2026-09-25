@@ -28,14 +28,11 @@
       <q-banner v-else-if="terminal.suspended" dense class="bg-warning text-dark" role="status">
         Die Terminalverbindung ist vorübergehend ausgesetzt. Eingaben sind gesperrt, bis der Server sie wieder freigibt.
       </q-banner>
-      <q-banner v-if="terminal.truncated" dense class="bg-warning text-dark" role="status">
-        Der Terminalverlauf wurde gekürzt. Frühere Ausgaben fehlen.
-      </q-banner>
       <div class="terminal-app__stage col relative-position">
         <div ref="terminalHost" class="terminal-app__host fit" />
       </div>
-      <div v-if="runtimeStatus" class="q-px-sm q-py-xs text-caption app-muted" role="status" aria-live="polite" aria-atomic="true">
-        {{ runtimeStatus }}
+      <div v-if="terminal.runtimeState === 'closed'" class="q-px-sm q-py-xs text-caption app-muted" role="status" aria-live="polite" aria-atomic="true">
+        Die Shell wurde beendet.
       </div>
     </template>
   </section>
@@ -84,16 +81,6 @@ const unavailableMessage = computed(() => {
     unsupported: 'Der ausgewählte Agent unterstützt das Terminal nicht.'
   })[contextState.value.reason]
 })
-const runtimeStatus = computed(() => {
-  if (!terminal.ready) return 'Terminal wird verbunden.'
-  if (terminal.suspended) return 'Terminal vorübergehend ausgesetzt.'
-  if (terminal.runtimeState === 'closed') return 'Die Shell wurde beendet.'
-  if (terminal.attached) return terminal.activeToolCallId
-    ? 'Der Agent führt einen Befehl aus. Manuelle Eingaben sind gesperrt.'
-    : 'Agent verbunden. Manuelle Eingaben sind gesperrt.'
-  return terminal.busy ? 'Ein manueller Befehl läuft.' : ''
-})
-
 let xterm
 let fitAddon
 let resizeObserver

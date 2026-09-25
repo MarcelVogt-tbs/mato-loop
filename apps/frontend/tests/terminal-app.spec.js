@@ -290,14 +290,14 @@ it('shows replacement without reclaiming on remount or stale control actions', a
   expect(FakeWebSocket.instances).toHaveLength(1)
 })
 
-it('keeps an idle terminal free of informational labels but shows truncated replay', async () => {
+it('keeps an idle terminal free of informational labels even when replay is truncated', async () => {
   store.$patch({ restored: false, currentDirectory: '/terminal/cwd' })
   await mountTerminal()
   expect(root.textContent).not.toMatch(/Neue Shell gestartet|Terminal-Ordner|Shell bereit/)
   expect(root.querySelector('.terminal-app [role="status"]')).toBeNull()
   store.truncated = true
   await nextTick()
-  expect(root.textContent).toContain('Frühere Ausgaben fehlen')
+  expect(root.querySelector('.terminal-app [role="status"]')).toBeNull()
 })
 
 it('waits for persisted tab creation and resumes after a failed optimistic removal', async () => {
@@ -341,7 +341,7 @@ it('keeps manual history and tab bytes raw, then disables input while agent-owne
   socket.state({ attached: true, busy: true, state: 'running', activeToolCallId: 'tool-1' })
   await nextTick()
   expect(xterm.options.disableStdin).toBe(true)
-  expect(root.textContent).toContain('Manuelle Eingaben sind gesperrt')
+  expect(root.textContent).not.toContain('Manuelle Eingaben sind gesperrt')
   expect(root.textContent).not.toMatch(/bearbeiten|geprüft|Strg\+C/)
   socket.send.mockClear()
   xterm.input('\r\x03', true)
@@ -352,7 +352,8 @@ it('uses the attachment toggle for both directions and blocks it during an agent
   socket.state({ attached: true, busy: true, state: 'running', activeToolCallId: 'tool-1' })
   await mountTerminal()
   const toggle = root.querySelector('[role="switch"]')
-  expect(root.textContent).toContain('Der Agent führt einen Befehl aus.')
+  expect(root.textContent).not.toContain('Agent verbunden.')
+  expect(root.querySelector('.terminal-app [role="status"]')).toBeNull()
   expect(toggle.getAttribute('aria-checked')).toBe('true')
   expect(toggle.getAttribute('aria-disabled')).toBe('true')
   expect(root.textContent).not.toContain('Manuell übernehmen')
@@ -363,8 +364,8 @@ it('uses the attachment toggle for both directions and blocks it during an agent
   expect(JSON.parse(socket.send.mock.calls.at(-1)[0])).toEqual({ type: 'detach' })
   expect(store.attached).toBe(true)
   await nextTick()
-  expect(root.textContent).toContain('Manuelle Übernahme wird angefordert.')
   socket.state({ attached: false })
   await nextTick()
-  expect(root.textContent).toContain('Manuelle Steuerung')
+  expect(root.textContent).not.toContain('Manuelle Steuerung')
+  expect(root.querySelector('.terminal-app [role="status"]')).toBeNull()
 })
