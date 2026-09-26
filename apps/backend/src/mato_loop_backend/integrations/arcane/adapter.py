@@ -144,6 +144,8 @@ async def _environments(client: ArcaneClient) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for start in range(0, 500, 50):
         page, _pagination = await client.request("GET", "/environments", params={"start": start, "limit": 50})
+        if page is None:
+            page = []
         if not isinstance(page, list) or len(page) > 50 or not all(isinstance(item, dict) for item in page):
             raise ArcaneError("integration.invalidResponse")
         result.extend(page)
@@ -227,6 +229,8 @@ async def arcane_list(args: ArcaneList, context: Any) -> Any:
         async with _client(args, context) as client:
             data, pagination = await client.request("GET", f"/environments/{args.environment_id}/{args.kind}",
                                                     params={"start": args.start, "limit": args.limit, **({"search": args.search} if args.search else {})})
+        if data is None:
+            data = []
         if not isinstance(data, list) or len(data) > args.limit:
             raise ArcaneError("integration.invalidResponse")
         return _result({"items": [_public(item, args.kind) for item in data], "pagination": pagination})

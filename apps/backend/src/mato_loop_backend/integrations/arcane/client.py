@@ -127,6 +127,8 @@ class ArcaneClient:
                 raise ArcaneError("integration.outcomeUnknown" if mutation else "integration.invalidResponse") from exc
             if not isinstance(payload, dict) or payload.get("success") is not True:
                 raise ArcaneError("integration.outcomeUnknown" if mutation else "integration.invalidResponse")
+            if not mutation and "data" not in payload:
+                raise ArcaneError("integration.invalidResponse")
             return payload.get("data"), payload.get("pagination")
         except httpx.HTTPError as exc:
             raise ArcaneError("integration.outcomeUnknown" if mutation else "integration.unavailable") from exc

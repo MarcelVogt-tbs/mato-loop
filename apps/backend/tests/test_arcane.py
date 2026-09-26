@@ -15,11 +15,40 @@ from mato_loop_backend.integrations.arcane.adapter import (
     ArcaneList,
     _binding,
     _delete_permission,
+    _environments,
     _public,
     arcane_action,
+    arcane_list,
 )
 from mato_loop_backend.integrations.arcane.client import ArcaneClient, ArcaneError, segment
 from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings
+
+
+@pytest.mark.asyncio
+async def test_arcane_nullable_list_data_is_empty_but_missing_data_is_invalid(monkeypatch):
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _: httpx.Response(200, json={"success": True, "data": None, "pagination": {"total": 0}})
+    )) as transport:
+        async with ArcaneClient("https://arcane.example.test", "test-key", client=transport) as client:
+            assert await _environments(client) == []
+
+            @asynccontextmanager
+            async def selected_client(_args, _context):
+                yield client
+
+            monkeypatch.setattr(arcane_module, "_client", selected_client)
+            result = await arcane_list(
+                ArcaneList(integration_id=uuid4(), environment_id="0", kind="containers"),
+                SimpleNamespace(),
+            )
+            assert json.loads(result.content)["data"]["items"] == []
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _: httpx.Response(200, json={"success": True, "pagination": {"total": 0}})
+    )) as transport:
+        async with ArcaneClient("https://arcane.example.test", "test-key", client=transport) as client:
+            with pytest.raises(ArcaneError, match="integration.invalidResponse"):
+                await client.request("GET", "/environments")
 
 
 @pytest.mark.asyncio
