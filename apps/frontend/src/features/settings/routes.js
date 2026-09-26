@@ -133,8 +133,7 @@ export const settingsRoutes = [
   {
     path: 'users',
     name: 'settings-users',
-    component: () => import('src/features/auth/UserSettingsPage.vue'),
-    meta: { settingsLabel: 'Benutzer', settingsIcon: 'group', requiresAdmin: true }
+    redirect: { name: 'admin-users' }
   },
   {
     path: 'debug-access',
@@ -147,5 +146,14 @@ export const settingsRoutes = [
     name: 'settings-instance-limits',
     component: () => import('src/features/settings/InstanceLimitsPage.vue'),
     meta: { settingsLabel: 'Instanzlimits', settingsIcon: 'tune', requiresAdmin: true }
+  }
+]
+
+export const adminRoutes = [
+  {
+    path: 'users',
+    name: 'admin-users',
+    component: () => import('src/features/auth/UserSettingsPage.vue'),
+    meta: { settingsLabel: 'Benutzer', settingsIcon: 'group' }
   }
 ]

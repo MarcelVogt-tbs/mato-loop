@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
-import routes, { settingsRoutes } from '../src/router/routes'
+import routes, { adminRoutes, settingsRoutes } from '../src/router/routes'
 
 describe('MatoLoop frontend scaffold', () => {
   it('routes legacy automation editing and exact-run links to the shared page', async () => {
@@ -23,7 +23,7 @@ describe('MatoLoop frontend scaffold', () => {
     const routeNames = appRoute.children.map((route) => route.name)
     const settingsRoute = appRoute.children.find((route) => route.name === 'settings')
 
-    expect(routeNames).toEqual(['chat', 'settings'])
+    expect(routeNames).toEqual(['chat', 'settings', 'admin'])
     expect(settingsRoute.children.map((route) => route.name)).toEqual([
       'settings-providers',
       'settings-agents',
@@ -65,7 +65,9 @@ describe('MatoLoop frontend scaffold', () => {
       { name: 'settings-automation-detail', path: ':automationId' }
     ])
     expect(routes.find((route) => route.name === 'markdown-print')?.path).toBe('/print/markdown')
-    expect(settingsRoutes.find((route) => route.name === 'settings-users')?.meta.requiresAdmin).toBe(true)
+    expect(settingsRoutes.find((route) => route.name === 'settings-users')?.redirect).toEqual({ name: 'admin-users' })
+    expect(appRoute.children.find((route) => route.name === 'admin')?.meta.requiresAdmin).toBe(true)
+    expect(adminRoutes.map((route) => route.name)).toEqual(['admin-users'])
     expect(settingsRoutes.find((route) => route.name === 'settings-notifications')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-debug-access')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-instance-limits')?.meta.requiresAdmin).toBe(true)
@@ -92,5 +94,13 @@ describe('MatoLoop frontend scaffold', () => {
     expect(settingsRoutes
       .filter((route) => ['settings-providers', 'settings-integrations'].includes(route.name))
       .every((route) => route.meta.requiresAdmin === undefined)).toBe(true)
+  })
+
+  it('keeps old user-management links in the admin-only section', () => {
+    const router = createRouter({ history: createMemoryHistory(), routes })
+
+    expect(router.resolve('/settings/users').matched.at(-1).redirect).toEqual({ name: 'admin-users' })
+    expect(router.resolve('/admin/users').name).toBe('admin-users')
+    expect(router.resolve('/admin/users').meta.requiresAdmin).toBe(true)
   })
 })

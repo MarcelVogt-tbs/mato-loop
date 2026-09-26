@@ -230,6 +230,10 @@
                 <q-item-section avatar><q-icon name="tune" /></q-item-section>
                 <q-item-section>Einstellungen</q-item-section>
               </q-item>
+              <q-item v-if="auth.isAdmin" clickable v-ripple :to="{ name: 'admin-users' }" v-close-popup @click="closeDrawerOnMobile">
+                <q-item-section avatar><q-icon name="admin_panel_settings" /></q-item-section>
+                <q-item-section>Administration</q-item-section>
+              </q-item>
               <q-item clickable v-ripple v-close-popup @click="openAccountDialog">
                 <q-item-section avatar><q-icon name="manage_accounts" /></q-item-section>
                 <q-item-section>Konto</q-item-section>

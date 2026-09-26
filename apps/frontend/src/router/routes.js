@@ -1,6 +1,6 @@
-import { settingsRoutes } from 'src/features/settings/routes'
+import { adminRoutes, settingsRoutes } from 'src/features/settings/routes'
 
-export { settingsRoutes } from 'src/features/settings/routes'
+export { adminRoutes, settingsRoutes } from 'src/features/settings/routes'
 
 const routes = [
   { path: '/login', name: 'login', component: () => import('src/features/auth/AuthPage.vue'), meta: { public: true } },
@@ -20,6 +20,15 @@ const routes = [
         component: () => import('src/features/settings/SettingsPage.vue'),
         redirect: { name: 'settings-providers' },
         children: settingsRoutes
+      },
+      {
+        path: 'admin',
+        name: 'admin',
+        component: () => import('src/features/settings/SettingsPage.vue'),
+        props: { admin: true },
+        meta: { requiresAdmin: true },
+        redirect: { name: 'admin-users' },
+        children: adminRoutes
       }
     ]
   },

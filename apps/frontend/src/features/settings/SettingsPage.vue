@@ -1,6 +1,9 @@
 <template>
   <q-page class="app-page settings-page column no-wrap">
-    <AppPageHeader title="Einstellungen" subtitle="Personalisierung, Provider, Computer, Integrationen, Kanäle und Funktionen zentral verwalten." />
+    <AppPageHeader
+      :title="admin ? 'Administration' : 'Einstellungen'"
+      :subtitle="admin ? 'Benutzer und Zugänge verwalten.' : 'Personalisierung, Provider, Computer, Integrationen, Kanäle und Funktionen zentral verwalten.'"
+    />
 
     <q-tabs
       no-caps
@@ -21,7 +24,7 @@
     </q-tabs>
 
     <div class="settings-layout row no-wrap items-stretch col">
-      <nav class="settings-category-nav q-py-xs q-pr-md" aria-label="Einstellungskategorien">
+      <nav class="settings-category-nav q-py-xs q-pr-md" :aria-label="admin ? 'Administrationsbereiche' : 'Einstellungskategorien'">
         <q-list class="settings-category-list">
           <q-item
             v-for="item in navigation"
@@ -50,13 +53,14 @@
 <script setup>
 import { computed } from 'vue'
 import AppPageHeader from 'src/shared/ui/AppPageHeader.vue'
-import { settingsRoutes } from 'src/features/settings/routes'
+import { adminRoutes, settingsRoutes } from 'src/features/settings/routes'
 import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'SettingsPage' })
 
+const { admin } = defineProps({ admin: { type: Boolean, default: false } })
 const auth = useAuthStore()
-const navigation = computed(() => settingsRoutes.filter((item) => (
+const navigation = computed(() => (admin ? adminRoutes : settingsRoutes).filter((item) => (
   item.meta?.settingsLabel && (!item.meta.requiresAdmin || auth.isAdmin)
 )))
 </script>
