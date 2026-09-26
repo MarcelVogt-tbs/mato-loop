@@ -25,6 +25,23 @@ from mato_loop_backend.tools.contracts import ToolResult as ToolResult
 from mato_loop_backend.user_profile import effective_profile_fact
 
 
+def _personal_settings_still_available(context: ToolContext) -> bool:
+    if context.tool_call.name != "customize_matoloop":
+        return True
+    legacy_name = (
+        "update_agent_identity"
+        if context.tool_call.arguments.get("area") == "agent_identity"
+        else "update_user_profile"
+    )
+    return (
+        context.tool_settings.tool_availability.get("customize_matoloop", True)
+        and context.tool_settings.tool_availability.get(legacy_name, True)
+        and permissions_resolution.tool_execution_policy(
+            context.tool_settings, "settings.personal.update", ToolExecutionPolicy.ASK
+        ) != ToolExecutionPolicy.DISABLED
+    )
+
+
 async def _update_agent_identity(
     arguments: UpdateAgentIdentityArguments, context: ToolContext
 ) -> ToolResult:
@@ -93,7 +110,7 @@ async def _update_agent_identity(
             "settings.agent_identity.update", context.tool_settings.trust_level
         ),
     )
-    if current_policy == ToolExecutionPolicy.DISABLED or (
+    if not _personal_settings_still_available(context) or current_policy == ToolExecutionPolicy.DISABLED or (
         current_policy == ToolExecutionPolicy.ASK and not approval_received
     ):
         return ToolResult.error("tool.unavailable")
@@ -234,7 +251,7 @@ async def _update_user_profile(
     current_policy = permissions_resolution.tool_execution_policy(
         context.tool_settings, capability, ToolExecutionPolicy.ASK
     )
-    if current_policy == ToolExecutionPolicy.DISABLED or (
+    if not _personal_settings_still_available(context) or current_policy == ToolExecutionPolicy.DISABLED or (
         current_policy == ToolExecutionPolicy.ASK and not approval_received
     ):
         return ToolResult.error("tool.unavailable")

@@ -7,10 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.integrations.bookstack.adapter import BOOKSTACK_CREDENTIAL_KIND
-from mato_loop_backend.integrations.caldav.adapter import CALDAV_CREDENTIAL_KIND
+from mato_loop_backend.integrations.caldav.service import discover_caldav_resources
 from mato_loop_backend.integrations.contracts import IntegrationResource
 from mato_loop_backend.integrations.mcp.adapter import MCP_CREDENTIAL_KIND
 from mato_loop_backend.integrations.registry import integration_adapter
+from mato_loop_backend.integrations.service import IntegrationSettingsError
 from mato_loop_backend.permissions.resolution import resolve_tool_execution_policy
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings import (
@@ -38,6 +39,15 @@ async def _integration_resources(
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
     if not tool_registry.integration_resource_actions(instance):
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
+    if instance.integration_type == "calendar" and instance.adapter_type == "caldav":
+        try:
+            return await discover_caldav_resources(db, instance, release_connection=True)
+        except IntegrationSettingsError as exc:
+            await db.rollback()
+            raise ApiError(
+                409 if exc.code == "integration.resourcePoliciesUnsupported" else 502,
+                exc.code,
+            ) from exc
     credential = None
     try:
         if adapter.resource_loader is not None and instance.credential_id is not None:
@@ -49,12 +59,6 @@ async def _integration_resources(
             )
             if record is None:
                 raise ValueError("missing integration credential")
-            if (
-                instance.integration_type == "calendar"
-                and instance.adapter_type == "caldav"
-                and record.kind != CALDAV_CREDENTIAL_KIND
-            ):
-                raise ValueError("invalid integration credential kind")
             if (
                 instance.integration_type == "knowledge"
                 and instance.adapter_type == "bookstack"

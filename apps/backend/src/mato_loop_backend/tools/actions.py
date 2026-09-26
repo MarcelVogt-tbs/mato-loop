@@ -148,6 +148,16 @@ _USER_PROFILE_UPDATE = ToolAction(
     mutates=True,
 )
 
+_PERSONAL_SETTINGS_READ = ToolAction(
+    "settings.personal.read", "Persönliche Einstellungen lesen",
+    ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK,
+)
+
+_PERSONAL_SETTINGS_WRITE = ToolAction(
+    "settings.personal.update", "Persönliche Einstellungen ändern",
+    ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True,
+)
+
 _SECRETS_ACCESS = ToolAction(
     "secrets.access",
     "Variablen und Secrets verwenden",

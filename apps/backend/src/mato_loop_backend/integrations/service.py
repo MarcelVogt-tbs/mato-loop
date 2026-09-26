@@ -12,14 +12,16 @@ from mato_loop_backend.settings import (
     UserAgentProfilesSettings,
     UserIntegrationSettings,
     UserToolSettings,
+    WebSearchToolSettings,
 )
 from mato_loop_backend.settings.effective import personal_integration_tool_settings
 
 
 class IntegrationSettingsError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, field: str | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.field = field
 
 
 IntegrationSettingsDocument = IntegrationSettings | UserIntegrationSettings
@@ -134,6 +136,25 @@ async def _save_settings(
     owner_id: UUID | None,
 ) -> None:
     await SettingsStore.save(db, settings, user_id=owner_id)
+
+
+async def save_search_selection(
+    db: AsyncSession,
+    owner_id: UUID | None,
+    selection: WebSearchToolSettings,
+    available_settings: IntegrationSettings,
+    tools: ToolSettingsDocument,
+) -> None:
+    from mato_loop_backend.integrations.search import search_provider_options
+
+    available = {str(option["value"]) for option in search_provider_options(available_settings)}
+    for field in ("primary_provider", "fallback_provider"):
+        provider = getattr(selection, field)
+        if provider is not None and provider not in available:
+            raise IntegrationSettingsError("integration.providerUnavailable", field=field)
+    tools.web_search = selection
+    await SettingsStore.save(db, tools, user_id=owner_id)
+    await db.commit()
 
 
 async def save_with_policy_cleanup(

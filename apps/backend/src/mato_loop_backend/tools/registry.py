@@ -592,6 +592,11 @@ class ToolRegistry:
         definitions, sources, prompt_fragments = self._combined_definitions(
             integration_settings
         )
+        if "customize_matoloop" in definitions:
+            # Keep legacy direct calls and saved policies, but offer one settings tool to models.
+            definitions.pop("update_agent_identity", None)
+            definitions.pop("update_user_profile", None)
+            definitions.pop("variable_write", None)
         for name, definition in self._operation_definitions.items():
             if definition.required_operation in execution_operations:
                 definitions[name] = definition

@@ -634,6 +634,29 @@ async def test_resource_discovery_cannot_invent_adapter_capabilities(
     assert exc_info.value.code == "integration.resourceDiscoveryFailed"
 
 
+async def test_caldav_discovery_rejects_duplicate_resource_keys(monkeypatch) -> None:
+    current = integration_registry._ADAPTERS[("calendar", "caldav")]
+    key = f"calendar:{'a' * 32}"
+
+    async def load_resources(_instance, _credential):
+        return (IntegrationResource(key, "Privat"), IntegrationResource(key, "Duplikat"))
+
+    monkeypatch.setitem(
+        integration_registry._ADAPTERS,
+        ("calendar", "caldav"),
+        replace(current, resource_loader=load_resources),
+    )
+    instance = IntegrationInstance(
+        name="Kalender", integration_type="calendar", adapter_type="caldav",
+        config={"base_url": "https://calendar.example.com", "username": "user"},
+    )
+    with pytest.raises(ApiError) as exc_info:
+        await api_integration_resources._integration_resources(
+            AsyncMock(spec=AsyncSession), instance,
+        )
+    assert exc_info.value.code == "integration.resourceDiscoveryFailed"
+
+
 async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:
     key = f"calendar:{'a' * 32}"
     task_list_key = f"tasklist:{'a' * 32}"

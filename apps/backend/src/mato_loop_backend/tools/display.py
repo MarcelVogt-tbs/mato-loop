@@ -67,6 +67,7 @@ TOOL_ACTIVITY_LABELS = {
     "session_search": "Sessions durchsuchen", "memory_retrieve": "Memory abrufen",
     "memory_write": "Memory speichern", "update_agent_identity": "Persona ändern",
     "update_user_profile": "Persönliches Profil ändern", "variable_read": "Variable lesen",
+    "customize_matoloop": "MatoLoop persönlich anpassen",
     "variable_write": "Variable speichern", "secret_input": "Secret einmalig abfragen",
     "process_exec": "Prozess ausführen",
     "process.exec": "Prozess ausführen", "shell_run": "Shell-Befehl ausführen",
@@ -120,6 +121,7 @@ _TOOL_GROUPS = {
         for name in (
             "question", "task", "todo_write", "load_skill", "build_skill", "edit_skill",
             "update_agent_identity", "update_user_profile",
+            "customize_matoloop",
         )
     },
 }

@@ -61,6 +61,7 @@ _READ_CAPABILITIES = frozenset({
     "recipes.read", "session.files.read", "session.read", "session.search",
     "session.tool_result.read", "secrets.access",
     "skills.load", "support.read", "system.info", "tasks.read", "calendar.read", "execution_agent.list",
+    "settings.personal.read",
 })
 _WRITE_CAPABILITIES = frozenset({
     "arcane.manage", "arcane.delete",
@@ -75,6 +76,7 @@ _WRITE_CAPABILITIES = frozenset({
     "media.generate.speech",
     "session.files.write", "settings.agent_identity.update",
     "settings.user_profile.update", "skills.write", "tasks.delete", "tasks.write",
+    "settings.personal.update",
     "secrets.write", "execution_agent.select",
 })
 
@@ -927,6 +929,34 @@ def user_profile_permission(
     )
 
 
+def personal_settings_permission(
+    user_id: UUID, area: str, action: str, *, fields: tuple[str, ...] = (),
+    integration_id: UUID | None = None, changes: dict[str, Any] | None = None,
+) -> PermissionRequest:
+    verbs = {"get": "lesen", "create": "anlegen", "update": "ändern", "delete": "entfernen"}
+    labels = {"memory": "Memory", "user_profile": "persönliches Profil", "agent_identity": "Agent-Persona", "integrations": "Integrationen", "variables": "persönliche Variablen"}
+    return PermissionRequest(
+        capability="settings.personal.read" if action == "get" else "settings.personal.update",
+        resource_type="personal_settings",
+        resource_scope=json.dumps(
+            {"userId": str(user_id), "area": area, "integrationId": str(integration_id) if integration_id else None},
+            separators=(",", ":"), sort_keys=True,
+        ),
+        action_kind=f"personal_settings_{action}",
+        risk_level="low" if action == "get" else "medium",
+        title="Persönliche Einstellungen lesen?" if action == "get" else "Persönliche Einstellungen ändern?",
+        summary=f"Der Agent möchte {labels[area]} {verbs[action]}" + (f" ({', '.join(fields)})" if fields else "") + ".",
+        resource_display=labels[area],
+        display_items=(PermissionDisplayItem("Änderungen", tuple(
+            f"{field}: {'wird geändert' if field == 'bearer_token_ref' else str(value)[:200]}"
+            for field, value in sorted(changes.items())
+        ), "list"),) if changes else (
+            (PermissionDisplayItem("Felder", fields, "list"),) if fields else ()
+        ),
+        use_integration_policy=False,
+    )
+
+
 def personal_variables_permission(
     user_id: UUID,
     *,
@@ -1398,6 +1428,24 @@ class PermissionPolicy:
                 or scope[0] != chat_session.user_id
                 or request.capability != "settings.user_profile.update"
             ):
+                return PermissionDecision.DENY
+
+        if request.resource_type == "personal_settings":
+            try:
+                scope = json.loads(request.resource_scope)
+                owner_id = UUID(scope["userId"])
+                integration_id = scope["integrationId"]
+                if (
+                    set(scope) != {"userId", "area", "integrationId"}
+                    or str(owner_id) != scope["userId"]
+                    or owner_id != chat_session.user_id
+                    or scope["area"] not in {"memory", "user_profile", "agent_identity", "integrations", "variables"}
+                    or (integration_id is not None and (scope["area"] != "integrations" or str(UUID(integration_id)) != integration_id))
+                    or json.dumps(scope, separators=(",", ":"), sort_keys=True) != request.resource_scope
+                    or request.capability not in {"settings.personal.read", "settings.personal.update"}
+                ):
+                    return PermissionDecision.DENY
+            except (ValueError, KeyError, TypeError):
                 return PermissionDecision.DENY
 
         if request.resource_type == "personal_variable_collection":

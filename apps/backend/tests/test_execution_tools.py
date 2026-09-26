@@ -9,7 +9,6 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-import mato_loop_backend.tools.computer as mock_tools_computer
 import mato_loop_backend.tools.interaction as mock_tools_interaction
 from mato_loop_backend.agent.run_support import _external_working_directory_policy, _tool_policy
 from mato_loop_backend.agent.session_secrets import session_secrets
@@ -1178,10 +1177,16 @@ async def test_shell_resolves_variable_reference_only_for_process_transport(
         encrypted_payload=b"encrypted",
         metadata_json={"secret": True},
     )
+    from mato_loop_backend.tools import secrets as tool_secrets
+
     _mock_value = AsyncMock(return_value=variable)
-    for _mock_target in (mock_tools_computer, mock_tools_interaction,):
+    for _mock_target in (tool_secrets, mock_tools_interaction,):
         monkeypatch.setattr(_mock_target, 'get_personal_variable', _mock_value)
-    monkeypatch.setattr(mock_tools_computer, 'personal_variable_value', lambda _variable: "host-secret")
+    monkeypatch.setattr(tool_secrets, 'personal_variable_value', lambda _variable: "host-secret")
+    monkeypatch.setattr(
+        tool_secrets.tools_access, "profile_tool_settings",
+        AsyncMock(return_value=context.tool_settings),
+    )
 
     result = await _tools(client.operations).execute(call, context)
 

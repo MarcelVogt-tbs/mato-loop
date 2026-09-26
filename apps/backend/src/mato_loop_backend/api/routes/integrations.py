@@ -32,8 +32,13 @@ from mato_loop_backend.integrations.caldav.adapter import (
     load_caldav_resources,
 )
 from mato_loop_backend.integrations.caldav.client import CalDavError
-from mato_loop_backend.integrations.caldav.service import CalDavIntegrationService
-from mato_loop_backend.integrations.contracts import IntegrationResource
+from mato_loop_backend.integrations.caldav.service import (
+    CalDavIntegrationService,
+    save_caldav_defaults,
+)
+from mato_loop_backend.integrations.caldav.service import (
+    caldav_defaults_payload as _default_resources_payload,
+)
 from mato_loop_backend.integrations.mail.adapter import (
     MAIL_CREDENTIAL_KIND,
     MailConfig,
@@ -72,13 +77,11 @@ from mato_loop_backend.integrations.search import (
 )
 from mato_loop_backend.integrations.searxng.client import search_with_provider
 from mato_loop_backend.integrations.searxng.service import SearchIntegrationService
-from mato_loop_backend.integrations.service import IntegrationSettingsError
+from mato_loop_backend.integrations.service import IntegrationSettingsError, save_search_selection
 from mato_loop_backend.integrations.sonobin.service import SonoBinIntegrationService
 from mato_loop_backend.models import ExecutionAgent, UserAccount
 from mato_loop_backend.security import load_credential, read_credential, require_admin, require_user
 from mato_loop_backend.settings import (
-    DefaultCalendarSettings,
-    DefaultTaskListSettings,
     IntegrationAdapterAvailability,
     IntegrationInstance,
     IntegrationSettings,
@@ -418,36 +421,6 @@ def _provider_payload(provider: IntegrationInstance) -> dict:
     }
 
 
-def _default_resources_payload(
-    instance: IntegrationInstance,
-    resources: tuple[IntegrationResource, ...],
-    tools: ToolSettingsDocument,
-) -> dict:
-    default_calendar = tools.default_calendar
-    default_task_list = tools.default_task_list
-    return {
-        "integrationId": str(instance.id),
-        "resources": [
-            {"key": item.key, "groupKey": item.group_key, "label": item.label}
-            for item in resources
-        ],
-        "defaultResourceKey": (
-            default_calendar.calendar_key
-            if default_calendar is not None
-            and default_calendar.integration_id == instance.id
-            and any(item.key == default_calendar.calendar_key for item in resources)
-            else None
-        ),
-        "defaultTaskListKey": (
-            default_task_list.task_list_key
-            if default_task_list is not None
-            and default_task_list.integration_id == instance.id
-            and any(item.key == default_task_list.task_list_key for item in resources)
-            else None
-        ),
-    }
-
-
 def search_settings_payload(
     settings: IntegrationSettingsDocument,
     tools: ToolSettingsDocument | None = None,
@@ -780,20 +753,11 @@ async def update_search_selection(
         if owner_id is not None
         else settings
     )
-    available = {
-        str(option["value"]) for option in search_provider_options(available_settings)
-    }
-    if payload.primary_provider not in available:
-        raise ApiError(409, "integration.providerUnavailable", field="primary_provider")
-    if (
-        payload.fallback_provider is not None
-        and payload.fallback_provider not in available
-    ):
-        raise ApiError(409, "integration.providerUnavailable", field="fallback_provider")
     tools = await _load_scoped_tools(db, owner_id, for_update=True)
-    tools.web_search = payload
-    await SettingsStore.save(db, tools, user_id=owner_id)
-    await db.commit()
+    try:
+        await save_search_selection(db, owner_id, payload, available_settings, tools)
+    except IntegrationSettingsError as exc:
+        raise ApiError(409, exc.code, field=exc.field) from exc
     return search_settings_payload(settings, tools, available_settings)
 
 
@@ -1701,36 +1665,6 @@ async def update_integration_access(
     )
     resources = await api_integration_resources._integration_resources(db, instance)
     revision = instance.model_dump(mode="json")
-    resource_keys = {resource.key for resource in resources}
-    default_resource_changed = "default_resource_key" in payload.model_fields_set
-    default_task_list_changed = "default_task_list_key" in payload.model_fields_set
-    if (default_resource_changed or default_task_list_changed) and (
-        instance.integration_type != "calendar" or instance.adapter_type != "caldav"
-    ):
-        field = (
-            "default_resource_key"
-            if default_resource_changed
-            else "default_task_list_key"
-        )
-        raise ApiError(422, "validation.invalidChoice", field=field)
-    if (
-        default_resource_changed
-        and payload.default_resource_key is not None
-        and (
-            payload.default_resource_key not in resource_keys
-            or not payload.default_resource_key.startswith("calendar:")
-        )
-    ):
-        raise ApiError(422, "validation.invalidChoice", field="default_resource_key")
-    if (
-        default_task_list_changed
-        and payload.default_task_list_key is not None
-        and (
-            payload.default_task_list_key not in resource_keys
-            or not payload.default_task_list_key.startswith("tasklist:")
-        )
-    ):
-        raise ApiError(422, "validation.invalidChoice", field="default_task_list_key")
     current_integrations, current_owner_id = await api_integration_access._load_scoped_integrations(
         db, scope, user, for_update=True, mutation=True
     )
@@ -1742,35 +1676,13 @@ async def update_integration_access(
     if current.model_dump(mode="json") != revision:
         raise ApiError(409, "integration.changed")
     tools = await _load_scoped_tools(db, owner_id, for_update=True)
-    labels = {resource.key: resource.label for resource in resources}
-    if labels:
-        tools.resource_labels[str(integration_id)] = labels
-    else:
-        tools.resource_labels.pop(str(integration_id), None)
-    if default_resource_changed:
-        if payload.default_resource_key is not None:
-            tools.default_calendar = DefaultCalendarSettings(
-                integration_id=integration_id,
-                calendar_key=payload.default_resource_key,
-            )
-        elif (
-            tools.default_calendar is not None
-            and tools.default_calendar.integration_id == integration_id
-        ):
-            tools.default_calendar = None
-    if default_task_list_changed:
-        if payload.default_task_list_key is not None:
-            tools.default_task_list = DefaultTaskListSettings(
-                integration_id=integration_id,
-                task_list_key=payload.default_task_list_key,
-            )
-        elif (
-            tools.default_task_list is not None
-            and tools.default_task_list.integration_id == integration_id
-        ):
-            tools.default_task_list = None
-    await SettingsStore.save(db, tools, user_id=owner_id)
-    await db.commit()
+    try:
+        await save_caldav_defaults(
+            db, owner_id, current, resources, tools,
+            payload.model_dump(include=payload.model_fields_set),
+        )
+    except IntegrationSettingsError as exc:
+        raise ApiError(422, exc.code, field=exc.field) from exc
     response_tools = (
         await load_effective_tools(db, owner_id)
         if owner_id is not None

@@ -173,7 +173,7 @@ def test_media_schemas_follow_effective_capabilities() -> None:
         "settings.agent_identity.update",
     }
     assert "generate_image" in names
-    assert "update_agent_identity" in names
+    assert "customize_matoloop" in names
     assert "generate_speech" not in names
     assert "generate_audio" not in names
     assert "transcribe_audio" not in names

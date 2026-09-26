@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from sqlalchemy import select
 
 import mato_loop_backend.files.access as files_access
 import mato_loop_backend.tools.access as tools_access
-from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.events import run_events
 from mato_loop_backend.execution import (
     DirectoryResult,
@@ -22,11 +21,9 @@ from mato_loop_backend.models import AgentRun, ExecutionAgent
 from mato_loop_backend.permissions.policy import (
     execution_agent_select_permission,
     execution_agents_list_permission,
-    personal_variables_permission,
     shell_command_permission,
     system_info_permission,
 )
-from mato_loop_backend.personal_variables import get_personal_variable, personal_variable_value
 from mato_loop_backend.tools.actions import (
     _EXECUTION_AGENT_SELECT,
     _EXECUTION_AGENTS_LIST,
@@ -45,6 +42,7 @@ from mato_loop_backend.tools.arguments import (
 from mato_loop_backend.tools.context import ToolContext as ToolContext
 from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
+from mato_loop_backend.tools.secrets import resolve_secret_refs
 
 
 async def _get_system_info(
@@ -227,59 +225,6 @@ async def _run_process(
     return tool_result
 
 
-async def _resolve_shell_environment(
-    arguments: ShellRunArguments, context: ToolContext
-) -> dict[str, str] | ToolResult:
-    if not arguments.environment:
-        return {}
-    variables = []
-    for variable_id in dict.fromkeys(
-        reference
-        for reference in arguments.environment.values()
-        if isinstance(reference, UUID)
-    ):
-        variable = await get_personal_variable(
-            context.db, context.session.user_id, variable_id
-        )
-        if variable is None:
-            return ToolResult.error("personalVariable.notFound")
-        variables.append(variable)
-    if variables and not await tools_access.allow(
-        context,
-        personal_variables_permission(
-            context.session.user_id,
-            names=tuple(variable.label for variable in variables),
-        ),
-    ):
-        return ToolResult.error("permission.denied")
-    values: dict[UUID | str, str] = {}
-    for variable in variables:
-        current = await get_personal_variable(
-            context.db,
-            context.session.user_id,
-            variable.id,
-            populate_existing=True,
-        )
-        if current is None:
-            return ToolResult.error("personalVariable.notFound")
-        values[variable.id] = personal_variable_value(current)
-    for reference in dict.fromkeys(
-        reference
-        for reference in arguments.environment.values()
-        if isinstance(reference, str)
-    ):
-        if reference.startswith("run-secret:"):
-            secret_id = UUID(reference.removeprefix("run-secret:"))
-            value = context.one_time_secrets.get(secret_id)
-        else:
-            secret_id = UUID(reference.removeprefix("session-secret:"))
-            value = session_secrets.resolve(context.session.id, secret_id)
-        if value is None:
-            return ToolResult.error("secret.valueRefUnavailable")
-        values[reference] = value
-    return {name: values[reference] for name, reference in arguments.environment.items()}
-
-
 async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> ToolResult:
     client = files_access.workspace_client(context)
     if client.current_directory is None:
@@ -292,7 +237,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
     if terminal is not None:
         from mato_loop_backend.agent.shared_shell import run_shared_shell
 
-        resolved = await _resolve_shell_environment(arguments, context)
+        resolved = await resolve_secret_refs(context, arguments.environment)
         if isinstance(resolved, ToolResult):
             return resolved
         environment = resolved
@@ -325,7 +270,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
     )
     if not await tools_access.allow(context, permission):
         return ToolResult.error("permission.denied")
-    resolved = await _resolve_shell_environment(arguments, context)
+    resolved = await resolve_secret_refs(context, arguments.environment)
     if isinstance(resolved, ToolResult):
         return resolved
     environment = resolved

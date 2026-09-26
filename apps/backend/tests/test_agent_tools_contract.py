@@ -25,6 +25,8 @@ import mato_loop_backend.tools.files as mock_tools_files
 import mato_loop_backend.tools.identity as mock_tools_identity
 import mato_loop_backend.tools.media as mock_tools_media
 import mato_loop_backend.tools.memory as mock_tools_memory
+import mato_loop_backend.tools.personal_integrations as mock_personal_integrations
+import mato_loop_backend.tools.personal_settings as mock_personal_settings
 import mato_loop_backend.tools.sessions as mock_tools_sessions
 import mato_loop_backend.tools.skills as mock_tools_skills
 import mato_loop_backend.tools.web as mock_tools_web
@@ -63,6 +65,7 @@ from mato_loop_backend.permissions.policy import (
     PermissionDecision,
     PermissionPolicy,
     PermissionRequest,
+    personal_settings_permission,
 )
 from mato_loop_backend.permissions.resolution import tool_execution_policy
 from mato_loop_backend.providers.base import ToolCall
@@ -74,6 +77,7 @@ from mato_loop_backend.settings import (
     EffectiveAgentIdentity,
     IntegrationInstance,
     IntegrationSettings,
+    MemorySettings,
     PersonaProfile,
     SettingsStore,
     SkillDefinition,
@@ -82,6 +86,7 @@ from mato_loop_backend.settings import (
     ToolSettings,
     TrustLevel,
     UserAgentIdentitySettings,
+    UserIntegrationSettings,
     UserProfileSettings,
 )
 from mato_loop_backend.skills import SkillDraft
@@ -2306,6 +2311,500 @@ async def test_update_user_profile_both_models_auto_skips_approval(
     assert saved.preferred_name.both == "Grace"
     assert saved.preferred_name.private_only is None
     assert saved.preferred_name.public_only is None
+
+
+async def test_personal_settings_exposes_one_tool_and_reuses_profile_rules(monkeypatch, tmp_path) -> None:
+    names = tool_registry.effective(
+        IntegrationSettings(), tool_settings=ToolSettings()
+    ).tools
+    assert "customize_matoloop" in names
+    assert "update_user_profile" not in names
+    assert "update_agent_identity" not in names
+
+    call = ToolCall("profile", "customize_matoloop", {
+        "action": "update", "area": "user_profile",
+        "changes": {"preferred_name": "Ada"},
+    })
+    context = _context(tmp_path, call)
+    update = AsyncMock(return_value=ToolResult.json({"updatedFields": ["preferred_name"]}))
+    monkeypatch.setattr(mock_personal_settings, "_update_user_profile", update)
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    assert update.await_args.args[0].preferred_name == "Ada"
+    context.db.commit.assert_awaited_once()
+
+
+def test_secret_input_available_without_shell_and_with_shell() -> None:
+    for execution_operations in (frozenset(), frozenset({"shell.run"})):
+        tools = tool_registry.effective(
+            IntegrationSettings(), tool_settings=ToolSettings(),
+            execution_operations=execution_operations,
+        ).tools
+        assert "secret_input" in tools
+        assert "customize_matoloop" in tools
+        assert ("shell_run" in tools) == bool(execution_operations)
+
+
+def test_personal_settings_rejects_ui_preferences_and_raw_credentials() -> None:
+    from mato_loop_backend.tools.personal_integrations import IntegrationChanges
+
+    with pytest.raises(ValidationError):
+        tool_registry._definitions["customize_matoloop"].arguments_model.model_validate({
+            "action": "update", "area": "preferences", "changes": {"dark_mode": True},
+        })
+    with pytest.raises(ValidationError):
+        IntegrationChanges.model_validate({"secret_refs": {"password": "plaintext"}})
+
+
+async def test_personal_variable_is_saved_from_protected_reference(monkeypatch, tmp_path) -> None:
+    secret_id = uuid4()
+    call = ToolCall("variable", "customize_matoloop", {
+        "action": "create", "area": "variables",
+        "changes": {"name": "MEALIE_TOKEN", "value_ref": f"run-secret:{secret_id}"},
+    })
+    context = _context(tmp_path, call)
+    context.one_time_secrets[secret_id] = "private-token"
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    create = AsyncMock(return_value=SimpleNamespace(id=uuid4(), label="MEALIE_TOKEN"))
+    monkeypatch.setattr(mock_personal_settings, "create_personal_variable", create)
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    assert create.await_args.args[1] == context.session.user_id
+    assert create.await_args.kwargs["value"] == "private-token"
+    assert create.await_args.kwargs["secret"] is True
+    assert "private-token" not in result.content
+    assert "private-token" not in str(context.ask_handler.await_args_list)
+
+
+async def test_personal_integration_resolves_owned_stored_secret_with_access_approval(monkeypatch, tmp_path) -> None:
+    from mato_loop_backend.tools import personal_integrations
+    from mato_loop_backend.tools import secrets as tool_secrets
+
+    variable_id = uuid4()
+    call = ToolCall("calendar-secret", "customize_matoloop", {
+        "action": "create", "area": "integrations", "adapter_type": "caldav",
+        "changes": {"name": "Calendar", "base_url": "https://calendar.example.com",
+                    "username": "ada", "secret_refs": {"password": str(variable_id)}},
+    })
+    context = _context(tmp_path, call)
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kw: {
+        IntegrationSettings: IntegrationSettings(),
+        UserIntegrationSettings: UserIntegrationSettings(),
+    }[model]))
+    variable = SimpleNamespace(id=variable_id, label="CALENDAR_PASSWORD")
+    lookup = AsyncMock(return_value=variable)
+    monkeypatch.setattr(tool_secrets, "get_personal_variable", lookup)
+    monkeypatch.setattr(tool_secrets, "personal_variable_value", lambda _variable: "private-password")
+    item = IntegrationInstance(
+        name="Calendar", integration_type="calendar", adapter_type="caldav",
+        config={"base_url": "https://calendar.example.com", "username": "ada"},
+    )
+    create = AsyncMock(return_value=UserIntegrationSettings(instances=[item]))
+    monkeypatch.setattr(personal_integrations.CalDavIntegrationService, "create", create)
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    assert create.await_args.kwargs["password"] == "private-password"
+    assert all(used.args[1] == context.session.user_id for used in lookup.await_args_list)
+    assert any(request.args[0].capability == "secrets.access" for request in context.ask_handler.await_args_list)
+    assert "private-password" not in result.content
+
+
+async def test_personal_integration_accepts_protected_username(monkeypatch, tmp_path) -> None:
+    from mato_loop_backend.tools import personal_integrations
+
+    username_id, password_id = uuid4(), uuid4()
+    call = ToolCall("calendar-credentials", "customize_matoloop", {
+        "action": "create", "area": "integrations", "adapter_type": "caldav",
+        "changes": {"name": "Calendar", "base_url": "https://calendar.example.com",
+                    "secret_refs": {"username": f"run-secret:{username_id}",
+                                    "password": f"run-secret:{password_id}"}},
+    })
+    context = _context(tmp_path, call)
+    context.one_time_secrets = {username_id: "ada", password_id: "private-password"}
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kw: {
+        IntegrationSettings: IntegrationSettings(),
+        UserIntegrationSettings: UserIntegrationSettings(),
+    }[model]))
+    item = IntegrationInstance(name="Calendar", integration_type="calendar", adapter_type="caldav",
+                               config={"base_url": "https://calendar.example.com", "username": "ada"})
+    create = AsyncMock(return_value=UserIntegrationSettings(instances=[item]))
+    monkeypatch.setattr(personal_integrations.CalDavIntegrationService, "create", create)
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    assert create.await_args.kwargs["username"] == "ada"
+    assert create.await_args.kwargs["password"] == "private-password"
+
+
+async def test_personal_profile_update_checks_generic_policy_after_approval(monkeypatch, tmp_path) -> None:
+    call = ToolCall("profile", "customize_matoloop", {
+        "action": "update", "area": "user_profile",
+        "changes": {"preferred_name": "Ada"},
+    })
+    context = _context(tmp_path, call)
+    allowed = ToolSettings()
+    blocked = ToolSettings(private_permissions={"policies": {"settings.personal.update": "disabled"}})
+    monkeypatch.setattr(
+        mock_tools_access, "profile_tool_settings",
+        AsyncMock(side_effect=[allowed, allowed, blocked]),
+    )
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata["errorCode"] == "tool.unavailable"
+    context.ask_handler.assert_awaited_once()
+    save.assert_not_awaited()
+
+
+async def test_personal_settings_cannot_bypass_disabled_profile_tool(monkeypatch, tmp_path) -> None:
+    call = ToolCall("profile", "customize_matoloop", {
+        "action": "update", "area": "user_profile",
+        "changes": {"preferred_name": "Ada"},
+    })
+    context = _context(tmp_path, call)
+    settings = ToolSettings(tool_availability={"update_user_profile": False})
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=settings))
+    update = AsyncMock()
+    monkeypatch.setattr(mock_personal_settings, "_update_user_profile", update)
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata["errorCode"] == "tool.unavailable"
+    update.assert_not_awaited()
+
+
+async def test_personal_settings_validates_scalar_patch_and_rechecks_policy(monkeypatch, tmp_path) -> None:
+    call = ToolCall("memory", "customize_matoloop", {
+        "action": "update", "area": "memory", "changes": {"enabled": False},
+    })
+    context = _context(tmp_path, call)
+    settings = ToolSettings(private_permissions={"policies": {"settings.personal.update": "ask"}})
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=settings))
+    memory = MemorySettings()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=memory))
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    assert save.await_args.args[1].enabled is False
+    assert save.await_args.kwargs["user_id"] == context.session.user_id
+    assert context.ask_handler.await_args.args[0].display_items[0].value == ("enabled: False",)
+
+    for value in ({"enabled": "false"}, {"dreaming_remove_policy": "auto"}):
+        call.arguments["changes"] = value
+        result = await tool_registry.execute(call, context)
+        assert result.metadata["errorCode"] == "tool.invalidArguments"
+    assert save.await_count == 1
+
+    call.arguments["changes"] = {"enabled": False}
+    context.ask_handler.reset_mock()
+    monkeypatch.setattr(
+        mock_tools_access, "profile_tool_settings",
+        AsyncMock(side_effect=[settings, ToolSettings(private_permissions={"policies": {"settings.personal.update": "disabled"}})]),
+    )
+    result = await tool_registry.execute(call, context)
+    assert result.metadata["errorCode"] == "tool.unavailable"
+    assert save.await_count == 1
+
+
+async def test_personal_settings_mcp_uses_owned_service_and_secret_reference(monkeypatch, tmp_path) -> None:
+    secret_id = uuid4()
+    call = ToolCall("mcp", "customize_matoloop", {
+        "action": "create", "area": "integrations", "adapter_type": "mcp_streamable_http",
+        "changes": {"name": "Haus", "endpoint": "https://example.com/mcp",
+                    "secret_refs": {"bearer_token": f"run-secret:{secret_id}"}},
+    })
+    context = _context(tmp_path, call)
+    context.one_time_secrets[secret_id] = "private-token"
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kw: {
+        IntegrationSettings: IntegrationSettings(adapter_availability={"mcp_streamable_http": "full"}),
+        UserIntegrationSettings: UserIntegrationSettings(),
+    }[model]))
+    server = IntegrationInstance(
+        name="Haus", integration_type="mcp", adapter_type="mcp_streamable_http",
+        config={"endpoint": "https://example.com/mcp"},
+    )
+    create = AsyncMock(return_value=server)
+    monkeypatch.setattr(mock_personal_integrations.McpIntegrationService, "create", create)
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    assert create.await_args.kwargs["owner_id"] == context.session.user_id
+    assert create.await_args.kwargs["token"] == "private-token"
+    assert context.one_time_secrets[secret_id] == "private-token"
+    assert "private-token" not in result.content
+    assert "private-token" not in str(context.ask_handler.await_args.args[0])
+
+    call.arguments["action"] = "delete"
+    call.arguments.pop("changes")
+    call.arguments["integration_id"] = str(uuid4())
+    result = await tool_registry.execute(call, context)
+    assert result.metadata["errorCode"] == "integration.notFound"
+
+
+async def test_personal_settings_mcp_update_keeps_owner_and_existing_connection(monkeypatch, tmp_path) -> None:
+    server = IntegrationInstance(
+        name="Haus", integration_type="mcp", adapter_type="mcp_streamable_http",
+        config={"endpoint": "https://example.com/mcp"}, enabled=True,
+    )
+    call = ToolCall("mcp-update", "customize_matoloop", {
+        "action": "update", "area": "integrations", "integration_id": str(server.id),
+        "changes": {"name": "Zuhause", "enabled": False},
+    })
+    context = _context(tmp_path, call)
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kw: {
+        IntegrationSettings: IntegrationSettings(adapter_availability={"mcp_streamable_http": "full"}),
+        UserIntegrationSettings: UserIntegrationSettings(instances=[server]),
+    }[model]))
+    updated = server.model_copy(update={"name": "Zuhause", "enabled": False})
+    update = AsyncMock(return_value=updated)
+    monkeypatch.setattr(mock_personal_integrations.McpIntegrationService, "update", update)
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    assert update.await_args.args[1] == server.id
+    assert update.await_args.kwargs["owner_id"] == context.session.user_id
+    assert update.await_args.kwargs["endpoint"] == "https://example.com/mcp"
+    assert update.await_args.kwargs["token"] is None
+    assert update.await_args.kwargs["enabled"] is False
+    scope = json.loads(context.ask_handler.await_args.args[0].resource_scope)
+    assert scope["userId"] == str(context.session.user_id)
+    assert scope["integrationId"] == str(server.id)
+
+
+async def test_personal_settings_refuses_disabled_mcp_before_network_access(monkeypatch, tmp_path) -> None:
+    call = ToolCall("mcp", "customize_matoloop", {
+        "action": "create", "area": "integrations", "adapter_type": "mcp_streamable_http",
+        "changes": {"name": "Haus", "endpoint": "https://example.com/mcp"},
+    })
+    context = _context(tmp_path, call)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kwargs: {
+        IntegrationSettings: IntegrationSettings(),
+        UserIntegrationSettings: UserIntegrationSettings(),
+    }[model]))
+    create = AsyncMock()
+    monkeypatch.setattr(mock_personal_integrations.McpIntegrationService, "create", create)
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata["errorCode"] == "integration.personalAdapterDisabled"
+    create.assert_not_awaited()
+
+
+@pytest.mark.parametrize("adapter_type,kind,config,credential", [
+    ("searxng", "search", {"base_url": "https://search.example.com"}, None),
+    ("caldav", "calendar", {"base_url": "https://calendar.example.com", "username": "ada"}, "password"),
+    ("imap_smtp", "mail", {"imap_host": "mail.example.com", "imap_port": 993, "imap_security": "tls", "smtp_host": "mail.example.com", "smtp_port": 465, "smtp_security": "tls", "username": "ada", "from_address": "ada@example.com"}, "password"),
+    ("tbs-desk", "support", {"base_url": "https://support.example.com", "username": "ada"}, "password"),
+    ("bookstack", "knowledge", {"base_url": "https://books.example.com"}, "token_id"),
+    ("mealie", "recipes", {"base_url": "https://recipes.example.com"}, "token"),
+    ("arcane", "infrastructure", {"base_url": "https://arcane.example.com"}, "api_key"),
+    ("sonobin", "music", {"endpoint": "https://music.example.com/mcp/"}, "bearer_token"),
+    ("openscad", "openscad", {"execution_agent_id": str(uuid4()), "binary_path": "/usr/bin/openscad"}, None),
+    ("opencode", "coding", {"base_url": "https://coding.example.com", "username": "opencode"}, None),
+    ("browser", "browser", {"execution_agent_id": str(uuid4())}, None),
+    ("mcp_streamable_http", "mcp", {"endpoint": "https://example.com/mcp"}, None),
+])
+async def test_personal_integration_create_dispatches_to_owned_service(
+    monkeypatch, tmp_path, adapter_type, kind, config, credential,
+) -> None:
+    from mato_loop_backend.tools import personal_integrations
+
+    secret_id = uuid4()
+    secret_refs = ({credential: f"run-secret:{secret_id}"} if credential else {})
+    if adapter_type == "bookstack":
+        secret_refs["token_secret"] = f"run-secret:{secret_id}"
+    call = ToolCall("integration-create", "customize_matoloop", {
+        "action": "create", "area": "integrations", "adapter_type": adapter_type,
+        "changes": {"name": "Home", **config, **({"secret_refs": secret_refs} if secret_refs else {})},
+    })
+    context = _context(tmp_path, call)
+    context.one_time_secrets[secret_id] = "protected-value"
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kw: {
+        IntegrationSettings: IntegrationSettings(adapter_availability={adapter_type: "full"}),
+        UserIntegrationSettings: UserIntegrationSettings(),
+    }[model]))
+    instance = IntegrationInstance(
+        name="Home", integration_type=kind, adapter_type=adapter_type,
+        config={key: value for key, value in config.items() if key != "execution_agent_id"},
+        execution_agent_id=UUID(config["execution_agent_id"]) if "execution_agent_id" in config else None,
+    )
+    create = AsyncMock(return_value=(
+        instance if adapter_type in {"sonobin", "mcp_streamable_http"}
+        else UserIntegrationSettings(instances=[instance])
+    ))
+    monkeypatch.setattr(personal_integrations._SERVICES[adapter_type], "create", create)
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error, result.content
+    assert create.await_count == 1
+    assert create.await_args.kwargs.get("owner_id", create.await_args.kwargs.get("user_id")) == context.session.user_id
+    assert "protected-value" not in result.content
+
+
+async def test_personal_integration_update_keeps_existing_credential(monkeypatch, tmp_path) -> None:
+    from mato_loop_backend.tools import personal_integrations
+
+    item = IntegrationInstance(
+        name="Kalender", integration_type="calendar", adapter_type="caldav",
+        config={"base_url": "https://calendar.example.com", "username": "ada"},
+        credential_id=uuid4(),
+    )
+    call = ToolCall("calendar-update", "customize_matoloop", {
+        "action": "update", "area": "integrations", "integration_id": str(item.id),
+        "changes": {"name": "Privater Kalender"},
+    })
+    context = _context(tmp_path, call)
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kw: {
+        IntegrationSettings: IntegrationSettings(),
+        UserIntegrationSettings: UserIntegrationSettings(instances=[item]),
+    }[model]))
+    update = AsyncMock(return_value=UserIntegrationSettings(instances=[item]))
+    monkeypatch.setattr(personal_integrations.CalDavIntegrationService, "update", update)
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    assert update.await_args.kwargs["password"] is None
+    assert update.await_args.kwargs["owner_id"] == context.session.user_id
+
+
+async def test_personal_integration_delete_disabled_existing_entry(monkeypatch, tmp_path) -> None:
+    from mato_loop_backend.tools import personal_integrations
+
+    item = IntegrationInstance(
+        name="Kalender", integration_type="calendar", adapter_type="caldav",
+        config={"base_url": "https://calendar.example.com", "username": "ada"},
+    )
+    call = ToolCall("calendar-delete", "customize_matoloop", {
+        "action": "delete", "area": "integrations", "integration_id": str(item.id),
+    })
+    context = _context(tmp_path, call)
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kw: {
+        IntegrationSettings: IntegrationSettings(adapter_availability={"caldav": "disabled"}),
+        UserIntegrationSettings: UserIntegrationSettings(instances=[item]),
+    }[model]))
+    delete = AsyncMock()
+    monkeypatch.setattr(personal_integrations.CalDavIntegrationService, "delete", delete)
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    delete.assert_awaited_once_with(context.db, item.id, owner_id=context.session.user_id)
+
+
+async def test_personal_search_selection_rejects_unavailable_provider(monkeypatch, tmp_path) -> None:
+    from mato_loop_backend.settings import UserToolSettings
+    from mato_loop_backend.tools import personal_integrations
+
+    call = ToolCall("search-selection", "customize_matoloop", {
+        "action": "update", "area": "integrations", "adapter_type": "search_selection",
+        "changes": {"primary_provider": "searxng:missing"},
+    })
+    context = _context(tmp_path, call)
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(personal_integrations, "load_effective_integrations", AsyncMock(return_value=IntegrationSettings()))
+    monkeypatch.setattr(personal_integrations, "_load_tools", AsyncMock(return_value=UserToolSettings()))
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata["errorCode"] == "integration.providerUnavailable"
+    save.assert_not_awaited()
+
+    call.arguments["changes"] = {"primary_provider": "no_key"}
+    result = await tool_registry.execute(call, context)
+    assert not result.is_error
+    assert save.await_args.kwargs["user_id"] == context.session.user_id
+
+
+async def test_personal_calendar_default_requires_discovered_owned_resource(monkeypatch, tmp_path) -> None:
+    from mato_loop_backend.integrations.caldav import service as caldav_service
+    from mato_loop_backend.integrations.contracts import IntegrationResource
+    from mato_loop_backend.settings import UserToolSettings
+    from mato_loop_backend.tools import personal_integrations
+
+    item = IntegrationInstance(
+        name="Kalender", integration_type="calendar", adapter_type="caldav",
+        config={"base_url": "https://calendar.example.com", "username": "ada"},
+        credential_id=uuid4(),
+    )
+    call = ToolCall("default-calendar", "customize_matoloop", {
+        "action": "update", "area": "integrations", "adapter_type": "caldav_defaults",
+        "integration_id": str(item.id),
+        "changes": {"default_resource_key": f"calendar:{'a' * 32}"},
+    })
+    context = _context(tmp_path, call)
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kw: {
+        IntegrationSettings: IntegrationSettings(),
+        UserIntegrationSettings: UserIntegrationSettings(instances=[item]),
+    }[model]))
+    monkeypatch.setattr(caldav_service, "load_credential", AsyncMock(return_value=SimpleNamespace(kind="caldav.password")))
+    monkeypatch.setattr(caldav_service, "read_credential", lambda _record: {"password": "hidden"})
+    monkeypatch.setattr(caldav_service, "integration_adapter", lambda *_args: SimpleNamespace(
+        resource_loader=True,
+        resources=AsyncMock(return_value=(
+            IntegrationResource(key=f"calendar:{'b' * 32}", label="Anderer Kalender"),
+        )),
+    ))
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+    monkeypatch.setattr(personal_integrations, "_load_tools", AsyncMock(return_value=UserToolSettings()))
+
+    result = await tool_registry.execute(call, context)
+
+    assert result.metadata["errorCode"] == "validation.invalidChoice"
+    save.assert_not_awaited()
+
+    call.arguments["changes"] = {"default_resource_key": f"calendar:{'b' * 32}"}
+    result = await tool_registry.execute(call, context)
+    assert not result.is_error
+    assert save.await_args.args[1].default_calendar.calendar_key == f"calendar:{'b' * 32}"
+    assert save.await_args.args[1].resource_labels[str(item.id)] == {
+        f"calendar:{'b' * 32}": "Anderer Kalender"
+    }
+    assert save.await_args.kwargs["user_id"] == context.session.user_id
+
+
+async def test_personal_settings_permissions_bind_to_session_owner(tmp_path) -> None:
+    call = ToolCall("settings", "customize_matoloop", {"action": "get", "area": "memory"})
+    context = _context(tmp_path, call)
+    for request in (
+        personal_settings_permission(uuid4(), "memory", "get"),
+        personal_settings_permission(context.session.user_id, "memory", "get"),
+    ):
+        decision = await PermissionPolicy.evaluate(
+            context.db, context.session, request, context.root_files, ToolExecutionPolicy.AUTO
+        )
+        assert decision == (
+            PermissionDecision.ALLOW
+            if str(context.session.user_id) in request.resource_scope
+            else PermissionDecision.DENY
+        )
 
 
 def test_update_user_profile_requires_a_field_and_rejects_blank_values() -> None:
@@ -4687,7 +5186,7 @@ async def test_fetch_transcript_requests_approval_when_policy_becomes_ask(
 
 @pytest.mark.parametrize("tool_name,capability", [
     ("webfetch", "network.fetch"),
-    ("update_user_profile", "settings.user_profile.update"),
+    ("customize_matoloop", "settings.personal.update"),
     ("load_skill", "skills.load"),
 ])
 @pytest.mark.parametrize("ceiling_policy", [ToolExecutionPolicy.ASK, ToolExecutionPolicy.DISABLED])
@@ -4699,7 +5198,7 @@ async def test_effective_dispatch_preserves_ceiling_across_live_settings_reload(
     skill = SkillDefinition(name="Review", description="Review", instructions="Review the text.")
     arguments = {
         "webfetch": {"url": "https://example.test"},
-        "update_user_profile": {"preferred_name": "Changed"},
+        "customize_matoloop": {"action": "update", "area": "memory", "changes": {"enabled": False}},
         "load_skill": {"skill_id": str(skill.id)},
     }[tool_name]
     call = ToolCall("child-call", tool_name, arguments)
@@ -4736,9 +5235,10 @@ async def test_effective_dispatch_preserves_ceiling_across_live_settings_reload(
         assert context.ask_handler.await_args.args[0].capability == capability
     else:
         context.ask_handler.assert_not_awaited()
-        assert tool_name not in tool_registry.effective(
+        offered = tool_registry.effective(
             IntegrationSettings(), webfetch_enabled=True, tool_settings=context.tool_settings
         ).tools
+        assert (tool_name in offered) == (tool_name == "customize_matoloop")
     assert "delegation" not in str(context.tool_settings.model_dump(mode="json"))
 
 

@@ -166,7 +166,10 @@ def test_every_builtin_tool_is_expected_by_a_live_case() -> None:
     }
 
     # todo_write is covered by dedicated deterministic tests and a separate model evaluation.
-    separately_evaluated = {"todo_write", "variable_read", "variable_write"}
+    separately_evaluated = {
+        "todo_write", "variable_read", "variable_write",
+        "update_agent_identity", "update_user_profile",  # Legacy direct calls, no longer offered.
+    }
     assert set(tool_registry._definitions) - set(PROJECT_CODING_TOOL_NAMES) - separately_evaluated <= covered
 
 

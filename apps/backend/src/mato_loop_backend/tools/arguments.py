@@ -878,6 +878,53 @@ class UpdateUserProfileArguments(ToolArguments):
         return self
 
 
+class PersonalSettingsArguments(ToolArguments):
+    action: Literal["list", "get", "update", "create", "delete"]
+    area: Literal["memory", "user_profile", "agent_identity", "integrations", "variables"] | None = None
+    changes: dict[str, Any] | None = Field(default=None, max_length=20)
+    model_scope: Literal[
+        "current_model", "private_models", "public_models", "both_models"
+    ] = "current_model"
+    integration_id: UUID | None = None
+    adapter_type: str | None = None
+    variable_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def validate_operation(self) -> PersonalSettingsArguments:
+        if self.action == "list":
+            if self.area is not None or self.changes is not None or self.integration_id is not None:
+                raise ValueError("list does not take an area or changes")
+        elif self.area is None:
+            raise ValueError("area is required")
+        elif self.action in {"create", "delete"} and self.area not in {"integrations", "variables"}:
+            raise ValueError("only integrations and variables can be created or deleted")
+        elif self.action in {"create", "update"} and not self.changes:
+            raise ValueError("changes are required")
+        elif self.action in {"get", "delete"} and self.changes is not None:
+            raise ValueError("changes are not allowed")
+        if self.integration_id is not None and self.area != "integrations":
+            raise ValueError("integration_id requires the integrations area")
+        if self.area == "integrations" and self.action in {"update", "delete"} and self.integration_id is None and self.adapter_type != "search_selection":
+            raise ValueError("integration_id is required")
+        if self.adapter_type == "search_selection" and self.action not in {"get", "update"}:
+            raise ValueError("search selection can only be read or updated")
+        if self.adapter_type == "caldav_defaults" and (self.action not in {"get", "update"} or self.integration_id is None):
+            raise ValueError("CalDAV defaults require an integration")
+        if self.action == "create" and (self.integration_id is not None or self.variable_id is not None):
+            raise ValueError("integration_id is assigned by the server")
+        if self.adapter_type is not None and self.area != "integrations":
+            raise ValueError("adapter_type requires integrations")
+        if self.area == "integrations" and self.action == "create" and self.adapter_type is None:
+            raise ValueError("adapter_type is required")
+        if self.variable_id is not None and self.area != "variables":
+            raise ValueError("variable_id requires variables")
+        if self.area == "variables" and self.action in {"update", "delete"} and self.variable_id is None:
+            raise ValueError("variable_id is required")
+        if self.model_scope != "current_model" and self.area != "user_profile":
+            raise ValueError("model_scope applies only to the user profile")
+        return self
+
+
 class BuildSkillArguments(ToolArguments):
     brief: str = Field(
         min_length=1,

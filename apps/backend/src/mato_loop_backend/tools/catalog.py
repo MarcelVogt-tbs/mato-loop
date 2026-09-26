@@ -10,6 +10,7 @@ import mato_loop_backend.tools.identity as tools_identity
 import mato_loop_backend.tools.interaction as tools_interaction
 import mato_loop_backend.tools.media as tools_media
 import mato_loop_backend.tools.memory as tools_memory
+import mato_loop_backend.tools.personal_settings as tools_personal_settings
 import mato_loop_backend.tools.sessions as tools_sessions
 import mato_loop_backend.tools.skills as tools_skills
 import mato_loop_backend.tools.web as tools_web
@@ -176,14 +177,15 @@ tool_registry = ToolRegistry(
         tools_skills.EDIT_SKILL,
         tools_interaction.VARIABLE_READ,
         tools_interaction.VARIABLE_WRITE,
+        tools_interaction.SECRET_INPUT,
         tools_identity.UPDATE_AGENT_IDENTITY,
         tools_identity.UPDATE_USER_PROFILE,
+        tools_personal_settings.CUSTOMIZE_MATOLOOP,
     ],
     operation_definitions=[
         tools_files.APPLY_PATCH,
         tools_computer.GET_SYSTEM_INFO,
         tools_computer.CHANGE_DIRECTORY,
-        tools_interaction.SECRET_INPUT,
         tools_computer.SHELL_RUN,
     ],
     group_actions={"working_directory": (_WORKING_DIRECTORY_EXTERNAL,)},
