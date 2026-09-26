@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import secrets
 import time
 from functools import partial
@@ -690,41 +691,48 @@ async def execute_loop_body(
             await agent_run_support._publish_run_phase(run.id, "finalizing")
             return
 
-        batch = await execute_tool_batch(
-            cls, db, run, chat_session, assistant, normalized_calls, serialized_calls,
-            toolset=effective_toolset, offered_names=offered_tool_names,
-            root_files=root_files, memory_state=memory_state,
-            model=model, provider=provider, ai_settings=ai_settings,
-            runtime_settings=runtime_settings, tool_settings=tool_settings,
-            limits=instance_limits, integration_settings=integration_settings,
-            identity=agent_identity, agent_profile_id=agent_profile_id,
-            skill_state=skill_state, execution_client=execution_client,
-            records=records, projection=projection, schemas=schemas,
-            trust_level=model_trust_level,
-            excluded_memory_content_hashes=excluded_memory_content_hashes,
-            delegated=delegated, max_tool_calls=tool_call_limit,
-            rejected_batch_code=rejected_batch_code,
-            truncated_batch=truncated_batch,
-            tool_batch_exceeds_budget=tool_batch_exceeds_budget,
-            repeated_tool_call_repair_available=repeated_tool_call_repair_available,
-            failed_tool_call_signatures=failed_tool_call_signatures,
-            retried_transient_reads=retried_transient_reads,
-            successful_research_calls=successful_research_calls,
-            research_sources=research_sources, research_source_titles=research_source_titles,
-            openscad_pending_paths=openscad_pending_paths,
-            session_read_cursors=session_read_cursors,
-            one_time_secrets=one_time_secrets,
-            ephemeral_images=ephemeral_images, live_tool_calls=live_tool_calls,
-            model_request=model_request, diagnostics_active=diagnostics_active,
-            next_helper_request=next_helper_request,
-            count_helper_request=count_helper_request,
-            attachment_service=AttachmentService,
-            research_tool_calls_used=research_tool_calls_used, research_used=research_used,
-            openscad_render_pending=openscad_render_pending,
-            openscad_render_retries=openscad_render_retries,
-            openscad_source_review_pending=openscad_source_review_pending,
-            openscad_source_review_retries=openscad_source_review_retries,
-        )
+        # ponytail: finish the issued batch before a redirected stop; explicit stops stay immediate.
+        cls._tool_active_runs.add(run.id)
+        try:
+            batch = await execute_tool_batch(
+                cls, db, run, chat_session, assistant, normalized_calls, serialized_calls,
+                toolset=effective_toolset, offered_names=offered_tool_names,
+                root_files=root_files, memory_state=memory_state,
+                model=model, provider=provider, ai_settings=ai_settings,
+                runtime_settings=runtime_settings, tool_settings=tool_settings,
+                limits=instance_limits, integration_settings=integration_settings,
+                identity=agent_identity, agent_profile_id=agent_profile_id,
+                skill_state=skill_state, execution_client=execution_client,
+                records=records, projection=projection, schemas=schemas,
+                trust_level=model_trust_level,
+                excluded_memory_content_hashes=excluded_memory_content_hashes,
+                delegated=delegated, max_tool_calls=tool_call_limit,
+                rejected_batch_code=rejected_batch_code,
+                truncated_batch=truncated_batch,
+                tool_batch_exceeds_budget=tool_batch_exceeds_budget,
+                repeated_tool_call_repair_available=repeated_tool_call_repair_available,
+                failed_tool_call_signatures=failed_tool_call_signatures,
+                retried_transient_reads=retried_transient_reads,
+                successful_research_calls=successful_research_calls,
+                research_sources=research_sources, research_source_titles=research_source_titles,
+                openscad_pending_paths=openscad_pending_paths,
+                session_read_cursors=session_read_cursors,
+                one_time_secrets=one_time_secrets,
+                ephemeral_images=ephemeral_images, live_tool_calls=live_tool_calls,
+                model_request=model_request, diagnostics_active=diagnostics_active,
+                next_helper_request=next_helper_request,
+                count_helper_request=count_helper_request,
+                attachment_service=AttachmentService,
+                research_tool_calls_used=research_tool_calls_used, research_used=research_used,
+                openscad_render_pending=openscad_render_pending,
+                openscad_render_retries=openscad_render_retries,
+                openscad_source_review_pending=openscad_source_review_pending,
+                openscad_source_review_retries=openscad_source_review_retries,
+            )
+        finally:
+            cls._tool_active_runs.discard(run.id)
+        if run.id in cls._redirected_runs and run.id in cls._user_cancelled_runs:
+            raise asyncio.CancelledError
         research_tool_calls_used = batch.research_tool_calls_used
         research_used = batch.research_used
         openscad_render_pending = batch.openscad_render_pending

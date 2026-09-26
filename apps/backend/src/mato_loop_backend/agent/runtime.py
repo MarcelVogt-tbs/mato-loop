@@ -129,6 +129,7 @@ class AgentRuntime:
     _continuations: dict[UUID, set[asyncio.Event]] = {}
     _pending_continuations: set[UUID] = set()
     _provider_active_runs: set[UUID] = set()
+    _tool_active_runs: set[UUID] = set()
     _interrupted_runs: set[UUID] = set()
 
     @staticmethod
@@ -523,7 +524,11 @@ class AgentRuntime:
         cls._user_cancelled_runs.add(run_id)
         if redirected:
             cls._redirected_runs.add(run_id)
-        if run_id in cls._cancellable_runs and task.cancelling() == 0:
+        if (
+            run_id in cls._cancellable_runs
+            and (not redirected or run_id not in cls._tool_active_runs)
+            and task.cancelling() == 0
+        ):
             task.cancel()
         return True
 
@@ -1110,6 +1115,7 @@ class AgentRuntime:
             cls._continuations.pop(run_id, None)
             cls._pending_continuations.discard(run_id)
             cls._provider_active_runs.discard(run_id)
+            cls._tool_active_runs.discard(run_id)
 
     @classmethod
     async def _execute_loop(

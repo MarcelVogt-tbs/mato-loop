@@ -331,6 +331,9 @@ def _tool_messages(db) -> list[Message]:
 def _clear_continuation_test_state(run_id) -> None:
     AgentRuntime._tasks.pop(run_id, None)
     AgentRuntime._cancellable_runs.discard(run_id)
+    AgentRuntime._user_cancelled_runs.discard(run_id)
+    AgentRuntime._redirected_runs.discard(run_id)
+    AgentRuntime._tool_active_runs.discard(run_id)
     AgentRuntime._continuations.pop(run_id, None)
     AgentRuntime._pending_continuations.discard(run_id)
     AgentRuntime._provider_active_runs.discard(run_id)
@@ -2309,6 +2312,42 @@ async def test_direct_message_waits_for_active_tool(monkeypatch) -> None:
         assert "Change after tool" in str(requests[-1]["messages"])
     finally:
         release_tool.set()
+        _clear_continuation_test_state(run.id)
+
+
+async def test_redirect_waits_for_active_tool_result_before_cancelling(monkeypatch) -> None:
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content="", tool_calls=[_search_call("search-1", "Current")], finish_reason="tool_calls")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    tool_started = asyncio.Event()
+    release_tool = asyncio.Event()
+
+    async def execute(*_args, **_kwargs):
+        tool_started.set()
+        await release_tool.wait()
+        return _search_result()
+
+    tool_registry._execute_definition.side_effect = execute
+    task = asyncio.create_task(AgentRuntime._execute_loop(db, run))
+    AgentRuntime._tasks[run.id] = task
+    AgentRuntime._cancellable_runs.add(run.id)
+    try:
+        await asyncio.wait_for(tool_started.wait(), timeout=5)
+        assert AgentRuntime.cancel(run.id, redirected=True)
+        assert task.cancelling() == 0
+        release_tool.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+        assert len(requests) == 1
+        assert len(_tool_messages(db)) == 1
+        assert SOURCE_ID in _tool_messages(db)[0].content
+    finally:
+        release_tool.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         _clear_continuation_test_state(run.id)
 
 

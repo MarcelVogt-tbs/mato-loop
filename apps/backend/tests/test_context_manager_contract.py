@@ -3369,6 +3369,51 @@ async def test_long_turn_compaction_keeps_pending_call_out_of_summary() -> None:
     _assert_whole_tool_pairs(projection.messages)
 
 
+async def test_direct_messages_during_tool_batch_keep_real_results_as_references() -> None:
+    session = _session()
+    run_id = uuid4()
+    request = _message(session.id, "user", "Prepare the machine")
+    assistant = _message(session.id, "assistant", "")
+    assistant.provider_data = {"_matoloop": {"runId": str(run_id)}}
+    assistant.tool_calls = [
+        {"id": call_id, "name": "shell_run", "arguments": {}}
+        for call_id in ("check-1", "check-2")
+    ]
+    first = _message(session.id, "user", "Keep the download running")
+    second = _message(session.id, "user", "Check the result afterwards")
+    for message in (first, second):
+        message.provider_data = {"_matoloop": {"continuationRunId": str(run_id)}}
+    result_one = _message(session.id, "tool", '{"exitCode":0,"stdout":"download complete"}')
+    result_two = _message(session.id, "tool", '{"exitCode":0,"stdout":"checksum verified"}')
+    result_one.tool_call_id = "check-1"
+    result_two.tool_call_id = "check-2"
+    records = [request, assistant, first, result_one, second, result_two]
+    original_ids = [item.id for item in records]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+
+    projection = await _build_context(
+        db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+        model=_model(context_window_tokens=16_000), settings=_settings(), summarize=AsyncMock(),
+    )
+
+    assert [item.id for item in records] == original_ids
+    assert [item["role"] for item in projection.messages[1:]] == [
+        "user", "assistant", "tool", "tool", "user", "user",
+    ]
+    references = [
+        json.loads(item["content"])["toolResultReference"]["arguments"]["message_id"]
+        for item in projection.messages if item["role"] == "tool"
+    ]
+    assert references == [
+        str(result_one.id), str(result_two.id),
+    ]
+    assert [item["content"] for item in projection.messages if item["role"] == "user"] == [
+        request.content, first.content, second.content,
+    ]
+    _assert_whole_tool_pairs(projection.messages)
+
+
 def test_compaction_never_covers_pending_parallel_batch_or_later_history() -> None:
     session = _session()
     request = _message(session.id, "user", "Arbeite weiter")

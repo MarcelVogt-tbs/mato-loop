@@ -27,6 +27,37 @@ SummaryCallback = Callable[[str, int], Awaitable[SummaryResult]]
 EstimateCallback = Callable[[list[dict[str, Any]]], Awaitable[int]]
 
 
+def _model_order(records: list[Message]) -> list[Message]:
+    """Keep completed tool batches together when direct messages arrive during execution."""
+    ordered = []
+    index = 0
+    while index < len(records):
+        assistant = records[index]
+        ordered.append(assistant)
+        index += 1
+        if assistant.role != "assistant" or not assistant.tool_calls:
+            continue
+        run_id = (assistant.provider_data or {}).get("_matoloop", {}).get("runId")
+        call_ids = {str(call["id"]) for call in assistant.tool_calls if call.get("id")}
+        if not run_id or not call_ids:
+            continue
+        results = []
+        direct_messages = []
+        while index < len(records):
+            item = records[index]
+            if item.role == "tool" and item.tool_call_id in call_ids:
+                results.append(item)
+            elif (item.role == "user" and
+                  (item.provider_data or {}).get("_matoloop", {}).get("continuationRunId") == run_id):
+                direct_messages.append(item)
+            else:
+                break
+            index += 1
+        ordered.extend(results)
+        ordered.extend(direct_messages)
+    return ordered
+
+
 class ContextManager:
     @staticmethod
     async def build(
@@ -47,7 +78,8 @@ class ContextManager:
         attachment_service: AttachmentService | None = None,
     ) -> ContextProjection:
         """Budget original projections with raw request estimates, before slack and safety."""
-        records = [item for item in records if item.error_code is None]
+        # Reorder only the model's view; persisted timestamps and message order stay intact.
+        records = _model_order([item for item in records if item.error_code is None])
         reserved_output_tokens = generation_reserve(model)
         input_budget = raw_input_budget(max(
             0,
