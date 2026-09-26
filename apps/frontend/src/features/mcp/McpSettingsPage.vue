@@ -7,8 +7,7 @@
         <p class="text-body2 app-muted q-mb-none q-mt-xs">Externe Tools über das Model Context Protocol bereitstellen.</p>
       </div>
       <div class="settings-scope-actions row items-center col-auto">
-        <q-checkbox v-if="auth.isAdmin" v-model="shared" label="Global" />
-        <q-btn color="primary" unelevated no-caps no-wrap icon="add" label="MCP-Server hinzufügen" :disable="servers.loading || (personalUnavailable && !shared)" @click="openCreate" />
+        <q-btn color="primary" unelevated no-caps no-wrap icon="add" label="MCP-Server hinzufügen" :disable="servers.loading || (personalUnavailable && !auth.isAdmin)" @click="openCreate" />
       </div>
     </header>
 
@@ -57,6 +56,7 @@
               <q-item-label class="text-weight-medium">{{ server.name }}</q-item-label>
               <q-badge outline color="grey-7" :label="server.scope === 'instance' ? 'Global' : 'Persönlich'" />
               <q-chip dense :color="server.enabled ? 'positive' : 'grey-7'" text-color="white">{{ server.enabled ? 'Aktiv' : 'Deaktiviert' }}</q-chip>
+              <q-chip v-if="server.available === false" dense outline color="warning">Nicht verfügbar</q-chip>
               <q-chip v-if="server.status && server.status !== 'ready'" dense outline color="warning">{{ statusLabel(server.status) }}</q-chip>
             </div>
             <q-item-label caption lines="1">{{ server.endpoint }}</q-item-label>
@@ -64,6 +64,7 @@
           </q-item-section>
           <q-item-section side top>
             <div class="row items-center no-wrap q-gutter-xs">
+              <q-toggle dense :model-value="server.enabled" :aria-label="`${server.name} ${server.enabled ? 'deaktivieren' : 'aktivieren'}`" :disable="!canEdit(server) || togglingId !== null" @update:model-value="toggleServer(server, $event)" />
               <q-btn flat dense :round="$q.screen.lt.md" no-caps icon="construction" :label="$q.screen.gt.sm ? 'Tools' : undefined" aria-label="Tools anzeigen" :disable="!canEdit(server)" :to="{ name: 'settings-mcp-tools', params: { serverId: server.id }, query: { scope: server.scope } }" />
               <template v-if="$q.screen.lt.md">
                 <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${server.name}`" :loading="refreshingId === server.id">
@@ -118,24 +119,19 @@ const auth = useAuthStore()
 const dialogOpen = ref(false)
 const selectedServer = ref(null)
 const personalAllowed = ref(false)
-const shared = ref(false)
 const refreshingId = ref(null)
 const removingId = ref(null)
+const togglingId = ref(null)
 const personalBlocked = computed(() => servers.settingsLoaded && !servers.personalAllowed)
 const personalUnavailable = computed(() => (
   !servers.settingsLoaded || servers.settingsLoadFailed || !servers.personalAllowed
 ))
 const settingsDirty = computed(() => servers.settingsLoaded && personalAllowed.value !== servers.personalAllowed)
 
-const canEdit = (server) => (server.scope === 'instance' ? auth.isAdmin : !personalUnavailable.value)
-function openCreate() { servers.selectScope(shared.value ? 'instance' : 'personal'); selectedServer.value = null; dialogOpen.value = true }
+const canEdit = (server) => server.available !== false && (server.scope === 'instance' ? auth.isAdmin : !personalUnavailable.value)
+function openCreate() { servers.selectScope(personalUnavailable.value ? 'instance' : 'personal'); selectedServer.value = null; dialogOpen.value = true }
 function openEdit(server) { servers.selectScope(server.scope); selectedServer.value = server; dialogOpen.value = true }
-function onDialogChange(open) {
-  if (!open) {
-    shared.value = false
-    void load()
-  }
-}
+function onDialogChange(open) { if (!open) void load() }
 function statusLabel(status) {
   return { unavailable: 'Nicht erreichbar', error: 'Fehler', stale: 'Tools veraltet' }[status] || status
 }
@@ -164,6 +160,18 @@ async function refreshServer(server) {
     await load()
     $q.notify({ type: 'positive', message: 'MCP-Tools aktualisiert' })
   } finally { refreshingId.value = null }
+}
+async function toggleServer(server, enabled) {
+  togglingId.value = server.id
+  try {
+    await servers.setServerEnabled(server.id, enabled, server.scope)
+    await load()
+    $q.notify({ type: 'positive', message: enabled ? 'MCP-Server aktiviert' : 'MCP-Server deaktiviert' })
+  } catch {
+    // The central API interceptor displays the error.
+  } finally {
+    togglingId.value = null
+  }
 }
 async function removeServer(server) {
   if (!await confirm(`MCP-Server „${server.name}“ vollständig löschen?`, 'MCP-Server löschen', { okLabel: 'Löschen' })) return

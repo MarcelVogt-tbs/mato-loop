@@ -20,6 +20,12 @@
       <q-separator />
       <q-form ref="formRef" class="col column no-wrap">
         <q-card-section class="col scroll q-gutter-md">
+          <q-checkbox
+            v-if="auth.isAdmin && !isEditing && globalAvailable"
+            :model-value="integrations.scope === 'instance'"
+            label="Global"
+            @update:model-value="switchScope"
+          />
           <q-select
             v-model="form.integration_type"
             outlined
@@ -279,6 +285,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
+import { useAuthStore } from 'stores/auth'
 import BrowserSetupDialog from 'src/features/browser/BrowserSetupDialog.vue'
 
 defineOptions({ name: 'IntegrationConfigDialog' })
@@ -291,6 +298,7 @@ const emit = defineEmits(['update:modelValue'])
 
 const $q = useQuasar()
 const integrations = useIntegrationStore()
+const auth = useAuthStore()
 const executionAgents = useExecutionAgentStore()
 const formRef = ref(null)
 const saving = ref(false)
@@ -325,6 +333,7 @@ const integrationTypes = computed(() => allIntegrationTypes.filter((type) => {
   const adapterType = PROVIDER_DEFAULTS[type.value].provider
   return integrations.adapterAvailable(adapterType)
 }))
+const globalAvailable = computed(() => integrations.adapterAvailable(form.provider_type, 'instance'))
 const providerTypes = computed(() => {
   const preset = PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search
   return [{ label: preset.label, value: preset.provider }]
@@ -393,6 +402,14 @@ function selectIntegrationType(type) {
   if (type === 'coding' && !form.username) form.username = 'opencode'
   invalidateDiscovery()
   if (['openscad', 'browser'].includes(type)) void fetchComputers()
+}
+
+function switchScope(global) {
+  integrations.selectScope(global ? 'instance' : 'personal')
+  if (!integrationTypes.value.some((item) => item.value === form.integration_type)) {
+    form.integration_type = integrationTypes.value[0]?.value || 'search'
+    selectIntegrationType(form.integration_type)
+  }
 }
 
 async function fetchComputers() {

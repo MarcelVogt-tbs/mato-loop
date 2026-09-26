@@ -16,6 +16,17 @@ describe('agent profiles store', () => {
     vi.clearAllMocks()
   })
 
+  it('switches one custom profile without submitting its definition', async () => {
+    api.patch.mockResolvedValue({ data: {} })
+    const store = useAgentProfileStore()
+
+    await store.setAgentEnabled('agent-id', false, 'instance')
+
+    expect(api.patch).toHaveBeenCalledWith(
+      '/agent-profiles/agent-id/enabled', { enabled: false }, { params: { scope: 'instance' } }
+    )
+  })
+
   it('loads selectable agents and the personal-agent gate', async () => {
     const agents = [
       { id: 'global-1', name: 'Recherche', scope: 'global' },

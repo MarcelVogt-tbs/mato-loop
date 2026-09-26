@@ -9,14 +9,6 @@
         </p>
       </div>
       <div class="settings-scope-actions row items-center col-auto">
-        <q-toggle
-          class="col-auto"
-          v-if="auth.isAdmin"
-          :model-value="agents.personalAgentsEnabled"
-          label="Persönliche Agenten"
-          @update:model-value="setPersonalAgentsEnabled"
-        />
-        <q-checkbox v-if="auth.isAdmin" v-model="shared" label="Global" />
         <q-btn
           v-if="auth.isAdmin || !personalBlocked"
           class="col-auto"
@@ -26,11 +18,26 @@
           color="primary"
           icon="add"
           label="Neues Profil erstellen"
-          :disable="agents.loading || (personalBlocked && !shared)"
-          :to="{ name: 'settings-agent-create', query: { scope: shared ? 'instance' : 'personal' } }"
+          :disable="agents.loading"
+          :to="{ name: 'settings-agent-create' }"
         />
       </div>
     </header>
+
+    <q-card v-if="auth.isAdmin" flat class="app-surface-tonal q-mb-md">
+      <q-card-section class="row items-center justify-between q-gutter-md">
+        <div>
+          <div class="text-subtitle2 text-weight-bold">Persönliche Agentenprofile</div>
+          <div class="text-caption app-muted">Erlaubt Benutzern, eigene Profile zu erstellen und zu verwenden.</div>
+        </div>
+        <q-toggle
+          :model-value="agents.personalAgentsEnabled"
+          label="Erlaubt"
+          :disable="gateSaving"
+          @update:model-value="setPersonalAgentsEnabled"
+        />
+      </q-card-section>
+    </q-card>
 
     <q-banner v-if="personalBlocked" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="person" color="primary" /></template>
@@ -59,6 +66,7 @@
           <q-item-section>
             <q-item-label class="text-subtitle1 text-weight-medium">
               {{ agent.name }} <q-badge outline color="grey-7" :label="agent.scope === 'instance' ? 'Global' : 'Persönlich'" />
+              <q-badge v-if="agent.enabled === false" outline color="grey-7" label="Deaktiviert" />
               <q-badge v-if="agent.effective === false" outline color="warning" label="Nicht verfügbar" />
             </q-item-label>
             <q-item-label caption class="text-body2 q-mt-xs">
@@ -70,6 +78,13 @@
           </q-item-section>
           <q-item-section side top>
             <div class="row no-wrap q-gutter-xs">
+              <q-toggle
+                dense
+                :model-value="agent.enabled !== false"
+                :aria-label="`${agent.name} ${agent.enabled === false ? 'aktivieren' : 'deaktivieren'}`"
+                :disable="agent.protected || switchingId === agent.id || agents.saving || (agent.scope === 'instance' ? !auth.isAdmin : personalBlocked)"
+                @update:model-value="setAgentEnabled(agent, $event)"
+              />
               <q-btn
                 flat
                 round
@@ -117,10 +132,11 @@ const { confirm } = useConfirm()
 const agents = useAgentProfileStore()
 const auth = useAuthStore()
 const showEditor = computed(() => ['settings-agent-create', 'settings-agent-edit'].includes(route.name))
-const shared = ref(false)
 const storedAgents = ref([])
+const switchingId = ref(null)
+const gateSaving = ref(false)
 const visibleAgents = computed(() => [
-  ...agents.agents.filter((agent) => agent.scope !== 'integration'),
+  ...agents.manageableAgents.filter((agent) => agent.scope !== 'integration'),
   ...storedAgents.value
 ])
 const personalBlocked = computed(() => !agents.personalAgentsEnabled)
@@ -154,12 +170,28 @@ async function removeAgent(agent) {
 }
 
 async function setPersonalAgentsEnabled(enabled) {
+  gateSaving.value = true
   try {
     await agents.setPersonalAgentsEnabled(enabled)
     await load()
     $q.notify({ type: 'positive', message: 'Einstellung gespeichert' })
   } catch {
     // The central Axios interceptor displays the error.
+  } finally {
+    gateSaving.value = false
+  }
+}
+
+async function setAgentEnabled(agent, enabled) {
+  switchingId.value = agent.id
+  try {
+    await agents.setAgentEnabled(agent.id, enabled, agent.scope)
+    await load()
+    $q.notify({ type: 'positive', message: enabled ? 'Agent aktiviert' : 'Agent deaktiviert' })
+  } catch {
+    // The central Axios interceptor displays the error.
+  } finally {
+    switchingId.value = null
   }
 }
 
@@ -167,9 +199,6 @@ onMounted(() => {
   if (!showEditor.value) void load()
 })
 watch(showEditor, (editing) => {
-  if (!editing) {
-    shared.value = false
-    void load()
-  }
+  if (!editing) void load()
 })
 </script>

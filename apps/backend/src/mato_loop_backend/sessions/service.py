@@ -177,7 +177,9 @@ async def validate_agent_profile(
     if profile_id in {None, GENERAL_PROFILE_ID}:
         return
     try:
-        await load_agent_profile(db, user_id, profile_id, for_update=True)
+        profile = await load_agent_profile(db, user_id, profile_id, for_update=True)
+        if not profile.enabled:
+            raise AgentProfileUnavailable
     except AgentProfileUnavailable as exc:
         raise SessionServiceError(
             409,

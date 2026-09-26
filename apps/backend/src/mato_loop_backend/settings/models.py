@@ -273,6 +273,7 @@ class AgentProfile(BaseModel):
     )
 
     id: UUID = Field(default_factory=uuid4)
+    enabled: StrictBool = True
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=500)
     persona_id: UUID | None = None
@@ -431,6 +432,7 @@ class CustomAgentProfile(BaseModel):
     )
 
     id: UUID = Field(default_factory=uuid4)
+    enabled: StrictBool = True
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(max_length=500)
     base_profile_id: UUID
@@ -461,6 +463,7 @@ def resolve_agent_profile(
     values = apply_profile_overrides(base, profile.overrides).model_dump()
     values.update(
         id=profile.id,
+        enabled=profile.enabled,
         name=profile.name,
         description=profile.description,
         base_profile_id=profile.base_profile_id,

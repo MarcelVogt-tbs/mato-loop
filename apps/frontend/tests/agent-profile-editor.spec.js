@@ -3,7 +3,7 @@ import { createApp, h, nextTick } from 'vue'
 import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, QAvatar, QBadge, QBanner, QBtn, QBtnToggle, QCard, QCardSection, QChip, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QList, QSelect, QSeparator, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar, QToolbarTitle } from 'quasar'
+import { Quasar, QAvatar, QBadge, QBanner, QBtn, QBtnToggle, QCard, QCardSection, QCheckbox, QChip, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QList, QSelect, QSeparator, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar, QToolbarTitle } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), put: vi.fn() } }))
@@ -68,7 +68,7 @@ async function mountEditor(path = '/agents/agent?scope=personal', extraAgents = 
     default: ({ Component }) => h(Component, { ref: (value) => { page = value?.$?.setupState } })
   }) })
   const pinia = createPinia()
-  app.use(pinia).use(router).use(Quasar, { components: { QAvatar, QBadge, QBanner, QBtn, QBtnToggle, QCard, QCardSection, QChip, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QList, QSelect, QSeparator, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar, QToolbarTitle } })
+  app.use(pinia).use(router).use(Quasar, { components: { QAvatar, QBadge, QBanner, QBtn, QBtnToggle, QCard, QCardSection, QCheckbox, QChip, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QList, QSelect, QSeparator, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar, QToolbarTitle } })
   useAuthStore(pinia).isAdmin = isAdmin
   app.config.globalProperties.$q.notify = vi.fn()
   app.mount(root)
@@ -109,6 +109,16 @@ it('starts a profile from Allgemein without copying fields or honoring copyFrom'
   page.applyInheritedValues()
   expect(page.form).toMatchObject({ instructions: 'Eigene Aufgabe', maxToolCalls: null, delegationEnabled: true })
   expect(page.requestPayload().overrides).toEqual({ instructions: 'Eigene Aufgabe' })
+})
+
+it('chooses global ownership in the profile creation form', async () => {
+  const page = await mountEditor('/agents/new')
+
+  expect(root.querySelector('.q-checkbox')?.textContent).toContain('Global')
+  expect(page.scope).toBe('personal')
+  await page.switchCreationScope(true)
+  expect(page.scope).toBe('instance')
+  expect(api.get).toHaveBeenCalledWith('/agent-profiles', { params: { scope: 'instance' } })
 })
 
 it('shows only the disabled state for a direct personal editor link', async () => {

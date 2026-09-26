@@ -723,6 +723,23 @@ async def test_start_rejects_unavailable_model_before_persisting(monkeypatch) ->
     db.commit.assert_not_awaited()
 
 
+async def test_start_rejects_disabled_profile_before_persisting(monkeypatch) -> None:
+    from mato_loop_backend.settings.models import AgentProfile
+
+    profile = AgentProfile(name="Paused", instructions="Work.", enabled=False)
+    monkeypatch.setattr(mock_agent_runtime, "load_agent_profile", AsyncMock(return_value=profile))
+    session = ChatSession(id=uuid4(), user_id=uuid4(), agent_profile_id=profile.id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [session, None, True]
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await AgentRuntime.start(db, session, "Work")
+
+    assert exc_info.value.code == "agentProfile.selectedUnavailable"
+    db.add_all.assert_not_called()
+    db.commit.assert_not_awaited()
+
+
 async def test_start_switches_profile_with_run_and_discards_session_grants(monkeypatch) -> None:
     from mato_loop_backend.settings.models import AgentProfile
 

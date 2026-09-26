@@ -7,6 +7,7 @@ const scopeConfig = (scope) => ({ params: { scope } })
 export const useAgentProfileStore = defineStore('agent-profiles', {
   state: () => ({
     agents: [],
+    manageableAgents: [],
     defaultAgentProfileId: null,
     groups: [],
     groupsByTrust: { private: [], public: [] },
@@ -54,6 +55,7 @@ export const useAgentProfileStore = defineStore('agent-profiles', {
           ? await api.get('/agent-profiles', scopeConfig(scope))
           : await api.get('/agent-profiles')
         this.agents = Array.isArray(data?.effectiveAgents) ? data.effectiveAgents : []
+        this.manageableAgents = Array.isArray(data?.agents) ? data.agents : this.agents
         this.defaultAgentProfileId = data?.defaultAgentProfileId || null
         this.groups = Array.isArray(data?.groups)
           ? data.groups
@@ -132,6 +134,9 @@ export const useAgentProfileStore = defineStore('agent-profiles', {
       } finally {
         this.saving = false
       }
+    },
+    async setAgentEnabled(id, enabled, scope) {
+      await api.patch(`/agent-profiles/${id}/enabled`, { enabled }, scopeConfig(scope))
     },
     async setPersonalAgentsEnabled(enabled) {
       const { data } = await api.patch('/agent-profiles/personal-enabled', { enabled })

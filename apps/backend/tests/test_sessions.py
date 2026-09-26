@@ -72,11 +72,24 @@ from mato_loop_backend.settings import (
     UserPreferences,
 )
 from mato_loop_backend.settings.models import (
+    AgentProfile,
     AgentProfileAccessOverrides,
     LlmProviderConfig,
     ModelAvailability,
     ModelConfig,
 )
+
+
+async def test_disabled_agent_profile_cannot_be_selected_for_a_new_session(monkeypatch) -> None:
+    from mato_loop_backend.sessions import service as session_service
+
+    profile = AgentProfile(name="Paused", instructions="Work.", enabled=False)
+    monkeypatch.setattr(session_service, "load_agent_profile", AsyncMock(return_value=profile))
+
+    with pytest.raises(SessionServiceError) as exc_info:
+        await session_service.validate_agent_profile(AsyncMock(), uuid4(), profile.id)
+
+    assert exc_info.value.code == "agentProfile.selectedUnavailable"
 
 
 def _user() -> UserAccount:

@@ -111,6 +111,9 @@ export const useMcpServerStore = defineStore('mcp-servers', {
       }
       return data
     },
+    async setServerEnabled(id, enabled, scope) {
+      return (await api.patch(`/integrations/${id}/enabled`, { enabled }, branchConfig(scope))).data
+    },
     async removeServer(id) {
       const scope = this.scope
       await api.delete(`/mcp/servers/${id}`, branchConfig(scope))

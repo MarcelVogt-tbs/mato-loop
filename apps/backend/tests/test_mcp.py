@@ -1087,7 +1087,9 @@ async def test_visible_mcp_servers_include_only_shared_and_owned_entries(monkeyp
         "config": {"endpoint": "https://mine.example/mcp", "tools": []},
     })
     user_id = uuid4()
-    load = AsyncMock(return_value=IntegrationSettings(instances=[shared]))
+    load = AsyncMock(return_value=IntegrationSettings(
+        instances=[shared], adapter_availability={"mcp_streamable_http": "instance_only"}
+    ))
     load_optional = AsyncMock(return_value=UserIntegrationSettings(instances=[personal]))
     monkeypatch.setattr(SettingsStore, "load", load)
     monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
@@ -1098,4 +1100,5 @@ async def test_visible_mcp_servers_include_only_shared_and_owned_entries(monkeyp
         ("Shared", "instance"), ("Mine", "personal")
     ]
     assert all("bearerToken" not in item for item in result["servers"])
+    assert [item["available"] for item in result["servers"]] == [True, False]
     assert load_optional.await_args.kwargs["user_id"] == user_id

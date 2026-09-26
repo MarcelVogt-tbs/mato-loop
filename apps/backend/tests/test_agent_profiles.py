@@ -18,6 +18,7 @@ from mato_loop_backend.api.routes.agent_profiles import (
     agent_profile_integration_metadata,
     delete_agent_profile,
     list_agent_profiles,
+    set_agent_profile_enabled,
     update_agent_profile,
 )
 from mato_loop_backend.integrations.contracts import IntegrationResource
@@ -41,6 +42,7 @@ from mato_loop_backend.settings import (
     UserAgentProfilesSettings,
     UserIntegrationSettings,
     core_profiles,
+    load_agent_profile,
     load_effective_agent_profiles,
     resolve_agent_profile,
 )
@@ -180,6 +182,59 @@ async def test_disabled_personal_profiles_are_manageable_but_not_runtime_effecti
 
     assert [(item["name"], item["effective"]) for item in management["agents"]] == [("Mine", False)]
     assert all(item["id"] != str(custom.id) for item in runtime["effectiveAgents"])
+
+
+async def test_custom_profile_switch_is_owner_scoped_and_shipped_profiles_stay_enabled(monkeypatch) -> None:
+    user = UserAccount(id=uuid4(), username="user", password_hash="hash")
+    custom = CustomAgentProfile(
+        name="Mine", description="", base_profile_id=GENERAL_PROFILE_ID,
+        overrides=AgentProfileOverrides(),
+    )
+    settings = UserAgentProfilesSettings(profiles=[custom])
+    load_scoped = AsyncMock(return_value=(settings, user.id))
+    save = AsyncMock()
+    monkeypatch.setattr(agent_profiles_module, "_load_scoped", load_scoped)
+    monkeypatch.setattr(agent_profiles_module, "_response", AsyncMock(return_value={}))
+    monkeypatch.setattr(SettingsStore, "save", save)
+    db = AsyncMock()
+
+    await set_agent_profile_enabled(
+        custom.id, agent_profiles_module.EnabledRequest(enabled=False), user, db,
+        scope="personal",
+    )
+
+    assert custom.enabled is False
+    save.assert_awaited_once_with(db, settings, user_id=user.id)
+    db.commit.assert_awaited_once()
+    with pytest.raises(ApiError, match="agentProfile.defaultProtected"):
+        await set_agent_profile_enabled(
+            GENERAL_PROFILE_ID, agent_profiles_module.EnabledRequest(enabled=False), user, db,
+            scope="instance",
+        )
+    load_scoped.assert_awaited_once()
+
+
+async def test_disabled_profile_stays_resolvable_for_an_active_run(monkeypatch) -> None:
+    user_id = uuid4()
+    custom = CustomAgentProfile(
+        name="Paused", description="", base_profile_id=GENERAL_PROFILE_ID,
+        overrides=AgentProfileOverrides(), enabled=False,
+    )
+
+    async def load_optional(_db, kind, **kwargs):
+        if kind is AgentProfilesSettings:
+            return AgentProfilesSettings()
+        if kind is UserAgentProfilesSettings:
+            assert kwargs["user_id"] == user_id
+            return UserAgentProfilesSettings(profiles=[custom])
+        return None
+
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=load_optional))
+
+    profile = await load_agent_profile(AsyncMock(), user_id, custom.id)
+
+    assert profile.id == custom.id
+    assert profile.enabled is False
 
 
 def test_custom_profile_stores_only_sparse_typed_overrides() -> None:
@@ -822,6 +877,7 @@ async def test_agent_profile_request_replaces_sparse_overrides(monkeypatch) -> N
     persona_id = uuid4()
     existing = CustomAgentProfile(
         name="Agent", description="Old", baseProfileId=GENERAL_PROFILE_ID,
+        enabled=False,
         overrides={"personaId": persona_id, "instructions": "Old task", "answerDisplay": "timeline"},
     )
     user = UserAccount(
@@ -843,6 +899,7 @@ async def test_agent_profile_request_replaces_sparse_overrides(monkeypatch) -> N
 
     assert updated.base_profile_id == PLAN_PROFILE_ID
     assert updated.description == "New"
+    assert updated.enabled is False
     assert updated.overrides.model_dump(exclude_unset=True) == {"instructions": "New task"}
 
 

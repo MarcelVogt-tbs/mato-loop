@@ -13,6 +13,7 @@
 
       <q-form ref="formRef" class="col column no-wrap" @submit.prevent="save">
         <q-card-section class="col scroll q-gutter-md">
+          <q-checkbox v-if="auth.isAdmin && !server" :model-value="servers.scope === 'instance'" label="Global" :disable="!servers.personalAllowed" @update:model-value="servers.selectScope($event ? 'instance' : 'personal')" />
           <q-input v-model.trim="form.name" outlined label="Name" maxlength="120" lazy-rules :rules="[requiredRule]" />
           <q-input
             v-model.trim="form.endpoint"
@@ -63,6 +64,7 @@
 import { reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useMcpServerStore } from 'stores/mcp-servers'
+import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'McpServerDialog' })
 
@@ -73,6 +75,7 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue'])
 const $q = useQuasar()
 const servers = useMcpServerStore()
+const auth = useAuthStore()
 const formRef = ref(null)
 const saving = ref(false)
 const form = reactive({ name: '', endpoint: '', bearerToken: '', removeBearerToken: false, enabled: true })

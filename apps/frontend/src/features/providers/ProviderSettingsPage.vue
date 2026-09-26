@@ -8,7 +8,6 @@
         </p>
       </div>
       <div class="settings-scope-actions row items-center col-auto">
-        <q-checkbox v-if="auth.isAdmin" v-model="shared" label="Global" :disable="scopeBusy" />
         <q-btn
           class="col-auto"
           color="primary"
@@ -17,7 +16,7 @@
           no-wrap
           icon="add"
           label="Provider hinzufügen"
-          :disable="pageLoading || (personalBlocked && !shared)"
+          :disable="pageLoading || (personalBlocked && !auth.isAdmin)"
           @click="openCreateDialog"
         />
       </div>
@@ -193,7 +192,7 @@
                   color="primary"
                   icon="add"
                   label="Modell manuell hinzufügen"
-                  :disable="personalBlocked"
+                  :disable="!canEdit(provider)"
                   @click="openModelDialog(provider)"
                 />
               </template>
@@ -323,7 +322,6 @@ const syncFailed = reactive({})
 const providerToggleLoading = reactive({})
 const modelToggleLoading = reactive({})
 const modelSearch = reactive({})
-const shared = ref(false)
 const pageLoading = ref(true)
 const loadFailed = ref(false)
 const listedProviders = ref([])
@@ -334,11 +332,6 @@ const llmProviders = computed(() => listedProviders.value.filter((item) => (
 const personalBlocked = computed(() => !providers.personalProvidersEnabled)
 const canEdit = (provider) => (provider.scope === 'instance' ? auth.isAdmin : !personalBlocked.value)
 const codexFor = (provider) => ({ authenticated: provider.hasCredential })
-const scopeBusy = computed(() => pageLoading.value || providers.loading
-  || gateLoading.value
-  || Object.values(syncing).some(Boolean)
-  || Object.values(providerToggleLoading).some(Boolean)
-  || Object.values(modelToggleLoading).some(Boolean))
 
 async function prepareScope(scope) {
   providers.selectScope(scope)
@@ -367,12 +360,7 @@ async function loadPage() {
   }
 }
 
-function onDialogChange(open) {
-  if (!open) {
-    shared.value = false
-    void loadPage()
-  }
-}
+function onDialogChange(open) { if (!open) void loadPage() }
 
 async function togglePersonalProviders(enabled) {
   gateLoading.value = true
@@ -385,7 +373,7 @@ async function togglePersonalProviders(enabled) {
 
 function openCreateDialog() {
   selectedProvider.value = null
-  void prepareScope(shared.value ? 'instance' : 'personal').then(() => { dialogOpen.value = true }).catch(() => {})
+  void prepareScope(personalBlocked.value ? 'instance' : 'personal').then(() => { dialogOpen.value = true }).catch(() => {})
 }
 
 function openEditDialog(provider) {

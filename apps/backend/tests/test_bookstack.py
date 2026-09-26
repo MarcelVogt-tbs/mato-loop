@@ -1325,7 +1325,7 @@ async def test_aggregate_books_recheck_resource_policies_after_pending_approval(
                 id=profile.id, name=profile.name, description="",
                 baseProfileId=GENERAL_PROFILE_ID,
                 overrides=profile.model_dump(
-                    exclude={"id", "name", "description", "owner_id"}
+                        exclude={"id", "name", "description", "owner_id", "enabled"}
                 ),
             )])
         return model()

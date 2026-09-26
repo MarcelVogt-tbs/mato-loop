@@ -37,6 +37,14 @@
           </template>
         </q-select>
 
+        <q-checkbox
+          v-if="auth.isAdmin && !isEditing"
+          :model-value="providers.scope === 'instance'"
+          label="Global"
+          :disable="providers.loading || !providers.personalProvidersEnabled"
+          @update:model-value="switchScope"
+        />
+
         <div v-if="providerType" class="provider-form-grid">
           <q-select
             v-model="form.trust_level"
@@ -208,6 +216,7 @@ import { copyToClipboard, useQuasar } from 'quasar'
 import { useConfirm } from 'src/composables/confirm'
 import { notifyError } from 'src/utils/notifications'
 import { useProviderStore } from 'stores/providers'
+import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'ProviderConfigDialog' })
 
@@ -220,6 +229,7 @@ const emit = defineEmits(['update:modelValue', 'provider-created', 'provider-upd
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const providers = useProviderStore()
+const auth = useAuthStore()
 const providerType = ref(null)
 const formRef = ref(null)
 const saving = ref(false)
@@ -335,6 +345,16 @@ function initialize() {
     pseudonymization_enabled: props.provider.pseudonymizationEnabled === true,
     memory_policy: props.provider.memoryPolicy || 'inherit'
   } : {})
+}
+
+async function switchScope(global) {
+  const previous = providers.scope
+  providers.selectScope(global ? 'instance' : 'personal')
+  try {
+    await providers.fetchAll()
+  } catch {
+    providers.selectScope(previous)
+  }
 }
 
 async function saveConfiguredProvider() {

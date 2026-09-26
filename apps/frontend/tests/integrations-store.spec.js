@@ -150,6 +150,17 @@ describe('integration store', () => {
     vi.clearAllMocks()
   })
 
+  it('sends only the desired status and the selected owner scope', async () => {
+    api.patch.mockResolvedValue({ data: { id: 'calendar-id', enabled: false } })
+    const store = useIntegrationStore()
+
+    await store.setIntegrationEnabled('calendar-id', false, 'personal')
+
+    expect(api.patch).toHaveBeenCalledWith(
+      '/integrations/calendar-id/enabled', { enabled: false }, { params: { scope: 'personal' } }
+    )
+  })
+
   it('loads the integration catalog and applies availability by scope', async () => {
     api.get.mockResolvedValue({ data: catalogResponse })
     const store = useIntegrationStore()

@@ -2,7 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { api } = vi.hoisted(() => ({
-  api: { delete: vi.fn(), get: vi.fn(), post: vi.fn(), put: vi.fn() }
+  api: { delete: vi.fn(), get: vi.fn(), patch: vi.fn(), post: vi.fn(), put: vi.fn() }
 }))
 vi.mock('src/boot/axios', () => ({ api }))
 
@@ -87,6 +87,15 @@ describe('MCP server store', () => {
     expect(api.get).toHaveBeenCalledWith('/mcp/servers/visible')
     expect(store.visibleServers).toEqual(items)
     expect(store.scope).toBe('personal')
+  })
+
+  it('toggles one owned server without resending its endpoint or token', async () => {
+    api.patch.mockResolvedValue({ data: { id: 'mine', enabled: false } })
+    const store = useMcpServerStore()
+
+    await store.setServerEnabled('mine', false, 'personal')
+
+    expect(api.patch).toHaveBeenCalledWith('/integrations/mine/enabled', { enabled: false }, { params: { scope: 'personal' } })
   })
 
 })

@@ -135,6 +135,10 @@ export const useIntegrationStore = defineStore('integrations', {
     }
   },
   actions: {
+    async setIntegrationEnabled(id, enabled, scope) {
+      const { data } = await api.patch(`/integrations/${id}/enabled`, { enabled }, scopeConfig(scope))
+      return data
+    },
     selectScope(scope) {
       const next = scope === 'personal' ? 'personal' : 'instance'
       if (next === this.scope) return

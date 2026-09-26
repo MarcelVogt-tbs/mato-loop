@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.api.integration_access as api_integration_access
@@ -31,6 +31,7 @@ from mato_loop_backend.api.routes.integrations import (
     delete_calendar_integration,
     delete_search_integration,
     get_integration_access,
+    set_integration_enabled,
     update_calendar_integration,
     update_integration_access,
     update_search_integration,
@@ -45,6 +46,7 @@ from mato_loop_backend.integrations.contracts import (
     IntegrationResource,
     ToolContribution,
 )
+from mato_loop_backend.integrations.mcp.client import McpClientError
 from mato_loop_backend.integrations.search import (
     SearchIntegrationError,
     search_available,
@@ -70,6 +72,105 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.tools.actions import ToolAction
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.contracts import ToolResult
+
+
+async def test_integration_switch_updates_only_the_owned_status(monkeypatch) -> None:
+    user = SimpleNamespace(id=uuid4(), is_admin=False)
+    shared = IntegrationInstance(name="Shared", integration_type="calendar", adapter_type="caldav")
+    own = IntegrationInstance(
+        name="Docker", integration_type="infrastructure", adapter_type="arcane",
+        credential_id=uuid4(), config={"base_url": "https://docker.example"},
+    )
+    instance = IntegrationSettings(instances=[shared])
+    personal = UserIntegrationSettings(instances=[own])
+
+    async def load(_db, kind, **kwargs):
+        if kind is UserIntegrationSettings:
+            assert kwargs["user_id"] == user.id
+            return personal
+        return instance
+
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+    db = AsyncMock()
+
+    result = await set_integration_enabled(
+        own.id, api_routes_integrations.EnabledRequest(enabled=False), db, user,
+        scope="personal",
+    )
+
+    assert result == {"id": str(own.id), "enabled": False}
+    assert own.config == {"base_url": "https://docker.example"}
+    assert own.credential_id is not None
+    assert shared.enabled is True
+    save.assert_awaited_once_with(db, personal, user_id=user.id)
+    result = await set_integration_enabled(
+        own.id, api_routes_integrations.EnabledRequest(enabled=True), db, user,
+        scope="personal",
+    )
+    assert result == {"id": str(own.id), "enabled": True}
+    assert own.config == {"base_url": "https://docker.example"}
+    assert own.credential_id is not None
+    assert save.await_count == 2
+    with pytest.raises(ApiError, match="auth.adminRequired"):
+        await set_integration_enabled(
+            shared.id, api_routes_integrations.EnabledRequest(enabled=False), db, user,
+            scope="instance",
+        )
+    with pytest.raises(ValidationError):
+        api_routes_integrations.EnabledRequest.model_validate({"enabled": True, "apiKey": "secret"})
+
+
+async def test_mcp_reenable_uses_discovery_without_resending_a_token(monkeypatch) -> None:
+    user = SimpleNamespace(id=uuid4(), is_admin=True)
+    server = IntegrationInstance(
+        name="MCP", integration_type="mcp", adapter_type="mcp_streamable_http",
+        enabled=False, credential_id=uuid4(),
+        config={"endpoint": "https://mcp.example/mcp", "tools": []},
+    )
+    settings = IntegrationSettings(instances=[server])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    update = AsyncMock(side_effect=McpClientError("mcp.unavailable"))
+    monkeypatch.setattr(api_routes_integrations.McpIntegrationService, "update", update)
+    db = AsyncMock()
+
+    with pytest.raises(ApiError, match="mcp.unavailable"):
+        await set_integration_enabled(
+            server.id, api_routes_integrations.EnabledRequest(enabled=True), db, user,
+            scope="instance",
+        )
+
+    assert update.await_args.kwargs["token"] is None
+    assert server.enabled is False
+    db.rollback.assert_awaited_once()
+
+
+async def test_opencode_reenable_uses_existing_connection_check(monkeypatch) -> None:
+    user = SimpleNamespace(id=uuid4(), is_admin=False)
+    instance = IntegrationInstance(
+        name="Coding", integration_type="coding", adapter_type="opencode",
+        enabled=False, config={
+            "base_url": "https://code.example/", "username": "opencode",
+            "server_root": "/srv/code", "server_version": "1.0",
+        },
+    )
+    personal = UserIntegrationSettings(instances=[instance])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_kw: (
+        personal if kind is UserIntegrationSettings else IntegrationSettings()
+    )))
+    update = AsyncMock(return_value=personal)
+    monkeypatch.setattr(api_routes_integrations.OpenCodeIntegrationService, "update", update)
+
+    await set_integration_enabled(
+        instance.id, api_routes_integrations.EnabledRequest(enabled=True),
+        AsyncMock(), user, scope="personal",
+    )
+
+    assert update.await_args.kwargs["user_id"] == user.id
+    assert update.await_args.kwargs["password"] is None
+    assert update.await_args.kwargs["remove_password"] is False
+    assert update.await_args.kwargs["enabled"] is True
 
 
 @pytest.mark.asyncio

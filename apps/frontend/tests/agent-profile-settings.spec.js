@@ -58,7 +58,7 @@ it('shows disabled personal profiles without error or empty states', async () =>
   expect(root.textContent).not.toContain('Die Agentenprofile konnten nicht geladen werden.')
   expect(root.textContent).not.toContain('Noch keine Agentenprofile')
   expect(root.textContent).toContain('Neues Profil erstellen')
-  expect(root.querySelector('.q-checkbox')?.textContent).toContain('Global')
+  expect(root.querySelector('.q-checkbox')).toBeNull()
 })
 
 it.each([
@@ -72,6 +72,11 @@ it.each([
     effectiveAgents: [
       { id: 'general', name: 'Allgemein', scope: 'instance', protected: true },
       { id: 'mine', name: 'Mein Agent', scope: 'personal' }
+    ],
+    agents: [
+      { id: 'general', name: 'Allgemein', scope: 'instance', protected: true },
+      { id: 'team', name: 'Team Agent', scope: 'instance', enabled: false },
+      { id: 'mine', name: 'Mein Agent', scope: 'personal', enabled: true }
     ]
   } })
   const router = createRouter({
@@ -100,4 +105,6 @@ it.each([
   expect(root.textContent).toContain('Persönlich')
   expect(root.textContent).toContain('Global')
   expect(root.querySelector('.q-checkbox')).toBeNull()
+  expect(root.textContent).toContain('Deaktiviert')
+  expect(root.querySelector('[aria-label="Team Agent aktivieren"]')?.classList.contains('disabled')).toBe(true)
 })

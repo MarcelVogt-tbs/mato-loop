@@ -4,7 +4,7 @@
 
 Unter **Einstellungen > Provider** können Sie Provider hinzufügen, bearbeiten, aktivieren, testen und löschen.
 
-Die Provider-Liste zeigt **Persönlich** und **Global** gekennzeichnete Einträge zusammen. Beim Anlegen können Administratoren **Global** wählen; der Geltungsbereich bleibt danach fest. Nur Administratoren ändern globale Provider und legen fest, ob persönliche Provider erlaubt sind. Globale Provider und ihre Modelle stehen allen Benutzern zur Verfügung; persönliche Provider und ihre verschlüsselten Zugangsdaten bleiben dem jeweiligen Benutzer zugeordnet.
+Die Provider-Liste zeigt **Persönlich** und **Global** gekennzeichnete Einträge zusammen. Beim Anlegen können Administratoren im Dialog **Global** wählen; der Geltungsbereich bleibt danach fest. Den Aktiv-Schalter globaler Provider können nur Administratoren bedienen. Nur Administratoren ändern globale Provider und legen fest, ob persönliche Provider erlaubt sind. Globale Provider und ihre Modelle stehen allen Benutzern zur Verfügung; persönliche Provider und ihre verschlüsselten Zugangsdaten bleiben dem jeweiligen Benutzer zugeordnet.
 
 ### ChatGPT Codex
 

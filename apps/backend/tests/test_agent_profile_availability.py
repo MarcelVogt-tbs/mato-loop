@@ -133,7 +133,7 @@ def mock_settings(monkeypatch, integrations, profile, *, personal=None):
                 description=profile.description,
                 baseProfileId=GENERAL_PROFILE_ID,
                 overrides=profile.model_dump(
-                    exclude={"id", "name", "description", "owner_id"}
+                    exclude={"id", "name", "description", "owner_id", "enabled"}
                 ),
             )])
         return model()

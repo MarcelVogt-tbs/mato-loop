@@ -229,6 +229,8 @@ class AgentRuntime:
             )
         except AgentProfileUnavailable as exc:
             raise AgentRunError("agentProfile.selectedUnavailable") from exc
+        if not profile.enabled:
+            raise AgentRunError("agentProfile.selectedUnavailable")
         ai_settings = apply_agent_profile_ai(
             await load_effective_ai(db, chat_session.user_id), profile
         )
@@ -486,6 +488,8 @@ class AgentRuntime:
                 )
             except AgentProfileUnavailable as exc:
                 raise AgentRunError("agentProfile.selectedUnavailable") from exc
+            if profile is not None and not profile.enabled:
+                raise AgentRunError("agentProfile.selectedUnavailable")
             input_message = await db.get(Message, run.input_message_id) if run.input_message_id else None
             if not isinstance(input_message, Message):
                 input_message = next((item for item in reversed(await cls._records(db, chat_session.id)) if item.role == "user"), None)

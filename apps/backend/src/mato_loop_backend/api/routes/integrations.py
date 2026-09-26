@@ -4,7 +4,15 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    ValidationError,
+    model_validator,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +56,7 @@ from mato_loop_backend.integrations.mail.adapter import (
 from mato_loop_backend.integrations.mail.client import MailError
 from mato_loop_backend.integrations.mail.service import MailIntegrationService
 from mato_loop_backend.integrations.mcp.client import McpClientError
+from mato_loop_backend.integrations.mcp.service import McpIntegrationService
 from mato_loop_backend.integrations.mealie.adapter import (
     MEALIE_CREDENTIAL_KIND,
     MealieConfig,
@@ -56,6 +65,7 @@ from mato_loop_backend.integrations.mealie.adapter import (
 from mato_loop_backend.integrations.mealie.client import MealieClient, MealieError
 from mato_loop_backend.integrations.mealie.service import MealieIntegrationService
 from mato_loop_backend.integrations.opencode.adapter import (
+    OpenCodeConfig,
     OpenCodeIntegrationService,
     OpenCodeSettingsError,
 )
@@ -69,6 +79,7 @@ from mato_loop_backend.integrations.openscad.service import OpenScadIntegrationS
 from mato_loop_backend.integrations.registry import (
     integration_adapter_type_registered,
     integration_adapters,
+    validate_integration,
 )
 from mato_loop_backend.integrations.search import (
     SearchIntegrationError,
@@ -96,6 +107,12 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.settings.effective import personal_integration_tool_settings
 
 router = APIRouter(prefix="/integrations", dependencies=[Depends(require_user)])
+
+
+class EnabledRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
 
 
 async def _load_scoped_tools(
@@ -720,6 +737,72 @@ async def visible_instance_integrations(
         for item in settings.instances
         if item.integration_type != "mcp"
     ]
+
+
+@router.patch("/{integration_id}/enabled")
+async def set_integration_enabled(
+    integration_id: UUID,
+    payload: EnabledRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[UserAccount, Depends(require_user)],
+    scope: SettingsApiScope = "personal",
+) -> dict:
+    settings, owner_id = await api_integration_access._load_scoped_integrations(
+        db, scope, user
+    )
+    instance = next((item for item in settings.instances if item.id == integration_id), None)
+    if instance is None:
+        raise ApiError(404, "integration.notFound")
+    if payload.enabled:
+        await api_integration_access._load_scoped_integrations(
+            db, scope, user, adapter_type=instance.adapter_type
+        )
+    if instance.enabled == payload.enabled:
+        return {"id": str(integration_id), "enabled": instance.enabled}
+    if payload.enabled and instance.adapter_type in {"mcp_streamable_http", "sonobin"}:
+        service = (
+            McpIntegrationService
+            if instance.adapter_type == "mcp_streamable_http"
+            else SonoBinIntegrationService
+        )
+        try:
+            config = service.config_model.model_validate(instance.config)
+            await service.update(
+                db, integration_id, name=instance.name, endpoint=str(config.endpoint),
+                token=None, remove_token=False, enabled=True, owner_id=owner_id,
+            )
+        except (McpClientError, IntegrationSettingsError, ValidationError) as exc:
+            await db.rollback()
+            raise ApiError(502, getattr(exc, "code", "integration.unavailable")) from exc
+    elif payload.enabled and instance.adapter_type == "opencode":
+        try:
+            config = OpenCodeConfig.model_validate(instance.config)
+            await OpenCodeIntegrationService.update(
+                db, integration_id, user_id=user.id, name=instance.name,
+                base_url=str(config.base_url), username=config.username,
+                password=None, remove_password=False, enabled=True,
+            )
+        except (OpenCodeSettingsError, OpenCodeError) as exc:
+            await db.rollback()
+            _raise_opencode_error(exc)
+        except ValidationError as exc:
+            raise ApiError(409, "integration.unavailable") from exc
+    else:
+        settings, _ = await api_integration_access._load_scoped_integrations(
+            db, scope, user, for_update=True, mutation=True
+        )
+        current = next((item for item in settings.instances if item.id == integration_id), None)
+        if current is None:
+            raise ApiError(404, "integration.notFound")
+        current.enabled = payload.enabled
+        if payload.enabled:
+            try:
+                validate_integration(current)
+            except ValueError as exc:
+                raise ApiError(409, "integration.unavailable") from exc
+        await SettingsStore.save(db, settings, user_id=owner_id)
+        await db.commit()
+    return {"id": str(integration_id), "enabled": payload.enabled}
 
 
 @router.get("/search")

@@ -40,6 +40,15 @@
       </div>
     </q-toolbar>
 
+    <q-checkbox
+      v-if="isCreate && auth.isAdmin"
+      :model-value="createGlobal"
+      label="Global"
+      class="q-mb-md"
+      :disable="agents.loading || agents.saving"
+      @update:model-value="switchCreationScope"
+    />
+
     <q-banner v-if="blocked" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="block" color="warning" /></template>
       Persönliche Agenten wurden für diese Instanz deaktiviert.
@@ -768,6 +777,7 @@ const loadFailed = ref(false)
 const notFound = ref(false)
 const savedPayload = ref('')
 const section = ref('profile')
+const createGlobal = ref(false)
 
 const emptyPermissions = () => ({ policies: {}, integrationPolicies: {}, resourcePolicies: {} })
 const form = reactive({
@@ -865,9 +875,9 @@ const additionalModelSettings = [
   { field: 'audioTranscriptionModelId', title: 'Transkription', description: 'Wandelt Audioaufnahmen in Text um.', label: 'Transkriptionsmodell', capability: 'audio_transcription' }
 ]
 const scope = computed(() => (
-  !isCreate.value && route.query.scope === 'instance'
-    ? 'instance'
-    : resolveSettingsScope(route.query.scope, auth.isAdmin)
+  isCreate.value
+    ? (auth.isAdmin && createGlobal.value ? 'instance' : 'personal')
+    : (route.query.scope === 'instance' ? 'instance' : resolveSettingsScope(route.query.scope, auth.isAdmin))
 ))
 const baseProfiles = computed(() => agents.agents.filter((agent) => (
   agent.protected && agent.scope !== 'integration'
@@ -1336,6 +1346,12 @@ async function load() {
   } catch {
     loadFailed.value = true
   }
+}
+
+async function switchCreationScope(global) {
+  if (!await confirmDiscardedChanges()) return
+  createGlobal.value = global
+  await load()
 }
 
 async function saveAgent() {

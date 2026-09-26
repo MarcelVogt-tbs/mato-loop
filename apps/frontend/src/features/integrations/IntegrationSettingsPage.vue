@@ -9,7 +9,6 @@
         </p>
       </div>
       <div v-if="showInstances" class="settings-scope-actions row items-center col-auto">
-        <q-checkbox v-if="auth.isAdmin" v-model="shared" label="Global" />
         <q-btn
           class="col-auto"
           color="primary"
@@ -227,6 +226,13 @@
           </q-item-section>
           <q-item-section side top>
             <div class="row items-center no-wrap q-gutter-xs">
+              <q-toggle
+                dense
+                :model-value="integration.enabled"
+                :aria-label="`${integration.name} ${integration.enabled ? 'deaktivieren' : 'aktivieren'}`"
+                :disable="!canEditIntegration(integration) || togglingId !== null"
+                @update:model-value="toggleIntegration(integration, $event)"
+              />
               <q-btn
                 v-if="integration.adapterType === 'caldav'"
                 flat
@@ -312,9 +318,9 @@ const setupId = ref(null)
 const resettingId = ref(null)
 const testingId = ref(null)
 const removingId = ref(null)
+const togglingId = ref(null)
 const searchSelectionSaving = ref(false)
 const section = ref('instances')
-const shared = ref(false)
 const instanceIntegrations = ref([])
 const storedPersonalIntegrations = ref([])
 const instanceSearch = ref({ primaryProvider: 'no_key', fallbackProvider: null, providerOptions: [{ name: 'Websuche ohne API-Key', value: 'no_key' }] })
@@ -370,7 +376,8 @@ const agentAvailabilityOptions = [
 const personalCreatable = computed(() => integrations.catalog.some((adapter) => integrations.adapterAvailable(adapter.adapterType, 'personal')))
 const canCreateIntegration = computed(() => (
   integrations.catalogLoaded
-  && integrations.catalog.some((adapter) => integrations.adapterAvailable(adapter.adapterType, shared.value ? 'instance' : 'personal'))
+  && integrations.catalog.some((adapter) => integrations.adapterAvailable(adapter.adapterType, 'personal')
+    || (auth.isAdmin && integrations.adapterAvailable(adapter.adapterType, 'instance')))
 ))
 
 function availabilityOptions(adapter) {
@@ -385,6 +392,19 @@ function canEditIntegration(integration) {
 
 function integrationAvailable(integration) {
   return integrations.adapterAvailable(integration.providerType, integration.scope)
+}
+
+async function toggleIntegration(integration, enabled) {
+  togglingId.value = integration.id
+  try {
+    await integrations.setIntegrationEnabled(integration.id, enabled, integration.scope)
+    await reload()
+    $q.notify({ type: 'positive', message: enabled ? 'Integration aktiviert' : 'Integration deaktiviert' })
+  } catch {
+    // The central API interceptor displays the error.
+  } finally {
+    togglingId.value = null
+  }
 }
 
 async function saveSearchSelection(primaryProvider, fallbackProvider) {
@@ -414,7 +434,7 @@ async function setFallbackSearchProvider(fallbackProvider) {
 }
 
 function openCreateDialog() {
-  integrations.selectScope(shared.value ? 'instance' : 'personal')
+  integrations.selectScope(personalCreatable.value ? 'personal' : 'instance')
   selectedIntegration.value = null
   dialogOpen.value = true
 }
@@ -426,10 +446,7 @@ function openEditDialog(integration) {
 }
 
 function onDialogChange(open) {
-  if (!open) {
-    shared.value = false
-    void reload()
-  }
+  if (!open) void reload()
 }
 
 async function saveInstanceSearch(primaryProvider, fallbackProvider) {

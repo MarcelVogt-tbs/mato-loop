@@ -258,7 +258,7 @@ async def _response(
             else []
         ),
         "personalPersonasEnabled": instance_identity.personal_personas_enabled,
-        "effectiveAgents": effective_profiles,
+        "effectiveAgents": [profile for profile in effective_profiles if profile["enabled"]],
         "agents": disabled_personal_profiles if disabled_personal_profiles else (
             effective_profiles if settings is None or scope is None else [
                 profile for profile in effective_profiles if profile["scope"] == scope
@@ -474,6 +474,7 @@ async def _profile_from_request(
         description=payload.description,
         base_profile_id=payload.base_profile_id,
         overrides=overrides,
+        enabled=existing.enabled if existing is not None else True,
     )
 
 
@@ -610,6 +611,26 @@ async def update_agent_profile(
     )
     _ensure_unique_name(settings, replacement.name, exclude_id=profile_id)
     settings.profiles[index] = replacement
+    await SettingsStore.save(db, settings, user_id=owner_id)
+    await db.commit()
+    return await _response(db, user, settings, scope)
+
+
+@router.patch("/{profile_id}/enabled")
+async def set_agent_profile_enabled(
+    profile_id: UUID,
+    payload: EnabledRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "personal",
+) -> dict:
+    if profile_id in {profile.id for profile in shipped_profiles()}:
+        raise ApiError(409, "agentProfile.defaultProtected")
+    settings, owner_id = await _load_scoped(db, scope, user, for_update=True)
+    profile = next((item for item in settings.profiles if item.id == profile_id), None)
+    if profile is None:
+        raise ApiError(404, "agentProfile.notFound")
+    profile.enabled = payload.enabled
     await SettingsStore.save(db, settings, user_id=owner_id)
     await db.commit()
     return await _response(db, user, settings, scope)

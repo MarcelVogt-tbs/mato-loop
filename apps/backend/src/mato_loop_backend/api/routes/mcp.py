@@ -183,7 +183,15 @@ async def list_visible_mcp_servers(
     personal = await SettingsStore.load_optional(db, UserIntegrationSettings, user_id=user.id)
     return {
         "servers": [
-            {**_payload(item), "scope": scope}
+            {
+                **_payload(item),
+                "scope": scope,
+                "available": (
+                    instance.availability_for("mcp_streamable_http") == IntegrationAdapterAvailability.FULL
+                    if scope == "personal"
+                    else instance.availability_for("mcp_streamable_http") != IntegrationAdapterAvailability.DISABLED
+                ),
+            }
             for scope, settings in (("instance", instance), ("personal", personal))
             if settings is not None
             for item in settings.instances
