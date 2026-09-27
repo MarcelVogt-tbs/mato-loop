@@ -416,12 +416,12 @@ export const sessionsActions = {
       }
       return Boolean(this.current?.messages?.some((message) => message.id === messageId))
     },
-    async updateActive(patch) {
+    async updateActive(patch, { draftOnly = false } = {}) {
       if (this.current) {
         const sessionId = this.current.id
         if (
           Object.hasOwn(patch, 'agent_profile_id')
-          && (this.running || this.stopping || this.runId || this.activeQueuedMessages.length)
+          && (draftOnly || this.running || this.stopping || this.runId || this.activeQueuedMessages.length)
         ) {
           this.drafts.sessionAgentProfiles[sessionId] = patch.agent_profile_id
           this.persistDrafts()

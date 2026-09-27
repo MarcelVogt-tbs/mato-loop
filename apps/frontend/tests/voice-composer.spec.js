@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ notify: vi.fn(), api: { post: vi.fn(), get: vi.fn(), delete: vi.fn() }, recorder: null }))
+const mocks = vi.hoisted(() => ({ notify: vi.fn(), api: { post: vi.fn(), get: vi.fn(), patch: vi.fn(), delete: vi.fn() }, recorder: null }))
 vi.mock('src/boot/axios', () => ({ api: mocks.api }))
 vi.mock('quasar', () => ({ useQuasar: () => ({ notify: mocks.notify, screen: { gt: { sm: true } } }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: async () => true }) }))
@@ -94,6 +94,7 @@ beforeEach(async () => {
     render: () => showPage.value ? h(ChatPage) : h(ChatComposer, {
       session: session.value,
       draft: chat.activeDraft,
+      disabled: chat.sessionSettingsPending > 0,
       running: chat.running,
       queueMode: chat.messageQueueActive,
       attachments: chat.activeAttachmentDraft,
@@ -124,7 +125,11 @@ beforeEach(async () => {
     emits: ['hide'],
     setup: (_, { emit, slots }) => () => h('div', { onClick: () => emit('hide') }, slots.default?.())
   }))
-  app.component('QInput', { methods: { focus() { this.$el.focus() } }, render() { return h('div', { tabindex: 0 }) } })
+  app.component('QInput', {
+    props: ['disable', 'modelValue'],
+    methods: { focus() { this.$el.focus() } },
+    render() { return h('textarea', { disabled: this.disable, value: this.modelValue }) }
+  })
   for (const name of ['QCard', 'QForm', 'QIcon', 'QSpace', 'QBanner', 'QTooltip', 'QSpinner', 'QChip', 'QPopupProxy', 'QToolbar', 'QToolbarTitle', 'QSeparator', 'QCardSection']) {
     app.component(name, { methods: { focus() {} }, render() { return h('div', this.$slots.default?.()) } })
   }
@@ -148,6 +153,30 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it('keeps the draft focused and sends with Enter immediately after switching agents while idle', async () => {
+    chat.selectedSessionId = 'session-1'
+    chat.current.agentProfileId = 'agent-a'
+    chat.setDraft('Nachricht an B')
+    const profiles = useAgentProfileStore()
+    profiles.defaultAgentProfileId = 'agent-a'
+    profiles.agents = [{ id: 'agent-a' }, { id: 'agent-b' }]
+    mocks.api.patch.mockReturnValue(new Promise(() => {}))
+    await nextTick()
+
+    const input = root.querySelector('.chat-composer__input')
+    input.focus()
+    input.dispatchEvent(new KeyboardEvent('keydown', {
+      key: '.', code: 'Period', ctrlKey: true, bubbles: true, cancelable: true
+    }))
+    await nextTick()
+
+    expect(document.activeElement).toBe(input)
+    expect(input.disabled).toBe(false)
+    expect(chat.activeAgentProfileId).toBe('agent-b')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    expect(sentMessages).toEqual([{ content: 'Nachricht an B', options: { interrupt: false } }])
+  })
+
   it('cycles agent profiles and toggles the send mode only from the focused composer', async () => {
     chat.selectedSessionId = 'session-1'
     chat.current.agentProfileId = 'agent-a'

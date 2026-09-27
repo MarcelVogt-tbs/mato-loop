@@ -363,7 +363,7 @@ function handleComposerKeydown(event) {
     const agents = agentProfiles.agents
     const current = chat.activeAgentProfileId || agentProfiles.defaultAgentProfileId
     const index = agents.findIndex((agent) => agent.id === current)
-    emit('update', { agent_profile_id: agents[(index + 1) % agents.length].id })
+    void chat.updateActive({ agent_profile_id: agents[(index + 1) % agents.length].id }, { draftOnly: true })
   }
   event.preventDefault()
   event.stopPropagation()
