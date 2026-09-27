@@ -139,7 +139,7 @@ class ControlRequest:
             raise ExecutionClientError("browser.notConnected")
 
 
-async def capture_control_request(reason: str, context: ToolContext) -> ControlRequest:
+async def capture_control_request(reason: str | None, context: ToolContext) -> ControlRequest:
     client = context.execution_client
     if client is None:
         raise ExecutionClientError("tool.unavailable")

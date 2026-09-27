@@ -322,7 +322,7 @@ async def _control_authorization(_arguments: BrowserRequestControlArguments, con
     from mato_loop_backend.tools.contracts import PERMISSION_REASON_ARGUMENT
 
     request = await capture_control_request(
-        context.tool_call.arguments[PERMISSION_REASON_ARGUMENT], context
+        context.tool_call.arguments.get(PERMISSION_REASON_ARGUMENT), context
     )
     context.bound_options["control_request"] = request
     return (request.permission,)

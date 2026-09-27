@@ -179,22 +179,21 @@ class ToolDefinition:
                 "minLength": 1,
                 "maxLength": 500,
                 "description": (
-                    "Required for every call, even without approval. Briefly explain why this action "
-                    "is needed in the user's language."
+                    "Optional explanation in the user's language of why this action is needed. "
+                    "If provided, it is shown when approval is required."
                     + (" " + self.permission_reason_instruction if self.permission_reason_instruction else "")
                 ),
             }
-            parameters.setdefault("required", []).append(PERMISSION_REASON_ARGUMENT)
         schema = parameters
         _remove_schema_titles(schema)
         return {"name": self.name, "description": self.description, "parameters": schema}
 
-    def validate_arguments(self, value: object, *, require_reason: bool = False) -> Any:
+    def validate_arguments(self, value: object) -> Any:
         if (self.actions or self.requires_permission_reason) and isinstance(value, dict):
             value = dict(value)
             reason_supplied = PERMISSION_REASON_ARGUMENT in value
             reason = value.pop(PERMISSION_REASON_ARGUMENT, None)
-            if (require_reason or reason_supplied) and (
+            if reason_supplied and (
                 not isinstance(reason, str) or not reason.strip() or len(reason) > 500
             ):
                 raise DynamicToolArgumentsError(

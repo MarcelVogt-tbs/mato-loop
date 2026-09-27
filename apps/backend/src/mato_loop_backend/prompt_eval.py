@@ -6702,9 +6702,7 @@ def _validate_tool_calls(
                 and bound_tool.default_arguments.keys().isdisjoint(raw_arguments)
             ):
                 raw_arguments = {**bound_tool.default_arguments, **raw_arguments}
-            definition.validate_arguments(
-                raw_arguments, require_reason=True
-            )
+            definition.validate_arguments(raw_arguments)
         except (ValidationError, DynamicToolArgumentsError):
             failures.append(f"{call.name} returned invalid arguments")
             continue

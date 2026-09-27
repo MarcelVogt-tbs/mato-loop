@@ -38,7 +38,6 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import (
-    PERMISSION_REASON_ARGUMENT,
     DynamicToolArgumentsError,
     ToolArgumentsEdited,
     ToolResult,
@@ -188,14 +187,6 @@ async def execute_definition(
     if tool.default_arguments and tool.default_arguments.keys().isdisjoint(raw_arguments):
         raw_arguments = {**tool.default_arguments, **raw_arguments}
     try:
-        if (
-            definition.actions
-            and context.assistant_message_id is not None
-            and PERMISSION_REASON_ARGUMENT not in raw_arguments
-        ):
-            return ToolResult.error(
-                "tool.invalidArguments", field=PERMISSION_REASON_ARGUMENT
-            )
         raw_arguments = await resolve_tool_references(
             call.name,
             raw_arguments,
@@ -206,9 +197,7 @@ async def execute_definition(
     except InvalidToolReference as exc:
         return ToolResult.error("integration.staleReference", field=exc.field)
     try:
-        arguments = definition.validate_arguments(
-            raw_arguments, require_reason=context.assistant_message_id is not None
-        )
+        arguments = definition.validate_arguments(raw_arguments)
     except JsonSchemaValidationError as exc:
         field_name = next(
             (str(part) for part in reversed(exc.absolute_path) if isinstance(part, str)),

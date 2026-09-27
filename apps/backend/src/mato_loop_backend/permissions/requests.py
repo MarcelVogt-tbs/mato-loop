@@ -61,7 +61,7 @@ async def request_approval(
         )
     reason = call.arguments.get(PERMISSION_REASON_ARGUMENT)
     if not isinstance(reason, str) or not (reason := reason.strip()):
-        reason = "Vom Agent angeforderte Tool-Aktion"
+        reason = "Keine Begründung angegeben"
     approval = ApprovalRequest(
         request_type="agent_action",
         user_id=chat_session.user_id,

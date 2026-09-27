@@ -22,7 +22,7 @@ def read_call(identifier, path="note.txt", **extra):
     return ToolCall(identifier, "read", {"root": "files", "path": path, **extra})
 
 
-@pytest.mark.parametrize("extra", [{}, {"_reason": None}, {"_reason": ""}, {"_reason": " "}, {"_reason": "x" * 501}])
+@pytest.mark.parametrize("extra", [{"_reason": None}, {"_reason": ""}, {"_reason": " "}, {"_reason": "x" * 501}])
 async def test_reason_repair_through_runtime_and_real_registry(monkeypatch, extra):
     initial = read_call("initial", **extra)
     repaired = read_call("repaired", _reason="Die Datei wird für die Antwort benötigt.")
@@ -59,9 +59,28 @@ async def test_reason_repair_through_runtime_and_real_registry(monkeypatch, extr
     handler.assert_awaited_once()
 
 
+async def test_missing_reason_executes_without_a_repair_round(monkeypatch):
+    call = read_call("initial")
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch, [ProviderResult(tool_calls=[call]), ProviderResult(content="Gelesen.")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    handler = AsyncMock(return_value=ToolResult.json({"content": "note"}))
+
+    async def execute(call, context, tool):
+        tool = replace(tool, definition=replace(tool.definition, handler=handler))
+        return await ToolRegistry._execute_definition(tool_registry, call, context, tool)
+
+    monkeypatch.setattr(tool_registry, "_execute_definition", execute)
+    await AgentRuntime._execute_loop(db, run)
+    assert len(requests) == 2
+    assert json.loads(_tool_messages(db)[0].content) == {"content": "note"}
+    handler.assert_awaited_once()
+
+
 @pytest.mark.parametrize("repair", [True, False])
 async def test_repeated_batch_gets_one_model_round_to_repair(monkeypatch, repair):
-    calls = [read_call(str(i), path=f"{i}.txt") for i in range(2)]
+    calls = [read_call(str(i), path=f"{i}.txt", _reason=" ") for i in range(2)]
     final_calls = [read_call(f"fixed-{i}", path=f"{i}.txt", _reason="Die Datei wird benötigt.") for i in range(2)] if repair else calls
     db, run, requests, _, _ = await _runtime_setup(
         monkeypatch,
@@ -70,7 +89,7 @@ async def test_repeated_batch_gets_one_model_round_to_repair(monkeypatch, repair
     )
 
     async def execute(call, _context, _tool):
-        return ToolResult.json({"content": "note"}) if "_reason" in call.arguments else ToolResult.error("tool.invalidArguments", field="_reason")
+        return ToolResult.json({"content": "note"}) if call.arguments.get("_reason", "").strip() else ToolResult.error("tool.invalidArguments", field="_reason")
 
     tool_registry._execute_definition.side_effect = execute
     if repair:
@@ -103,7 +122,7 @@ def test_reason_survives_persisted_history_projection():
     assert message_dict(message)["tool_calls"][0]["arguments"] == arguments
 
 
-@pytest.mark.parametrize("extra,valid", [({}, False), ({"_reason": None}, False), ({"_reason": " "}, False), ({"_reason": "Prüfen."}, True)])
-def test_prompt_evaluator_enforces_reason(extra, valid):
+@pytest.mark.parametrize("extra,valid", [({}, True), ({"_reason": None}, False), ({"_reason": " "}, False), ({"_reason": "Prüfen."}, True)])
+def test_prompt_evaluator_accepts_missing_reason_and_validates_supplied_value(extra, valid):
     case = PromptCase(id="reason-contract", kind="general", user="Lies note.txt.", tools=("read",))
     assert (not _validate_tool_calls(case, [read_call("read", **extra)])) is valid

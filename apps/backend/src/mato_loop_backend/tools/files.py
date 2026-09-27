@@ -40,8 +40,14 @@ from mato_loop_backend.files.service import (
     RootFileService,
     WorkingFileRevision,
 )
-from mato_loop_backend.media.attachments import AttachmentService
+from mato_loop_backend.media.attachments import (
+    MAX_IMAGE_ATTACHMENT_BYTES,
+    AttachmentService,
+    image_mime_type,
+    validate_image,
+)
 from mato_loop_backend.models import Message, MessageAttachment
+from mato_loop_backend.providers.service import normalize_provider_image
 from mato_loop_backend.settings import ToolExecutionPolicy
 from mato_loop_backend.tools.actions import (
     _FILE_PROVIDE,
@@ -198,6 +204,32 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
                     "contentIsUntrusted": True,
                 }
             )
+    if normalized_path.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
+        if arguments.root == "workspace":
+            client = files_access.workspace_client(context)
+            if not client.supports("filesystem.export"):
+                return ToolResult.error("executionAgent.operationUnavailable")
+            data = await client.read_bytes(normalized_path, limit=MAX_IMAGE_ATTACHMENT_BYTES)
+        else:
+            data = await asyncio.to_thread(
+                root_files.read_bytes, arguments.root, normalized_path,
+                limit=MAX_IMAGE_ATTACHMENT_BYTES,
+            )
+        if len(data) > MAX_IMAGE_ATTACHMENT_BYTES:
+            return ToolResult.error("file.tooLarge")
+        validated = validate_image(data, image_mime_type(data) or "")
+        image, mime_type = normalize_provider_image(data, validated)
+        result = ToolResult.json({
+            "root": arguments.root,
+            "path": normalized_path,
+            "image": {"filename": posixpath.basename(normalized_path), "mimeType": mime_type},
+            "contentIsUntrusted": True,
+        })
+        result.attachments = (ToolAttachment(
+            image, mime_type, posixpath.basename(normalized_path),
+            presentation="internal", ephemeral=True,
+        ),)
+        return result
     if arguments.root == "workspace":
         result = await files_access.workspace_request(
             context,

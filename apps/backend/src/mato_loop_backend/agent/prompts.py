@@ -230,7 +230,7 @@ def general_system_prompt(
     if offered_tool_names:
         parts.append(
             "For each tool with a _reason argument, include one concise sentence in the user's language "
-            "explaining why the action is needed. It is shown if approval is required."
+            "explaining why the action is needed when useful. It is shown if approval is required."
         )
     if "secret_input" in offered_tool_names:
         parts.append(
@@ -392,7 +392,7 @@ def general_system_prompt(
     if "session_tool_result_read" in offered_tool_names:
         parts.append(
             "Read relevant toolResultReference data with session_tool_result_read. Copy the reference "
-            "argument values unchanged and add the required _reason in the user's language. "
+            "argument values unchanged and add _reason in the user's language when useful. "
             "Use nextOffset for further chunks; never rerun the original tool."
         )
     if file_tools_available:

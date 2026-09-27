@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from PIL import Image
 from pydantic import ValidationError
 
 import mato_loop_backend.tools.interaction as mock_tools_interaction
@@ -136,7 +137,7 @@ def test_shell_tool_cannot_select_execution_targets() -> None:
         "environment",
         "timeout",
     }
-    assert shell["parameters"]["required"] == ["command", "_reason"]
+    assert shell["parameters"]["required"] == ["command"]
     assert "command's purpose" in shell["parameters"]["properties"]["_reason"]["description"]
     assert ShellRunArguments(command="pwd").timeout is None
     assert all(item["name"] != "process_exec" for item in tools.schemas())
@@ -159,22 +160,6 @@ def test_shell_tool_cannot_select_execution_targets() -> None:
             ToolExecutionPolicy.ASK,
         ),
     }
-
-
-async def test_model_tool_call_requires_permission_reason(tmp_path) -> None:
-    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
-    call = ToolCall("shell", "shell_run", {"command": "pwd"})
-    context = _context(tmp_path, call, client)
-    context.assistant_message_id = uuid4()
-
-    result = await _tools({"shell.run"}).execute(call, context)
-
-    error = json.loads(result.content)["error"]
-    assert error["code"] == "tool.invalidArguments"
-    assert error["field"] == "_reason"
-    assert tool_registry.action_default(
-        "shell.read", TrustLevel.PRIVATE, IntegrationSettings()
-    ) == ToolExecutionPolicy.AUTO
 
 
 async def test_execution_client_forwards_exact_arguments_without_context(monkeypatch) -> None:
@@ -376,6 +361,28 @@ async def test_workspace_read_dispatches_absolute_filesystem_path(tmp_path) -> N
     assert client.requests[0] == (
         "filesystem.stat",
         {"path": "/home/user/project/README.md"},
+    )
+
+
+async def test_workspace_read_sends_generated_image_to_model(tmp_path) -> None:
+    image = BytesIO()
+    Image.new("RGB", (2, 2), "white").save(image, format="PNG")
+    call = ToolCall("image", "read", {"root": "workspace", "path": "scanrand_probe.png"})
+    client = FakeExecutionClient({
+        "filesystem.stat": WorkspaceStatResult(
+            path="/home/user/project/scanrand_probe.png", kind="file",
+            size=len(image.getvalue()), modified_at=0.0,
+        ),
+    }, {"filesystem.stat", "filesystem.export"})
+    client.read_bytes = AsyncMock(return_value=image.getvalue())
+    result = await _tools(client.operations).execute(call, _context(tmp_path, call, client))
+
+    assert not result.is_error
+    assert json.loads(result.content)["image"]["mimeType"] == "image/png"
+    assert result.attachments[0].ephemeral is True
+    assert result.attachments[0].data == image.getvalue()
+    client.read_bytes.assert_awaited_once_with(
+        "/home/user/project/scanrand_probe.png", limit=64 * 1024 * 1024,
     )
 
 

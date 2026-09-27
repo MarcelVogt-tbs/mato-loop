@@ -190,6 +190,14 @@ def test_optional_viewer_connects_after_model_attachment(request_case):
             assert case.coordinator.connections[case.agent.id].attached
 
 
+def test_browser_control_without_reason_keeps_normal_approval(request_case):
+    case = request_case
+    case.context.tool_call.arguments.clear()
+
+    assert not case.start().result(timeout=3).is_error
+    assert case.approval.await_count == 1
+
+
 def test_denial_never_opens_browser(request_case):
     case = request_case
     case.approval.return_value = "deny"

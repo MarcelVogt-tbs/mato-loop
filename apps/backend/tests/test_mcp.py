@@ -269,7 +269,7 @@ def test_mcp_contribution_has_stable_schema_and_tool_resource_policy() -> None:
     definition = ToolRegistry._contributed_definition(contribution)
     context = SimpleNamespace(bound_options={"binding_revision": "{}"})
 
-    assert definition.schema()["parameters"]["required"] == ["query", "_reason"]
+    assert definition.schema()["parameters"]["required"] == ["query"]
     assert definition.validate_arguments({
         "query": "value", PERMISSION_REASON_ARGUMENT: "Lookup is required."
     }) == {"query": "value"}

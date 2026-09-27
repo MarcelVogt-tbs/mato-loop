@@ -1217,7 +1217,6 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
     assert schemas["delete_path"]["parameters"]["properties"]["recursive"]["default"] is False
     for name in {"copy_path", "move_path"}:
         assert set(schemas[name]["parameters"]["required"]) == {
-            "_reason",
             "source_root",
             "source_path",
             "destination_root",
@@ -1346,7 +1345,8 @@ def test_tool_catalog_exposes_types_but_model_schemas_do_not() -> None:
         )
         if schema["name"] == "change_directory"
     )
-    assert "_reason" in change_directory_schema["parameters"]["required"]
+    assert "_reason" in change_directory_schema["parameters"]["properties"]
+    assert "_reason" not in change_directory_schema["parameters"]["required"]
     assert {tool["toolType"] for tool in tools.values()} == {
         "backend",
         "computer",
@@ -3715,7 +3715,7 @@ async def test_session_search_shows_private_derived_titles_to_public_models(
 def test_session_tool_result_read_schema_uses_a_fixed_host_chunk_size() -> None:
     schema = tool_registry._definitions["session_tool_result_read"].schema()
 
-    assert schema["parameters"]["required"] == ["message_id", "_reason"]
+    assert schema["parameters"]["required"] == ["message_id"]
     assert schema["parameters"]["properties"]["offset"] == {
         "default": 0,
         "minimum": 0,
@@ -3729,9 +3729,10 @@ def test_session_discovery_and_anchor_schemas_keep_tasks_separate() -> None:
     search = tool_registry._definitions["session_search"].schema()
     read = tool_registry._definitions["session_read"].schema()
 
-    assert browse["parameters"]["required"] == ["_reason"]
+    assert "_reason" in browse["parameters"]["properties"]
+    assert "_reason" not in browse["parameters"].get("required", [])
     assert "query" not in browse["parameters"]["properties"]
-    assert search["parameters"]["required"] == ["query", "_reason"]
+    assert search["parameters"]["required"] == ["query"]
     assert "around_message_id" in read["parameters"]["properties"]
 
 
@@ -3941,7 +3942,7 @@ async def test_session_tool_result_read_returns_bounded_continuation_chunks(tmp_
 
 
 @pytest.mark.parametrize("trust_level", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
-async def test_session_tool_result_read_missing_reason_survives_projection_and_retry(
+async def test_session_tool_result_read_without_reason_survives_projection(
     tmp_path, trust_level,
 ) -> None:
     message = Message(
@@ -3961,19 +3962,11 @@ async def test_session_tool_result_read_missing_reason_survives_projection_and_r
     )
 
     result = await tool_registry.execute(call, context)
-    context.db.scalar.assert_not_awaited()
+    context.db.scalar.assert_awaited_once()
     page = Message(
         id=uuid4(), session_id=context.session.id, role="tool",
         tool_call_id=call.id, content=result.content, trust_level=trust_level.value,
     )
-    projected = _projection_messages("System", None, [reader, page], trust_level)
-    payload = json.loads(next(item["content"] for item in projected if item["role"] == "tool"))
-    assert payload["error"]["code"] == "tool.invalidArguments"
-    assert payload["error"]["field"] == "_reason"
-
-    call.arguments["_reason"] = "Die bereits gelesene Dokumentation wird für die Fortsetzung benötigt."
-    result = await tool_registry.execute(call, context)
-    page.content = result.content
     projected = _projection_messages("System", None, [reader, page], trust_level)
     payload = json.loads(next(item["content"] for item in projected if item["role"] == "tool"))
     assert payload["messageId"] == str(message.id)
@@ -4822,6 +4815,24 @@ async def test_read_reports_invalid_encoding_for_managed_binary_file(tmp_path) -
     assert result.metadata == {"errorCode": "file.invalidEncoding"}
 
 
+async def test_read_generated_session_image_without_attachment_record(tmp_path) -> None:
+    image = BytesIO()
+    Image.new("RGB", (2, 2), "white").save(image, format="PNG")
+    call = ToolCall("image", "read", {"root": "session", "path": "scanrand_probe.png"})
+    context = _context(tmp_path, call)
+    context.root_files.create_file(
+        FileRoot.SESSION, "scanrand_probe.png", BytesIO(image.getvalue()), max_bytes=1000,
+    )
+    context.db.scalar.return_value = None
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    assert result.attachments[0].ephemeral is True
+    assert result.attachments[0].data == image.getvalue()
+    assert json.loads(result.content)["contentIsUntrusted"] is True
+
+
 def test_webfetch_schema_has_the_expected_contract() -> None:
     schema = next(
         item.schema()
@@ -4859,7 +4870,7 @@ def test_fetch_transcript_schema_has_the_expected_contract() -> None:
         "url",
         "language",
     }
-    assert schema["parameters"]["required"] == ["url", "_reason"]
+    assert schema["parameters"]["required"] == ["url"]
     assert schema["parameters"]["properties"]["language"]["default"] is None
 
 
@@ -4880,13 +4891,13 @@ def test_skill_write_schemas_delegate_compact_briefs() -> None:
         "brief",
         "name_hint",
     }
-    assert build_schema["required"] == ["brief", "_reason"]
+    assert build_schema["required"] == ["brief"]
     assert set(edit_schema["properties"]) == {
         "_reason",
         "skill_id",
         "brief",
     }
-    assert edit_schema["required"] == ["skill_id", "brief", "_reason"]
+    assert edit_schema["required"] == ["skill_id", "brief"]
 
 
 def test_tool_schemas_remove_annotative_titles_recursively() -> None:
