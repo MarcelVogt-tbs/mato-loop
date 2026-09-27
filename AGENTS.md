@@ -118,16 +118,19 @@ Example:
 
 ## Validation
 
-When a regression test is warranted, test the reported failure with the smallest observable assertion. Mock only unavoidable boundaries; include adjacent workflows only when they address a separate regression risk.
+- Match validation effort to the changed behavior and its risk. For small, reversible UI fixes, prefer existing coverage; add one focused regression test only when it provides meaningful protection.
+- When a regression test is warranted, test the reported failure with the smallest observable assertion. Mock only unavoidable boundaries. Add variants or adjacent workflows only for a distinct regression risk, not to repeat the same condition across views.
+- Start with the narrowest relevant checks supported by `./scripts/dev.sh`. Run broader suites or full builds for cross-cutting changes, relevant failures, or explicit requirements. If the script only supports a whole target suite, run it without adding test infrastructure just to narrow execution. Stop once the relevant checks pass unless new evidence warrants more validation.
+- Do not reduce necessary coverage for security, permissions, input validation, or data-loss prevention. Documentation-only changes need a diff review, not application tests or builds.
 
-Prefer checks through the Docker development stack:
+Run checks through the Docker development stack. Repository-wide checks, when warranted:
 
 ```bash
 ./scripts/dev.sh check
 ./scripts/dev.sh test
 ```
 
-Targeted checks are also available:
+Prefer the relevant target:
 
 ```bash
 ./scripts/dev.sh check backend
@@ -139,7 +142,7 @@ Targeted checks are also available:
 ./scripts/dev.sh db current
 ```
 
-For UI changes, verify at least desktop and mobile in light and dark mode. For API errors, verify both the backend contract and the human-readable frontend message.
+For UI changes, verify the affected interaction. Check desktop and mobile when layout or responsive behavior is affected, and light and dark mode when theme-dependent appearance is affected; do not automatically require all four combinations for every UI change. If visual verification is unavailable, state that briefly and request screenshots only to resolve a concrete visual uncertainty. For API errors, verify both the backend contract and the human-readable frontend message.
 
 ## CI and Releases
 
