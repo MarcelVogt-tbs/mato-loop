@@ -1888,7 +1888,7 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "current events, prices, availability, laws" in prompt
     assert "recommendations" in prompt
     assert "Do not search stable knowledge" in prompt
-    assert "merely difficult tasks" in prompt
+    assert "or supplied text" in prompt
     assert "For open comparisons" in prompt
     assert "verify credible alternatives" in prompt
     assert "stop when evidence is sufficient" in prompt
@@ -1909,10 +1909,10 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "invent numbers" in prompt
     assert "Current-turn research requires" in prompt
     assert "never use sourceId" in prompt
-    assert "directly after each supported claim" in prompt
-    assert "use at most two links per claim" in prompt
+    assert "after each claim" in prompt
+    assert "Use at most two links per claim" in prompt
     assert "Research budget limit:" not in prompt
-    assert "Copy it exactly" in prompt
+    assert "Copy returned links exactly" in prompt
 
 
 def test_webfetch_browser_fallback_prompt_matches_available_control() -> None:
@@ -2060,11 +2060,12 @@ def test_system_prompt_describes_managed_file_roots() -> None:
         offered_tool_names=frozenset({"read", "glob", "grep", "provide_file"}),
     )
 
-    assert "explicit root plus relative POSIX path" in prompt
-    assert "'.' is root" in prompt
-    assert "Path has no root name, files/ prefix, or absolute form" in prompt
-    assert "exact unused destination" in prompt
+    assert "explicit root and relative POSIX path" in prompt
+    assert "'.' for root" in prompt
+    assert "no absolute path or root prefix" in prompt
+    assert "unused destination" in prompt
     assert "root=files is managed" in prompt
+    assert "file.accessDenied is not permission.userDenied" not in prompt
     assert "revisioned" not in prompt
     assert "No computer directory selected. Use root=files." in prompt
     assert "user explicitly requests a file, image result, download, or ZIP" in prompt
@@ -3087,7 +3088,11 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     assert "Read AGENTS.md before relevant repository work" in work
     assert "Read AGENTS.md" not in general
     assert "skip unrelated tasks" in work
-    assert "Use the supplied file tools instead of shell commands" in general
+    assert "Prefer file tools." in general
+    assert "file.accessDenied is not permission.userDenied" not in general
+    assert "file.accessDenied is not permission.userDenied" in general_system_prompt(
+        session, agent_profile=general_profile(), offered_tool_names=tools | {"shell_run"},
+    )
     assert "Verify code with tests and other claims with suitable evidence" in work
 
 

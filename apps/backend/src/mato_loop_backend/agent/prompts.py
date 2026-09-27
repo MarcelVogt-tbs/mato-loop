@@ -288,8 +288,7 @@ def general_system_prompt(
             [
                 "Search when freshness matters: current events, prices, availability, laws, office "
                 "holders, versions, APIs, compatibility, recommendations, or explicit requests for "
-                "current information, verification, or sources. Do not search stable knowledge, reasoning, "
-                "writing, translation, supplied-text summaries, or merely difficult tasks.",
+                "current information, verification, or sources. Do not search stable knowledge or supplied text.",
                 "For open comparisons, verify credible alternatives; stop when evidence is sufficient.",
                 "Use one discriminative query per information need. Preserve relationships, exact names, "
                 "models, versions, and error codes; reformulate failed, empty, or irrelevant searches.",
@@ -304,6 +303,8 @@ def general_system_prompt(
                 "Once a relevant page or document URL is known, fetch it instead of re-searching that candidate. "
                 "Fetch exact pages for prices, availability, compatibility, variants, and specifications; never merge "
                 "model codes, and qualify or omit absent claims.",
+                "Reuse session fetches; read omitted results with session_tool_result_read when offered. "
+                "Refetch for changed, missing, or stale evidence.",
                 "Never invent image URLs. Fetch the exact URL, prefer its attachment as research input, and "
                 "do not repeat the remote URL. Request pdf_pages for PDF layouts.",
             ]
@@ -316,11 +317,9 @@ def general_system_prompt(
     if execution_agent_connected and "shell_run" in offered_tool_names:
         parts.append(
             "Use the most suitable available tool. Prefer dedicated tools and established "
-            "command-line utilities over custom scripts. Give each shell call one clear purpose. "
-            "Keep reads of protected files or possible secret output separate from ordinary diagnostics. "
-            "Prefer non-secret metadata and avoid repeating protected reads. Avoid decorative echo "
-            "labels; format necessary multi-step commands for review. Do not add preliminary checks, "
-            "fallbacks, diagnostics, or branches unless required for correctness."
+            "command-line utilities over custom scripts. Give each shell call one purpose. "
+            "Separate protected reads from diagnostics; avoid repeating them. Keep commands "
+            "reviewable; skip needless pre-checks and fallbacks."
         )
         parts.append(
             "Tool routing: Prefer shell_run for direct API requests, custom HTTP, pagination, multiple "
@@ -366,10 +365,9 @@ def general_system_prompt(
             "or omit it."
         )
         research_instructions.append(
-            "Current-turn research requires an eligible [returned title](returned URL), or "
-            "[hostname](returned URL), directly after each supported claim. Copy it exactly; never use "
-            "sourceId, URL paths, or generic labels. Do not request sources already present; use at most "
-            "two links per claim and stop when evidence supports a useful answer."
+            "Current-turn research requires an eligible [returned title](returned URL) or "
+            "[hostname](returned URL) after each claim. Copy returned links exactly; never use "
+            "sourceId, URL paths, or generic labels. Use at most two links per claim."
         )
         if research_tools_exhausted:
             runtime_parts.append(
@@ -397,12 +395,16 @@ def general_system_prompt(
         )
     if file_tools_available:
         parts.append(
-            "Use the supplied file tools instead of shell commands when they fit; shell for other tasks. "
-            "Batch independent calls with known paths and purpose. Scope reads and searches; wait for "
-            "discovery before new reads. Use explicit root plus relative POSIX path; '.' is root. "
-            "Path has no root name, files/ prefix, or absolute form. root=files is managed; "
-            "root=computer uses its selected directory. "
-            "Copy and move need an exact unused destination."
+            "Prefer file tools. "
+            + (
+                "file.accessDenied is not permission.userDenied. Try a different shell_run command "
+                "(sudo if requested) under its own inspection and permissions. Never bypass denied "
+                "approval, disabled capability, or hard path boundary. "
+                if "shell_run" in offered_tool_names else ""
+            )
+            + "Batch known independent calls. Scope reads and searches. Use explicit root and "
+            "relative POSIX path ('.' for root; no absolute path or root prefix). root=files is "
+            "managed; root=computer uses its selected directory. Copy and move need an unused destination."
         )
     if "write_file" in offered_tool_names:
         parts.append(

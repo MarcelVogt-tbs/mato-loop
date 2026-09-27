@@ -334,18 +334,16 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
     assert rule not in offline_messages[0]["content"]
     command_rule = (
         "Use the most suitable available tool. Prefer dedicated tools and established "
-        "command-line utilities over custom scripts. Give each shell call one clear purpose. "
-        "Keep reads of protected files or possible secret output separate from ordinary diagnostics. "
-        "Prefer non-secret metadata and avoid repeating protected reads. Avoid decorative echo "
-        "labels; format necessary multi-step commands for review. Do not add preliminary checks, "
-        "fallbacks, diagnostics, or branches unless required for correctness."
+        "command-line utilities over custom scripts. Give each shell call one purpose. "
+        "Separate protected reads from diagnostics; avoid repeating them. Keep commands "
+        "reviewable; skip needless pre-checks and fallbacks."
     )
     assert messages[0]["content"].count(command_rule) == 1
     assert command_rule not in offline_messages[0]["content"]
     growth = prompt_eval.estimate_tokens(messages[0]["content"], 4.0) - prompt_eval.estimate_tokens(
         offline_messages[0]["content"], 4.0
     )
-    assert 185 <= growth <= 200
+    assert 100 <= growth <= 150
 
     shell_only_messages, _tools = build_case(
         replace(case, tools=("shell_run",))
@@ -572,7 +570,7 @@ def test_prompt_slimming_schema_variants_preserve_tools_and_validation_shape() -
     assert [tool["name"] for tool in current] == [tool["name"] for tool in structural]
     assert [tool["name"] for tool in current] == [tool["name"] for tool in compact]
     assert len(json.dumps(compact)) < len(json.dumps(structural)) < len(json.dumps(current))
-    assert prose_v2 == current
+    assert prose_v2 != current
     for baseline, candidate in zip(current, compact, strict=True):
         assert set(candidate["parameters"].get("properties", {})) == set(
             baseline["parameters"].get("properties", {})
@@ -2362,10 +2360,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 138
-    assert payload["contractCount"] == 361
-    assert "Cases: 223" in report
+    assert payload["contractCount"] == 364
+    assert "Cases: 226" in report
     assert "Semantic contracts: 138" in report
-    assert "All inventory rows: 361" in report
+    assert "All inventory rows: 364" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report
