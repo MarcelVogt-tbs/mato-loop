@@ -246,6 +246,8 @@ async def execute_loop_body(
         if continuation_received or continuation_context_stale:
             selected_execution_agent = None
             memory_cache.invalidate(continuation=True)
+            if project is not None:
+                await db.refresh(project)
             continuation_context_stale = False
         tool_budget_exhausted = budget_finalization or (
             tool_call_limit is not None and tool_calls_used >= tool_call_limit

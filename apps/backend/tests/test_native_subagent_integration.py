@@ -17,6 +17,7 @@ import mato_loop_backend.agent.runtime as mock_agent_runtime
 import mato_loop_backend.agent.summarization as mock_agent_summarization
 import mato_loop_backend.agent.titles as mock_agent_titles
 import mato_loop_backend.tools.web as mock_tools_web
+import mato_loop_backend.web_push as mock_web_push
 from mato_loop_backend.agent import subagents
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import register_error_handlers
@@ -26,7 +27,14 @@ from mato_loop_backend.db.base import Base
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.events import run_events
 from mato_loop_backend.files.storage import SessionStorage
-from mato_loop_backend.models import AgentRun, ApprovalRequest, ChatSession, Message, UserAccount
+from mato_loop_backend.models import (
+    AgentRun,
+    ApprovalRequest,
+    ChatSession,
+    Message,
+    Project,
+    UserAccount,
+)
 from mato_loop_backend.permissions.decisions import decide_agent_action
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
@@ -61,7 +69,7 @@ async def native_database(request, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "embedding_enabled", False)
     monkeypatch.setattr(config, "web_push_enabled", False)
     _mock_value = factory
-    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles, mock_web_push):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(subagents, "AsyncSessionFactory", factory)
     async with admin.begin() as db:
@@ -123,6 +131,64 @@ async def _events(run_id, event_type, count=1):
                     return found
             if event["type"] == "run.failed":
                 pytest.fail(f"Run failed before {event_type}: {event}")
+
+
+@pytest.mark.parametrize("with_project", [False, True], ids=["without-project", "with-project"])
+async def test_direct_message_during_model_response(native_database, monkeypatch, with_project):
+    fixture = native_database
+    session_id, run_id, message_id = uuid4(), uuid4(), uuid4()
+    fixture.owned_runs.add(run_id)
+    started = asyncio.Event()
+    requests = []
+
+    async def complete(db, **kwargs):
+        requests.append(kwargs)
+        if len(requests) == 1:
+            await kwargs["on_delta"]("Partial answer")
+            started.set()
+            await asyncio.Future()
+        return ProviderResult(content="Updated answer", finish_reason="stop")
+
+    monkeypatch.setattr(ProviderService, "complete", complete)
+    async with fixture.factory() as db:
+        project = None
+        if with_project:
+            project = Project(user_id=fixture.user.id, name="Continuation regression")
+            db.add(project)
+            await db.flush()
+        session = ChatSession(
+            id=session_id, user_id=fixture.user.id,
+            project_id=project.id if project else None,
+            title="Direct message regression", title_generation_status="skipped",
+            agent_profile_id=BUILD_PROFILE_ID, model_config_id=fixture.model.id,
+            memory_mode="disabled", web_search_policy="available",
+        )
+        db.add(session)
+        await db.flush()
+        SessionStorage().provision(session_id, session.project_id)
+        await AgentRuntime.start(db, session, "Prepare a PDF.", run_id=run_id)
+
+    await asyncio.wait_for(started.wait(), timeout=20)
+    response = await fixture.client.post(
+        f"/api/sessions/{session_id}/runs/{run_id}/messages",
+        json={"message_id": str(message_id), "content": "Keep the PDF file small."},
+    )
+    assert response.status_code == 202, response.text
+    assert response.json()["runId"] == str(run_id)
+    async with asyncio.timeout(20), aclosing(run_events.subscribe(run_id)) as stream:
+        async for event in stream:
+            if event["type"] in {"run.completed", "run.failed"}:
+                break
+
+    async with fixture.factory() as db:
+        message = await db.get(Message, message_id)
+        assert message.content == "Keep the PDF file small."
+        assert message.provider_data["_matoloop"]["continuationRunId"] == str(run_id)
+        run = await db.get(AgentRun, run_id)
+        assert run.status == "completed", run.error
+        assert (await db.get(Message, run.result_message_id)).content == "Updated answer"
+    assert len(requests) == 2
+    assert "Keep the PDF file small." in str(requests[-1]["messages"])
 
 
 @pytest.mark.parametrize("profile_id", [PLAN_PROFILE_ID, BUILD_PROFILE_ID], ids=["plan", "build"])
