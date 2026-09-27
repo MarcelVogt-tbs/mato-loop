@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { copyToClipboard } from 'quasar'
 import FileViewerApp from '../src/features/files/components/FileViewerApp.vue'
 import FileViewerPanel from '../src/features/files/components/FileViewerPanel.vue'
+import ImageViewerPanel from '../src/features/files/components/ImageViewerPanel.vue'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { useWorkspaceStore } from '../src/stores/workspace'
 
@@ -43,7 +44,6 @@ vi.mock('src/features/files/components/WorkspaceFileEditor.vue', () => ({ __esMo
     ])
   }
 } }))
-vi.mock('src/features/files/components/ImageViewerPanel.vue', () => ({ default: { render: () => null } }))
 
 let app
 beforeEach(() => { mocks.confirm.mockReset(); mocks.api.get.mockReset(); mocks.api.put.mockReset(); copyToClipboard.mockReset() })
@@ -139,7 +139,7 @@ it('activates a historical revision only after confirmation', async () => {
   expect(activate).toHaveBeenCalledWith('note.txt', 1, state)
 })
 
-async function mountLiveViewer({ kind = 'text', path = 'note.txt', toolContext = null, toolbar, viaApp = false, fullscreenToggle = false, previewError = null } = {}) {
+async function mountLiveViewer({ kind = 'text', path = 'note.txt', toolContext = null, toolbar, viaApp = false, fullscreen = false, fullscreenToggle = false, previewError = null } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const workspace = useWorkspaceStore()
@@ -159,7 +159,7 @@ async function mountLiveViewer({ kind = 'text', path = 'note.txt', toolContext =
   const tab = { tabId: 'file-a', kind: 'file', fileTarget: workspace.fileTarget(workspace.viewedEntry) }
   app = createApp({ render: () => h(
     viaApp ? FileViewerApp : FileViewerPanel,
-    viaApp ? { tab } : { entry: workspace.viewedEntry, fullscreenToggle, onToggleFullscreen: toggleFullscreen },
+    viaApp ? { tab } : { entry: workspace.viewedEntry, fullscreen, fullscreenToggle, onToggleFullscreen: toggleFullscreen },
     toolbar ? { toolbar } : undefined
   ) })
   app.use(pinia)
@@ -205,6 +205,28 @@ function button(root, label) {
   expect(element, label).toBeTruthy()
   return element
 }
+
+it('offers an exit for a fullscreen image without enabling the fullscreen toggle', () => {
+  const root = document.createElement('div')
+  const exit = vi.fn()
+  app = createApp({ render: () => h(ImageViewerPanel, {
+    image: { url: '/image.png', name: 'image.png' }, fullscreen: true, onToggleFullscreen: exit
+  }) })
+  for (const name of ['QToolbar', 'QToolbarTitle', 'QTooltip', 'QSeparator', 'QSpinner']) {
+    app.component(name, { render() { return h('div', this.$attrs, this.$slots.default?.()) } })
+  }
+  app.component('QBtn', { render() { return h('button', this.$attrs, this.$slots.default?.()) } })
+  app.mount(root)
+
+  button(root, 'Vollbild verlassen').click()
+  expect(exit).toHaveBeenCalledOnce()
+})
+
+it.each(['image', 'text'])('offers an exit for fullscreen %s without enabling the fullscreen toggle', async (kind) => {
+  const { root, toggleFullscreen } = await mountLiveViewer({ kind, fullscreen: true })
+  button(root, 'Vollbild verlassen').click()
+  expect(toggleFullscreen).toHaveBeenCalledOnce()
+})
 
 it('explains that a historical workspace output can have been moved or deleted', async () => {
   const error = { response: { status: 404, data: { error: { code: 'file.pathNotFound' } } } }

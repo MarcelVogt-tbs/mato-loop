@@ -102,7 +102,7 @@
           <q-tooltip>Gespeicherte Datei herunterladen</q-tooltip>
         </q-btn>
         <q-btn
-          v-if="fullscreenToggle"
+          v-if="fullscreen || fullscreenToggle"
           class="file-icon-action"
           flat
           round
@@ -195,7 +195,7 @@
           <q-item-section>Gespeicherte Datei herunterladen</q-item-section>
         </q-item>
         <q-item
-          v-if="fullscreenToggle"
+          v-if="fullscreen || fullscreenToggle"
           clickable v-close-popup
           :aria-label="fullscreen ? 'Vollbild verlassen' : 'Im Vollbild öffnen'"
           @click="emit('toggle-fullscreen')"

@@ -25,7 +25,7 @@
         <q-tooltip>Herunterladen</q-tooltip>
       </q-btn>
       <q-btn
-        v-if="fullscreenToggle"
+        v-if="fullscreen || fullscreenToggle"
         class="file-icon-action"
         flat
         round
