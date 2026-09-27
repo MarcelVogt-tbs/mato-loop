@@ -1146,7 +1146,10 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
 
 READ = ToolDefinition(
             "read",
-            "Read a current directory, text, or image with optional pagination.",
+            "Read a directory, UTF-8 text, or PNG/JPEG/WebP/GIF image. "
+            "Pagination applies to directories and text. "
+            "To inspect an image, read its source path in root=computer or root=files directly; "
+            "do not copy it or call provide_file first.",
             ReadArguments,
             _read,
             tool_type="shared",
