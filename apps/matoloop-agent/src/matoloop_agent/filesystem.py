@@ -217,7 +217,9 @@ class Filesystem:
             name = absolute.rsplit("/", 1)[-1] or "."
             try:
                 parent_fd = self._open_dir(
-                    root_fd, tuple(part for part in absolute.split("/")[1:-1] if part)
+                    root_fd,
+                    tuple(part for part in absolute.split("/")[1:-1] if part),
+                    path_only=True,
                 )
             except AgentError as exc:
                 if not isinstance(exc.__cause__, FileNotFoundError):
@@ -237,6 +239,8 @@ class Filesystem:
                 if must_exist:
                     raise AgentError("path.notFound", "Path target is unavailable") from exc
                 metadata = None
+            except PermissionError as exc:
+                raise AgentError("path.accessDenied", "Path access was denied") from exc
             except OSError as exc:
                 raise AgentError("path.unavailable", "Path target is unavailable") from exc
             finally:
@@ -394,13 +398,19 @@ class Filesystem:
             os.close(fd)
 
     @staticmethod
-    def _open_dir(root_fd: int, parts: tuple[str, ...]) -> int:
+    def _open_dir(root_fd: int, parts: tuple[str, ...], *, path_only: bool = False) -> int:
         fd = os.dup(root_fd)
+        # Inspection needs search permission, not directory enumeration; content operations
+        # retain readable descriptors for listing and durability (fsync).
+        flags = (
+            (os.O_PATH if path_only else os.O_RDONLY)
+            | os.O_DIRECTORY
+            | os.O_NOFOLLOW
+            | os.O_CLOEXEC
+        )
         try:
             for part in parts:
-                child = os.open(
-                    part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd
-                )
+                child = os.open(part, flags, dir_fd=fd)
                 os.close(fd)
                 fd = child
             return fd

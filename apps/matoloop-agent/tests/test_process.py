@@ -2,7 +2,10 @@ import asyncio
 import os
 import shlex
 import stat
+import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -31,6 +34,74 @@ def configuration(home: Path) -> AgentConfig:
 
 
 class ProcessTests(unittest.IsolatedAsyncioTestCase):
+    def test_inspection_respects_search_permissions_without_requiring_directory_reads(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                textwrap.dedent("""
+                    import os
+                    import tempfile
+                    import unittest
+                    from pathlib import Path
+
+                    from matoloop_agent.config import AgentConfig
+                    from matoloop_agent.filesystem import AgentError, Filesystem
+                    from matoloop_agent.process import ProcessRunner
+
+                    # Exercise actual kernel permissions even in the root-run development container.
+                    if os.geteuid() == 0:
+                        os.setgroups([])
+                        os.setgid(65534)
+                        os.setuid(65534)
+                    check = unittest.TestCase()
+                    with tempfile.TemporaryDirectory() as temporary:
+                        root = Path(temporary)
+                        parent = root / "protected"
+                        parent.mkdir()
+                        target = parent / "file"
+                        target.write_text("private")
+                        target.chmod(0)
+                        config = AgentConfig(homeDirectory=root)
+                        filesystem = Filesystem(config)
+                        runner = ProcessRunner(config, filesystem)
+                        try:
+                            for mode in (0o700, 0o100, 0):
+                                parent.chmod(mode)
+                                for command in (f"cat {target}", f"sudo -n cat {target}"):
+                                    if mode:
+                                        metadata = target.stat()
+                                        inspection = runner.inspect_shell(command, str(root))
+                                        inspected = next(
+                                            t for t in inspection["targets"]
+                                            if t["path"] == str(target)
+                                        )
+                                        check.assertEqual(inspected["inode"], metadata.st_ino)
+                                    else:
+                                        with check.assertRaises(PermissionError):
+                                            target.stat()
+                                        with check.assertRaises(AgentError) as raised:
+                                            runner.inspect_shell(command, str(root))
+                                        check.assertEqual(
+                                            raised.exception.code, "path.accessDenied"
+                                        )
+                                with check.assertRaises(AgentError) as raised:
+                                    filesystem.read(str(target), 1, 1, 100)
+                                check.assertEqual(raised.exception.code, "path.accessDenied")
+                                if mode != 0o700:
+                                    with check.assertRaises(AgentError) as raised:
+                                        filesystem.list(str(parent), 0, 10)
+                                    check.assertEqual(raised.exception.code, "path.accessDenied")
+                        finally:
+                            parent.chmod(0o700)
+                    """),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     async def test_exec_uses_absolute_descriptor_validated_cwd(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

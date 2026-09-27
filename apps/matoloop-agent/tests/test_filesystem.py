@@ -103,7 +103,7 @@ class FilesystemTests(unittest.TestCase):
         ):
             with self.assertRaises(AgentError) as raised:
                 self.filesystem.resolve_path_target("real/file", str(self.root), must_exist=False)
-        self.assertEqual(raised.exception.code, "path.unavailable")
+        self.assertEqual(raised.exception.code, "path.accessDenied")
         self.assertNotIn("private detail", str(raised.exception))
         for path in (".", "real/..", "real/"):
             self.assertEqual(
