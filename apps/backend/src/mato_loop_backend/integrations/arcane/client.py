@@ -64,7 +64,7 @@ class ArcaneClient:
         # Paths are assembled only from host-known fragments and encoded identifiers.
         if not path.startswith("/") or ".." in path or "?" in path or "#" in path:
             raise ValueError("invalid Arcane API path")
-        url = self._base.copy_with(raw_path=self._base.raw_path + b"/api" + path.encode())
+        url = self._base.copy_with(raw_path=self._base.raw_path.rstrip(b"/") + b"/api" + path.encode())
         if params:
             url = url.copy_with(params=params)
         request = self._client.build_request(

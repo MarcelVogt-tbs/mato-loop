@@ -68,9 +68,12 @@ async def test_arcane_request_limits_origin_and_requires_stream_completion():
             assert await client.request("POST", "/environments/0/projects/x/up", streamed=True) == {
                 "completed": True, "activityId": "run-1"
             }
+        async with ArcaneClient("https://arcane.example.test", "test-key", client=transport) as client:
+            await client.request("GET", "/environments")
     assert requests[0].url.path == "/panel/api/environments"
     assert requests[0].headers["X-Api-Key"] == "test-key"
     assert requests[1].url.path == "/panel/api/environments/0/projects/x/up"
+    assert requests[2].url.path == "/api/environments"
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, content=b'{"log":"working"}\n'))) as transport:
         async with ArcaneClient("https://arcane.example.test", "test-key", client=transport) as client:
