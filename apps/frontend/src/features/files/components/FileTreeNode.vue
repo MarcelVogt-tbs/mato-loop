@@ -66,6 +66,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { attachmentIcon } from 'src/utils/attachments'
 import { useWorkspaceStore } from 'stores/workspace'
 
 defineOptions({ name: 'FileTreeNode' })
@@ -89,9 +90,11 @@ const canDownload = computed(() => (
   props.entry.kind === 'file' && workspace.operationAvailable('filesystem.export')
 ))
 const visible = computed(() => !props.filter || props.entry.name.toLocaleLowerCase().includes(props.filter.toLocaleLowerCase()))
-const icon = computed(() => props.entry.currentSession
-  ? 'folder_special'
-  : ({ directory: 'folder', symlink: 'link', file: 'description' })[props.entry.kind])
+const icon = computed(() => {
+  if (props.entry.currentSession) return 'folder_special'
+  if (props.entry.kind === 'file') return attachmentIcon({ filename: props.entry.name })
+  return ({ directory: 'folder', symlink: 'link' })[props.entry.kind]
+})
 
 function activate() {
   if (props.entry.kind === 'directory') {

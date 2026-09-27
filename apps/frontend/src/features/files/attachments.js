@@ -18,6 +18,21 @@ const PROVIDED_IMAGE_MIME_TYPES = new Map([
   ['.webp', 'image/webp']
 ])
 const UUID_PATTERN = new RegExp(`^${UUID}$`, 'i')
+const FILE_EXTENSION_ICONS = {
+  pdf: 'picture_as_pdf',
+  doc: 'article', docx: 'article', odt: 'article', rtf: 'article',
+  xls: 'table_view', xlsx: 'table_view', ods: 'table_view', csv: 'table_view', tsv: 'table_view',
+  ppt: 'slideshow', pptx: 'slideshow', odp: 'slideshow',
+  zip: 'folder_zip', rar: 'folder_zip', '7z': 'folder_zip', tar: 'folder_zip',
+  gz: 'folder_zip', tgz: 'folder_zip', bz2: 'folder_zip', xz: 'folder_zip',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', svg: 'image',
+  mp3: 'audio_file', wav: 'audio_file', ogg: 'audio_file', flac: 'audio_file', m4a: 'audio_file',
+  mp4: 'video_file', webm: 'video_file', mov: 'video_file', avi: 'video_file', mkv: 'video_file',
+  txt: 'description', md: 'description', log: 'description',
+  js: 'code', ts: 'code', py: 'code', html: 'code', css: 'code',
+  json: 'code', xml: 'code', yaml: 'code', yml: 'code', sh: 'code', sql: 'code',
+  stl: 'view_in_ar', off: 'view_in_ar'
+}
 
 export function validRelativePath(value, allowRoot = false) {
   if (value === '.') return allowRoot
@@ -323,15 +338,20 @@ export function attachmentIcon(attachment) {
   if (attachment?.kind === 'image') return 'image'
   if (attachment?.kind === 'audio') return 'audio_file'
   if (attachment?.kind === 'video') return 'video_file'
-  const mimeType = String(attachment?.mimeType || '')
-  if (['model/stl', 'model/vnd.off'].includes(mimeType)
-    || /\.(stl|off)$/i.test(attachment?.filename || '')) return 'view_in_ar'
+  const mimeType = String(attachment?.mimeType || '').split(';', 1)[0].trim().toLowerCase()
+  const extension = String(attachment?.filename || '').match(/\.([^.]+)$/u)?.[1].toLowerCase()
+  if (['model/stl', 'model/vnd.off'].includes(mimeType)) return 'view_in_ar'
   if (mimeType === 'application/pdf') return 'picture_as_pdf'
-  if (attachment?.kind === 'text' || mimeType.startsWith('text/')) return 'description'
-  if (mimeType.includes('spreadsheet') || mimeType.includes('excel')) return 'table_view'
+  if (mimeType === 'text/csv' || mimeType.includes('spreadsheet') || mimeType.includes('excel')) return 'table_view'
   if (mimeType.includes('presentation') || mimeType.includes('powerpoint')) return 'slideshow'
-  if (mimeType.includes('zip') || mimeType.includes('compressed')) return 'folder_zip'
-  return attachment?.kind === 'document' ? 'article' : 'draft'
+  if (/(zip|compressed|gzip|tar|rar)/u.test(mimeType)) return 'folder_zip'
+  if (mimeType.includes('wordprocessing') || mimeType.includes('msword') || mimeType.includes('opendocument.text')) return 'article'
+  if (Object.hasOwn(FILE_EXTENSION_ICONS, extension)) return FILE_EXTENSION_ICONS[extension]
+  if (mimeType.startsWith('image/')) return 'image'
+  if (mimeType.startsWith('audio/')) return 'audio_file'
+  if (mimeType.startsWith('video/')) return 'video_file'
+  if (attachment?.kind === 'text' || mimeType.startsWith('text/')) return 'description'
+  return attachment?.kind === 'document' ? 'article' : 'insert_drive_file'
 }
 
 export function formatAttachmentSize(value) {

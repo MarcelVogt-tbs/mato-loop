@@ -1,3 +1,5 @@
+import { attachmentIcon } from 'src/utils/attachments'
+
 function clipboardFilename(file, now) {
   if (String(file?.name || '').trim() && file.name !== 'image.png') return file
   const date = now instanceof Date ? now : new Date(now)
@@ -47,12 +49,5 @@ export function attachmentDraftLabel(attachment) {
 }
 
 export function attachmentDraftIcon(attachment) {
-  if (attachment?.kind === 'image') return 'image'
-  if (attachment?.kind === 'audio') return 'audio_file'
-  if (attachment?.kind === 'video') return 'video_file'
-  const mimeType = String(attachment?.mimeType || '')
-  if (mimeType === 'application/pdf') return 'picture_as_pdf'
-  if (mimeType.startsWith('text/')) return 'description'
-  if (mimeType.includes('spreadsheet') || mimeType.includes('excel')) return 'table_view'
-  return 'draft'
+  return attachmentIcon({ ...attachment, filename: attachment?.file?.name })
 }

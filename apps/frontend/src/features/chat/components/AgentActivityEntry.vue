@@ -164,7 +164,7 @@
           :key="`${action.rootIdentity || action.executionAgentId}:${action.path}`"
           class="work-history__file-output app-surface"
         >
-          <q-icon name="draft" color="primary" size="24px" />
+          <q-icon :name="attachmentIcon(action)" color="primary" size="24px" />
           <span class="col ellipsis text-weight-medium">{{ action.filename }}</span>
           <q-btn
             v-if="!readOnly"
@@ -200,6 +200,7 @@ import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
 import MessageAttachments from 'src/features/chat/components/MessageAttachments.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
+import { attachmentIcon } from 'src/utils/attachments'
 import { parseToolResult, shellCommand, toolIdentity, toolPresentation, toolStatus } from 'src/utils/tool-display'
 
 defineOptions({ name: 'AgentActivityEntry' })

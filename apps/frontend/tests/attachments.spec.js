@@ -335,6 +335,33 @@ describe('persisted attachments', () => {
     expect(attachmentIcon(attachments[5])).toBe('folder_zip')
   })
 
+  it.each([
+    ['Bericht.PDF', 'picture_as_pdf'],
+    ['Bericht.docx', 'article'],
+    ['Tabelle.xlsx', 'table_view'],
+    ['Daten.csv', 'table_view'],
+    ['Folien.pptx', 'slideshow'],
+    ['Archiv.zip', 'folder_zip'],
+    ['Archiv.7z', 'folder_zip'],
+    ['Archiv.tar.gz', 'folder_zip'],
+    ['Bild.png', 'image'],
+    ['Ton.mp3', 'audio_file'],
+    ['Film.mp4', 'video_file'],
+    ['Notiz.md', 'description'],
+    ['Skript.py', 'code'],
+    ['Modell.stl', 'view_in_ar'],
+    ['unbekannt.xyz', 'insert_drive_file'],
+    ['ohne-endung', 'insert_drive_file']
+  ])('shows a matching icon for %s even with a generic MIME type', (filename, icon) => {
+    expect(attachmentIcon({ kind: 'file', filename, mimeType: 'application/octet-stream' })).toBe(icon)
+  })
+
+  it('keeps specific MIME types ahead of filenames and recognizes CSV as a table', () => {
+    expect(attachmentIcon({ filename: 'notiz.txt', mimeType: 'application/pdf' })).toBe('picture_as_pdf')
+    expect(attachmentIcon({ filename: 'daten.csv', mimeType: 'text/plain' })).toBe('table_view')
+    expect(attachmentIcon({ mimeType: 'text/csv' })).toBe('table_view')
+  })
+
   it('hides only tool attachments marked as internal output', () => {
     const attachments = [
       { id: 'internal-image', kind: 'image', presentation: 'internal', mimeType: 'image/png', url },
