@@ -153,31 +153,7 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
-  it('keeps the draft focused and sends with Enter immediately after switching agents while idle', async () => {
-    chat.selectedSessionId = 'session-1'
-    chat.current.agentProfileId = 'agent-a'
-    chat.setDraft('Nachricht an B')
-    const profiles = useAgentProfileStore()
-    profiles.defaultAgentProfileId = 'agent-a'
-    profiles.agents = [{ id: 'agent-a' }, { id: 'agent-b' }]
-    mocks.api.patch.mockReturnValue(new Promise(() => {}))
-    await nextTick()
-
-    const input = root.querySelector('.chat-composer__input')
-    input.focus()
-    input.dispatchEvent(new KeyboardEvent('keydown', {
-      key: '.', code: 'Period', ctrlKey: true, bubbles: true, cancelable: true
-    }))
-    await nextTick()
-
-    expect(document.activeElement).toBe(input)
-    expect(input.disabled).toBe(false)
-    expect(chat.activeAgentProfileId).toBe('agent-b')
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
-    expect(sentMessages).toEqual([{ content: 'Nachricht an B', options: { interrupt: false } }])
-  })
-
-  it('cycles agent profiles and toggles the send mode only from the focused composer', async () => {
+  it('cycles agents, keeps the composer focused and sends with Enter after an idle switch', async () => {
     chat.selectedSessionId = 'session-1'
     chat.current.agentProfileId = 'agent-a'
     chat.running = true
@@ -218,6 +194,18 @@ describe('voice attachment composer', () => {
     expect(sentMessages).toEqual([])
     document.body.dispatchEvent(new KeyboardEvent('keydown', { code: 'Period', ctrlKey: true, bubbles: true }))
     expect(chat.activeAgentProfileId).toBe('agent-a')
+
+    chat.running = false
+    chat.runId = null
+    mocks.api.patch.mockReturnValue(new Promise(() => {}))
+    await nextTick()
+    shortcut()
+    await nextTick()
+    expect(document.activeElement).toBe(input)
+    expect(input.disabled).toBe(false)
+    expect(chat.activeAgentProfileId).toBe('agent-b')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    expect(sentMessages).toEqual([{ content: 'Folgenachricht', options: { interrupt: false } }])
   })
 
   it('returns focus to the composer after selecting an agent or send mode', async () => {
