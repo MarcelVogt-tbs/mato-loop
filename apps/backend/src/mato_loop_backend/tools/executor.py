@@ -7,6 +7,7 @@ if TYPE_CHECKING:
 
 import inspect
 from dataclasses import replace
+from datetime import UTC, datetime
 from uuid import UUID
 
 from jsonschema import SchemaError
@@ -43,6 +44,7 @@ from mato_loop_backend.tools.contracts import (
     ToolResult,
 )
 from mato_loop_backend.tools.references import InvalidToolReference, resolve_tool_references
+from mato_loop_backend.tools.snapshots import ToolSnapshotState, snapshot_revision
 from mato_loop_backend.web.fetch import WebFetchError
 
 
@@ -397,6 +399,12 @@ async def execute_definition(
         result = await definition.handler(arguments, context)
         if definition.releases_private_data and not result.is_error:
             result.metadata["privateIntegrationData"] = True
+        if definition.snapshot_policy is not None and not result.is_error:
+            result.metadata["toolSnapshot"] = ToolSnapshotState(
+                arguments=arguments.model_dump(mode="json"),
+                revision=snapshot_revision(tool, context.tool_settings),
+                observed_at=datetime.now(UTC),
+            ).model_dump(mode="json")
         return result
     except ToolArgumentsEdited:
         raise

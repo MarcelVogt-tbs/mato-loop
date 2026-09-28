@@ -43,6 +43,7 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
 )
 from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 BOOKSTACK_CREDENTIAL_KIND = "bookstack.token"
 _BOOK_KEY_PATTERN = r"^book:[1-9][0-9]{0,17}$"
@@ -2073,6 +2074,7 @@ def _accounts_permission(    _arguments: KnowledgeListAccountsArguments, _contex
 BOOKSTACK_AGGREGATE_TOOLS = (
     ToolContribution(
         name="knowledge_list_accounts",
+        snapshot_policy=ToolSnapshotPolicy("accounts", ("integrationId", "name"), max_age_seconds=None),
         description="List the active BookStack knowledge bases available to this tool binding.",
         arguments_model=KnowledgeListAccountsArguments,
         handler=knowledge_list_accounts,

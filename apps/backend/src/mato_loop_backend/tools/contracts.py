@@ -20,6 +20,7 @@ from mato_loop_backend.files.roots import (
 from mato_loop_backend.permissions.policy import PermissionRequest
 from mato_loop_backend.settings import TrustLevel
 from mato_loop_backend.tools.actions import ApprovalEditField, ToolAction
+from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 if TYPE_CHECKING:
     from mato_loop_backend.tools.context import ToolContext
@@ -166,6 +167,7 @@ class ToolDefinition:
     approval_edit_fields: tuple[ApprovalEditField, ...] = ()
     permission_reason_instruction: str | None = None
     requires_permission_reason: bool = False
+    snapshot_policy: ToolSnapshotPolicy | None = None
 
     def schema(self) -> dict[str, Any]:
         if self.arguments_schema is not None:

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from mato_loop_backend.settings.models import AgentProfile, IntegrationInstance
 from mato_loop_backend.tools.actions import ApprovalEditField, ToolAction
+from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 ToolHandler = Callable[[Any, Any], Awaitable[Any]]
 
@@ -73,6 +74,7 @@ class ToolContribution:
     arguments_schema: dict[str, Any] | None = None
     approval_edit_fields: tuple[ApprovalEditField, ...] = ()
     permission_reason_instruction: str | None = None
+    snapshot_policy: ToolSnapshotPolicy | None = None
 
 
 @dataclass(frozen=True, slots=True)

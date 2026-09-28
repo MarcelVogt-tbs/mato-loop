@@ -47,6 +47,7 @@ async def build_turn_context(
     live_tool_calls: dict[UUID, list[dict[str, Any]]],
     ephemeral_images: dict[tuple[UUID, int, str, int], ProviderImageInput],
     attachment_service: type[AttachmentService],
+    tool_snapshots: list[dict[str, Any]] | None = None,
 ) -> tuple[ContextProjection, int, int]:
     async def summarize(source: str, output_tokens: int) -> SummaryResult:
         await run_support._publish_run_phase(run.id, "compacting_context")
@@ -107,6 +108,7 @@ async def build_turn_context(
                 system_prompt=system_prompt,
                 runtime_instructions=runtime_instructions,
                 memory_context=memory_context,
+                tool_snapshots=tool_snapshots,
                 tool_schemas=schemas,
                 model=model,
                 target_trust_level=trust_level,

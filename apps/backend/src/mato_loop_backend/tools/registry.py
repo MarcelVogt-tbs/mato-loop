@@ -381,6 +381,7 @@ class ToolRegistry:
             prompt_fragments=contribution.prompt_fragments,
             approval_edit_fields=contribution.approval_edit_fields,
             permission_reason_instruction=contribution.permission_reason_instruction,
+            snapshot_policy=contribution.snapshot_policy,
         )
 
     def inactive_capability_groups(

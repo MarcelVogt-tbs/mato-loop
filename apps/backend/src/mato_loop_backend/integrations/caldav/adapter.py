@@ -44,6 +44,7 @@ from mato_loop_backend.settings import (
     UserToolSettings,
 )
 from mato_loop_backend.tools.actions import ApprovalEditField, ToolAction
+from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 CALDAV_CREDENTIAL_KIND = "caldav.password"
 _LOCAL_TIMEZONE = ZoneInfo("Europe/Berlin")
@@ -1894,6 +1895,7 @@ def _task_accounts_permission(
 CALDAV_AGGREGATE_TOOLS = (
     ToolContribution(
         name="calendar_list_accounts",
+        snapshot_policy=ToolSnapshotPolicy("accounts", ("integrationId", "name"), max_age_seconds=None),
         description=(
             "List active CalDAV accounts only when the user asks about accounts or explicitly "
             "requests a non-default calendar."
@@ -1909,6 +1911,7 @@ CALDAV_AGGREGATE_TOOLS = (
     ),
     ToolContribution(
         name="tasks_list_accounts",
+        snapshot_policy=ToolSnapshotPolicy("accounts", ("integrationId", "name"), max_age_seconds=None),
         description=(
             "List active CalDAV accounts only when the user asks about task accounts or needs "
             "to select an account before listing task lists."
@@ -1927,6 +1930,7 @@ CALDAV_AGGREGATE_TOOLS = (
 CALDAV_SHARED_TOOLS = (
     ToolContribution(
         name="calendar_list_calendars",
+        snapshot_policy=ToolSnapshotPolicy("calendars", ("calendarKey", "name", "unavailableCapabilities")),
         description=(
             "List calendars in one CalDAV account only when the user asks about available "
             "calendars or explicitly requests a non-default calendar."
@@ -2014,6 +2018,7 @@ CALDAV_SHARED_TOOLS = (
     ),
     ToolContribution(
         name="tasks_list_lists",
+        snapshot_policy=ToolSnapshotPolicy("taskLists", ("taskListKey", "name", "unavailableCapabilities")),
         description="List VTODO task lists in one CalDAV account before selecting a task list.",
         arguments_model=TaskIntegrationArguments,
         handler=tasks_list_lists,

@@ -22,6 +22,7 @@ from mato_loop_backend.memory.service import memory_visible_to
 from mato_loop_backend.models import ContextSummary, Message
 from mato_loop_backend.settings.models import TrustLevel
 from mato_loop_backend.tools.references import model_tool_references
+from mato_loop_backend.tools.snapshots import SNAPSHOT_MARKER, snapshot_context
 
 if TYPE_CHECKING:
     from mato_loop_backend.agent.context import EstimateCallback
@@ -566,6 +567,8 @@ def _projection_messages(
     target_trust_level: TrustLevel,
     *,
     memory_context: str | None = None,
+    tool_snapshots: list[dict[str, Any]] | None = None,
+    tool_snapshot_characters: int = 8_000,
     runtime_instructions: str = "",
     include_attachment_text: bool = False,
     available_records: list[Message] | None = None,
@@ -634,12 +637,20 @@ def _projection_messages(
         -1,
     )
     projected_attachment_ids: set[str] = set()
+    snapshot_message = snapshot_context(
+        tool_snapshots or [],
+        current_message_ids={str(item.id) for item in records[latest_user_index + 1:]},
+        max_characters=tool_snapshot_characters,
+    )
     historical_tool_indices: list[int] = []
     historical_omitted_markers: dict[int, str] = {}
     current_tool_indices: list[int] = []
     browser_inspect_calls: set[str] = set()
     user_edited_tool_arguments = False
     for record_index, item in enumerate(records):
+        if item.id == latest_user_id and snapshot_message is not None:
+            messages.append(snapshot_message)
+            snapshot_message = None
         if item.id == latest_user_id and todo_message is not None:
             messages.append(todo_message)
             todo_message = None
@@ -1595,6 +1606,7 @@ def _strip_projection_metadata(messages: list[dict[str, Any]]) -> None:
     for message in messages:
         message.pop(_HOST_TOOL_RESULT_REFERENCE, None)
         message.pop(_HOST_CHECKLIST_RESULT, None)
+        message.pop(SNAPSHOT_MARKER, None)
 
 
 def _current_tool_output_indices(messages: list[dict[str, Any]]) -> list[int]:

@@ -30,6 +30,7 @@ from mato_loop_backend.models import Credential
 from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
 from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 MEALIE_CREDENTIAL_KIND = "mealie.api_token"
 
@@ -977,6 +978,7 @@ def _meal_plan_delete_permission(
 MEALIE_SHARED_TOOLS = (
     ToolContribution(
         name="mealie_list_accounts",
+        snapshot_policy=ToolSnapshotPolicy("accounts", ("integrationId", "name"), max_age_seconds=None),
         description="List active Mealie accounts available to this tool binding.",
         arguments_model=MealieListAccountsArguments,
         handler=mealie_list_accounts,

@@ -74,6 +74,7 @@ from mato_loop_backend.settings.effective import filter_agent_profile_integratio
 from mato_loop_backend.settings.models import ReasoningEffort, TrustLevel
 from mato_loop_backend.skills import RunSkillState
 from mato_loop_backend.tools.display import tool_display
+from mato_loop_backend.tools.snapshots import collect_tool_snapshots
 from mato_loop_backend.user_profile import user_profile_content_hashes, user_profile_runtime_payload
 from mato_loop_backend.web.access import webfetch_available
 
@@ -458,6 +459,10 @@ async def execute_loop_body(
             runtime_instructions=(prompt_agent_profile.runtime_instructions if prompt_agent_profile else ""),
             schemas=schemas,
             offered_tool_names=frozenset(effective_toolset.tools if effective_toolset else ()),
+            tool_snapshots=collect_tool_snapshots(
+                records, effective_toolset.tools if effective_toolset else {},
+                tool_settings, chat_session.id,
+            ),
             memory_turn=memory_turn,
             memory_read_enabled=memory_state.read_enabled,
             request_options=request_options,

@@ -91,6 +91,7 @@ async def persist_tool_result(
                 "toolName": call.name,
                 **({"userEditedArguments": True} if metadata.get("userEdited") is True else {}),
                 **({"errorCode": metadata["errorCode"]} if isinstance(metadata.get("errorCode"), str) else {}),
+                **({"toolSnapshot": metadata["toolSnapshot"]} if isinstance(metadata.get("toolSnapshot"), dict) else {}),
                 **({"preparedReply": metadata["preparedReply"]} if isinstance(metadata.get("preparedReply"), dict) else {}),
                 "fileOutputsPending": not ephemeral_output or bool(attachments or file_actions),
                 "fileActions": [

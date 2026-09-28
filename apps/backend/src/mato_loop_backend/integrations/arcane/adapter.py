@@ -25,6 +25,7 @@ from mato_loop_backend.models import Credential
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
 from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 ARCANE_CREDENTIAL_KIND = "arcane.api_key"
 
@@ -403,9 +404,11 @@ ARCANE_ADAPTER = IntegrationAdapterDefinition(
     resource_actions=(_READ, _MANAGE, _DELETE),
     shared_tools=(
         ToolContribution(name="arcane_accounts", description="List configured Arcane instances.", arguments_model=ArcaneAccounts,
+                         snapshot_policy=ToolSnapshotPolicy("data", ("integrationId", "name"), max_age_seconds=None),
                          handler=arcane_accounts, label="Arcane-Instanzen auflisten", icon="dns", actions=(_ACCOUNTS,),
                          authorization_factory=_accounts_permission, releases_private_data=True),
         ToolContribution(name="arcane_environments", description="List accessible Docker environments in one Arcane instance.",
+                         snapshot_policy=ToolSnapshotPolicy("data", ("id", "name")),
                          arguments_model=ArcaneInstance, handler=arcane_environments, label="Arcane-Umgebungen auflisten", icon="dns",
                          actions=(_READ,), instance_argument="integration_id", authorization_factory=_environments_permission, releases_private_data=True),
         ToolContribution(name="arcane_list", description="List containers, projects, images, volumes, or networks in one environment.",

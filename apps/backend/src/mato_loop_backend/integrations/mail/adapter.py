@@ -26,6 +26,7 @@ from mato_loop_backend.models import Credential
 from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
 from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 MAIL_CREDENTIAL_KIND = "mail.password"
 _HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|[0-9A-Fa-f:]+)$")
@@ -759,6 +760,7 @@ def _tool(
     operation: str,
     *,
     aggregate: bool = False,
+    snapshot_policy: ToolSnapshotPolicy | None = None,
 ) -> ToolContribution:
     return ToolContribution(
         name=name,
@@ -777,6 +779,7 @@ def _tool(
             )
         ),
         releases_private_data=action is _READ,
+        snapshot_policy=snapshot_policy,
     )
 
 
@@ -789,6 +792,7 @@ MAIL_SHARED_TOOLS = (
         _READ,
         "mail_list_accounts",
         aggregate=True,
+        snapshot_policy=ToolSnapshotPolicy("accounts", ("integrationId", "name"), max_age_seconds=None),
     ),
     _tool(
         "mail_list_folders",
@@ -797,6 +801,7 @@ MAIL_SHARED_TOOLS = (
         mail_list_folders,
         _READ,
         "mail_list_folders",
+        snapshot_policy=ToolSnapshotPolicy("folders", ("mailbox", "flags")),
     ),
     _tool(
         "mail_search",

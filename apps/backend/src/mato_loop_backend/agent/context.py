@@ -20,6 +20,7 @@ from mato_loop_backend.media.attachments import AttachmentService
 from mato_loop_backend.models import ChatSession, ContextSummary, Message
 from mato_loop_backend.providers.output_budget import generation_reserve, raw_input_budget
 from mato_loop_backend.settings.models import AgentRuntimeSettings, ModelConfig, TrustLevel
+from mato_loop_backend.tools.snapshots import SNAPSHOT_MARKER
 
 SummaryCallback = Callable[[str, int], Awaitable[SummaryResult]]
 
@@ -76,6 +77,7 @@ class ContextManager:
         runtime_instructions: str = "",
         live_tool_calls: dict[UUID, list[dict[str, Any]]] | None = None,
         attachment_service: AttachmentService | None = None,
+        tool_snapshots: list[dict[str, Any]] | None = None,
     ) -> ContextProjection:
         """Budget original projections with raw request estimates, before slack and safety."""
         # Reorder only the model's view; persisted timestamps and message order stay intact.
@@ -136,6 +138,8 @@ class ContextManager:
                 selected,
                 target_trust_level,
                 memory_context=memory_context,
+                tool_snapshots=tool_snapshots,
+                tool_snapshot_characters=int(input_budget * 0.05 * characters_per_token),
                 runtime_instructions=runtime_instructions,
                 include_attachment_text=not tool_schemas,
                 attachment_service=attachment_service,
@@ -260,6 +264,9 @@ class ContextManager:
             if estimated >= previous:
                 break
 
+        if estimated > input_budget and any(message.get(SNAPSHOT_MARKER) for message in messages):
+            messages = [message for message in messages if not message.get(SNAPSHOT_MARKER)]
+            estimated = await estimate_request(messages)
         if estimated > input_budget:
             estimated = await agent_projection._prune_tool_outputs_to_budget(
                 messages,
