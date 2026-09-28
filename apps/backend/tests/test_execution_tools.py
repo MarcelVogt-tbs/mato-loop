@@ -814,6 +814,54 @@ async def test_elevated_shell_resolves_run_secrets_and_forwards_explicit_environ
     assert "sudo-private" not in result.content
 
 
+@pytest.mark.parametrize("remember", [False, True])
+@pytest.mark.parametrize("error_code", ["process.sudoAuthFailed", "process.timedOut"])
+async def test_elevated_shell_reprompts_only_for_rejected_passwords(tmp_path, remember, error_code) -> None:
+    def fail(_arguments):
+        raise ExecutionClientError(error_code)
+
+    client = FakeExecutionClient({"shell.elevated": fail}, {"shell.run", "shell.elevated"})
+    context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
+    name = f"SUDO_PASSWORD_{client.agent_id.hex.upper()}"
+    other_name = f"SUDO_PASSWORD_{uuid4().hex.upper()}"
+    other_refs = session_secrets.put(context.session.id, {other_name: "other password"})
+    question = AsyncMock(side_effect=[
+        ProtectedQuestionResolution({name: ["wrong"]}, frozenset({name}) if remember else frozenset()),
+        ProtectedQuestionResolution({name: ["correct"]}, frozenset()),
+    ])
+    context.question_handler = question
+    secret = ToolCall("password", "secret_input", {"inputs": [
+        {"name": name, "label": "sudo", "question": "Enter the password"},
+    ]})
+    shell = ToolCall("admin", "shell_run", {"command": "id -u", "elevated": True})
+    tools = _tools(client.operations)
+    try:
+        context.tool_call = secret
+        original = await tools.execute(secret, context)
+        context.tool_call = shell
+        failed = await tools.execute(shell, context)
+        assert json.loads(failed.content)["error"]["code"] == error_code
+        assert client.requests[-1][1]["sudoPassword"] == "wrong"
+
+        context.tool_call = secret
+        replacement = await tools.execute(secret, context)
+        rejected = error_code == "process.sudoAuthFailed"
+        assert question.await_count == (2 if rejected else 1)
+        assert (replacement.content != original.content) is rejected
+        assert session_secrets.references(context.session.id)[other_name] == other_refs[other_name]
+
+        client.responses["shell.elevated"] = ProcessResult(
+            exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0,
+            stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
+        )
+        context.tool_call = shell
+        result = await tools.execute(shell, context)
+        assert not result.is_error
+        assert client.requests[-1][1]["sudoPassword"] == ("correct" if rejected else "wrong")
+    finally:
+        session_secrets.clear_session(context.session.id)
+
+
 async def test_elevated_shell_requires_a_capable_agent_before_approval(tmp_path) -> None:
     client = FakeExecutionClient({}, {"shell.run", "shell.inspect"})
     context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)

@@ -10,6 +10,7 @@ import mato_loop_backend.tools.access as tools_access
 from mato_loop_backend.events import run_events
 from mato_loop_backend.execution import (
     DirectoryResult,
+    ExecutionClientError,
     ProcessResult,
     ShellInspectResult,
     SystemInfoResult,
@@ -43,7 +44,12 @@ from mato_loop_backend.tools.arguments import (
 from mato_loop_backend.tools.context import ToolContext as ToolContext
 from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
-from mato_loop_backend.tools.secrets import resolve_secret_refs, resolve_sudo_password
+from mato_loop_backend.tools.secrets import (
+    discard_sudo_reference,
+    effective_sudo_reference,
+    resolve_secret_refs,
+    resolve_sudo_password,
+)
 
 
 async def _get_system_info(
@@ -263,22 +269,30 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
             context, elevated_shell_permission(client.agent_id, client.current_directory, arguments.command)
         ):
             return ToolResult.error("permission.denied")
-        password = await resolve_sudo_password(context, arguments.sudo_password_ref, client.agent_id)
+        reference = effective_sudo_reference(
+            context.session.id, context.run_secret_refs, client.agent_id, arguments.sudo_password_ref,
+        )
+        password = await resolve_sudo_password(context, reference, client.agent_id)
         if isinstance(password, ToolResult):
             return password
         resolved = await resolve_secret_refs(context, arguments.environment)
         if isinstance(resolved, ToolResult):
             return resolved
         requested = arguments.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
-        return await _run_process(
-            context, "shell.elevated",
-            {"command": arguments.command, "currentDirectory": client.current_directory,
-              **({"timeoutSeconds": arguments.timeout} if arguments.timeout is not None else {}),
-              **({"sudoPassword": password} if password else {}),
-              **({"environment": resolved} if resolved else {})},
-            requested_arguments=requested, executed_arguments=requested,
-            redacted_values=(*resolved.values(), *((password,) if password else ())),
-        )
+        try:
+            return await _run_process(
+                context, "shell.elevated",
+                {"command": arguments.command, "currentDirectory": client.current_directory,
+                  **({"timeoutSeconds": arguments.timeout} if arguments.timeout is not None else {}),
+                  **({"sudoPassword": password} if password else {}),
+                  **({"environment": resolved} if resolved else {})},
+                requested_arguments=requested, executed_arguments=requested,
+                redacted_values=(*resolved.values(), *((password,) if password else ())),
+            )
+        except ExecutionClientError as exc:
+            if exc.code == "process.sudoAuthFailed":
+                discard_sudo_reference(context, client.agent_id, reference)
+            raise
     terminal = terminal_coordinator.attached_for(
         user_id=context.session.user_id,
         session_id=context.session.id,

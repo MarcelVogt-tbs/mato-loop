@@ -85,12 +85,31 @@ async def resolve_protected_text(
     ), True
 
 
+def effective_sudo_reference(
+    session_id: UUID, run_secret_refs: dict[str, str], agent_id: UUID,
+    reference: UUID | str | None = None,
+) -> UUID | str | None:
+    if reference is not None:
+        return reference
+    name = f"SUDO_PASSWORD_{agent_id.hex.upper()}"
+    return session_secrets.references(session_id).get(name) or run_secret_refs.get(name)
+
+
+def discard_sudo_reference(context: ToolContext, agent_id: UUID, reference: UUID | str | None) -> None:
+    if reference is None:
+        return
+    name = f"SUDO_PASSWORD_{agent_id.hex.upper()}"
+    session_secrets.discard(context.session.id, name, reference)
+    if context.run_secret_refs.get(name) == reference:
+        context.run_secret_refs.pop(name)
+        context.one_time_secrets.pop(UUID(str(reference).removeprefix("run-secret:")), None)
+
+
 async def resolve_sudo_password(
     context: ToolContext, reference: UUID | str | None, agent_id: UUID
 ) -> str | None | ToolResult:
     name = f"SUDO_PASSWORD_{agent_id.hex.upper()}"
-    if reference is None:
-        reference = session_secrets.references(context.session.id).get(name) or context.run_secret_refs.get(name)
+    reference = effective_sudo_reference(context.session.id, context.run_secret_refs, agent_id, reference)
     if reference is None:
         return None
     if isinstance(reference, str) and reference.startswith("session-secret:"):

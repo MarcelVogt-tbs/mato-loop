@@ -63,6 +63,7 @@ from mato_loop_backend.tools.contracts import (
     ToolResult,
 )
 from mato_loop_backend.tools.registry import EffectiveToolSet
+from mato_loop_backend.tools.secrets import effective_sudo_reference
 
 
 async def persist_tool_result(
@@ -309,7 +310,14 @@ async def execute_tool_batch(
         memory_available_now = True
         memory_write_available_now = True
         current_memory_state = memory_state
+        authentication_scope = ""
+        if call.name == "shell_run" and call.arguments.get("elevated") is True and execution_client is not None:
+            reference = effective_sudo_reference(
+                session.id, run_secret_refs, execution_client.agent_id, call.arguments.get("sudo_password_ref"),
+            )
+            authentication_scope = f":agent={execution_client.agent_id}:sudo={reference}"
         call_signature = run_support._tool_call_signature(call)
+        call_signature += authentication_scope
         validation_signature = "arguments:" + run_support._tool_call_signature(call, include_reason=True)
         if call.arguments.get("root") in {"workspace", "computer"} or call.name in {"shell_run", "apply_patch"}:
             call_signature += f":directory={run.current_directory_snapshot}"
@@ -474,6 +482,7 @@ async def execute_tool_batch(
                 raise
             if tool_result.metadata.get("userEdited") is True:
                 call_signature = run_support._tool_call_signature(call)
+                call_signature += authentication_scope
                 if call.arguments.get("root") in {"workspace", "computer"} or call.name in {"shell_run", "apply_patch"}:
                     call_signature += f":directory={run.current_directory_snapshot}"
             if delegated:

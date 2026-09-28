@@ -70,6 +70,12 @@ class SessionSecretStore:
             None,
         )
 
+    def discard(self, session_id: UUID, name: str, reference: UUID | str) -> None:
+        secrets = self._sessions.get(session_id)
+        secret = secrets.get(name) if secrets is not None else None
+        if secret is not None and reference == f"session-secret:{secret.id}":
+            del secrets[name]
+
     def clear_session(self, session_id: UUID) -> None:
         self._sessions.pop(session_id, None)
 

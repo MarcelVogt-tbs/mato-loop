@@ -24,8 +24,11 @@ from mato_loop_backend.sessions.serialization import message_payload
 from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings, ToolSettings
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
 from mato_loop_backend.settings.models import AgentProfile
+from mato_loop_backend.tools.arguments import ProtectedQuestionResolution
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.contracts import ToolResult
+from mato_loop_backend.tools.registry import ToolRegistry
+from mato_loop_backend.tools.secrets import resolve_sudo_password
 
 
 @pytest.mark.parametrize("transmitted", [30_000, None])
@@ -186,6 +189,43 @@ async def test_unrelated_success_does_not_reset_failed_call_protection(monkeypat
     assert len(requests) == 5
     assert tool_registry._execute_definition.await_count == 3
     assert _tool_messages(db)[-1].provider_data["_matoloop"]["errorCode"] == "agent.repeatedToolCall"
+
+
+@pytest.mark.parametrize("matching_agent", [True, False])
+async def test_sudo_retry_requires_changed_authentication_for_the_selected_agent(monkeypatch, matching_agent):
+    agent_id = uuid4()
+    name = f"SUDO_PASSWORD_{(agent_id if matching_agent else uuid4()).hex.upper()}"
+    command = ToolCall("admin", "shell_run", {"command": "id -u", "elevated": True})
+    secret = ToolCall("password", "secret_input", {"inputs": [
+        {"name": name, "label": "sudo", "question": "Enter the password"},
+    ]})
+    calls = [command, secret, command]
+    if matching_agent:
+        calls += [secret, command]
+    db, run, _requests, _projections, _events = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(tool_calls=[call]) for call in calls] + [ProviderResult(content="Done")],
+        search_policy=WebSearchPolicy.AVAILABLE, execution_agent_id=agent_id,
+        execution_operations=("shell.run", "shell.elevated"),
+    )
+    run.current_directory_snapshot = "/work"
+    question = AsyncMock(return_value=ProtectedQuestionResolution({name: ["private password"]}, frozenset()))
+    monkeypatch.setattr(AgentRuntime, "_request_question", question)
+    passwords = []
+
+    async def execute(call, context, bound_tool):
+        if call.name == "secret_input":
+            return await ToolRegistry._execute_definition(tool_registry, call, context, bound_tool)
+        password = await resolve_sudo_password(context, None, context.execution_client.agent_id)
+        passwords.append(password)
+        return ToolResult.error("process.sudoAuthRequired" if password is None else "process.commandFailed")
+
+    tool_registry._execute_definition.side_effect = execute
+    await AgentRuntime._execute_loop(db, run)
+
+    assert passwords == ([None, "private password"] if matching_agent else [None])
+    assert _tool_messages(db)[-1].provider_data["_matoloop"]["errorCode"] == "agent.repeatedToolCall"
+    question.assert_awaited_once()
 
 
 def test_only_one_identical_snapshot_retry_is_allowed_after_unstable_observation():
