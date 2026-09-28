@@ -170,10 +170,32 @@ async def _run_process(
     redacted_values: tuple[str, ...] = (),
 ) -> ToolResult:
     output = {"stdout": "", "stderr": ""}
+    client = files_access.workspace_client(context)
+    terminal = terminal_coordinator.attached_for(
+        user_id=context.session.user_id,
+        session_id=context.session.id,
+        agent_id=client.agent_id,
+    ) if operation == "shell.elevated" else None
+
+    async def display(text: str) -> None:
+        if (
+            text and terminal is not None and terminal.attached
+            and not terminal.closed and not terminal.shell_exited
+            and terminal.suspended_since is None
+        ):
+            await terminal.send_bytes(text.replace("\r\n", "\n").replace("\n", "\r\n").encode())
+
+    if terminal is not None:
+        command = arguments["command"]
+        for secret in sorted(set(redacted_values), key=len, reverse=True):
+            if secret:
+                command = command.replace(secret, "[redacted]")
+        await display(f"\nsudo {command}\n")
 
     async def publish(event: Any) -> None:
         output[event.event] += event.data
         if not redacted_values:
+            await display(event.data)
             await run_events.publish(
                 context.run_id,
                 {
@@ -183,7 +205,6 @@ async def _run_process(
                 },
             )
 
-    client = files_access.workspace_client(context)
     result = await client.request(
         operation, arguments, ProcessResult, timeout=3_610, on_event=publish,
     )
@@ -202,6 +223,7 @@ async def _run_process(
                         key: value.replace(secret, "[redacted]")
                         for key, value in safe_output.items()
                     }
+        await display("".join(safe_output.values()))
         await run_events.publish(
             context.run_id,
             {

@@ -34,7 +34,11 @@ from mato_loop_backend.execution.client import (
     WorkspaceStatResult,
 )
 from mato_loop_backend.execution.protocol import ResponseMessage
-from mato_loop_backend.execution.terminals import terminal_coordinator
+from mato_loop_backend.execution.terminals import (
+    BrowserTerminalConnection,
+    TerminalRuntime,
+    terminal_coordinator,
+)
 from mato_loop_backend.execution.transfers import (
     EXPORT_TIMEOUT_SECONDS,
     MAX_TRANSFER_TTL_SECONDS,
@@ -670,7 +674,7 @@ async def test_elevated_shell_reuses_only_exact_elevated_grants(tmp_path) -> Non
     ) == PermissionDecision.DENY
 
 
-async def test_elevated_shell_never_uses_normal_inspection_or_attached_terminal(tmp_path) -> None:
+async def test_elevated_shell_executes_without_normal_inspection_or_shared_shell(tmp_path) -> None:
     client = FakeExecutionClient({"shell.elevated": ProcessResult(
         exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0,
         stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
@@ -685,6 +689,69 @@ async def test_elevated_shell_never_uses_normal_inspection_or_attached_terminal(
     assert request.capability == "shell.write"
     assert request.resource_type == "shell_elevated_command"
     assert not request.force_ask
+
+
+@pytest.mark.parametrize("mode", ["live", "secret", "truncated", "denied", "detached"])
+async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_path, monkeypatch, mode) -> None:
+    client = FakeExecutionClient({}, {"shell.run", "shell.elevated"})
+    context = _context(
+        tmp_path, ToolCall("admin", "shell_run", {}), client,
+        decision=PermissionDecision.DENY if mode == "denied" else PermissionDecision.ALLOW,
+    )
+    terminal = TerminalRuntime(
+        user_id=context.session.user_id, owner_session_id=context.session.id,
+        agent_id=client.agent_id, login_id=uuid4(), terminal_id=str(uuid4()),
+        client=client, generation=1, attached=mode != "detached",
+    )
+    terminal.viewer = BrowserTerminalConnection(terminal, Mock())
+    monkeypatch.setitem(terminal_coordinator._runtimes, (
+        context.session.user_id, context.session.id, client.agent_id,
+    ), terminal)
+    protected = mode in {"secret", "truncated"}
+    password_id = uuid4()
+    arguments = ShellRunArguments(command="id -u", elevated=True)
+    if protected:
+        context.one_time_secrets[password_id] = "private-password"
+        arguments.sudo_password_ref = f"run-secret:{password_id}"
+
+    async def execute(operation, _arguments, _model, *, on_event, **_kwargs):
+        assert operation == "shell.elevated"
+        if mode != "detached":
+            assert terminal.personal_buffer == b"\r\nsudo id -u\r\n"
+        chunks = [("stdout", "0\n"), ("stderr", "warning\r\n")]
+        if protected:
+            chunks = [("stdout", "private-"), ("stdout", "password\n"), ("stderr", "warning\n")]
+        for channel, data in chunks:
+            await on_event(SimpleNamespace(event=channel, data=data))
+            if protected:
+                assert terminal.personal_buffer == b"\r\nsudo id -u\r\n"
+            elif mode == "live":
+                assert terminal.personal_buffer.endswith(data.replace("\r\n", "\n").replace("\n", "\r\n").encode())
+        return ProcessResult(
+            exit_code=1, timed_out=False, duration_ms=1, stdout_bytes=17 if protected else 2,
+            stderr_bytes=8, stdout_truncated=mode == "truncated", stderr_truncated=False,
+        )
+
+    request = AsyncMock(side_effect=execute)
+    monkeypatch.setattr(client, "request", request)
+    result = await _shell_run(arguments, context)
+    assert result.is_error
+    if mode in {"denied", "detached"}:
+        assert terminal.personal_buffer == b""
+    else:
+        expected = {
+            "live": b"0\r\nwarning\r\n",
+            "secret": b"[redacted]\r\nwarning\r\n",
+            "truncated": b"[redacted][redacted]",
+        }[mode]
+        assert terminal.personal_buffer == b"\r\nsudo id -u\r\n" + expected
+        delivered = b"".join(
+            terminal.viewer.queue.get_nowait()[0] for _ in range(terminal.viewer.queue.qsize())
+        )
+        assert delivered == terminal.personal_buffer
+        assert b"private-password" not in delivered
+    if mode == "denied":
+        request.assert_not_awaited()
 
 
 async def test_elevated_shell_reuses_only_this_agents_session_password(tmp_path) -> None:
