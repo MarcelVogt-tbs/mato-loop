@@ -264,6 +264,7 @@ def _safe_metadata(metadata: dict | None) -> dict:
             "pageNumber",
             "providerAdapter",
             "providerName",
+            "protectedInput",
             "quality",
             "sampleRate",
             "sampleWidth",

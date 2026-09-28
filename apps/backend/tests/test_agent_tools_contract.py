@@ -31,7 +31,11 @@ import mato_loop_backend.tools.sessions as mock_tools_sessions
 import mato_loop_backend.tools.skills as mock_tools_skills
 import mato_loop_backend.tools.web as mock_tools_web
 import mato_loop_backend.tools.web as tools_web
-from mato_loop_backend.agent.projection import _projection_messages, _tool_result_reference
+from mato_loop_backend.agent.projection import (
+    _projection_messages,
+    _tool_result_reference,
+    message_dict,
+)
 from mato_loop_backend.agent.run_support import _argument_edit_payload, _tool_policy
 from mato_loop_backend.files.search import MAX_MATCH_TEXT, MAX_SEARCH_RESULTS, RootFileSearch
 from mato_loop_backend.files.service import FileRoot, RootFileError, RootFileService
@@ -624,6 +628,70 @@ async def test_generate_qr_code_returns_scannable_png(tmp_path) -> None:
     assert decoded.text == content
 
 
+async def test_protected_wifi_qr_escapes_values_without_releasing_password(tmp_path) -> None:
+    ssid_id, password_id, security_id = uuid4(), uuid4(), uuid4()
+    call = ToolCall("qr-protected", "generate_qr_code", {"wifi": {
+        "ssid": {"parts": [{"value_ref": f"run-secret:{ssid_id}"}]},
+        "password": {"parts": [{"value_ref": f"run-secret:{password_id}"}]},
+        "security": {"parts": [{"value_ref": f"run-secret:{security_id}"}]},
+    }})
+    context = _context(tmp_path, call)
+    context.one_time_secrets.update({
+        ssid_id: "Gä;ste", password_id: 'a\\b:c,d"e', security_id: "WPA/WPA2",
+    })
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    assert result.attachments[0].metadata == {"protectedInput": True}
+    assert "a\\b:c" not in result.content
+    with Image.open(BytesIO(result.attachments[0].data)) as image:
+        decoded = zxingcpp.read_barcode(image, formats=zxingcpp.BarcodeFormat.QRCode,
+                                       text_mode=zxingcpp.TextMode.Plain)
+    assert decoded.text == 'WIFI:T:WPA;S:Gä\\;ste;P:a\\\\b\\:c\\,d\\"e;;'
+
+    other_run = await tool_registry.execute(call, _context(tmp_path, call))
+    assert other_run.metadata == {"errorCode": "secret.valueRefUnavailable"}
+
+    oversized = ToolCall("qr-oversized-protected", "generate_qr_code", {
+        "content": {"parts": [{"value_ref": f"run-secret:{password_id}"}]},
+    })
+    context.one_time_secrets[password_id] = "x" * 2_001
+    rejected = await tool_registry.execute(oversized, context)
+    assert rejected.metadata == {"errorCode": "tool.invalidArguments"}
+    assert "x" * 200 not in rejected.content
+
+
+async def test_protected_text_can_write_file_after_authorization(tmp_path) -> None:
+    secret_id = uuid4()
+    call = ToolCall("write-protected", "write_file", {
+        "root": "session", "path": "credentials.txt",
+        "content": {"parts": ["token=", {"value_ref": f"run-secret:{secret_id}"}]},
+    })
+    context = _context(tmp_path, call)
+    context.one_time_secrets[secret_id] = "private-value"
+
+    denied_context = _context(tmp_path, call, decision=PermissionDecision.DENY)
+    denied = await tool_registry.execute(call, denied_context)
+    assert denied.metadata == {"errorCode": "permission.denied"}
+
+    result = await tool_registry.execute(call, context)
+
+    assert not result.is_error
+    assert "private-value" not in result.content
+    assert context.root_files.read_bytes("session", "credentials.txt", limit=1_000) == b"token=private-value"
+
+    edit = ToolCall("edit-protected", "edit_file", {
+        "root": "session", "path": "credentials.txt",
+        "oldText": {"parts": ["token=", {"value_ref": f"run-secret:{secret_id}"}]},
+        "newText": {"parts": ["token=", {"value_ref": f"run-secret:{secret_id}"}, "-updated"]},
+    })
+    context.tool_call = edit
+    edited = await tool_registry.execute(edit, context)
+    assert not edited.is_error
+    assert context.root_files.read_bytes("session", "credentials.txt", limit=1_000) == b"token=private-value-updated"
+
+
 async def test_generate_qr_code_rejects_oversized_utf8_content(tmp_path) -> None:
     call = ToolCall(
         id="qr-large",
@@ -689,6 +757,13 @@ async def test_read_qr_code_uses_current_session_image_and_source_trust(
     read_image.assert_awaited_once_with(attachment, context.session.id, current_only=True)
     statement = context.db.scalar.await_args.args[0]
     assert context.session.id in statement.compile().params.values()
+
+    attachment.metadata_json = {"protectedInput": True}
+    blocked = await tool_registry.execute(read_call, context)
+    assert blocked.metadata == {"errorCode": "permission.denied"}
+    read_image.assert_awaited_once()
+    assert message_dict(message)["attachments"] == []
+    assert str(attachment_id) not in message_dict(message)["content"]
 
 
 async def test_read_qr_code_rejects_stale_attachment_id(tmp_path, monkeypatch) -> None:

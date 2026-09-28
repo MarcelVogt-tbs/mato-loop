@@ -413,8 +413,13 @@ def message_dict(
         ]
     provider_data.pop("_matoloop", None)
     provider_data = _model_provider_file_roots(provider_data)
+    # Generated protected artifacts are for the user, not a model image or readable reference.
+    visible_attachments = [
+        attachment for attachment in model_attachments(message)
+        if (attachment.metadata_json or {}).get("protectedInput") is not True
+    ]
     attachment_markers = []
-    for attachment in model_attachments(message):
+    for attachment in visible_attachments:
         if attachment.duration_ms is not None:
             hours, remainder = divmod(attachment.duration_ms, 3_600_000)
             minutes, remainder = divmod(remainder, 60_000)
@@ -504,7 +509,7 @@ def message_dict(
                 **({"run_id": str(attachment.run_id)} if getattr(attachment, "run_id", None) else {}),
                 "file_path": attachment.file_path,
             }
-            for attachment in model_attachments(message)
+            for attachment in visible_attachments
             if attachment.kind == "image"
         ],
     }

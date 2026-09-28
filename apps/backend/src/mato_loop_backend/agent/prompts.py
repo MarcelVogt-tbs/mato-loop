@@ -241,7 +241,9 @@ def general_system_prompt(
             "helpers, configuring an integration, or attempting a command, if any required authentication value is missing, call "
             "secret_input, not question, once with all currently missing authentication values. Use "
             "masked=false for visible identifiers and masked=true for secrets. Pass only references to "
-            "customize_matoloop; references remain reusable throughout the current run."
+            "customize_matoloop; references remain reusable throughout the current run. When a tool "
+            "accepts protected text, use literal parts and {value_ref: reference} parts. Do not "
+            "interpolate referenced values in model text or ask for them again."
         )
         if "shell_run" in offered_tool_names:
             parts.append(

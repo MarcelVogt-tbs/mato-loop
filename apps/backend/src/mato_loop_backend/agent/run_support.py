@@ -437,11 +437,17 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
             if tool_name in {"write_file", "generate_qr_code"}
             else {"characters": len(content), "preview": content[:200]}
         )
+    elif isinstance(content, dict) and tool_name in {"write_file", "generate_qr_code"}:
+        safe["content"] = {"redacted": True}
+    if tool_name == "generate_qr_code" and isinstance(safe.get("wifi"), dict):
+        safe["wifi"] = {"redacted": True}
     if tool_name == "edit_file":
         for key in ("oldText", "newText"):
             text = safe.get(key)
             if isinstance(text, str):
                 safe[key] = {"characters": len(text), "redacted": True}
+            elif isinstance(text, dict):
+                safe[key] = {"redacted": True}
     if tool_name == "apply_patch" and isinstance(safe.get("patch"), str):
         safe["patch"] = {"characters": len(safe["patch"]), "redacted": True}
     if tool_name in {"webfetch", "fetch_transcript"} and isinstance(

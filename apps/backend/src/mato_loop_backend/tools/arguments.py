@@ -26,6 +26,23 @@ class ToolArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ProtectedTextRef(ToolArguments):
+    value_ref: UUID | Annotated[
+        str,
+        Field(pattern=r"^(?:run|session)-secret:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"),
+    ]
+
+
+class ProtectedText(ToolArguments):
+    parts: list[str | ProtectedTextRef] = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def needs_a_reference(self) -> ProtectedText:
+        if not any(isinstance(part, ProtectedTextRef) for part in self.parts):
+            raise ValueError("protected text needs a value reference")
+        return self
+
+
 class DelegatedTask(ToolArguments):
     description: str = Field(min_length=1, max_length=240)
     prompt: str = Field(min_length=1, max_length=8_000)
@@ -321,7 +338,7 @@ class ProvideFileArguments(SessionFileReadArguments):
 class WriteFileArguments(ToolArguments):
     root: Literal["session", "workspace"]
     path: str = Field(min_length=1, max_length=1_000)
-    content: str = Field(max_length=1_000_000)
+    content: Annotated[str, Field(max_length=1_000_000)] | ProtectedText
     expected_sha256: str | None = Field(
         default=None, alias="expectedSha256", pattern=r"^[0-9a-f]{64}$"
     )
@@ -330,8 +347,8 @@ class WriteFileArguments(ToolArguments):
 class EditFileArguments(ToolArguments):
     root: Literal["session", "workspace"]
     path: str = Field(min_length=1, max_length=1_000)
-    old_text: str = Field(min_length=1, max_length=1_000_000, alias="oldText")
-    new_text: str = Field(max_length=1_000_000, alias="newText")
+    old_text: Annotated[str, Field(min_length=1, max_length=1_000_000)] | ProtectedText = Field(alias="oldText")
+    new_text: Annotated[str, Field(max_length=1_000_000)] | ProtectedText = Field(alias="newText")
     replace_all: bool = Field(default=False, alias="replaceAll")
     expected_sha256: str | None = Field(
         default=None, alias="expectedSha256", pattern=r"^[0-9a-f]{64}$"
@@ -584,13 +601,27 @@ class GenerateImageArguments(ToolArguments):
     seed: int | None = Field(default=None, ge=0)
 
 
+class WifiQrArguments(ToolArguments):
+    ssid: str | ProtectedText
+    password: str | ProtectedText | None = None
+    security: str | ProtectedText = "WPA"
+    hidden: bool = False
+
+
 class GenerateQrCodeArguments(ToolArguments):
-    content: str = Field(min_length=1, max_length=2_000)
+    content: Annotated[str, Field(min_length=1, max_length=2_000)] | ProtectedText | None = None
+    wifi: WifiQrArguments | None = None
+
+    @model_validator(mode="after")
+    def choose_payload(self) -> GenerateQrCodeArguments:
+        if (self.content is None) == (self.wifi is None):
+            raise ValueError("provide QR content or Wi-Fi credentials")
+        return self
 
     @field_validator("content")
     @classmethod
-    def content_fits_qr_code(cls, value: str) -> str:
-        if len(value.encode("utf-8")) > QR_CODE_MAX_CONTENT_BYTES:
+    def content_fits_qr_code(cls, value: str | ProtectedText | None) -> str | ProtectedText | None:
+        if isinstance(value, str) and len(value.encode("utf-8")) > QR_CODE_MAX_CONTENT_BYTES:
             raise ValueError("content exceeds the QR code byte limit")
         return value
 

@@ -1403,6 +1403,22 @@ def test_qr_code_content_is_fully_redacted_before_persistence() -> None:
     assert arguments["content"] == {"characters": len(secret), "redacted": True}
     assert secret not in str(arguments)
 
+    wifi = _safe_tool_arguments("generate_qr_code", {"wifi": {
+        "ssid": "Guest", "password": "private value", "security": "WPA",
+    }})
+    assert wifi["wifi"] == {"redacted": True}
+    assert "private value" not in str(wifi)
+
+    protected_file = _safe_tool_arguments("write_file", {
+        "content": {"parts": ["sensitive literal", {"value_ref": f"run-secret:{uuid4()}"}]},
+    })
+    assert protected_file["content"] == {"redacted": True}
+    assert "sensitive literal" not in str(protected_file)
+    protected_edit = _safe_tool_arguments("edit_file", {
+        "newText": {"parts": ["sensitive literal", {"value_ref": f"run-secret:{uuid4()}"}]},
+    })
+    assert protected_edit["newText"] == {"redacted": True}
+
 
 def test_mutation_tokens_are_redacted_before_persistence() -> None:
     arguments = _safe_tool_arguments(

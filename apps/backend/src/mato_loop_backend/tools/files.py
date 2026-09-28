@@ -8,6 +8,7 @@ from io import BytesIO
 from typing import BinaryIO
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy import and_, select
 
 import mato_loop_backend.files.access as files_access
@@ -75,6 +76,7 @@ from mato_loop_backend.tools.contracts import ToolAttachment as ToolAttachment
 from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolFileAction as ToolFileAction
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
+from mato_loop_backend.tools.secrets import resolve_protected_text
 
 logger = logging.getLogger("mato_loop_backend.agent.tools")
 
@@ -586,7 +588,7 @@ def _provided_reference(
 async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> ToolResult:
     if files_access.delegated_session_files(context, arguments.root):
         return ToolResult.error("tool.unavailable")
-    if _omitted_file_content(arguments.content):
+    if isinstance(arguments.content, str) and _omitted_file_content(arguments.content):
         return ToolResult.error("file.omittedContent", field="content")
     path = (
         files_access.execution_path(context, arguments.path)
@@ -608,13 +610,23 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
     )
     if not await tools_access.allow(context, request):
         return ToolResult.error("permission.denied")
+    resolved = await resolve_protected_text(context, arguments.content)
+    if isinstance(resolved, ToolResult):
+        return resolved
+    content, _protected = resolved
+    try:
+        WriteFileArguments.model_validate({**arguments.model_dump(by_alias=True), "content": content})
+    except ValidationError:
+        return ToolResult.error("tool.invalidArguments", field="content")
+    if _omitted_file_content(content):
+        return ToolResult.error("file.omittedContent", field="content")
     if arguments.root == "workspace":
         result = await files_access.workspace_request(
             context,
             "filesystem.write",
             {
                 "path": path,
-                "content": arguments.content,
+                "content": content,
                 **(
                     {"expectedSha256": arguments.expected_sha256}
                     if arguments.expected_sha256 is not None
@@ -640,11 +652,11 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
         context.root_files.write_file,
         arguments.root,
         path,
-        arguments.content,
+        content,
         mode="replace" if arguments.expected_sha256 is not None else "create",
         expected_sha256=arguments.expected_sha256,
     )
-    encoded = arguments.content.encode("utf-8")
+    encoded = content.encode("utf-8")
     return ToolResult.json(
         {
             "root": arguments.root,
@@ -665,9 +677,9 @@ def _omitted_file_content(content: str) -> bool:
 async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> ToolResult:
     if files_access.delegated_session_files(context, arguments.root):
         return ToolResult.error("tool.unavailable")
-    if _omitted_file_content(arguments.old_text):
+    if isinstance(arguments.old_text, str) and _omitted_file_content(arguments.old_text):
         return ToolResult.error("file.omittedContent", field="oldText")
-    if _omitted_file_content(arguments.new_text):
+    if isinstance(arguments.new_text, str) and _omitted_file_content(arguments.new_text):
         return ToolResult.error("file.omittedContent", field="newText")
     path = (
         files_access.execution_path(context, arguments.path)
@@ -690,14 +702,29 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
     )
     if not await tools_access.allow(context, request):
         return ToolResult.error("permission.denied")
+    old = await resolve_protected_text(context, arguments.old_text)
+    if isinstance(old, ToolResult):
+        return old
+    new = await resolve_protected_text(context, arguments.new_text)
+    if isinstance(new, ToolResult):
+        return new
+    old_text, new_text = old[0], new[0]
+    try:
+        EditFileArguments.model_validate({
+            **arguments.model_dump(by_alias=True), "oldText": old_text, "newText": new_text,
+        })
+    except ValidationError:
+        return ToolResult.error("tool.invalidArguments", field="newText")
+    if _omitted_file_content(old_text) or _omitted_file_content(new_text):
+        return ToolResult.error("file.omittedContent")
     if arguments.root == "workspace":
         result = await files_access.workspace_request(
             context,
             "filesystem.edit",
             {
                 "path": path,
-                "oldText": arguments.old_text,
-                "newText": arguments.new_text,
+                "oldText": old_text,
+                "newText": new_text,
                 "replaceAll": arguments.replace_all,
                 **(
                     {"expectedSha256": arguments.expected_sha256}
@@ -724,8 +751,8 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
         context.root_files.edit_text_file,
         arguments.root,
         path,
-        arguments.old_text,
-        arguments.new_text,
+        old_text,
+        new_text,
         replace_all=arguments.replace_all,
         expected_sha256=arguments.expected_sha256,
     )
@@ -1212,7 +1239,9 @@ PROVIDE_FILE = ToolDefinition(
 
 WRITE_FILE = ToolDefinition(
             "write_file",
-            "Write complete UTF-8 content to one file, creating or replacing it.",
+            "Write complete UTF-8 content to one file, creating or replacing it. content may "
+            "contain protected text parts with value_ref from secret_input; resolve only after "
+            "file access is authorized.",
             WriteFileArguments,
             _write_file,
             tool_type="shared",
@@ -1227,7 +1256,8 @@ WRITE_FILE = ToolDefinition(
 
 EDIT_FILE = ToolDefinition(
             "edit_file",
-            "Replace exact text in one existing UTF-8 file. oldText must be unique unless replaceAll is true.",
+            "Replace exact text in one existing UTF-8 file. oldText must be unique unless replaceAll is true. "
+            "oldText and newText may contain protected text parts with value_ref from secret_input.",
             EditFileArguments,
             _edit_file,
             tool_type="shared",

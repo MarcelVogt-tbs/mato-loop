@@ -8,6 +8,7 @@ from uuid import UUID
 
 import zxingcpp
 from PIL import Image
+from pydantic import ValidationError
 from sqlalchemy import and_, select
 from sqlalchemy.orm import joinedload
 
@@ -38,6 +39,7 @@ from mato_loop_backend.tools.context import ToolContext as ToolContext
 from mato_loop_backend.tools.contracts import ToolAttachment as ToolAttachment
 from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
+from mato_loop_backend.tools.secrets import resolve_protected_text
 
 QR_CODE_MAX_RESULTS = 16
 
@@ -172,18 +174,67 @@ def _qr_code_png(content: str) -> bytes:
     return output.getvalue()
 
 
+def _wifi_qr_escape(value: str) -> str:
+    return "".join("\\" + char if char in '\\;,:"' else char for char in value)
+
+
 async def _generate_qr_code(
     arguments: GenerateQrCodeArguments, context: ToolContext
 ) -> ToolResult:
+    if arguments.wifi is not None:
+        fields = {}
+        protected = False
+        for name in ("ssid", "password", "security"):
+            value = getattr(arguments.wifi, name)
+            if value is None:
+                fields[name] = ""
+                continue
+            resolved = await resolve_protected_text(context, value)
+            if isinstance(resolved, ToolResult):
+                return resolved
+            fields[name] = resolved[0]
+            protected |= resolved[1]
+        security = fields["security"].strip().upper()
+        if security in {"WPA", "WPA2", "WPA3", "WPA/WPA2", "WPA2/WPA3"}:
+            security = "WPA"
+        elif security == "WEP":
+            security = "WEP"
+        elif security in {"OPEN", "OFFEN", "NOPASS"}:
+            security = "nopass"
+        else:
+            return ToolResult.error("tool.invalidArguments", field="wifi.security")
+        if not fields["ssid"] or (security != "nopass" and not fields["password"]) or (
+            security == "nopass" and fields["password"]
+        ):
+            return ToolResult.error("tool.invalidArguments", field="wifi")
+        content = f'WIFI:T:{security};S:{_wifi_qr_escape(fields["ssid"])};'
+        if security != "nopass":
+            content += f'P:{_wifi_qr_escape(fields["password"])};'
+        if arguments.wifi.hidden:
+            content += "H:true;"
+        content += ";"
+    else:
+        assert arguments.content is not None
+        resolved = await resolve_protected_text(context, arguments.content)
+        if isinstance(resolved, ToolResult):
+            return resolved
+        content, protected = resolved
     try:
-        data = await asyncio.to_thread(_qr_code_png, arguments.content)
+        GenerateQrCodeArguments.model_validate({"content": content})
+    except ValidationError:
+        return ToolResult.error("tool.invalidArguments", field="content")
+    try:
+        data = await asyncio.to_thread(_qr_code_png, content)
     except Exception:
         logger.exception("QR code generation failed")
         return ToolResult.error("tool.executionFailed")
     return ToolResult(
         "QR code generated.",
         {},
-        attachments=(ToolAttachment(data, "image/png", "qr-code.png"),),
+        attachments=(ToolAttachment(
+            data, "image/png", "qr-code.png",
+            metadata={"protectedInput": True} if protected else {},
+        ),),
     )
 
 
@@ -207,6 +258,8 @@ async def _read_qr_code(
     )
     if attachment is None:
         return ToolResult.error("attachment.notFound")
+    if (attachment.metadata_json or {}).get("protectedInput") is True:
+        return ToolResult.error("permission.denied")
     try:
         data = await AttachmentService(run_id=context.run_id).read_image(
             attachment, context.session.id, current_only=True
@@ -536,7 +589,11 @@ logger = logging.getLogger("mato_loop_backend.agent.tools")
 GENERATE_QR_CODE = ToolDefinition(
             "generate_qr_code",
             "Create an exact, scannable QR code PNG only when the latest user asks for one. Never "
-            "use it to open, fetch, or cite a URL.",
+            "use it to open, fetch, or cite a URL. Use wifi with protected text references from "
+            "secret_input for Wi-Fi credentials; the host formats and escapes them without revealing "
+            "their values to the model. For wifi.ssid use parts with one value_ref copied "
+            "exactly from secret_input; never use the reference string as the SSID itself. "
+            "content also accepts protected text parts.",
             GenerateQrCodeArguments,
             _generate_qr_code,
             group="media",

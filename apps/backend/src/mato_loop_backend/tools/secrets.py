@@ -8,6 +8,7 @@ from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.permissions.policy import personal_variables_permission
 from mato_loop_backend.personal_variables import get_personal_variable, personal_variable_value
 from mato_loop_backend.settings import ToolExecutionPolicy
+from mato_loop_backend.tools.arguments import ProtectedText, ProtectedTextRef
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import ToolResult
 
@@ -62,6 +63,26 @@ async def resolve_secret_refs(
             return ToolResult.error("secret.valueRefUnavailable")
         values[key] = value
     return values
+
+
+async def resolve_protected_text(
+    context: ToolContext, text: str | ProtectedText,
+) -> tuple[str, bool] | ToolResult:
+    """Assemble explicit text parts without releasing referenced values to the model."""
+    if isinstance(text, str):
+        return text, False
+    references = {
+        str(index): part.value_ref
+        for index, part in enumerate(text.parts)
+        if isinstance(part, ProtectedTextRef)
+    }
+    values = await resolve_secret_refs(context, references)
+    if isinstance(values, ToolResult):
+        return values
+    return "".join(
+        values[str(index)] if isinstance(part, ProtectedTextRef) else part
+        for index, part in enumerate(text.parts)
+    ), True
 
 
 async def resolve_sudo_password(

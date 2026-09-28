@@ -269,7 +269,8 @@ SECRET_INPUT = ToolDefinition(
             "secret_input",
             "Ask once for all missing credentials, including usernames. Values are not returned. The user may "
             "keep selected fields temporarily for this session; other references remain reusable throughout the "
-            "current run. Call alone, then pass references to shell_run.environment or the personal settings tool. "
+            "current run. Call alone, then pass references to tools that accept protected text "
+            "parts, shell_run.environment, or the personal settings tool. "
             "Reuse the exact name/reference pairs instead of asking again. Set masked false only for values the user may see while "
             "typing. Use customize_matoloop only for explicitly requested durable storage.",
             SecretInputArguments,
