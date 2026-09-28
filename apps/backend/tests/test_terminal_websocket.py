@@ -63,7 +63,7 @@ def env(monkeypatch):
     class Db:
         failure = False
 
-        async def get(self, model, key):
+        async def get(self, model, key, **_kwargs):
             if self.failure:
                 raise OperationalError("select", {}, Exception("unavailable"))
             return objects.get((model, key))
@@ -90,6 +90,7 @@ def env(monkeypatch):
             return TerminalControlResult()
 
     db = Db()
+    db.commit = AsyncMock()
     coordinator = execution.TerminalCoordinator()
     monkeypatch.setattr(api_routes_terminals, "get_runtime_config", lambda: SimpleNamespace(cors_origin_list=["https://ui.test"]))
     monkeypatch.setattr(api_websocket_access, "_browser_login", AsyncMock(return_value=api_websocket_access._BrowserLogin(user, login.id, login.expires_at)))
@@ -107,10 +108,68 @@ async def open_viewer(env):
     return await env.coordinator.open(env.user.id, env.session.id, env.agent.id, env.login.id, FakeWebSocket())
 
 
+async def test_attachment_preference_survives_restart_until_explicit_detach(env):
+    first = await open_viewer(env)
+    try:
+        await api_routes_terminals._handle_control(first, {"type": "attach", "sessionId": str(env.session.id)})
+        assert env.session.control_center["terminal_auto_attach"] is True
+        env.db.commit.assert_awaited_once()
+        await env.coordinator.shutdown()
+
+        env.coordinator = execution.TerminalCoordinator()
+        second = await open_viewer(env)
+        assert second.runtime.terminal_id != first.runtime.terminal_id
+        opened = json.loads(second.queue.get_nowait()[0])
+        assert opened["attached"] is True and opened["restored"] is False
+        env.db.commit.assert_awaited_once()  # Restoration does not rewrite the preference.
+
+        await env.coordinator.detach(second.runtime)
+        assert env.session.control_center["terminal_auto_attach"] is False
+        await env.coordinator.shutdown()
+
+        env.coordinator = execution.TerminalCoordinator()
+        third = await open_viewer(env)
+        assert json.loads(third.queue.get_nowait()[0])["attached"] is False
+    finally:
+        await env.coordinator.shutdown()
+
+
+async def test_failed_restore_does_not_publish_an_attached_terminal(env, monkeypatch):
+    env.session.control_center["terminal_auto_attach"] = True
+    request = execution.ExecutionClient.request
+
+    async def fail_acquire(self, operation, *args, **kwargs):
+        if operation == "terminal.shared.acquire":
+            raise ExecutionClientError("terminal.unavailable")
+        return await request(self, operation, *args, **kwargs)
+
+    monkeypatch.setattr(execution.ExecutionClient, "request", fail_acquire)
+    with pytest.raises(ExecutionClientError):
+        await open_viewer(env)
+    assert env.coordinator.attached_for(
+        user_id=env.user.id, session_id=env.session.id, agent_id=env.agent.id,
+    ) is None
+    assert env.session.control_center["terminal_auto_attach"] is True
+    assert env.calls[-1][0] == "terminal.close"
+
+
+async def test_failed_preference_save_reports_error_and_actual_attachment(env):
+    viewer = await open_viewer(env)
+    try:
+        env.db.commit.side_effect = OperationalError("commit", {}, Exception("unavailable"))
+        await api_routes_terminals._handle_control(viewer, {"type": "attach", "sessionId": str(env.session.id)})
+        messages = [json.loads(viewer.queue.get_nowait()[0]) for _ in range(viewer.queue.qsize())]
+        assert any(message["type"] == "terminal.status" and message["attached"] for message in messages)
+        assert messages[-1]["error"]["code"] == "terminal.unavailable"
+    finally:
+        await env.coordinator.shutdown()
+
+
 @pytest.mark.parametrize("attached", [False, True])
 async def test_resume_keeps_output_and_partial_input_without_clearing_screen(env, attached):
     first = await open_viewer(env)
     first.runtime.attached = attached
+    env.session.control_center["terminal_auto_attach"] = True
     history = b"$ ls\r\none.txt  two.txt\r\n$ cat \x1b[2D"
     try:
         await first.runtime.send_bytes(history)

@@ -539,8 +539,10 @@ async def test_shared_shell_cancellation_cancels_prepared_command(env):
     ) in env.native.calls
 
 
-async def test_attach_and_detach_change_local_state_only_after_remote_success(env):
+async def test_attach_and_detach_change_local_state_only_after_remote_success(env, monkeypatch):
     coordinator = TerminalCoordinator()
+    remember = AsyncMock()
+    monkeypatch.setattr(coordinator, "_remember_attachment", remember)
     env.terminal.attached = False
     original = env.native.request
 
@@ -553,10 +555,12 @@ async def test_attach_and_detach_change_local_state_only_after_remote_success(en
     with pytest.raises(ExecutionClientError):
         await coordinator.attach(env.terminal)
     assert not env.terminal.attached
+    remember.assert_not_awaited()
 
     env.native.request = original
     await coordinator.attach(env.terminal)
     assert env.terminal.attached
+    remember.assert_awaited_once_with(env.terminal)
 
     async def fail_release(operation, *args, **kwargs):
         if operation == "terminal.shared.release":
@@ -567,3 +571,4 @@ async def test_attach_and_detach_change_local_state_only_after_remote_success(en
     with pytest.raises(ExecutionClientError):
         await coordinator.detach(env.terminal)
     assert env.terminal.attached
+    remember.assert_awaited_once()

@@ -2825,6 +2825,57 @@ async def test_control_center_state_can_be_replaced() -> None:
     db.commit.assert_awaited_once()
 
 
+async def test_changing_computer_clears_terminal_preference(monkeypatch) -> None:
+    from mato_loop_backend.sessions import service
+
+    user = _user()
+    session = ChatSession(
+        id=uuid4(), user_id=user.id, title="Test", memory_mode="disabled",
+        preferred_execution_agent_id=uuid4(),
+        control_center={"terminal_auto_attach": True, "tabs": [{"app_id": "terminal", "pinned": False}],
+                        "active_app_id": "terminal"},
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    db.scalar.return_value = None
+    monkeypatch.setattr(service, "_profile_ai", AsyncMock(return_value=AiSettings()))
+    monkeypatch.setattr(service, "validate_execution_preferences", AsyncMock(return_value=(None, None)))
+    monkeypatch.setattr(service, "add_directory_grant", AsyncMock())
+    await update_session(
+        session.id, SessionUpdateRequest(preferred_execution_agent_id=uuid4()), user, db,
+    )
+    assert "terminal_auto_attach" not in session.control_center
+    assert session.control_center["tabs"][0]["app_id"] == "terminal"
+
+
+async def test_control_center_layout_preserves_terminal_preference_until_tab_removal() -> None:
+    user = _user()
+    session = ChatSession(
+        id=uuid4(), user_id=user.id, title="Test", memory_mode="disabled",
+        control_center={
+            "tabs": [{"app_id": "terminal", "pinned": False}],
+            "active_app_id": "terminal", "terminal_auto_attach": True,
+        },
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    assert session_payload(session)["controlCenter"]["activeAppId"] == "terminal"
+    result = await update_session(
+        session.id, SessionUpdateRequest(control_center={
+            "tabs": [{"app_id": "terminal", "pinned": False}],
+            "active_app_id": "terminal", "open": True,
+        }), user, db,
+    )
+    assert session.control_center["terminal_auto_attach"] is True
+    assert result["controlCenter"]["activeAppId"] == "terminal"
+    assert "FOR UPDATE" in str(db.scalar.await_args.args[0])
+
+    await update_session(
+        session.id, SessionUpdateRequest(control_center={"tabs": [], "active_app_id": None}), user, db,
+    )
+    assert "terminal_auto_attach" not in session.control_center
+
+
 def test_control_center_state_accepts_a_session_file_tab() -> None:
     root_id = uuid4()
     tab_id = f"file-{uuid4()}"
@@ -3047,7 +3098,8 @@ async def test_control_center_state_can_change_during_active_run() -> None:
     )
 
     assert session.control_center["tabs"][1]["pinned"] is True
-    db.scalar.assert_not_awaited()
+    db.scalar.assert_awaited_once()
+    assert "FOR UPDATE" in str(db.scalar.await_args.args[0])
 
 
 async def test_control_center_update_is_owner_scoped() -> None:

@@ -524,7 +524,8 @@ def session_payload(
 ) -> dict[str, Any]:
     try:
         control_center = ControlCenterState.model_validate(
-            item.control_center or default_control_center_state()
+            {key: value for key, value in item.control_center.items() if key != "terminal_auto_attach"}
+            if item.control_center else default_control_center_state()
         ).model_dump(mode="json")
     except (RootFileError, ValidationError):
         control_center = default_control_center_state().model_dump(mode="json")

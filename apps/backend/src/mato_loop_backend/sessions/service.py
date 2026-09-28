@@ -1337,7 +1337,7 @@ async def update_session(
         "preferred_execution_agent_id",
         "current_directory",
     }
-    if fields & policy_fields:
+    if fields & (policy_fields | {"control_center"}):
         await db.scalar(
             select(ChatSession.id)
             .where(ChatSession.id == session_id, ChatSession.user_id == user.id)
@@ -1405,7 +1405,11 @@ async def update_session(
             tab.get("app_id") == "browser" and tab.get("kind", "app") == "app"
             for tab in (item.control_center or {}).get("tabs", [])
         ) and not any(tab.app_id == "browser" and tab.kind == "app" for tab in payload.control_center.tabs)
-        item.control_center = payload.control_center.model_dump(mode="json")
+        control_center = payload.control_center.model_dump(mode="json")
+        # The terminal WebSocket owns this preference, not browser layout snapshots.
+        if any(tab.app_id == "terminal" and tab.kind == "app" for tab in payload.control_center.tabs):
+            control_center["terminal_auto_attach"] = (item.control_center or {}).get("terminal_auto_attach", False)
+        item.control_center = control_center
     if fields & {"model_id", "agent_profile_id"}:
         ai = await _profile_ai(db, user.id, target_profile_id)
         requested_model_id = (
@@ -1459,6 +1463,10 @@ async def update_session(
             current_directory = (
                 payload.current_directory if "current_directory" in fields else None
             )
+            item.control_center = {
+                key: value for key, value in (item.control_center or {}).items()
+                if key != "terminal_auto_attach"
+            }
         item.current_directory, directory_policy = await validate_execution_preferences(
             db, user.id, agent_id, current_directory
         )

@@ -385,6 +385,7 @@ async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkey
     call = ToolCall("select", "select_execution_agent", {"agent_id": str(first.id)})
     context.tool_call = call
     context.session.session_type = "chat"
+    context.session.control_center = {"terminal_auto_attach": True, "tabs": [{"app_id": "terminal"}]}
     context.db.scalar.return_value = first
     run = AgentRun(id=context.run_id, session_id=context.session.id)
     context.db.get.return_value = run
@@ -398,6 +399,7 @@ async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkey
 
     assert switched.metadata["executionAgentChanged"] is True
     assert context.session.preferred_execution_agent_id == first.id
+    assert context.session.control_center == {"tabs": [{"app_id": "terminal"}]}
     assert context.session.current_directory == "/srv/new"
     assert run.execution_agent_id == first.id
     assert run.current_directory_snapshot == "/srv/new"

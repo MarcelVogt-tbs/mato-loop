@@ -333,6 +333,16 @@ class TerminalCoordinator:
                 raise ExecutionClientError("executionAgent.protocolError")
             if self._stopping or runtime.closed:
                 raise ExecutionClientError("terminal.disconnected")
+            async with asyncio.timeout(3), AsyncSessionFactory() as db:
+                session = await db.get(ChatSession, session_id)
+                restore_attachment = (
+                    session is not None and session.user_id == user_id
+                    and session.preferred_execution_agent_id == agent_id
+                    and (session.control_center or {}).get("terminal_auto_attach") is True
+                )
+            if restore_attachment:
+                await runtime.check_access()
+                await self.attach(runtime, remember=False)
             runtime.task = asyncio.create_task(self._supervise(runtime))
             return runtime
         except BaseException:
@@ -465,7 +475,29 @@ class TerminalCoordinator:
         # Keep failed/suspended bindings visible: a tool must not fall back to an isolated shell.
         return runtime if runtime is not None and runtime.attached else None
 
-    async def attach(self, runtime: TerminalRuntime) -> None:
+    async def _remember_attachment(self, runtime: TerminalRuntime) -> None:
+        attached = runtime.attached
+        try:
+            async with asyncio.timeout(3), AsyncSessionFactory() as db:
+                session = await db.get(ChatSession, runtime.owner_session_id, with_for_update=True)
+                if (
+                    session is None or session.user_id != runtime.user_id
+                    or session.preferred_execution_agent_id != runtime.agent_id
+                    or not any(
+                        tab.get("app_id") == "terminal" and tab.get("kind", "app") == "app"
+                        for tab in (session.control_center or {}).get("tabs", [])
+                    )
+                ):
+                    raise ExecutionClientError("terminal.disconnected")
+                session.control_center = {
+                    **(session.control_center or {}), "terminal_auto_attach": attached,
+                }
+                await db.commit()
+        except (SQLAlchemyError, TimeoutError) as exc:
+            logger.warning("Could not persist terminal attachment", exc_info=True)
+            raise ExecutionClientError("terminal.unavailable") from exc
+
+    async def attach(self, runtime: TerminalRuntime, *, remember: bool = True) -> None:
         if runtime.closed:
             raise ValueError("terminal.disconnected")
         await runtime.client.request(
@@ -473,8 +505,12 @@ class TerminalCoordinator:
             TerminalControlResult, timeout=3,
         )
         runtime.attached = True
+        try:
+            if remember:
+                await self._remember_attachment(runtime)
+        finally:
+            await runtime.send_status()
         await runtime.refresh_status()
-        await runtime.send_status()
 
     async def detach(self, runtime: TerminalRuntime) -> None:
         if runtime.command_id is not None:
@@ -484,8 +520,11 @@ class TerminalCoordinator:
             TerminalControlResult, timeout=3,
         )
         runtime.attached = False
+        try:
+            await self._remember_attachment(runtime)
+        finally:
+            await runtime.send_status()
         await runtime.refresh_status()
-        await runtime.send_status()
 
 
 terminal_coordinator = TerminalCoordinator()

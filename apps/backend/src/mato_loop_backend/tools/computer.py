@@ -117,6 +117,10 @@ async def _select_execution_agent(
     if run is None:
         return ToolResult.error("tool.unavailable")
     context.session.preferred_execution_agent_id = agent.id
+    context.session.control_center = {
+        key: value for key, value in (context.session.control_center or {}).items()
+        if key != "terminal_auto_attach"
+    }
     context.session.current_directory = directory
     run.execution_agent_id = agent.id
     run.execution_agent_revision = agent.revision
