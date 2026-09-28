@@ -118,10 +118,14 @@ Example:
 
 ## Validation
 
-- Match validation effort to the changed behavior and its risk. For small, reversible UI fixes, prefer existing coverage; add one focused regression test only when it provides meaningful protection.
-- When a regression test is warranted, test the reported failure with the smallest observable assertion. Mock only unavoidable boundaries. Add variants or adjacent workflows only for a distinct regression risk, not to repeat the same condition across views.
-- Start with the narrowest relevant checks supported by `./scripts/dev.sh`. Run broader suites or full builds for cross-cutting changes, relevant failures, or explicit requirements. If the script only supports a whole target suite, run it without adding test infrastructure just to narrow execution. Stop once the relevant checks pass unless new evidence warrants more validation.
-- Do not reduce necessary coverage for security, permissions, input validation, or data-loss prevention. Documentation-only changes need a diff review, not application tests or builds.
+- Before validation, choose the smallest checks supported by `./scripts/dev.sh` that verify the changed behavior. Identify what a failure would cause you to change. If the script only supports a whole target suite, use it without adding test infrastructure just to narrow execution.
+- Prefer existing coverage, especially for small, reversible UI fixes. Add a regression test only for a concrete gap, using the smallest observable assertion and mocking only unavoidable boundaries. Each additional case must protect against a distinct failure.
+- A failing baseline run is optional. Run it to resolve uncertainty about the cause or whether the regression test detects the bug, not merely to complete a red-green sequence.
+- Use known suite duration plus a timeout margin; allow a generous timeout for full suites of unknown duration. After interruption or truncated output, inspect captured results and execution state before deciding whether another run is necessary.
+- Repeat a check only after a change that can affect its result or to investigate a specific unresolved failure. Formatting-only changes require formatting/lint checks, not another functional test run.
+- Broaden validation only for a concrete risk that narrower checks do not cover or an explicit user requirement. Preserve necessary security, permission, input-validation, and data-loss coverage; those categories alone do not justify additional suites.
+- Before repeating or broadening a check, state the specific reason in one short sentence. Stop when the selected checks pass. Committing or writing the final response is not a reason to rerun them.
+- Documentation-only changes need a diff review, not application tests or builds.
 
 Run checks through the Docker development stack. Repository-wide checks, when warranted:
 

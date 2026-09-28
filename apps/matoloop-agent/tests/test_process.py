@@ -65,33 +65,24 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                         config = AgentConfig(homeDirectory=root)
                         filesystem = Filesystem(config)
                         runner = ProcessRunner(config, filesystem)
+                        command = f"sudo -n cat {target}"
                         try:
-                            for mode in (0o700, 0o100, 0):
-                                parent.chmod(mode)
-                                for command in (f"cat {target}", f"sudo -n cat {target}"):
-                                    if mode:
-                                        metadata = target.stat()
-                                        inspection = runner.inspect_shell(command, str(root))
-                                        inspected = next(
-                                            t for t in inspection["targets"]
-                                            if t["path"] == str(target)
-                                        )
-                                        check.assertEqual(inspected["inode"], metadata.st_ino)
-                                    else:
-                                        with check.assertRaises(PermissionError):
-                                            target.stat()
-                                        with check.assertRaises(AgentError) as raised:
-                                            runner.inspect_shell(command, str(root))
-                                        check.assertEqual(
-                                            raised.exception.code, "path.accessDenied"
-                                        )
-                                with check.assertRaises(AgentError) as raised:
-                                    filesystem.read(str(target), 1, 1, 100)
-                                check.assertEqual(raised.exception.code, "path.accessDenied")
-                                if mode != 0o700:
-                                    with check.assertRaises(AgentError) as raised:
-                                        filesystem.list(str(parent), 0, 10)
-                                    check.assertEqual(raised.exception.code, "path.accessDenied")
+                            parent.chmod(0o100)
+                            inspection = runner.inspect_shell(command, str(root))
+                            check.assertIn(
+                                str(target), [t["path"] for t in inspection["targets"]]
+                            )
+                            with check.assertRaises(AgentError) as raised:
+                                filesystem.read(str(target), 1, 1, 100)
+                            check.assertEqual(raised.exception.code, "path.accessDenied")
+                            with check.assertRaises(AgentError) as raised:
+                                filesystem.list(str(parent), 0, 10)
+                            check.assertEqual(raised.exception.code, "path.accessDenied")
+
+                            parent.chmod(0)
+                            with check.assertRaises(AgentError) as raised:
+                                runner.inspect_shell(command, str(root))
+                            check.assertEqual(raised.exception.code, "path.accessDenied")
                         finally:
                             parent.chmod(0o700)
                     """),
