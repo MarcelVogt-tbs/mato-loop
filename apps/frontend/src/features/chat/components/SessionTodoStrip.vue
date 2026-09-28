@@ -1,40 +1,64 @@
 <template>
-  <q-card v-if="todos.length" flat bordered class="session-todos app-surface" aria-live="polite">
-    <div class="session-todos__header text-weight-medium app-muted">Aufgaben · {{ completedCount }} von {{ todos.length }} erledigt</div>
+  <q-card v-if="todos.length" flat class="session-todos app-surface overflow-hidden">
+    <q-btn
+      flat
+      no-caps
+      align="between"
+      class="full-width text-caption app-muted"
+      :label="`Aufgaben · ${completedCount} von ${todos.length} erledigt`"
+      :icon-right="collapsed ? 'keyboard_arrow_down' : 'keyboard_arrow_up'"
+      :aria-expanded="!collapsed"
+      :aria-controls="listId"
+      :disable="saving"
+      @click="$emit('update:collapsed', !collapsed)"
+    />
     <q-linear-progress
       :value="completedCount / todos.length"
       :color="completedCount === todos.length ? 'positive' : 'primary'"
       size="2px"
       aria-label="Aufgabenfortschritt"
     />
-    <div class="session-todos__list" role="list" aria-label="Aufgaben dieser Session">
-      <div v-for="(todo, index) in todos" :key="index" class="session-todos__item" role="listitem">
+    <div v-show="!collapsed" :id="listId" class="session-todos__list column no-wrap scroll q-pa-xs" role="list" aria-label="Aufgaben dieser Session" aria-live="polite">
+      <div v-for="(todo, index) in todos" :key="index" class="session-todos__item row no-wrap items-start col-auto q-px-xs" role="listitem">
         <q-icon
           :name="statusIcon[todo.status]"
           :color="todo.status === 'completed' ? 'positive' : todo.status === 'in_progress' ? 'primary' : undefined"
           size="18px"
-          aria-hidden="true"
+          role="img"
+          aria-hidden="false"
+          :aria-label="statusLabel[todo.status]"
+          class="col-auto"
         />
-        <span class="session-todos__content" :class="{ 'text-strike app-muted': todo.status === 'cancelled' }">{{ todo.content }}</span>
+        <span class="session-todos__content" :class="{ 'text-strike app-muted': ['completed', 'cancelled'].includes(todo.status) }">{{ todo.content }}</span>
       </div>
     </div>
   </q-card>
 </template>
 
 <script setup>
-import { QCard, QIcon, QLinearProgress } from 'quasar'
-import { computed } from 'vue'
+import { QBtn, QCard, QIcon, QLinearProgress } from 'quasar'
+import { computed, useId } from 'vue'
 
 defineOptions({ name: 'SessionTodoStrip' })
 
 const props = defineProps({
-  todos: { type: Array, default: () => [] }
+  todos: { type: Array, default: () => [] },
+  collapsed: Boolean,
+  saving: Boolean
 })
+defineEmits(['update:collapsed'])
+const listId = useId()
 const statusIcon = {
   pending: 'radio_button_unchecked',
   in_progress: 'pending',
   completed: 'check_circle',
   cancelled: 'remove_circle_outline'
+}
+const statusLabel = {
+  pending: 'Offen',
+  in_progress: 'In Bearbeitung',
+  completed: 'Erledigt',
+  cancelled: 'Abgebrochen'
 }
 const completedCount = computed(() => props.todos.filter((todo) => todo.status === 'completed').length)
 </script>
@@ -42,28 +66,19 @@ const completedCount = computed(() => props.todos.filter((todo) => todo.status =
 <style scoped>
 .session-todos {
   min-width: 0;
-}
-
-.session-todos__header {
-  min-height: 24px;
-  padding: 3px 8px;
-  font-size: 0.7rem;
-  line-height: 18px;
+  border-bottom: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 .session-todos__list {
-  display: flex;
   min-width: 0;
-  padding: 4px;
-  flex-direction: column;
+  max-height: min(20dvh, 160px);
 }
 
 .session-todos__item {
-  display: flex;
   min-width: 0;
   min-height: 24px;
-  padding: 0 4px;
-  align-items: center;
   gap: 8px;
   font-size: 0.75rem;
   line-height: 20px;

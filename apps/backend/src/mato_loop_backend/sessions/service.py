@@ -382,16 +382,16 @@ async def session_detail_payload(
         cursor=None,
     )
     attributions = await message_attributions(db, messages)
-    active_run = await db.scalar(
+    latest_run = await db.scalar(
         select(AgentRun)
         .where(
             AgentRun.session_id == item.id,
             AgentRun.parent_run_id.is_(None),
-            AgentRun.status.in_(ACTIVE_RUN_STATUSES),
         )
         .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
         .limit(1)
     )
+    active_run = latest_run if latest_run and latest_run.status in ACTIVE_RUN_STATUSES else None
     retry_message_id = None
     if item.parent_session_id is None and active_run is None and messages:
         retry_source = await ChatHistoryService.retry_source(
@@ -461,8 +461,10 @@ async def session_detail_payload(
                     )
                     .order_by(Message.created_at, Message.id)
                 )
-            ).all()
+            ).all(),
+            latest_run_id=latest_run.id if latest_run else None,
         ),
+        "latestRunId": str(latest_run.id) if latest_run else None,
         "contextSummaries": [
             context_summary_serializer(summary) for summary in context_summaries
         ],
@@ -1337,7 +1339,7 @@ async def update_session(
         "preferred_execution_agent_id",
         "current_directory",
     }
-    if fields & (policy_fields | {"control_center"}):
+    if fields & (policy_fields | {"control_center", "todos_collapsed"}):
         await db.scalar(
             select(ChatSession.id)
             .where(ChatSession.id == session_id, ChatSession.user_id == user.id)
@@ -1406,10 +1408,16 @@ async def update_session(
             for tab in (item.control_center or {}).get("tabs", [])
         ) and not any(tab.app_id == "browser" and tab.kind == "app" for tab in payload.control_center.tabs)
         control_center = payload.control_center.model_dump(mode="json")
+        if "todos_collapsed" in (item.control_center or {}):
+            control_center["todos_collapsed"] = item.control_center["todos_collapsed"]
         # The terminal WebSocket owns this preference, not browser layout snapshots.
         if any(tab.app_id == "terminal" and tab.kind == "app" for tab in payload.control_center.tabs):
             control_center["terminal_auto_attach"] = (item.control_center or {}).get("terminal_auto_attach", False)
         item.control_center = control_center
+    if "todos_collapsed" in fields and payload.todos_collapsed is not None:
+        item.control_center = {
+            **(item.control_center or {}), "todos_collapsed": payload.todos_collapsed,
+        }
     if fields & {"model_id", "agent_profile_id"}:
         ai = await _profile_ai(db, user.id, target_profile_id)
         requested_model_id = (

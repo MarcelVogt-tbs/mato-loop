@@ -11,7 +11,7 @@ from mato_loop_backend.settings import TrustLevel
 from mato_loop_backend.tools.arguments import TodoWriteArguments
 
 
-def _todo_message(todos, *, error_code=None):
+def _todo_message(todos, *, error_code=None, run_id=None):
     return Message(
         id=uuid4(),
         session_id=uuid4(),
@@ -20,6 +20,7 @@ def _todo_message(todos, *, error_code=None):
         provider_data={
             "_matoloop": {
                 "toolName": "todo_write",
+                "runId": str(run_id) if run_id else None,
                 **({"errorCode": error_code} if error_code else {}),
             }
         },
@@ -55,6 +56,19 @@ def test_latest_successful_snapshot_reconstructs_after_failure_and_undo() -> Non
         {"content": "Implement", "status": "completed"}
     ]
     assert session_todos([initial]) == [{"content": "Implement", "status": "pending"}]
+
+
+@pytest.mark.parametrize("status", ["pending", "in_progress", "completed", "cancelled"])
+def test_display_hides_only_terminal_todos_from_an_earlier_run(status):
+    run_id = uuid4()
+    todos = [{"content": "Implement", "status": status}]
+    message = _todo_message(todos, run_id=run_id)
+    assert session_todos([message], latest_run_id=run_id) == todos
+    assert session_todos([message], latest_run_id=uuid4()) == (
+        [] if status in {"completed", "cancelled"} else todos
+    )
+    # Model context still receives the canonical snapshot.
+    assert session_todos([message]) == todos
 
 
 def _todo_exchange(todos, *, error_code=None):

@@ -170,11 +170,17 @@
   flex: 0 0 auto;
 }
 
-.chat-composer {
+.chat-input-dock {
   width: min(900px, 100%);
   margin: 0 auto;
   flex: 0 0 auto;
   padding-bottom: max(16px, env(safe-area-inset-bottom));
+}
+
+.chat-input-dock--with-todos .chat-composer__card,
+.chat-input-dock--with-todos .question-dock {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 .chat-scroll-to-bottom {
@@ -216,9 +222,7 @@
 
 .question-dock {
   display: flex;
-  width: min(900px, calc(100% - 32px));
   max-height: min(60dvh, 620px);
-  margin: 0 auto max(16px, env(safe-area-inset-bottom));
   flex-direction: column;
   border-color: color-mix(in srgb, var(--q-primary) 45%, var(--app-surface-border));
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
@@ -1141,10 +1145,6 @@
 }
 
 .work-history__persistent-outputs {
-  grid-column: 1 / -1;
-}
-
-.work-history__todos {
   grid-column: 1 / -1;
 }
 

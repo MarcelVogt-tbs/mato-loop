@@ -1,6 +1,6 @@
 <template>
   <div
-    v-if="$slots.header || entries.length || running || todos.length || unmatchedSubagents.length"
+    v-if="$slots.header || entries.length || running || unmatchedSubagents.length"
     class="work-history"
     :class="{
       'work-history--preview': showPreview,
@@ -76,11 +76,6 @@
         @open-file="emit('open-file', $event)"
       />
     </div>
-    <SessionTodoStrip
-      v-if="todos.length"
-      class="work-history__todos"
-      :todos="todos"
-    />
     <SubagentRows class="work-history__children" :children="unmatchedSubagents" />
   </div>
 </template>
@@ -88,7 +83,6 @@
 <script setup>
 import { computed, nextTick, ref } from 'vue'
 import AgentActivityEntry from 'src/features/chat/components/AgentActivityEntry.vue'
-import SessionTodoStrip from 'src/features/chat/components/SessionTodoStrip.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
 import TurnDuration from 'src/features/chat/components/TurnDuration.vue'
 import {
@@ -112,7 +106,6 @@ const props = defineProps({
   contextSummary: { type: Object, default: null },
   warnings: { type: Array, default: () => [] },
   subagents: { type: Array, default: () => [] },
-  todos: { type: Array, default: () => [] },
   trustedImageOrigins: { type: Array, default: () => [] },
   readOnly: Boolean,
   running: Boolean,

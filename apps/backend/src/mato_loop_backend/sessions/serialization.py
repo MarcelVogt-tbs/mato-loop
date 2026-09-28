@@ -276,6 +276,7 @@ def session_payload(
         "title": item.title,
         "titleGenerationStatus": item.title_generation_status,
         "pinned": bool(item.is_pinned),
+        "todosCollapsed": (item.control_center or {}).get("todos_collapsed") is True,
         "controlCenter": {
             "tabs": [_control_center_tab_payload(tab) for tab in control_center["tabs"]],
             "activeAppId": control_center["active_app_id"],

@@ -499,6 +499,11 @@ export const sessionsActions = {
         this.sessionSettingsPending = Math.max(0, this.sessionSettingsPending - 1)
       }
     },
+    async setTodosCollapsed(id, collapsed) {
+      const { data } = await api.patch(`/sessions/${id}`, { todos_collapsed: collapsed })
+      this.updateCachedSession(id, (session) => ({ ...session, todosCollapsed: data.todosCollapsed }))
+      if (this.current?.id === id) this.current.todosCollapsed = data.todosCollapsed
+    },
     async renameSession(id, title) {
       const { data } = await api.patch(`/sessions/${id}`, { title })
       this.updateCachedSession(id, (session) => ({ ...session, ...data }))

@@ -1,5 +1,5 @@
 <template>
-  <div class="chat-composer q-pa-md">
+  <div class="chat-composer">
     <q-card flat class="app-surface chat-composer__card">
       <q-form @submit.prevent="submit">
         <q-input

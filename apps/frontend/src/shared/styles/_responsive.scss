@@ -167,10 +167,13 @@
     display: none;
   }
 
-  .chat-composer {
-    max-height: min(52dvh, 380px);
+  .chat-input-dock {
     padding: 8px;
     padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+
+  .chat-composer {
+    max-height: min(52dvh, 380px);
     overflow-y: auto;
   }
 
@@ -249,9 +252,11 @@
   }
 
   .question-dock {
-    width: min(calc(100% - 16px), 900px);
     max-height: min(68dvh, 620px);
-    margin-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+
+  .chat-input-dock--with-todos .question-dock {
+    max-height: min(48dvh, 460px);
   }
 
   .question-dock__header {

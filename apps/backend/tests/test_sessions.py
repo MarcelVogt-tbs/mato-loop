@@ -941,7 +941,10 @@ async def test_uncertain_first_commit_preserves_provisioned_session_tree(
     db.rollback.assert_awaited()
 
 
-async def test_session_detail_contains_active_run_and_aggregate_metrics() -> None:
+@pytest.mark.parametrize("todo_status,same_run", [
+    ("in_progress", False), ("completed", True), ("completed", False),
+])
+async def test_session_detail_contains_active_run_and_aggregate_metrics(todo_status, same_run) -> None:
     user = _user()
     session_id = uuid4()
     session = ChatSession(
@@ -986,14 +989,18 @@ async def test_session_detail_contains_active_run_and_aggregate_metrics() -> Non
     todo_messages.all.return_value = [Message(
         session_id=session_id,
         role="tool",
-        content='{"todos":[{"content":"Prüfen","status":"in_progress"}]}',
-        provider_data={"_matoloop": {"toolName": "todo_write"}},
+        content='{"todos":[{"content":"Prüfen","status":"' + todo_status + '"}]}',
+        provider_data={"_matoloop": {"toolName": "todo_write", "runId": str(run.id if same_run else uuid4())}},
     )]
     db.scalars.return_value = todo_messages
 
     result = await get_session(session_id, user, db)
 
-    assert result["todos"] == [{"content": "Prüfen", "status": "in_progress"}]
+    assert result["todos"] == (
+        [{"content": "Prüfen", "status": todo_status}]
+        if same_run or todo_status == "in_progress" else []
+    )
+    assert result["latestRunId"] == str(run.id)
     assert result["pinned"] is True
     assert result["controlCenter"] == {
         "tabs": [_api_app_tab("session"), _api_app_tab("files")],
@@ -2823,6 +2830,33 @@ async def test_control_center_state_can_be_replaced() -> None:
         "fileViews": {"session": None, "filesystem": None},
     }
     db.commit.assert_awaited_once()
+
+
+async def test_todo_collapse_state_round_trips_and_survives_layout_updates() -> None:
+    user = _user()
+    session = ChatSession(
+        id=uuid4(), user_id=user.id, title="Test", memory_mode="disabled",
+        control_center={"tabs": [{"app_id": "files", "pinned": False}], "active_app_id": "files"},
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    assert session_payload(session)["todosCollapsed"] is False
+
+    result = await update_session(session.id, SessionUpdateRequest(todos_collapsed=True), user, db)
+    assert result["todosCollapsed"] is True
+    assert result["controlCenter"]["activeAppId"] == "files"
+    assert session.control_center["todos_collapsed"] is True
+    db.scalar.assert_awaited_once()  # UI changes only lock the session, even during a run.
+    assert "FOR UPDATE" in str(db.scalar.await_args.args[0])
+
+    result = await update_session(
+        session.id, SessionUpdateRequest(control_center={"tabs": [], "active_app_id": None}), user, db,
+    )
+    assert result["todosCollapsed"] is True
+    result = await update_session(session.id, SessionUpdateRequest(todos_collapsed=False), user, db)
+    assert result["todosCollapsed"] is False
+    with pytest.raises(ValidationError):
+        SessionUpdateRequest(todos_collapsed="false")
 
 
 async def test_changing_computer_preserves_terminal_preference(monkeypatch) -> None:

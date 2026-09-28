@@ -22,6 +22,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     StrictInt,
     ValidationError,
     model_validator,
@@ -373,6 +374,7 @@ class SessionCreateRequest(BaseModel):
 class SessionUpdateRequest(BaseModel):
     title: str | None = Field(default=None, max_length=240)
     pinned: bool | None = None
+    todos_collapsed: StrictBool | None = None
     project_id: UUID | None = None
     model_id: UUID | None = None
     agent_profile_id: UUID | None = Field(
@@ -524,7 +526,8 @@ def session_payload(
 ) -> dict[str, Any]:
     try:
         control_center = ControlCenterState.model_validate(
-            {key: value for key, value in item.control_center.items() if key != "terminal_auto_attach"}
+            {key: value for key, value in item.control_center.items()
+             if key not in {"terminal_auto_attach", "todos_collapsed"}}
             if item.control_center else default_control_center_state()
         ).model_dump(mode="json")
     except (RootFileError, ValidationError):

@@ -141,7 +141,6 @@
                 :context-summary="message.currentTurn ? chat.streamContextSummary : null"
                 :warnings="message.currentTurn ? chat.runWarnings : []"
                 :trusted-image-origins="trustedImageOrigins"
-                :todos="message.id === todoHistoryMessageId ? chat.current?.todos : []"
                 :running="chat.running && message.currentTurn"
                 :expanded="expandedWorkHistoryIds.has(message.id)"
                 :class="{
@@ -345,36 +344,44 @@
         @resume="chat.resumeQueuedSend"
         @undo="undoQueuedMessage"
       />
-      <QuestionDock
-        v-if="activeQuestion"
-        :key="activeQuestion.id"
-        :request="activeQuestion"
-        :stopping="chat.stopping"
-        :show-stop="chat.running"
-        @stop="chat.stop"
-      />
-      <ChatComposer
-        v-else
-        ref="composer"
-        :session="chat.activeContext"
-        :draft="chat.activeDraft"
-        :disabled="!chat.outboxLoaded
-          || chat.outboxSaving
-          || chat.historyActionPending
-          || chat.sessionSettingsPending > 0
-          || (!chat.current && chat.activeQueuedMessages.length > 0)"
-        :running="chat.running"
-        :stopping="chat.stopping"
-        :pending-count="sessionApprovals.length"
-        :queue-mode="chat.messageQueueActive"
-        :attachments="chat.activeAttachmentDraft"
-        @add-attachments="addAttachmentFiles"
-        @remove-attachment="chat.removeAttachmentFile"
-        @send="send"
-        @stop="chat.stop"
-        @update="chat.updateActive"
-        @update:draft="chat.setDraft"
-      />
+      <div class="chat-input-dock q-pa-md" :class="{ 'chat-input-dock--with-todos': chat.current?.todos?.length }">
+        <SessionTodoStrip
+          :todos="chat.current?.todos || []"
+          :collapsed="chat.current?.todosCollapsed || false"
+          :saving="savingTodos"
+          @update:collapsed="setTodosCollapsed"
+        />
+        <QuestionDock
+          v-if="activeQuestion"
+          :key="activeQuestion.id"
+          :request="activeQuestion"
+          :stopping="chat.stopping"
+          :show-stop="chat.running"
+          @stop="chat.stop"
+        />
+        <ChatComposer
+          v-else
+          ref="composer"
+          :session="chat.activeContext"
+          :draft="chat.activeDraft"
+          :disabled="!chat.outboxLoaded
+            || chat.outboxSaving
+            || chat.historyActionPending
+            || chat.sessionSettingsPending > 0
+            || (!chat.current && chat.activeQueuedMessages.length > 0)"
+          :running="chat.running"
+          :stopping="chat.stopping"
+          :pending-count="sessionApprovals.length"
+          :queue-mode="chat.messageQueueActive"
+          :attachments="chat.activeAttachmentDraft"
+          @add-attachments="addAttachmentFiles"
+          @remove-attachment="chat.removeAttachmentFile"
+          @send="send"
+          @stop="chat.stop"
+          @update="chat.updateActive"
+          @update:draft="chat.setDraft"
+        />
+      </div>
     </div>
     <span class="app-sr-only" role="status" aria-live="polite" aria-atomic="true">
       {{ announcedRunStatus }}
@@ -449,6 +456,7 @@ import AgentActivityPanel from 'src/features/chat/components/AgentActivityPanel.
 import AppLogo from 'src/shared/ui/AppLogo.vue'
 import ChatComposer from 'src/features/chat/components/ChatComposer.vue'
 import ChatQueuedMessages from 'src/features/chat/components/ChatQueuedMessages.vue'
+import SessionTodoStrip from 'src/features/chat/components/SessionTodoStrip.vue'
 import ControlCenterPanel from 'src/app/control-center/ControlCenterPanel.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
 import MessageAttachments from 'src/features/chat/components/MessageAttachments.vue'
@@ -516,6 +524,18 @@ const scrollArea = ref(null)
 const scrollContent = ref(null)
 const virtualScroll = ref(null)
 const composer = ref(null)
+const savingTodos = ref(false)
+async function setTodosCollapsed(collapsed) {
+  if (!chat.current || savingTodos.value) return
+  savingTodos.value = true
+  try {
+    await chat.setTodosCollapsed(chat.current.id, collapsed)
+  } catch {
+    // The API interceptor reports failures; keep the confirmed state.
+  } finally {
+    savingTodos.value = false
+  }
+}
 const trustedImageOriginsBySession = ref(new Map())
 const expandedWorkHistoryIds = ref(new Set())
 const followingBottom = ref(true)
@@ -625,10 +645,6 @@ const displayMessages = computed(() => {
     workHistory: liveHistory
   }
   return withLiveTranscriptMessage(messages, liveMessage)
-})
-const todoHistoryMessageId = computed(() => {
-  const messages = displayMessages.value.filter((message) => message.workHistory)
-  return messages.find((message) => message.currentTurn)?.id || messages.at(-1)?.id || null
 })
 const runPresentation = computed(() => agentRunPresentation({
   runId: chat.runId || chat.current?.activeRun?.id,

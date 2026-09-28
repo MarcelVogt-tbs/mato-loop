@@ -1737,18 +1737,65 @@ describe('chat drafts', () => {
     })
   })
 
-  it('replaces session todos from SSE', () => {
+  it('replaces todos live and hides terminal lists only on the next run, not reconnect', () => {
     global.EventSource = EventSourceMock
     const chat = useChatStore()
-    chat.current = { id: 'session-1', messages: [], todos: [] }
+    chat.current = {
+      id: 'session-1', messages: [], todos: [{ content: 'Alt', status: 'cancelled' }],
+      latestRunId: 'run-0', todosCollapsed: true
+    }
     chat.selectedSessionId = 'session-1'
     chat.watchRun('session-1', 'run-1', { status: 'running' })
+    expect(chat.current.todos).toEqual([])
 
     EventSourceMock.instances[0].emit('todo.updated', {
       todos: [{ content: 'Prüfen', status: 'in_progress' }]
     })
 
     expect(chat.current.todos).toEqual([{ content: 'Prüfen', status: 'in_progress' }])
+    const completed = [{ content: 'Prüfen', status: 'completed' }]
+    EventSourceMock.instances[0].emit('todo.updated', { todos: completed })
+    chat.watchRun('session-1', 'run-1', { status: 'running', reconnecting: true })
+    expect(chat.current.todos).toEqual(completed)
+    chat.watchRun('session-1', 'run-2', { status: 'queued' })
+    expect(chat.current.todos).toEqual([])
+    expect(chat.current.todosCollapsed).toBe(true)
+  })
+
+  it.each(['pending', 'in_progress'])('carries %s todos into the next run', (status) => {
+    global.EventSource = EventSourceMock
+    const chat = useChatStore()
+    const todos = [{ content: 'Offen', status }, { content: 'Fertig', status: 'completed' }]
+    chat.current = { id: 'session-1', messages: [], todos, latestRunId: 'run-0' }
+    chat.watchRun('session-1', 'run-1')
+    expect(chat.current.todos).toEqual(todos)
+  })
+
+  it('saves the collapse preference without replacing live state or another session', async () => {
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', todosCollapsed: false, todos: [] }
+    let resolve
+    api.patch.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+    const saving = chat.setTodosCollapsed('session-1', true)
+    const todos = [{ content: 'Live', status: 'in_progress' }]
+    chat.current.todos = todos
+    expect(chat.current.todosCollapsed).toBe(false)
+    resolve({ data: { id: 'session-1', todosCollapsed: true } })
+    await saving
+    expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', { todos_collapsed: true })
+    expect(chat.current.todosCollapsed).toBe(true)
+    expect(chat.current.todos).toEqual(todos)
+
+    api.patch.mockRejectedValueOnce(new Error('offline'))
+    await expect(chat.setTodosCollapsed('session-1', false)).rejects.toThrow('offline')
+    expect(chat.current.todosCollapsed).toBe(true)
+
+    api.patch.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+    const savingPreviousSession = chat.setTodosCollapsed('session-1', false)
+    chat.current = { id: 'session-2', todosCollapsed: true }
+    resolve({ data: { id: 'session-1', todosCollapsed: false } })
+    await savingPreviousSession
+    expect(chat.current).toEqual({ id: 'session-2', todosCollapsed: true })
   })
 
   it('refreshes session files after a successful filesystem tool completes', () => {

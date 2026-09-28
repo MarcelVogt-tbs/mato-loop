@@ -14,6 +14,12 @@ import { ACTIVE_TITLE_GENERATION_STATUSES, FILESYSTEM_MUTATION_TOOLS, controlCen
 
 export const streamActions = {
     watchRun(sessionId, runId, run = {}) {
+      if (this.current?.id === sessionId && this.current.latestRunId !== runId) {
+        if (this.current.todos?.every((todo) => ['completed', 'cancelled'].includes(todo.status))) {
+          this.current.todos = []
+        }
+        this.current.latestRunId = runId
+      }
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
       if (!run.reconnecting) this.reconnectAttempts = 0
