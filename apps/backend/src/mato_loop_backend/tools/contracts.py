@@ -40,6 +40,10 @@ class DynamicToolArgumentsError(ValueError):
         self.field = field
 
 
+class ToolCallSuperseded(Exception):
+    """A new user instruction supersedes an unapproved tool call."""
+
+
 class ToolArgumentsEdited(Exception):
     def __init__(
         self,

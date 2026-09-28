@@ -24,7 +24,7 @@ from mato_loop_backend.permissions.policy import (
     session_grants_payload,
 )
 from mato_loop_backend.providers.base import ToolCall
-from mato_loop_backend.tools.contracts import PERMISSION_REASON_ARGUMENT
+from mato_loop_backend.tools.contracts import PERMISSION_REASON_ARGUMENT, ToolCallSuperseded
 from mato_loop_backend.tools.display import tool_display
 from mato_loop_backend.web_push import WebPushActionsTarget, WebPushService, web_push_payload
 
@@ -40,6 +40,8 @@ async def request_approval(
     display: dict[str, str] | None = None,
     argument_edit: dict[str, Any] | None = None,
 ) -> str | ApprovalResolution:
+    if run.id in cls._pending_continuations:
+        raise ToolCallSuperseded
     origin = await permission_origin(db, chat_session)
     grant_payload = session_grants_payload(permission)
     available_decisions = [
@@ -133,6 +135,9 @@ async def request_approval(
             await enqueue_approval_prompt(db, approval)
     approval_id, run_id = approval.id, run.id
     waiter = approval_coordinator.register(approval_id)
+    cls._waiting_approvals[run_id] = waiter
+    if run_id in cls._pending_continuations:
+        waiter.set_result("superseded")
     try:
         await db.commit()
         await run_events.publish(
@@ -166,11 +171,20 @@ async def request_approval(
             await run_events.publish(run_id, {"type": "approval.expired", "approvalId": str(approval_id)})
         raise
     finally:
+        cls._waiting_approvals.pop(run_id, None)
         approval_coordinator.discard(approval_id)
-    await db.refresh(approval)
+    await db.refresh(approval, with_for_update=True)
+    superseded = decision == "superseded" or run_id in cls._pending_continuations
+    if superseded and approval.status == "pending":
+        approval.status = "expired"
+        approval.resolved_at = datetime.now(UTC)
     transition_run_status(run, "running")
     await db.commit()
+    if superseded:
+        await run_events.publish(run_id, {"type": "approval.expired", "approvalId": str(approval_id)})
     await run_events.publish(
         run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}
     )
+    if superseded:
+        raise ToolCallSuperseded
     return decision

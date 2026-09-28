@@ -58,6 +58,7 @@ from mato_loop_backend.skills import RunSkillState
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import (
     ToolAttachment,
+    ToolCallSuperseded,
     ToolFileAction,
     ToolResult,
 )
@@ -283,6 +284,7 @@ async def execute_tool_batch(
         openscad_source_review_pending=openscad_source_review_pending,
         openscad_source_review_retries=openscad_source_review_retries,
     )
+    superseded = False
     invalid_question_batch = any(call.name in {"question", "secret_input"} for call in calls) and len(calls) != 1
     invalid_skill_batch = any(call.name == "load_skill" for call in calls) and len(calls) != 1
     invalid_agent_batch = any(call.name == "select_execution_agent" for call in calls) and len(calls) != 1
@@ -331,7 +333,10 @@ async def execute_tool_batch(
         if not rejected_batch_code and is_research_call and not repeated_research_call and not state.user_denied_batch:
             state.research_tool_calls_used += 1
         tool_trust = trust_level
-        if rejected_batch_code is not None:
+        if superseded:
+            content = json.dumps(error_payload("tool.superseded"), ensure_ascii=False)
+            metadata = {"errorCode": "tool.superseded"}
+        elif rejected_batch_code is not None:
             rejected = error_payload(rejected_batch_code)
             if truncated_batch and not tool_batch_exceeds_budget:
                 rejected["repair"] = (
@@ -451,6 +456,9 @@ async def execute_tool_batch(
                 )
             try:
                 tool_result = await toolset.execute(call, tool_context)
+            except ToolCallSuperseded:
+                superseded = True
+                tool_result = ToolResult.error("tool.superseded")
             except Exception as exc:
                 if diagnostics_active:
                     schedule_diagnostic_event(
@@ -543,6 +551,13 @@ async def execute_tool_batch(
             limits=limits, attachment_service=attachment_service,
         )
         error_code = metadata.get("errorCode")
+        await run_events.publish(run.id, {
+            "type": "tool.completed", "tool": call.name, "toolLabel": tool_label,
+            "toolDisplay": display, "toolCallId": call.id,
+            "output": content[:500], "metadata": metadata,
+        })
+        if error_code == "tool.superseded":
+            continue
         if not isinstance(error_code, str):
             if call.name == "render_openscad" and call.arguments.get("output", "preview") == "preview":
                 rendered_root = call.arguments.get("root")
@@ -634,11 +649,6 @@ async def execute_tool_batch(
                     **metadata,
                     "toolResultReference": _tool_result_reference(tool_message.id, tool_message.content),
                 }
-        await run_events.publish(run.id, {
-            "type": "tool.completed", "tool": call.name, "toolLabel": tool_label,
-            "toolDisplay": display, "toolCallId": call.id,
-            "output": content[:500], "metadata": metadata,
-        })
         if call.name == "todo_write" and not isinstance(error_code, str):
             await run_events.publish(run.id, {
                 "type": "todo.updated", "todos": json.loads(content)["todos"],

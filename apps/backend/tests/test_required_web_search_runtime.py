@@ -34,11 +34,13 @@ from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.media.video_processing import MediaInfo, VideoFrame
 from mato_loop_backend.models import (
     AgentRun,
+    ApprovalRequest,
     ChatSession,
     ExecutionAgent,
     MemoryRecord,
     Message,
     MessageAttachment,
+    UserAccount,
     WebSearchPolicy,
 )
 from mato_loop_backend.permissions.policy import (
@@ -2312,6 +2314,139 @@ async def test_direct_message_waits_for_active_tool(monkeypatch) -> None:
         assert "Change after tool" in str(requests[-1]["messages"])
     finally:
         release_tool.set()
+        _clear_continuation_test_state(run.id)
+
+
+@pytest.mark.parametrize("arrival", ["waiting", "resolving", "creating", "before"])
+async def test_direct_message_supersedes_approval_and_replans(monkeypatch, tmp_path, arrival) -> None:
+    arguments = {"root": "session", "path": "note.txt", "content": "Updated", "_reason": "Write the note"}
+    db, run, requests, _, events = await _runtime_setup(
+        monkeypatch,
+        [
+            ProviderResult(tool_calls=[
+                _search_call("completed", "Current"),
+                ToolCall("waiting", "write_file", arguments),
+                ToolCall("skipped", "delete_path", {"root": "session", "path": "old.txt"}),
+            ], finish_reason="tool_calls"),
+            ProviderResult(tool_calls=[ToolCall("replanned", "write_file", arguments)], finish_reason="tool_calls"),
+            ProviderResult(content="Updated answer", finish_reason="stop"),
+        ],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    session = db.get.return_value
+    records = AgentRuntime._records.return_value
+    approvals = []
+    created = asyncio.Queue()
+    storage = SessionStorage(tmp_path / "sessions")
+    session_path = storage.provision(run.session_id)
+    target = session_path / "files" / "note.txt"
+    for module in (mock_agent_runtime, mock_agent_loop):
+        monkeypatch.setattr(module, "RootFileService", lambda session_id, **kwargs: RootFileService(
+            session_id, session_storage=storage,
+        ))
+    monkeypatch.setattr(PermissionPolicy, "evaluate", AsyncMock(return_value=PermissionDecision.ASK))
+    monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", AsyncMock())
+    db.scalars.return_value = SimpleNamespace(all=lambda: [])
+    db.scalar.side_effect = lambda statement: True if statement.column_descriptions[0]["entity"] is UserAccount else None
+    db.get.side_effect = lambda model, key: records[0] if model is Message else session
+
+    def persist(item):
+        item.id = item.id or uuid4()
+        item.created_at = item.created_at or datetime.now(UTC)
+        if isinstance(item, Message):
+            records.append(item)
+        elif isinstance(item, ApprovalRequest):
+            item.status = "pending"
+            approvals.append(item)
+
+    db.add.side_effect = persist
+    sent = False
+
+    def send_direct_message(*, accepted=True):
+        nonlocal sent
+        reservation = AgentRuntime.reserve_continuation(run.id)
+        assert reservation is not None
+        if accepted:
+            sent = True
+            db.add(Message(
+                id=uuid4(), session_id=run.session_id, role="user", content="Change course",
+                provider_data={"_matoloop": {"continuationRunId": str(run.id)}},
+            ))
+        AgentRuntime.finish_continuation(run.id, reservation, accepted=accepted)
+
+    async def flush():
+        if arrival == "creating" and len(approvals) == 1 and not sent:
+            send_direct_message()
+
+    db.flush.side_effect = flush
+
+    async def publish(_run_id, event):
+        events.append(event)
+        if event["type"] == "approval.created":
+            created.put_nowait(approvals[-1])
+
+    monkeypatch.setattr(run_events, "publish", publish)
+
+    async def execute(call, context, tool):
+        if call.id == "completed":
+            return _search_result()
+        if arrival == "before" and call.id == "waiting":
+            send_direct_message()
+        return await ToolRegistry._execute_definition(tool_registry, call, context, tool)
+
+    tool_registry._execute_definition.side_effect = execute
+    task = asyncio.create_task(AgentRuntime._execute_loop(db, run))
+    AgentRuntime._tasks[run.id] = task
+    AgentRuntime._cancellable_runs.add(run.id)
+    try:
+        if arrival != "before":
+            old = await asyncio.wait_for(created.get(), timeout=5)
+            if arrival in {"waiting", "resolving"}:
+                send_direct_message(accepted=False)
+                assert run.id not in AgentRuntime._pending_continuations
+                assert old.status == "pending"
+                assert not task.done()
+                if arrival == "resolving":
+                    assert AgentRuntime.claim_approval_resolution(old.id)
+                send_direct_message()
+                if arrival == "resolving":
+                    AgentRuntime.release_approval_resolution(old.id)
+                    assert not AgentRuntime.resolve_approval(old.id, "allow_once")
+            assert not AgentRuntime.claim_approval_resolution(old.id)
+
+        new = await asyncio.wait_for(created.get(), timeout=5)
+        assert new.payload["toolCallId"] == "replanned"
+        assert not target.exists()
+        assert "Change course" in str(requests[-1]["messages"])
+        assert SOURCE_ID in str(requests[-1]["messages"])
+        assert "tool.superseded" in str(requests[-1]["messages"])
+        if arrival != "before":
+            assert old.status == "expired"
+            assert old.decision is None
+            assert old.resolved_at is not None
+            assert any(event["type"] == "approval.expired" and event["approvalId"] == str(old.id) for event in events)
+        assert AgentRuntime.claim_approval_resolution(new.id)
+        new.status = "approved"
+        new.decision = "allow_once"
+        assert AgentRuntime.resolve_approval(new.id, "allow_once")
+        await asyncio.wait_for(task, timeout=5)
+
+        assert target.read_text() == "Updated"
+        results = {message.tool_call_id: message for message in _tool_messages(db)}
+        assert SOURCE_ID in results["completed"].content
+        for call_id in ("waiting", "skipped"):
+            assert json.loads(results[call_id].content)["error"]["code"] == "tool.superseded"
+        assert run.status == "running"
+        assert run.id not in AgentRuntime._waiting_approvals
+        assert _assistant_messages(db)[-1].content == "Updated answer"
+    except TimeoutError:
+        if task.done():
+            task.result()
+        pytest.fail(f"Approval wait stalled: {[message.content for message in _tool_messages(db)]}")
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         _clear_continuation_test_state(run.id)
 
 

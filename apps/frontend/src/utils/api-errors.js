@@ -507,6 +507,7 @@ const messages = {
   'tool.cursorInvalid': () => 'Der referenzierte Nachrichtenabschnitt ist nicht mehr verfügbar.',
   'tool.executionFailed': () => 'Die Tool-Aktion ist fehlgeschlagen.',
   'tool.executionInterrupted': () => 'Die Tool-Aktion wurde unterbrochen.',
+  'tool.superseded': () => 'Die ausstehende Aktion wurde wegen deiner neuen Nachricht übersprungen.',
   'tool.invalidArguments': () => 'Das Modell hat ungültige Tool-Argumente erzeugt.',
   'tool.unknown': () => 'Das angeforderte Tool ist nicht bekannt.',
   'tool.unavailable': () => 'Dieses Tool ist für das ausgewählte Modell nicht verfügbar.',

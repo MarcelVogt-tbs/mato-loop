@@ -66,6 +66,9 @@ describe('API error messages', () => {
   })
 
   it('translates stable domain error codes', () => {
+    expect(apiErrorMessage({ error: { code: 'tool.superseded' } })).toBe(
+      'Die ausstehende Aktion wurde wegen deiner neuen Nachricht übersprungen.'
+    )
     expect(apiErrorMessage({ error: { code: 'approval.targetChanged' } })).toBe(
       'Das Ziel der Freigabe wurde inzwischen geändert. Der Vorschlag ist nicht mehr gültig.'
     )

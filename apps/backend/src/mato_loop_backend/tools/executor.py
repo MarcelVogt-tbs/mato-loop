@@ -41,6 +41,7 @@ from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import (
     DynamicToolArgumentsError,
     ToolArgumentsEdited,
+    ToolCallSuperseded,
     ToolResult,
 )
 from mato_loop_backend.tools.references import InvalidToolReference, resolve_tool_references
@@ -406,7 +407,7 @@ async def execute_definition(
                 observed_at=datetime.now(UTC),
             ).model_dump(mode="json")
         return result
-    except ToolArgumentsEdited:
+    except (ToolArgumentsEdited, ToolCallSuperseded):
         raise
     except (
         AttachmentError,
