@@ -35,6 +35,7 @@ it('shows every task and updates progress as tasks change', async () => {
   expect(root.textContent).toContain('Aufgaben · 2 von 4 erledigt')
   expect(root.querySelector('[role="progressbar"]').getAttribute('aria-valuenow')).toBe('0.5')
   expect(root.querySelector('button').getAttribute('aria-expanded')).toBe('true')
+  expect(root.querySelector('[role="status"]')).toBeNull()
 
   todos.value = todos.value.map((todo) => ({ ...todo, status: 'completed' }))
   await nextTick()
@@ -47,7 +48,7 @@ it('shows every task and updates progress as tasks change', async () => {
   expect(root.querySelector('.session-todos')).toBeNull()
 })
 
-it('toggles the controlled collapsed state without hiding progress', async () => {
+it('keeps progress and the live current step visible while collapsed', async () => {
   const collapsed = ref(false)
   const todos = ref([{ content: 'Prüfen', status: 'pending' }])
   root = document.createElement('div')
@@ -69,12 +70,22 @@ it('toggles the controlled collapsed state without hiding progress', async () =>
   await nextTick()
   expect(list.style.display).toBe('none')
   expect(button.getAttribute('aria-expanded')).toBe('false')
+  expect(root.querySelector('[role="status"]')).toBeNull()
+
+  todos.value = [{ content: 'Prüfen', status: 'in_progress' }]
+  await nextTick()
+  expect(root.querySelector('[role="status"]').textContent).toContain('Prüfen')
+  todos.value = [{ content: 'Umsetzen', status: 'in_progress' }]
+  await nextTick()
+  expect(root.querySelector('[role="status"]').textContent).toContain('Umsetzen')
+  expect(root.querySelector('[role="status"] [title]').title).toBe('Umsetzen')
 
   todos.value = [{ content: 'Prüfen', status: 'completed' }]
   await nextTick()
   expect(list.style.display).toBe('none')
   expect(root.textContent).toContain('1 von 1 erledigt')
   expect(root.querySelector('[role="progressbar"]')).not.toBeNull()
+  expect(root.querySelector('[role="status"]')).toBeNull()
 
   button.click()
   await nextTick()

@@ -18,6 +18,11 @@
       size="2px"
       aria-label="Aufgabenfortschritt"
     />
+    <div v-if="collapsed && activeTodo" class="session-todos__item row no-wrap items-center q-ma-xs q-px-xs" role="status">
+      <q-icon :name="statusIcon.in_progress" color="primary" size="18px" class="col-auto" aria-hidden="true" />
+      <span class="app-sr-only">In Bearbeitung: </span>
+      <span class="col ellipsis" :title="activeTodo.content">{{ activeTodo.content }}</span>
+    </div>
     <div v-show="!collapsed" :id="listId" class="session-todos__list column no-wrap scroll q-pa-xs" role="list" aria-label="Aufgaben dieser Session" aria-live="polite">
       <div v-for="(todo, index) in todos" :key="index" class="session-todos__item row no-wrap items-start col-auto q-px-xs" role="listitem">
         <q-icon
@@ -61,6 +66,7 @@ const statusLabel = {
   cancelled: 'Abgebrochen'
 }
 const completedCount = computed(() => props.todos.filter((todo) => todo.status === 'completed').length)
+const activeTodo = computed(() => props.todos.find((todo) => todo.status === 'in_progress'))
 </script>
 
 <style scoped>
