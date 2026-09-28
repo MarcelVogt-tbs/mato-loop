@@ -1463,10 +1463,6 @@ async def update_session(
             current_directory = (
                 payload.current_directory if "current_directory" in fields else None
             )
-            item.control_center = {
-                key: value for key, value in (item.control_center or {}).items()
-                if key != "terminal_auto_attach"
-            }
         item.current_directory, directory_policy = await validate_execution_preferences(
             db, user.id, agent_id, current_directory
         )

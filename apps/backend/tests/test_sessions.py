@@ -2825,7 +2825,7 @@ async def test_control_center_state_can_be_replaced() -> None:
     db.commit.assert_awaited_once()
 
 
-async def test_changing_computer_clears_terminal_preference(monkeypatch) -> None:
+async def test_changing_computer_preserves_terminal_preference(monkeypatch) -> None:
     from mato_loop_backend.sessions import service
 
     user = _user()
@@ -2844,7 +2844,7 @@ async def test_changing_computer_clears_terminal_preference(monkeypatch) -> None
     await update_session(
         session.id, SessionUpdateRequest(preferred_execution_agent_id=uuid4()), user, db,
     )
-    assert "terminal_auto_attach" not in session.control_center
+    assert session.control_center["terminal_auto_attach"] is True
     assert session.control_center["tabs"][0]["app_id"] == "terminal"
 
 
