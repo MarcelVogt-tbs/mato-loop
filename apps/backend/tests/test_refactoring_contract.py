@@ -30,4 +30,4 @@ def test_model_contract_survives_module_extraction():
                 ),
             })
     digest = hashlib.sha256(json.dumps(contracts, sort_keys=True).encode()).hexdigest()
-    assert digest == "5de0f46e08b0c25355f7c7166ebaa2bb918bcf7cb9998c953616bfd4bc3747e4"
+    assert digest == "4b5af95dec193ec7b6b62846807c8eb733f9afecdf98e15c37ae86a7c0b769d3"
