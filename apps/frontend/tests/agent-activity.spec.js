@@ -218,7 +218,7 @@ describe('agent activity', () => {
     expect(agentRunPresentation({
       running: true,
       activity: { phase: 'waiting_model', modelRequest: 2 }
-    })).toMatchObject({ showActivity: false, label: '', summary: '', announcement: '', entry: null })
+    })).toMatchObject({ showActivity: true, label: 'Verarbeite Anfrage' })
     expect(agentRunPresentation({
       running: true,
       activity: { phase: 'waiting_model', modelRequest: 2 },

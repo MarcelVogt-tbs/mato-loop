@@ -245,7 +245,7 @@ def general_system_prompt(
         )
         if "shell_run" in offered_tool_names:
             parts.append(
-                "Pass returned environment references to shell_run.environment for ordinary commands. "
+                "Pass returned environment references to shell_run.environment for ordinary and elevated commands. "
                 "In shell commands, reference only environment variable names; never reveal, transform, "
                 "persist, or trace credential values. Try elevated shell commands without a password first "
                 "unless sudo authentication is already known to be required. "
@@ -258,12 +258,12 @@ def general_system_prompt(
             )
     if session_environment and "shell_run" in offered_tool_names:
         parts.append(
-            "Temporary environment references available in this session: "
+            "Temporary environment references available in this run or session: "
             + json.dumps(session_environment, ensure_ascii=True, sort_keys=True)
             + ". Use each ordinary valueRef through shell_run.environment; sudo references are used "
-            "automatically by elevated shell_run on the matching computer. Values are hidden, unavailable "
-            "to other sessions, and lost when this session "
-            "is deleted or the backend restarts."
+            "automatically by elevated shell_run on the matching computer for session-stored values. "
+            "Run references expire when this run ends; session references expire when the session "
+            "is deleted or the backend restarts. Values are hidden and unavailable to other sessions."
         )
     if "todo_write" in offered_tool_names:
         parts.append(

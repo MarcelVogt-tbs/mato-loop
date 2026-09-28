@@ -104,6 +104,7 @@ class ToolContext:
     execution_client: ExecutionClient | None = None
     session_read_cursors: dict[UUID, UUID | None] = field(default_factory=dict)
     one_time_secrets: dict[UUID, str] = field(default_factory=dict)
+    run_secret_refs: dict[str, str] = field(default_factory=dict)
     task_handler: TaskHandler | None = None
     arguments_edited_handler: ArgumentsEditedHandler | None = None
 

@@ -349,6 +349,7 @@ class MatoLoopAgent:
                 stream=stream,
                 elevated=True,
                 sudo_password=arguments.sudo_password,
+                environment=arguments.environment,
             )
         if isinstance(arguments, ShellInspectArguments):
             return await asyncio.to_thread(

@@ -3374,7 +3374,7 @@ async def test_long_turn_compaction_keeps_pending_call_out_of_summary() -> None:
     _assert_whole_tool_pairs(projection.messages)
 
 
-async def test_direct_messages_during_tool_batch_keep_real_results_as_references() -> None:
+async def test_direct_messages_during_tool_batch_keep_same_run_results_available() -> None:
     session = _session()
     run_id = uuid4()
     request = _message(session.id, "user", "Prepare the machine")
@@ -3406,13 +3406,11 @@ async def test_direct_messages_during_tool_batch_keep_real_results_as_references
     assert [item["role"] for item in projection.messages[1:]] == [
         "user", "assistant", "tool", "tool", "user", "user",
     ]
-    references = [
-        json.loads(item["content"])["toolResultReference"]["arguments"]["message_id"]
+    results = [
+        json.loads(item["content"])
         for item in projection.messages if item["role"] == "tool"
     ]
-    assert references == [
-        str(result_one.id), str(result_two.id),
-    ]
+    assert results == [json.loads(result_one.content), json.loads(result_two.content)]
     assert [item["content"] for item in projection.messages if item["role"] == "user"] == [
         request.content, first.content, second.content,
     ]

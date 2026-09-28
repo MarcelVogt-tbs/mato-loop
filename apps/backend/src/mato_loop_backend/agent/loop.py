@@ -87,6 +87,7 @@ async def execute_loop_body(
     ephemeral_images: dict[tuple[UUID, int, str, int], ProviderImageInput],
     one_time_secrets: dict[UUID, str],
 ) -> None:
+    run_secret_refs: dict[str, str] = {}
     visible_response = visible_response or _VisibleResponse()
     chat_session = await db.get(ChatSession, run.session_id)
     if chat_session is None:
@@ -415,7 +416,10 @@ async def execute_loop_body(
                 else None
             ),
             current_directory=run.current_directory_snapshot,
-            session_environment=session_secrets.prompt_entries(chat_session.id),
+            session_environment={
+                **{name: {"valueRef": ref} for name, ref in run_secret_refs.items()},
+                **session_secrets.prompt_entries(chat_session.id),
+            },
         )
 
         system_prompt = render_system_prompt()
@@ -725,6 +729,7 @@ async def execute_loop_body(
                 openscad_pending_paths=openscad_pending_paths,
                 session_read_cursors=session_read_cursors,
                 one_time_secrets=one_time_secrets,
+                run_secret_refs=run_secret_refs,
                 ephemeral_images=ephemeral_images, live_tool_calls=live_tool_calls,
                 model_request=model_request, diagnostics_active=diagnostics_active,
                 next_helper_request=next_helper_request,

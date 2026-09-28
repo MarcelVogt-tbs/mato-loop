@@ -244,14 +244,18 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         password = await resolve_sudo_password(context, arguments.sudo_password_ref, client.agent_id)
         if isinstance(password, ToolResult):
             return password
+        resolved = await resolve_secret_refs(context, arguments.environment)
+        if isinstance(resolved, ToolResult):
+            return resolved
         requested = arguments.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
         return await _run_process(
             context, "shell.elevated",
             {"command": arguments.command, "currentDirectory": client.current_directory,
-             **({"timeoutSeconds": arguments.timeout} if arguments.timeout is not None else {}),
-             **({"sudoPassword": password} if password else {})},
+              **({"timeoutSeconds": arguments.timeout} if arguments.timeout is not None else {}),
+              **({"sudoPassword": password} if password else {}),
+              **({"environment": resolved} if resolved else {})},
             requested_arguments=requested, executed_arguments=requested,
-            redacted_values=(password,) if password else (),
+            redacted_values=(*resolved.values(), *((password,) if password else ())),
         )
     terminal = terminal_coordinator.attached_for(
         user_id=context.session.user_id,
@@ -382,6 +386,8 @@ SHELL_RUN = ToolDefinition(
             "output retained; interpret the exit code and output for the command's meaning. "
             "elevated=true runs this command as administrator in an isolated shell, even with an "
             "attached terminal. It uses shell.write policy and computer-wide hard restrictions. "
+            "Use environment references for explicit variables; elevated commands preserve only "
+            "those named variables through sudo. "
             "Use sudo_password_ref for secure input when sudo requires a password; do not put sudo, "
             "password pipes, or a password in the command. An existing session secret named "
             "SUDO_PASSWORD_<AGENT_ID_WITHOUT_DASHES> is reused automatically for that computer.",

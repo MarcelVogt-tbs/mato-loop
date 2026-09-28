@@ -71,6 +71,17 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(arguments=arguments), self.assertRaises(ValidationError):
                 validate_arguments(request)
 
+        request.operation = "shell.elevated"
+        request.arguments = {
+            "command": "printenv CUSTOM_VALUE",
+            "currentDirectory": "/workspace",
+            "environment": {"CUSTOM_VALUE": "secret"},
+        }
+        self.assertEqual(validate_arguments(request).environment, {"CUSTOM_VALUE": "secret"})
+        request.arguments["environment"] = {"BASH_ENV": "unsafe"}
+        with self.assertRaises(ValidationError):
+            validate_arguments(request)
+
         request.operation = "terminal.run"
         request.arguments = {
             "terminalId": AGENT_ID,

@@ -69,7 +69,7 @@ async def resolve_sudo_password(
 ) -> str | None | ToolResult:
     name = f"SUDO_PASSWORD_{agent_id.hex.upper()}"
     if reference is None:
-        reference = session_secrets.references(context.session.id).get(name)
+        reference = session_secrets.references(context.session.id).get(name) or context.run_secret_refs.get(name)
     if reference is None:
         return None
     if isinstance(reference, str) and reference.startswith("session-secret:"):

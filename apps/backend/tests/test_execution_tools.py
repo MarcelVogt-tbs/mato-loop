@@ -715,6 +715,33 @@ async def test_elevated_shell_reuses_only_this_agents_session_password(tmp_path)
         session_secrets.clear_session(context.session.id)
 
 
+async def test_elevated_shell_resolves_run_secrets_and_forwards_explicit_environment(tmp_path) -> None:
+    response = ProcessResult(
+        exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0,
+        stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
+    )
+    client = FakeExecutionClient({"shell.elevated": response}, {"shell.run", "shell.elevated"})
+    context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
+    sudo_name = f"SUDO_PASSWORD_{client.agent_id.hex.upper()}"
+    password_id, token_id = uuid4(), uuid4()
+    context.one_time_secrets.update({password_id: "sudo-private", token_id: "env-private"})
+    context.run_secret_refs[sudo_name] = f"run-secret:{password_id}"
+
+    result = await _shell_run(ShellRunArguments(
+        command="test -n \"$APP_TOKEN\"", elevated=True,
+        environment={"APP_TOKEN": f"run-secret:{token_id}"},
+    ), context)
+
+    assert not result.is_error
+    assert client.requests[-1] == (
+        "shell.elevated",
+        {"command": 'test -n "$APP_TOKEN"', "currentDirectory": client.current_directory,
+         "sudoPassword": "sudo-private", "environment": {"APP_TOKEN": "env-private"}},
+    )
+    assert "env-private" not in result.content
+    assert "sudo-private" not in result.content
+
+
 async def test_elevated_shell_requires_a_capable_agent_before_approval(tmp_path) -> None:
     client = FakeExecutionClient({}, {"shell.run", "shell.inspect"})
     context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
@@ -1415,6 +1442,25 @@ async def test_secret_references_keep_only_selected_fields_for_session(
         "SSH_PASSWORD": "  exact secret  "
     }
     assert list(context.one_time_secrets.values()) == ["  exact secret  "]
+
+    # A new model call in the same run may ask again after an instant message.
+    context.question_handler = AsyncMock(return_value=ProtectedQuestionResolution(
+        {"API_TOKEN": ["new token"]}, frozenset(),
+    ))
+    repeated = ToolCall("secret-again", "secret_input", {"inputs": [
+        {"name": "SSH_PASSWORD", "label": "SSH password", "question": "Enter the password"},
+        {"name": "API_TOKEN", "label": "API token", "question": "Enter the token"},
+    ]})
+    context.tool_call = repeated
+    repeated_result = await _tools(client.operations).execute(repeated, context)
+    repeated_environment = json.loads(repeated_result.content)["environment"]
+    assert repeated_environment["SSH_PASSWORD"] == environment["SSH_PASSWORD"]
+    assert [item.id for item in context.question_handler.await_args.args[0].questions] == ["API_TOKEN"]
+    assert "new token" not in repeated_result.content
+    assert json.loads((await _tools(client.operations).execute(repeated, context)).content)[
+        "environment"
+    ] == repeated_environment
+    assert context.question_handler.await_count == 1
 
     other_context = _context(tmp_path, password_call, client)
     isolated_result = await _tools(client.operations).execute(

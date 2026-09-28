@@ -304,6 +304,9 @@ class ElevatedShellArguments(HostDirectoryArguments):
     sudo_password: str | None = Field(
         default=None, alias="sudoPassword", min_length=1, max_length=4096
     )
+    environment: dict[EnvironmentName, EnvironmentValue] | None = Field(default=None, max_length=32)
+
+    _environment_is_bounded = field_validator("environment")(_bounded_unprotected_environment)
 
     @field_validator("sudo_password")
     @classmethod

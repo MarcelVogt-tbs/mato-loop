@@ -1,0 +1,5 @@
+# Active-run continuations and elevated environments
+
+A direct message interrupts the current model request and starts a new model request in the same run. Its instruction supersedes pending approvals, but successful tool results from that run remain current evidence. Existing context budgets still shorten large tool outputs. Run-local secret references stay available only until that run ends; repeat protected-input requests reuse already answered names and ask only for missing ones. Remembering a value for later runs still requires the user's session opt-in.
+
+For `shell_run(elevated=true)`, the backend resolves only explicitly requested environment references after authorization. The Agent passes the validated names through sudo's targeted `--preserve-env` option, never the values in the command or argument vector. If sudo drops a requested name, the elevated shell exits before executing the supplied command. The existing output redaction covers both the sudo password and explicit environment values. A host whose sudo policy rejects targeted preservation cannot execute that command with the requested environment.

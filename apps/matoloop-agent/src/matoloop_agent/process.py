@@ -1536,14 +1536,31 @@ class ProcessRunner:
     ) -> dict:
         timeout = self.execution_timeout(timeout)
         if elevated:
-            if self.shell is None or expected_inspection_revision is not None or environment:
+            if self.shell is None or expected_inspection_revision is not None:
                 raise AgentError("process.notAllowed", "Elevated shell is unavailable")
             _parse_shell(command)
             sudo = shutil.which("sudo", path=EXECUTION_PATH)
             if sudo is None:
                 raise AgentError("process.sudoUnavailable", "Sudo is unavailable")
             sudo = os.fspath(self._resolve_executable(Path(sudo)))
-            argv = [sudo, "-n", "--", os.fspath(self.shell), "-c", command]
+            if environment:
+                # sudo env_reset keeps only these validated names; no values enter argv.
+                names = sorted(environment)
+                command = (
+                    "if ! ("
+                    + " && ".join(f'test "${{{name}+x}}" = x' for name in names)
+                    + "); then echo 'Explicit elevated environment unavailable' >&2; exit 125; fi\n"
+                    + command
+                )
+            argv = [
+                sudo,
+                "-n",
+                *(["--preserve-env=" + ",".join(names)] if environment else []),
+                "--",
+                os.fspath(self.shell),
+                "-c",
+                command,
+            ]
             inspection = None
         else:
             argv, inspection = self.execution_argv(

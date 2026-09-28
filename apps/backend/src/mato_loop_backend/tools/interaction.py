@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import mato_loop_backend.permissions.resolution as permissions_resolution
 import mato_loop_backend.tools.access as tools_access
@@ -83,6 +83,15 @@ async def _variable_read(
 async def _secret_input(
     arguments: SecretInputArguments, context: ToolContext
 ) -> ToolResult:
+    # Reuse run-local answers across direct-message continuations without extending their lifetime.
+    known = {
+        **{name: ref for name, ref in context.run_secret_refs.items()
+           if context.one_time_secrets.get(UUID(ref.removeprefix("run-secret:"))) is not None},
+        **session_secrets.references(context.session.id),
+    }
+    missing = [item for item in arguments.inputs if item.name not in known]
+    if not missing:
+        return ToolResult.json({"environment": {item.name: known[item.name] for item in arguments.inputs}})
     answers = await context.ask_user(
         ProtectedQuestionArguments(
             questions=[
@@ -93,7 +102,7 @@ async def _secret_input(
                     type="password" if item.masked else "value",
                     one_time=True,
                 )
-                for item in arguments.inputs
+                for item in missing
             ]
         )
     )
@@ -104,7 +113,7 @@ async def _secret_input(
     assert isinstance(answers, ProtectedQuestionResolution)
     remembered = {
         item.name: answers.answers[item.name][0]
-        for item in arguments.inputs
+        for item in missing
         if item.name in answers.remember_for_session
     }
     session_environment = session_secrets.put(
@@ -112,18 +121,19 @@ async def _secret_input(
         remembered,
         {
             item.name: item.description
-            for item in arguments.inputs
+            for item in missing
             if item.description and item.name in answers.remember_for_session
         },
     )
-    environment = {}
-    for item in arguments.inputs:
+    environment = {item.name: known[item.name] for item in arguments.inputs if item.name in known}
+    for item in missing:
         if item.name in session_environment:
             environment[item.name] = session_environment[item.name]
         else:
             secret_id = uuid4()
             context.one_time_secrets[secret_id] = answers.answers[item.name][0]
             environment[item.name] = f"run-secret:{secret_id}"
+            context.run_secret_refs[item.name] = environment[item.name]
     return ToolResult.json({"environment": environment})
 
 

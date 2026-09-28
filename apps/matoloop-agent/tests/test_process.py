@@ -41,11 +41,15 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             sudo.write_text(
                 textwrap.dedent("""\
                 #!/usr/bin/python3
+                import os
                 import subprocess
                 import sys
                 from pathlib import Path
 
                 args = sys.argv[1:]
+                preserve = next((arg.partition('=')[2].split(',') for arg in args
+                                 if arg.startswith('--preserve-env=')), [])
+                args = [arg for arg in args if not arg.startswith('--preserve-env=')]
                 timestamp = Path(__file__).with_suffix('.authenticated')
                 if args == ['-n', '-v']:
                     sys.exit(0 if timestamp.exists() else 1)
@@ -54,10 +58,20 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                         sys.exit(1)
                     timestamp.touch()
                     sys.exit(0)
+                if args[:2] == ['-n', '--'] and timestamp.exists():
+                    environment = {'PATH': os.environ.get('PATH', '/usr/bin:/bin')}
+                    environment.update({name: os.environ[name] for name in preserve
+                                        if name in os.environ and name != 'DROP_ENV'})
+                    sys.exit(subprocess.run(args[2:], stdin=subprocess.DEVNULL,
+                                            env=environment).returncode)
                 if args[:4] == ['-S', '-p', '', '--']:
                     if sys.stdin.readline() != 'correct\\n':
                         sys.exit(1)
-                    sys.exit(subprocess.run(args[4:], stdin=subprocess.DEVNULL).returncode)
+                    environment = {'PATH': os.environ.get('PATH', '/usr/bin:/bin')}
+                    environment.update({name: os.environ[name] for name in preserve
+                                        if name in os.environ and name != 'DROP_ENV'})
+                    sys.exit(subprocess.run(args[4:], stdin=subprocess.DEVNULL,
+                                            env=environment).returncode)
                 sys.exit(1)
             """)
             )
@@ -114,6 +128,47 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                             "content",
                         )
                         self.assertNotIn("correct", str(chunks))
+
+                chunks.clear()
+                result = await runner.exec(
+                    current_directory=str(root),
+                    command='test -n "$APP_TOKEN"; printf received',
+                    timeout=2,
+                    stream=stream,
+                    elevated=True,
+                    sudo_password="correct",
+                    environment={"APP_TOKEN": "private-value"},
+                )
+                self.assertEqual(result["exitCode"], 0)
+                self.assertEqual(chunks, [("stdout", "received")])
+                self.assertNotIn("private-value", str(chunks))
+
+                chunks.clear()
+                result = await runner.exec(
+                    current_directory=str(root),
+                    command='test -n "$APP_TOKEN"; printf received',
+                    timeout=2,
+                    stream=stream,
+                    elevated=True,
+                    environment={"APP_TOKEN": "private-value"},
+                )
+                self.assertEqual(result["exitCode"], 0)
+                self.assertEqual(chunks, [("stdout", "received")])
+
+                chunks.clear()
+                result = await runner.exec(
+                    current_directory=str(root),
+                    command="printf must-not-run",
+                    timeout=2,
+                    stream=stream,
+                    elevated=True,
+                    sudo_password="correct",
+                    environment={"DROP_ENV": "private-value"},
+                )
+                self.assertEqual(result["exitCode"], 125)
+                self.assertNotIn("must-not-run", str(chunks))
+                self.assertIn("Explicit elevated environment unavailable", str(chunks))
+                self.assertNotIn("private-value", str(chunks))
 
     async def test_elevated_shell_timeout_stops_command(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

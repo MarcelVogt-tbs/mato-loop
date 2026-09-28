@@ -262,6 +262,7 @@ async def execute_tool_batch(
     openscad_pending_paths: set[tuple[str, str]],
     session_read_cursors: dict[UUID, UUID | None],
     one_time_secrets: dict[UUID, str],
+    run_secret_refs: dict[str, str],
     ephemeral_images: dict[tuple[UUID, int, str, int], ProviderImageInput],
     live_tool_calls: dict[UUID, list[dict[str, Any]]],
     model_request: int,
@@ -429,6 +430,7 @@ async def execute_tool_batch(
                 skill_state=skill_state, skill_draft_handler=draft_handler,
                 approval_resolution=approval_resolution, execution_client=execution_client,
                 session_read_cursors=session_read_cursors, one_time_secrets=one_time_secrets,
+                run_secret_refs=run_secret_refs,
                 task_handler=(
                     partial(
                         run_tasks, runtime, db, run, session, tool_call_id=call.id,

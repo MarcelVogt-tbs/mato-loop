@@ -636,6 +636,19 @@ def _projection_messages(
         ),
         -1,
     )
+    # Continuation messages change the instruction, not the active run's evidence boundary.
+    continuation_run_id = (
+        (records[latest_user_index].provider_data or {}).get("_matoloop", {}).get("continuationRunId")
+        if latest_user_index >= 0 else None
+    )
+    if continuation_run_id:
+        latest_user_index = next(
+            (index for index in range(latest_user_index - 1, -1, -1)
+             if records[index].role == "user"
+             and (records[index].provider_data or {}).get("_matoloop", {}).get("continuationRunId")
+             != continuation_run_id),
+            0,
+        )
     projected_attachment_ids: set[str] = set()
     snapshot_message = snapshot_context(
         tool_snapshots or [],

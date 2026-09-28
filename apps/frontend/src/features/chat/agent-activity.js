@@ -141,28 +141,16 @@ export function agentRunPresentation({
     : ''
   const selectedTool = activity?.phase === 'processing_tool'
     ? toolItems.find((item) => activity.toolCallId ? item.tool.id === activity.toolCallId : item.active)
-    : ['preparing_context', 'waiting_model'].includes(activity?.phase) && !reasoningSummary && !streamContextSummary?.content
+    : activity?.phase === 'preparing_context' && !reasoningSummary && !streamContextSummary?.content
       ? activity.toolCallId
         ? toolItems.find((item) => item.tool.id === activity.toolCallId)
         : toolItems.findLast((item) => item.current !== false && (item.result || item.completed))
       : null
   const presentationTool = selectedTool?.tool || (
-    ['preparing_context', 'processing_tool', 'waiting_model'].includes(activity?.phase) && activity.tool && !reasoningSummary && !streamContextSummary?.content
+    ['preparing_context', 'processing_tool'].includes(activity?.phase) && activity.tool && !reasoningSummary && !streamContextSummary?.content
       ? { id: activity.toolCallId, name: activity.tool, arguments: {}, toolDisplay: activity.toolDisplay }
       : null
   )
-  if (
-    activity?.phase === 'waiting_model'
-    && (activity.modelRequest > 1 || toolItems.some((item) => item.current && (item.result || item.completed)))
-    && !stopping
-    && !reasoningSummary
-    && !presentationTool
-    && !streamContextSummary?.content
-    && !approval
-    && !question
-  ) {
-    return hidden
-  }
   const label = stopping
     ? 'Anfrage abbrechen'
     : approval

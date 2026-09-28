@@ -134,8 +134,12 @@ describe('subagent inspector navigation and presentation', () => {
       entry.value = { ...entry.value, completed: true }
       activity.value = { phase: 'waiting_model', modelRequest: 2 }
       await nextTick()
-      expect(root.querySelector('.activity-row').getAttribute('aria-expanded')).toBe('true')
-      expect(root.querySelector('.activity-shimmer')).not.toBeNull()
+      expect(root.querySelector('.activity-shimmer').textContent).toBe('Verarbeite Anfrage')
+      root.querySelector('.work-history__toggle').click()
+      await nextTick()
+      expect(root.querySelector('.tool-call__header[aria-expanded="true"]')).not.toBeNull()
+      root.querySelector('.work-history__toggle').click()
+      await nextTick()
       entry.value = { ...entry.value, key: 'next', completed: false, tool: { ...entry.value.tool, id: 'next' } }
       activity.value = { phase: 'processing_tool', toolCallId: 'next' }
     } else {
@@ -449,8 +453,8 @@ describe('subagent inspector navigation and presentation', () => {
 
     activity.value = mergeAgentActivity(activity.value, { phase: 'waiting_model', modelRequest: 2 })
     await nextTick()
-    expect(root.querySelector('.activity-shimmer').closest('.tool-call__header')).toBe(row)
-    expect(root.querySelector('.activity-shimmer').textContent).toContain('Datei lesen')
+    expect(root.querySelector('.activity-shimmer').textContent).toBe('Verarbeite Anfrage')
+    expect(root.querySelector('.activity-shimmer').closest('.tool-call__header')).toBeNull()
     expect(root.textContent).toContain('Vorherige Suche')
     expect(root.querySelector('.work-history__header')).toBeNull()
   })
@@ -546,9 +550,8 @@ describe('subagent inspector navigation and presentation', () => {
 
     expect(root.querySelector('.work-history__tool-group')).toBeNull()
     expect(root.textContent).not.toContain('Erste Suche')
-    expect(root.textContent).not.toContain('Verarbeite Anfrage')
-    expect(root.querySelector('.activity-shimmer').textContent).toContain('Websuche')
-    expect(root.querySelector('.tool-call__summary').textContent).toBe('Aktuelle Suche')
+    expect(root.querySelector('.activity-shimmer').textContent).toContain('Verarbeite Anfrage')
+    expect(root.querySelector('.tool-call__summary')).toBeNull()
     expect(root.querySelector('.work-history__header')).toBeNull()
 
     entries.value = [...entries.value, {
@@ -735,10 +738,8 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.querySelector('.activity-shimmer').textContent).toContain('Webseite abrufen')
     activity.value = { phase: 'waiting_model', modelRequest: 2 }
     await nextTick()
-    expect(root.textContent).not.toContain('Verarbeite Anfrage')
-    expect(root.querySelector('.activity-shimmer').textContent).toContain('Webseite abrufen')
-    expect(root.querySelector('.tool-call__title').textContent).toContain('Webseite abrufen')
-    expect(root.querySelector('.tool-call__header')).toBe(fetchRow)
+    expect(root.querySelector('.activity-shimmer').textContent).toContain('Verarbeite Anfrage')
+    expect(root.querySelector('.tool-call__header')).toBeNull()
     expect(root.querySelector('.work-history__header')).toBeNull()
     expect(root.textContent).toContain(intro)
 
@@ -930,11 +931,11 @@ describe('subagent inspector navigation and presentation', () => {
     app.mount(root)
 
     expect(root.textContent).not.toContain('Zwischenstand')
-    expect(root.querySelector('.activity-shimmer')).toBeNull()
+    expect(root.querySelector('.activity-shimmer').textContent).toBe('Verarbeite Anfrage')
     root.querySelector('.work-history__toggle').click()
     await nextTick()
     expect(root.textContent).toContain('Zwischenstand')
-    expect(root.querySelector('.activity-shimmer')).toBeNull()
+    expect(root.querySelector('.activity-shimmer').textContent).toBe('Verarbeite Anfrage')
   })
 
   it('shows the current reasoning summary beside its label and removes it afterwards', async () => {
@@ -1053,7 +1054,7 @@ describe('subagent inspector navigation and presentation', () => {
     const detailRows = root.querySelectorAll('.work-history__reasoning .q-item')
     expect(detailRows).toHaveLength(2)
     expect([...root.querySelectorAll('.work-history__activity-title')].map((node) => node.textContent.trim()))
-      .toEqual(['Nachdenken', 'Gesprächskontext verdichtet'])
+      .toEqual(['Nachdenken', 'Gesprächskontext verdichtet', 'Verarbeite Anfrage'])
     detailRows[0].click()
     await nextTick()
     expect(root.textContent).toContain('Öffentliche Überlegung')
