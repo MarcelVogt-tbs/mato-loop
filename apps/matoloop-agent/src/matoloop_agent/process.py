@@ -1590,7 +1590,8 @@ class ProcessRunner:
                         await check.wait()
                         raise
                     if check.returncode == 0:
-                        if password is not None:
+                        # The command's new session may not share the preflight sudo timestamp.
+                        if sudo_password is not None:
                             argv[1:2] = ["-S", "-p", ""]
                         break
                 else:

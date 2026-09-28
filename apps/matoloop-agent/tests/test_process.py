@@ -43,12 +43,17 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                 #!/usr/bin/python3
                 import subprocess
                 import sys
+                from pathlib import Path
 
                 args = sys.argv[1:]
+                timestamp = Path(__file__).with_suffix('.authenticated')
                 if args == ['-n', '-v']:
-                    sys.exit(1)
+                    sys.exit(0 if timestamp.exists() else 1)
                 if args[:4] == ['-S', '-p', '', '-v']:
-                    sys.exit(0 if sys.stdin.readline() == 'correct\\n' else 1)
+                    if sys.stdin.readline() != 'correct\\n':
+                        sys.exit(1)
+                    timestamp.touch()
+                    sys.exit(0)
                 if args[:4] == ['-S', '-p', '', '--']:
                     if sys.stdin.readline() != 'correct\\n':
                         sys.exit(1)
@@ -91,20 +96,24 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                 command = (
                     f"printf '%s' content > {root / 'protected'}; cat {root / 'protected'}; cat"
                 )
-                result = await runner.exec(
-                    current_directory=str(root),
-                    command=command,
-                    timeout=2,
-                    stream=stream,
-                    elevated=True,
-                    sudo_password="correct",
-                )
-                self.assertEqual(result["exitCode"], 0)
-                self.assertEqual((root / "protected").read_text(), "content")
-                self.assertEqual(
-                    "".join(data for channel, data in chunks if channel == "stdout"), "content"
-                )
-                self.assertNotIn("correct", str(chunks))
+                for cached_preflight in (False, True):
+                    with self.subTest(cached_preflight=cached_preflight):
+                        chunks.clear()
+                        result = await runner.exec(
+                            current_directory=str(root),
+                            command=command,
+                            timeout=2,
+                            stream=stream,
+                            elevated=True,
+                            sudo_password="correct",
+                        )
+                        self.assertEqual(result["exitCode"], 0)
+                        self.assertEqual((root / "protected").read_text(), "content")
+                        self.assertEqual(
+                            "".join(data for channel, data in chunks if channel == "stdout"),
+                            "content",
+                        )
+                        self.assertNotIn("correct", str(chunks))
 
     async def test_elevated_shell_timeout_stops_command(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
