@@ -147,6 +147,11 @@ def test_shell_tool_cannot_select_execution_targets() -> None:
         "sudo_password_ref",
     }
     assert shell["parameters"]["required"] == ["command"]
+    assert "Before elevated execution, reuse a sudo reference for the selected computer" in shell["description"]
+    assert "secret_input with masked=true" in shell["description"]
+    assert "and wait for its result" in shell["description"]
+    assert "explicitly as sudo_password_ref, including on retries" in shell["description"]
+    assert "only when passwordless sudo is already confirmed for this computer" in shell["description"]
     assert "command's purpose" in shell["parameters"]["properties"]["_reason"]["description"]
     assert ShellRunArguments(command="pwd").timeout is None
     assert not ShellRunArguments(command="pwd").elevated

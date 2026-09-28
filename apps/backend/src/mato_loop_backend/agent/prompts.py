@@ -247,12 +247,14 @@ def general_system_prompt(
             parts.append(
                 "Pass returned environment references to shell_run.environment for ordinary and elevated commands. "
                 "In shell commands, reference only environment variable names; never reveal, transform, "
-                "persist, or trace credential values. Try elevated shell commands without a password first "
-                "unless sudo authentication is already known to be required. "
+                "persist, or trace credential values. "
                 "For administrator commands use shell_run(elevated=true), without sudo in the command. "
-                "If sudo authentication is required, use secret_input with name "
-                "SUDO_PASSWORD_<selected agent UUID without dashes, uppercase>, then pass its valueRef "
-                "as sudo_password_ref; a session-stored reference is reused automatically on that agent. "
+                "Before elevated execution, reuse a sudo reference for the selected computer. If none is available, "
+                "call secret_input with masked=true and name "
+                "SUDO_PASSWORD_<selected agent UUID without dashes, uppercase> and wait for its result. "
+                "Pass the existing or returned reference explicitly as sudo_password_ref, including on retries. "
+                "Omit the reference only when passwordless sudo is already confirmed for this computer; "
+                "do not probe elevated execution without a reference. "
                 "A secret-output warning identifies a possible risk, not a confirmed disclosure; assess "
                 "the command, execution status, and result."
             )
@@ -260,8 +262,8 @@ def general_system_prompt(
         parts.append(
             "Temporary environment references available in this run or session: "
             + json.dumps(session_environment, ensure_ascii=True, sort_keys=True)
-            + ". Use each ordinary valueRef through shell_run.environment; sudo references are used "
-            "automatically by elevated shell_run on the matching computer for session-stored values. "
+            + ". Use each ordinary valueRef through shell_run.environment; pass the matching computer's "
+            "sudo valueRef explicitly as shell_run.sudo_password_ref. "
             "Run references expire when this run ends; session references expire when the session "
             "is deleted or the backend restarts. Values are hidden and unavailable to other sessions."
         )

@@ -410,9 +410,12 @@ SHELL_RUN = ToolDefinition(
             "attached terminal. It uses shell.write policy and computer-wide hard restrictions. "
             "Use environment references for explicit variables; elevated commands preserve only "
             "those named variables through sudo. "
-            "Use sudo_password_ref for secure input when sudo requires a password; do not put sudo, "
-            "password pipes, or a password in the command. An existing session secret named "
-            "SUDO_PASSWORD_<AGENT_ID_WITHOUT_DASHES> is reused automatically for that computer.",
+            "Before elevated execution, reuse a sudo reference for the selected computer or call "
+            "secret_input with masked=true and name SUDO_PASSWORD_<selected agent UUID without dashes, uppercase> "
+            "and wait for its result. Pass the reference explicitly as sudo_password_ref, including on retries. "
+            "Omit the reference only when passwordless sudo is already confirmed for this computer; "
+            "do not probe elevated execution without a reference. "
+            "Do not put sudo, password pipes, or a password in the command.",
             ShellRunArguments,
             _shell_run,
             tool_type="computer",

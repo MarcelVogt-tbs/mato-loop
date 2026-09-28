@@ -1737,6 +1737,12 @@ def test_secret_input_prompt_routes_all_credentials_before_probing() -> None:
     assert "returned environment references to shell_run.environment" in prompt
     assert "references remain reusable throughout the current run" in prompt
     assert "shell_run(elevated=true), without sudo in the command" in prompt
+    assert "Before elevated execution, reuse a sudo reference for the selected computer" in prompt
+    assert "call secret_input with masked=true" in prompt
+    assert "and wait for its result" in prompt
+    assert "explicitly as sudo_password_ref, including on retries" in prompt
+    assert "only when passwordless sudo is already confirmed for this computer" in prompt
+    assert "Try elevated shell commands without a password first" not in prompt
     assert "not a confirmed disclosure" in prompt
 
 
@@ -1756,6 +1762,7 @@ def test_session_environment_prompt_exposes_only_references() -> None:
     assert f'"valueRef": "{reference}"' in prompt
     assert '"description": "Token for deployments"' in prompt
     assert "Use each ordinary valueRef through shell_run.environment" in prompt
+    assert "sudo valueRef explicitly as shell_run.sudo_password_ref" in prompt
     assert "exact-secret" not in prompt
 
 
