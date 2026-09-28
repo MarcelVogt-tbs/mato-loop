@@ -658,8 +658,9 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(mon
     assert captured["body"]["reasoning"]["effort"] == "ultra"
 
 
-async def test_complete_does_not_touch_attachment_storage_without_image_capability(
-    monkeypatch,
+@pytest.mark.parametrize("role", ["user", "tool"])
+async def test_complete_marks_images_without_opening_storage_for_text_models(
+    monkeypatch, role,
 ) -> None:
     provider = LlmProviderConfig(
         name="Local",
@@ -685,7 +686,7 @@ async def test_complete_does_not_touch_attachment_storage_without_image_capabili
         model=model,
         messages=[
             {
-                "role": "tool",
+                "role": role,
                 "content": "Screenshot",
                 "tool_call_id": "call-1",
                 "attachments": [
@@ -702,8 +703,11 @@ async def test_complete_does_not_touch_attachment_storage_without_image_capabili
     )
 
     request = captured["request"]
-    assert "attachments" not in request.messages[0]
+    assert "attachments" not in request.messages[-1]
     assert request.media == []
+    assert request.messages[-1]["content"] == (
+        "Screenshot\n\n[Image content unavailable to this model. Only image metadata is available.]"
+    )
 
 
 async def test_complete_materializes_valid_image_without_leaking_storage_key(
@@ -1012,6 +1016,13 @@ async def test_projection_combines_persisted_and_direct_images_with_shared_limit
         **options, "model": model.model_copy(update={"input_modalities": {ModelInputModality.TEXT}}),
     })
     assert text_only.request.media == []
+    assert all(
+        message["content"].endswith(
+            "[Image content unavailable to this model. Only image metadata is available.]"
+        )
+        for message in text_only.request.messages
+    )
+    assert messages == original
 
 
 async def test_projection_accepts_and_downsizes_mpo_images_for_provider() -> None:
@@ -1044,7 +1055,8 @@ async def test_projection_accepts_and_downsizes_mpo_images_for_provider() -> Non
     assert len(normalized) <= service_module._MODEL_IMAGE_MAX_BYTES
 
 
-async def test_session_image_read_reactivates_historical_image(monkeypatch) -> None:
+@pytest.mark.parametrize("supports_image_input", [True, False])
+async def test_session_image_read_reactivates_historical_image(monkeypatch, supports_image_input) -> None:
     attachment_id = uuid4()
     reference = _attachment_reference(
         uuid4(),
@@ -1061,7 +1073,7 @@ async def test_session_image_read_reactivates_historical_image(monkeypatch) -> N
         lambda attachment: f"data:image/png;base64,{attachment['id']}",
     )
 
-    _projected, media = await service_module._provider_projection(
+    projected, media = await service_module._provider_projection(
         [
             {"role": "system", "content": "System", "attachments": [reference]},
             {"role": "user", "content": "Lies den alten Verlauf"},
@@ -1097,13 +1109,20 @@ async def test_session_image_read_reactivates_historical_image(monkeypatch) -> N
                 ),
             },
         ],
-        supports_image_input=True,
+        supports_image_input=supports_image_input,
         target_trust_level=TrustLevel.PUBLIC,
     )
 
-    assert len(media) == 1
-    assert media[0].message_index == 3
-    assert media[0].status == "ready"
+    marker = "[Image content unavailable to this model. Only image metadata is available.]"
+    if supports_image_input:
+        assert len(media) == 1
+        assert media[0].message_index == 3
+        assert media[0].status == "ready"
+        assert marker not in projected[3]["content"]
+    else:
+        assert media == []
+        assert projected[3]["content"].endswith(marker)
+        assert all(marker not in message["content"] for message in projected[:3])
 
 
 async def test_historical_image_limit_prefers_newest_references(monkeypatch) -> None:

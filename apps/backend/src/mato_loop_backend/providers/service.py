@@ -222,14 +222,22 @@ async def _provider_projection(
         projected.pop("attachments", None)
         projected_messages.append(projected)
 
-    if not supports_image_input:
-        return projected_messages, []
-
     selected = select_provider_images(
         latest_image_references(messages),
         target_trust_level=target_trust_level.value,
         required_image_ids=required_image_ids,
     )
+    if not supports_image_input:
+        unavailable_indices = {item.message_index for item in selected} | {
+            image.message_index for image in image_inputs or []
+        }
+        for index, message in enumerate(projected_messages):
+            if index in unavailable_indices:
+                message["content"] = (message.get("content") or "") + (
+                    "\n\n[Image content unavailable to this model. Only image metadata is available.]"
+                )
+        return projected_messages, []
+
     direct_inputs = image_inputs or []
     if len(selected) + len(direct_inputs) > MAX_PROVIDER_IMAGES:
         raise ProviderError(
