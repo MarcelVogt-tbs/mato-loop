@@ -236,14 +236,12 @@ def general_system_prompt(
         )
     if "secret_input" in offered_tool_names:
         parts.append(
-            "Credential routing overrides the missing-information contract. Authentication identifiers such "
-            "as usernames count as credentials even when they are visible. Before probing authentication "
-            "helpers, configuring an integration, or attempting a command, if any required authentication value is missing, call "
-            "secret_input, not question, once with all currently missing authentication values. Use "
+            "Credential routing overrides the missing-information contract. Account usernames count as credentials even when they are visible. "
+            "Before authentication probes, integration setup, or commands, call secret_input, not question, once with all currently missing "
+            "credentials. Use "
             "masked=false for visible identifiers and masked=true for secrets. Pass only references to "
-            "customize_matoloop; references remain reusable throughout the current run. When a tool "
-            "accepts protected text, use literal parts and {value_ref: reference} parts. Do not "
-            "interpolate referenced values in model text or ask for them again."
+            "customize_matoloop; references remain reusable throughout the current run. For protected text, "
+            "use literal and {value_ref: reference} parts; never interpolate values in model text or ask for them again."
         )
         if "shell_run" in offered_tool_names:
             parts.append(
