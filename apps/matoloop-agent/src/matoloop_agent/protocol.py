@@ -512,7 +512,20 @@ class OpenScadRenderArguments(StrictModel):
         return _relative_path(value)
 
 
+class MaintenanceStartArguments(StrictModel):
+    action: Literal["update", "uninstall"]
+    job_id: str = Field(alias="jobId", pattern=UUID_PATTERN)
+    sudo_password: str | None = Field(
+        default=None, alias="sudoPassword", min_length=1, max_length=4096
+    )
+
+    _password_is_single_line = field_validator("sudo_password")(
+        ElevatedShellArguments.password_is_single_line.__func__
+    )
+
+
 ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
+    "maintenance.start": MaintenanceStartArguments,
     "system.info": SystemInfoArguments,
     "filesystem.resolve": ResolveDirectoryArguments,
     "filesystem.stat": StatArguments,

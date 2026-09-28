@@ -54,6 +54,7 @@ class ExecutionAgent(Base):
         DateTime(timezone=True), nullable=True
     )
     operations: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    maintenance: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     home_directory: Mapped[str | None] = mapped_column(String(4096), nullable=True)
     home_filesystem_policy: Mapped[str] = mapped_column(
         String(20), nullable=False, default="auto", server_default=text("'auto'")

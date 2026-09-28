@@ -30,6 +30,7 @@ from .protocol import (
     Hello,
     ImportArguments,
     ListArguments,
+    MaintenanceStartArguments,
     MkdirArguments,
     OpenScadDiscoverArguments,
     OpenScadRenderArguments,
@@ -160,6 +161,10 @@ class MatoLoopAgent:
             return await self.browser.dispatch(request.operation, arguments)
         if isinstance(arguments, SystemInfoArguments):
             return await asyncio.to_thread(self.system_info, arguments.current_directory)
+        if isinstance(arguments, MaintenanceStartArguments):
+            return await self.platform.start_maintenance(
+                self.config, arguments.action, arguments.job_id, arguments.sudo_password
+            )
         if isinstance(arguments, ResolveDirectoryArguments):
             return await asyncio.to_thread(self.filesystem.resolve_directory, arguments.path)
         if isinstance(arguments, OpenScadDiscoverArguments):

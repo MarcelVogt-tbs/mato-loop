@@ -66,6 +66,8 @@ def disconnect_error_code(operation: str, dispatched: bool) -> str:
         return "browser.outcomeUnknown"
     if operation in _MUTATING_FILESYSTEM_OPERATIONS:
         return "executionAgent.outcomeUnknown"
+    if operation == "maintenance.start":
+        return "executionAgent.outcomeUnknown"
     if operation.startswith("shell.") or operation in {"terminal.run", "terminal.shared.execute"}:
         return "process.outcomeUnknown"
     return "executionAgent.unavailable"

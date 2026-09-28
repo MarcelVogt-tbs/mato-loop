@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import pwd
 import shlex
 import shutil
 import signal
 import socket
 import sys
+import tempfile
 import threading
 from collections.abc import Coroutine, Mapping
 from contextlib import suppress
@@ -19,6 +21,7 @@ from .browser_contracts import BROWSER_ARGUMENT_MODELS
 from .cache import SessionCache
 from .config import AgentConfig
 from .credentials_linux import LinuxCredentialStore
+from .errors import AgentError
 from .filesystem import Filesystem
 from .openscad import OpenScadRunner
 from .platform import FilesystemAdapter, RuntimeServices
@@ -91,6 +94,16 @@ class LinuxPlatform:
         )
         openscad = OpenScadRunner(config, filesystem, cache, transfer)
         operations = set(ARGUMENT_MODELS) | set(BROWSER_ARGUMENT_MODELS)
+        root = config.data_dir.parent
+        if (
+            os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1"
+            or not (root / ".managed-by-matoloop-agent").is_file()
+            or not (root / "installer.py").is_file()
+            or not (root / "bin/python").exists()
+            or not shutil.which("sudo")
+            or not shutil.which("systemd-run")
+        ):
+            operations.discard("maintenance.start")
         if os.environ.get("MATOLOOP_AGENT_CONTAINER") != "1":
             operations -= {
                 "integration.browser.view",
@@ -133,6 +146,92 @@ class LinuxPlatform:
             transfer=transfer,
             operations=tuple(sorted(operations)),
         )
+
+    async def start_maintenance(
+        self, config: AgentConfig, action: str, job_id: str, password: str | None
+    ) -> dict:
+        root = config.data_dir.parent
+        if (
+            not (root / ".managed-by-matoloop-agent").is_file()
+            or not (root / "installer.py").is_file()
+        ):
+            raise AgentError("maintenance.unavailable", "Native maintenance is unavailable")
+        sudo = shutil.which("sudo")
+        systemd_run = shutil.which("systemd-run")
+        if not sudo or not systemd_run:
+            raise AgentError("maintenance.unavailable", "System maintenance is unavailable")
+
+        async def authorized(*command: str) -> int:
+            argv = [sudo, "-S", "-p", ""] if password else [sudo, "-n"]
+            try:
+                child = await asyncio.create_subprocess_exec(
+                    *argv,
+                    *command,
+                    stdin=asyncio.subprocess.PIPE if password else asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                try:
+                    await asyncio.wait_for(
+                        child.communicate((password + "\n").encode() if password else None), 15
+                    )
+                except (TimeoutError, asyncio.CancelledError):
+                    child.kill()
+                    await child.wait()
+                    raise
+                return child.returncode
+            except (OSError, TimeoutError) as exc:
+                raise AgentError("maintenance.failed", "Maintenance could not be started") from exc
+
+        # Invalidate cached sudo timestamps: the independent unit cannot inherit them.
+        if await authorized("-k", "-v") != 0:
+            raise AgentError(
+                "process.sudoAuthFailed" if password else "process.sudoAuthRequired",
+                "Sudo authorization failed",
+            )
+
+        with tempfile.TemporaryDirectory(prefix="matoloop-maintenance-") as directory:
+            socket_path = str(Path(directory) / "handoff.sock")
+            received = asyncio.get_running_loop().create_future()
+
+            async def handoff(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+                try:
+                    writer.write((password or "").encode())
+                    await writer.drain()
+                    writer.write_eof()
+                    await writer.drain()
+                    if not received.done():
+                        received.set_result(True)
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+
+            server = await asyncio.start_unix_server(handoff, path=socket_path)
+            try:
+                result = await authorized(
+                    systemd_run,
+                    "--system",
+                    "--collect",
+                    f"--unit=matoloop-agent-maintenance-{job_id}",
+                    f"--property=User={pwd.getpwuid(os.getuid()).pw_name}",
+                    "--property=RuntimeMaxSec=3600",
+                    str(root / "bin/python"),
+                    str(root / "installer.py"),
+                    "maintenance-run",
+                    action,
+                    job_id,
+                    socket_path,
+                    str(root),
+                )
+                if result != 0:
+                    raise AgentError("maintenance.failed", "Maintenance could not be started")
+                await asyncio.wait_for(received, 15)
+            except TimeoutError as exc:
+                raise AgentError("maintenance.failed", "Maintenance handoff failed") from exc
+            finally:
+                server.close()
+                await server.wait_closed()
+        return {"started": True}
 
     def system_info(
         self, current_directory: str | None, filesystem: FilesystemAdapter

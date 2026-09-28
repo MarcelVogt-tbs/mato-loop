@@ -1,12 +1,19 @@
+import asyncio
 import importlib.util
+import io
 import json
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from matoloop_agent.config import AgentConfig
+from matoloop_agent.platform_linux import LinuxPlatform
 
 INSTALLER_PATH = Path(__file__).parents[3] / "scripts/matoloop-agent-installer.py"
 SPEC = importlib.util.spec_from_file_location("matoloop_agent_installer", INSTALLER_PATH)
@@ -474,6 +481,130 @@ class InstallerTests(unittest.TestCase):
                     with self.assertRaises(SystemExit):
                         installer.uninstall(purge=True, yes=True)
                 self.assertTrue(root.exists())
+
+    def test_maintenance_uses_custom_root_and_reports_after_uninstall(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "agent root"
+            (root / "data/agent-state").mkdir(parents=True)
+            (root / ".managed-by-matoloop-agent").touch()
+            (root / "data/agent-state/credential.json").write_text(
+                json.dumps(
+                    {
+                        "backendUrl": "wss://mato.test/api/execution-agents/connect",
+                        "agentId": "agent-id",
+                        "accessKey": "private-token",
+                    }
+                )
+            )
+            installer.write_json(root / "install.json", {"source": "checkout"})
+            socket_path = str(Path(temporary) / "handoff.sock")
+            listener = socket.socket(socket.AF_UNIX)
+            listener.bind(socket_path)
+            listener.listen(1)
+
+            def handoff():
+                with listener:
+                    connection, _ = listener.accept()
+                    with connection:
+                        connection.sendall(b"secret")
+
+            thread = threading.Thread(target=handoff)
+            thread.start()
+            calls = []
+
+            def remove(*, purge, yes):
+                assert not purge and yes
+                assert os.environ["MATOLOOP_AGENT_INSTALL_ROOT"] == str(root)
+                calls.append("uninstall")
+                (root / "install.json").unlink()
+
+            def report(request, **_kwargs):
+                calls.append(
+                    (
+                        request.full_url,
+                        json.loads(request.data),
+                        request.get_header("Authorization"),
+                    )
+                )
+                return io.BytesIO()
+
+            try:
+                with (
+                    patch.dict(os.environ, {"MATOLOOP_AGENT_INSTALL_ROOT": str(root)}),
+                    patch.object(installer, "uninstall", side_effect=remove),
+                    patch.object(installer, "build_opener") as opener,
+                ):
+                    opener.return_value.open.side_effect = report
+                    installer.maintenance_run("uninstall", "job-id", socket_path, str(root))
+            finally:
+                installer._maintenance_password = None
+                thread.join(timeout=5)
+            self.assertEqual(
+                calls,
+                [
+                    "uninstall",
+                    (
+                        "https://mato.test/api/execution-agents/agent-id/maintenance/job-id/complete",
+                        {"status": "succeeded"},
+                        "Bearer private-token",
+                    ),
+                ],
+            )
+
+    def test_maintenance_starts_separate_user_service_without_exposing_password(self) -> None:
+        async def check():
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "agent root"
+                root.mkdir()
+                (root / ".managed-by-matoloop-agent").touch()
+                (root / "installer.py").touch()
+                config = AgentConfig(homeDirectory=root)
+                config._data_directory = root / "data"
+                calls = []
+                connections = []
+                handoffs = []
+
+                class Child:
+                    returncode = 0
+
+                    async def communicate(self, data):
+                        calls[-1].append(data)
+
+                async def spawn(*command, **_kwargs):
+                    calls.append([*command])
+                    if "maintenance-run" in command:
+                        address = command[command.index("maintenance-run") + 3]
+
+                        async def receive():
+                            reader, writer = await asyncio.open_unix_connection(address)
+                            connections.append(await reader.read())
+                            writer.close()
+                            await writer.wait_closed()
+
+                        handoffs.append(asyncio.create_task(receive()))
+                    return Child()
+
+                with (
+                    patch(
+                        "matoloop_agent.platform_linux.shutil.which",
+                        side_effect=lambda name: f"/usr/bin/{name}",
+                    ),
+                    patch(
+                        "matoloop_agent.platform_linux.asyncio.create_subprocess_exec",
+                        side_effect=spawn,
+                    ),
+                ):
+                    result = await LinuxPlatform().start_maintenance(
+                        config, "update", "ce137f81-2b83-4e07-950d-c35306533e16", "secret"
+                    )
+                await asyncio.gather(*handoffs)
+                self.assertEqual(result, {"started": True})
+                self.assertEqual(connections, [b"secret"])
+                self.assertIn("--collect", calls[1])
+                self.assertIn(str(root), calls[1])
+                self.assertNotIn("secret", str(calls[0][:-1]) + str(calls[1][:-1]))
+
+        asyncio.run(check())
 
 
 if __name__ == "__main__":

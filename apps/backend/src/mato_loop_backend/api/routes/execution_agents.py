@@ -5,7 +5,7 @@ import json
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import (
     APIRouter,
@@ -40,6 +40,7 @@ from mato_loop_backend.settings import SettingsStore, UserPreferences
 router = APIRouter(prefix="/execution-agents")
 PAIRING_DURATION_DEFAULT_SECONDS = 1800
 PAIRING_DURATION_MAXIMUM_SECONDS = 86400
+MAINTENANCE_LIMIT = timedelta(minutes=65)
 
 
 @router.get("/install.sh", include_in_schema=False)
@@ -125,6 +126,31 @@ class ExecutionAgentUpdateRequest(ApiModel):
         return self
 
 
+class MaintenanceRequest(ApiModel):
+    action: Literal["update", "uninstall"]
+    sudo_password: str | None = Field(default=None, min_length=1, max_length=4096)
+
+    @field_validator("sudo_password")
+    @classmethod
+    def valid_password(cls, value: str | None) -> str | None:
+        if value is not None and any(character in value for character in "\r\n\x00"):
+            raise ValueError("invalid sudo password")
+        return value
+
+
+class MaintenanceCompletion(ApiModel):
+    status: Literal["succeeded", "failed"]
+
+
+def _maintenance_state(agent: ExecutionAgent) -> dict | None:
+    state = agent.maintenance
+    if state and state["status"] == "running":
+        started = datetime.fromisoformat(state["startedAt"])
+        if datetime.now(UTC) - started > MAINTENANCE_LIMIT:
+            return {**state, "status": "unknown"}
+    return state
+
+
 def _valid_registration(agent: ExecutionAgent, now: datetime) -> bool:
     return (
         agent.revoked_at is None
@@ -147,6 +173,7 @@ def _agent_payload(agent: ExecutionAgent) -> dict:
         "platform": agent.platform,
         "revision": agent.revision,
         "operations": agent.operations,
+        "maintenance": _maintenance_state(agent),
         "homeDirectory": agent.home_directory,
         "homeFilesystemPolicy": agent.home_filesystem_policy,
         "externalFilesystemPolicy": agent.external_filesystem_policy,
@@ -365,6 +392,116 @@ async def get_execution_agent(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
     return _agent_payload(await _owned_agent(db, user.id, agent_id))
+
+
+@router.post("/{agent_id}/maintenance")
+async def start_execution_agent_maintenance(
+    agent_id: UUID,
+    payload: MaintenanceRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    response: Response,
+) -> dict:
+    agent = await _owned_agent(db, user.id, agent_id, for_update=True)
+    if agent.revoked_at is not None:
+        raise ApiError(409, "executionAgent.revoked")
+    if (
+        agent.maintenance
+        and agent.maintenance["status"] in {"running", "unknown"}
+        and datetime.now(UTC) - datetime.fromisoformat(agent.maintenance["startedAt"])
+        <= MAINTENANCE_LIMIT
+    ):
+        raise ApiError(409, "maintenance.busy")
+    if not execution_agent_connections.is_connected(agent_id):
+        raise ApiError(503, "executionAgent.unavailable")
+    if "maintenance.start" not in agent.operations:
+        raise ApiError(409, "maintenance.unavailable")
+    previous = agent.maintenance
+    job_id = str(uuid4())
+    agent.maintenance = {
+        "jobId": job_id,
+        "action": payload.action,
+        "status": "running",
+        "startedAt": datetime.now(UTC).isoformat(),
+    }
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        result = await execution_agent_connections.request(
+            agent_id,
+            "maintenance.start",
+            {
+                "action": payload.action,
+                "jobId": job_id,
+                **({"sudoPassword": payload.sudo_password} if payload.sudo_password else {}),
+            },
+            timeout=35,
+        )
+        if not result.ok:
+            code = result.error.code if result.error else "maintenance.failed"
+            if code not in {
+                "process.sudoAuthRequired", "process.sudoAuthFailed", "maintenance.unavailable"
+            }:
+                code = "maintenance.failed"
+            raise ApiError(409 if code != "maintenance.failed" else 502, code)
+    except (ExecutionAgentError, ApiError) as exc:
+        code = exc.code
+        unknown = code in {
+            "executionAgent.outcomeUnknown", "executionAgent.timeout", "executionAgent.replaced"
+        }
+        current = await db.get(
+            ExecutionAgent, agent_id, with_for_update=True, populate_existing=True
+        )
+        if current and current.maintenance and current.maintenance["jobId"] == job_id:
+            if code in {"process.sudoAuthRequired", "process.sudoAuthFailed"}:
+                current.maintenance = previous
+            elif current.maintenance["status"] == "running":
+                current.maintenance = {
+                    **current.maintenance,
+                    "status": "unknown" if unknown else "failed",
+                    "errorCode": "maintenance.failed" if code.startswith("executionAgent.") else code,
+                }
+            await db.commit()
+        if isinstance(exc, ApiError):
+            raise
+        raise ApiError(
+            503,
+            code if unknown or code == "executionAgent.unavailable" else "maintenance.failed",
+        ) from exc
+    await db.refresh(agent)
+    return {"maintenance": _maintenance_state(agent)}
+
+
+@router.post("/{agent_id}/maintenance/{job_id}/complete", status_code=204)
+async def complete_execution_agent_maintenance(
+    agent_id: UUID,
+    job_id: UUID,
+    payload: MaintenanceCompletion,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> Response:
+    token_hash = hash_token(_http_bearer_token(authorization))
+    agent = await db.get(ExecutionAgent, agent_id, with_for_update=True)
+    if (
+        agent is None or agent.revoked_at is not None or not agent.token_hash
+        or not secrets.compare_digest(agent.token_hash, token_hash)
+    ):
+        raise ApiError(401, "executionAgent.pairingTokenInvalid")
+    state = agent.maintenance
+    if (
+        not state or state["jobId"] != str(job_id)
+        or state["status"] not in {"running", "unknown", payload.status}
+    ):
+        raise ApiError(409, "maintenance.jobUnavailable")
+    if state["status"] in {"running", "unknown"}:
+        agent.maintenance = {
+            **{key: value for key, value in state.items() if key != "errorCode"},
+            "status": payload.status,
+            "finishedAt": datetime.now(UTC).isoformat(),
+            **({"errorCode": "maintenance.failed"} if payload.status == "failed" else {}),
+        }
+    await db.commit()
+    return Response(status_code=204)
 
 
 @router.patch("/{agent_id}")

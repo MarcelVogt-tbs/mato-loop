@@ -41,6 +41,7 @@ SUPPORTED_OPERATIONS = frozenset(
         "integration.browser.files",
         "integration.browser.publish",
         "integration.browser.upload",
+        "maintenance.start",
         "shell.run",
         "shell.elevated",
         "shell.inspect",

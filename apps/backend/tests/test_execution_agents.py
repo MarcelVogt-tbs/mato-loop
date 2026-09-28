@@ -16,19 +16,23 @@ from mato_loop_backend.api.routes.execution_agents import (
     DefaultExecutionAgentRequest,
     ExecutionAgentRequest,
     ExecutionAgentUpdateRequest,
+    MaintenanceCompletion,
+    MaintenanceRequest,
     PairExecutionAgentRequest,
     PairingTokenRequest,
     _agent_payload,
     _register_snapshot,
+    complete_execution_agent_maintenance,
     create_execution_agent,
     create_execution_agent_pairing_token,
     execution_agent_pairing_policy,
     pair_execution_agent,
     set_default_execution_agent,
+    start_execution_agent_maintenance,
     unpair_execution_agent,
     update_execution_agent,
 )
-from mato_loop_backend.execution import HelloMessage
+from mato_loop_backend.execution import ExecutionAgentError, HelloMessage
 from mato_loop_backend.models import ExecutionAgent, UserAccount
 from mato_loop_backend.security import hash_token
 from mato_loop_backend.settings import SettingsStore, UserPreferences
@@ -551,3 +555,84 @@ async def test_ws_snapshot_rejects_stale_authenticated_hash(monkeypatch) -> None
     assert accepted is False
     statement = db.scalar.await_args.args[0]
     assert "execution_agents.token_hash" in str(statement)
+
+
+async def test_maintenance_password_is_forwarded_once_and_never_persisted(monkeypatch) -> None:
+    user = _user()
+    agent = _agent(user_id=user.id, operations=["maintenance.start"])
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = agent
+    db.get.return_value = agent
+    monkeypatch.setattr(execution_agents_route.execution_agent_connections, "is_connected", lambda _: True)
+    request = AsyncMock(return_value=Mock(ok=True))
+    monkeypatch.setattr(execution_agents_route.execution_agent_connections, "request", request)
+
+    result = await start_execution_agent_maintenance(
+        agent.id, MaintenanceRequest(action="update", sudoPassword="private"), user, db, Response()
+    )
+
+    assert result["maintenance"]["status"] == "running"
+    assert "private" not in str(agent.maintenance)
+    assert request.await_args.args[2]["sudoPassword"] == "private"
+    assert db.commit.await_count == 1
+
+
+async def test_maintenance_auth_prompt_and_callback_owner_check(monkeypatch) -> None:
+    user = _user()
+    agent = _agent(user_id=user.id, operations=["maintenance.start"], token_hash=hash_token("agent-key"))
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = agent
+    db.get.return_value = agent
+    monkeypatch.setattr(execution_agents_route.execution_agent_connections, "is_connected", lambda _: True)
+    monkeypatch.setattr(execution_agents_route.execution_agent_connections, "request", AsyncMock(return_value=Mock(ok=False, error=Mock(code="process.sudoAuthRequired"))))
+
+    with pytest.raises(ApiError) as error:
+        await start_execution_agent_maintenance(
+            agent.id, MaintenanceRequest(action="uninstall"), user, db, Response()
+        )
+    assert error.value.code == "process.sudoAuthRequired"
+    assert agent.maintenance is None
+
+    agent.maintenance = {"jobId": str(uuid4()), "action": "uninstall", "status": "running", "startedAt": datetime.now(UTC).isoformat()}
+    with pytest.raises(ApiError) as error:
+        await complete_execution_agent_maintenance(
+            agent.id, uuid4(), MaintenanceCompletion(status="succeeded"), db, "Bearer agent-key"
+        )
+    assert error.value.code == "maintenance.jobUnavailable"
+    with pytest.raises(ApiError) as error:
+        await complete_execution_agent_maintenance(
+            agent.id, uuid4(), MaintenanceCompletion(status="succeeded"), db, "Bearer wrong"
+        )
+    assert error.value.status_code == 401
+
+    await complete_execution_agent_maintenance(
+        agent.id, execution_agents_route.UUID(agent.maintenance["jobId"]),
+        MaintenanceCompletion(status="succeeded"), db, "Bearer agent-key"
+    )
+    assert agent.maintenance["status"] == "succeeded"
+
+
+async def test_disconnected_maintenance_is_unknown_not_success(monkeypatch) -> None:
+    user = _user()
+    agent = _agent(user_id=user.id, operations=["maintenance.start"])
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = agent
+    db.get.return_value = agent
+    monkeypatch.setattr(execution_agents_route.execution_agent_connections, "is_connected", lambda _: True)
+    monkeypatch.setattr(
+        execution_agents_route.execution_agent_connections, "request",
+        AsyncMock(side_effect=ExecutionAgentError("executionAgent.outcomeUnknown")),
+    )
+
+    with pytest.raises(ApiError) as error:
+        await start_execution_agent_maintenance(
+            agent.id, MaintenanceRequest(action="update"), user, db, Response()
+        )
+
+    assert error.value.code == "executionAgent.outcomeUnknown"
+    assert agent.maintenance["status"] == "unknown"
+    with pytest.raises(ApiError) as second:
+        await start_execution_agent_maintenance(
+            agent.id, MaintenanceRequest(action="update"), user, db, Response()
+        )
+    assert second.value.code == "maintenance.busy"

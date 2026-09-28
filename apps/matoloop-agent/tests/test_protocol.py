@@ -11,6 +11,18 @@ AGENT_ID = "2ea504cc-e3c6-4e0d-aa05-080328100fe8"
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_maintenance_password_is_single_line(self) -> None:
+        request = Request(
+            type="request",
+            id=REQUEST_ID,
+            operation="maintenance.start",
+            arguments={"action": "update", "jobId": REQUEST_ID, "sudoPassword": "secret"},
+        )
+        self.assertEqual(validate_arguments(request).sudo_password, "secret")
+        request.arguments["sudoPassword"] = "secret\nnext"
+        with self.assertRaises(ValidationError):
+            validate_arguments(request)
+
     def test_shell_environment_is_strict_bounded_and_protects_clean_values(self) -> None:
         request = Request(
             type="request",

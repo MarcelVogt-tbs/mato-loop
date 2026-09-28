@@ -63,6 +63,9 @@
             <q-item-label v-if="agent.lastSeenAt" caption>
               Zuletzt gesehen: {{ formatAbsoluteDateTime(agent.lastSeenAt) }}
             </q-item-label>
+            <q-item-label v-if="agent.maintenance" caption>
+              {{ maintenanceLabel(agent.maintenance) }}
+            </q-item-label>
 
             <div class="q-mt-sm">
               <div class="text-caption app-muted">Home-Verzeichnis</div>
@@ -81,6 +84,25 @@
           </q-item-section>
           <q-item-section side top class="execution-agent-item__actions">
             <div class="row items-center no-wrap q-gutter-xs">
+              <q-btn
+                v-if="agent.operations?.includes('maintenance.start')"
+                flat round dense icon="more_vert"
+                :aria-label="`Agent-Wartung für ${agent.alias}`"
+                :disable="!agent.connected || agent.maintenance?.status === 'running' || maintenanceBusy"
+              >
+                <q-menu class="app-menu-popup app-action-menu" anchor="bottom right" self="top right">
+                  <q-list>
+                    <q-item clickable v-close-popup @click="maintain(agent, 'update')">
+                      <q-item-section avatar><q-icon name="update" /></q-item-section>
+                      <q-item-section>Agent aktualisieren</q-item-section>
+                    </q-item>
+                    <q-item clickable v-close-popup @click="maintain(agent, 'uninstall')">
+                      <q-item-section avatar><q-icon name="delete_sweep" /></q-item-section>
+                      <q-item-section>Agent deinstallieren</q-item-section>
+                    </q-item>
+                  </q-list>
+                </q-menu>
+              </q-btn>
               <q-btn flat round dense icon="edit" :aria-label="`${agent.alias} bearbeiten`" @click="openEdit(agent)">
                 <q-tooltip>Bearbeiten</q-tooltip>
               </q-btn>
@@ -199,6 +221,8 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import ExecutionAgentConfigDialog from 'src/features/computers/ExecutionAgentConfigDialog.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
+import { errorDescriptor } from 'src/utils/api-errors'
+import { notifyError } from 'src/utils/notifications'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 
 defineOptions({ name: 'ExecutionAgentSettingsPage' })
@@ -246,6 +270,7 @@ const pairingAgent = ref(null)
 const pairingResult = ref(null)
 const pairingDurationSeconds = ref(null)
 const saving = ref(false)
+const maintenanceBusy = ref(false)
 const installerCommand = `curl -fsSL ${window.location.origin}/api/execution-agents/install.sh | sh -s -- --instance-url ${window.location.origin}`
 const operationLabel = (operation) => operationLabels[operation] || operation
 const pairingDurationOptions = computed(() => pairingDurationChoices.filter((option) => (
@@ -309,6 +334,56 @@ async function revoke(agent) {
   if (!accepted) return
   await agents.revoke(agent.id)
   $q.notify({ type: 'positive', message: 'Computer entfernt' })
+}
+
+function maintenanceLabel(job) {
+  const action = job.action === 'update' ? 'Update' : 'Deinstallation'
+  const result = {
+    running: 'läuft', succeeded: 'abgeschlossen', failed: 'fehlgeschlagen', unknown: 'Ergebnis unbekannt'
+  }[job.status] || 'Ergebnis unbekannt'
+  return `${action}: ${result}`
+}
+
+async function maintain(agent, action) {
+  if (action === 'uninstall') {
+    const accepted = await confirm(
+      `Agent auf „${agent.alias}“ deinstallieren? Programm und Dienst werden entfernt. Kopplungsdaten und Workspaces bleiben erhalten. Den Computereintrag kannst du anschließend separat entfernen.`,
+      'Agent deinstallieren',
+      { okLabel: 'Deinstallieren', okColor: 'negative' }
+    )
+    if (!accepted) return
+  }
+  maintenanceBusy.value = true
+  try {
+    let password = null
+    do {
+      try {
+        await agents.startMaintenance(agent.id, action, password, { suppressErrorToast: true })
+        $q.notify({ type: 'positive', message: 'Wartung gestartet' })
+        return
+      } catch (error) {
+        const code = errorDescriptor(error)?.code
+        if (code !== 'process.sudoAuthRequired' && code !== 'process.sudoAuthFailed') {
+          notifyError(error)
+          return
+        }
+        if (password) notifyError(error)
+        password = await new Promise((resolve) => {
+          $q.dialog({
+            title: 'sudo-Passwort benötigt',
+            message: `Gib das sudo-Passwort auf „${agent.alias}“ für diese Wartung ein. Es wird nur für diesen Auftrag verwendet.`,
+            prompt: { model: '', type: 'password', label: 'sudo-Passwort', outlined: true, maxlength: 4096, autocomplete: 'new-password', isValid: Boolean },
+            cancel: { label: 'Abbrechen', flat: true },
+            ok: { label: 'Wartung starten', color: 'primary' },
+            maximized: $q.screen.lt.sm
+          }).onOk(resolve).onDismiss(() => resolve(null))
+        })
+        if (password === null) return
+      }
+    } while (password !== null)
+  } finally {
+    maintenanceBusy.value = false
+  }
 }
 
 async function copy(value, label) {

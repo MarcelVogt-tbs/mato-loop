@@ -8,12 +8,14 @@ import os
 import pwd
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 SOURCE_URL = "https://git.devmato.net/devmato/MatoLoop.git"
 SYSTEM_SERVICE_PATH = Path("/etc/systemd/system/matoloop-agent.service")
@@ -21,6 +23,12 @@ SYSTEM_PACKAGES = (
     "bash",
     "ripgrep",
 )
+_maintenance_password: str | None = None
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
 
 
 def paths() -> dict[str, Path]:
@@ -80,6 +88,11 @@ def check_safe_root(layout: dict[str, Path]) -> None:
 
 def run(*command: str | Path, **kwargs) -> subprocess.CompletedProcess:
     kwargs.setdefault("check", True)
+    if command[0] == "sudo" and _maintenance_password is not None:
+        command = ("sudo", "-S", "-p", "", *command[1:])
+        kwargs["input"] = (_maintenance_password + "\n").encode()
+    elif command[0] == "sudo" and os.environ.get("MATOLOOP_AGENT_MAINTENANCE") == "1":
+        command = ("sudo", "-n", *command[1:])
     return subprocess.run([os.fspath(item) for item in command], **kwargs)
 
 
@@ -552,7 +565,7 @@ def install(arguments: argparse.Namespace) -> None:
     print(f"MatoLoop Agent installed. Status: {layout['wrapper']} status")
 
 
-def update() -> None:
+def update(*, in_process: bool = False) -> None:
     layout = paths()
     state = read_state(layout)
     if not state:
@@ -579,7 +592,79 @@ def update() -> None:
     ]
     if state.get("sourceType") == "managed":
         command.append("--managed")
-    run(*command)
+    if in_process:
+        install(
+            argparse.Namespace(
+                source=os.fspath(source),
+                managed=state.get("sourceType") == "managed",
+                home=state["homeDirectory"],
+                instance_url=state["instanceUrl"],
+            )
+        )
+    else:
+        run(*command)
+
+
+def maintenance_run(action: str, job_id: str, socket_path: str, root: str) -> None:
+    global _maintenance_password
+    os.environ["MATOLOOP_AGENT_INSTALL_ROOT"] = root
+    layout = paths()
+    check_safe_root(layout)
+    if not layout["marker"].is_file() or not read_state(layout):
+        fail("MatoLoop Agent is not installed")
+    # The live Agent hands the password over a private socket before it can be stopped.
+    with socket.socket(socket.AF_UNIX) as channel:
+        channel.settimeout(10)
+        channel.connect(socket_path)
+        with channel.makefile("rb") as stream:
+            password = bytearray(stream.read(4097))
+    if len(password) > 4096:
+        fail("invalid maintenance authorization")
+    _maintenance_password = password.decode("utf-8") or None
+    password.clear()
+    os.environ["MATOLOOP_AGENT_MAINTENANCE"] = "1"
+    credential = json.loads((layout["data"] / "agent-state/credential.json").read_text())
+    address = urlsplit(credential["backendUrl"])
+    endpoint = urlunsplit(
+        (
+            "https" if address.scheme == "wss" else "http",
+            address.netloc,
+            f"{address.path.removesuffix('/connect')}/{credential['agentId']}/maintenance/{job_id}/complete",
+            "",
+            "",
+        )
+    )
+    result = "succeeded"
+    reporter = build_opener(_NoRedirect)
+    try:
+        if action == "update":
+            os.environ["GIT_TERMINAL_PROMPT"] = "0"
+            update(in_process=True)
+        else:
+            uninstall(purge=False, yes=True)
+    except BaseException:
+        result = "failed"
+        raise
+    finally:
+        payload = json.dumps({"status": result}).encode()
+        for attempt in range(3):
+            try:
+                with reporter.open(
+                    Request(
+                        endpoint,
+                        data=payload,
+                        headers={
+                            "Authorization": f"Bearer {credential['accessKey']}",
+                            "Content-Type": "application/json",
+                        },
+                    ),
+                    timeout=10,
+                ) as response:
+                    response.read()
+                break
+            except OSError:
+                if attempt < 2:
+                    time.sleep(2)
 
 
 def status() -> None:
@@ -649,17 +734,21 @@ def uninstall(purge: bool, yes: bool) -> None:
     if layout["service"].exists():
         run("sudo", "systemctl", "disable", "matoloop-agent.service")
     remove_service(layout)
-    run("sudo", "systemctl", "daemon-reload", check=False)
+    run("sudo", "systemctl", "daemon-reload")
     layout["wrapper"].unlink(missing_ok=True)
     if purge:
-        shutil.rmtree(layout["root"], ignore_errors=True)
+        shutil.rmtree(layout["root"])
     else:
         if layout["venv"].is_symlink() or layout["venv"].is_file():
             layout["venv"].unlink(missing_ok=True)
         else:
-            shutil.rmtree(layout["venv"], ignore_errors=True)
+            shutil.rmtree(layout["venv"])
         for name in ("source", "venvs", "tools", "cache", "bin"):
-            shutil.rmtree(layout["root"] / name, ignore_errors=True)
+            target = layout["root"] / name
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            elif target.exists() or target.is_symlink():
+                fail(f"invalid managed installation path: {target}")
         if layout["data"].is_dir():
             for child in layout["data"].iterdir():
                 if child.name == "agent-state":
@@ -691,6 +780,11 @@ def main() -> None:
     uninstall_parser = subparsers.add_parser("uninstall")
     uninstall_parser.add_argument("--purge", action="store_true")
     uninstall_parser.add_argument("--yes", action="store_true")
+    maintenance_parser = subparsers.add_parser("maintenance-run", help=argparse.SUPPRESS)
+    maintenance_parser.add_argument("action", choices=("update", "uninstall"))
+    maintenance_parser.add_argument("job_id")
+    maintenance_parser.add_argument("socket_path")
+    maintenance_parser.add_argument("root")
     arguments = parser.parse_args()
     try:
         if arguments.command == "install":
@@ -699,8 +793,12 @@ def main() -> None:
             update()
         elif arguments.command == "status":
             status()
-        else:
+        elif arguments.command == "uninstall":
             uninstall(arguments.purge, arguments.yes)
+        else:
+            maintenance_run(
+                arguments.action, arguments.job_id, arguments.socket_path, arguments.root
+            )
     except (OSError, subprocess.CalledProcessError):
         fail("the installation command failed")
 

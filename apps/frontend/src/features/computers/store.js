@@ -120,6 +120,15 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
       if (this.defaultExecutionAgentId === id) this.defaultExecutionAgentId = null
       return updated
     },
+    async startMaintenance(id, action, sudoPassword = null, config = {}) {
+      const { data } = await api.post(`/execution-agents/${id}/maintenance`, {
+        action,
+        ...(sudoPassword ? { sudoPassword } : {})
+      }, config)
+      this.items = this.items.map((agent) => agent.id === id
+        ? { ...agent, maintenance: data.maintenance }
+        : agent)
+    },
     async revoke(id) {
       await api.delete(`/execution-agents/${id}`)
       this.items = this.items.filter((agent) => agent.id !== id)
