@@ -34,10 +34,10 @@ def configuration(home: Path) -> AgentConfig:
 
 
 class ProcessTests(unittest.IsolatedAsyncioTestCase):
-    async def test_elevated_shell_keeps_password_out_of_command(self) -> None:
+    async def test_elevated_shell_with_linked_sudo_keeps_password_out_of_command(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            sudo = root / "sudo"
+            sudo = root / "sudo-rs"
             sudo.write_text(
                 textwrap.dedent("""\
                 #!/usr/bin/python3
@@ -57,6 +57,10 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             """)
             )
             sudo.chmod(0o755)
+            alternative = root / "sudo-alternative"
+            alternative.symlink_to(sudo)
+            sudo_link = root / "sudo"
+            sudo_link.symlink_to(alternative)
             config = configuration(root)
             runner = ProcessRunner(config, Filesystem(config))
             chunks = []
@@ -64,7 +68,7 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             async def stream(channel, data):
                 chunks.append((channel, data))
 
-            with patch("matoloop_agent.process.shutil.which", return_value=str(sudo)):
+            with patch("matoloop_agent.process.shutil.which", return_value=str(sudo_link)):
                 with self.assertRaises(AgentError) as raised:
                     await runner.exec(
                         current_directory=str(root),

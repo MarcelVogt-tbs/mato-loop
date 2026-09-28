@@ -1542,6 +1542,7 @@ class ProcessRunner:
             sudo = shutil.which("sudo", path=EXECUTION_PATH)
             if sudo is None:
                 raise AgentError("process.sudoUnavailable", "Sudo is unavailable")
+            sudo = os.fspath(self._resolve_executable(Path(sudo)))
             argv = [sudo, "-n", "--", os.fspath(self.shell), "-c", command]
             inspection = None
         else:
