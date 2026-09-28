@@ -34,6 +34,110 @@ def configuration(home: Path) -> AgentConfig:
 
 
 class ProcessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_elevated_shell_keeps_password_out_of_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sudo = root / "sudo"
+            sudo.write_text(
+                textwrap.dedent("""\
+                #!/usr/bin/python3
+                import subprocess
+                import sys
+
+                args = sys.argv[1:]
+                if args == ['-n', '-v']:
+                    sys.exit(1)
+                if args[:4] == ['-S', '-p', '', '-v']:
+                    sys.exit(0 if sys.stdin.readline() == 'correct\\n' else 1)
+                if args[:4] == ['-S', '-p', '', '--']:
+                    if sys.stdin.readline() != 'correct\\n':
+                        sys.exit(1)
+                    sys.exit(subprocess.run(args[4:], stdin=subprocess.DEVNULL).returncode)
+                sys.exit(1)
+            """)
+            )
+            sudo.chmod(0o755)
+            config = configuration(root)
+            runner = ProcessRunner(config, Filesystem(config))
+            chunks = []
+
+            async def stream(channel, data):
+                chunks.append((channel, data))
+
+            with patch("matoloop_agent.process.shutil.which", return_value=str(sudo)):
+                with self.assertRaises(AgentError) as raised:
+                    await runner.exec(
+                        current_directory=str(root),
+                        command="true",
+                        timeout=2,
+                        stream=stream,
+                        elevated=True,
+                    )
+                self.assertEqual(raised.exception.code, "process.sudoAuthRequired")
+                with self.assertRaises(AgentError) as raised:
+                    await runner.exec(
+                        current_directory=str(root),
+                        command="true",
+                        timeout=2,
+                        stream=stream,
+                        elevated=True,
+                        sudo_password="wrong",
+                    )
+                self.assertEqual(raised.exception.code, "process.sudoAuthFailed")
+                command = (
+                    f"printf '%s' content > {root / 'protected'}; cat {root / 'protected'}; cat"
+                )
+                result = await runner.exec(
+                    current_directory=str(root),
+                    command=command,
+                    timeout=2,
+                    stream=stream,
+                    elevated=True,
+                    sudo_password="correct",
+                )
+                self.assertEqual(result["exitCode"], 0)
+                self.assertEqual((root / "protected").read_text(), "content")
+                self.assertEqual(
+                    "".join(data for channel, data in chunks if channel == "stdout"), "content"
+                )
+                self.assertNotIn("correct", str(chunks))
+
+    async def test_elevated_shell_timeout_stops_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sudo = root / "sudo"
+            sudo.write_text(
+                textwrap.dedent("""\
+                #!/usr/bin/python3
+                import os
+                import sys
+
+                args = sys.argv[1:]
+                if args == ['-n', '-v']:
+                    sys.exit(0)
+                if args[:2] == ['-n', '--']:
+                    os.execv(args[2], args[2:])
+                sys.exit(1)
+            """)
+            )
+            sudo.chmod(0o755)
+            config = configuration(root)
+            runner = ProcessRunner(config, Filesystem(config))
+
+            async def stream(_channel, _data):
+                pass
+
+            with patch("matoloop_agent.process.shutil.which", return_value=str(sudo)):
+                result = await runner.exec(
+                    current_directory=str(root),
+                    command="sleep 5",
+                    timeout=0.2,
+                    stream=stream,
+                    elevated=True,
+                )
+            self.assertTrue(result["timedOut"])
+            self.assertLess(result["durationMs"], 3000)
+
     def test_inspection_respects_search_permissions_without_requiring_directory_reads(self) -> None:
         result = subprocess.run(
             [

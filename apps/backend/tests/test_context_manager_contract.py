@@ -1734,9 +1734,9 @@ def test_secret_input_prompt_routes_all_credentials_before_probing() -> None:
     assert "usernames count as credentials even when they are visible" in prompt
     assert "secret_input, not question, once with all currently missing" in prompt
     assert "masked=false for visible identifiers and masked=true for secrets" in prompt
-    assert "returned environment unchanged to shell_run" in prompt
+    assert "returned environment references to shell_run.environment" in prompt
     assert "references remain reusable throughout the current run" in prompt
-    assert "pipe a shell-builtin printf of the variable directly to sudo -S" in prompt
+    assert "shell_run(elevated=true), without sudo in the command" in prompt
     assert "not a confirmed disclosure" in prompt
 
 
@@ -1755,7 +1755,7 @@ def test_session_environment_prompt_exposes_only_references() -> None:
 
     assert f'"valueRef": "{reference}"' in prompt
     assert '"description": "Token for deployments"' in prompt
-    assert "Use each valueRef with its name" in prompt
+    assert "Use each ordinary valueRef through shell_run.environment" in prompt
     assert "exact-secret" not in prompt
 
 

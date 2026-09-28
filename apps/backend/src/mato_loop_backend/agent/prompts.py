@@ -245,10 +245,14 @@ def general_system_prompt(
         )
         if "shell_run" in offered_tool_names:
             parts.append(
-                "Pass the returned environment unchanged to shell_run. In shell commands, reference only "
-                "environment variable names; never reveal, transform, persist, or trace credential values. "
-                "If sudo password authentication is required, pipe a shell-builtin printf of the variable "
-                "directly to sudo -S; never use echo, tee, a temporary file, or a command-line argument. "
+                "Pass returned environment references to shell_run.environment for ordinary commands. "
+                "In shell commands, reference only environment variable names; never reveal, transform, "
+                "persist, or trace credential values. Try elevated shell commands without a password first "
+                "unless sudo authentication is already known to be required. "
+                "For administrator commands use shell_run(elevated=true), without sudo in the command. "
+                "If sudo authentication is required, use secret_input with name "
+                "SUDO_PASSWORD_<selected agent UUID without dashes, uppercase>, then pass its valueRef "
+                "as sudo_password_ref; a session-stored reference is reused automatically on that agent. "
                 "A secret-output warning identifies a possible risk, not a confirmed disclosure; assess "
                 "the command, execution status, and result."
             )
@@ -256,8 +260,9 @@ def general_system_prompt(
         parts.append(
             "Temporary environment references available in this session: "
             + json.dumps(session_environment, ensure_ascii=True, sort_keys=True)
-            + ". Use each valueRef with its name through shell_run.environment instead of asking "
-            "for them again. Values are hidden, unavailable to other sessions, and lost when this session "
+            + ". Use each ordinary valueRef through shell_run.environment; sudo references are used "
+            "automatically by elevated shell_run on the matching computer. Values are hidden, unavailable "
+            "to other sessions, and lost when this session "
             "is deleted or the backend restarts."
         )
     if "todo_write" in offered_tool_names:
@@ -399,8 +404,8 @@ def general_system_prompt(
         parts.append(
             "Prefer file tools. "
             + (
-                "file.accessDenied is not permission.userDenied. Try a different shell_run command "
-                "(sudo if requested) under its own inspection and permissions. Never bypass denied "
+                "file.accessDenied is not permission.userDenied. If administrator access is needed, "
+                "use shell_run(elevated=true) under its own permissions. Never bypass denied "
                 "approval, disabled capability, or hard path boundary. "
                 if "shell_run" in offered_tool_names else ""
             )

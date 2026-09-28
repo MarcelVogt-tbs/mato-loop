@@ -21,6 +21,7 @@ from .protocol import (
     CopyMoveArguments,
     DeleteArguments,
     EditArguments,
+    ElevatedShellArguments,
     Error,
     Event,
     ExportArguments,
@@ -329,6 +330,20 @@ class MatoLoopAgent:
                 stream=stream,
                 expected_inspection_revision=arguments.expected_inspection_revision,
                 environment=arguments.environment,
+            )
+        if isinstance(arguments, ElevatedShellArguments):
+            if stream is None:
+
+                async def stream(_channel: str, _data: str) -> None:
+                    return None
+
+            return await self.process.exec(
+                current_directory=arguments.current_directory,
+                command=arguments.command,
+                timeout=arguments.timeout_seconds,
+                stream=stream,
+                elevated=True,
+                sudo_password=arguments.sudo_password,
             )
         if isinstance(arguments, ShellInspectArguments):
             return await asyncio.to_thread(

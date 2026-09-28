@@ -172,6 +172,7 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "filesystem.export",
         "filesystem.upsert",
         "shell.run",
+        "shell.elevated",
         "cache.ensure",
         "cache.export",
         "cache.store",

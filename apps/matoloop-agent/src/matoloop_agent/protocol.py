@@ -298,6 +298,21 @@ class ShellArguments(HostDirectoryArguments):
     _environment_is_bounded = field_validator("environment")(_bounded_unprotected_environment)
 
 
+class ElevatedShellArguments(HostDirectoryArguments):
+    command: str = Field(min_length=1, max_length=256 * 1024)
+    timeout_seconds: float | None = Field(default=None, alias="timeoutSeconds", gt=0, le=3600)
+    sudo_password: str | None = Field(
+        default=None, alias="sudoPassword", min_length=1, max_length=4096
+    )
+
+    @field_validator("sudo_password")
+    @classmethod
+    def password_is_single_line(cls, value: str | None) -> str | None:
+        if value is not None and any(character in value for character in "\r\n\0"):
+            raise ValueError("invalid sudo password")
+        return value
+
+
 class ResolveDirectoryArguments(PathArguments):
     pass
 
@@ -517,6 +532,7 @@ ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "filesystem.import": ImportArguments,
     "filesystem.export": ExportArguments,
     "shell.run": ShellArguments,
+    "shell.elevated": ElevatedShellArguments,
     "shell.inspect": ShellInspectArguments,
     "terminal.open": TerminalOpenArguments,
     "terminal.read": TerminalReadArguments,

@@ -1531,16 +1531,76 @@ class ProcessRunner:
         stream: StreamCallback,
         expected_inspection_revision: str | None = None,
         environment: dict[str, str] | None = None,
+        elevated: bool = False,
+        sudo_password: str | None = None,
     ) -> dict:
         timeout = self.execution_timeout(timeout)
-        argv, inspection = self.execution_argv(
-            current_directory=current_directory,
-            command=command,
-            expected_inspection_revision=expected_inspection_revision,
-        )
+        if elevated:
+            if self.shell is None or expected_inspection_revision is not None or environment:
+                raise AgentError("process.notAllowed", "Elevated shell is unavailable")
+            _parse_shell(command)
+            sudo = shutil.which("sudo", path=EXECUTION_PATH)
+            if sudo is None:
+                raise AgentError("process.sudoUnavailable", "Sudo is unavailable")
+            argv = [sudo, "-n", "--", os.fspath(self.shell), "-c", command]
+            inspection = None
+        else:
+            argv, inspection = self.execution_argv(
+                current_directory=current_directory,
+                command=command,
+                expected_inspection_revision=expected_inspection_revision,
+            )
         cwd, cwd_fd = self._cwd(current_directory)
         started = time.monotonic()
         try:
+            if elevated:
+                attempts = [(("-n", "-v"), None)]
+                if sudo_password is not None:
+                    attempts.append((("-S", "-p", "", "-v"), sudo_password))
+                for options, password in attempts:
+                    check = await asyncio.create_subprocess_exec(
+                        sudo,
+                        *options,
+                        cwd=cwd,
+                        stdin=(
+                            asyncio.subprocess.PIPE
+                            if password is not None
+                            else asyncio.subprocess.DEVNULL
+                        ),
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                        pass_fds=(cwd_fd,),
+                    )
+                    try:
+                        await asyncio.wait_for(
+                            check.communicate(
+                                (password + "\n").encode() if password is not None else None
+                            ),
+                            min(timeout, 10),
+                        )
+                    except TimeoutError as exc:
+                        check.kill()
+                        await check.wait()
+                        raise AgentError(
+                            "process.timedOut", "Sudo authentication timed out"
+                        ) from exc
+                    except asyncio.CancelledError:
+                        check.kill()
+                        await check.wait()
+                        raise
+                    if check.returncode == 0:
+                        if password is not None:
+                            argv[1:2] = ["-S", "-p", ""]
+                        break
+                else:
+                    if sudo_password is None:
+                        raise AgentError(
+                            "process.sudoAuthRequired", "Sudo authentication is required"
+                        )
+                    raise AgentError("process.sudoAuthFailed", "Sudo authentication failed")
+                timeout -= time.monotonic() - started
+                if timeout <= 0:
+                    raise AgentError("process.timedOut", "Sudo authentication timed out")
             # Procfs is only for descriptor-bound startup, never a logical HOME or PWD.
             process_environment = self.execution_environment(
                 current_directory, inspection, environment
@@ -1550,12 +1610,24 @@ class ProcessRunner:
                 *argv,
                 cwd=cwd,
                 env=process_environment,
-                stdin=asyncio.subprocess.DEVNULL,
+                stdin=(
+                    asyncio.subprocess.PIPE
+                    if elevated and argv[1] == "-S"
+                    else asyncio.subprocess.DEVNULL
+                ),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
                 pass_fds=(cwd_fd,),
             )
+            if elevated and argv[1] == "-S":
+                try:
+                    process.stdin.write((sudo_password + "\n").encode())
+                    await process.stdin.drain()
+                    process.stdin.close()
+                except BaseException:
+                    await self._terminate(process)
+                    raise
         except OSError as exc:
             raise AgentError("process.startFailed", "Process could not be started") from exc
         finally:

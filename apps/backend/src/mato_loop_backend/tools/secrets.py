@@ -62,3 +62,18 @@ async def resolve_secret_refs(
             return ToolResult.error("secret.valueRefUnavailable")
         values[key] = value
     return values
+
+
+async def resolve_sudo_password(
+    context: ToolContext, reference: UUID | str | None, agent_id: UUID
+) -> str | None | ToolResult:
+    name = f"SUDO_PASSWORD_{agent_id.hex.upper()}"
+    if reference is None:
+        reference = session_secrets.references(context.session.id).get(name)
+    if reference is None:
+        return None
+    if isinstance(reference, str) and reference.startswith("session-secret:"):
+        if session_secrets.references(context.session.id).get(name) != reference:
+            return ToolResult.error("secret.valueRefUnavailable")
+    values = await resolve_secret_refs(context, {name: reference})
+    return values if isinstance(values, ToolResult) else values[name]

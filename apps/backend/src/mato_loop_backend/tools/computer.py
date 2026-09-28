@@ -19,6 +19,7 @@ from mato_loop_backend.execution.protocol import MAX_REQUEST_BYTES, RequestMessa
 from mato_loop_backend.execution.terminals import terminal_coordinator
 from mato_loop_backend.models import AgentRun, ExecutionAgent
 from mato_loop_backend.permissions.policy import (
+    elevated_shell_permission,
     execution_agent_select_permission,
     execution_agents_list_permission,
     shell_command_permission,
@@ -42,7 +43,7 @@ from mato_loop_backend.tools.arguments import (
 from mato_loop_backend.tools.context import ToolContext as ToolContext
 from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
-from mato_loop_backend.tools.secrets import resolve_secret_refs
+from mato_loop_backend.tools.secrets import resolve_secret_refs, resolve_sudo_password
 
 
 async def _get_system_info(
@@ -229,6 +230,25 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
     client = files_access.workspace_client(context)
     if client.current_directory is None:
         return ToolResult.error("permission.denied")
+    if arguments.elevated:
+        if not client.supports("shell.elevated"):
+            return ToolResult.error("executionAgent.operationUnavailable")
+        if not await tools_access.allow(
+            context, elevated_shell_permission(client.agent_id, client.current_directory, arguments.command)
+        ):
+            return ToolResult.error("permission.denied")
+        password = await resolve_sudo_password(context, arguments.sudo_password_ref, client.agent_id)
+        if isinstance(password, ToolResult):
+            return password
+        requested = arguments.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+        return await _run_process(
+            context, "shell.elevated",
+            {"command": arguments.command, "currentDirectory": client.current_directory,
+             **({"timeoutSeconds": arguments.timeout} if arguments.timeout is not None else {}),
+             **({"sudoPassword": password} if password else {})},
+            requested_arguments=requested, executed_arguments=requested,
+            redacted_values=(password,) if password else (),
+        )
     terminal = terminal_coordinator.attached_for(
         user_id=context.session.user_id,
         session_id=context.session.id,
@@ -355,7 +375,12 @@ SHELL_RUN = ToolDefinition(
             "operating-system sandbox. "
             "Optional timeout is in seconds (0 < timeout <= 3600); null uses the agent default, "
             "subject to its local maximum. Nonzero exits and timeouts are errors with bounded "
-            "output retained; interpret the exit code and output for the command's meaning.",
+            "output retained; interpret the exit code and output for the command's meaning. "
+            "elevated=true runs this command as administrator in an isolated shell, even with an "
+            "attached terminal. It uses shell.write policy and computer-wide hard restrictions. "
+            "Use sudo_password_ref for secure input when sudo requires a password; do not put sudo, "
+            "password pipes, or a password in the command. An existing session secret named "
+            "SUDO_PASSWORD_<AGENT_ID_WITHOUT_DASHES> is reused automatically for that computer.",
             ShellRunArguments,
             _shell_run,
             tool_type="computer",

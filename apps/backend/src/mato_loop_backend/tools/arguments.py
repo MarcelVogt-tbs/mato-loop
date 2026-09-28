@@ -388,6 +388,11 @@ class MovePathArguments(CopyPathArguments):
 
 class ShellRunArguments(ToolArguments):
     command: str = Field(min_length=1, max_length=256 * 1024)
+    elevated: bool = False
+    sudo_password_ref: UUID | Annotated[
+        str,
+        Field(pattern=r"^(?:run|session)-secret:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"),
+    ] | None = None
     environment: dict[
         Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")],
         UUID
@@ -444,6 +449,12 @@ class ShellRunArguments(ToolArguments):
         ):
             raise ValueError("environment contains a protected name")
         return value
+
+    @model_validator(mode="after")
+    def sudo_password_requires_elevation(self) -> ShellRunArguments:
+        if self.sudo_password_ref is not None and not self.elevated:
+            raise ValueError("sudo password requires elevated execution")
+        return self
 
 
 class VariableReadArguments(ToolArguments):

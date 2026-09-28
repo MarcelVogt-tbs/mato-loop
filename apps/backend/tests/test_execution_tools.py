@@ -51,9 +51,11 @@ from mato_loop_backend.permissions.policy import (
     PermissionPolicy,
     PermissionRequest,
     SessionGrantScope,
+    elevated_shell_permission,
     execution_directory_permission,
     execution_directory_scope,
     session_grant_matches_request,
+    session_grants_display,
     shell_command_permission,
     shell_command_scope,
     shell_prefix_allowed,
@@ -70,6 +72,7 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.tools.arguments import ProtectedQuestionResolution, ShellRunArguments
 from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.tools.computer import _shell_run
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import ToolResult
 
@@ -136,10 +139,15 @@ def test_shell_tool_cannot_select_execution_targets() -> None:
         "command",
         "environment",
         "timeout",
+        "elevated",
+        "sudo_password_ref",
     }
     assert shell["parameters"]["required"] == ["command"]
     assert "command's purpose" in shell["parameters"]["properties"]["_reason"]["description"]
     assert ShellRunArguments(command="pwd").timeout is None
+    assert not ShellRunArguments(command="pwd").elevated
+    with pytest.raises(ValidationError):
+        ShellRunArguments(command="pwd", sudo_password_ref=uuid4())
     assert all(item["name"] != "process_exec" for item in tools.schemas())
     assert {
         action.capability: (
@@ -621,6 +629,98 @@ def test_shell_grant_matches_access_class_agent_and_directory(tmp_path) -> None:
     assert PermissionPolicy.grant_matches(grant, matching, context.root_files)
     assert not PermissionPolicy.grant_matches(grant, wrong_class, context.root_files)
     assert not PermissionPolicy.grant_matches(grant, wrong_directory, context.root_files)
+
+
+async def test_elevated_shell_reuses_only_exact_elevated_grants(tmp_path) -> None:
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run", "shell.elevated"})
+    context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
+    context.session.preferred_execution_agent_id = client.agent_id
+    context.db.scalar.return_value = ExecutionAgent(
+        id=client.agent_id, user_id=context.session.user_id,
+        home_filesystem_policy="auto", external_filesystem_policy="auto",
+        home_shell_enabled=True, external_shell_enabled=True,
+    )
+    request = elevated_shell_permission(client.agent_id, client.current_directory, "cat /root/private")
+    assert session_grants_display(request) == ["Nur dieser Administrator-Befehl: cat /root/private"]
+    grant_scope = request.effective_session_grants[0]
+    normal_grant = PermissionGrant(
+        capability="resource.write", resource_type="execution_directory",
+        resource_scope=execution_directory_scope(client.agent_id, client.current_directory),
+    )
+    exact_grant = PermissionGrant(
+        capability=grant_scope.capability, resource_type=grant_scope.resource_type,
+        resource_scope=grant_scope.resource_scope,
+    )
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[normal_grant]))
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session, request, context.root_files, ToolExecutionPolicy.ASK,
+    ) == PermissionDecision.ASK
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[exact_grant]))
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session, request, context.root_files, ToolExecutionPolicy.ASK,
+    ) == PermissionDecision.ALLOW
+    changed = elevated_shell_permission(client.agent_id, client.current_directory, "cat /root/other")
+    assert not PermissionPolicy.grant_matches(exact_grant, changed, context.root_files)
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session, request, context.root_files, ToolExecutionPolicy.DISABLED,
+    ) == PermissionDecision.DENY
+    context.db.scalar.return_value.external_shell_enabled = False
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session, request, context.root_files, ToolExecutionPolicy.ASK,
+    ) == PermissionDecision.DENY
+
+
+async def test_elevated_shell_never_uses_normal_inspection_or_attached_terminal(tmp_path) -> None:
+    client = FakeExecutionClient({"shell.elevated": ProcessResult(
+        exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0,
+        stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
+    )}, {"shell.run", "shell.elevated"})
+    context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
+    result = await _shell_run(ShellRunArguments(
+        command="ls /root", elevated=True,
+    ), context)
+    assert not result.is_error
+    assert [operation for operation, _ in client.requests] == ["shell.elevated"]
+    request = context.ask_handler.await_args.args[0]
+    assert request.capability == "shell.write"
+    assert request.resource_type == "shell_elevated_command"
+    assert not request.force_ask
+
+
+async def test_elevated_shell_reuses_only_this_agents_session_password(tmp_path) -> None:
+    response = ProcessResult(
+        exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0,
+        stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
+    )
+    client = FakeExecutionClient({"shell.elevated": response}, {"shell.run", "shell.elevated"})
+    context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
+    name = f"SUDO_PASSWORD_{client.agent_id.hex.upper()}"
+    references = session_secrets.put(context.session.id, {name: "private password"})
+    try:
+        result = await _shell_run(ShellRunArguments(command="id -u", elevated=True), context)
+        assert not result.is_error
+        assert client.requests[-1] == (
+            "shell.elevated",
+            {"command": "id -u", "currentDirectory": client.current_directory,
+             "sudoPassword": "private password"},
+        )
+        assert "private password" not in result.content
+        client.agent_id = uuid4()
+        result = await _shell_run(ShellRunArguments(
+            command="id -u", elevated=True, sudo_password_ref=references[name],
+        ), context)
+        assert result.is_error
+        assert json.loads(result.content)["error"]["code"] == "secret.valueRefUnavailable"
+    finally:
+        session_secrets.clear_session(context.session.id)
+
+
+async def test_elevated_shell_requires_a_capable_agent_before_approval(tmp_path) -> None:
+    client = FakeExecutionClient({}, {"shell.run", "shell.inspect"})
+    context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
+    result = await _shell_run(ShellRunArguments(command="id", elevated=True), context)
+    assert json.loads(result.content)["error"]["code"] == "executionAgent.operationUnavailable"
+    context.ask_handler.assert_not_awaited()
 
 
 def test_shell_session_grants_include_cwd_and_every_target_directory() -> None:

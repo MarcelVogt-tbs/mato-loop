@@ -374,7 +374,7 @@ def test_agent_web_routing_cases_offer_real_production_schemas() -> None:
         assert set(by_name) == {"web_search", "webfetch", "shell_run"}
         properties = by_name["shell_run"]["parameters"]["properties"]
         assert set(properties) == {
-            "_reason", "command", "environment", "timeout",
+            "_reason", "command", "environment", "timeout", "elevated", "sudo_password_ref",
         }
         assert properties["timeout"]["default"] is None
         assert properties["timeout"]["anyOf"] == [
