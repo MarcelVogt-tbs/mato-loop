@@ -2,7 +2,7 @@
   <q-page class="app-page settings-page column no-wrap">
     <AppPageHeader
       :title="admin ? 'Administration' : 'Einstellungen'"
-      :subtitle="admin ? 'Benutzer und Zugänge verwalten.' : 'Personalisierung, Provider, Computer, Integrationen, Kanäle und Funktionen zentral verwalten.'"
+      :subtitle="admin ? 'Zentrale Verwaltung der MatoLoop-Instanz.' : 'Personalisierung, Provider, Computer, Integrationen, Kanäle und Funktionen zentral verwalten.'"
     />
 
     <q-tabs

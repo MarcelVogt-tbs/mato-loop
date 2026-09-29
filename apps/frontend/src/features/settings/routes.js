@@ -140,12 +140,6 @@ export const settingsRoutes = [
     name: 'settings-debug-access',
     component: () => import('src/features/settings/DebugAccessSettingsPage.vue'),
     meta: { settingsLabel: 'Debug-Zugang', settingsIcon: 'bug_report', requiresAdmin: true }
-  },
-  {
-    path: 'instance-limits',
-    name: 'settings-instance-limits',
-    component: () => import('src/features/settings/InstanceLimitsPage.vue'),
-    meta: { settingsLabel: 'Instanzlimits', settingsIcon: 'tune', requiresAdmin: true }
   }
 ]
 
@@ -155,5 +149,11 @@ export const adminRoutes = [
     name: 'admin-users',
     component: () => import('src/features/auth/UserSettingsPage.vue'),
     meta: { settingsLabel: 'Benutzer', settingsIcon: 'group' }
+  },
+  {
+    path: 'instance-limits',
+    name: 'admin-instance-limits',
+    component: () => import('src/features/settings/InstanceLimitsPage.vue'),
+    meta: { settingsLabel: 'Instanzlimits', settingsIcon: 'tune' }
   }
 ]

@@ -41,8 +41,7 @@ describe('MatoLoop frontend scaffold', () => {
       'settings-memory',
       'settings-notifications',
       'settings-users',
-      'settings-debug-access',
-      'settings-instance-limits'
+      'settings-debug-access'
     ])
     expect(
       settingsRoute.children.find((route) => route.name === 'settings-integrations').children
@@ -67,10 +66,9 @@ describe('MatoLoop frontend scaffold', () => {
     expect(routes.find((route) => route.name === 'markdown-print')?.path).toBe('/print/markdown')
     expect(settingsRoutes.find((route) => route.name === 'settings-users')?.redirect).toEqual({ name: 'admin-users' })
     expect(appRoute.children.find((route) => route.name === 'admin')?.meta.requiresAdmin).toBe(true)
-    expect(adminRoutes.map((route) => route.name)).toEqual(['admin-users'])
+    expect(adminRoutes.map((route) => route.name)).toEqual(['admin-users', 'admin-instance-limits'])
     expect(settingsRoutes.find((route) => route.name === 'settings-notifications')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-debug-access')?.meta.requiresAdmin).toBe(true)
-    expect(settingsRoutes.find((route) => route.name === 'settings-instance-limits')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-tools')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-channels')?.meta).toEqual({
       settingsLabel: 'Kanäle', settingsIcon: 'forum'
@@ -96,11 +94,12 @@ describe('MatoLoop frontend scaffold', () => {
       .every((route) => route.meta.requiresAdmin === undefined)).toBe(true)
   })
 
-  it('keeps old user-management links in the admin-only section', () => {
+  it('keeps user management and instance limits in the admin-only section', () => {
     const router = createRouter({ history: createMemoryHistory(), routes })
 
     expect(router.resolve('/settings/users').matched.at(-1).redirect).toEqual({ name: 'admin-users' })
     expect(router.resolve('/admin/users').name).toBe('admin-users')
     expect(router.resolve('/admin/users').meta.requiresAdmin).toBe(true)
+    expect(router.resolve('/admin/instance-limits').meta.requiresAdmin).toBe(true)
   })
 })
