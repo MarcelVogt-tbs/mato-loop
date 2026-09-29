@@ -32,7 +32,7 @@ CODEX_IMAGES_GENERATIONS_URL = (
 )
 CODEX_IMAGES_EDITS_URL = "https://chatgpt.com/backend-api/codex/images/edits"
 CODEX_IMAGE_MODEL_ID = "openai-codex/gpt-image-2"
-CODEX_COMPATIBILITY_VERSION = "0.156.0"
+CODEX_COMPATIBILITY_VERSION = "0.159.0"
 LOGIN_TTL_SECONDS = 15 * 60
 
 
