@@ -6,7 +6,7 @@
       align="between"
       class="full-width text-caption app-muted"
       :label="`Aufgaben · ${completedCount} von ${todos.length} erledigt`"
-      :icon-right="collapsed ? 'keyboard_arrow_down' : 'keyboard_arrow_up'"
+      :icon-right="collapsed ? 'keyboard_arrow_up' : 'keyboard_arrow_down'"
       :aria-expanded="!collapsed"
       :aria-controls="listId"
       :disable="saving"
