@@ -18,7 +18,7 @@ const routes = [
         path: 'settings',
         name: 'settings',
         component: () => import('src/features/settings/SettingsPage.vue'),
-        redirect: { name: 'settings-providers' },
+        redirect: { name: 'settings-personalization' },
         children: settingsRoutes
       },
       {

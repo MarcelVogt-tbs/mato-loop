@@ -14,7 +14,7 @@ MatoLoop ist eine selbst gehostete Arbeitsumgebung für KI-gestützte Chats und 
 
 ## Administration
 
-Open **Einstellungen** from the user menu at the bottom of the navigation to manage providers, agent profiles, tools, integrations, channels, automations, personalization, and memory. Configure models, reasoning, and tool permissions in agent profiles. Open your own account through **Konto** in the same menu. Administrators can manage users through the separate **Administration** entry; shared instance settings remain under **Einstellungen**.
+Open **Einstellungen** from the user menu at the bottom of the navigation to manage personal providers, agent profiles, tools, integrations, channels, automations, personalization, and memory. Personal providers appear only when allowed by the instance administrator. Configure models, reasoning, and tool permissions in agent profiles. Open your own account through **Konto** in the same menu. Administrators manage users, instance limits, global providers, and the personal-provider gate through the separate **Administration** entry.
 
 Persönliche Sessions, Dateien, Arbeitsbereiche, Erinnerungen, Kanäle und Zugangsdaten sind nach Benutzer getrennt. Gemeinsame Provider, Modelle und Integrationen der Instanz stehen dagegen absichtlich allen Benutzern nach den festgelegten Richtlinien zur Verfügung.
 

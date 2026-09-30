@@ -131,11 +131,6 @@ export const settingsRoutes = [
     meta: { settingsLabel: 'Benachrichtigungen', settingsIcon: 'notifications_active', requiresAdmin: true }
   },
   {
-    path: 'users',
-    name: 'settings-users',
-    redirect: { name: 'admin-users' }
-  },
-  {
     path: 'debug-access',
     name: 'settings-debug-access',
     component: () => import('src/features/settings/DebugAccessSettingsPage.vue'),
@@ -149,6 +144,13 @@ export const adminRoutes = [
     name: 'admin-users',
     component: () => import('src/features/auth/UserSettingsPage.vue'),
     meta: { settingsLabel: 'Benutzer', settingsIcon: 'group' }
+  },
+  {
+    path: 'providers',
+    name: 'admin-providers',
+    component: () => import('src/features/providers/ProviderSettingsPage.vue'),
+    props: { admin: true },
+    meta: { settingsLabel: 'Provider', settingsIcon: 'dns' }
   },
   {
     path: 'instance-limits',

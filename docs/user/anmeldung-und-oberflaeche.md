@@ -6,7 +6,7 @@ MatoLoop verwendet derzeit ausschließlich eine lokale, Cookie-basierte Anmeldun
 
 Das erste bei der Ersteinrichtung angelegte lokale Konto erhält Administratorrechte. Über **Konto** im Benutzermenü ändern Sie Ihr eigenes Passwort; danach werden alle bestehenden Anmeldungen dieses Kontos beendet.
 
-Administratoren können unter **Einstellungen > Benutzer** lokale Konten anlegen, Passwörter zurücksetzen, Konten aktivieren oder deaktivieren und Administratorrechte zuweisen oder entziehen. Vor dem endgültigen Löschen muss ein Konto deaktiviert werden. Das eigene Konto kann nicht deaktiviert oder gelöscht werden; außerdem muss mindestens ein aktiver Administrator bestehen bleiben.
+Under **Administration > Benutzer**, administrators can create local accounts, reset passwords, enable or disable accounts, and grant or revoke administrator rights. An account must be disabled before permanent deletion. You cannot disable or delete your own account, and at least one active administrator must remain.
 
 Administratorrechte erlauben die Benutzerverwaltung und Änderungen an globalen Einstellungen. Sie erlauben keinen Zugriff auf Sessions, Nachrichten, Dateien, Erinnerungen, Zugangsdaten, Arbeitsbereiche oder Computer anderer Benutzer. **Persönlich** und **Global** gekennzeichnete Einträge erscheinen in einer Liste; Administratoren können beim Anlegen geeigneter Einträge **Global** wählen. Persönliche Einträge anderer Benutzer werden dabei nicht angezeigt.
 

@@ -2,9 +2,9 @@
 
 ## Provider verwalten
 
-Unter **Einstellungen > Provider** können Sie Provider hinzufügen, bearbeiten, aktivieren, testen und löschen.
+Use the **Verwaltung** tab under **Administration > Provider** to add, edit, enable, test, and delete global providers and their models. This tab appears first and opens by default. Administrators control **Persönliche Provider** in the **Einstellungen** tab.
 
-Die Provider-Liste zeigt **Persönlich** und **Global** gekennzeichnete Einträge zusammen. Beim Anlegen können Administratoren im Dialog **Global** wählen; der Geltungsbereich bleibt danach fest. Den Aktiv-Schalter globaler Provider können nur Administratoren bedienen. Nur Administratoren ändern globale Provider und legen fest, ob persönliche Provider erlaubt sind. Globale Provider und ihre Modelle stehen allen Benutzern zur Verfügung; persönliche Provider und ihre verschlüsselten Zugangsdaten bleiben dem jeweiligen Benutzer zugeordnet.
+**Einstellungen > Provider** manages only your own providers, including when signed in as an administrator. This navigation entry is hidden when personal providers are disabled; existing personal configuration remains stored. New providers inherit the global or personal scope from the page where they are created. Global providers and their models remain available to all users in chat and agent profiles. Personal providers and encrypted credentials belong only to their owner.
 
 ### ChatGPT Codex
 

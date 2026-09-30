@@ -2,11 +2,11 @@
 
 ## 1. Benutzer einrichten
 
-Beim ersten Aufruf zeigt MatoLoop die Ersteinrichtung an. Legen Sie einen Benutzernamen und ein Passwort mit mindestens zehn Zeichen fest. Dieses erste lokale Konto wird Administrator und nach dem Speichern automatisch angemeldet. Weitere Konten legen Administratoren später unter **Einstellungen > Benutzer** an.
+On first launch, MatoLoop opens initial setup. Choose a username and a password with at least ten characters. This first local account becomes an administrator and is signed in automatically after saving. Administrators create additional accounts under **Administration > Benutzer**.
 
 ## 2. Provider verbinden
 
-Öffnen Sie **Einstellungen > Provider** und wählen Sie einen Provider:
+Open **Administration > Provider** to configure a global provider. If personal providers are allowed, use **Einstellungen > Provider** for your own connection:
 
 - **ChatGPT Codex** verbindet ein geeignetes ChatGPT-Konto über einen Gerätecode.
 - **OpenAI-kompatibel** verbindet einen kompatiblen Server über Basis-URL und optionalen API-Schlüssel.

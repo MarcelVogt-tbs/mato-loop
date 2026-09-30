@@ -4,10 +4,10 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Provider</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          KI-Verbindungen und ihre verfügbaren Chat- und Medienmodelle verwalten.
+          {{ admin ? 'Globale KI-Verbindungen und ihre Chat- und Medienmodelle verwalten.' : 'Persönliche KI-Verbindungen und ihre Chat- und Medienmodelle verwalten.' }}
         </p>
       </div>
-      <div class="settings-scope-actions row items-center col-auto">
+      <div v-if="showManagement" class="settings-scope-actions row items-center col-auto">
         <q-btn
           class="col-auto"
           color="primary"
@@ -16,29 +16,49 @@
           no-wrap
           icon="add"
           label="Provider hinzufügen"
-          :disable="pageLoading || (personalBlocked && !auth.isAdmin)"
+          :disable="pageLoading || (!admin && personalBlocked)"
           @click="openCreateDialog"
         />
       </div>
     </header>
 
-    <q-card v-if="auth.isAdmin" flat class="app-surface-tonal q-mb-md">
-      <q-card-section class="row items-center justify-between q-gutter-md">
-        <div>
-          <div class="text-subtitle2 text-weight-bold">Persönliche Provider</div>
-          <div class="text-caption app-muted">Erlaubt Benutzern eigene Provider und Modelle zu verwalten.</div>
+    <q-tabs
+      v-if="admin"
+      v-model="section"
+      dense
+      no-caps
+      align="left"
+      active-color="primary"
+      indicator-color="primary"
+      class="q-mb-lg"
+    >
+      <q-tab name="management" icon="dns" label="Verwaltung" />
+      <q-tab name="general" icon="settings" label="Einstellungen" />
+    </q-tabs>
+
+    <q-card v-if="admin && section === 'general'" flat class="app-surface q-mb-md">
+      <q-card-section>
+        <div class="row items-center q-col-gutter-md">
+          <div class="col-12 col-sm row items-center no-wrap q-gutter-md">
+            <q-avatar color="primary" text-color="white" icon="person" />
+            <div>
+              <div class="text-subtitle2 text-weight-bold">Persönliche Provider erlauben</div>
+              <div class="text-caption app-muted">Benutzer können eigene Provider und Modelle verwalten.</div>
+            </div>
+          </div>
+          <q-toggle
+            :model-value="providers.personalProvidersEnabled"
+            class="col-12 col-sm-auto"
+            color="primary"
+            aria-label="Persönliche Provider erlauben"
+            :disable="gateLoading || pageLoading || loadFailed"
+            @update:model-value="togglePersonalProviders"
+          />
         </div>
-        <q-toggle
-          :model-value="providers.personalProvidersEnabled"
-          color="primary"
-          label="Erlaubt"
-          :disable="gateLoading"
-          @update:model-value="togglePersonalProviders"
-        />
       </q-card-section>
     </q-card>
 
-    <q-banner v-if="personalBlocked" rounded class="app-surface-tonal q-mb-md">
+    <q-banner v-if="admin && section === 'general' && personalBlocked" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="person" color="primary" /></template>
       Persönliche Provider wurden für diese Instanz deaktiviert. Globale Provider bleiben verfügbar.
     </q-banner>
@@ -48,7 +68,7 @@
       <template #action><q-btn flat no-caps color="primary" label="Erneut laden" @click="loadPage" /></template>
     </q-banner>
 
-    <q-card v-if="!llmProviders.length && !pageLoading && !loadFailed" flat class="app-surface q-pa-lg">
+    <q-card v-if="showManagement && !llmProviders.length && !pageLoading && !loadFailed" flat class="app-surface q-pa-lg">
       <div class="row items-center no-wrap q-gutter-md">
         <q-avatar color="grey-7" text-color="white" icon="hub" />
         <div>
@@ -58,7 +78,7 @@
       </div>
     </q-card>
 
-    <div class="provider-card-list">
+    <div v-if="showManagement" class="provider-card-list">
       <q-card
         v-for="provider in llmProviders"
         :key="provider.id"
@@ -283,8 +303,9 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import { useRouter } from 'vue-router'
 import { api } from 'src/boot/axios'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import ModelConfigDialog from 'src/features/providers/ModelConfigDialog.vue'
@@ -305,7 +326,9 @@ import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'ProviderSettingsPage' })
 
+const { admin } = defineProps({ admin: { type: Boolean, default: false } })
 const $q = useQuasar()
+const router = useRouter()
 const { confirm } = useConfirm()
 const providers = useProviderStore()
 const auth = useAuthStore()
@@ -316,6 +339,7 @@ const selectedModelProvider = ref(null)
 const selectedModel = ref(null)
 const testingProviderId = ref(null)
 const gateLoading = ref(false)
+const section = ref('management')
 const expandedProviders = reactive({})
 const syncing = reactive({})
 const syncFailed = reactive({})
@@ -326,11 +350,13 @@ const pageLoading = ref(true)
 const loadFailed = ref(false)
 const listedProviders = ref([])
 const listedModels = ref([])
+const scope = computed(() => admin ? 'instance' : 'personal')
+const showManagement = computed(() => !admin || section.value === 'management')
 const llmProviders = computed(() => listedProviders.value.filter((item) => (
   ['openai-codex', 'openai-compatible', 'lemonade', 'azure-speech'].includes(item.adapterType)
 )))
 const personalBlocked = computed(() => !providers.personalProvidersEnabled)
-const canEdit = (provider) => (provider.scope === 'instance' ? auth.isAdmin : !personalBlocked.value)
+const canEdit = (provider) => provider.scope === scope.value && (admin ? auth.isAdmin : !personalBlocked.value)
 const codexFor = (provider) => ({ authenticated: provider.hasCredential })
 
 async function prepareScope(scope) {
@@ -339,24 +365,25 @@ async function prepareScope(scope) {
 }
 
 async function loadPage() {
+  const requestedScope = scope.value
   pageLoading.value = true
   loadFailed.value = false
   try {
-    const policy = (await api.get('/providers/personal-policy')).data
-    providers.personalProvidersEnabled = policy.personalProvidersEnabled !== false
-    const instance = (await api.get('/providers', auth.isAdmin ? { params: { scope: 'instance' } } : {})).data
-    const personal = (await api.get('/providers', { params: { scope: 'personal' } })).data
-    const personalIds = new Set(personal.providers.map((provider) => provider.id))
-    listedProviders.value = [
-      ...instance.providers.filter((provider) => !personalIds.has(provider.id)).map((provider) => ({ ...provider, scope: 'instance' })),
-      ...personal.providers.map((provider) => ({ ...provider, scope: 'personal' }))
-    ]
-    listedModels.value = [...instance.models.filter((model) => !personalIds.has(model.providerId)), ...personal.models]
+    await providers.fetchPersonalPolicy()
+    if (scope.value !== requestedScope) return
+    if (!admin && personalBlocked.value) {
+      await router.replace({ name: 'settings-personalization' })
+      return
+    }
+    const data = (await api.get('/providers', { params: { scope: requestedScope } })).data
+    if (scope.value !== requestedScope) return
+    listedProviders.value = data.providers.map((provider) => ({ ...provider, scope: requestedScope }))
+    listedModels.value = data.models
   } catch {
-    loadFailed.value = true
+    if (scope.value === requestedScope) loadFailed.value = true
     // The central API interceptor displays the error.
   } finally {
-    pageLoading.value = false
+    if (scope.value === requestedScope) pageLoading.value = false
   }
 }
 
@@ -373,7 +400,7 @@ async function togglePersonalProviders(enabled) {
 
 function openCreateDialog() {
   selectedProvider.value = null
-  void prepareScope(personalBlocked.value ? 'instance' : 'personal').then(() => { dialogOpen.value = true }).catch(() => {})
+  void prepareScope(scope.value).then(() => { dialogOpen.value = true }).catch(() => {})
 }
 
 function openEditDialog(provider) {
@@ -582,5 +609,12 @@ async function removeProvider(provider) {
   $q.notify({ type: 'positive', message: 'Provider gelöscht' })
 }
 
-onMounted(loadPage)
+watch(scope, () => {
+  section.value = 'management'
+  dialogOpen.value = false
+  modelDialogOpen.value = false
+  listedProviders.value = []
+  listedModels.value = []
+  void loadPage()
+}, { immediate: true })
 </script>

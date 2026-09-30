@@ -24,6 +24,7 @@ function scopeConfig(scope, config = {}) {
 
 function assignPersonalPolicy(store, policy) {
   store.personalProvidersEnabled = policy?.personalProvidersEnabled !== false
+  store.personalPolicyLoaded = true
 }
 
 function effectiveModelOptions(state, capability = 'chat', requiresTools = false) {
@@ -101,6 +102,7 @@ export const useProviderStore = defineStore('providers', {
     availableModels: null,
     scope: 'instance',
     personalProvidersEnabled: true,
+    personalPolicyLoaded: false,
     codex: {},
     loading: false,
     loadVersion: 0,
@@ -142,6 +144,16 @@ export const useProviderStore = defineStore('providers', {
     )
   },
   actions: {
+    async fetchPersonalPolicy() {
+      try {
+        const { data } = await api.get('/providers/personal-policy')
+        assignPersonalPolicy(this, data)
+        return data
+      } catch (error) {
+        this.personalPolicyLoaded = false
+        throw error
+      }
+    },
     selectScope(scope) {
       const next = scope === 'personal' ? 'personal' : 'instance'
       if (next === this.scope) return
@@ -230,6 +242,7 @@ export const useProviderStore = defineStore('providers', {
     async setPersonalProvidersEnabled(enabled) {
       await api.patch('/providers/personal-enabled', { enabled }, scopeConfig('instance'))
       this.personalProvidersEnabled = enabled
+      this.personalPolicyLoaded = true
     },
     async syncModels(id) {
       return (await mutateAndRefresh(this, () => api.post(`/providers/configuration/${id}/models/sync`, null, scopeConfig(this.scope))))?.data

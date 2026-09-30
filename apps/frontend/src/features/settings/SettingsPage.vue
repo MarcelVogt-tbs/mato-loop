@@ -2,7 +2,7 @@
   <q-page class="app-page settings-page column no-wrap">
     <AppPageHeader
       :title="admin ? 'Administration' : 'Einstellungen'"
-      :subtitle="admin ? 'Zentrale Verwaltung der MatoLoop-Instanz.' : 'Personalisierung, Provider, Computer, Integrationen, Kanäle und Funktionen zentral verwalten.'"
+      :subtitle="admin ? 'Zentrale Verwaltung der MatoLoop-Instanz.' : 'Personalisierung, persönliche Provider, Computer, Integrationen, Kanäle und Funktionen verwalten.'"
     />
 
     <q-tabs
@@ -55,12 +55,15 @@ import { computed } from 'vue'
 import AppPageHeader from 'src/shared/ui/AppPageHeader.vue'
 import { adminRoutes, settingsRoutes } from 'src/features/settings/routes'
 import { useAuthStore } from 'stores/auth'
+import { useProviderStore } from 'stores/providers'
 
 defineOptions({ name: 'SettingsPage' })
 
 const { admin } = defineProps({ admin: { type: Boolean, default: false } })
 const auth = useAuthStore()
+const providers = useProviderStore()
 const navigation = computed(() => (admin ? adminRoutes : settingsRoutes).filter((item) => (
   item.meta?.settingsLabel && (!item.meta.requiresAdmin || auth.isAdmin)
+  && (item.name !== 'settings-providers' || (providers.personalPolicyLoaded && providers.personalProvidersEnabled))
 )))
 </script>

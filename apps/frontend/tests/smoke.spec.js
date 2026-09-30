@@ -40,7 +40,6 @@ describe('MatoLoop frontend scaffold', () => {
       'settings-persona',
       'settings-memory',
       'settings-notifications',
-      'settings-users',
       'settings-debug-access'
     ])
     expect(
@@ -64,9 +63,8 @@ describe('MatoLoop frontend scaffold', () => {
       { name: 'settings-automation-detail', path: ':automationId' }
     ])
     expect(routes.find((route) => route.name === 'markdown-print')?.path).toBe('/print/markdown')
-    expect(settingsRoutes.find((route) => route.name === 'settings-users')?.redirect).toEqual({ name: 'admin-users' })
     expect(appRoute.children.find((route) => route.name === 'admin')?.meta.requiresAdmin).toBe(true)
-    expect(adminRoutes.map((route) => route.name)).toEqual(['admin-users', 'admin-instance-limits'])
+    expect(adminRoutes.map((route) => route.name)).toEqual(['admin-users', 'admin-providers', 'admin-instance-limits'])
     expect(settingsRoutes.find((route) => route.name === 'settings-notifications')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-debug-access')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-tools')?.meta.requiresAdmin).toBe(true)
@@ -97,9 +95,12 @@ describe('MatoLoop frontend scaffold', () => {
   it('keeps user management and instance limits in the admin-only section', () => {
     const router = createRouter({ history: createMemoryHistory(), routes })
 
-    expect(router.resolve('/settings/users').matched.at(-1).redirect).toEqual({ name: 'admin-users' })
+    expect(router.resolve('/settings/users').matched.at(-1).path).toBe('/:catchAll(.*)*')
     expect(router.resolve('/admin/users').name).toBe('admin-users')
     expect(router.resolve('/admin/users').meta.requiresAdmin).toBe(true)
     expect(router.resolve('/admin/instance-limits').meta.requiresAdmin).toBe(true)
+    expect(router.resolve('/admin/providers').meta.requiresAdmin).toBe(true)
+    expect(adminRoutes.find((route) => route.name === 'admin-providers').props).toEqual({ admin: true })
+    expect(router.resolve('/settings').matched.at(-1).redirect).toEqual({ name: 'settings-personalization' })
   })
 })

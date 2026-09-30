@@ -14,7 +14,6 @@ vi.mock('src/boot/axios', () => ({ api: {} }))
 import ProviderConfigDialog from '../src/features/providers/ProviderConfigDialog.vue'
 import ModelConfigDialog from '../src/features/providers/ModelConfigDialog.vue'
 import { useProviderStore } from '../src/stores/providers'
-import { useAuthStore } from '../src/stores/auth'
 
 let app, root
 
@@ -28,12 +27,10 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function mountDialog(component = ProviderConfigDialog, extraProps = {}, isAdmin = false) {
+async function mountDialog(component = ProviderConfigDialog, extraProps = {}) {
   const state = reactive({ modelValue: false, ...extraProps })
   const pinia = createPinia()
   const store = useProviderStore(pinia)
-  useAuthStore(pinia).isAdmin = isAdmin
-  const fetchAll = vi.spyOn(store, 'fetchAll').mockResolvedValue()
   const createProvider = vi.spyOn(store, 'createProvider').mockResolvedValue('azure')
   const updateProvider = vi.spyOn(store, 'updateProvider').mockResolvedValue()
   const updateModel = vi.spyOn(store, 'updateModel').mockResolvedValue()
@@ -48,20 +45,8 @@ async function mountDialog(component = ProviderConfigDialog, extraProps = {}, is
   app.mount(root)
   state.modelValue = true
   await vi.waitFor(() => expect(document.querySelector('.provider-dialog')).not.toBeNull())
-  return { createProvider, updateProvider, updateModel, fetchAll, store }
+  return { createProvider, updateProvider, updateModel }
 }
-
-it('chooses global scope inside the creation dialog', async () => {
-  const { fetchAll, store } = await mountDialog(ProviderConfigDialog, {}, true)
-  const checkbox = [...document.querySelectorAll('.provider-dialog .q-checkbox')]
-    .find((item) => item.textContent.includes('Global'))
-  expect(checkbox).toBeTruthy()
-  store.selectScope('personal')
-  await nextTick()
-  checkbox.click()
-  await vi.waitFor(() => expect(store.scope).toBe('instance'))
-  expect(fetchAll).toHaveBeenCalled()
-})
 
 function field(label) {
   return [...document.querySelectorAll('.provider-dialog .q-field')]

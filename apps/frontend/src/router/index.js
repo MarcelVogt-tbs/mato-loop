@@ -3,6 +3,7 @@ import { createMemoryHistory, createRouter, createWebHistory } from 'vue-router'
 
 import routes from './routes'
 import { useAuthStore } from 'stores/auth'
+import { useProviderStore } from 'stores/providers'
 
 export default defineRouter(() => {
   const createHistory = process.env.SERVER ? createMemoryHistory : createWebHistory
@@ -21,7 +22,16 @@ export default defineRouter(() => {
       return true
     }
     if (!auth.authenticated) return { name: 'login', query: { redirect: to.fullPath } }
-    if (to.meta.requiresAdmin && !auth.isAdmin) return { name: 'settings-providers' }
+    if (to.meta.requiresAdmin && !auth.isAdmin) return { name: 'settings-personalization' }
+    if (to.matched.some((record) => record.name === 'settings')) {
+      const providers = useProviderStore()
+      if (!providers.personalPolicyLoaded || to.name === 'settings-providers') {
+        await providers.fetchPersonalPolicy().catch(() => {})
+      }
+      if (to.name === 'settings-providers' && (!providers.personalPolicyLoaded || !providers.personalProvidersEnabled)) {
+        return { name: 'settings-personalization' }
+      }
+    }
     return true
   })
 
