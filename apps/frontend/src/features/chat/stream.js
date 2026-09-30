@@ -107,6 +107,28 @@ export const streamActions = {
         this.setSessionRunStatus(sessionId, 'running')
         this.setActivity('preparing_context', { ...payload, startedAt: payload.createdAt })
       })
+      source.addEventListener('run.snapshot', (event) => {
+        if (this.eventSource !== source) return
+        const payload = JSON.parse(event.data)
+        this.streamContent = ''
+        this.streamReasoning = null
+        this.streamContextSummary = null
+        this.streamResearchSources = mergeResearchSources([], payload.researchSources)
+        this.runWarnings = []
+        this.processOutputs = {}
+        this.completedToolCallId = null
+        if (payload.events?.length) this.clearActivity()
+        for (const item of payload.events || []) {
+          source.dispatchEvent(new MessageEvent(item.type, { data: JSON.stringify(item) }))
+        }
+        if (payload.content) source.dispatchEvent(new MessageEvent('message.delta', {
+          data: JSON.stringify({ delta: payload.content })
+        }))
+        void this.refreshSession(sessionId).catch(() => {})
+        void useApprovalStore().fetchPending().catch(() => {})
+        void useQuestionStore().fetchPending().catch(() => {})
+        if (useSubagentStore().parentId === sessionId) void useSubagentStore().loadChildren()
+      })
       source.addEventListener('browser.control.requested', () => {
         if (this.eventSource !== source || this.current?.id !== sessionId) return
         void useBrowserStore().reconcileControlRequest(sessionId)
@@ -119,6 +141,7 @@ export const streamActions = {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
         this.setActivity(payload.phase, payload)
+        if (payload.phase !== 'compacting_context') this.streamContextSummary = null
       })
       source.addEventListener('session.title.updated', (event) => {
         if (this.eventSource !== source) return
@@ -183,6 +206,7 @@ export const streamActions = {
           )
         }
         this.streamContextSummary = null
+        if (this.activity.phase === 'compacting_context') this.setActivity('preparing_context')
         void this.refreshSession(sessionId).catch(() => {})
       })
       source.addEventListener('process.output', (event) => {
@@ -251,6 +275,7 @@ export const streamActions = {
         if (this.eventSource !== source) return
         this.streamContent = ''
         this.streamReasoning = null
+        this.streamContextSummary = null
         this.runWarnings = []
       })
       source.addEventListener('tool.completed', (event) => {

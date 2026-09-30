@@ -5,6 +5,7 @@ import { emptyActivity } from 'src/features/chat/state'
 import { mergeAgentActivity } from 'src/utils/agent-activity'
 import { notifyError } from 'src/utils/notifications'
 import { useApprovalStore } from 'src/stores/approvals'
+import { useQuestionStore } from 'src/stores/questions'
 import { mergeResearchSources } from 'src/utils/research-sources'
 
 const ACTIVE = new Set(['queued', 'running', 'waiting_approval', 'waiting_input'])
@@ -224,8 +225,7 @@ export const useSubagentStore = defineStore('subagents', () => {
     const version = selectionVersion
     const connection = new EventSource(`/api/sessions/${selectedId}/runs/${run.value.id}/events`)
     source = connection
-    // The broker replays a bounded history without IDs. Rebuild only the live
-    // buffer on each connection; persisted messages are always merged by ID.
+    // A broker snapshot replaces live state; durable messages are merged by ID.
     clearStream()
     const seenIds = new Set()
     const on = (name, handler) => connection.addEventListener(name, (event) => {
@@ -244,14 +244,38 @@ export const useSubagentStore = defineStore('subagents', () => {
       run.value = { ...run.value, ...payload, status: 'running' }
       activity.value = mergeAgentActivity(activity.value, { ...payload, phase: 'preparing_context' })
     })
-    on('run.phase', (payload) => { activity.value = mergeAgentActivity(activity.value, payload) })
+    on('run.snapshot', (payload) => {
+      messageRevision += 1
+      clearStream()
+      streamResearchSources.value = mergeResearchSources([], payload.researchSources)
+      processOutputs.value = {}
+      completedToolCallId.value = null
+      if (payload.events?.length) activity.value = emptyActivity(activity.value.revision + 1)
+      for (const item of payload.events || []) {
+        connection.dispatchEvent(new MessageEvent(item.type, { data: JSON.stringify(item) }))
+      }
+      if (payload.content) connection.dispatchEvent(new MessageEvent('message.delta', {
+        data: JSON.stringify({ delta: payload.content })
+      }))
+      void refresh(parent)
+      void useApprovalStore().fetchPending().catch(() => {})
+      void useQuestionStore().fetchPending().catch(() => {})
+    })
+    on('run.phase', (payload) => {
+      activity.value = mergeAgentActivity(activity.value, payload)
+      if (payload.phase !== 'compacting_context') streamContextSummary.value = null
+    })
     on('run.timing', (payload) => { activity.value = mergeAgentActivity(activity.value, { ...payload, phase: null }) })
     on('message.delta', (payload) => {
       if (typeof payload.delta === 'string') streamContent.value += payload.delta
       if (activity.value.phase !== 'streaming') activity.value = mergeAgentActivity(activity.value, { phase: 'streaming' })
     })
     on('reasoning.updated', (payload) => { streamReasoning.value = payload.reasoning })
-    on('context.summary.updated', (payload) => { streamContextSummary.value = payload.summary })
+    on('context.summary.updated', (payload) => {
+      activity.value = mergeAgentActivity(activity.value, { phase: 'compacting_context' })
+      streamContextSummary.value = payload.summary
+    })
+    on('message.continued', () => { clearStream({ preserveResearch: true }) })
     on('run.warning', (payload) => {
       if (!warnings.value.some((item) => item.code === payload.code && item.modelRequest === payload.modelRequest)) {
         warnings.value.push(payload)
@@ -297,7 +321,12 @@ export const useSubagentStore = defineStore('subagents', () => {
           completedToolCallId.value = payload.toolCallId || null
           delete processOutputs.value[payload.toolCallId]
         }
-        if (name === 'context.compacted') streamContextSummary.value = null
+        if (name === 'context.compacted') {
+          streamContextSummary.value = null
+          if (activity.value.phase === 'compacting_context') {
+            activity.value = mergeAgentActivity(activity.value, { phase: 'preparing_context' })
+          }
+        }
         messageRevision += 1
         void refresh(parent)
       })

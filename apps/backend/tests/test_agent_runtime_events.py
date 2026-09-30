@@ -1284,7 +1284,7 @@ async def test_cancel_after_completed_response_does_not_add_interruption(monkeyp
     assert [event["type"] for event in events] == ["run.started", "run.completed"]
 
 
-async def test_reasoning_history_keeps_only_latest_snapshot() -> None:
+async def test_reasoning_snapshot_keeps_only_latest_state() -> None:
     broker = RunEventBroker()
     run_id = uuid4()
 
@@ -1292,13 +1292,13 @@ async def test_reasoning_history_keeps_only_latest_snapshot() -> None:
     await broker.publish(run_id, {"type": "message.delta", "delta": "Antwort"})
     await broker.publish(run_id, {"type": "reasoning.updated", "reasoning": {"text": "AB"}})
 
-    assert broker._history[run_id] == [
-        {"type": "message.delta", "delta": "Antwort"},
+    assert broker._snapshot(run_id)["content"] == "Antwort"
+    assert broker._snapshot(run_id)["events"] == [
         {"type": "reasoning.updated", "reasoning": {"text": "AB"}},
     ]
 
 
-async def test_context_summary_history_keeps_only_latest_snapshot() -> None:
+async def test_context_summary_snapshot_keeps_only_latest_state() -> None:
     broker = RunEventBroker()
     run_id = uuid4()
 
@@ -1312,7 +1312,7 @@ async def test_context_summary_history_keeps_only_latest_snapshot() -> None:
         {"type": "context.summary.updated", "summary": {"content": "AB"}},
     )
 
-    assert broker._history[run_id] == [
+    assert broker._snapshot(run_id)["events"] == [
         {"type": "run.phase", "phase": "compacting_context"},
         {"type": "context.summary.updated", "summary": {"content": "AB"}},
     ]

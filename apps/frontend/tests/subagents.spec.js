@@ -22,6 +22,7 @@ class EventSourceMock {
     EventSourceMock.instances.push(this)
   }
   addEventListener(name, handler) { this.listeners.set(name, handler) }
+  dispatchEvent(event) { this.listeners.get(event.type)?.(event) }
   emit(name, payload, lastEventId = '') { this.listeners.get(name)?.({ data: JSON.stringify(payload), lastEventId }) }
 }
 
@@ -63,6 +64,59 @@ afterEach(() => {
 })
 
 describe('read-only subagents', () => {
+  it.each(['parent', 'child'])('replaces snapshot buffers and clears finished compaction for %s', async (consumer) => {
+    chat.current = { id: 'parent', messages: [] }
+    chat.watchRun('parent', 'parent-run', { status: 'running' })
+    await store.loadChildren('parent')
+    await store.open('parent', 'child')
+    const target = consumer === 'parent' ? chat : store
+    const source = EventSourceMock.instances[consumer === 'parent' ? 0 : 1]
+    api.get.mockImplementation(() => new Promise(() => {}))
+    const initialPhase = target.activity.phase
+    source.emit('run.snapshot', { content: '', events: [] })
+    expect(target.activity.phase).toBe(initialPhase)
+    const content = Array.from({ length: 350 }, (_, index) => `[${index}]`).join('')
+    const snapshot = {
+      content,
+      events: [
+        { type: 'run.phase', phase: 'waiting_model' },
+        { type: 'run.timing', activeTimingRevision: 3, activeDurationMs: 9000, activeDurationRunning: false },
+        { type: 'process.output', toolCallId: 'shell', output: { stdout: 'Output', stderr: '' } }
+      ],
+      researchSources: [{ url: 'https://example.com/', title: 'Source' }]
+    }
+    source.emit('message.delta', { delta: 'Old suffix' })
+    source.emit('run.snapshot', snapshot)
+    source.emit('message.delta', { delta: ' next' })
+    expect(target.streamContent).toBe(`${content} next`)
+    expect(target.processOutputs.shell.stdout).toBe('Output')
+    expect(target.streamResearchSources).toEqual(snapshot.researchSources)
+    expect(target.activity).toMatchObject({ phase: 'streaming', activeDurationMs: 9000 })
+    source.emit('run.snapshot', { ...snapshot, content: `${content} next` })
+    expect(target.streamContent).toBe(`${content} next`)
+    source.emit('message.continued', {})
+    source.emit('message.delta', { delta: 'New answer' })
+    expect(target.streamContent).toBe('New answer')
+
+    source.emit('run.phase', { phase: 'compacting_context' })
+    source.emit('context.summary.updated', { summary: { content: 'Summary' } })
+    expect(target.streamContextSummary.content).toBe('Summary')
+    source.emit('context.compacted', { summary: { id: 'summary', content: 'Summary' } })
+    expect(target.streamContextSummary).toBeNull()
+    expect(target.activity.phase).toBe('preparing_context')
+    source.emit('run.phase', { phase: 'waiting_model', modelRequest: 2 })
+    expect(target.activity.phase).toBe('waiting_model')
+    source.emit('run.snapshot', {
+      content: '', events: [
+        { type: 'run.phase', phase: 'compacting_context' },
+        { type: 'context.compacted', summary: { id: 'summary', content: 'Summary' } },
+        { type: 'run.phase', phase: 'waiting_model', modelRequest: 3 }
+      ]
+    })
+    expect(target.streamContextSummary).toBeNull()
+    expect(target.activity.phase).toBe('waiting_model')
+  })
+
   it.each(['parent', 'child'])('projects the full activity event sequence for %s', async (consumer) => {
     chat.current = { id: 'parent', messages: [] }
     chat.watchRun('parent', 'parent-run', { status: 'running' })
@@ -256,8 +310,9 @@ describe('read-only subagents', () => {
     expect(EventSourceMock.instances).toHaveLength(2)
     source.emit('message.delta', { delta: 'Veraltet' })
     const reconnected = EventSourceMock.instances[1]
-    reconnected.emit('message.delta', { delta: 'Teil' })
-    expect(store.streamContent).toBe('Teil')
+    reconnected.emit('run.snapshot', { content: 'Vollständiger Teil', events: [] })
+    reconnected.emit('message.delta', { delta: ' danach' })
+    expect(store.streamContent).toBe('Vollständiger Teil danach')
     run.status = 'completed'
     session.activeRun = null
     session.messages = [{ id: 'final', role: 'assistant', content: 'Fertig' }]

@@ -31,7 +31,8 @@ async def test_child_requests_reach_only_the_parent_without_forwarding_transcrip
     }
     assert forwarded[2]["question"]["payload"]["subagentSessionId"] == str(child_session)
     assert sibling not in broker._history
-    assert broker._history[child][0]["delta"] == "child-only content"
+    assert broker._snapshot(child)["content"] == "child-only content"
+    assert broker._snapshot(parent)["content"] == ""
     assert "subagentSessionId" not in broker._history[child][-1]
     count = len(broker._history[parent])
     broker.unregister_subagent(child)

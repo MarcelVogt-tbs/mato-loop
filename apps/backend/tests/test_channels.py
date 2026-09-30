@@ -1034,6 +1034,31 @@ async def test_telegram_relays_typing_and_native_drafts(monkeypatch) -> None:
     ] == [None, None, telegram.ParseMode.HTML, None, telegram.ParseMode.HTML]
 
 
+async def test_telegram_replaces_snapshot_text_and_resets_on_continuation(monkeypatch) -> None:
+    drafts = []
+
+    async def events():
+        yield {"type": "message.delta", "delta": "Old suffix"}
+        yield {"type": "run.snapshot", "content": "Complete answer", "events": [{"type": "run.phase", "phase": "waiting_model"}]}
+        yield {"type": "message.delta", "delta": " next"}
+        yield {"type": "message.continued"}
+        yield {"type": "message.delta", "delta": "New answer"}
+        yield {"type": "run.completed"}
+
+    bot = AsyncMock()
+    bot.__aenter__.return_value = bot
+    bot.send_message_draft.side_effect = lambda **kwargs: drafts.append(kwargs["text"])
+
+    monkeypatch.setattr(telegram, "DRAFT_UPDATE_SECONDS", 0)
+    monkeypatch.setattr(telegram, "_progress_target", AsyncMock(return_value=("running", "token", 123, 456)))
+    monkeypatch.setattr(telegram.run_events, "subscribe", lambda _run_id: events())
+    monkeypatch.setattr(telegram, "Bot", lambda **_kwargs: bot)
+
+    await telegram._relay_run_progress(uuid4())
+
+    assert drafts == ["Old suffix", "Complete answer", "Complete answer next", telegram.DRAFT_CLEAR_TEXT, "New answer"]
+
+
 def test_telegram_omits_finalizing_activity() -> None:
     assert telegram._progress_activity(
         {

@@ -81,8 +81,10 @@ describe('subagent inspector navigation and presentation', () => {
     root = document.createElement('div')
     document.body.append(root)
     app = createApp({ render: () => h(AgentActivityPanel, {
-      running: true, activity: activity.value,
-      history: { entries: [{ key: 'old', type: 'tool', result: {}, tool: { id: 'old', name: 'web_search', arguments: { query: 'Älterer Aufruf' } } }, entry.value] }
+      running: true,
+      activity: { ...activity.value, ...(type === 'context-summary' ? { startedAt: entry.value.key } : {}) },
+      contextSummary: type === 'context-summary' ? { content: detail } : null,
+      history: { entries: [{ key: 'old', type: 'tool', result: {}, tool: { id: 'old', name: 'web_search', arguments: { query: 'Älterer Aufruf' } } }, ...(type === 'context-summary' ? [] : [entry.value])] }
     }) })
     app.use(createPinia()).use(router).use(Quasar, { components })
     app.mount(root)
@@ -875,7 +877,8 @@ describe('subagent inspector navigation and presentation', () => {
     document.body.append(root)
     app = createApp({
       render: () => h(AgentActivityPanel, {
-        history: { entries: [entry] }, running: true, activity
+        history: { entries: entry.type === 'context-summary' ? [] : [entry] }, running: true, activity,
+        contextSummary: entry.type === 'context-summary' ? { content: entry.text } : null
       })
     })
     app.use(pinia).use(Quasar, { components })

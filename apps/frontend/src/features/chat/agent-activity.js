@@ -183,14 +183,11 @@ export function agentRunPresentation({
       key: `live-reasoning-${activity.modelRequest ?? 0}`, type: 'reasoning', blocks: reasoningBlocks(streamReasoning),
       presentation: { ...reasoningHistoryPresentation(streamReasoning), title: label, summary }
     }
-    else if (['compacting_context', 'waiting_model'].includes(activity?.phase) && streamContextSummary?.content) entry = {
+    else if (activity?.phase === 'compacting_context' && streamContextSummary?.content) entry = {
       key: `live-context-summary-${activity.startedAt ?? 0}`, type: 'context-summary', text: streamContextSummary.content,
       warning: streamContextSummary.isFallback,
       presentation: { title: 'Gesprächskontext wird verdichtet', icon: 'compress' }
     }
-    else if (['compacting_context', 'waiting_model'].includes(activity?.phase)) entry = entries.findLast((item) => (
-      item.type === 'context-summary' && item.current
-    ))
   }
   entry ||= {
     key: 'activity-status', type: 'reasoning',

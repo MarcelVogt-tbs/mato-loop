@@ -112,6 +112,7 @@ async def native_database(request, tmp_path, monkeypatch):
             await asyncio.gather(*cleanup, return_exceptions=True)
             for run_id in owned_runs:
                 run_events._history.pop(run_id, None)
+                run_events._checkpoints.pop(run_id, None)
                 run_events._subscribers.pop(run_id, None)
                 run_events.unregister_subagent(run_id)
         finally:

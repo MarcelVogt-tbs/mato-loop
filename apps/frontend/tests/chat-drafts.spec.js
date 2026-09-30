@@ -61,6 +61,8 @@ class EventSourceMock {
     this.listeners.set(name, listener)
   }
 
+  dispatchEvent(event) { this.listeners.get(event.type)?.(event) }
+
   emit(name, payload) {
     this.listeners.get(name)?.({ data: JSON.stringify(payload) })
   }
@@ -2540,13 +2542,20 @@ describe('chat drafts', () => {
       createdAt: '2026-07-19T12:00:00Z'
     })
 
-    await EventSourceMock.instances[0].onerror()
+    const disconnected = EventSourceMock.instances[0]
+    disconnected.emit('message.delta', { delta: 'Anfang' })
+    await disconnected.onerror()
 
     expect(chat.running).toBe(true)
     expect(chat.activity.phase).toBe('reconnecting')
     await vi.advanceTimersByTimeAsync(1000)
     expect(EventSourceMock.instances).toHaveLength(2)
     expect(chat.running).toBe(true)
+    disconnected.emit('message.delta', { delta: 'Veraltet' })
+    const reconnected = EventSourceMock.instances[1]
+    reconnected.emit('run.snapshot', { content: 'Anfang und Rest', events: [] })
+    reconnected.emit('message.delta', { delta: '.' })
+    expect(chat.streamContent).toBe('Anfang und Rest.')
   })
 
   it('releases the composer immediately while cancellation finishes', async () => {

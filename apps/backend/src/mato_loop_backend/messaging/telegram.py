@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import logging
 import secrets
+from contextlib import aclosing
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1583,7 +1584,18 @@ async def _relay_run_progress(run_id: UUID) -> None:
         draft_dirty = False
         next_draft_at = 0.0
         next_indicator_at = 0.0
-        events = run_events.subscribe(run_id)
+        async def progress_events():
+            async with aclosing(run_events.subscribe(run_id)) as stream:
+                async for event in stream:
+                    if event.get("type") == "run.snapshot":
+                        yield {"type": "run.snapshot", "snapshotReplay": True}
+                        for item in event.get("events", []):
+                            yield {**item, "snapshotReplay": True}
+                        yield {"type": "message.delta", "delta": event.get("content", "")}
+                    else:
+                        yield event
+
+        events = progress_events()
         event_task = asyncio.create_task(anext(events))
         try:
             async with Bot(token=token) as bot:
@@ -1652,7 +1664,11 @@ async def _relay_run_progress(run_id: UUID) -> None:
                             if isinstance(question_id, str):
                                 pending_interactions.discard(f"question:{question_id}")
                                 interaction_finished = True
-                        if event_type == "message.delta":
+                        if event_type == "run.snapshot":
+                            draft_dirty = bool(activity or content)
+                            content = activity = reasoning_label = resume_activity = ""
+                            pending_interactions.clear()
+                        elif event_type == "message.delta":
                             delta = event.get("delta")
                             if isinstance(delta, str) and delta:
                                 content += delta
@@ -1753,12 +1769,18 @@ async def _relay_run_progress(run_id: UUID) -> None:
                                 draft_dirty = bool(activity or completed_content != content)
                                 content = completed_content
                                 activity = ""
+                        elif event_type in {"message.interrupted", "message.continued"}:
+                            content = ""
+                            reasoning_label = ""
+                            draft_dirty = True
                         elif event_type in {
                             "run.completed",
                             "run.failed",
                             "run.cancelled",
                         }:
                             return
+                        if event.get("snapshotReplay"):
+                            continue
                     now = asyncio.get_running_loop().time()
                     has_draft = bool(activity or content)
                     if (

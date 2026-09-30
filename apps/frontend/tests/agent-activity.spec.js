@@ -252,6 +252,30 @@ describe('agent activity', () => {
     expect(formatActivityDuration(0)).toBe('0 s')
   })
 
+  it('keeps completed compaction in history instead of selecting it during later model waits', () => {
+    const completedSummary = {
+      key: 'summary', type: 'context-summary', current: true,
+      text: 'Completed summary', presentation: { title: 'Gesprächskontext verdichtet', icon: 'compress' }
+    }
+    const transcript = { messages: [{ workHistory: { entries: [completedSummary] } }] }
+    for (const modelRequest of [2, 3]) {
+      const presentation = agentRunPresentation({
+        running: true, activity: { phase: 'waiting_model', modelRequest }, transcript,
+        streamContextSummary: { content: 'Stale live summary' }
+      })
+      expect(presentation.entry.type).toBe('reasoning')
+      expect(presentation.entry.presentation.title).toBe('Verarbeite Anfrage')
+    }
+    expect(transcript.messages[0].workHistory.entries).toEqual([completedSummary])
+    expect(agentRunPresentation({
+      running: true, activity: { phase: 'compacting_context' },
+      streamContextSummary: { content: 'New summary' }, transcript
+    }).entry).toMatchObject({
+      type: 'context-summary', text: 'New summary',
+      presentation: { title: 'Gesprächskontext wird verdichtet' }
+    })
+  })
+
   it('adds only the current active segment to persisted runtime', () => {
     const now = Date.parse('2026-07-19T12:00:05.000Z')
 
