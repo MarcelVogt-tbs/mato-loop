@@ -3842,6 +3842,30 @@ def _mock_tool_result_history(context, message, tool_name) -> None:
     context.db.scalars.return_value.all.return_value = [origin, message]
 
 
+@pytest.mark.parametrize("tool_name", ["secret_input", "session_tool_result_read"])
+async def test_historical_secret_input_filters_expired_references(tmp_path, tool_name) -> None:
+    call = ToolCall("read-result", "session_tool_result_read", {"message_id": str(uuid4())})
+    context = _context(tmp_path, call)
+    expired, active = uuid4(), uuid4()
+    context.one_time_secrets[active] = "hidden password"
+    message = Message(
+        id=UUID(call.arguments["message_id"]), session_id=context.session.id, role="tool",
+        content=json.dumps({"environment": {
+            "OLD": f"run-secret:{expired}", "CURRENT": f"run-secret:{active}",
+        }}),
+    )
+    if tool_name == "session_tool_result_read":
+        message.content = json.dumps({"toolName": "secret_input", "content": message.content})
+    _mock_tool_result_history(context, message, tool_name)
+    result = await tool_registry.execute(call, context)
+    history = json.loads(json.loads(result.content)["content"])
+    if tool_name == "session_tool_result_read":
+        history = json.loads(history["content"])
+    assert (history["environment"], history["unavailableCredentialNames"]) == (
+        {"CURRENT": f"run-secret:{active}"}, ["OLD"],
+    )
+
+
 @pytest.mark.parametrize("tool_name", ["fetch_transcript", "webfetch"])
 async def test_session_tool_result_read_pages_survive_projection(tmp_path, tool_name) -> None:
     call = ToolCall("read-result", "session_tool_result_read", {"message_id": str(uuid4())})

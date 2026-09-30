@@ -308,6 +308,14 @@ async def test_shared_shell_passes_temporary_environment_and_redacts_output(env,
     }
 
 
+async def test_shared_shell_masks_cookie_headers_without_environment(env):
+    env.policy = ToolExecutionPolicy.AUTO
+    env.native.output = "Set-Cookie: session=derived-credential\nHTTP 200\n"
+    result = await env.start("inspect")
+    visible = result.content + str(shared_shell.run_events.publish.await_args_list)
+    assert "derived-credential" not in visible and "HTTP 200" in visible
+
+
 async def test_shared_shell_reinspects_and_executes_edited_command_once(env):
     async def handler(arguments, context):
         return await shared_shell.run_shared_shell(context, arguments, env.terminal)

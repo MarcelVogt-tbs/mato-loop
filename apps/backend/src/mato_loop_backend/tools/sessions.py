@@ -17,6 +17,7 @@ from mato_loop_backend.agent.projection import (
     _tool_names_by_message_id,
     _tool_result_reference,
 )
+from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.media.attachments import model_attachments
 from mato_loop_backend.models import AgentRun, ChatSession, Message
 from mato_loop_backend.permissions.policy import (
@@ -44,6 +45,13 @@ from mato_loop_backend.tools.references import model_tool_references
 SESSION_TOOL_RESULT_CHUNK_CHARACTERS = 12_000
 
 
+def _available_secret_references(context: ToolContext) -> set[str]:
+    return {
+        *(f"run-secret:{secret_id}" for secret_id in context.one_time_secrets),
+        *session_secrets.references(context.session.id).values(),
+    }
+
+
 def _attachment_items(message: Message) -> list[dict[str, Any]]:
     return [
         {
@@ -68,12 +76,14 @@ def _message_item(
     target_trust_level: TrustLevel,
     *,
     reference_tool_results: bool,
+    available_secret_references: set[str] | None = None,
 ) -> tuple[dict[str, Any], int]:
     content_limit = min(SESSION_TOOL_RESULT_CHUNK_CHARACTERS, max(0, remaining))
     content = message.content
     if message.role == "tool":
         content = _target_tool_result(
-            tool_names.get(message.id), message.content, target_trust_level
+            tool_names.get(message.id), message.content, target_trust_level,
+            available_secret_references=available_secret_references or set(),
         )
         content = _model_file_tool_result(content)
     if message.role == "tool":
@@ -135,7 +145,10 @@ async def _session_tool_result_read(
     tool_name = _tool_names_by_message_id(records).get(message.id)
     if tool_name is None:
         return ToolResult.error("session.messageNotFound")
-    content = _target_tool_result(tool_name, message.content, context.memory_trust_level)
+    content = _target_tool_result(
+        tool_name, message.content, context.memory_trust_level,
+        available_secret_references=_available_secret_references(context),
+    )
     content = _model_file_tool_result(content)
     content = _sanitize_tool_result_reference_fields(content)
     content = model_tool_references(tool_name, content, message.id)
@@ -278,6 +291,9 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             tool_names,
             context.memory_trust_level,
             reference_tool_results=target_id == context.session.id,
+            available_secret_references=(
+                _available_secret_references(context) if target_id == context.session.id else set()
+            ),
         )
         if message.id in agent_by_message:
             agent_id = agent_by_message[message.id]

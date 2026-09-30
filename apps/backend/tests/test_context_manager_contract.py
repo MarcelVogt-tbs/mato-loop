@@ -714,7 +714,7 @@ def test_projection_sanitizes_memory_inside_tool_result_read() -> None:
     assert "geteilt" in content
 
 
-@pytest.mark.parametrize("tool_name", [None, "memory_retrieve", "session_read", "session_tool_result_read"])
+@pytest.mark.parametrize("tool_name", [None, "memory_retrieve", "secret_input", "session_read", "session_tool_result_read"])
 @pytest.mark.parametrize("offset,has_more", [(0, True), (12_000, False)])
 def test_projection_redacts_partial_sensitive_or_untyped_tool_result_read_content(
     tool_name, offset, has_more,
@@ -1769,6 +1769,14 @@ def test_session_environment_prompt_exposes_only_references() -> None:
     assert "exact-secret" not in prompt
 
 
+def test_historical_shell_output_masks_cookie_values() -> None:
+    from mato_loop_backend.agent.projection import _target_tool_result
+
+    content = json.dumps({"output": {"stdout": "SENT headers: {'Cookie': 'stored-credential'}\nHTTP 403\n"}})
+    visible = _target_tool_result("shell_run", content, TrustLevel.PUBLIC)
+    assert "stored-credential" not in visible and "HTTP 403" in visible
+
+
 def test_active_skill_instructions_preserve_host_precedence() -> None:
     skill = SkillDefinition(
         name="Quellenpruefung",
@@ -2038,7 +2046,7 @@ def test_general_system_prompt_keeps_persona_within_selected_profile_task() -> N
 
     assert "use it only for tone, character, and working style within the task" in prompt
     assert "it defines the task and workflow" in prompt
-    assert "A short, informal, or ambiguous message does not change the selected task" in prompt
+    assert "User requests refine the task within the selected profile's constraints" in prompt
 
 
 def test_general_system_prompt_contains_project_name_and_instructions() -> None:

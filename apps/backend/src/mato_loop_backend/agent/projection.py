@@ -21,7 +21,8 @@ from mato_loop_backend.media.attachments import (
 from mato_loop_backend.memory.service import memory_visible_to
 from mato_loop_backend.models import ContextSummary, Message
 from mato_loop_backend.settings.models import TrustLevel
-from mato_loop_backend.tools.references import model_tool_references
+from mato_loop_backend.tools.process_output import redact_process_output
+from mato_loop_backend.tools.references import model_secret_references, model_tool_references
 from mato_loop_backend.tools.snapshots import SNAPSHOT_MARKER, snapshot_context
 
 if TYPE_CHECKING:
@@ -829,6 +830,11 @@ def _historical_tool_result(
         payload = None
     if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if tool_name == "secret_input" and isinstance(payload, dict):
+        return json.dumps({
+            "historicalCredentialNames": list(payload.get("environment", {})),
+            "instruction": "Historical input does not restore credentials. Use current runtime references or call secret_input.",
+        }, ensure_ascii=False, separators=(",", ":"))
     if tool_name == "web_search" and isinstance(payload, list):
         sources = [
             {
@@ -1281,11 +1287,26 @@ def _target_tool_result(
     readable_by: TrustLevel,
     *,
     depth: int = 0,
+    available_secret_references: set[str] | None = None,
 ) -> str:
     if tool_name is None:
         tool_name = _inferred_tool_name(content)
+    if tool_name == "secret_input" and available_secret_references is not None:
+        return model_secret_references(content, available_secret_references)
     if tool_name == "memory_retrieve":
         return _target_memory_result(content, readable_by)
+    if tool_name == "shell_run":
+        try:
+            payload = json.loads(content)
+        except (TypeError, json.JSONDecodeError):
+            return content
+        if isinstance(payload, dict) and isinstance(payload.get("output"), dict):
+            output = payload["output"]
+            safe = redact_process_output({key: value for key, value in output.items() if isinstance(value, str)})
+            if any(output[key] != value for key, value in safe.items()):
+                output.update(safe)
+                return json.dumps(payload, ensure_ascii=False)
+        return content
     if tool_name == "session_tool_result_read":
         if depth >= 8:
             return json.dumps({"content": "", "redactedNestedToolResult": True})
@@ -1303,14 +1324,15 @@ def _target_tool_result(
             nested_tool_name = _inferred_tool_name(nested_content)
         # Sensitive fragments cannot be revalidated, especially after a trust change.
         if nested_tool_name is None or (
-            nested_tool_name in {"memory_retrieve", "session_read", "session_tool_result_read"}
+            nested_tool_name in {"memory_retrieve", "secret_input", "session_read", "session_tool_result_read"}
             and (payload.get("offset", 0) != 0 or payload.get("hasMore", False))
         ):
             payload["content"] = ""
             payload["redactedNestedToolResult"] = True
             return json.dumps(payload, ensure_ascii=False)
         payload["content"] = _target_tool_result(
-            nested_tool_name, nested_content, readable_by, depth=depth + 1
+            nested_tool_name, nested_content, readable_by, depth=depth + 1,
+            available_secret_references=available_secret_references,
         )
         return json.dumps(payload, ensure_ascii=False)
     if tool_name != "session_read":
@@ -1354,6 +1376,7 @@ def _target_tool_result(
                 nested_content,
                 readable_by,
                 depth=depth + 1,
+                available_secret_references=available_secret_references,
             )
     return json.dumps(payload, ensure_ascii=False)
 

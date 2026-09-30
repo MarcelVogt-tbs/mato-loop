@@ -320,7 +320,9 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
     rule = (
         "Tool routing: Prefer shell_run for direct API requests, custom HTTP, pagination, multiple "
         "requests, local processing, or computer downloads. Use webfetch when available for web pages and static "
-        "documents. Use a browser only for page interaction or browser-authenticated access. Verify saved "
+        "documents. Verify unknown API paths and fields in official docs or schemas; "
+        "use HTTP status and error details before retrying. "
+        "Use a browser only for page interaction or browser-authenticated access. Verify saved "
         "downloads before claiming success."
     )
 
@@ -343,7 +345,7 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
     growth = prompt_eval.estimate_tokens(messages[0]["content"], 4.0) - prompt_eval.estimate_tokens(
         offline_messages[0]["content"], 4.0
     )
-    assert 100 <= growth <= 150
+    assert 100 <= growth <= 190
 
     shell_only_messages, _tools = build_case(
         replace(case, tools=("shell_run",))
@@ -2360,10 +2362,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 138
-    assert payload["contractCount"] == 364
-    assert "Cases: 226" in report
+    assert payload["contractCount"] == 369
+    assert "Cases: 231" in report
     assert "Semantic contracts: 138" in report
-    assert "All inventory rows: 364" in report
+    assert "All inventory rows: 369" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

@@ -63,9 +63,11 @@ from mato_loop_backend.settings.models import (
     ReasoningEffort,
     SkillDefinition,
     plan_profile,
+    sysadmin_profile,
 )
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.contracts import DynamicToolArgumentsError
+from mato_loop_backend.tools.interaction import SECRET_INPUT_USAGE
 from mato_loop_backend.tools.registry import EffectiveToolSet
 from mato_loop_backend.tools.sessions import SESSION_TOOL_RESULT_CHUNK_CHARACTERS
 
@@ -428,6 +430,15 @@ _ERROR_INVALID_ARGUMENTS = json.dumps(
     }
 )
 _ERROR_DENIED = json.dumps(error_payload("permission.userDenied"))
+_LOGIN_ENVIRONMENT = {
+    "LOGIN_USERNAME": "run-secret:123e4567-e89b-42d3-a456-426614174000",
+    "LOGIN_PASSWORD": "run-secret:123e4567-e89b-42d3-a456-426614174001",
+}
+_LOGIN_INPUTS = {"inputs": [
+    {"name": "LOGIN_USERNAME", "label": "Benutzername", "question": "Benutzername?", "masked": False},
+    {"name": "LOGIN_PASSWORD", "label": "Passwort", "question": "Passwort?", "masked": True},
+]}
+_LOGIN_COMMAND = "python3 -c 'import os; print(bool(os.environ[\"LOGIN_USERNAME\"] and os.environ[\"LOGIN_PASSWORD\"]))'"
 VIDEO_EVAL_TOOLS = (
     "read",
     "glob",
@@ -952,6 +963,80 @@ CASES = (
         expected_tool="secret_input",
         expected_tool_call_count=1,
         forbidden_tools=("question", "shell_run"),
+    ),
+    PromptCase(
+        id="answered_credentials_continue_in_same_run",
+        kind="general",
+        user="Melde dich an https://login.example.test an und prüfe meinen Kontostatus. POST /login mit username/password ist dokumentiert.",
+        tools=("question", "secret_input", "shell_run"),
+        working_directory="/home/user/project",
+        system_options={
+            "agent_profile": sysadmin_profile(),
+            "session_environment": {name: {"valueRef": ref} for name, ref in _LOGIN_ENVIRONMENT.items()},
+        },
+        continuation=_exchange("secret_input", _LOGIN_INPUTS, json.dumps({
+            "environment": _LOGIN_ENVIRONMENT, "instruction": SECRET_INPUT_USAGE,
+        })),
+        expected_tool="shell_run", expected_tool_call_count=1,
+        expected_arguments={"environment": _LOGIN_ENVIRONMENT},
+        forbidden_tools=("question", "secret_input"),
+    ),
+    PromptCase(
+        id="expired_credentials_are_requested_again",
+        kind="general",
+        user="Dann führe jetzt die Anmeldung und Kontostatusprüfung durch.",
+        tools=("question", "secret_input", "shell_run", "session_tool_result_read"),
+        working_directory="/home/user/project",
+        system_options={"agent_profile": sysadmin_profile()},
+        history=(
+            {"role": "user", "content": "Melde dich an https://login.example.test an. POST /login mit username/password ist dokumentiert."},
+            *_exchange("secret_input", _LOGIN_INPUTS, _historical_tool_result(
+                "secret_input", json.dumps({"environment": _LOGIN_ENVIRONMENT}), TOOL_RESULT_MESSAGE_ID,
+            )),
+            {"role": "assistant", "content": "Die Eingabe ist angekommen; ich werde mich anmelden."},
+        ),
+        expected_tool="secret_input", expected_tool_call_count=1,
+        forbidden_tools=("question", "shell_run", "session_tool_result_read"),
+    ),
+    PromptCase(
+        id="invalid_credential_reference_repairs_named_argument",
+        kind="general",
+        user=f"Prüfe mit genau diesem Befehl, ob beide Login-Variablen verfügbar sind: {_LOGIN_COMMAND}",
+        tools=("secret_input", "shell_run"), working_directory="/home/user/project",
+        system_options={"session_environment": {name: {"valueRef": ref} for name, ref in _LOGIN_ENVIRONMENT.items()}},
+        continuation=_exchange("shell_run", {
+            "command": _LOGIN_COMMAND,
+            "environment": {**_LOGIN_ENVIRONMENT, "LOGIN_USERNAME": _LOGIN_ENVIRONMENT["LOGIN_USERNAME"] + "\\"},
+        }, json.dumps(error_payload("tool.invalidArguments", field="environment.LOGIN_USERNAME"))),
+        expected_tool="shell_run", expected_tool_call_count=1,
+        expected_arguments={"command": _LOGIN_COMMAND, "environment": _LOGIN_ENVIRONMENT},
+        forbidden_tools=("secret_input",),
+    ),
+    PromptCase(
+        id="sysadmin_design_discussion_pauses_execution",
+        kind="general",
+        user="Warte mit der Umsetzung. Lass uns erst abstimmen: app-admins zentral und pro App eine eigene users-Gruppe — sinnvoll für einen einzigen Admin?",
+        tools=("question", "secret_input", "shell_run", "write_file"),
+        working_directory="/home/user/project",
+        system_options={"agent_profile": sysadmin_profile()},
+        history=(
+            {"role": "user", "content": "Richte OIDC und die Zugriffsgruppen für Mealie ein."},
+            {"role": "assistant", "content": "Als Nächstes lege ich die Gruppen an und konfiguriere OIDC."},
+        ),
+        expected_no_tools=True,
+    ),
+    PromptCase(
+        id="unknown_api_route_uses_documentation",
+        kind="general",
+        user="Prüfe die öffentliche Status-API von https://status.example.test. Die API-Dokumentation liegt unter https://status.example.test/docs/api.",
+        tools=("shell_run", "webfetch"), working_directory="/home/user/project",
+        system_options={"agent_profile": sysadmin_profile(), "execution_agent_connected": True},
+        continuation=_exchange("shell_run", {"command": "curl -fsS https://status.example.test/api/v1/status"}, json.dumps({
+            "exitCode": 22, "output": {"stderr": "HTTP 404: unknown route"},
+        })),
+        expected_tool="webfetch", expected_tool_call_count=1,
+        expected_arguments={"url": "https://status.example.test/docs/api"},
+        forbidden_tools=("shell_run",),
     ),
     PromptCase(
         id="calendar_missing_details_uses_question",
@@ -4106,7 +4191,12 @@ _SEMANTIC_CONTRACTS = (
     ContractCoverage(
         "tools.credential_input_routing",
         "tools",
-        ("missing_shell_credentials_use_secret_input",),
+        (
+            "missing_shell_credentials_use_secret_input",
+            "answered_credentials_continue_in_same_run",
+            "expired_credentials_are_requested_again",
+            "invalid_credential_reference_repairs_named_argument",
+        ),
     ),
     ContractCoverage(
         "tools.no_premature_success",
@@ -4125,6 +4215,8 @@ _SEMANTIC_CONTRACTS = (
             "file_access_denied_allows_requested_shell",
             "user_denied_file_write_stays_denied_with_shell",
             "denied_memory_read_allows_independent_terminal_work",
+            "sysadmin_design_discussion_pauses_execution",
+            "unknown_api_route_uses_documentation",
         ),
     ),
     ContractCoverage(
@@ -5767,7 +5859,8 @@ def _rewrite_system_prompt_v2(prompt: str) -> str:
                 "insufficient; never ask in assistant text. Group all currently known required details in one "
                 "call; later calls are allowed when answers reveal new required decisions. Never ask optional "
                 "details such as location or description unless mentioned or required to disambiguate. Do not "
-                "call question for informational or complete requests."
+                "call question for informational or complete requests. "
+                "For design advice, answer directly instead of asking the user to choose an implementation."
             )
         elif paragraph.startswith("Use session_read for compacted details"):
             paragraph = (

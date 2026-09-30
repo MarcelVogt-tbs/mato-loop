@@ -39,6 +39,22 @@ class InvalidToolReference(ValueError):
         self.field = field
 
 
+def model_secret_references(content: str, available_references: set[str]) -> str:
+    """Expose only temporary references still available in the calling run or session."""
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return content
+    if not isinstance(payload, dict) or not isinstance(payload.get("environment"), dict):
+        return content
+    environment = payload["environment"]
+    return json.dumps({
+        "environment": {name: ref for name, ref in environment.items() if isinstance(ref, str) and ref in available_references},
+        "unavailableCredentialNames": [name for name, ref in environment.items() if not isinstance(ref, str) or ref not in available_references],
+        "instruction": "Use available references unchanged. Call secret_input for unavailable credentials; reading history does not restore them.",
+    }, ensure_ascii=False)
+
+
 def model_tool_references(
     tool_name: str | None, content: str, message_id: UUID
 ) -> str:

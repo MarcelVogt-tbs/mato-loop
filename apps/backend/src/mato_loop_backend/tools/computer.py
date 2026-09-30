@@ -44,6 +44,7 @@ from mato_loop_backend.tools.arguments import (
 from mato_loop_backend.tools.context import ToolContext as ToolContext
 from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
+from mato_loop_backend.tools.process_output import redact_process_output
 from mato_loop_backend.tools.secrets import (
     discard_sudo_reference,
     effective_sudo_reference,
@@ -176,6 +177,7 @@ async def _run_process(
     redacted_values: tuple[str, ...] = (),
 ) -> ToolResult:
     output = {"stdout": "", "stderr": ""}
+    published_output = dict(output)
     client = files_access.workspace_client(context)
     terminal = terminal_coordinator.attached_for(
         user_id=context.session.user_id,
@@ -201,35 +203,23 @@ async def _run_process(
     async def publish(event: Any) -> None:
         output[event.event] += event.data
         if not redacted_values:
-            await display(event.data)
-            await run_events.publish(
-                context.run_id,
-                {
-                    "type": "process.output",
-                    "toolCallId": context.tool_call.id,
-                    "output": dict(output),
-                },
-            )
+            safe = redact_process_output(output, complete=False)
+            if safe != published_output:
+                await display(safe[event.event][len(published_output[event.event]):])
+                await run_events.publish(context.run_id, {
+                    "type": "process.output", "toolCallId": context.tool_call.id, "output": safe,
+                })
+                published_output.update(safe)
 
     result = await client.request(
         operation, arguments, ProcessResult, timeout=3_610, on_event=publish,
     )
     assert isinstance(result, ProcessResult)
     truncated = result.stdout_truncated or result.stderr_truncated
-    safe_output = dict(output)
-    if redacted_values:
-        if truncated:
-            safe_output = {
-                key: "[redacted]" if value else "" for key, value in output.items()
-            }
-        else:
-            for secret in sorted(set(redacted_values), key=len, reverse=True):
-                if secret:
-                    safe_output = {
-                        key: value.replace(secret, "[redacted]")
-                        for key, value in safe_output.items()
-                    }
-        await display("".join(safe_output.values()))
+    safe_output = redact_process_output(output, redacted_values, truncated=truncated)
+    if safe_output != published_output:
+        for channel, text in safe_output.items():
+            await display(text[len(published_output[channel]):])
         await run_events.publish(
             context.run_id,
             {

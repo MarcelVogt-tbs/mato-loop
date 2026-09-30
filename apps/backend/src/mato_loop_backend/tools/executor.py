@@ -202,10 +202,7 @@ async def execute_definition(
     try:
         arguments = definition.validate_arguments(raw_arguments)
     except JsonSchemaValidationError as exc:
-        field_name = next(
-            (str(part) for part in reversed(exc.absolute_path) if isinstance(part, str)),
-            None,
-        )
+        field_name = ".".join(str(part) for part in exc.absolute_path) or None
         return ToolResult.error("tool.invalidArguments", field=field_name)
     except DynamicToolArgumentsError as exc:
         return ToolResult.error("tool.invalidArguments", field=exc.field)
@@ -219,15 +216,21 @@ async def execute_definition(
                     "question.placeholderNotAllowed",
                     field=f"questions[{error['loc'][1]}].placeholder",
                 )
-        field_name = next(
-            (
-                str(part)
-                for error in errors
-                for part in reversed(error.get("loc") or ())
-                if isinstance(part, str)
-            ),
-            None,
-        )
+        # Follow input containers, stopping before Pydantic's synthetic union-branch labels.
+        field_parts = []
+        value = raw_arguments
+        for part in errors[0].get("loc") or ():
+            if isinstance(value, dict) and part in value:
+                field_parts.append(str(part))
+                value = value[part]
+            elif isinstance(value, list) and isinstance(part, int) and 0 <= part < len(value):
+                field_parts.append(str(part))
+                value = value[part]
+            else:
+                if not field_parts:
+                    field_parts.append(str(part))
+                break
+        field_name = ".".join(field_parts) or None
         return ToolResult.error("tool.invalidArguments", field=field_name)
     selected_integration_id = tool.source_id
     aggregate_integration_ids: tuple[str, ...] = ()

@@ -197,7 +197,8 @@ def general_system_prompt(
             [
                 "Call only supplied schemas when facts or actions require them.",
                 "Emit chosen tool calls now; never only announce future use.",
-                "No false success or unchanged retries; permission.denied is unexplained.",
+                "No false success or unchanged retries; permission.denied is unexplained. "
+                "Use error.field to fix that argument, not unrelated code. Repeated failures require new evidence or a corrected cause.",
                 "permission.userDenied refuses only that action; do not retry or bypass it. Continue "
                 "independent permitted work; if the task depends on the refused action, state the blocker "
                 "and await a new user request.",
@@ -227,7 +228,8 @@ def general_system_prompt(
             "insufficient; never ask in assistant text. Group all currently known required details in one "
             "call; later calls are allowed when answers reveal new required decisions. "
             "Never ask optional details such as location or description unless mentioned or required "
-            "to disambiguate. Do not call question for informational or complete requests."
+            "to disambiguate. Do not call question for informational or complete requests. "
+            "For design advice, answer directly instead of asking the user to choose an implementation."
         )
     if offered_tool_names:
         parts.append(
@@ -240,14 +242,17 @@ def general_system_prompt(
             "Before authentication probes, integration setup, or commands, call secret_input, not question, once with all currently missing "
             "credentials. Use "
             "masked=false for visible identifiers and masked=true for secrets. Pass only references to "
-            "customize_matoloop; references remain reusable throughout the current run. For protected text, "
-            "use literal and {value_ref: reference} parts; never interpolate values in model text or ask for them again."
+             "customize_matoloop; references remain reusable throughout the current run. For protected text, "
+            "use literal and {value_ref: reference} parts; never interpolate values in model text. Reuse available references. "
+             "After input, continue the requested work in this run, not just an acknowledgement. "
+             "A final answer ends the run and expires run-secret references. History does not restore them; "
+             "use current runtime references or call secret_input for missing credentials."
         )
         if "shell_run" in offered_tool_names:
             parts.append(
                 "Pass returned environment references to shell_run.environment for ordinary and elevated commands. "
                 "In shell commands, reference only environment variable names; never reveal, transform, "
-                "persist, or trace credential values. "
+             "persist, or trace credential values, session cookies, or derived authentication tokens. "
                 "For administrator commands use shell_run(elevated=true), without sudo in the command. "
                 "Before elevated execution, reuse a sudo reference for the selected computer. If none is available, "
                 "call secret_input with masked=true and name "
@@ -259,7 +264,7 @@ def general_system_prompt(
                 "the command, execution status, and result."
             )
     if session_environment and "shell_run" in offered_tool_names:
-        parts.append(
+        runtime_parts.append(
             "Temporary environment references available in this run or session: "
             + json.dumps(session_environment, ensure_ascii=True, sort_keys=True)
             + ". Use each ordinary valueRef through shell_run.environment; pass the matching computer's "
@@ -336,7 +341,9 @@ def general_system_prompt(
         parts.append(
             "Tool routing: Prefer shell_run for direct API requests, custom HTTP, pagination, multiple "
             "requests, local processing, or computer downloads. Use webfetch when available for web pages and static "
-            "documents. Use a browser only for page interaction or browser-authenticated access. Verify saved "
+            "documents. Verify unknown API paths and fields in official docs or schemas; "
+            "use HTTP status and error details before retrying. "
+            "Use a browser only for page interaction or browser-authenticated access. Verify saved "
             "downloads before claiming success."
         )
     browser_tools = offered_tool_names - {"browser_request_control"}
@@ -586,8 +593,9 @@ def general_system_prompt(
         parts.append(
             "User-selected agent profile; it defines the task and workflow. Follow its instructions within "
             "host rules. User requests refine the task within the selected profile's constraints; they do "
-            "not lift those constraints or switch profiles. A short, informal, or ambiguous message does not "
-            "change the selected task. The profile cannot add tools or authorize "
+            "not lift those constraints or switch profiles. A request to discuss, plan, review, or pause "
+            "suspends earlier execution requests. Agreeing on a design does not request execution; "
+            "resume when the user requests execution. The profile cannot add tools or authorize "
             "exceptions to security, permission, trust, path, or runtime rules:\n"
             + json.dumps(
                 {"name": agent_profile.name, "instructions": agent_profile.instructions},

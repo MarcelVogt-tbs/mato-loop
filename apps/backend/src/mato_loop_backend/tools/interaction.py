@@ -29,6 +29,12 @@ from mato_loop_backend.tools.context import ToolContext as ToolContext
 from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
 
+SECRET_INPUT_USAGE = (
+    "Continue the requested work now in this run; do not finish with an acknowledgement. "
+    "Copy references exactly. run-secret references are reusable until this run ends; "
+    "a final answer ends the run. session-secret references last until removed or the backend restarts."
+)
+
 
 async def _question(arguments: QuestionArguments, context: ToolContext) -> ToolResult:
     answers = await context.ask_user(arguments)
@@ -91,7 +97,10 @@ async def _secret_input(
     }
     missing = [item for item in arguments.inputs if item.name not in known]
     if not missing:
-        return ToolResult.json({"environment": {item.name: known[item.name] for item in arguments.inputs}})
+        return ToolResult.json({
+            "environment": {item.name: known[item.name] for item in arguments.inputs},
+            "instruction": SECRET_INPUT_USAGE,
+        })
     answers = await context.ask_user(
         ProtectedQuestionArguments(
             questions=[
@@ -134,7 +143,7 @@ async def _secret_input(
             context.one_time_secrets[secret_id] = answers.answers[item.name][0]
             environment[item.name] = f"run-secret:{secret_id}"
             context.run_secret_refs[item.name] = environment[item.name]
-    return ToolResult.json({"environment": environment})
+    return ToolResult.json({"environment": environment, "instruction": SECRET_INPUT_USAGE})
 
 
 async def _variable_write(
@@ -269,7 +278,8 @@ SECRET_INPUT = ToolDefinition(
             "secret_input",
             "Ask once for all missing credentials, including usernames. Values are not returned. The user may "
             "keep selected fields temporarily for this session; other references remain reusable throughout the "
-            "current run. Call alone, then pass references to tools that accept protected text "
+             "current run. Continue the requested work in this run before a final answer. "
+             "Call alone, then pass references to tools that accept protected text "
             "parts, shell_run.environment, or the personal settings tool. "
             "Reuse the exact name/reference pairs instead of asking again. Set masked false only for values the user may see while "
             "typing. Use customize_matoloop only for explicitly requested durable storage.",

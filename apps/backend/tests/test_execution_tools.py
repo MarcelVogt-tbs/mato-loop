@@ -76,7 +76,7 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.tools.arguments import ProtectedQuestionResolution, ShellRunArguments
 from mato_loop_backend.tools.catalog import tool_registry
-from mato_loop_backend.tools.computer import _shell_run
+from mato_loop_backend.tools.computer import _run_process, _shell_run
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import ToolResult
 
@@ -694,6 +694,38 @@ async def test_elevated_shell_executes_without_normal_inspection_or_shared_shell
     assert request.capability == "shell.write"
     assert request.resource_type == "shell_elevated_command"
     assert not request.force_ask
+
+
+@pytest.mark.parametrize("operation", ["shell.run", "shell.elevated"])
+async def test_process_masks_split_authentication_headers_without_environment(tmp_path, monkeypatch, operation) -> None:
+    client = FakeExecutionClient({}, {operation})
+    context = _context(tmp_path, ToolCall("headers", "shell_run", {}), client)
+    published = AsyncMock()
+    monkeypatch.setattr("mato_loop_backend.tools.computer.run_events.publish", published)
+
+    async def execute(_operation, _arguments, _model, *, on_event, **_kwargs):
+        for chunk in ("SENT Co", "okie header: session-", "credential\n", "HTTP 403\n"):
+            await on_event(SimpleNamespace(event="stdout", data=chunk))
+        return ProcessResult(
+            exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=52, stderr_bytes=0,
+            stdout_truncated=False, stderr_truncated=False,
+        )
+
+    client.request = execute
+    result = await _run_process(
+        context, operation, {"command": "inspect"}, requested_arguments={}, executed_arguments={},
+    )
+    visible = result.content + str(published.await_args_list)
+    assert "session-credential" not in visible and "session-" not in visible and "HTTP 403" in visible
+
+
+async def test_invalid_secret_reference_reports_environment_field(tmp_path) -> None:
+    client = FakeExecutionClient({}, {"shell.run"})
+    call = ToolCall("login", "shell_run", {
+        "command": "login", "environment": {"USERNAME": f"run-secret:{uuid4()}\\"},
+    })
+    result = await _tools(client.operations).execute(call, _context(tmp_path, call, client))
+    assert json.loads(result.content)["error"]["field"] == "environment.USERNAME"
 
 
 @pytest.mark.parametrize("mode", ["live", "secret", "truncated", "denied", "detached"])

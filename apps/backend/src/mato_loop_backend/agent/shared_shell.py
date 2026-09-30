@@ -17,6 +17,7 @@ from mato_loop_backend.execution.terminals import TerminalRuntime
 from mato_loop_backend.permissions.policy import PermissionDecision, shell_command_permission
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import ToolResult
+from mato_loop_backend.tools.process_output import redact_process_output
 
 
 async def run_shared_shell(
@@ -38,25 +39,17 @@ async def run_shared_shell(
     completed = False
     executing = False
     output = {"stdout": "", "stderr": ""}
-
-    def redacted_output(truncated: bool) -> dict[str, str]:
-        safe = dict(output)
-        if truncated:
-            return {key: "[redacted]" if value else "" for key, value in safe.items()}
-        for secret in sorted(set(redacted_values), key=len, reverse=True):
-            if secret:
-                safe = {
-                    key: value.replace(secret, "[redacted]")
-                    for key, value in safe.items()
-                }
-        return safe
+    published_output = dict(output)
 
     async def publish(event) -> None:
         output[event.event] += event.data
         if not redacted_values:
-            await run_events.publish(context.run_id, {
-                "type": "process.output", "toolCallId": context.tool_call.id, "output": dict(output),
-            })
+            safe = redact_process_output(output, complete=False)
+            if safe != published_output:
+                await run_events.publish(context.run_id, {
+                    "type": "process.output", "toolCallId": context.tool_call.id, "output": safe,
+                })
+                published_output.update(safe)
 
     try:
         await runtime.send_status()
@@ -117,8 +110,8 @@ async def run_shared_shell(
         result = await runtime.command_task
         completed = True
         truncated = result.stdout_truncated or result.stderr_truncated
-        safe_output = redacted_output(truncated) if redacted_values else dict(output)
-        if redacted_values:
+        safe_output = redact_process_output(output, redacted_values, truncated=truncated)
+        if safe_output != published_output:
             await run_events.publish(context.run_id, {
                 "type": "process.output",
                 "toolCallId": context.tool_call.id,
@@ -154,8 +147,8 @@ async def run_shared_shell(
             code = exc.code
         result = ToolResult.error(code)
         if executing:
-            safe_output = redacted_output(False) if redacted_values else dict(output)
-            if redacted_values:
+            safe_output = redact_process_output(output, redacted_values)
+            if safe_output != published_output:
                 await run_events.publish(context.run_id, {
                     "type": "process.output",
                     "toolCallId": context.tool_call.id,
