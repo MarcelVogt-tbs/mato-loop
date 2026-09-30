@@ -52,6 +52,18 @@ describe('chat transcript', () => {
     })
   })
 
+  it('keeps the last tool-round text visible after a manual stop', () => {
+    const transcript = buildChatTranscript([
+      { id: 'user', role: 'user', content: 'Start' },
+      { id: 'step', role: 'assistant', content: 'Ich prüfe die Datei.',
+        toolCalls: [{ id: 'read', name: 'read_file', arguments: {} }] },
+      { id: 'stopped', role: 'assistant', content: '', generationStatus: 'interrupted' }
+    ])
+
+    expect(transcript.messages.filter((message) => message.role === 'assistant' && message.content)
+      .map((message) => message.content)).toEqual(['Ich prüfe die Datei.'])
+  })
+
   it('exposes validated file actions on the final assistant response', () => {
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
     const path = 'Support-Meeting-Protokoll.md'

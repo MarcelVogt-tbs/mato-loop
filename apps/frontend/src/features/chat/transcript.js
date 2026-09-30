@@ -208,7 +208,12 @@ export function buildChatTranscript(
     if (!assistantSection.length) return
     const reversedSection = [...assistantSection].reverse()
     const lastResponse = reversedSection.find((message) => message.content || message.toolCalls.length)
-    const finalAnswer = lastResponse?.content && !lastResponse.toolCalls.length ? lastResponse : null
+    const manuallyStopped = reversedSection.some((message) => (
+      message.generationStatus === 'interrupted' && !message.redirected
+    ))
+    const finalAnswer = manuallyStopped
+      ? reversedSection.find((message) => message.content) || null
+      : lastResponse?.content && !lastResponse.toolCalls.length ? lastResponse : null
     if (finalAnswer && !finalAnswer.continuationSegment) {
       const partial = assistantSection.filter((message) => message.continuationSegment && message.content)
       if (partial.length) {

@@ -118,8 +118,19 @@ Example:
 
 ## Validation
 
+### Test scope for small fixes
+
+- Default to existing tests and checks. A code change does not automatically require new test code. Existing runnable coverage satisfies requirements for an executable check, including Ponytail's check requirement; do not add a separate self-check just to satisfy it.
+- Before adding a test, identify the exact missing protection: which observed bug could return without any existing test failing? If no concrete gap is identified, add no test.
+- For a small bug fix, add at most one regression case with one observable assertion. Prefer extending an existing test over creating another setup. Mock only unavoidable boundaries.
+- Reproduce the reported failure only. Do not add neighboring scenarios, reload simulations, input-immutability checks, metadata checks, or internal ordering assertions unless they are necessary to detect that failure.
+- If added test code exceeds the implementation diff, reconsider it before editing. Reduce the setup and assertions, reuse existing coverage, or omit the new test when existing checks sufficiently verify the change. Line count is a review trigger, not a hard limit.
+- Additional cases or test infrastructure require a concrete independent correctness risk or an explicit user request. Security, permissions, input validation, and data-loss protections must remain adequately covered.
+- Review the test diff for unnecessary scope before the first validation run, not after the user questions it.
+
+### Running checks
+
 - Before validation, choose the smallest checks supported by `./scripts/dev.sh` that verify the changed behavior. Identify what a failure would cause you to change. If the script only supports a whole target suite, use it without adding test infrastructure just to narrow execution.
-- Prefer existing coverage, especially for small, reversible UI fixes. Add a regression test only for a concrete gap, using the smallest observable assertion and mocking only unavoidable boundaries. Each additional case must protect against a distinct failure.
 - A failing baseline run is optional. Run it to resolve uncertainty about the cause or whether the regression test detects the bug, not merely to complete a red-green sequence.
 - Use known suite duration plus a timeout margin; allow a generous timeout for full suites of unknown duration. After interruption or truncated output, inspect captured results and execution state before deciding whether another run is necessary.
 - Repeat a check only after a change that can affect its result or to investigate a specific unresolved failure. Formatting-only changes require formatting/lint checks, not another functional test run.
