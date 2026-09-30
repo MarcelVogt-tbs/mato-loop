@@ -322,13 +322,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
     )
     assert isinstance(inspection, ShellInspectResult)
     if arguments.environment:
-        inspection = inspection.model_copy(
-            update={
-                "analysis_complete": False,
-                "classification": "write",
-                "read_only": False,
-            }
-        )
+        inspection = inspection.model_copy(update={"analysis_complete": False})
     permission = shell_command_permission(
         client.agent_id, client.current_directory, executed["command"], inspection,
     )

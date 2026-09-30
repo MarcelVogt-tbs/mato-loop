@@ -74,11 +74,7 @@ async def run_shared_shell(
             raise ExecutionClientError("executionAgent.protocolError")
         inspection = prepared.inspection
         if environment:
-            inspection = inspection.model_copy(update={
-                "analysis_complete": False,
-                "classification": "write",
-                "read_only": False,
-            })
+            inspection = inspection.model_copy(update={"analysis_complete": False})
         permission = shell_command_permission(
             runtime.agent_id, prepared.current_directory, prepared.command, inspection,
         )

@@ -1375,27 +1375,29 @@ async def test_shell_dispatches_with_inspection_classification(
     assert PermissionPolicy.grant_matches(grant, request, context.root_files)
 
 
+@pytest.mark.parametrize("classification", ["read", "write"])
 async def test_shell_resolves_variable_reference_only_for_process_transport(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, classification
 ) -> None:
     reference = uuid4()
+    tokens = ["env"] if classification == "read" else ["touch", "output"]
     call = ToolCall(
         "shell",
         "shell_run",
-        {"command": "env", "environment": {"API_TOKEN": str(reference)}},
+        {"command": " ".join(tokens), "environment": {"API_TOKEN": str(reference)}},
     )
     client = FakeExecutionClient(
         {
             "shell.inspect": ShellInspectResult(
                 targets=[],
                 analysis_complete=True,
-                classification="read",
-                read_only=True,
+                classification=classification,
+                read_only=classification == "read",
                 commands=[
                     {
-                        "tokens": ["env"],
-                        "prefix": ["env"],
-                        "classification": "read",
+                        "tokens": tokens,
+                        "prefix": [tokens[0]],
+                        "classification": classification,
                     }
                 ],
                 inspection_revision="a" * 64,
@@ -1449,7 +1451,10 @@ async def test_shell_resolves_variable_reference_only_for_process_transport(
     assert "host-secret" not in result.content
     assert "token=[redacted]" in result.content
     assert str(reference) in result.content
-    assert context.ask_handler.await_args_list[0].args[0].capability == "shell.write"
+    permission = context.ask_handler.await_args_list[0].args[0]
+    assert permission.capability == f"shell.{classification}"
+    assert permission.approval_details["shellAnalysisComplete"] is False
+    assert permission.force_ask is (classification == "read")
     assert context.ask_handler.await_args_list[1].args[0].capability == "secrets.access"
 
 

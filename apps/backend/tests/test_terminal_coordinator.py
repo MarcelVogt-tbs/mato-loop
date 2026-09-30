@@ -278,14 +278,15 @@ async def test_shared_shell_prepares_immutable_command_then_uses_ordinary_approv
     assert all("command" not in arguments for operation, arguments in env.native.calls if operation == "terminal.shared.execute")
 
 
-async def test_shared_shell_passes_temporary_environment_and_redacts_output(env):
+@pytest.mark.parametrize("command,classification", [("printf output", "read"), ("touch output", "write")])
+async def test_shared_shell_passes_temporary_environment_and_redacts_output(env, command, classification):
     env.policy = ToolExecutionPolicy.AUTO
     secret_id = uuid4()
     env.context.one_time_secrets[secret_id] = "exact secret"
     env.native.output = "before exact secret after"
 
     result = await env.start(
-        "printf output",
+        command,
         environment={"TOKEN": "exact secret"},
     )
 
@@ -299,7 +300,7 @@ async def test_shared_shell_passes_temporary_environment_and_redacts_output(env)
     )
     assert execute["environment"] == {"TOKEN": "exact secret"}
     assert env.context.one_time_secrets[secret_id] == "exact secret"
-    assert env.evaluated[-1].capability == "shell.write"
+    assert env.evaluated[-1].capability == f"shell.{classification}"
     assert env.evaluated[-1].approval_details["shellAnalysisComplete"] is False
     assert shared_shell.run_events.publish.await_args.args[1]["output"] == {
         "stdout": "before [redacted] after",
