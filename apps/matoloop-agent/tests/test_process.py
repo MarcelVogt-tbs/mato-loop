@@ -710,6 +710,7 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                     ("echo 'rm /tmp/file; echo x > /tmp/file'", "read"),
                     ("sh -c 'docker exec \"{server,rm}\" echo ok'", "read"),
                     ("curl --user-agent '-sXPOST' http://example.invalid", "read"),
+                    ("curl --output=- http://example.invalid", "read"),
                     ("sh -c 'cat /container-only/file | head -8'", "read"),
                     ('bash -lc \'printf "%s" "$(pwd)"\'', "read"),
                     ("sh -c 'echo ok >&2'", "read"),
@@ -721,6 +722,7 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                     ("curl -so/tmp/output http://example.invalid", "write"),
                     ("curl -X GET -X POST http://example.invalid", "write"),
                     ("curl -o /container-only/file http://example.invalid", "write"),
+                    ("curl -o /dev/null http://example.invalid", "write"),
                     ("sh -c 'echo x > /tmp/file'", "write"),
                     ("sh -c 'echo x > /dev/null'", "write"),
                     ("sh -c 'cat <> /tmp/file'", "write"),
@@ -1338,6 +1340,8 @@ class ShellInspectionTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 if kind == "file":
                     null.write_text("not a device")
+                    with self.assertRaises(AgentError):
+                        self.inspect("curl -o /dev/null https://example.invalid")
                 elif kind == "link":
                     null.symlink_to("../outside/file")
                 elif kind == "wrong-device":
@@ -1346,6 +1350,47 @@ class ShellInspectionTests(unittest.TestCase):
                     self.inspect("pwd >/dev/null")
                 if kind != "missing":
                     null.unlink()
+
+    def test_curl_output_targets_preserve_discard_metadata_and_other_writes(self) -> None:
+        for option in ("-o /dev/null", "-o/dev/null", "-so/dev/null", "--output=/dev/null"):
+            with self.subTest(option=option):
+                result = self.inspect(
+                    f"curl {option} -w 'HTTP %{{http_code}}\\n' https://example.invalid"
+                )
+                self.assertEqual(result["classification"], "read")
+                self.assertTrue(result["analysisComplete"])
+                self.assertEqual(
+                    [(t["path"], t["kind"]) for t in result["targets"]], [("/dev/null", "discard")]
+                )
+                self.assertNotIn("access", result["targets"][0])
+                self.assertEqual(result["targets"][0]["rdev"], os.makedev(1, 3))
+        for option in ("-o -", "-o-", "--output=-", "--header '-o/dev/null'"):
+            with self.subTest(option=option):
+                result = self.inspect(f"curl {option} https://example.invalid")
+                self.assertEqual(result["classification"], "read")
+                self.assertEqual(result["targets"], [])
+        for command in (
+            "curl -o /dev/null -XPOST https://example.invalid",
+            "curl -o /dev/null --upload-file data https://example.invalid",
+            "curl -o /dev/null -o ./output https://example.invalid",
+            "curl -o /dev/null https://example.invalid > ./output",
+            "curl -o /dev/null https://example.invalid; touch ./output",
+            "curl -o $OUTPUT https://example.invalid",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.inspect(command)["classification"], "write")
+        for option in ("-o ./output", "-so./output", "--output=./output"):
+            with self.subTest(option=option):
+                result = self.inspect(f"curl {option} https://example.invalid")
+                self.assertEqual(result["classification"], "write")
+                self.assertEqual(
+                    [(t["path"], t["kind"], t["access"]) for t in result["targets"]],
+                    [("/workspace/output", "output", "write")],
+                )
+        command = "curl -o /dev/null https://example.invalid"
+        revision = self.inspect(command)["inspectionRevision"]
+        (self.root / "dev/null").chmod(0o600)
+        self.assertNotEqual(self.inspect(command)["inspectionRevision"], revision)
 
     def test_unresolved_analysis_continues_and_hard_violations_are_not_missing(self) -> None:
         command = "cat missing /outside/file /confidential/file; unknown; touch ./new"

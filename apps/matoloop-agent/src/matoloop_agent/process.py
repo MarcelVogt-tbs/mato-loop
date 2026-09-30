@@ -11,7 +11,7 @@ import shutil
 import signal
 import stat
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 
 import tree_sitter_bash
@@ -569,7 +569,66 @@ def _python_command(arguments: list[str]) -> tuple[str, list[str]] | None:
     return "", []
 
 
-def _definitely_writes(tokens: list[str], *, depth: int = 0) -> bool:
+def _curl_options(arguments: list[str]) -> Iterator[tuple[str, str, int]]:
+    value_options = {
+        "--url",
+        "--user-agent",
+        "--header",
+        "--user",
+        "--proxy-user",
+        "--proxy",
+        "--max-time",
+        "--connect-timeout",
+        "--retry",
+        "--range",
+        "--referer",
+        "--cookie",
+        "--cacert",
+        "--cert",
+        "--key",
+        "--interface",
+        "--resolve",
+        "--connect-to",
+        "--config",
+        "--write-out",
+        "--request",
+        *(
+            option
+            for option in _CURL_WRITE_OPTIONS
+            if option.startswith("--") and option not in {"--remote-name", "--remote-name-all"}
+        ),
+    }
+    skip_next = False
+    for index, argument in enumerate(arguments):
+        if skip_next:
+            skip_next = False
+            continue
+        if argument == "--":
+            break
+        option, separator, value = argument.partition("=")
+        following = arguments[index + 1] if index + 1 < len(arguments) else ""
+        if option in value_options:
+            skip_next = not separator
+            yield option, value if separator else following, index if separator else index + 1
+        elif option.startswith("--") and option in _CURL_WRITE_OPTIONS:
+            yield option, "", index
+        elif argument.startswith("-") and not argument.startswith("--"):
+            for offset, option in enumerate(argument[1:], start=1):
+                if option == "O":
+                    yield "-O", "", index
+                elif option in "AbcCDeEFHKmPQrtTUuwxXyYzdo":
+                    skip_next = offset == len(argument) - 1
+                    value = argument[offset + 1 :] or following
+                    yield "-" + option, value, index + 1 if skip_next else index
+                    break
+                # Only peel known switches; other options may consume the remaining text.
+                elif option not in "#012346aBfgGiIjJklLMnNpRqsSvVZ":
+                    break
+
+
+def _definitely_writes(
+    tokens: list[str], *, depth: int = 0, curl_discard_outputs: frozenset[int] = frozenset()
+) -> bool:
     executable = Path(tokens[0]).name
     arguments = tokens[1:]
     if executable.startswith("python"):
@@ -708,60 +767,14 @@ def _definitely_writes(tokens: list[str], *, depth: int = 0) -> bool:
                 nested = _subcommand(arguments[arguments.index(subcommand) + 1 :], set())
                 return nested in {"add", "lock", "move", "prune", "remove", "repair", "unlock"}
     if executable == "curl":
-        value_options = {
-            "--url",
-            "--user-agent",
-            "--header",
-            "--user",
-            "--proxy-user",
-            "--proxy",
-            "--max-time",
-            "--connect-timeout",
-            "--retry",
-            "--range",
-            "--referer",
-            "--cookie",
-            "--cacert",
-            "--cert",
-            "--key",
-            "--interface",
-            "--resolve",
-            "--connect-to",
-            "--config",
-            "--write-out",
-            "--request",
-        }
-        skip_next = False
-        for index, argument in enumerate(arguments):
-            if skip_next:
-                skip_next = False
-                continue
-            if argument == "--":
-                break
-            option, separator, value = argument.partition("=")
-            following = arguments[index + 1] if index + 1 < len(arguments) else ""
-            if option in _CURL_WRITE_OPTIONS:
-                return True
-            if option in value_options:
-                skip_next = not separator
-                if (
-                    option == "--request"
-                    and (value if separator else following).upper() in _MUTATING_HTTP_METHODS
-                ):
+        for option, value, index in _curl_options(arguments):
+            if option in {"-o", "--output"}:
+                if value != "-" and index not in curl_discard_outputs:
                     return True
-            elif argument.startswith("-") and not argument.startswith("--"):
-                for offset, option in enumerate(argument[1:], start=1):
-                    if option in "FOTdo":
-                        return True
-                    if option in "AbcCDeEHKmPQrtUuwxXyYz":
-                        skip_next = offset == len(argument) - 1
-                        value = argument[offset + 1 :] or following
-                        if option == "X" and value.upper() in _MUTATING_HTTP_METHODS:
-                            return True
-                        break
-                    # Only peel known switches; other options may consume the remaining text.
-                    if option not in "#012346aBfgGiIjJklLMnNpRqsSvVZ":
-                        break
+            elif option in _CURL_WRITE_OPTIONS:
+                return True
+            elif option in {"-X", "--request"} and value.upper() in _MUTATING_HTTP_METHODS:
+                return True
     if executable == "dd" and any(argument.startswith("of=") for argument in arguments):
         return True
     if executable == "find" and any(argument in _FIND_WRITE_ACTIONS for argument in arguments):
@@ -1131,6 +1144,12 @@ class ProcessRunner:
                 analysis_complete = False
             retain(target, kind, access)
 
+        def discard(path: str) -> None:
+            target = self.filesystem.resolve_path_target(path, current, must_exist=True)
+            if not stat.S_ISCHR(target["mode"]) or target["rdev"] != os.makedev(1, 3):
+                raise AgentError("path.unsupportedType", "Discard target is not the null device")
+            retain(target, "discard")
+
         command_nodes = _nodes(root, "command")
         if len(command_nodes) > 64:
             extraction_complete = False
@@ -1152,7 +1171,32 @@ class ProcessRunner:
                     except ValueError:
                         values = []
                     tokens.append(values[0] if len(values) == 1 else "$unresolved")
-            unit_writes = bool(tokens) and _definitely_writes(tokens)
+            output_indices = set()
+            discard_indices = set()
+            if tokens and Path(tokens[0]).name == "curl":
+                for option, path, index in _curl_options(tokens[1:]):
+                    if option not in {"-o", "--output"} or index + 1 >= len(words):
+                        continue
+                    word = words[index + 1]
+                    output_indices.add(index + 1)
+                    if _has_ansi_quoting(word):
+                        unsupported_target_quoting = True
+                        continue
+                    static = not any(_nodes(word, kind) for kind in _DYNAMIC_SHELL_NODES)
+                    if static and path == "/dev/null":
+                        discard(path)
+                        discard_indices.add(index)
+                    elif path and path != "-":
+                        add(
+                            path,
+                            "output",
+                            access="write",
+                            must_exist=False,
+                            literal=static and word.type in {"raw_string", "string"},
+                        )
+            unit_writes = bool(tokens) and _definitely_writes(
+                tokens, curl_discard_outputs=frozenset(discard_indices)
+            )
             docker = (
                 _docker_command(tokens[1:]) if tokens and Path(tokens[0]).name == "docker" else None
             )
@@ -1200,7 +1244,7 @@ class ProcessRunner:
                 ):
                     command_unit["prefix"] = prefix
                 commands.append(command_unit)
-            units.append((command_unit, words, "write" if unit_writes else "read"))
+            units.append((command_unit, words, "write" if unit_writes else "read", output_indices))
 
         if any(
             _nodes(root, kind)
@@ -1272,12 +1316,7 @@ class ProcessRunner:
                 destination and not dynamic and not any(c in destination_text for c in "*?[]{}~")
             )
             if writes and static and destination == "/dev/null" and operator != "<>":
-                target = self.filesystem.resolve_path_target(destination, current, must_exist=True)
-                if not stat.S_ISCHR(target["mode"]) or target["rdev"] != os.makedev(1, 3):
-                    raise AgentError(
-                        "path.unsupportedType", "Discard target is not the null device"
-                    )
-                retain(target, "discard")
+                discard(destination)
                 continue
             if not writes:
                 if operator in {"<", "<&"} and not descriptor_only:
@@ -1294,7 +1333,7 @@ class ProcessRunner:
             elif not descriptor_only:
                 analysis_complete = False
 
-        for command_unit, words, target_access in units:
+        for command_unit, words, target_access, output_indices in units:
             tokens = command_unit["tokens"]
             ansi_words = {_node_text(source, word) for word in words if _has_ansi_quoting(word)}
             docker = _docker_command(tokens[1:]) if Path(tokens[0]).name == "docker" else None
@@ -1415,7 +1454,9 @@ class ProcessRunner:
                     must_exist=must_exist,
                     literal=path in literal_paths,
                 )
-            for token in tokens[1:]:
+            for index, token in enumerate(tokens[1:], start=1):
+                if index in output_indices:
+                    continue
                 if token in ansi_words:
                     if "/" in token:
                         unsupported_target_quoting = True
