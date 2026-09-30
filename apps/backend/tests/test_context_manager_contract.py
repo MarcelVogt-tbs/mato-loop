@@ -1620,6 +1620,9 @@ def test_builtin_plan_instructions_are_not_duplicated_by_host_prompt() -> None:
     assert "materially helps track complex or multi-part work" in offered
     assert "not a fixed step or tool-call count" in offered
     assert "Update only when scope changes" in offered
+    assert "only completed or cancelled items stays visible until the next run" in offered
+    assert "Do not ask to clear a finished checklist just to tidy the UI" in offered
+    assert "tidy the UI" not in unavailable
 
 
 def test_general_system_prompt_keeps_permission_denials_host_scoped() -> None:

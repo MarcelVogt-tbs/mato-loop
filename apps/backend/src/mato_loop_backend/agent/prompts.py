@@ -273,7 +273,10 @@ def general_system_prompt(
             "user asks for one. Decide from the task, not a fixed step or tool-call count. Skip it for simple "
             "work. Keep items concise. Update only when scope changes, work is blocked, or before the final "
             "answer. The latest request overrides an old checklist. Complete an item only after its work and "
-            "required checks. Planning is not implementation; leave blocked work unfinished and explain why."
+            "required checks. Planning is not implementation; leave blocked work unfinished and explain why. "
+            "A checklist with only completed or cancelled items stays visible until the next run, then the "
+            "UI hides it automatically. Unfinished checklists remain visible. Do not ask to clear a finished "
+            "checklist just to tidy the UI."
         )
     if delegated:
         parts.append(
