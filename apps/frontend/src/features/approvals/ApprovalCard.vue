@@ -6,10 +6,10 @@
       <div class="col">
         <div class="row items-center q-gutter-sm">
           <div class="text-subtitle1 text-weight-bold">{{ cardTitle }}</div>
-          <q-chip v-if="!isMemoryApproval || isMemoryRemove" dense square :color="riskColor" text-color="white">{{ riskLabel }}</q-chip>
+          <q-chip v-if="isMemoryRemove || approval.riskLevel === 'high'" dense square color="negative" text-color="white">Hohes Risiko</q-chip>
         </div>
         <div class="text-body2 app-muted q-mt-xs">{{ cardSummary }}</div>
-        <div v-if="!isMemoryApproval && approval.reason" class="text-body2 q-mt-sm">
+        <div v-if="!isMemoryApproval && approval.reason && approval.reason !== 'Keine Begründung angegeben'" class="text-body2 q-mt-sm">
           <span class="text-weight-medium">Begründung des Agenten:</span> {{ approval.reason }}
         </div>
       </div>
@@ -112,7 +112,7 @@
         <div class="approval-resource">
           <div class="text-caption app-muted">{{ resource.label }}</div>
           <code>{{ resource.value }}</code>
-          <div v-if="approval.resourceType === 'session' && approval.resourceScope">
+          <div v-if="approval.capability === 'session.read' && approval.resourceType === 'session' && approval.resourceScope">
             <q-btn
               flat
               dense
@@ -185,13 +185,6 @@
               :label="shellClassification.label"
             />
             <q-chip v-if="shellClassification.incomplete" dense square outline label="Analyse unvollständig" />
-            <div class="text-caption app-muted q-mt-xs">
-              Die Einstufung ist keine Garantie für rein lesendes Verhalten.
-            </div>
-            <div v-if="shellPrefixes.length" class="q-mt-sm">
-              <div class="text-caption app-muted">Erkannte Befehlspräfixe</div>
-              <code v-for="prefix in shellPrefixes" :key="prefix" class="q-mr-sm">{{ prefix }}</code>
-            </div>
           </div>
           <q-input
             v-if="approval.payload?.sudoPasswordInput"
@@ -236,32 +229,14 @@
           übertragen werden. Ein späterer Widerruf kann bereits übermittelte Daten nicht
           zurückholen.
         </q-banner>
-        <q-expansion-item
-          v-if="technicalDetails.text"
-          dense
-          icon="data_object"
-          label="Technische Details"
-          class="q-mt-md"
-        >
-          <pre class="approval-details">{{ showFullDetails ? technicalDetails.fullText : technicalDetails.text }}</pre>
-          <q-btn
-            v-if="technicalDetails.truncated"
-            flat
-            dense
-            no-caps
-            color="primary"
-            :label="showFullDetails ? 'Weniger anzeigen' : 'Vollständig anzeigen'"
-            class="q-mt-xs"
-            @click="showFullDetails = !showFullDetails"
-          />
-        </q-expansion-item>
       </template>
     </q-card-section>
 
     <q-separator />
     <q-card-actions class="q-pa-md">
-      <div v-if="!isMemoryApproval && hasBothAllowDecisions && !argumentEditDirty" class="column">
+      <div v-if="!isMemoryApproval && hasDecision('allow_session') && !argumentEditDirty" class="column col-12">
         <q-checkbox
+          v-if="hasBothAllowDecisions"
           v-model="rememberForSession"
           color="primary"
           :label="approval.resourceType === 'execution_administrator'
@@ -269,7 +244,10 @@
             : 'Passende Aktionen in dieser Session nicht mehr nachfragen'"
           :disable="Boolean(loadingDecision) || matchingDraftDirty"
         />
-        <div class="text-caption app-muted q-ml-sm">
+        <ul v-if="rememberForSession || !hasBothAllowDecisions" class="text-body2 q-my-sm q-pl-md">
+          <li v-for="line in sessionGrantDisplay" :key="line">{{ line }}</li>
+        </ul>
+        <div v-if="rememberForSession || !hasBothAllowDecisions" class="text-caption app-muted q-ml-sm">
           Kann in den Session-Freigaben widerrufen werden.
         </div>
       </div>
@@ -339,12 +317,10 @@ import { useConfirm } from 'src/composables/confirm'
 import {
   approvalResource,
   memoryApprovalDisplay,
-  shellClassificationDisplay,
-  technicalDetailsDisplay
+  shellClassificationDisplay
 } from 'src/utils/approval-display'
 import {
   approvalPresentationKind as resolveApprovalPresentationKind,
-  toolArgumentsDisplay,
   toolPresentation
 } from 'src/utils/tool-display'
 import { useApprovalStore } from 'stores/approvals'
@@ -371,17 +347,12 @@ const memoryCategoryOptions = ['context', 'fact', 'goal', 'identity', 'preferenc
   .map((value) => ({ value, label: memoryCategoryLabel(value) }))
 const memoryAudienceOptions = ['private_only', 'public_only', 'both']
   .map((value) => ({ value, label: memoryAudienceLabel(value) }))
-const showFullDetails = ref(false)
 const rememberForSession = ref(false)
 const sudoPassword = ref('')
 const shellClassification = computed(() => shellClassificationDisplay(props.approval))
-const shellPrefixes = computed(() => (
-  Array.isArray(props.approval.payload?.shellPrefixes)
-    ? props.approval.payload.shellPrefixes
-      .filter((prefix) => Array.isArray(prefix) && prefix.every((token) => typeof token === 'string'))
-      .map((prefix) => prefix.join(' '))
-    : []
-))
+const sessionGrantDisplay = computed(() => (
+  props.approval.details?.displayItems || props.approval.payload?.displayItems || []
+).find((item) => item.label === 'Für diese Session')?.value || [])
 const argumentEditPayload = computed(() => props.approval.payload?.argumentEdit)
 const canEditArguments = computed(() => (
   props.approval.status === 'pending'
@@ -407,11 +378,9 @@ const cardTitle = computed(() => isMemoryApproval.value ? memoryDisplay.value.ti
 const cardSummary = computed(() => isMemoryApproval.value ? memoryDisplay.value.summary : props.approval.summary)
 const memoryTargetLabel = computed(() => memoryDisplay.value.targetLabel)
 const riskColor = computed(() => isMemoryRemove.value || props.approval.riskLevel === 'high' ? 'negative' : 'warning')
-const riskLabel = computed(() => isMemoryRemove.value
-  ? 'Hoch'
-  : ({ high: 'Hoch', medium: 'Mittel', low: 'Niedrig' })[props.approval.riskLevel] || props.approval.riskLevel)
 const actionIcon = computed(() => {
   if (isMemoryApproval.value) return memoryDisplay.value.icon
+  if (props.approval.capability?.startsWith('memory.')) return 'psychology'
   if (props.approval.capability?.startsWith('filesystem')) return 'folder_managed'
   if (props.approval.capability === 'execution.directory') return 'drive_file_move'
   if (props.approval.capability === 'system.info') return 'computer'
@@ -431,8 +400,8 @@ const skillDraftApproval = computed(() => (
   props.approval.actionKind === 'build_skill' || props.approval.actionKind === 'edit_skill'
 ))
 const approvalTool = computed(() => ({
-  name: props.approval.details?.tool,
-  arguments: props.approval.details?.arguments
+  name: props.approval.details?.tool || props.approval.payload?.tool,
+  arguments: props.approval.details?.arguments || props.approval.payload?.arguments
 }))
 const approvalPresentationKind = computed(() => resolveApprovalPresentationKind(approvalTool.value))
 const presentation = computed(() => toolPresentation(
@@ -459,14 +428,6 @@ const draftRevision = computed(() => draftFile.value
     ? draftFile.value.initialRevision
     : workspace.filePreviews[draftFile.value.path]?.revision ?? draftFile.value.initialRevision
   : undefined)
-const technicalDetails = computed(() => {
-  if (approvalTool.value.name === 'memory_write') {
-    return toolArgumentsDisplay(approvalTool.value.arguments, approvalTool.value.name)
-  }
-  const details = { ...props.approval.details }
-  delete details.displayItems
-  return technicalDetailsDisplay(details)
-})
 const hasBothAllowDecisions = computed(() => (
   hasDecision('allow_once') && hasDecision('allow_session')
 ))

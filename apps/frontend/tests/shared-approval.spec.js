@@ -53,16 +53,15 @@ it.each(['read', 'write'])('displays historical terminal approval data generical
   expect(root.querySelector('.tool-call__details').textContent).toBe(command)
   expect(root.textContent).toContain(currentDirectory)
   expect(root.textContent).toContain('Begründung des Agenten: Der Befehl prüft die Projektdateien.')
-  expect(root.textContent).toContain('Alle passenden lesenden Datei- und Shell-Aktionen: /extern und Unterordner')
   expect(root.querySelector('textarea, [contenteditable="true"]')).toBeNull()
   expect(root.textContent).toContain(classification === 'read' ? 'Keine Schreibaktion erkannt' : 'Als schreibend eingestuft')
   expect(root.textContent).not.toContain('Analyse unvollständig')
-  expect(root.textContent).toContain('Erkannte Befehlspräfixe')
-  expect(root.textContent).not.toContain('Session-Präfixe')
-  expect(root.textContent).toContain('ls -l')
+  expect(root.textContent).not.toContain('Erkannte Befehlspräfixe')
+  expect(root.textContent).not.toContain('Technische Details')
   expect(api.post).not.toHaveBeenCalled()
   root.querySelector('.q-checkbox').click()
   await nextTick()
+  expect(root.textContent).toContain('Alle passenden lesenden Datei- und Shell-Aktionen: /extern und Unterordner')
   const allow = [...root.querySelectorAll('button')].find((button) => button.textContent === 'Für Session erlauben')
   expect(allow).toBeTruthy()
   allow.click()
@@ -70,6 +69,30 @@ it.each(['read', 'write'])('displays historical terminal approval data generical
   expect(api.post).toHaveBeenCalledWith('/approvals/shared/decisions', {
     decision: 'allow_session'
   })
+})
+
+it('shows the proposed memory in the approval card with legacy session and pin details', async () => {
+  const pinia = createPinia()
+  const content = 'Meine Docker-Stacks sollen über Arcane verwaltet werden. '.repeat(300)
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ render: () => h(ApprovalCard, { approval: {
+    id: 'memory', requestType: 'agent_action', capability: 'memory.write',
+    title: 'Memory speichern?', resourceType: 'session', resourceScope: 'session-1',
+    resourceDisplay: 'Memory der aktuellen Session',
+    availableDecisions: ['allow_once', 'allow_session', 'deny'],
+    details: {
+      tool: 'memory_write', arguments: { content, pin: true },
+      displayItems: [
+        { label: 'Berücksichtigung', value: 'Immer', format: 'text' },
+        { label: 'Für diese Session', value: ['Weitere Memory-Schreibaktionen'], format: 'list' }
+      ]
+    }
+  } }) })
+  app.use(pinia).use(Quasar, { components: { QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QSelect, QSeparator, QSpace, QToggle, QTooltip } })
+  app.mount(root)
+  await nextTick()
+  expect(root.querySelector('.tool-call__details').textContent).toBe(content)
 })
 
 it('edits a shell command and approves the final value in one action', async () => {

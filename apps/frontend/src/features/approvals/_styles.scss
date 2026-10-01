@@ -24,6 +24,7 @@
 
 .approval-card {
   border-color: color-mix(in srgb, var(--q-warning) 45%, var(--app-surface-border));
+  overflow-wrap: anywhere;
 }
 
 .app-surface-tonal {

@@ -745,7 +745,7 @@ def memory_write_permission(
         resource_type="memory_collection" if forgetting else "session",
         resource_scope=f"forget:{session_id}" if forgetting else str(session_id),
         action_kind="memory_write",
-        risk_level="medium",
+        risk_level="high" if forgetting else "medium",
         title=(
             "Memory vergessen?"
             if forgetting
@@ -760,7 +760,7 @@ def memory_write_permission(
             if updating
             else "Der Agent möchte ein neues Memory speichern."
         ),
-        resource_display="Memory der aktuellen Session",
+        resource_display="Persönliche Memories" if forgetting else "Aktuelle Session",
         display_items=(
             (PermissionDisplayItem("Berücksichtigung", "Immer"),) if pinned else ()
         ),

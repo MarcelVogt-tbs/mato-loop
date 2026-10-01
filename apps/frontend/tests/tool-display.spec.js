@@ -188,10 +188,13 @@ describe('tool display', () => {
   })
 
   it('uses generic presentation for unrecognized historical tools', () => {
-    const tool = { name: 'retired_tool', arguments: { path: 'project' } }
+    const tool = { name: 'retired_tool', arguments: { path: 'project', cc: [] } }
     expect(toolIdentity(tool.name)).toEqual({ label: 'Tool ausführen', icon: 'build' })
     expect(toolPresentation(tool)).toEqual({
-      summary: 'project', items: [{ label: 'Pfad', value: 'project', format: 'text' }]
+      summary: 'project', items: [
+        { label: 'Pfad', value: 'project', format: 'text' },
+        { label: 'Cc', value: [], format: 'list' }
+      ]
     })
     expect(toolPresentation({ name: tool.name, arguments: {} }))
       .toEqual({ summary: tool.name, items: [] })

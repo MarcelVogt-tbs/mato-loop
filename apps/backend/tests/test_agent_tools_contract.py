@@ -4561,6 +4561,7 @@ async def test_memory_write_forget_checks_visibility_revision_and_hard_deletes(
         user_id=uuid4(),
         audience="private_only",
         revision=4,
+        content="Eine veraltete Erinnerung",
     )
     get_memory = AsyncMock(side_effect=[item, item])
     delete_memory = AsyncMock()
@@ -4601,6 +4602,7 @@ async def test_memory_write_forget_checks_visibility_revision_and_hard_deletes(
     request = context.ask_handler.await_args.args[0]
     assert request.capability == "memory.write"
     assert request.action_kind == "memory_write"
+    assert request.display_items[0].value == item.content
 
 
 @pytest.mark.parametrize(
@@ -4610,8 +4612,9 @@ async def test_memory_write_forget_checks_visibility_revision_and_hard_deletes(
         ("private_only", 2, "memory.changed"),
     ],
 )
-async def test_memory_write_forget_rejects_invisible_or_changed_target(
-    monkeypatch, tmp_path, audience, revision, error_code
+@pytest.mark.parametrize("action", ["forget", "update"])
+async def test_memory_write_rejects_invisible_or_changed_target(
+    monkeypatch, tmp_path, audience, revision, error_code, action
 ) -> None:
     item = SimpleNamespace(
         id=uuid4(),
@@ -4626,9 +4629,11 @@ async def test_memory_write_forget_rejects_invisible_or_changed_target(
         id="forget",
         name="memory_write",
         arguments={
-            "action": "forget",
+            "action": action,
             "memory_id": str(item.id),
             "expected_revision": 1,
+            "content": "Neuer Inhalt" if action == "update" else None,
+            "category": "context" if action == "update" else None,
             "pin": False,
         },
     )

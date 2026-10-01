@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import mato_loop_backend.tools.access as tools_access
 from mato_loop_backend.memory.retrieval import MemoryRetrievalService, MemoryRetrieveMode
 from mato_loop_backend.memory.service import (
@@ -7,7 +9,11 @@ from mato_loop_backend.memory.service import (
     memory_reference_timestamps,
     memory_visible_to,
 )
-from mato_loop_backend.permissions.policy import memory_read_permission, memory_write_permission
+from mato_loop_backend.permissions.policy import (
+    PermissionDisplayItem,
+    memory_read_permission,
+    memory_write_permission,
+)
 from mato_loop_backend.settings import TrustLevel
 from mato_loop_backend.tools.actions import _MEMORY_READ, _MEMORY_WRITE
 from mato_loop_backend.tools.arguments import MemoryRetrieveArguments, MemoryWriteArguments
@@ -21,7 +27,8 @@ async def _memory_write(
 ) -> ToolResult:
     if context.assistant_message_id is None:
         return ToolResult.error("memory.provenanceUnavailable")
-    if arguments.action == "forget":
+    item = None
+    if arguments.action in {"update", "forget"}:
         assert arguments.memory_id is not None
         assert arguments.expected_revision is not None
         item = await MemoryService.get(
@@ -35,12 +42,13 @@ async def _memory_write(
             return ToolResult.error("memory.notFound")
         if item.revision != arguments.expected_revision:
             return ToolResult.error("memory.changed")
-    if not await tools_access.allow(
-        context,
-        memory_write_permission(
-            context.session.id, arguments.action, pinned=arguments.pin
-        ),
-    ):
+    permission = memory_write_permission(context.session.id, arguments.action, pinned=arguments.pin)
+    if item is not None:
+        preview = (PermissionDisplayItem("Zu löschende Erinnerung" if arguments.action == "forget" else "Bisheriger Inhalt", item.content, "code"),)
+        if arguments.action == "update":
+            preview += (PermissionDisplayItem("Neuer Inhalt", arguments.content, "code"),)
+        permission = replace(permission, display_items=(*preview, *permission.display_items))
+    if not await tools_access.allow(context, permission):
         return ToolResult.error("permission.denied")
     if arguments.action == "forget":
         item = await MemoryService.get(

@@ -250,7 +250,9 @@ const PROFILE_SCOPE_LABELS = {
 }
 
 function profileDisplayItems(tool) {
-  const args = tool?.arguments || {}
+  const args = tool?.name === 'customize_matoloop'
+    ? { ...tool.arguments.changes, model_scope: tool.arguments.model_scope }
+    : tool?.arguments || {}
   const changes = Object.entries(PROFILE_FIELD_LABELS)
     .filter(([field]) => Object.prototype.hasOwnProperty.call(args, field))
     .map(([field, label]) => ({
@@ -283,9 +285,18 @@ function normalizeDisplayItems(items) {
 
 export function toolPresentation(tool, displayItems = []) {
   const suppliedItems = normalizeDisplayItems(displayItems)
+    .filter((item) => item.label !== 'Für diese Session')
+  const memory = memoryWriteContent(tool)
+  if (memory && suppliedItems.every((item) => item.label === 'Berücksichtigung')) {
+    return {
+      summary: toolSummary(tool),
+      items: [{ label: 'Memory-Inhalt', value: memory, format: 'code' }, ...suppliedItems]
+    }
+  }
   if (suppliedItems.length) return { summary: toolSummary(tool), items: suppliedItems }
 
-  if (tool?.name === 'update_user_profile') {
+  if (tool?.name === 'update_user_profile' || (tool?.name === 'customize_matoloop'
+    && tool.arguments?.area === 'user_profile' && tool.arguments?.action === 'update')) {
     return { summary: toolSummary(tool), items: profileDisplayItems(tool) }
   }
 
@@ -308,22 +319,30 @@ export function toolPresentation(tool, displayItems = []) {
       ]
     }
   }
-  const memory = memoryWriteContent(tool)
-  if (memory) {
-    return {
-      summary: toolSummary(tool),
-      items: [{ label: 'Memory-Inhalt', value: memory, format: 'code' }]
-    }
-  }
   const taskItems = taskDisplayItems(tool)
   const args = tool?.arguments || {}
   return {
     summary: toolSummary(tool),
     items: taskItems.length ? taskItems : [
-      ['query', 'Suchbegriff'], ['path', 'Pfad'], ['url', 'Adresse']
-    ].flatMap(([key, label]) => typeof args[key] === 'string' && args[key].trim()
-      ? [{ label, value: key === 'url' ? cleanUrlForDisplay(args[key]) : args[key], format: 'text' }]
-      : [])
+      ['query', 'Suchbegriff'], ['queries', 'Suchbegriffe'], ['pattern', 'Suchmuster'],
+      ['path', 'Pfad'], ['source_path', 'Quelle'], ['destination_path', 'Ziel'], ['url', 'Adresse'],
+      ['title', 'Titel'], ['name', 'Name'], ['prompt', 'Auftrag'], ['text', 'Text'], ['brief', 'Auftrag'],
+      ['to', 'An'], ['cc', 'Cc'], ['bcc', 'Bcc'], ['subject', 'Betreff'], ['body', 'Nachricht'],
+      ['markdown', 'Inhalt'],
+      ['display_name', 'Agent-Name'], ['instructions', 'Persona-Anweisungen'],
+      ['code', 'Python-Code'], ['function', 'JavaScript'], ['element', 'Element']
+    ].flatMap(([key, label]) => {
+      let value = args[key]?.preview ?? args[key]
+      if (Array.isArray(value)) {
+        value = value.filter((item) => typeof item === 'string')
+        return value.length || args[key].length === 0 ? [{ label, value, format: 'list' }] : []
+      }
+      if (typeof value !== 'string') return []
+      if (!value) value = '(leer)'
+      if (args[key]?.characters > value.length) value += '\n[Vorschau gekürzt]'
+      return [{ label, value: key === 'url' ? cleanUrlForDisplay(value) : value,
+        format: ['code', 'function', 'instructions', 'body', 'markdown'].includes(key) ? 'code' : 'text' }]
+    })
   }
 }
 

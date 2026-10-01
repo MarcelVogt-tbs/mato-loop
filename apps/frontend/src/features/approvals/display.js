@@ -67,15 +67,25 @@ export function memoryApprovalDisplay(approval) {
 
 export function approvalResource(approval, sessions = []) {
   const scope = String(approval?.resourceScope || '')
+  if (approval?.capability === 'memory.write') {
+    return { label: 'Dauerhafte Erinnerungen', value: 'Persönliche Memories' }
+  }
+  if (['shell_command', 'execution_administrator'].includes(approval?.resourceType)) {
+    return {
+      label: approval?.actionKind === 'shell_run' ? 'Arbeitsverzeichnis' : 'Datei oder Ordner',
+      value: approval?.resourceDisplay || 'Ausgewählter Bereich'
+    }
+  }
   if (['path', 'root_path', 'execution_root_path'].includes(approval?.resourceType)) {
     return {
       label: 'Datei oder Ordner',
-      value: approval?.resourceDisplay || scope || 'Unbekannter Pfad'
+      value: approval?.resourceDisplay || (approval?.resourceType === 'path' ? scope : '') || 'Ausgewählter Pfad'
     }
   }
   if (approval?.resourceType === 'execution_directory') {
     return {
-      label: 'Aktueller Ordner',
+      label: approval?.capability?.startsWith('filesystem.') || approval?.capability === 'file.provide'
+        ? 'Datei oder Ordner' : 'Aktueller Ordner',
       value: approval?.resourceDisplay || 'Ausgewählter Ordner'
     }
   }
@@ -122,7 +132,7 @@ export function approvalResource(approval, sessions = []) {
     const allSessions = !scope || ['*', 'all', 'sessions'].includes(scope.toLowerCase())
     return {
       label: 'Session-Sammlung',
-      value: name ? `„${name}“` : allSessions ? 'Alle Sessions' : scope
+      value: name ? `„${name}“` : allSessions ? 'Alle Sessions' : 'Ausgewählte Sessions'
     }
   }
   if (approval?.resourceType === 'network_service') {
@@ -153,7 +163,7 @@ export function approvalResource(approval, sessions = []) {
     return { label: 'Variablen & Secrets', value: 'Eigene Variablen und Secrets' }
   }
   if (approval?.resourceType === 'skill') {
-    return { label: 'Skill', value: approval?.resourceDisplay ? `„${approval.resourceDisplay}“` : scope }
+    return { label: 'Skill', value: approval?.resourceDisplay ? `„${approval.resourceDisplay}“` : 'Ausgewählter Skill' }
   }
   if (approval?.resourceType === 'skill_collection') {
     return {
@@ -167,9 +177,17 @@ export function approvalResource(approval, sessions = []) {
   if (approval?.resourceType === 'automation') {
     return { label: 'Automation', value: approval?.resourceDisplay || 'Ausgewählte Automation' }
   }
+  const label = {
+    execution_agent_collection: 'Computer',
+    media_model: 'Medienmodell',
+    agent_identity: 'Agent-Persona',
+    personal_settings: 'Persönliche Einstellungen',
+    project: 'Projekt',
+    project_session_path: 'Datei einer Projekt-Session'
+  }[approval?.resourceType]
   return {
-    label: 'Angeforderte Ressource',
-    value: approval?.resourceDisplay || scope || 'Nicht angegeben'
+    label: label || 'Angeforderte Ressource',
+    value: approval?.resourceDisplay || 'Ausgewählter Bereich'
   }
 }
 
