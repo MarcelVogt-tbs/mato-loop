@@ -1533,6 +1533,18 @@ class AgentRuntime:
             session_write_paths=session_write_paths,
             **permission_namespace,
         )
+        browser_approval_key = None
+        if approval_resolution is not None and (
+            request.resource_type == "execution_administrator"
+            or request.action_kind.startswith("browser_") and (check_only or decision == PermissionDecision.ASK)
+        ):
+            browser_approval_key = ("administrator_approved:" if request.resource_type == "execution_administrator" else "browser_approved:") + json.dumps([
+                str(run.id), call.id, call.name, str(chat_session.id), str(chat_session.user_id),
+                str(origin.id), str(agent_profile_id), run.trust_level or TrustLevel.PUBLIC.value,
+                request.capability, request.resource_type, request.resource_scope,
+                request.use_integration_policy, str(request.policy_integration_id),
+                request.policy_resource_key, request.force_ask,
+            ])
         edited_approval = (
             approval_resolution.get("argument_edit_approved")
             if approval_resolution is not None
@@ -1550,31 +1562,21 @@ class AgentRuntime:
             == agent_run_support._argument_edit_permission_binding(request)
         ):
             approval_resolution.pop("argument_edit_approved", None)
+            if request.resource_type == "execution_administrator" and decision != PermissionDecision.DENY:
+                approval_resolution[browser_approval_key] = "allow_once"
             return (
                 PermissionDecision.DENY
                 if decision == PermissionDecision.DENY
                 else PermissionDecision.ALLOW
             )
-        browser_approval_key = None
         if (
-            request.action_kind.startswith("browser_") and approval_resolution is not None
-            and (check_only or decision == PermissionDecision.ASK)
+            decision == PermissionDecision.ASK
+            and (check_only or request.resource_type == "execution_administrator")
+            and browser_approval_key is not None
+            and approval_resolution.get(browser_approval_key) in {"allow_once", "allow_session"}
         ):
-            browser_approval_key = "browser_approved:" + json.dumps([
-                str(run.id), call.id, call.name, str(chat_session.id), str(chat_session.user_id),
-                str(origin.id), str(agent_profile_id), run.trust_level or TrustLevel.PUBLIC.value,
-                request.capability, request.resource_type, request.resource_scope,
-                request.use_integration_policy, str(request.policy_integration_id),
-                request.policy_resource_key, request.force_ask,
-            ])
+            return PermissionDecision.ALLOW
         if check_only:
-            # Only a real approval for this call and exact scope can satisfy a remaining ASK.
-            if (
-                decision == PermissionDecision.ASK
-                and browser_approval_key is not None
-                and approval_resolution.get(browser_approval_key) in {"allow_once", "allow_session"}
-            ):
-                return PermissionDecision.ALLOW
             return decision
         if decision != PermissionDecision.ASK:
             draft_file = (request.approval_details or {}).get("draftFile")
@@ -1610,6 +1612,11 @@ class AgentRuntime:
             argument_edit=agent_run_support._argument_edit_payload(definition, call.arguments),
         )
         if isinstance(resolution, ApprovalResolution) and resolution.argument_edits:
+            if request.resource_type == "execution_administrator" and (request.approval_details or {}).get("sudoPasswordInput"):
+                from mato_loop_backend.agent.session_secrets import session_secrets
+
+                agent_id = UUID(request.approval_details["administratorAgentId"])
+                session_secrets.put(chat_session.id, {f"SUDO_PASSWORD_{agent_id.hex.upper()}": resolution.sudo_password or ""})
             raise ToolArgumentsEdited(
                 resolution.argument_edits,
                 agent_run_support._argument_edit_permission_binding(request),
@@ -1682,6 +1689,14 @@ class AgentRuntime:
         )
         if current_decision != PermissionDecision.DENY and browser_approval_key is not None:
             approval_resolution[browser_approval_key] = approval_decision
+        if (
+            current_decision != PermissionDecision.DENY and request.resource_type == "execution_administrator"
+            and (request.approval_details or {}).get("sudoPasswordInput")
+        ):
+            from mato_loop_backend.agent.session_secrets import session_secrets
+
+            agent_id = UUID(request.approval_details["administratorAgentId"])
+            session_secrets.put(chat_session.id, {f"SUDO_PASSWORD_{agent_id.hex.upper()}": resolution.sudo_password or "" if isinstance(resolution, ApprovalResolution) else ""})
         return (
             PermissionDecision.DENY
             if current_decision == PermissionDecision.DENY

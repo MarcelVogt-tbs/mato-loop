@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 import mato_loop_backend.files.access as files_access
 import mato_loop_backend.tools.access as tools_access
+import mato_loop_backend.tools.administrator as administrator
 from mato_loop_backend.events import run_events
 from mato_loop_backend.execution import (
     DirectoryResult,
@@ -20,7 +21,7 @@ from mato_loop_backend.execution.protocol import MAX_REQUEST_BYTES, RequestMessa
 from mato_loop_backend.execution.terminals import terminal_coordinator
 from mato_loop_backend.models import AgentRun, ExecutionAgent
 from mato_loop_backend.permissions.policy import (
-    elevated_shell_permission,
+    administrator_permission,
     execution_agent_select_permission,
     execution_agents_list_permission,
     shell_command_permission,
@@ -49,7 +50,6 @@ from mato_loop_backend.tools.secrets import (
     discard_sudo_reference,
     effective_sudo_reference,
     resolve_secret_refs,
-    resolve_sudo_password,
 )
 
 
@@ -183,7 +183,7 @@ async def _run_process(
         user_id=context.session.user_id,
         session_id=context.session.id,
         agent_id=client.agent_id,
-    ) if operation == "shell.elevated" else None
+    ) if operation == "administrator.run" else None
 
     async def display(text: str) -> None:
         if (
@@ -194,7 +194,7 @@ async def _run_process(
             await terminal.send_bytes(text.replace("\r\n", "\n").replace("\n", "\r\n").encode())
 
     if terminal is not None:
-        command = arguments["command"]
+        command = arguments["arguments"]["command"]
         for secret in sorted(set(redacted_values), key=len, reverse=True):
             if secret:
                 command = command.replace(secret, "[redacted]")
@@ -253,34 +253,50 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
     if client.current_directory is None:
         return ToolResult.error("permission.denied")
     if arguments.elevated:
-        if not client.supports("shell.elevated"):
+        if not client.supports("administrator.run") or not client.supports("shell.classify"):
             return ToolResult.error("executionAgent.operationUnavailable")
-        if not await tools_access.allow(
-            context, elevated_shell_permission(client.agent_id, client.current_directory, arguments.command)
-        ):
-            return ToolResult.error("permission.denied")
-        reference = effective_sudo_reference(
-            context.session.id, context.run_secret_refs, client.agent_id, arguments.sudo_password_ref,
+        shell_arguments = {"command": arguments.command, "currentDirectory": client.current_directory}
+        inspection = await client.request("shell.classify", shell_arguments, ShellInspectResult)
+        permission = administrator_permission(
+            client.agent_id, client.current_directory, capability=f"shell.{inspection.classification}",
+            command=arguments.command, inspection=inspection,
         )
-        password = await resolve_sudo_password(context, reference, client.agent_id)
-        if isinstance(password, ToolResult):
-            return password
+        if not await administrator.authorize(context, permission, arguments.sudo_password_ref):
+            return ToolResult.error("permission.denied")
+        inspection = await administrator.invoke(context, "shell.inspect", shell_arguments, ShellInspectResult, arguments.sudo_password_ref)
+        if isinstance(inspection, ToolResult):
+            return inspection
+        if arguments.environment:
+            inspection = inspection.model_copy(update={"analysis_complete": False})
+        permission = administrator_permission(
+            client.agent_id, client.current_directory, capability=f"shell.{inspection.classification}",
+            command=arguments.command, inspection=inspection,
+        )
+        if not await tools_access.allow(context, permission):
+            return ToolResult.error("permission.denied")
         resolved = await resolve_secret_refs(context, arguments.environment)
         if isinstance(resolved, ToolResult):
             return resolved
+        reference = effective_sudo_reference(
+            context.session.id, context.run_secret_refs, client.agent_id, arguments.sudo_password_ref,
+        )
         requested = arguments.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+        payload = await administrator.request_arguments(context, "shell.run", {
+            **shell_arguments, "expectedInspectionRevision": inspection.inspection_revision,
+            **({"timeoutSeconds": arguments.timeout} if arguments.timeout is not None else {}),
+            **({"environment": resolved} if resolved else {}),
+        }, reference)
+        if isinstance(payload, ToolResult):
+            return payload
+        password = payload.get("sudoPassword")
         try:
             return await _run_process(
-                context, "shell.elevated",
-                {"command": arguments.command, "currentDirectory": client.current_directory,
-                  **({"timeoutSeconds": arguments.timeout} if arguments.timeout is not None else {}),
-                  **({"sudoPassword": password} if password else {}),
-                  **({"environment": resolved} if resolved else {})},
+                context, "administrator.run", payload,
                 requested_arguments=requested, executed_arguments=requested,
                 redacted_values=(*resolved.values(), *((password,) if password else ())),
             )
         except ExecutionClientError as exc:
-            if exc.code == "process.sudoAuthFailed":
+            if exc.code in {"process.sudoAuthFailed", "process.sudoAuthRequired"}:
                 discard_sudo_reference(context, client.agent_id, reference)
             raise
     terminal = terminal_coordinator.attached_for(
@@ -405,14 +421,12 @@ SHELL_RUN = ToolDefinition(
             "subject to its local maximum. Nonzero exits and timeouts are errors with bounded "
             "output retained; interpret the exit code and output for the command's meaning. "
             "elevated=true runs this command as administrator in an isolated shell, even with an "
-            "attached terminal. It uses shell.write policy and computer-wide hard restrictions. "
+             "attached terminal. It uses the same shell.read/shell.write classification as ordinary execution. "
             "Use environment references for explicit variables; elevated commands preserve only "
             "those named variables through sudo. "
-            "Before elevated execution, reuse a sudo reference for the selected computer or call "
-            "secret_input with masked=true and name SUDO_PASSWORD_<selected agent UUID without dashes, uppercase> "
-            "and wait for its result. Pass the reference explicitly as sudo_password_ref, including on retries. "
-            "Omit the reference only when passwordless sudo is already confirmed for this computer; "
-            "do not probe elevated execution without a reference. "
+             "The host combines administrator approval and any missing password in one request. "
+             "An existing computer-specific sudo reference may be passed as sudo_password_ref. "
+             "Do not ask for a password or duplicate confirmation before calling the tool. "
             "Do not put sudo, password pipes, or a password in the command.",
             ShellRunArguments,
             _shell_run,

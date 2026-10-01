@@ -1740,11 +1740,8 @@ def test_secret_input_prompt_routes_all_credentials_before_probing() -> None:
     assert "returned environment references to shell_run.environment" in prompt
     assert "references remain reusable throughout the current run" in prompt
     assert "shell_run(elevated=true), without sudo in the command" in prompt
-    assert "Before elevated execution, reuse a sudo reference for the selected computer" in prompt
-    assert "call secret_input with masked=true" in prompt
-    assert "and wait for its result" in prompt
-    assert "explicitly as sudo_password_ref, including on retries" in prompt
-    assert "only when passwordless sudo is already confirmed for this computer" in prompt
+    assert "combines approval and any missing administrator password" in prompt
+    assert "Administrator passwords are handled by elevated tools' approval requests" in prompt
     assert "Try elevated shell commands without a password first" not in prompt
     assert "not a confirmed disclosure" in prompt
 
@@ -2078,11 +2075,12 @@ def test_system_prompt_describes_managed_file_roots() -> None:
         offered_tool_names=frozenset({"read", "glob", "grep", "provide_file"}),
     )
 
-    assert "explicit root and relative POSIX path" in prompt
+    assert "Use explicit root" in prompt
     assert "'.' for root" in prompt
     assert "no absolute path or root prefix" in prompt
     assert "unused destination" in prompt
-    assert "root=files is managed" in prompt
+    assert "root=files uses relative POSIX paths" in prompt
+    assert "root=computer accepts absolute paths" in prompt
     assert "file.accessDenied is not permission.userDenied" not in prompt
     assert "revisioned" not in prompt
     assert "No computer directory selected. Use root=files." in prompt
@@ -3106,7 +3104,7 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     assert "Read AGENTS.md before relevant repository work" in work
     assert "Read AGENTS.md" not in general
     assert "skip unrelated tasks" in work
-    assert "Prefer file tools." in general
+    assert "Use file tools for supported file changes" in general
     assert "file.accessDenied is not permission.userDenied" not in general
     assert "file.accessDenied is not permission.userDenied" in general_system_prompt(
         session, agent_profile=general_profile(), offered_tool_names=tools | {"shell_run"},

@@ -55,11 +55,10 @@ from mato_loop_backend.permissions.policy import (
     PermissionPolicy,
     PermissionRequest,
     SessionGrantScope,
-    elevated_shell_permission,
+    administrator_permission,
     execution_directory_permission,
     execution_directory_scope,
     session_grant_matches_request,
-    session_grants_display,
     shell_command_permission,
     shell_command_scope,
     shell_prefix_allowed,
@@ -74,6 +73,7 @@ from mato_loop_backend.settings import (
     plan_profile,
     sysadmin_profile,
 )
+from mato_loop_backend.tools.administrator import AdministratorAuthenticationResult
 from mato_loop_backend.tools.arguments import ProtectedQuestionResolution, ShellRunArguments
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.computer import _run_process, _shell_run
@@ -94,6 +94,13 @@ class FakeExecutionClient:
 
     async def request(self, operation, arguments, _result_model, **_kwargs):
         self.requests.append((operation, arguments))
+        if operation == "administrator.run" and arguments["operation"] == "authenticate":
+            return AdministratorAuthenticationResult(passwordless=False)
+        if operation == "shell.classify" or operation == "administrator.run" and arguments["operation"] == "shell.inspect":
+            return ShellInspectResult(
+                classification="read", read_only=True, analysis_complete=operation != "shell.classify",
+                inspection_revision="a" * 64, targets=[], commands=[],
+            )
         response = self.responses[operation]
         return response(arguments) if callable(response) else response
 
@@ -147,11 +154,7 @@ def test_shell_tool_cannot_select_execution_targets() -> None:
         "sudo_password_ref",
     }
     assert shell["parameters"]["required"] == ["command"]
-    assert "Before elevated execution, reuse a sudo reference for the selected computer" in shell["description"]
-    assert "secret_input with masked=true" in shell["description"]
-    assert "and wait for its result" in shell["description"]
-    assert "explicitly as sudo_password_ref, including on retries" in shell["description"]
-    assert "only when passwordless sudo is already confirmed for this computer" in shell["description"]
+    assert "combines administrator approval and any missing password" in shell["description"]
     assert "command's purpose" in shell["parameters"]["properties"]["_reason"]["description"]
     assert ShellRunArguments(command="pwd").timeout is None
     assert not ShellRunArguments(command="pwd").elevated
@@ -474,6 +477,22 @@ async def test_workspace_write_uses_compare_and_swap_operation(tmp_path) -> None
     ]
 
 
+@pytest.mark.parametrize(("tool", "operation", "arguments", "response"), [
+    ("read", "filesystem.read", {}, WorkspaceReadResult(content="old", lines_read=1, has_more=False, next_offset=None, truncated_lines=[], sha256="a" * 64)),
+    ("write_file", "filesystem.write", {"content": "new", "expectedSha256": "a" * 64}, WorkspaceWriteResult(path="/etc/demo.conf", sha256="b" * 64, size=3)),
+    ("edit_file", "filesystem.edit", {"oldText": "old", "newText": "new", "expectedSha256": "a" * 64}, WorkspaceWriteResult(path="/etc/demo.conf", sha256="b" * 64, size=3)),
+])
+async def test_elevated_files_use_structured_worker_and_existing_permissions(tmp_path, tool, operation, arguments, response):
+    call = ToolCall("file", tool, {"root": "computer", "path": "/etc/demo.conf", "elevated": True, **arguments})
+    client = FakeExecutionClient({"administrator.run": response}, {"administrator.run"})
+    context = _context(tmp_path, call, client)
+    result = await _tools(client.operations).execute(call, context)
+    assert not result.is_error
+    assert client.requests[-1][1]["operation"] == operation
+    assert context.ask_handler.await_args.args[0].capability == ("filesystem.read" if tool == "read" else "filesystem.write")
+    assert context.ask_handler.await_args.args[0].approval_details["sudoPasswordInput"] is True
+
+
 async def test_apply_patch_resolves_paths_and_checks_each_permission(tmp_path) -> None:
     patch = """*** Begin Patch
 *** Update File: README.md
@@ -640,8 +659,8 @@ def test_shell_grant_matches_access_class_agent_and_directory(tmp_path) -> None:
     assert not PermissionPolicy.grant_matches(grant, wrong_directory, context.root_files)
 
 
-async def test_elevated_shell_reuses_only_exact_elevated_grants(tmp_path) -> None:
-    client = FakeExecutionClient({}, {"shell.inspect", "shell.run", "shell.elevated"})
+async def test_administrator_grants_cover_file_and_shell_actions_but_not_disabled_rights(tmp_path) -> None:
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run", "shell.classify", "administrator.run"})
     context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
     context.session.preferred_execution_agent_id = client.agent_id
     context.db.scalar.return_value = ExecutionAgent(
@@ -649,8 +668,7 @@ async def test_elevated_shell_reuses_only_exact_elevated_grants(tmp_path) -> Non
         home_filesystem_policy="auto", external_filesystem_policy="auto",
         home_shell_enabled=True, external_shell_enabled=True,
     )
-    request = elevated_shell_permission(client.agent_id, client.current_directory, "cat /root/private")
-    assert session_grants_display(request) == ["Nur dieser Administrator-Befehl: cat /root/private"]
+    request = administrator_permission(client.agent_id, client.current_directory, capability="shell.read", command="cat /root/private")
     grant_scope = request.effective_session_grants[0]
     normal_grant = PermissionGrant(
         capability="resource.write", resource_type="execution_directory",
@@ -668,35 +686,46 @@ async def test_elevated_shell_reuses_only_exact_elevated_grants(tmp_path) -> Non
     assert await PermissionPolicy.evaluate(
         context.db, context.session, request, context.root_files, ToolExecutionPolicy.ASK,
     ) == PermissionDecision.ALLOW
-    changed = elevated_shell_permission(client.agent_id, client.current_directory, "cat /root/other")
+    changed = administrator_permission(client.agent_id, client.current_directory, capability="filesystem.read", path="/root/other")
+    assert PermissionPolicy.grant_matches(exact_grant, changed, context.root_files)
+    changed = administrator_permission(client.agent_id, client.current_directory, capability="filesystem.write", path="/root/other")
+    assert not PermissionPolicy.grant_matches(exact_grant, changed, context.root_files)
+    changed = administrator_permission(uuid4(), client.current_directory, capability="shell.read", command="id")
     assert not PermissionPolicy.grant_matches(exact_grant, changed, context.root_files)
     assert await PermissionPolicy.evaluate(
         context.db, context.session, request, context.root_files, ToolExecutionPolicy.DISABLED,
     ) == PermissionDecision.DENY
     context.db.scalar.return_value.external_shell_enabled = False
+    request = replace(request, administrator_analysis_complete=False)
     assert await PermissionPolicy.evaluate(
         context.db, context.session, request, context.root_files, ToolExecutionPolicy.ASK,
     ) == PermissionDecision.DENY
+    context.db.scalar.return_value.home_directory = "/home/user"
+    context.db.scalar.return_value.home_filesystem_policy = "deny"
+    file_request = administrator_permission(client.agent_id, client.current_directory, capability="filesystem.read", path="/etc/demo.conf")
+    assert await PermissionPolicy.evaluate(
+        context.db, context.session, file_request, context.root_files, ToolExecutionPolicy.ASK,
+    ) == PermissionDecision.ALLOW
 
 
-async def test_elevated_shell_executes_without_normal_inspection_or_shared_shell(tmp_path) -> None:
-    client = FakeExecutionClient({"shell.elevated": ProcessResult(
+async def test_elevated_shell_uses_read_classification_and_privileged_inspection(tmp_path) -> None:
+    client = FakeExecutionClient({"administrator.run": ProcessResult(
         exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0,
         stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
-    )}, {"shell.run", "shell.elevated"})
+    )}, {"shell.run", "shell.classify", "administrator.run"})
     context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
     result = await _shell_run(ShellRunArguments(
         command="ls /root", elevated=True,
     ), context)
     assert not result.is_error
-    assert [operation for operation, _ in client.requests] == ["shell.elevated"]
+    assert [operation for operation, _ in client.requests] == ["shell.classify", "administrator.run", "administrator.run", "administrator.run"]
     request = context.ask_handler.await_args.args[0]
-    assert request.capability == "shell.write"
-    assert request.resource_type == "shell_elevated_command"
+    assert request.capability == "shell.read"
+    assert request.resource_type == "execution_administrator"
     assert not request.force_ask
 
 
-@pytest.mark.parametrize("operation", ["shell.run", "shell.elevated"])
+@pytest.mark.parametrize("operation", ["shell.run", "administrator.run"])
 async def test_process_masks_split_authentication_headers_without_environment(tmp_path, monkeypatch, operation) -> None:
     client = FakeExecutionClient({}, {operation})
     context = _context(tmp_path, ToolCall("headers", "shell_run", {}), client)
@@ -713,7 +742,9 @@ async def test_process_masks_split_authentication_headers_without_environment(tm
 
     client.request = execute
     result = await _run_process(
-        context, operation, {"command": "inspect"}, requested_arguments={}, executed_arguments={},
+        context, operation,
+        {"command": "inspect"} if operation == "shell.run" else {"operation": "shell.run", "arguments": {"command": "inspect"}},
+        requested_arguments={}, executed_arguments={},
     )
     visible = result.content + str(published.await_args_list)
     assert "session-credential" not in visible and "session-" not in visible and "HTTP 403" in visible
@@ -730,7 +761,7 @@ async def test_invalid_secret_reference_reports_environment_field(tmp_path) -> N
 
 @pytest.mark.parametrize("mode", ["live", "secret", "truncated", "denied", "detached"])
 async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_path, monkeypatch, mode) -> None:
-    client = FakeExecutionClient({}, {"shell.run", "shell.elevated"})
+    client = FakeExecutionClient({}, {"shell.run", "shell.classify", "administrator.run"})
     context = _context(
         tmp_path, ToolCall("admin", "shell_run", {}), client,
         decision=PermissionDecision.DENY if mode == "denied" else PermissionDecision.ALLOW,
@@ -751,8 +782,12 @@ async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_p
         context.one_time_secrets[password_id] = "private-password"
         arguments.sudo_password_ref = f"run-secret:{password_id}"
 
-    async def execute(operation, _arguments, _model, *, on_event, **_kwargs):
-        assert operation == "shell.elevated"
+    async def execute(operation, _arguments, _model, *, on_event=None, **_kwargs):
+        if operation == "administrator.run" and _arguments["operation"] == "authenticate":
+            return AdministratorAuthenticationResult(passwordless=False)
+        if operation == "shell.classify" or _arguments["operation"] == "shell.inspect":
+            return ShellInspectResult(classification="read", read_only=True, analysis_complete=True, inspection_revision="a" * 64, targets=[], commands=[])
+        assert operation == "administrator.run"
         if mode != "detached":
             assert terminal.personal_buffer == b"\r\nsudo id -u\r\n"
         chunks = [("stdout", "0\n"), ("stderr", "warning\r\n")]
@@ -788,7 +823,7 @@ async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_p
         assert delivered == terminal.personal_buffer
         assert b"private-password" not in delivered
     if mode == "denied":
-        request.assert_not_awaited()
+        assert request.await_count == 1  # Classification never executes a command.
 
 
 async def test_elevated_shell_reuses_only_this_agents_session_password(tmp_path) -> None:
@@ -796,7 +831,7 @@ async def test_elevated_shell_reuses_only_this_agents_session_password(tmp_path)
         exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0,
         stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
     )
-    client = FakeExecutionClient({"shell.elevated": response}, {"shell.run", "shell.elevated"})
+    client = FakeExecutionClient({"administrator.run": response}, {"shell.run", "shell.classify", "administrator.run"})
     context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
     name = f"SUDO_PASSWORD_{client.agent_id.hex.upper()}"
     references = session_secrets.put(context.session.id, {name: "private password"})
@@ -804,9 +839,9 @@ async def test_elevated_shell_reuses_only_this_agents_session_password(tmp_path)
         result = await _shell_run(ShellRunArguments(command="id -u", elevated=True), context)
         assert not result.is_error
         assert client.requests[-1] == (
-            "shell.elevated",
-            {"command": "id -u", "currentDirectory": client.current_directory,
-             "sudoPassword": "private password"},
+            "administrator.run",
+            {"operation": "shell.run", "arguments": {"command": "id -u", "currentDirectory": client.current_directory,
+             "expectedInspectionRevision": "a" * 64}, "sudoPassword": "private password"},
         )
         assert "private password" not in result.content
         client.agent_id = uuid4()
@@ -824,7 +859,7 @@ async def test_elevated_shell_resolves_run_secrets_and_forwards_explicit_environ
         exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0,
         stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
     )
-    client = FakeExecutionClient({"shell.elevated": response}, {"shell.run", "shell.elevated"})
+    client = FakeExecutionClient({"administrator.run": response}, {"shell.run", "shell.classify", "administrator.run"})
     context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
     sudo_name = f"SUDO_PASSWORD_{client.agent_id.hex.upper()}"
     password_id, token_id = uuid4(), uuid4()
@@ -838,9 +873,9 @@ async def test_elevated_shell_resolves_run_secrets_and_forwards_explicit_environ
 
     assert not result.is_error
     assert client.requests[-1] == (
-        "shell.elevated",
-        {"command": 'test -n "$APP_TOKEN"', "currentDirectory": client.current_directory,
-         "sudoPassword": "sudo-private", "environment": {"APP_TOKEN": "env-private"}},
+        "administrator.run",
+        {"operation": "shell.run", "arguments": {"command": 'test -n "$APP_TOKEN"', "currentDirectory": client.current_directory,
+         "expectedInspectionRevision": "a" * 64, "environment": {"APP_TOKEN": "env-private"}}, "sudoPassword": "sudo-private"},
     )
     assert "env-private" not in result.content
     assert "sudo-private" not in result.content
@@ -852,7 +887,7 @@ async def test_elevated_shell_reprompts_only_for_rejected_passwords(tmp_path, re
     def fail(_arguments):
         raise ExecutionClientError(error_code)
 
-    client = FakeExecutionClient({"shell.elevated": fail}, {"shell.run", "shell.elevated"})
+    client = FakeExecutionClient({"administrator.run": fail}, {"shell.run", "shell.classify", "administrator.run"})
     context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
     name = f"SUDO_PASSWORD_{client.agent_id.hex.upper()}"
     other_name = f"SUDO_PASSWORD_{uuid4().hex.upper()}"
@@ -882,7 +917,7 @@ async def test_elevated_shell_reprompts_only_for_rejected_passwords(tmp_path, re
         assert (replacement.content != original.content) is rejected
         assert session_secrets.references(context.session.id)[other_name] == other_refs[other_name]
 
-        client.responses["shell.elevated"] = ProcessResult(
+        client.responses["administrator.run"] = ProcessResult(
             exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0,
             stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
         )

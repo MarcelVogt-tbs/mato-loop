@@ -5,6 +5,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shlex
 import shutil
@@ -19,7 +20,7 @@ from tree_sitter import Language, Node, Parser
 
 from .config import AgentConfig
 from .errors import AgentError
-from .filesystem import Filesystem, _parts
+from .filesystem import Filesystem, _parts, _path
 
 StreamCallback = Callable[[str, str], Awaitable[None]]
 
@@ -1056,11 +1057,17 @@ class ProcessRunner:
                 os.close(directory_fd)
                 raise
 
-    def inspect_shell(self, command: str, current_directory: str) -> dict:
-        current = self.filesystem.resolve_directory(current_directory)["path"]
+    def inspect_shell(
+        self, command: str, current_directory: str, *, resolve_paths: bool = True
+    ) -> dict:
+        current = (
+            self.filesystem.resolve_directory(current_directory)["path"]
+            if resolve_paths
+            else _path(_parts(current_directory))
+        )
         targets: list[dict] = []
         commands: list[dict] = []
-        analysis_complete = True
+        analysis_complete = resolve_paths
         extraction_complete = True
         redirect_writes = False
         command_writes = False
@@ -1139,12 +1146,19 @@ class ProcessRunner:
                 kind, must_exist = "directory", True
             # Missing literals still carry their absolute path for policy checks. Hard
             # no-follow/access errors must not be mistaken for incomplete analysis.
-            target = self.filesystem.resolve_path_target(path, current, must_exist=False)
+            target = (
+                self.filesystem.resolve_path_target(path, current, must_exist=False)
+                if resolve_paths
+                else {"path": _path(_parts(posixpath.normpath(posixpath.join(current, path))))}
+            )
             if must_exist and "mode" not in target:
                 analysis_complete = False
             retain(target, kind, access)
 
         def discard(path: str) -> None:
+            if not resolve_paths:
+                retain({"path": path}, "discard")
+                return
             target = self.filesystem.resolve_path_target(path, current, must_exist=True)
             if not stat.S_ISCHR(target["mode"]) or target["rdev"] != os.makedev(1, 3):
                 raise AgentError("path.unsupportedType", "Discard target is not the null device")
@@ -1252,33 +1266,37 @@ class ProcessRunner:
         ):
             extraction_complete = False
 
-        metadata_safe = extraction_complete and not any(
-            Path(unit["tokens"][0]).name
-            in {
-                ".",
-                "source",
-                "eval",
-                "exec",
-                "export",
-                "unset",
-                "alias",
-                "unalias",
-                "hash",
-                "enable",
-                "builtin",
-                "command",
-                "env",
-                "set",
-                "shopt",
-                "trap",
-                "read",
-                "getopts",
-                "declare",
-                "typeset",
-                "local",
-                "readonly",
-            }
-            for unit in commands
+        metadata_safe = (
+            resolve_paths
+            and extraction_complete
+            and not any(
+                Path(unit["tokens"][0]).name
+                in {
+                    ".",
+                    "source",
+                    "eval",
+                    "exec",
+                    "export",
+                    "unset",
+                    "alias",
+                    "unalias",
+                    "hash",
+                    "enable",
+                    "builtin",
+                    "command",
+                    "env",
+                    "set",
+                    "shopt",
+                    "trap",
+                    "read",
+                    "getopts",
+                    "declare",
+                    "typeset",
+                    "local",
+                    "readonly",
+                }
+                for unit in commands
+            )
         )
 
         for redirect in _nodes(root, "file_redirect"):
@@ -1433,7 +1451,12 @@ class ProcessRunner:
                 if tokens[0] in ansi_words:
                     unsupported_target_quoting = True
                 else:
-                    for target in self.filesystem.resolve_executable_targets(tokens[0], current):
+                    executable_targets = (
+                        self.filesystem.resolve_executable_targets(tokens[0], current)
+                        if resolve_paths
+                        else [{"path": posixpath.normpath(posixpath.join(current, tokens[0]))}]
+                    )
+                    for target in executable_targets:
                         if "mode" not in target:
                             analysis_complete = False
                         retain(target, "executable", "read")
@@ -1572,95 +1595,16 @@ class ProcessRunner:
         stream: StreamCallback,
         expected_inspection_revision: str | None = None,
         environment: dict[str, str] | None = None,
-        elevated: bool = False,
-        sudo_password: str | None = None,
     ) -> dict:
         timeout = self.execution_timeout(timeout)
-        if elevated:
-            if self.shell is None or expected_inspection_revision is not None:
-                raise AgentError("process.notAllowed", "Elevated shell is unavailable")
-            _parse_shell(command)
-            sudo = shutil.which("sudo", path=EXECUTION_PATH)
-            if sudo is None:
-                raise AgentError("process.sudoUnavailable", "Sudo is unavailable")
-            sudo = os.fspath(self._resolve_executable(Path(sudo)))
-            if environment:
-                # sudo env_reset keeps only these validated names; no values enter argv.
-                names = sorted(environment)
-                command = (
-                    "if ! ("
-                    + " && ".join(f'test "${{{name}+x}}" = x' for name in names)
-                    + "); then echo 'Explicit elevated environment unavailable' >&2; exit 125; fi\n"
-                    + command
-                )
-            argv = [
-                sudo,
-                "-n",
-                *(["--preserve-env=" + ",".join(names)] if environment else []),
-                "--",
-                os.fspath(self.shell),
-                "-c",
-                command,
-            ]
-            inspection = None
-        else:
-            argv, inspection = self.execution_argv(
-                current_directory=current_directory,
-                command=command,
-                expected_inspection_revision=expected_inspection_revision,
-            )
+        argv, inspection = self.execution_argv(
+            current_directory=current_directory,
+            command=command,
+            expected_inspection_revision=expected_inspection_revision,
+        )
         cwd, cwd_fd = self._cwd(current_directory)
         started = time.monotonic()
         try:
-            if elevated:
-                attempts = [(("-n", "-v"), None)]
-                if sudo_password is not None:
-                    attempts.append((("-S", "-p", "", "-v"), sudo_password))
-                for options, password in attempts:
-                    check = await asyncio.create_subprocess_exec(
-                        sudo,
-                        *options,
-                        cwd=cwd,
-                        stdin=(
-                            asyncio.subprocess.PIPE
-                            if password is not None
-                            else asyncio.subprocess.DEVNULL
-                        ),
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
-                        pass_fds=(cwd_fd,),
-                    )
-                    try:
-                        await asyncio.wait_for(
-                            check.communicate(
-                                (password + "\n").encode() if password is not None else None
-                            ),
-                            min(timeout, 10),
-                        )
-                    except TimeoutError as exc:
-                        check.kill()
-                        await check.wait()
-                        raise AgentError(
-                            "process.timedOut", "Sudo authentication timed out"
-                        ) from exc
-                    except asyncio.CancelledError:
-                        check.kill()
-                        await check.wait()
-                        raise
-                    if check.returncode == 0:
-                        # The command's new session may not share the preflight sudo timestamp.
-                        if sudo_password is not None:
-                            argv[1:2] = ["-S", "-p", ""]
-                        break
-                else:
-                    if sudo_password is None:
-                        raise AgentError(
-                            "process.sudoAuthRequired", "Sudo authentication is required"
-                        )
-                    raise AgentError("process.sudoAuthFailed", "Sudo authentication failed")
-                timeout -= time.monotonic() - started
-                if timeout <= 0:
-                    raise AgentError("process.timedOut", "Sudo authentication timed out")
             # Procfs is only for descriptor-bound startup, never a logical HOME or PWD.
             process_environment = self.execution_environment(
                 current_directory, inspection, environment
@@ -1670,24 +1614,12 @@ class ProcessRunner:
                 *argv,
                 cwd=cwd,
                 env=process_environment,
-                stdin=(
-                    asyncio.subprocess.PIPE
-                    if elevated and argv[1] == "-S"
-                    else asyncio.subprocess.DEVNULL
-                ),
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
                 pass_fds=(cwd_fd,),
             )
-            if elevated and argv[1] == "-S":
-                try:
-                    process.stdin.write((sudo_password + "\n").encode())
-                    await process.stdin.drain()
-                    process.stdin.close()
-                except BaseException:
-                    await self._terminate(process)
-                    raise
         except OSError as exc:
             raise AgentError("process.startFailed", "Process could not be started") from exc
         finally:

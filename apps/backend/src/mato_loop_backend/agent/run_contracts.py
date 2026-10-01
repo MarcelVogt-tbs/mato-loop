@@ -34,3 +34,4 @@ class ApprovalResolution:
     decision: str
     expected_revision: str | None = None
     argument_edits: tuple[tuple[tuple[str, ...], str], ...] = ()
+    sudo_password: str | None = field(default=None, repr=False)

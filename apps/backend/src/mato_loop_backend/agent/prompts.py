@@ -240,7 +240,8 @@ def general_system_prompt(
         parts.append(
             "Credential routing overrides the missing-information contract. Account usernames count as credentials even when they are visible. "
             "Before authentication probes, integration setup, or commands, call secret_input, not question, once with all currently missing "
-            "credentials. Use "
+            "credentials. Administrator passwords are handled by elevated tools' approval requests; "
+            "do not request them separately. Use "
             "masked=false for visible identifiers and masked=true for secrets. Pass only references to "
              "customize_matoloop; references remain reusable throughout the current run. For protected text, "
             "use literal and {value_ref: reference} parts; never interpolate values in model text. Reuse available references. "
@@ -254,12 +255,7 @@ def general_system_prompt(
                 "In shell commands, reference only environment variable names; never reveal, transform, "
              "persist, or trace credential values, session cookies, or derived authentication tokens. "
                 "For administrator commands use shell_run(elevated=true), without sudo in the command. "
-                "Before elevated execution, reuse a sudo reference for the selected computer. If none is available, "
-                "call secret_input with masked=true and name "
-                "SUDO_PASSWORD_<selected agent UUID without dashes, uppercase> and wait for its result. "
-                "Pass the existing or returned reference explicitly as sudo_password_ref, including on retries. "
-                "Omit the reference only when passwordless sudo is already confirmed for this computer; "
-                "do not probe elevated execution without a reference. "
+                "The host combines approval and any missing administrator password in one request. "
                 "A secret-output warning identifies a possible risk, not a confirmed disclosure; assess "
                 "the command, execution status, and result."
             )
@@ -414,16 +410,18 @@ def general_system_prompt(
         )
     if file_tools_available:
         parts.append(
-            "Prefer file tools. "
+            "Use file tools for supported file changes, not shell/Python/Node.js scripts. "
+            "shell.read does not authorize write effects requiring approval. "
             + (
-                "file.accessDenied is not permission.userDenied. If administrator access is needed, "
-                "use shell_run(elevated=true) under its own permissions. Never bypass denied "
-                "approval, disabled capability, or hard path boundary. "
+                "file.accessDenied is not permission.userDenied. Try ordinary access first; "
+                "retry protected UTF-8 computer files with elevated=true on read/write_file/edit_file. "
+                "Never bypass denied approval, disabled capabilities, or hard path boundaries. "
                 if "shell_run" in offered_tool_names else ""
             )
-            + "Batch known independent calls. Scope reads and searches. Use explicit root and "
-            "relative POSIX path ('.' for root; no absolute path or root prefix). root=files is "
-            "managed; root=computer uses its selected directory. Copy and move need an unused destination."
+            + "Batch independent calls. Scope reads/searches. Use explicit root. "
+            "root=files uses relative POSIX paths ('.' for root; no absolute path or root prefix). "
+            "root=computer accepts absolute paths or directory-relative paths. "
+            "Copy and move need an unused destination."
         )
     if "write_file" in offered_tool_names:
         parts.append(

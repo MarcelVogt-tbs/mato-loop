@@ -103,6 +103,7 @@ async def decide_agent_action(
     argument_edits: tuple[tuple[tuple[str, ...], str], ...] = (),
     argument_revision: str | None = None,
     idempotent_same_decision: bool = False,
+    sudo_password: str | None = None,
 ) -> dict[str, str]:
     async def decide() -> dict[str, str]:
         await db.refresh(approval, with_for_update=True)
@@ -121,6 +122,7 @@ async def decide_agent_action(
             argument_edits=argument_edits,
             argument_revision=argument_revision,
             idempotent_same_decision=idempotent_same_decision,
+            sudo_password=sudo_password,
         )
 
     task = asyncio.create_task(decide())
@@ -140,7 +142,13 @@ async def _decide_agent_action(
     argument_edits=(),
     argument_revision=None,
     idempotent_same_decision=False,
+    sudo_password=None,
 ) -> dict[str, str]:
+    if sudo_password is not None and (
+        not decision.startswith("allow") or approval.resource_type != "execution_administrator"
+        or not (approval.payload or {}).get("sudoPasswordInput")
+    ):
+        raise ApprovalDecisionError(400, "validation.invalid", field="sudo_password")
     if approval.status != "pending":
         if (
             idempotent_same_decision
@@ -182,7 +190,7 @@ async def _decide_agent_action(
         except (Exception, asyncio.CancelledError):
             AgentRuntime.release_approval_resolution(approval.id)
             raise
-        resolution = ApprovalResolution(decision, argument_edits=edits)
+        resolution = ApprovalResolution(decision, argument_edits=edits, sudo_password=sudo_password)
         if not AgentRuntime.resolve_approval(approval.id, resolution):
             approval.status = "expired"
             approval.decision = None
@@ -314,7 +322,7 @@ async def _decide_agent_action(
         AgentRuntime.release_approval_resolution(approval.id)
         raise
 
-    resolution = ApprovalResolution(decision, expected_revision)
+    resolution = ApprovalResolution(decision, expected_revision, sudo_password=sudo_password)
     if not AgentRuntime.resolve_approval(approval.id, resolution):
         approval.status = "expired"
         approval.decision = None

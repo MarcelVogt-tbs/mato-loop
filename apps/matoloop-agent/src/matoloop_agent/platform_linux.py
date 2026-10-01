@@ -113,9 +113,8 @@ class LinuxPlatform:
             }
         if process.shell is None:
             operations.remove("shell.run")
-            operations.discard("shell.elevated")
         if shutil.which("sudo") is None or os.geteuid() == 0:
-            operations.discard("shell.elevated")
+            operations.discard("administrator.run")
         if not terminal.available:
             operations -= {
                 "terminal.open",

@@ -27,6 +27,16 @@ describe('inline approvals', () => {
     })
   })
 
+  it('sends an administrator password only with an allow decision', async () => {
+    api.post.mockResolvedValue({ data: { status: 'approved' } })
+    const approvals = useApprovalStore()
+    await approvals.decide('admin', 'allow_session', undefined, undefined, undefined, 'private password')
+    await approvals.decide('denied', 'deny', undefined, undefined, undefined, 'private password')
+    expect(api.post.mock.calls.map((call) => call[1])).toEqual([
+      { decision: 'allow_session', sudo_password: 'private password' }, { decision: 'deny' }
+    ])
+  })
+
   it('loads pending approvals with request options and exposes their count', async () => {
     api.get.mockResolvedValue({ data: [{ id: 'approval-1' }] })
     const approvals = useApprovalStore()

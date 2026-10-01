@@ -13,6 +13,7 @@ from sqlalchemy import and_, select
 
 import mato_loop_backend.files.access as files_access
 import mato_loop_backend.tools.access as tools_access
+import mato_loop_backend.tools.administrator as administrator
 from mato_loop_backend.execution import (
     ExecutionClientError,
     WorkspaceDeleteResult,
@@ -48,6 +49,7 @@ from mato_loop_backend.media.attachments import (
     validate_image,
 )
 from mato_loop_backend.models import Message, MessageAttachment
+from mato_loop_backend.permissions.policy import administrator_permission
 from mato_loop_backend.providers.service import normalize_provider_image
 from mato_loop_backend.settings import ToolExecutionPolicy
 from mato_loop_backend.tools.actions import (
@@ -87,6 +89,22 @@ ALL_TOOL_EXECUTION_POLICIES = tuple(ToolExecutionPolicy)
 async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
     if files_access.delegated_session_files(context, arguments.root):
         return ToolResult.error("tool.unavailable")
+    if arguments.elevated:
+        client = files_access.workspace_client(context)
+        if not client.supports("administrator.run"):
+            return ToolResult.error("executionAgent.operationUnavailable")
+        path = files_access.execution_path(context, arguments.path)
+        permission = administrator_permission(client.agent_id, client.current_directory, capability="filesystem.read", path=path)
+        if not await administrator.authorize(context, permission, arguments.sudo_password_ref):
+            return ToolResult.error("permission.denied")
+        result = await administrator.invoke(context, "filesystem.read", {
+            "path": path, "offset": arguments.offset, "limit": arguments.limit, "maxLineLength": 2000,
+        }, WorkspaceReadResult, arguments.sudo_password_ref)
+        if isinstance(result, ToolResult):
+            return result
+        tool_result = _read_text_result(arguments, context.session.id, result)
+        tool_result.content += f"\n\n[File SHA-256: {result.sha256}]"
+        return tool_result
     selected = await files_access.project_read_files(arguments, context)
     if selected is None:
         return ToolResult.error("permission.denied")
@@ -251,6 +269,10 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
             offset=arguments.offset,
             limit=arguments.limit,
         )
+    return _read_text_result(arguments, target_session_id, result)
+
+
+def _read_text_result(arguments: ReadArguments, target_session_id: UUID, result) -> ToolResult:
     content = result.content
     notices = []
     if result.truncated_lines:
@@ -608,7 +630,15 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
         action_kind="write_file",
         action_label="Datei schreiben",
     )
-    if not await tools_access.allow(context, request):
+    if arguments.elevated:
+        client = files_access.workspace_client(context)
+        if not client.supports("administrator.run"):
+            return ToolResult.error("executionAgent.operationUnavailable")
+        request = administrator_permission(client.agent_id, client.current_directory, capability=capability, path=path)
+        allowed = await administrator.authorize(context, request, arguments.sudo_password_ref)
+    else:
+        allowed = await tools_access.allow(context, request)
+    if not allowed:
         return ToolResult.error("permission.denied")
     resolved = await resolve_protected_text(context, arguments.content)
     if isinstance(resolved, ToolResult):
@@ -621,9 +651,8 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
     if _omitted_file_content(content):
         return ToolResult.error("file.omittedContent", field="content")
     if arguments.root == "workspace":
-        result = await files_access.workspace_request(
-            context,
-            "filesystem.write",
+        result = await (administrator.invoke if arguments.elevated else files_access.workspace_request)(
+            context, "filesystem.write",
             {
                 "path": path,
                 "content": content,
@@ -634,7 +663,10 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
                 ),
             },
             WorkspaceWriteResult,
+            **({"reference": arguments.sudo_password_ref} if arguments.elevated else {}),
         )
+        if isinstance(result, ToolResult):
+            return result
         assert isinstance(result, WorkspaceWriteResult)
         files_access.require_workspace_path(result.path, path)
         return ToolResult.json(
@@ -700,7 +732,15 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
         action_kind="edit_file",
         action_label="Datei bearbeiten",
     )
-    if not await tools_access.allow(context, request):
+    if arguments.elevated:
+        client = files_access.workspace_client(context)
+        if not client.supports("administrator.run"):
+            return ToolResult.error("executionAgent.operationUnavailable")
+        request = administrator_permission(client.agent_id, client.current_directory, capability="filesystem.write", path=path)
+        allowed = await administrator.authorize(context, request, arguments.sudo_password_ref)
+    else:
+        allowed = await tools_access.allow(context, request)
+    if not allowed:
         return ToolResult.error("permission.denied")
     old = await resolve_protected_text(context, arguments.old_text)
     if isinstance(old, ToolResult):
@@ -718,9 +758,8 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
     if _omitted_file_content(old_text) or _omitted_file_content(new_text):
         return ToolResult.error("file.omittedContent")
     if arguments.root == "workspace":
-        result = await files_access.workspace_request(
-            context,
-            "filesystem.edit",
+        result = await (administrator.invoke if arguments.elevated else files_access.workspace_request)(
+            context, "filesystem.edit",
             {
                 "path": path,
                 "oldText": old_text,
@@ -733,7 +772,10 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
                 ),
             },
             WorkspaceWriteResult,
+            **({"reference": arguments.sudo_password_ref} if arguments.elevated else {}),
         )
+        if isinstance(result, ToolResult):
+            return result
         assert isinstance(result, WorkspaceWriteResult)
         files_access.require_workspace_path(result.path, path)
         return ToolResult.json(
@@ -1176,7 +1218,9 @@ READ = ToolDefinition(
             "Read a directory, UTF-8 text, or PNG/JPEG/WebP/GIF image. "
             "Pagination applies to directories and text. "
             "To inspect an image, read its source path in root=computer or root=files directly; "
-            "do not copy it or call provide_file first.",
+             "do not copy it or call provide_file first. elevated=true supports regular UTF-8 computer files; "
+             "the host combines administrator approval and any missing password in one request. "
+             "Reuse its returned file SHA-256 as expectedSha256 when changing the file.",
             ReadArguments,
             _read,
             tool_type="shared",
@@ -1241,7 +1285,8 @@ WRITE_FILE = ToolDefinition(
             "write_file",
             "Write complete UTF-8 content to one file, creating or replacing it. content may "
             "contain protected text parts with value_ref from secret_input; resolve only after "
-            "file access is authorized.",
+             "file access is authorized. elevated=true uses administrator rights for root=computer; "
+             "the host handles approval and any missing password.",
             WriteFileArguments,
             _write_file,
             tool_type="shared",
@@ -1257,7 +1302,8 @@ WRITE_FILE = ToolDefinition(
 EDIT_FILE = ToolDefinition(
             "edit_file",
             "Replace exact text in one existing UTF-8 file. oldText must be unique unless replaceAll is true. "
-            "oldText and newText may contain protected text parts with value_ref from secret_input.",
+             "oldText and newText may contain protected text parts with value_ref from secret_input. "
+             "elevated=true uses administrator rights for root=computer; the host handles approval and any missing password.",
             EditFileArguments,
             _edit_file,
             tool_type="shared",

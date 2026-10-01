@@ -305,7 +305,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(task.cancelled())
 
     def test_bounded_contract_and_operations(self):
-        self.assertEqual(len(ARGUMENT_MODELS) + len(BROWSER_ARGUMENT_MODELS), 61)
+        self.assertEqual(len(ARGUMENT_MODELS) + len(BROWSER_ARGUMENT_MODELS), 62)
         self.assertLessEqual(len(self.agent.hello().operations), 64)
         for width, height in ((320, 240), (3840, 2160), (1001, 701)):
             args = BrowserResizeArguments(browserId=self.browser_id, width=width, height=height)

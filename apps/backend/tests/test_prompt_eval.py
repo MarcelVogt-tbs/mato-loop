@@ -1737,6 +1737,8 @@ def test_evaluate_checks_expected_tool_arguments_and_paths() -> None:
 
     assert evaluate(case, valid) == []
     assert "read.root expected 'computer', got 'files'" in evaluate(case, invalid)
+    assert not any("invalid relative path" in failure for failure in evaluate(case, absolute))
+    absolute.tool_calls[0].arguments["root"] = "files"
     assert any("invalid relative path" in failure for failure in evaluate(case, absolute))
 
 

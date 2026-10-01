@@ -1,4 +1,5 @@
 import asyncio
+import json
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -23,6 +24,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.permissions.decisions import ApprovalDecisionError, decide_agent_action
 from mato_loop_backend.permissions.policy import (
     PermissionRequest,
+    administrator_permission,
     execution_directory_scope,
     integration_operation_permission,
     session_grants_fingerprint,
@@ -121,6 +123,26 @@ async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None
         approval.id, ApprovalResolution(decision="allow_session")
     )
     assert result == {"status": "approved", "decision": "allow_session"}
+
+
+async def test_administrator_decision_keeps_password_out_of_persistence(monkeypatch):
+    approval = _approval()
+    request = administrator_permission(uuid4(), "/work", capability="filesystem.write", path="/etc/demo.conf")
+    approval.resource_type, approval.resource_scope, approval.capability = request.resource_type, request.resource_scope, request.capability
+    approval.payload = {**request.approval_details, "sudoPasswordInput": True, "sessionGrants": session_grants_payload(request)}
+    _fingerprint(approval)
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = approval
+    db.scalar.return_value = None
+    resolve = Mock(return_value=True)
+    monkeypatch.setattr(AgentRuntime, "claim_approval_resolution", Mock(return_value=True))
+    monkeypatch.setattr(AgentRuntime, "resolve_approval", resolve)
+    monkeypatch.setattr(run_events, "publish", AsyncMock())
+    user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
+    await decide_approval(approval.id, ApprovalDecisionRequest(decision="allow_session", sudo_password="private password"), user, db)
+    assert "private password" not in json.dumps(approval.payload)
+    assert resolve.call_args.args[1].sudo_password == "private password"
+    assert [call.args[0].resource_type for call in db.add.call_args_list] == ["execution_administrator", "execution_administrator"]
 
 
 async def test_mcp_allow_session_persists_tool_grant(monkeypatch) -> None:

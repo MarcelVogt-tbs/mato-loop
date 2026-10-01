@@ -6857,11 +6857,14 @@ def _validate_tool_calls(
             failures.append(f"{call.name} returned invalid arguments")
             continue
         path_fields = [
-            value
+            (key, value)
             for key, value in call.arguments.items()
             if key in {"path", "source_path", "destination_path"} and isinstance(value, str)
         ]
-        for path in path_fields:
+        for key, path in path_fields:
+            root_field = {"source_path": "source_root", "destination_path": "destination_root"}.get(key, "root")
+            if call.arguments.get(root_field) in {"computer", "workspace"}:
+                continue
             parts = PurePosixPath(path).parts
             if (
                 path.startswith("/")

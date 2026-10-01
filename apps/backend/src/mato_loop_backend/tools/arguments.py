@@ -304,7 +304,23 @@ class SessionFileReadArguments(ToolArguments):
         return self
 
 
-class ReadArguments(SessionFileReadArguments):
+class ElevatedArguments(ToolArguments):
+    elevated: bool = False
+    sudo_password_ref: UUID | Annotated[
+        str,
+        Field(pattern=r"^(?:run|session)-secret:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"),
+    ] | None = None
+
+    @model_validator(mode="after")
+    def valid_elevation(self):
+        if self.sudo_password_ref is not None and not self.elevated:
+            raise ValueError("Sudo reference requires elevated execution")
+        if self.elevated and getattr(self, "root", "workspace") != "workspace":
+            raise ValueError("Elevated access requires the computer root")
+        return self
+
+
+class ReadArguments(SessionFileReadArguments, ElevatedArguments):
     path: str = Field(min_length=1, max_length=1_000)
     offset: int = Field(default=1, ge=1)
     limit: int = Field(default=1_000, ge=1, le=1_000)
@@ -335,7 +351,7 @@ class ProvideFileArguments(SessionFileReadArguments):
         return self
 
 
-class WriteFileArguments(ToolArguments):
+class WriteFileArguments(ElevatedArguments):
     root: Literal["session", "workspace"]
     path: str = Field(min_length=1, max_length=1_000)
     content: Annotated[str, Field(max_length=1_000_000)] | ProtectedText
@@ -344,7 +360,7 @@ class WriteFileArguments(ToolArguments):
     )
 
 
-class EditFileArguments(ToolArguments):
+class EditFileArguments(ElevatedArguments):
     root: Literal["session", "workspace"]
     path: str = Field(min_length=1, max_length=1_000)
     old_text: Annotated[str, Field(min_length=1, max_length=1_000_000)] | ProtectedText = Field(alias="oldText")
@@ -403,13 +419,8 @@ class MovePathArguments(CopyPathArguments):
     pass
 
 
-class ShellRunArguments(ToolArguments):
+class ShellRunArguments(ElevatedArguments):
     command: str = Field(min_length=1, max_length=256 * 1024)
-    elevated: bool = False
-    sudo_password_ref: UUID | Annotated[
-        str,
-        Field(pattern=r"^(?:run|session)-secret:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"),
-    ] | None = None
     environment: dict[
         Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")],
         UUID
@@ -466,13 +477,6 @@ class ShellRunArguments(ToolArguments):
         ):
             raise ValueError("environment contains a protected name")
         return value
-
-    @model_validator(mode="after")
-    def sudo_password_requires_elevation(self) -> ShellRunArguments:
-        if self.sudo_password_ref is not None and not self.elevated:
-            raise ValueError("sudo password requires elevated execution")
-        return self
-
 
 class VariableReadArguments(ToolArguments):
     name: str | None = Field(

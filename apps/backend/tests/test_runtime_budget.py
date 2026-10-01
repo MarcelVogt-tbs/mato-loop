@@ -206,7 +206,7 @@ async def test_sudo_retry_requires_changed_authentication_for_the_selected_agent
         monkeypatch,
         [ProviderResult(tool_calls=[call]) for call in calls] + [ProviderResult(content="Done")],
         search_policy=WebSearchPolicy.AVAILABLE, execution_agent_id=agent_id,
-        execution_operations=("shell.run", "shell.elevated"),
+        execution_operations=("shell.run", "shell.classify", "administrator.run"),
     )
     run.current_directory_snapshot = "/work"
     question = AsyncMock(return_value=ProtectedQuestionResolution({name: ["private password"]}, frozenset()))

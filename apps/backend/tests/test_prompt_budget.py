@@ -119,7 +119,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
         "brief",
         "name_hint",
     }
-    assert prompt_tokens <= 7_620, prompt_tokens
-    # Protected text references and Wi-Fi QR arguments expand the tool schemas.
-    assert schema_tokens <= 12_500, schema_tokens
-    assert prompt_tokens + schema_tokens <= 20_100, prompt_tokens + schema_tokens
+    assert prompt_tokens <= 7_800, prompt_tokens
+    # Protected text, Wi-Fi QR and optional administrator arguments expand the schemas.
+    assert schema_tokens <= 12_800, schema_tokens
+    assert prompt_tokens + schema_tokens <= 20_600, prompt_tokens + schema_tokens

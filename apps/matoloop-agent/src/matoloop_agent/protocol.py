@@ -298,22 +298,10 @@ class ShellArguments(HostDirectoryArguments):
     _environment_is_bounded = field_validator("environment")(_bounded_unprotected_environment)
 
 
-class ElevatedShellArguments(HostDirectoryArguments):
-    command: str = Field(min_length=1, max_length=256 * 1024)
-    timeout_seconds: float | None = Field(default=None, alias="timeoutSeconds", gt=0, le=3600)
-    sudo_password: str | None = Field(
-        default=None, alias="sudoPassword", min_length=1, max_length=4096
-    )
-    environment: dict[EnvironmentName, EnvironmentValue] | None = Field(default=None, max_length=32)
-
-    _environment_is_bounded = field_validator("environment")(_bounded_unprotected_environment)
-
-    @field_validator("sudo_password")
-    @classmethod
-    def password_is_single_line(cls, value: str | None) -> str | None:
-        if value is not None and any(character in value for character in "\r\n\0"):
-            raise ValueError("invalid sudo password")
-        return value
+def _single_line_password(value: str | None) -> str | None:
+    if value is not None and any(character in value for character in "\r\n\0"):
+        raise ValueError("Invalid sudo password")
+    return value
 
 
 class ResolveDirectoryArguments(PathArguments):
@@ -333,6 +321,32 @@ class SystemInfoArguments(StrictModel):
 
 class ShellInspectArguments(HostDirectoryArguments):
     command: str = Field(min_length=1, max_length=256 * 1024)
+
+
+class AdministratorArguments(StrictModel):
+    operation: Literal[
+        "authenticate",
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.edit",
+        "shell.inspect",
+        "shell.run",
+    ]
+    arguments: dict[str, Any]
+    sudo_password: str | None = Field(
+        default=None, alias="sudoPassword", min_length=1, max_length=4096, repr=False
+    )
+
+    _password_is_single_line = field_validator("sudo_password")(_single_line_password)
+
+    @model_validator(mode="after")
+    def validate_operation(self):
+        if self.operation == "authenticate":
+            if self.arguments or self.sudo_password is not None:
+                raise ValueError("Authentication probe accepts no arguments or password")
+        else:
+            ARGUMENT_MODELS[self.operation].model_validate(self.arguments)
+        return self
 
 
 class TerminalOpenArguments(StrictModel):
@@ -522,9 +536,7 @@ class MaintenanceStartArguments(StrictModel):
         default=None, alias="sudoPassword", min_length=1, max_length=4096
     )
 
-    _password_is_single_line = field_validator("sudo_password")(
-        ElevatedShellArguments.password_is_single_line.__func__
-    )
+    _password_is_single_line = field_validator("sudo_password")(_single_line_password)
 
 
 ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
@@ -548,8 +560,9 @@ ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "filesystem.import": ImportArguments,
     "filesystem.export": ExportArguments,
     "shell.run": ShellArguments,
-    "shell.elevated": ElevatedShellArguments,
     "shell.inspect": ShellInspectArguments,
+    "shell.classify": ShellInspectArguments,
+    "administrator.run": AdministratorArguments,
     "terminal.open": TerminalOpenArguments,
     "terminal.read": TerminalReadArguments,
     "terminal.write": TerminalWriteArguments,

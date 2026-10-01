@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +39,14 @@ class ApprovalDecisionRequest(BaseModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+    sudo_password: str | None = Field(default=None, min_length=1, max_length=4096, repr=False)
+
+    @field_validator("sudo_password")
+    @classmethod
+    def single_line_password(cls, value: str | None) -> str | None:
+        if value is not None and any(character in value for character in "\r\n\0"):
+            raise ValueError("Invalid sudo password")
+        return value
 
 
 def _permission_payload(
@@ -124,6 +132,11 @@ async def decide_approval(
     approval = await db.get(ApprovalRequest, approval_id)
     if approval is None or approval.user_id != user.id:
         raise ApiError(404, "approval.notFound")
+    if payload.sudo_password is not None and (
+        not payload.decision.startswith("allow") or approval.resource_type != "execution_administrator"
+        or not (approval.payload or {}).get("sudoPasswordInput")
+    ):
+        raise ApiError(400, "validation.invalid", field="sudo_password")
     if payload.memory_edit is not None and (
         payload.decision != "approve"
         or approval.request_type != "memory_change"
@@ -164,6 +177,7 @@ async def decide_approval(
                 else ()
             ),
             argument_revision=payload.argument_revision,
+            sudo_password=payload.sudo_password,
         )
     except ApprovalDecisionError as exc:
         raise ApiError(

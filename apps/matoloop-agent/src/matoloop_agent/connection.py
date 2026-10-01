@@ -14,6 +14,7 @@ from .config import AgentConfig
 from .errors import AgentError
 from .platform import RuntimeServices, TransferAdapter, current_platform
 from .protocol import (
+    AdministratorArguments,
     CacheEnsureArguments,
     CacheExportArguments,
     CacheStoreArguments,
@@ -21,7 +22,6 @@ from .protocol import (
     CopyMoveArguments,
     DeleteArguments,
     EditArguments,
-    ElevatedShellArguments,
     Error,
     Event,
     ExportArguments,
@@ -156,6 +156,15 @@ class MatoLoopAgent:
 
         if request.operation not in self.operations:
             raise AgentError("operation.unsupported", "Operation is not supported")
+
+        if isinstance(arguments, AdministratorArguments):
+            from .administrator import run_administrator
+
+            return await run_administrator(self.config, arguments, stream)
+        if request.operation == "shell.classify":
+            return self.process.inspect_shell(
+                arguments.command, arguments.current_directory, resolve_paths=False
+            )
 
         if request.operation in BROWSER_ARGUMENT_MODELS:
             return await self.browser.dispatch(request.operation, arguments)
@@ -334,21 +343,6 @@ class MatoLoopAgent:
                 timeout=arguments.timeout_seconds,
                 stream=stream,
                 expected_inspection_revision=arguments.expected_inspection_revision,
-                environment=arguments.environment,
-            )
-        if isinstance(arguments, ElevatedShellArguments):
-            if stream is None:
-
-                async def stream(_channel: str, _data: str) -> None:
-                    return None
-
-            return await self.process.exec(
-                current_directory=arguments.current_directory,
-                command=arguments.command,
-                timeout=arguments.timeout_seconds,
-                stream=stream,
-                elevated=True,
-                sudo_password=arguments.sudo_password,
                 environment=arguments.environment,
             )
         if isinstance(arguments, ShellInspectArguments):

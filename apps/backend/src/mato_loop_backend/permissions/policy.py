@@ -114,6 +114,8 @@ class PermissionRequest:
     # Derived from the current shell inspection, never from approval payloads or grants.
     shell_metadata_paths: frozenset[str] = frozenset()
     session_grants: tuple[SessionGrantScope, ...] = ()
+    administrator_paths: tuple[str, ...] = ()
+    administrator_analysis_complete: bool = True
 
     @property
     def grant_capabilities(self) -> tuple[str, ...]:
@@ -172,8 +174,8 @@ def session_grants_fingerprint(
 def session_grants_display(request: PermissionRequest) -> list[str]:
     result = []
     for grant in request.effective_session_grants:
-        if grant.resource_type == "shell_elevated_command":
-            result.append(f"Nur dieser Administrator-Befehl: {grant.resource_display}")
+        if grant.resource_type == "execution_administrator":
+            result.append(f"Administrator-{'Lese' if grant.access == 'read' else 'Schreib'}zugriffe auf diesem Computer: {grant.resource_display}")
             continue
         subtree = grant.resource_type in {"execution_directory", "root_path"}
         if grant.resource_type == "execution_directory":
@@ -1237,28 +1239,39 @@ def shell_command_permission(
     )
 
 
-def elevated_shell_permission(agent_id: UUID, current_directory: str, command: str) -> PermissionRequest:
+def administrator_permission(
+    agent_id: UUID, current_directory: str, *, capability: str,
+    command: str | None = None, path: str | None = None,
+    inspection: ShellInspectResult | None = None,
+) -> PermissionRequest:
     scope = json.dumps(
-        {"agentId": str(agent_id), "currentDirectory": current_directory, "command": command},
+        {"agentId": str(agent_id), "currentDirectory": current_directory,
+         **({"command": command} if command is not None else {"path": path})},
         sort_keys=True, separators=(",", ":"),
     )
+    paths = tuple(target.path for target in inspection.targets) if inspection else (path,)
+    confidential = any(confidential_execution_path(value) for value in paths if value)
+    secret_output = inspection is not None and _shell_may_expose_secret(current_directory, inspection)
     return PermissionRequest(
-        capability="shell.write",
-        resource_type="shell_elevated_command",
-        resource_scope=scope,
-        action_kind="shell_run",
-        risk_level="high",
-        title="Befehl als Administrator ausführen?",
-        summary="Dieser Befehl kann den gesamten Computer mit Administratorrechten verwalten.",
-        resource_display=current_directory,
-        display_items=(
-            PermissionDisplayItem("Computer", str(agent_id)),
-            PermissionDisplayItem("Arbeitsverzeichnis", current_directory),
-            PermissionDisplayItem("Administrator-Befehl", command, "code"),
-        ),
-        session_grants=(SessionGrantScope(
-            "write", "shell_elevated_command", scope, command[:120],
-        ),),
+        capability=capability, resource_type="execution_administrator", resource_scope=scope,
+        action_kind="shell_run" if command is not None else "read" if capability == "filesystem.read" else "edit_file",
+        risk_level="high", title="Administratorzugriff erlauben?",
+        summary="Die angezeigte Aktion wird mit Administratorrechten auf dem ausgewählten Computer ausgeführt.",
+        resource_display=path or current_directory,
+        display_items=(PermissionDisplayItem("Computer", str(agent_id)),
+                       PermissionDisplayItem("Shell-Befehl" if command is not None else "Datei", command or path, "code")),
+        approval_details={
+            "administratorAgentId": str(agent_id),
+            **({"shellClassification": inspection.classification,
+                "shellAnalysisComplete": inspection.analysis_complete} if inspection else {}),
+        },
+        administrator_paths=tuple(value for value in paths if value),
+        administrator_analysis_complete=inspection.analysis_complete if inspection else True,
+        force_ask=confidential or secret_output,
+        available_decisions=("allow_once", "deny") if confidential or secret_output else ("allow_once", "allow_session", "deny"),
+        session_grants=tuple(SessionGrantScope(
+            access, "execution_administrator", str(agent_id), str(agent_id),
+        ) for access in ("read", "write")),
     )
 
 
@@ -1350,6 +1363,16 @@ def session_grant_matches_request(
     resource_scope: str,
     grant: SessionGrantScope,
 ) -> bool:
+    if resource_type == "execution_administrator":
+        try:
+            scope = json.loads(resource_scope)
+            return (
+                capability in {"shell.read", "shell.write", "filesystem.read", "filesystem.write"}
+                and grant.resource_type == "execution_administrator"
+                and str(UUID(scope["agentId"])) == str(UUID(grant.resource_scope))
+            )
+        except (ValueError, KeyError, TypeError):
+            return False
     if resource_type != "shell_command" and grant.access != _access_for_capability(capability):
         return False
     if resource_type == "root_path":
@@ -1595,6 +1618,61 @@ class PermissionPolicy:
             if policy == ToolExecutionPolicy.AUTO:
                 return PermissionDecision.ALLOW
 
+        if request.resource_type == "execution_administrator":
+            try:
+                scope = json.loads(request.resource_scope)
+                agent_id = UUID(scope["agentId"])
+                shell = "command" in scope
+                if (
+                    set(scope) != {"agentId", "currentDirectory", "command" if shell else "path"}
+                    or scope["currentDirectory"] != chat_session.current_directory
+                    or request.capability not in ({"shell.read", "shell.write"} if shell else {"filesystem.read", "filesystem.write"})
+                    or not isinstance(scope["command" if shell else "path"], str)
+                    or not scope["command" if shell else "path"]
+                    or PurePosixPath(scope["currentDirectory"]).as_posix() != scope["currentDirectory"]
+                    or not PurePosixPath(scope["currentDirectory"]).is_absolute()
+                    or any(not PurePosixPath(path).is_absolute() or PurePosixPath(path).as_posix() != path for path in request.administrator_paths)
+                ):
+                    return PermissionDecision.DENY
+                agent = await db.scalar(select(ExecutionAgent).where(
+                    ExecutionAgent.id == agent_id, ExecutionAgent.user_id == chat_session.user_id,
+                    ExecutionAgent.revoked_at.is_(None),
+                ).execution_options(populate_existing=True))
+                if agent is None or chat_session.preferred_execution_agent_id != agent_id or policy == ToolExecutionPolicy.DISABLED:
+                    return PermissionDecision.DENY
+                paths = (scope["currentDirectory"], *request.administrator_paths) if shell else request.administrator_paths
+                if not shell and scope["path"] not in request.administrator_paths:
+                    return PermissionDecision.DENY
+                home = PurePosixPath(agent.home_directory) if agent.home_directory else None
+                workspace = PurePosixPath(scope["currentDirectory"])
+                zones = {"home" if home and _path_is_within(PurePosixPath(path), home) else "external" for path in paths}
+                outside = any(not _path_is_within(PurePosixPath(path), workspace) for path in paths)
+                if not request.administrator_analysis_complete:
+                    zones.add("external")
+                    outside = True
+                if (
+                    any(getattr(agent, f"{zone}_filesystem_policy") == "deny" for zone in zones)
+                    or shell and any(not getattr(agent, f"{zone}_shell_enabled") for zone in zones)
+                    or outside and external_working_directory_policy == ToolExecutionPolicy.DISABLED
+                ):
+                    return PermissionDecision.DENY
+                if request.force_ask or (request.approval_details or {}).get("sudoPasswordInput"):
+                    return PermissionDecision.ASK
+                if policy == ToolExecutionPolicy.AUTO and (not outside or external_working_directory_policy == ToolExecutionPolicy.AUTO):
+                    return PermissionDecision.ALLOW
+                access = _access_for_capability(request.capability)
+                grants = (await db.scalars(select(PermissionGrant).where(
+                    PermissionGrant.session_id == grant_session_id,
+                    PermissionGrant.capability == f"resource.{access}",
+                    PermissionGrant.resource_type == "execution_administrator",
+                    PermissionGrant.resource_scope == str(agent_id),
+                    *grant_binding_conditions(),
+                ))).all()
+                granted_scope = SessionGrantScope(access, "execution_administrator", str(agent_id))
+                return PermissionDecision.ALLOW if any(PermissionPolicy.scope_matches(grant, granted_scope, root_files) for grant in grants) else PermissionDecision.ASK
+            except (KeyError, ValueError, TypeError):
+                return PermissionDecision.DENY
+
         if request.resource_type == "execution_directory":
             scope = _execution_directory_scope(request.resource_scope)
             if scope is None:
@@ -1647,55 +1725,6 @@ class PermissionPolicy:
                     )
                 ).all()
             )
-            return (
-                PermissionDecision.ALLOW
-                if any(PermissionPolicy.grant_matches(item, request, root_files) for item in grants)
-                else PermissionDecision.ASK
-            )
-
-        if request.resource_type == "shell_elevated_command":
-            try:
-                scope = json.loads(request.resource_scope)
-                agent_id = UUID(scope["agentId"])
-                if (
-                    set(scope) != {"agentId", "currentDirectory", "command"}
-                    or request.capability != "shell.write"
-                    or not isinstance(scope["command"], str)
-                    or not scope["command"]
-                    or not isinstance(scope["currentDirectory"], str)
-                    or not PurePosixPath(scope["currentDirectory"]).is_absolute()
-                    or PurePosixPath(scope["currentDirectory"]).as_posix() != scope["currentDirectory"]
-                    or json.dumps(scope, sort_keys=True, separators=(",", ":")) != request.resource_scope
-                    or scope["currentDirectory"] != chat_session.current_directory
-                ):
-                    return PermissionDecision.DENY
-            except (KeyError, TypeError, ValueError):
-                return PermissionDecision.DENY
-            agent = await db.scalar(select(ExecutionAgent).where(
-                ExecutionAgent.id == agent_id,
-                ExecutionAgent.user_id == chat_session.user_id,
-                ExecutionAgent.revoked_at.is_(None),
-            ).execution_options(populate_existing=True))
-            if (
-                agent is None or chat_session.preferred_execution_agent_id != agent_id
-                or policy == ToolExecutionPolicy.DISABLED
-                or external_working_directory_policy == ToolExecutionPolicy.DISABLED
-                or not agent.home_shell_enabled or not agent.external_shell_enabled
-                or "deny" in (agent.home_filesystem_policy, agent.external_filesystem_policy)
-            ):
-                return PermissionDecision.DENY
-            if (
-                policy == ToolExecutionPolicy.AUTO
-                and external_working_directory_policy == ToolExecutionPolicy.AUTO
-                and agent.home_filesystem_policy == "auto"
-                and agent.external_filesystem_policy == "auto"
-            ):
-                return PermissionDecision.ALLOW
-            grants = (await db.scalars(select(PermissionGrant).where(
-                PermissionGrant.session_id == grant_session_id,
-                PermissionGrant.capability.in_(request.grant_capabilities),
-                *grant_binding_conditions(),
-            ))).all()
             return (
                 PermissionDecision.ALLOW
                 if any(PermissionPolicy.grant_matches(item, request, root_files) for item in grants)
@@ -1862,6 +1891,8 @@ class PermissionPolicy:
         request: PermissionRequest,
         root_files: RootFileService,
     ) -> bool:
+        if request.resource_type == "execution_administrator" and grant.capability != f"resource.{_access_for_capability(request.capability)}":
+            return False
         if grant.capability not in request.grant_capabilities:
             return False
         if grant.capability in {"resource.read", "resource.write"}:
