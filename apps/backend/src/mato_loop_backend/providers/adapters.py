@@ -255,6 +255,7 @@ _OPENAI_COMPATIBLE = ProviderAdapter(
     discover=_discover_openai,
     operation=_openai_operation,
     native_media_api_types=frozenset({"chat_completions"}),
+    include_stream_usage=True,
 )
 _CODEX = ProviderAdapter(
     adapter_type="openai-codex",

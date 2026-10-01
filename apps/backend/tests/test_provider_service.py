@@ -156,7 +156,7 @@ async def test_complete_passes_model_capabilities_and_explicit_timeout(monkeypat
     [
         ("openai-compatible", {"owned_by": "llamacpp"}, True, True),
         ("lemonade", {"recipe": "llamacpp"}, True, True),
-        ("openai-compatible", {"owned_by": "vendor"}, False, False),
+        ("openai-compatible", {"owned_by": "vendor"}, False, True),
         ("lemonade", {"recipe": "flm"}, False, True),
     ],
 )
@@ -1739,7 +1739,7 @@ async def test_lemonade_complete_explicitly_uses_chat_completions(monkeypatch) -
     assert transport.await_args.kwargs["request"].enable_thinking is False
 
 
-async def test_openai_compatible_stream_does_not_request_usage(monkeypatch) -> None:
+async def test_openai_compatible_stream_requests_usage(monkeypatch) -> None:
     provider = LlmProviderConfig(
         name="OpenAI-compatible",
         adapter_type="openai-compatible",
@@ -1758,7 +1758,7 @@ async def test_openai_compatible_stream_does_not_request_usage(monkeypatch) -> N
         tools=[],
     )
 
-    assert transport.await_args.kwargs["request"].include_usage is False
+    assert transport.await_args.kwargs["request"].include_usage is True
 
 
 async def test_qwen_3_8_uses_medium_by_default_and_disables_thinking_cleanly(
