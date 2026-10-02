@@ -21,7 +21,6 @@ import mato_loop_backend.tools.automations as mock_tools_automations
 import mato_loop_backend.tools.catalog as mock_tools_catalog
 import mato_loop_backend.tools.coding as mock_tools_coding
 import mato_loop_backend.tools.computer as mock_tools_computer
-import mato_loop_backend.tools.files as mock_tools_files
 import mato_loop_backend.tools.identity as mock_tools_identity
 import mato_loop_backend.tools.media as mock_tools_media
 import mato_loop_backend.tools.memory as mock_tools_memory

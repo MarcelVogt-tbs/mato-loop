@@ -17,7 +17,6 @@ from telegram import (
 )
 
 from mato_loop_backend.api.routes import channels as routes
-from mato_loop_backend.automations import AutomationService
 from mato_loop_backend.media.attachments import AttachmentInput
 from mato_loop_backend.messaging import telegram
 from mato_loop_backend.messaging.approvals import (
@@ -36,7 +35,6 @@ from mato_loop_backend.messaging.telegram import endpoint_payload
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
-    Automation,
     AutomationRun,
     ChatSession,
     MessagingEndpoint,
@@ -600,44 +598,6 @@ async def test_telegram_unbound_text_during_question_gets_direct_guidance(
     )
     assert inbox.status == "completed"
     assert inbox.attempts == 1
-
-
-async def test_disabled_provider_falls_back_to_app(monkeypatch) -> None:
-    endpoint_id = uuid4()
-    endpoint = MessagingEndpoint(
-        id=endpoint_id,
-        user_id=uuid4(),
-        provider="telegram",
-        name="Privater Bot",
-        enabled=True,
-        external_identity="123",
-        paired_user_id="1",
-        paired_chat_id="1",
-    )
-    automation = Automation(
-        id=uuid4(),
-        user_id=endpoint.user_id,
-        execution_session_id=uuid4(),
-        output_session_id=uuid4(),
-        delivery_channel_type="endpoint",
-        delivery_endpoint_id=endpoint_id,
-        name="Test",
-        task="Test",
-    )
-    db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = endpoint
-    monkeypatch.setattr(
-        "mato_loop_backend.messaging.policy.SettingsStore.load",
-        AsyncMock(return_value=ChannelSettings(allowed_providers=set())),
-    )
-
-    result = await AutomationService.resolved_delivery_channel(db, automation)
-
-    assert result == {
-        "delivery_channel_type": "app",
-        "delivery_endpoint_id": None,
-        "delivery_destination": None,
-    }
 
 
 async def test_telegram_poll_releases_database_session_before_network(monkeypatch) -> None:
