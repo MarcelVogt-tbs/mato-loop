@@ -109,7 +109,7 @@ describe('subagent inspector navigation and presentation', () => {
       entry.value = { ...entry.value, completed: true }
       activity.value = { phase: 'waiting_model', modelRequest: 2 }
       await nextTick()
-      expect(root.querySelector('.activity-shimmer').textContent).toBe('Verarbeite Anfrage')
+      expect(root.querySelector('.activity-shimmer').textContent).toBe('Websuche')
       root.querySelector('.work-history__toggle').click()
       await nextTick()
       expect(root.querySelector('.tool-call__header[aria-expanded="true"]')).not.toBeNull()
@@ -428,8 +428,7 @@ describe('subagent inspector navigation and presentation', () => {
 
     activity.value = mergeAgentActivity(activity.value, { phase: 'waiting_model', modelRequest: 2 })
     await nextTick()
-    expect(root.querySelector('.activity-shimmer').textContent).toBe('Verarbeite Anfrage')
-    expect(root.querySelector('.activity-shimmer').closest('.tool-call__header')).toBeNull()
+    expect(root.querySelector('.activity-shimmer').closest('.tool-call__header')).toBe(row)
     expect(root.textContent).toContain('Vorherige Suche')
     expect(root.querySelector('.work-history__header')).toBeNull()
   })
@@ -525,8 +524,8 @@ describe('subagent inspector navigation and presentation', () => {
 
     expect(root.querySelector('.work-history__tool-group')).toBeNull()
     expect(root.textContent).not.toContain('Erste Suche')
-    expect(root.querySelector('.activity-shimmer').textContent).toContain('Verarbeite Anfrage')
-    expect(root.querySelector('.tool-call__summary')).toBeNull()
+    expect(root.querySelector('.activity-shimmer').textContent).toContain('Websuche')
+    expect(root.querySelector('.tool-call__summary').textContent).toBe('Aktuelle Suche')
     expect(root.querySelector('.work-history__header')).toBeNull()
 
     entries.value = [...entries.value, {
@@ -713,8 +712,8 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.querySelector('.activity-shimmer').textContent).toContain('Webseite abrufen')
     activity.value = { phase: 'waiting_model', modelRequest: 2 }
     await nextTick()
-    expect(root.querySelector('.activity-shimmer').textContent).toContain('Verarbeite Anfrage')
-    expect(root.querySelector('.tool-call__header')).toBeNull()
+    expect(root.querySelector('.activity-shimmer').textContent).toContain('Webseite abrufen')
+    expect(root.querySelector('.tool-call__header')).toBe(fetchRow)
     expect(root.querySelector('.work-history__header')).toBeNull()
     expect(root.textContent).toContain(intro)
 
