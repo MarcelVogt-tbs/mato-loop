@@ -30,7 +30,7 @@ describe('projects store', () => {
 
     await store.fetchAll()
 
-    expect(api.get).toHaveBeenCalledWith('/projects')
+    expect(api.get).toHaveBeenCalledWith('/projects', {})
     expect(store.items).toEqual([project])
     expect(store.loading).toBe(false)
     expect(store.loaded).toBe(true)

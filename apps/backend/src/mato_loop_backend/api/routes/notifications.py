@@ -9,12 +9,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.models import Notification, UserAccount
+from mato_loop_backend.models import ChatSession, Notification, UserAccount
 from mato_loop_backend.notifications import NotificationError, NotificationService
 from mato_loop_backend.security import require_admin, require_user
 from mato_loop_backend.sessions.presence import mark_user_present
@@ -148,11 +149,31 @@ def _decode_cursor(value: str, user_id: UUID) -> tuple[datetime, UUID]:
         raise ApiError(400, "validation.invalid", field="cursor") from exc
 
 
+class NotificationPresenceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: UUID = Field(alias="clientId")
+    session_id: UUID | None = Field(default=None, alias="sessionId")
+    active: bool = True
+
+
 @router.put("/presence", status_code=status.HTTP_204_NO_CONTENT)
 async def mark_notification_presence(
     user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    payload: NotificationPresenceRequest | None = None,
 ) -> Response:
-    mark_user_present(user.id)
+    if payload is None:
+        mark_user_present(user.id)
+    else:
+        if payload.session_id is not None and await db.scalar(select(ChatSession.id).where(
+            ChatSession.id == payload.session_id, ChatSession.user_id == user.id,
+        )) is None:
+            raise ApiError(404, "session.notFound")
+        mark_user_present(
+            user.id, client_id=payload.client_id, session_id=payload.session_id,
+            active=payload.active,
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -318,3 +339,18 @@ async def mark_notification_read(
         notification=_notification_payload(item),
         unreadCount=unread_count,
     )
+
+
+@router.delete("/{notification_id}")
+async def delete_notification(
+    notification_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, int]:
+    try:
+        await NotificationService.delete(db, user.id, notification_id)
+    except NotificationError as exc:
+        raise ApiError(404, exc.code) from exc
+    unread_count = await NotificationService.unread_count(db, user.id)
+    await db.commit()
+    return {"unreadCount": unread_count}

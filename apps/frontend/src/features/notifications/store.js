@@ -49,6 +49,7 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
     loadMoreFailed: false,
     markingId: null,
     markingAll: false,
+    deletingId: null,
     pushSupported: pushSupported(),
     pushLoaded: false,
     pushLoadFailed: false,
@@ -62,8 +63,8 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
     revision: 0
   }),
   actions: {
-    async markPresent() {
-      await api.put('/notifications/presence', null, { suppressErrorToast: true })
+    async markPresent(presence = null) {
+      await api.put('/notifications/presence', presence, { suppressErrorToast: true })
     },
     async fetchLatest(config = {}) {
       const revision = ++this.revision
@@ -112,13 +113,14 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
       }
     },
     async markRead(id) {
-      if (this.markingId || this.markingAll) return
+      if (this.markingId || this.markingAll || this.deletingId) return
       const current = this.items.find((item) => item.id === id)
       if (current?.readAt) return current
       this.markingId = id
       try {
         const { data } = await api.post(`/notifications/${id}/read`)
         this.revision += 1
+        this.loading = false
         const index = this.items.findIndex((item) => item.id === id)
         if (index !== -1) this.items[index] = data.notification
         this.unreadCount = Number(data.unreadCount) || 0
@@ -128,16 +130,30 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
       }
     },
     async markAllRead() {
-      if (!this.unreadCount || this.markingId || this.markingAll) return
+      if (!this.unreadCount || this.markingId || this.markingAll || this.deletingId) return
       this.markingAll = true
       try {
         const { data } = await api.post('/notifications/read-all')
         this.revision += 1
+        this.loading = false
         const readAt = new Date().toISOString()
         this.items = this.items.map((item) => item.readAt ? item : { ...item, readAt })
         this.unreadCount = Number(data.unreadCount) || 0
       } finally {
         this.markingAll = false
+      }
+    },
+    async remove(id) {
+      if (this.deletingId || this.markingId || this.markingAll) return
+      this.deletingId = id
+      try {
+        const { data } = await api.delete(`/notifications/${id}`)
+        this.revision += 1
+        this.loading = false
+        this.items = this.items.filter((item) => item.id !== id)
+        this.unreadCount = Number(data.unreadCount) || 0
+      } finally {
+        this.deletingId = null
       }
     },
     async reconcilePush(config = {}) {

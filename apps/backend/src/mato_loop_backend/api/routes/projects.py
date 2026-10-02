@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.runtime import AgentRuntime
@@ -82,6 +82,7 @@ class ProjectResponse(BaseModel):
     default_execution_agent_id: UUID | None = Field(alias="defaultExecutionAgentId")
     default_current_directory: str | None = Field(alias="defaultCurrentDirectory")
     session_count: int = Field(alias="sessionCount")
+    has_unread_messages: bool = Field(default=False, alias="hasUnreadMessages")
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
     coding_service: dict | None = Field(alias="codingService")
@@ -93,7 +94,7 @@ class ProjectListResponse(BaseModel):
     items: list[ProjectResponse]
 
 
-def _payload(project: Project, session_count: int) -> ProjectResponse:
+def _payload(project: Project, session_count: int, has_unread_messages: bool = False) -> ProjectResponse:
     return ProjectResponse(
         id=project.id,
         name=project.name,
@@ -102,6 +103,7 @@ def _payload(project: Project, session_count: int) -> ProjectResponse:
         defaultExecutionAgentId=project.default_execution_agent_id,
         defaultCurrentDirectory=project.default_current_directory,
         sessionCount=session_count,
+        hasUnreadMessages=has_unread_messages,
         createdAt=project.created_at,
         updatedAt=project.updated_at,
         codingService=(
@@ -221,7 +223,7 @@ async def list_projects(
 ) -> ProjectListResponse:
     rows = (
         await db.execute(
-            select(Project, func.count(ChatSession.id))
+            select(Project, func.count(ChatSession.id), _unread_project_sessions())
             .outerjoin(
                 ChatSession,
                 (ChatSession.project_id == Project.id)
@@ -234,8 +236,17 @@ async def list_projects(
         )
     ).all()
     return ProjectListResponse(
-        items=[_payload(project, session_count) for project, session_count in rows]
+        items=[_payload(project, session_count, unread) for project, session_count, unread in rows]
     )
+
+
+def _unread_project_sessions():
+    return select(ChatSession.id).join(Message, Message.session_id == ChatSession.id).where(
+        ChatSession.project_id == Project.id, ChatSession.user_id == Project.user_id,
+        ChatSession.parent_session_id.is_(None), ChatSession.archived_at.is_(None),
+        Message.role == "assistant",
+        or_(ChatSession.last_read_at.is_(None), Message.created_at > ChatSession.last_read_at),
+    ).correlate(Project).exists()
 
 
 @router.post("/{project_id}/archive", response_model=ProjectResponse)
@@ -324,7 +335,8 @@ async def update_project(
             project.default_current_directory = current_directory
     project.updated_at = datetime.now(UTC)
     await db.commit()
-    return _payload(project, session_count)
+    unread = await db.scalar(select(_unread_project_sessions()).select_from(Project).where(Project.id == project.id))
+    return _payload(project, session_count, bool(unread))
 
 
 @router.get("/{project_id}/delete-impact")

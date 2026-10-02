@@ -59,6 +59,18 @@ class TaskArguments(ToolArguments):
     tasks: list[DelegatedTask] = Field(min_length=1, max_length=4)
 
 
+class NotifyArguments(ToolArguments):
+    title: str = Field(min_length=1, max_length=240)
+    body: str = Field(min_length=1, max_length=500)
+
+    @field_validator("title", "body")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        if not (value := " ".join(value.split())):
+            raise ValueError("notification text must not be blank")
+        return value
+
+
 class TodoItem(ToolArguments):
     content: str = Field(min_length=1, max_length=160)
     status: Literal["pending", "in_progress", "completed", "cancelled"]

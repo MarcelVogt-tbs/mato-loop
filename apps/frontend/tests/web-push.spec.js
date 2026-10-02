@@ -16,6 +16,7 @@ describe('web push contract', () => {
       notification: {
         title: 'Automation abgeschlossen',
         body: 'Der Bericht ist bereit.',
+        notificationId: RUN_ID,
         target: { type: 'session', sessionId: SESSION_ID }
       }
     })
@@ -27,6 +28,7 @@ describe('web push contract', () => {
         icon: '/icons/icon-192.png',
         data: {
           version: 1,
+          notificationId: RUN_ID,
           target: { type: 'session', sessionId: SESSION_ID }
         }
       }

@@ -96,6 +96,30 @@ describe('PWA updates', () => {
     expect(reload).not.toHaveBeenCalled()
   })
 
+  it('opens the session from Push without waiting for the read acknowledgement', async () => {
+    const id = '3e6e1d85-4c5e-4fb9-8b8b-77542d0e24ad'
+    let acknowledge
+    const fetch = vi.fn(() => new Promise((resolve) => { acknowledge = resolve }))
+    const openWindow = vi.fn().mockResolvedValue()
+    const worker = {
+      __WB_MANIFEST: [], location: { origin: 'https://mato.test' }, addEventListener: vi.fn(),
+      clients: { matchAll: vi.fn().mockResolvedValue([]), openWindow }
+    }
+    vi.stubGlobal('self', worker)
+    vi.stubGlobal('fetch', fetch)
+    await import('../src-pwa/custom-service-worker')
+    const [, click] = worker.addEventListener.mock.calls.find(([type]) => type === 'notificationclick')
+    const pending = []
+    click({
+      notification: { close: vi.fn(), data: { notificationId: id, target: { type: 'session', sessionId: id } } },
+      waitUntil: (promise) => pending.push(promise)
+    })
+    await vi.waitFor(() => expect(openWindow).toHaveBeenCalledWith(`https://mato.test/?session=${id}`))
+    expect(fetch).toHaveBeenCalledWith(`/api/notifications/${id}/read`, { method: 'POST', credentials: 'same-origin' })
+    acknowledge({ ok: true })
+    await Promise.all(pending)
+  })
+
   it('recovers from a stalled activation and reloads on a late takeover', async () => {
     vi.useFakeTimers()
     const { reload, serviceWorker, worker } = updateEnvironment()

@@ -137,7 +137,9 @@
                     <q-icon :name="expandedProjects[project.id] ? mdiFolderOpenOutline : mdiFolderOutline" size="22px" />
                   </q-item-section>
                   <q-item-section>
-                    <q-item-label lines="1" class="text-body2 text-weight-medium">{{ project.name }}</q-item-label>
+                    <q-item-label lines="1" class="text-body2" :class="project.hasUnreadMessages ? 'text-weight-bold' : 'text-weight-medium'">
+                      {{ project.name }}<span v-if="project.hasUnreadMessages" class="app-sr-only">, ungelesene Nachrichten</span>
+                    </q-item-label>
                   </q-item-section>
                   <q-item-section side class="project-list-item__actions row no-wrap items-center">
                     <q-btn

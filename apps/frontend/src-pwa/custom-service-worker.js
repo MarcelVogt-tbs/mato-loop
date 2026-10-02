@@ -63,6 +63,12 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   const path = pushTargetPath(event.notification.data?.target)
   const destination = new URL(path, self.location.origin)
+  const id = event.notification.data?.notificationId
+  if (typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id)) {
+    event.waitUntil(fetch(`/api/notifications/${encodeURIComponent(id)}/read`, {
+      method: 'POST', credentials: 'same-origin'
+    }).catch(() => {}))
+  }
   event.waitUntil((async () => {
     const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
     const client = clients.find((item) => new URL(item.url).origin === destination.origin)

@@ -53,7 +53,7 @@ async def test_canonical_error_retains_only_current_safe_generation_diagnostics(
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_ensure_user_active", AsyncMock())
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
-    monkeypatch.setattr(AgentRuntime, "_deliver_run_push", AsyncMock())
+    monkeypatch.setattr(mock_agent_runtime.NotificationService, "deliver_message_after_commit", AsyncMock())
     if failure == "after_generation":
         monkeypatch.setattr(mock_agent_runtime.EpisodeIndexService, "enqueue", AsyncMock(side_effect=RuntimeError("private")))
     if failure == "after_commit":

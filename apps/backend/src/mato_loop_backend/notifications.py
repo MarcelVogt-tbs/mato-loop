@@ -5,18 +5,22 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.models import (
     Automation,
     AutomationRun,
     ChatSession,
+    Message,
     Notification,
     UserAccount,
 )
+from mato_loop_backend.sessions.presence import session_is_present
+from mato_loop_backend.web_push import WebPushService, WebPushSessionTarget, web_push_payload
 
 
 class NotificationDraft(BaseModel):
@@ -52,7 +56,9 @@ class NotificationError(ValueError):
 
 class NotificationService:
     @staticmethod
-    async def create(db: AsyncSession, draft: NotificationDraft) -> UUID | None:
+    async def create(
+        db: AsyncSession, draft: NotificationDraft, *, created_at: datetime | None = None,
+    ) -> UUID | None:
         if draft.session_id is not None:
             owned_session = await db.scalar(
                 select(ChatSession.id)
@@ -79,11 +85,87 @@ class NotificationService:
         notification_id = uuid4()
         statement = (
             insert(Notification)
-            .values(id=notification_id, **draft.model_dump())
+            .values(
+                id=notification_id, **draft.model_dump(),
+                **({"created_at": created_at} if created_at is not None else {}),
+            )
             .on_conflict_do_nothing(constraint="uq_notifications_user_deduplication_key")
             .returning(Notification.id)
         )
         return await db.scalar(statement)
+
+    @staticmethod
+    async def create_for_message(db: AsyncSession, message: Message) -> UUID | None:
+        session = await db.scalar(
+            select(ChatSession).where(ChatSession.id == message.session_id)
+            .execution_options(populate_existing=True).with_for_update()
+        )
+        if (
+            session is None or session.parent_session_id is not None
+            or session.session_type != "chat"
+            or (session.last_read_at is not None and session.last_read_at >= message.created_at)
+            or session_is_present(session.user_id, session.id)
+        ):
+            return None
+        return await NotificationService.create(
+            db,
+            NotificationDraft(
+                user_id=session.user_id, session_id=session.id, kind="session.response",
+                title=f"{'Antwort fehlgeschlagen' if message.error_code else 'Neue Antwort'}: {session.title}"[:240],
+                body=(
+                    "Der Agent-Auftrag konnte nicht abgeschlossen werden. Details stehen in der Session."
+                    if message.error_code else " ".join(canonical_assistant_content(message.content).split())[:500]
+                    or "Die Antwort ist in der Session verfügbar."
+                ),
+                deduplication_key=f"message:{message.id}",
+            ),
+            # Use the source timestamp so the existing through-message read boundary stays exact.
+            created_at=message.created_at,
+        )
+
+    @staticmethod
+    async def deliver_after_commit(db: AsyncSession, notification_id: UUID) -> None:
+        item = await db.get(Notification, notification_id)
+        if item is None or item.read_at is not None:
+            return
+        await WebPushService.deliver_after_commit(
+            item.user_id,
+            web_push_payload(
+                title=item.title, body=item.body, tag=f"notification:{item.id}",
+                notification_id=item.id,
+                target=WebPushSessionTarget(type="session", sessionId=item.session_id)
+                if item.session_id else None,
+            ),
+        )
+
+    @staticmethod
+    async def deliver_message_after_commit(db: AsyncSession, message_id: UUID | None) -> None:
+        if message_id is None:
+            return
+        notification_id = await db.scalar(select(Notification.id).where(
+            Notification.deduplication_key == f"message:{message_id}",
+            Notification.kind == "session.response", Notification.read_at.is_(None),
+        ))
+        if notification_id is not None:
+            await NotificationService.deliver_after_commit(db, notification_id)
+
+    @staticmethod
+    async def mark_session_read(
+        db: AsyncSession, user_id: UUID, session_id: UUID, through: datetime,
+    ) -> None:
+        await db.execute(update(Notification).where(
+            Notification.user_id == user_id, Notification.session_id == session_id,
+            Notification.kind == "session.response", Notification.created_at <= through,
+            Notification.read_at.is_(None),
+        ).values(read_at=func.now()))
+
+    @staticmethod
+    async def delete(db: AsyncSession, user_id: UUID, notification_id: UUID) -> None:
+        deleted = await db.scalar(delete(Notification).where(
+            Notification.id == notification_id, Notification.user_id == user_id,
+        ).returning(Notification.id))
+        if deleted is None:
+            raise NotificationError("notification.notFound")
 
     @staticmethod
     async def list_page(

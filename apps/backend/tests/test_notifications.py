@@ -8,14 +8,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.notifications import (
+    NotificationPresenceRequest,
     _decode_cursor,
     _encode_cursor,
+    delete_notification,
     list_notifications,
     mark_all_notifications_read,
     mark_notification_presence,
     mark_notification_read,
 )
-from mato_loop_backend.models import Notification, UserAccount
+from mato_loop_backend.models import ChatSession, Message, Notification, UserAccount
 from mato_loop_backend.notifications import (
     NotificationDraft,
     NotificationError,
@@ -46,7 +48,7 @@ async def test_mark_notification_presence_is_user_scoped(monkeypatch) -> None:
     mark = MagicMock()
     monkeypatch.setattr(notifications_route, "mark_user_present", mark)
 
-    response = await mark_notification_presence(user)
+    response = await mark_notification_presence(user, AsyncMock(spec=AsyncSession))
 
     assert response.status_code == 204
     mark.assert_called_once_with(user.id)
@@ -228,3 +230,61 @@ async def test_mark_all_read_commits_and_returns_authoritative_count(monkeypatch
     assert result.updated_count == 4
     assert result.unread_count == 1
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.parametrize("already_read", [False, True])
+async def test_response_notification_is_skipped_when_seen(monkeypatch, already_read) -> None:
+    now = datetime.now(UTC)
+    session = ChatSession(
+        id=uuid4(), user_id=uuid4(), title="Test", session_type="chat",
+        last_read_at=now if already_read else None,
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = session
+    monkeypatch.setattr("mato_loop_backend.notifications.session_is_present", lambda *_: not already_read)
+    create = AsyncMock()
+    monkeypatch.setattr(NotificationService, "create", create)
+    await NotificationService.create_for_message(db, Message(
+        id=uuid4(), session_id=session.id, role="assistant", content="Done", created_at=now,
+    ))
+    create.assert_not_awaited()
+
+
+async def test_presence_rejects_another_owners_session() -> None:
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    with pytest.raises(ApiError, match="session.notFound"):
+        await mark_notification_presence(_user(), db, NotificationPresenceRequest(
+            clientId=uuid4(), sessionId=uuid4(),
+        ))
+
+
+async def test_delete_notification_is_owner_scoped_and_committed() -> None:
+    user, notification_id = _user(), uuid4()
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [notification_id, 2]
+    result = await delete_notification(notification_id, user, db)
+    statement = db.scalar.await_args_list[0].args[0]
+    assert user.id in statement.compile().params.values()
+    assert result == {"unreadCount": 2}
+    db.commit.assert_awaited_once()
+
+
+async def test_agent_notification_uses_current_owner_and_session(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from mato_loop_backend.tools.arguments import NotifyArguments
+    from mato_loop_backend.tools.interaction import _notify
+
+    session = ChatSession(id=uuid4(), user_id=uuid4())
+    db = AsyncMock(spec=AsyncSession)
+    create, deliver = AsyncMock(return_value=uuid4()), AsyncMock()
+    monkeypatch.setattr(NotificationService, "create", create)
+    monkeypatch.setattr(NotificationService, "deliver_after_commit", deliver)
+    await _notify(NotifyArguments(title="Preis gefallen", body="Unter 10 Euro."), SimpleNamespace(
+        db=db, session=session, run_id=uuid4(), tool_call=SimpleNamespace(id="call-1"),
+    ))
+    draft = create.await_args.args[1]
+    assert (draft.user_id, draft.session_id, draft.kind) == (session.user_id, session.id, "agent.notice")
+    db.commit.assert_awaited_once()
+    deliver.assert_awaited_once_with(db, create.return_value)

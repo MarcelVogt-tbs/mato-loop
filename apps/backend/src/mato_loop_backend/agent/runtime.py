@@ -69,6 +69,7 @@ from mato_loop_backend.models import (
     TitleGenerationStatus,
     UserAccount,
 )
+from mato_loop_backend.notifications import NotificationService
 from mato_loop_backend.permissions.coordinator import approval_coordinator, question_coordinator
 from mato_loop_backend.permissions.policy import (
     PermissionDecision,
@@ -112,11 +113,6 @@ from mato_loop_backend.tools.contracts import (
     ToolArgumentsEdited,
 )
 from mato_loop_backend.tools.display import tool_display
-from mato_loop_backend.web_push import (
-    WebPushService,
-    WebPushSessionTarget,
-    web_push_payload,
-)
 
 
 class AgentRuntime:
@@ -131,28 +127,6 @@ class AgentRuntime:
     _provider_active_runs: set[UUID] = set()
     _tool_active_runs: set[UUID] = set()
     _interrupted_runs: set[UUID] = set()
-
-    @staticmethod
-    async def _deliver_run_push(db: AsyncSession, run: AgentRun, *, failed: bool) -> None:
-        chat_session = await db.get(ChatSession, run.session_id)
-        if chat_session is None:
-            return
-        result = await db.get(Message, run.result_message_id) if run.result_message_id else None
-        await WebPushService.deliver_after_commit(
-            chat_session.user_id,
-            web_push_payload(
-                title="Antwort fehlgeschlagen" if failed else f"Neue Antwort: {chat_session.title}",
-                body=(
-                    "Der Agent-Auftrag konnte nicht abgeschlossen werden."
-                    if failed
-                    else canonical_assistant_content(result.content)
-                    if result is not None
-                    else None
-                ),
-                tag=f"agent-run:{run.id}",
-                target=WebPushSessionTarget(type="session", sessionId=chat_session.id),
-            ),
-        )
 
     @staticmethod
     async def _ensure_user_active(
@@ -889,6 +863,10 @@ class AgentRuntime:
                     from mato_loop_backend.automations import AutomationService
 
                     await AutomationService.enqueue_event(db, run, "agent_response")
+                    if run.result_message_id is not None:
+                        result = await db.get(Message, run.result_message_id)
+                        if result is not None:
+                            await NotificationService.create_for_message(db, result)
                     await db.commit()
                     run_completed = True
                     cls._cancellable_runs.discard(run_id)
@@ -912,7 +890,7 @@ class AgentRuntime:
                             **run_timing_payload(run),
                         },
                     )
-                    await cls._deliver_run_push(db, run, failed=False)
+                    await NotificationService.deliver_message_after_commit(db, run.result_message_id)
                 except asyncio.CancelledError:
                     if run_completed:
                         raise
@@ -959,6 +937,8 @@ class AgentRuntime:
                             )
                         await cls._persist_run_duration(db, cancelled_run)
                         await db.commit()
+                        if error_message is not None:
+                            await NotificationService.deliver_message_after_commit(db, error_message.id)
                         if diagnostics_active:
                             schedule_diagnostic_event(
                                 diagnostic_owner,
@@ -1127,7 +1107,7 @@ class AgentRuntime:
                         },
                     )
                     if failure_committed and failed_run is not None:
-                        await cls._deliver_run_push(db, failed_run, failed=True)
+                        await NotificationService.deliver_message_after_commit(db, failed_run.result_message_id)
         finally:
             cls._cancellable_runs.discard(run_id)
             cls._user_cancelled_runs.discard(run_id)
@@ -1290,6 +1270,7 @@ class AgentRuntime:
         db.add(message)
         await db.flush()
         run.result_message_id = message.id
+        await NotificationService.create_for_message(db, message)
         return message
 
     @staticmethod

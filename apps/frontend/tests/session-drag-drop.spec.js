@@ -38,7 +38,8 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
       setSessionScope: vi.fn().mockResolvedValue(),
       moveSession: vi.fn().mockResolvedValue(),
       findCachedSession: vi.fn((id) => sessions.find((session) => session.id === id)),
-      fetchSession: vi.fn()
+      fetchSession: vi.fn(),
+      markSessionRead: vi.fn().mockResolvedValue()
     },
     projects: { loaded: true, items: [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }], fetchAll: vi.fn().mockResolvedValue() },
     pending: { pending: [], forSession: () => [], fetchPending: vi.fn().mockResolvedValue() },
@@ -198,27 +199,34 @@ it.each([
   expect(root.querySelector('[role="dialog"]')).not.toBeNull()
 })
 
-it('reports presence only while the app is focused and visible', async () => {
+it('reports the visible session, reads it only when focused and releases presence when hidden', async () => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
   const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
   notifications.markPresent.mockClear()
+  useChatStore().current = { id: 'standalone', hasUnreadMessages: true, messages: [] }
+  useRoute().query = { session: 'standalone' }
 
   window.dispatchEvent(new Event('focus'))
-  expect(notifications.markPresent).toHaveBeenCalledOnce()
+  await vi.waitFor(() => expect(notifications.markPresent).toHaveBeenLastCalledWith(expect.objectContaining({ active: true, sessionId: 'standalone' })))
+  expect(useChatStore().markSessionRead).toHaveBeenCalledWith(useChatStore().current)
 
   notifications.markPresent.mockClear()
-  vi.advanceTimersByTime(5000)
-  expect(notifications.markPresent).toHaveBeenCalledOnce()
+  await vi.advanceTimersByTimeAsync(5000)
+  expect(notifications.markPresent).toHaveBeenCalledWith(expect.objectContaining({ active: true, sessionId: 'standalone' }))
 
   notifications.markPresent.mockClear()
   focus.mockReturnValue(false)
-  window.dispatchEvent(new Event('focus'))
-  expect(notifications.markPresent).not.toHaveBeenCalled()
+  window.dispatchEvent(new Event('blur'))
+  await vi.waitFor(() => expect(notifications.markPresent).toHaveBeenLastCalledWith(expect.objectContaining({ active: false, sessionId: null })))
+  useChatStore().markSessionRead.mockClear()
+  useChatStore().current = { ...useChatStore().current, messages: [{ id: 'new' }] }
+  await nextTick()
+  expect(useChatStore().markSessionRead).not.toHaveBeenCalled()
 
   focus.mockReturnValue(true)
   visibility.mockReturnValue('hidden')
   window.dispatchEvent(new Event('focus'))
-  expect(notifications.markPresent).not.toHaveBeenCalled()
+  await vi.waitFor(() => expect(notifications.markPresent).toHaveBeenLastCalledWith(expect.objectContaining({ active: false, sessionId: null })))
 
   focus.mockRestore()
   visibility.mockRestore()

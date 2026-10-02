@@ -138,6 +138,7 @@ tool_registry = ToolRegistry(
         tools_permissions.REQUEST_SESSION_PERMISSIONS,
         tools_interaction.TASK,
         tools_interaction.TODO_WRITE,
+        tools_interaction.NOTIFY,
         tools_computer.LIST_EXECUTION_AGENTS,
         tools_computer.SELECT_EXECUTION_AGENT,
         tools_files.READ,

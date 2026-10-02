@@ -196,6 +196,7 @@ class WebPushNotificationPayload(BaseModel):
     body: Annotated[str | None, Field(default=None, max_length=500)]
     tag: Annotated[str | None, Field(default=None, min_length=1, max_length=120)]
     target: WebPushSessionTarget | WebPushAutomationRunTarget | WebPushActionsTarget | None = None
+    notification_id: UUID | None = Field(default=None, alias="notificationId")
 
 
 class WebPushPayload(BaseModel):
@@ -211,6 +212,7 @@ def web_push_payload(
     body: str | None,
     tag: str,
     target: WebPushSessionTarget | WebPushAutomationRunTarget | WebPushActionsTarget | None,
+    notification_id: UUID | None = None,
 ) -> WebPushPayload:
     preview = " ".join(body.split())[:500] if body else None
     return WebPushPayload(
@@ -219,6 +221,7 @@ def web_push_payload(
             body=preview or None,
             tag=tag,
             target=target,
+            notificationId=notification_id,
         )
     )
 

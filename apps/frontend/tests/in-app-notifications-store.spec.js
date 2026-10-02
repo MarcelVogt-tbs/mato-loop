@@ -52,6 +52,18 @@ describe('in-app notification store', () => {
     expect(store.loaded).toBe(true)
   })
 
+  it('removes a notification only after successful deletion', async () => {
+    const store = useInAppNotificationStore()
+    store.items = [{ id: 'notice', readAt: null }]
+    store.unreadCount = 1
+    api.delete.mockRejectedValueOnce(new Error('network'))
+    await expect(store.remove('notice')).rejects.toThrow('network')
+    expect(store.items).toHaveLength(1)
+    api.delete.mockResolvedValueOnce({ data: { unreadCount: 0 } })
+    await store.remove('notice')
+    expect([store.items, store.unreadCount]).toEqual([[], 0])
+  })
+
   it('does not let an older fetch overwrite newer state', async () => {
     let resolveFirst
     api.get

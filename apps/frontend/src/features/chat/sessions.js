@@ -4,6 +4,8 @@ import { useApprovalStore } from 'src/stores/approvals'
 import { useBrowserStore } from 'src/stores/browser'
 import { controlCenterRequestState, useControlCenterStore } from 'src/stores/control-center'
 import { useQuestionStore } from 'src/stores/questions'
+import { useInAppNotificationStore } from 'src/stores/in-app-notifications'
+import { useProjectStore } from 'src/stores/projects'
 import { downloadMessageAttachmentFiles, releaseAttachmentDrafts } from 'src/features/chat/attachments'
 import { defaultSessionOptions, lastAssistantMessage, sanitizedSessionOptions, sessionBeforeFailedResponse, sessionBeforeUserMessage, sessionCreatePayload, sessionScopeKey, sessionScopeParams, sortSessions } from 'src/features/chat/state'
 import { deleteChatOutboxEntries, saveChatOutboxEntries } from 'src/utils/chat-outbox'
@@ -306,7 +308,6 @@ export const sessionsActions = {
         if (session.readOnly && session.parentSessionId) return session
         controlCenter.syncSession(session)
         this.applySessionResult(session)
-        void this.markSessionRead(session).catch(() => {})
         if (session.activeRun && this.runId !== session.activeRun.id) {
           this.watchRun(id, session.activeRun.id, session.activeRun)
         } else if (!session.activeRun && !this.running) {
@@ -346,7 +347,6 @@ export const sessionsActions = {
             }
             this.applySessionResult(session)
             void useBrowserStore().reconcileControlRequest(id)
-            void this.markSessionRead(session).catch(() => {})
             this.loadError = null
             if (session.activeRun && this.runId !== session.activeRun.id) {
               this.watchRun(id, session.activeRun.id, session.activeRun)
@@ -664,8 +664,15 @@ export const sessionsActions = {
         { throughMessageId: message.id },
         { suppressErrorToast: true }
       )
+      if (this.current?.id === session.id && lastAssistantMessage(this.current.messages)?.id !== message.id) return
       if (this.current?.id === session.id) this.current.hasUnreadMessages = false
       this.updateCachedSession(session.id, (summary) => ({ ...summary, hasUnreadMessages: false }))
+      const notifications = useInAppNotificationStore()
+      const projects = useProjectStore()
+      await Promise.allSettled([
+        ...(notifications.loaded ? [notifications.fetchLatest({ suppressErrorToast: true })] : []),
+        ...(session.projectId && projects.loaded ? [projects.fetchAll({ suppressErrorToast: true })] : [])
+      ])
     },
     async undoUserMessage(message) {
       const session = this.current

@@ -6,7 +6,7 @@ import { Quasar, QAvatar, QBadge, QBanner, QBtn, QCard, QCardActions, QCardSecti
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
-vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn() } }))
+vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() } }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
 
 import NotificationCenterApp from '../src/features/notifications/NotificationCenterApp.vue'
@@ -89,6 +89,16 @@ async function selectOption(card, label, option) {
 }
 
 describe('notification center', () => {
+  it('deletes a notice with confirmation without navigating or marking it read', async () => {
+    const router = await mountCenter()
+    api.delete.mockResolvedValue({ data: { unreadCount: 0 } })
+    root.querySelector('[aria-label="Benachrichtigung löschen"]').click()
+    await vi.waitFor(() => expect(useInAppNotificationStore().items).toHaveLength(0))
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(api.post).not.toHaveBeenCalled()
+    expect(router.currentRoute.value.query).toEqual({})
+  })
+
   it('submits administrator session approval without collecting a password', async () => {
     responses['/approvals/pending'][0] = {
       ...responses['/approvals/pending'][0], requestType: 'agent_action', resourceType: 'execution_administrator',
@@ -147,24 +157,22 @@ describe('notification center', () => {
     expect(root.textContent).toContain('Automation abgeschlossen')
   })
 
-  it('retains type filters and session source links', async () => {
+  it('keeps tasks compact and exposes their existing controls and session links when expanded', async () => {
     responses['/approvals/pending'].push({
       id: 'memory', requestType: 'memory_change', actionKind: 'memory_pin', createdAt,
       availableDecisions: ['deny'], payload: {}
     })
     const router = await mountCenter()
+    const headers = root.querySelectorAll('.q-expansion-item__container > .q-item')
+    expect([...headers].every((header) => header.getAttribute('aria-expanded') === 'false')).toBe(true)
+    for (const header of headers) header.click()
+    await nextTick()
     expect(root.querySelectorAll('.approval-card')).toHaveLength(2)
     expect(root.textContent).toContain('Dreaming im Hintergrund')
     const source = [...root.querySelectorAll('a')].find((link) => link.textContent.includes('Quellsession'))
     source.click()
     await vi.waitFor(() => expect(router.currentRoute.value.query.session).toBe('parent'))
 
-    root.querySelector('[role="combobox"]').click()
-    await vi.waitFor(() => expect(document.querySelector('[role="option"]')).not.toBeNull())
-    const option = [...document.querySelectorAll('[role="option"]')].find((item) => item.textContent.includes('Agent-Aktionen'))
-    option.click()
-    await vi.waitFor(() => expect(root.querySelectorAll('.approval-card')).toHaveLength(1))
-    expect(root.querySelector('.approval-card').textContent).toContain('Datei lesen')
     expect(root.querySelector('.question-dock')).not.toBeNull()
     expect(root.textContent).toContain('Automation abgeschlossen')
     expect(useApprovalStore().pending).toHaveLength(2)

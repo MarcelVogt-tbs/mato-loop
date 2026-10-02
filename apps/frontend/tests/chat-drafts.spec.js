@@ -1110,6 +1110,7 @@ describe('chat drafts', () => {
     setSessions(chat, [{ id: 'session-1', hasUnreadMessages: true }])
 
     await chat.loadSession('session-1')
+    await chat.markSessionRead(chat.current)
     await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith(
       '/sessions/session-1/read',
       { throughMessageId: 'assistant-message' },
@@ -1320,6 +1321,7 @@ describe('chat drafts', () => {
     setSessions(chat, [{ id: 'session-1', hasUnreadMessages: true }])
 
     await chat.loadSession('session-1')
+    await expect(chat.markSessionRead(chat.current)).rejects.toThrow('network')
     await vi.waitFor(() => expect(api.post).toHaveBeenCalled())
 
     expect(chat.current.hasUnreadMessages).toBe(true)

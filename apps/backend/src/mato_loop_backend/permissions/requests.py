@@ -163,7 +163,7 @@ async def request_approval(
         await WebPushService.deliver_after_commit(
             chat_session.user_id,
             web_push_payload(
-                title="Freigabe erforderlich",
+                title=approval.title,
                 body=permission.summary,
                 tag=f"approval:{approval.id}",
                 target=WebPushActionsTarget(type="actions"),

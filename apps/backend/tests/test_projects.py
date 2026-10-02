@@ -117,13 +117,14 @@ async def test_project_list_is_owner_scoped_and_counts_sessions() -> None:
     project.coding_execution_model_key = "provider/build"
     project.coding_execution_model_variant = "max"
     result = MagicMock()
-    result.all.return_value = [(project, 3)]
+    result.all.return_value = [(project, 3, True)]
     db = AsyncMock(spec=AsyncSession)
     db.execute.return_value = result
 
     response = await list_projects(user, db)
 
     assert response.items[0].session_count == 3
+    assert response.items[0].has_unread_messages is True
     assert response.items[0].coding_service["analysisModelVariant"] == "high"
     assert response.items[0].coding_service["executionModelVariant"] == "max"
     statement = db.execute.await_args.args[0]
@@ -147,7 +148,7 @@ async def test_create_and_update_project_commit_owner_scoped_changes() -> None:
     )
 
     project = _project(user.id)
-    db.scalar.side_effect = [project, 2]
+    db.scalar.side_effect = [project, 2, True]
     updated = await update_project(
         project.id,
         ProjectRequest(name=" Renamed ", instructions=" Be concise. "),
@@ -171,7 +172,7 @@ async def test_update_project_preserves_omitted_instructions() -> None:
     project = _project(user.id)
     project.instructions = "Keep this."
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [project, 0]
+    db.scalar.side_effect = [project, 0, False]
 
     updated = await update_project(
         project.id, ProjectRequest(name="Renamed"), user, db
@@ -189,7 +190,7 @@ async def test_update_project_validates_changed_session_defaults(monkeypatch) ->
     validate = AsyncMock(return_value=("/srv/project", "ask"))
     monkeypatch.setattr(projects_route, "validate_execution_preferences", validate)
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [project, 0]
+    db.scalar.side_effect = [project, 0, False]
 
     updated = await update_project(
         project.id,

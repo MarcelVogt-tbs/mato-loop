@@ -21,7 +21,7 @@ Model, agent profile, computer, working directory, and permissions come from the
 - Chat messages do not change the saved task automatically. Their conversation context can influence later runs.
 - If the agent is already working in the session, a queued automation waits. Further due occurrences of an already queued or running automation are recorded as skipped.
 
-The **Bisherige Ausführungen** section shows scheduling status and links to messages in the conversation. Automation input messages identify the originating task by name. Results are not copied into separate completion notifications. Ordinary session unread indicators and configured push notifications apply.
+The **Bisherige Ausführungen** section shows scheduling status and links to messages in the conversation. Automation input messages identify the originating task by name. Answers and failures remain in that conversation and use the same unread indicators and response notifications as interactive sessions. A focused, visible session does not create an automatic response notice; configured Web Push is sent only while the app is inactive. For specific findings, the task can ask the agent to create a notification using `notify`.
 
 ## Schedules
 

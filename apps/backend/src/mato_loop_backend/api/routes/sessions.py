@@ -953,6 +953,9 @@ async def mark_session_read(
         )
         .values(last_read_at=read_at, updated_at=ChatSession.updated_at)
     )
+    from mato_loop_backend.notifications import NotificationService
+
+    await NotificationService.mark_session_read(db, user.id, session_id, read_at)
     await db.commit()
     return {"read": True}
 

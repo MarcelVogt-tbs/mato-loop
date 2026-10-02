@@ -1319,7 +1319,7 @@ async def test_terminal_events_follow_file_finalization(monkeypatch, terminal):
     monkeypatch.setattr(AgentRuntime, "_finalize_run_files", finalize)
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
     monkeypatch.setattr(AgentRuntime, "_persist_run_duration", AsyncMock())
-    monkeypatch.setattr(AgentRuntime, "_deliver_run_push", AsyncMock())
+    monkeypatch.setattr(mock_agent_runtime.NotificationService, "deliver_message_after_commit", AsyncMock())
     monkeypatch.setattr(mock_agent_runtime.run_events, "publish", publish)
     if terminal == "cancelled":
         with pytest.raises(asyncio.CancelledError):

@@ -321,7 +321,7 @@ class AutomationService:
     @staticmethod
     async def _session_error(
         db: AsyncSession, automation: Automation, run: AutomationRun, code: str,
-    ) -> None:
+    ) -> Message:
         from mato_loop_backend.agent.runtime import AgentRuntime
         from mato_loop_backend.error_contract import describe_error
 
@@ -343,7 +343,7 @@ class AutomationService:
         await db.flush()
         agent_run.input_message_id = message.id
         run.agent_run_id = agent_run.id
-        await AgentRuntime._persist_error_message(db, agent_run, describe_error(code))
+        return await AgentRuntime._persist_error_message(db, agent_run, describe_error(code))
 
     @staticmethod
     async def _fail_start(db: AsyncSession, run_id: UUID, code: str) -> None:
@@ -355,6 +355,7 @@ class AutomationService:
         run.error_code = code
         run.completed_at = datetime.now(UTC)
         automation = await db.get(Automation, run.automation_id)
+        message = None
         if automation is not None:
             await db.scalar(select(ChatSession).where(
                 ChatSession.id == automation.execution_session_id,
@@ -365,8 +366,12 @@ class AutomationService:
             )) is not None:
                 await db.rollback()
                 return
-            await AutomationService._session_error(db, automation, run, code)
+            message = await AutomationService._session_error(db, automation, run, code)
         await db.commit()
+        if message is not None:
+            from mato_loop_backend.notifications import NotificationService
+
+            await NotificationService.deliver_message_after_commit(db, message.id)
 
     @staticmethod
     async def process_next(db: AsyncSession) -> bool:

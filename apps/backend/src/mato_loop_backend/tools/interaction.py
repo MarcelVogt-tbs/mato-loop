@@ -7,7 +7,9 @@ from sqlalchemy import select
 import mato_loop_backend.permissions.resolution as permissions_resolution
 import mato_loop_backend.tools.access as tools_access
 from mato_loop_backend.agent.session_secrets import session_secrets
+from mato_loop_backend.agent.subagents import permission_origin
 from mato_loop_backend.models import ExecutionAgent
+from mato_loop_backend.notifications import NotificationDraft, NotificationService
 from mato_loop_backend.permissions.policy import personal_variables_permission
 from mato_loop_backend.personal_variables import (
     get_personal_variable,
@@ -19,6 +21,7 @@ from mato_loop_backend.settings import ToolExecutionPolicy
 from mato_loop_backend.tools.actions import _SECRETS_ACCESS, _SECRETS_WRITE
 from mato_loop_backend.tools.arguments import (
     AdministratorQuestionTarget,
+    NotifyArguments,
     ProtectedQuestionArguments,
     ProtectedQuestionItem,
     ProtectedQuestionResolution,
@@ -236,6 +239,29 @@ async def _task(arguments: TaskArguments, context: ToolContext) -> ToolResult:
 
 async def _todo_write(arguments: TodoWriteArguments, _context: ToolContext) -> ToolResult:
     return ToolResult.json(arguments.model_dump(mode="json"))
+
+
+async def _notify(arguments: NotifyArguments, context: ToolContext) -> ToolResult:
+    session = await permission_origin(context.db, context.session)
+    notification_id = await NotificationService.create(context.db, NotificationDraft(
+        user_id=session.user_id, session_id=session.id, kind="agent.notice",
+        title=arguments.title, body=arguments.body,
+        deduplication_key=f"tool:{context.run_id}:{context.tool_call.id}",
+    ))
+    await context.db.commit()
+    if notification_id is not None:
+        await NotificationService.deliver_after_commit(context.db, notification_id)
+    return ToolResult.json({"created": notification_id is not None})
+
+
+NOTIFY = ToolDefinition(
+    "notify",
+    "Create a persistent notification for the current user, linked to this session. "
+    "Use for requested alerts or important findings, including during automations. "
+    "Ordinary replies and failures already notify the user; do not duplicate them. "
+    "Use a short plain-text title and body in the user's language.",
+    NotifyArguments, _notify, group="agent", label="Benachrichtigung erstellen", icon="notifications",
+)
 
 
 QUESTION = ToolDefinition(

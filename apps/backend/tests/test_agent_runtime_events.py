@@ -259,7 +259,7 @@ def delegated_runtime(monkeypatch):
     monkeypatch.setattr(run_events, "unregister_subagent", Mock(), raising=False)
     monkeypatch.setattr(run_events, "publish", AsyncMock())
     for name in ("_transcribe_voice_messages", "_finalize_run_files", "_persist_run_duration",
-                 "_deliver_run_push", "_terminalize_incomplete_tool_calls"):
+                 "_terminalize_incomplete_tool_calls"):
         monkeypatch.setattr(AgentRuntime, name, AsyncMock())
 
     async def delegate(max_tool_calls=None, *, tool_settings=None, integration_settings=None, tool_names=None):
@@ -568,7 +568,7 @@ async def test_delegated_waits_keep_parent_active_and_expire_on_cancel(monkeypat
                 "id": "detail", "type": "free_text", "header": "Detail", "question": "Which detail?",
             }]))
 
-    monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", AsyncMock())
+    monkeypatch.setattr("mato_loop_backend.web_push.WebPushService.deliver_after_commit", AsyncMock())
     monkeypatch.setattr(run_events, "publish", publish)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", execute)
     task = asyncio.create_task(delegate())
@@ -1037,7 +1037,7 @@ async def test_run_failure_persists_structured_message_before_terminal_event(mon
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", fail)
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
-    monkeypatch.setattr(AgentRuntime, "_deliver_run_push", AsyncMock())
+    monkeypatch.setattr(mock_agent_runtime.NotificationService, "deliver_message_after_commit", AsyncMock())
     monkeypatch.setattr(run_events, "publish", publish)
 
     await AgentRuntime._run(run.id)
@@ -1064,47 +1064,36 @@ async def test_run_failure_persists_structured_message_before_terminal_event(mon
     ("failed", "expected_title", "expected_body"),
     [
         (False, "Neue Antwort: Test", "Fertige Antwort"),
-        (True, "Antwort fehlgeschlagen", "Der Agent-Auftrag konnte nicht abgeschlossen werden."),
+        (True, "Antwort fehlgeschlagen: Test", "Der Agent-Auftrag konnte nicht abgeschlossen werden. Details stehen in der Session."),
     ],
 )
 async def test_normal_run_push_uses_canonical_session_target(
     monkeypatch, failed: bool, expected_title: str, expected_body: str
 ) -> None:
-    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
-    message = Message(id=uuid4(), session_id=session.id, role="assistant", content="Fertige Antwort")
-    run = AgentRun(id=uuid4(), session_id=session.id, result_message_id=message.id)
+    from mato_loop_backend.models import Notification
+    from mato_loop_backend.web_push import WebPushService
+
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test", session_type="chat")
+    message = Message(
+        id=uuid4(), session_id=session.id, role="assistant", content="Fertige Antwort",
+        created_at=datetime.now(UTC), error_code="agent.failed" if failed else None,
+    )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = None
-
-    async def get(model_type, item_id):
-        return {(ChatSession, session.id): session, (Message, message.id): message}.get(
-            (model_type, item_id)
-        )
-
-    db.get.side_effect = get
+    notification_id = uuid4()
+    db.scalar.side_effect = [session, session.id, notification_id, notification_id]
     deliver = AsyncMock()
-    monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", deliver)
+    monkeypatch.setattr(WebPushService, "deliver_after_commit", deliver)
 
-    await AgentRuntime._deliver_run_push(db, run, failed=failed)
+    await mock_agent_runtime.NotificationService.create_for_message(db, message)
+    db.get.return_value = Notification(**db.scalar.await_args.args[0].compile().params)
+    await db.commit()
+    await mock_agent_runtime.NotificationService.deliver_message_after_commit(db, message.id)
 
     user_id, payload = deliver.await_args.args
     assert user_id == session.user_id
     assert payload.notification.title == expected_title
     assert payload.notification.body == expected_body
     assert payload.notification.target.session_id == session.id
-
-
-async def test_automation_run_uses_the_normal_session_push(monkeypatch) -> None:
-    run = AgentRun(id=uuid4(), session_id=uuid4())
-    db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = uuid4()
-    db.get.return_value = ChatSession(id=run.session_id, user_id=uuid4(), title="Automation")
-    deliver = AsyncMock()
-    monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", deliver)
-
-    await AgentRuntime._deliver_run_push(db, run, failed=False)
-
-    assert deliver.await_args.args[1].notification.target.session_id == run.session_id
 
 
 @pytest.mark.parametrize("redirected", [False, True])

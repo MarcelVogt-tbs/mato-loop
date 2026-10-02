@@ -18,6 +18,7 @@ import { useWorkspaceStore } from 'stores/workspace'
 import { terminalControlCenterState } from 'src/app/control-center/manifest'
 import { isPwaUpdateReload } from 'src/utils/pwa-update'
 import { searchShortcutAction } from 'src/utils/search-shortcut'
+import { randomUuid } from 'src/utils/random-id'
 
 const ACTIVE_RUN_STATUSES = new Set(['queued', 'running', 'waiting_approval', 'waiting_input'])
 const SESSION_ACTIVITY_REFRESH_MS = 5000
@@ -54,6 +55,16 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   })
   let sessionActivityTimer = null
   let sessionActivityRefreshPending = false
+  const presenceClientId = randomUuid(window.crypto)
+  const focused = ref(appIsFocused())
+  const visibleSessionId = computed(() => (
+    focused.value && route.name === 'chat' && !route.query.subagent
+    && routeSessionId.value === chat.current?.id
+    && !(controlCenterVisible.value && $q.screen.lt.md)
+    && !(drawerOpen.value && $q.screen.lt.md)
+      ? chat.current.id : null
+  ))
+  let presenceRequest = Promise.resolve()
 
   function updateVisualViewport() {
     const viewport = window.visualViewport
@@ -78,14 +89,15 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   }
 
   function refreshAppPresence() {
-    if (!appIsFocused()) return
-    void notifications.markPresent().catch(() => {})
+    focused.value = appIsFocused()
+    const presence = { clientId: presenceClientId, sessionId: visibleSessionId.value, active: focused.value }
+    presenceRequest = presenceRequest.catch(() => {}).then(() => notifications.markPresent(presence)).catch(() => {})
   }
 
   function refreshSessionsWhenVisible() {
-    if (document.visibilityState !== 'visible') return
     refreshAppPresence()
-    if (projects.loadFailed) void projects.fetchAll().catch(() => {})
+    if (document.visibilityState !== 'visible') return
+    void projects.fetchAll({ suppressErrorToast: true }).catch(() => {})
     if (chat.current?.id && !chat.running) {
       void chat.refreshSession(chat.current.id, { suppressErrorToast: true }).catch(() => {})
     }
@@ -105,6 +117,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     if (event.data?.type !== 'matoloop:push' || event.data.version !== 1) return
     void Promise.allSettled([
       notifications.fetchLatest({ suppressErrorToast: true }),
+      projects.fetchAll({ suppressErrorToast: true }),
       approvals.fetchPending({ suppressErrorToast: true }),
       questions.fetchPending({ suppressErrorToast: true })
     ])
@@ -118,6 +131,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     try {
       const requests = [
         automations.fetchAutomations({ suppressErrorToast: true }),
+        projects.fetchAll({ suppressErrorToast: true }),
         approvals.fetchPending({ suppressErrorToast: true }),
         questions.fetchPending({ suppressErrorToast: true })
       ]
@@ -147,6 +161,11 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     event.preventDefault()
     event.returnValue = ''
   }
+
+  watch(visibleSessionId, refreshAppPresence)
+  watch(() => [visibleSessionId.value, chat.current?.hasUnreadMessages, chat.current?.messages?.length], ([id, unread]) => {
+    if (id && unread) void chat.markSessionRead(chat.current).catch(() => {})
+  }, { flush: 'post' })
 
   watch(
     () => [controlCenterVisible.value, $q.screen.lt.lg],
@@ -208,6 +227,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     window.addEventListener('resize', updateVisualViewport)
     window.addEventListener('keydown', handleSearchShortcut)
     window.addEventListener('focus', refreshAppPresence)
+    window.addEventListener('blur', refreshAppPresence)
     window.addEventListener('beforeunload', preventDiscardOnUnload)
     document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
     window.addEventListener('matoloop:service-worker-ready', refreshPushState)
@@ -230,6 +250,10 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     window.removeEventListener('resize', updateVisualViewport)
     window.removeEventListener('keydown', handleSearchShortcut)
     window.removeEventListener('focus', refreshAppPresence)
+    window.removeEventListener('blur', refreshAppPresence)
+    presenceRequest = presenceRequest.catch(() => {}).then(() => notifications.markPresent({
+      clientId: presenceClientId, sessionId: null, active: false
+    })).catch(() => {})
     window.removeEventListener('beforeunload', preventDiscardOnUnload)
     terminal.release()
     browser.release()

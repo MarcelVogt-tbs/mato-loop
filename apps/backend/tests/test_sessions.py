@@ -560,11 +560,13 @@ async def test_mark_session_read_uses_owned_assistant_message_monotonically() ->
     statements = [call.args[0] for call in db.scalar.await_args_list]
     assert "FOR UPDATE" in str(statements[0])
     assert message_id in statements[1].compile().params.values()
-    update_statement = db.execute.await_args.args[0]
+    update_statement = db.execute.await_args_list[0].args[0]
     sql = str(update_statement)
     assert "chat_sessions.last_read_at <" in sql
     assert "updated_at=chat_sessions.updated_at" in sql.replace(" ", "")
     assert read_at in update_statement.compile().params.values()
+    notification_update = db.execute.await_args_list[1].args[0]
+    assert "notifications.created_at <=" in str(notification_update)
     db.commit.assert_awaited_once()
 
 

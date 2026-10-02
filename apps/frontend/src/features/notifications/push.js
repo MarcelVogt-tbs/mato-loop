@@ -40,7 +40,10 @@ export function parsePushPayload(payload) {
       ...(typeof notification.body === 'string' ? { body: notification.body } : {}),
       ...(typeof notification.tag === 'string' ? { tag: notification.tag } : {}),
       icon: '/icons/icon-192.png',
-      data: { version: 1, target }
+      data: {
+        version: 1, target,
+        ...(UUID_PATTERN.test(notification.notificationId || '') ? { notificationId: notification.notificationId } : {})
+      }
     }
   }
 }
