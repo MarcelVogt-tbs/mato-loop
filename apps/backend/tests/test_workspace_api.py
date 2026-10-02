@@ -22,7 +22,7 @@ from mato_loop_backend.api.routes.workspace import (
 from mato_loop_backend.execution.client import ExecutionClientError
 from mato_loop_backend.files.service import FileRoot, RootFileService
 from mato_loop_backend.files.storage import SessionStorage
-from mato_loop_backend.models import ChatSession, PermissionGrant, UserAccount
+from mato_loop_backend.models import ChatSession, Message, PermissionGrant, UserAccount
 from mato_loop_backend.settings import InstanceLimits
 
 
@@ -220,6 +220,39 @@ async def test_filesystem_scope_without_agent_context_is_rejected() -> None:
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.code == "file.workspaceNotSelected"
+
+
+async def test_provided_download_follows_file_identity_and_reads_current_bytes(tmp_path, monkeypatch):
+    context, _ = _session_context(tmp_path)
+    files = context.root_files
+    files.write_file("session", "report.txt", "original")
+    revision = files.working_revision("report.txt")
+    message = Message(id=uuid4(), session_id=files.session_id, role="tool", provider_data={"_matoloop": {
+        "fileActions": [{
+            "operation": "provide", "kind": "file", "root": "session", "rootIdentity": str(files.session_id),
+            "path": "report.txt", "filename": "report.txt", "sizeBytes": 8,
+            "fileId": str(revision.file_id), "fileRevision": revision.revision,
+        }],
+    }})
+    files.move_path("session", "report.txt", "session", "renamed.txt")
+    files.edit_text_file("session", "renamed.txt", "original", "updated")
+    files.write_file("session", "report.txt", "different file")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = message
+    monkeypatch.setattr(workspace_route, "_file_context", AsyncMock(return_value=context))
+    response = await workspace_route.provided_file(files.session_id, message.id, 0, "download", MagicMock(), _user(), db)
+    assert b"".join([part async for part in response.body_iterator]) == b"updated"
+
+
+async def test_provided_download_rejects_unowned_message_before_file_access(monkeypatch):
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    access = AsyncMock()
+    monkeypatch.setattr(workspace_route, "_file_context", access)
+    with pytest.raises(ApiError) as error:
+        await workspace_route.provided_file(uuid4(), uuid4(), 0, "download", MagicMock(), _user(), db)
+    assert error.value.code == "file.fileNotFound"
+    access.assert_not_awaited()
 
 
 async def test_download_streams_the_bound_session_file(tmp_path: Path, monkeypatch) -> None:

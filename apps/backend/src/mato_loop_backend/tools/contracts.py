@@ -84,15 +84,21 @@ class ToolAttachment:
 
 @dataclass(frozen=True, slots=True)
 class ToolFileAction:
-    operation: Literal["write", "copy", "move"]
+    operation: Literal["write", "create", "edit", "delete", "mkdir", "copy", "move", "provide"]
     root: Literal["session", "workspace"]
     root_identity: str | None
     path: str
     filename: str
-    size_bytes: int
+    size_bytes: int | None
     execution_agent_id: str | None = None
     current_directory: str | None = None
-    presentation: Literal["result", "internal"] = "result"
+    kind: Literal["file", "directory", "collection", "path"] = "file"
+    source_path: str | None = None
+    source_root: Literal["session", "workspace"] | None = None
+    paths: tuple[str, ...] | None = None
+    archive_root_contents: bool = False
+    file_id: str | None = None
+    file_revision: int | None = None
 
 
 @dataclass(slots=True)

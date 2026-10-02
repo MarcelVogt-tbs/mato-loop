@@ -487,14 +487,17 @@ describe('workspace store', () => {
       workspaceContext: { executionAgentId: 'current-agent' }
     })
 
-    const target = workspace.fileTargetFromAction({
+    const action = {
       root: 'workspace',
       executionAgentId: 'historical-agent',
       currentDirectory: '/original-project',
       path: '/original-project/model.stl',
       filename: 'model.stl',
       sizeBytes: 84
-    })
+    }
+    const reference = '/api/workspace/files/provided/550e8400-e29b-41d4-a716-446655440000/550e8400-e29b-41d4-a716-446655440001/0'
+    api.get.mockResolvedValueOnce({ data: action })
+    const target = await workspace.resolveFileTarget({ operation: 'provide', targetUrl: `${reference}/target`, downloadUrl: `${reference}/download` })
     workspace.activateFileTab({ tabId: 'file-1', kind: 'file', fileTarget: target })
     await workspace.load(workspace.directoryPath)
 

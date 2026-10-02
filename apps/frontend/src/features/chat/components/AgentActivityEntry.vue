@@ -164,10 +164,18 @@
           :key="`${action.rootIdentity || action.executionAgentId}:${action.path}`"
           class="work-history__file-output app-surface"
         >
-          <q-icon :name="attachmentIcon(action)" color="primary" size="24px" />
-          <span class="col ellipsis text-weight-medium">{{ action.filename }}</span>
+          <q-icon :name="['directory', 'collection'].includes(action.kind) ? 'folder_zip' : attachmentIcon(action)" color="primary" size="24px" />
+          <span class="col ellipsis text-weight-medium" :title="action.path">{{ action.kind === 'directory' ? `${action.filename}.zip` : action.filename }}</span>
           <q-btn
-            v-if="!readOnly"
+            v-if="!readOnly && action.fileRevision && action.fileId"
+            flat round dense icon="history"
+            :aria-label="`${action.filename}: bereitgestellte Revision ansehen`"
+            @click="emit('open-file', { ...action, revision: action.fileRevision })"
+          >
+            <q-tooltip>Bereitgestellte Revision ansehen</q-tooltip>
+          </q-btn>
+          <q-btn
+            v-if="!readOnly && action.kind === 'file'"
             flat
             round
             dense
@@ -183,7 +191,7 @@
             dense
             icon="download"
             :href="action.downloadUrl"
-            :download="action.filename"
+            :download="action.kind === 'directory' ? `${action.filename}.zip` : action.filename"
             :aria-label="`${action.filename} herunterladen`"
           >
             <q-tooltip>Datei herunterladen</q-tooltip>

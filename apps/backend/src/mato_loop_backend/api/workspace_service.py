@@ -412,6 +412,8 @@ def _agent_entry(value: object, *, expected_path: str | None = None) -> dict:
         raise ApiError(502, "executionAgent.protocolError") from exc
     if expected_path is not None and path != expected_path:
         raise ApiError(502, "executionAgent.protocolError")
+    if "name" in value and value["name"] != PurePosixPath(path).name:
+        raise ApiError(502, "executionAgent.protocolError")
     kind = value.get("kind")
     if kind not in {"directory", "file", "symlink", "other"}:
         raise ApiError(502, "executionAgent.protocolError")

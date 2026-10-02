@@ -5,7 +5,6 @@ import hashlib
 import logging
 import posixpath
 from io import BytesIO
-from typing import BinaryIO
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -26,21 +25,10 @@ from mato_loop_backend.execution import (
     WorkspaceStatResult,
     WorkspaceWriteResult,
 )
-from mato_loop_backend.files.archives import (
-    MAX_EXPORT_BYTES,
-    MAX_EXPORT_ENTRIES,
-    ArchiveEntry,
-    ArchivePage,
-    FileArchiveError,
-    create_zip_archive,
-)
 from mato_loop_backend.files.search import RootFileSearch
 from mato_loop_backend.files.service import (
-    FileRevision,
     FileRoot,
     RootFileError,
-    RootFileService,
-    WorkingFileRevision,
 )
 from mato_loop_backend.media.attachments import (
     MAX_IMAGE_ATTACHMENT_BYTES,
@@ -399,16 +387,6 @@ async def _provide_file(
     if selected is None:
         return ToolResult.error("permission.denied")
     root_files, target_session_id = selected
-    output_files = context.root_files
-    if output_files.run_id != context.run_id:
-        output_files = RootFileService(
-            context.session.id,
-            project_id=context.session.project_id,
-            run_id=context.run_id,
-            session_storage=context.root_files.session_storage,
-            session_quota_bytes=context.root_files.SESSION_QUOTA_BYTES,
-            max_editable_text_bytes=context.root_files.max_editable_text_bytes,
-        )
     if arguments.root == "workspace":
         client = files_access.workspace_client(context)
         if not all(
@@ -439,171 +417,47 @@ async def _provide_file(
         if not await authorize(source):
             return ToolResult.error("permission.denied")
 
+    revision = None
+    size = None
+    for path in paths:
+        if arguments.root == "workspace":
+            stat_result = await client.request(
+                "filesystem.stat", {"path": path}, WorkspaceStatResult
+            )
+            files_access.require_workspace_path(stat_result.path, path)
+            kind, size = stat_result.kind, stat_result.size
+        else:
+            kind = await asyncio.to_thread(root_files.path_kind, arguments.root, path)
+            if kind == "file" and arguments.paths is None:
+                revision = await asyncio.to_thread(root_files.working_revision, path)
+                size = revision.size_bytes
+        if arguments.paths is not None and kind != "file":
+            return ToolResult.error("file.notAFile", field="paths")
+        if kind not in {"file", "directory"}:
+            return ToolResult.error("file.notAFile", field="path")
+    if arguments.paths is None and kind == "file" and size == 0:
+        return ToolResult.error("attachment.empty")
+    kind = "collection" if arguments.paths is not None else kind
     path = paths[0]
-    if arguments.root == "workspace":
-        stat_result = await client.request(
-            "filesystem.stat", {"path": path}, WorkspaceStatResult
-        )
-        files_access.require_workspace_path(stat_result.path, path)
-        kind = stat_result.kind
-    else:
-        kind = await asyncio.to_thread(root_files.path_kind, arguments.root, path)
-
-    if (
-        arguments.root == "workspace"
-        and arguments.paths is None
-        and kind == "file"
-        and stat_result.size == 0
-    ):
-        return ToolResult.error("attachment.empty")
-
-    if arguments.paths is not None or kind == "directory":
-        if arguments.root == "workspace" and not client.supports("filesystem.list"):
-            return ToolResult.error("executionAgent.operationUnavailable")
-
-        async def archive_stat_source(source: str) -> ArchiveEntry:
-            if arguments.root == "workspace":
-                item = await client.request(
-                    "filesystem.stat", {"path": source}, WorkspaceStatResult
-                )
-                return ArchiveEntry(item.path, posixpath.basename(item.path), item.kind, item.size)
-            item_kind = await asyncio.to_thread(root_files.path_kind, arguments.root, source)
-            size = None
-            if item_kind == "file":
-                resolved = await asyncio.to_thread(root_files.resolve, arguments.root, source)
-                size = resolved.stat(follow_symlinks=False).st_size
-            return ArchiveEntry(source, posixpath.basename(source), item_kind, size)
-
-        async def list_source(source: str, offset: int) -> ArchivePage:
-            if arguments.root == "workspace":
-                page = await client.request(
-                    "filesystem.list",
-                    {"path": source, "offset": offset, "limit": root_files.MAX_LIST_LIMIT},
-                    WorkspaceListResult,
-                )
-            else:
-                page = await asyncio.to_thread(
-                    root_files.list_directory, arguments.root, source,
-                    offset=offset, limit=root_files.MAX_LIST_LIMIT,
-                )
-            return ArchivePage(
-                tuple(ArchiveEntry(item.path, item.name, item.kind, item.size) for item in page.entries),
-                page.has_more,
-                page.next_offset,
-            )
-
-        async def open_source(source: str, limit: int) -> BinaryIO:
-            if arguments.root == "workspace":
-                return await client.open_export(source, limit=limit)
-            return await asyncio.to_thread(root_files.open_file, arguments.root, source)
-
-        try:
-            archive = await create_zip_archive(
-                paths,
-                stat_path=archive_stat_source,
-                list_directory=list_source,
-                open_file=open_source,
-                file_list=arguments.paths is not None,
-                root_contents=arguments.path == ".",
-                max_source_bytes=MAX_EXPORT_BYTES,
-                max_output_bytes=MAX_EXPORT_BYTES,
-                max_entries=MAX_EXPORT_ENTRIES,
-            )
-        except FileArchiveError as exc:
-            return ToolResult.error(exc.code, field=exc.field)
-        try:
-            revision = await files_access.create_output_stream(
-                output_files, archive.filename, archive.content
-            )
-        finally:
-            archive.content.close()
-        result = ToolResult.json({
-            "root": arguments.root,
-            "filename": archive.filename,
-            "sizeBytes": revision.size_bytes,
-            "sha256": revision.sha256,
-            "snapshotImported": True,
-        })
-        result.attachments = (
-            _provided_reference(
-                output_files, revision, archive.filename, mime_type="application/zip"
-            ),
-        )
-        return result
-
-    if arguments.root == "workspace":
-        source = await client.open_export(path, limit=MAX_EXPORT_BYTES)
-        try:
-            revision = await files_access.create_output_stream(
-                output_files, path.rsplit("/", 1)[-1], source
-            )
-        finally:
-            source.close()
-        result = ToolResult.json(
-            {
-                "root": arguments.root,
-                "path": path,
-                "filename": path.rsplit("/", 1)[-1],
-                "sizeBytes": revision.size_bytes,
-                "sha256": revision.sha256,
-                "snapshotImported": True,
-            }
-        )
-        result.attachments = (
-            _provided_reference(output_files, revision, path.rsplit("/", 1)[-1]),
-        )
-        return result
-
-    try:
-        revision = root_files.working_revision(path)
-    except RootFileError:
-        return ToolResult.error("file.notAFile", field="path")
-    if revision.size_bytes == 0:
-        return ToolResult.error("attachment.empty")
-    result = ToolResult.json(
-        {
-            "root": arguments.root,
-            "sessionId": str(target_session_id),
-            "path": path,
-            "filename": path.rsplit("/", 1)[-1],
-            "sizeBytes": revision.size_bytes,
-            "sha256": revision.sha256,
-        },
-        metadata={"providedFile": True},
+    filename = "files.zip" if kind == "collection" else path.rsplit("/", 1)[-1] or "files"
+    if path == ".":
+        filename = "files"
+    action = ToolFileAction(
+        operation="provide", root=arguments.root,
+        root_identity=root_files.root_identity("session") if arguments.root == "session" else None,
+        path=path, filename=filename, size_bytes=size if kind == "file" else None,
+        kind=kind,
+        execution_agent_id=str(client.agent_id) if arguments.root == "workspace" else None,
+        current_directory=client.current_directory if arguments.root == "workspace" else None,
+        paths=tuple(paths) if kind == "collection" else None,
+        archive_root_contents=arguments.path == ".",
+        file_id=str(revision.file_id) if revision else None,
+        file_revision=revision.revision if revision else None,
     )
-    result.attachments = (
-        ToolAttachment(
-            b"",
-            "application/octet-stream",
-            path.rsplit("/", 1)[-1],
-            kind="file",
-            category="downloaded",
-            file_root_id=UUID(root_files.root_identity(FileRoot.SESSION)),
-            file_id=revision.file_id,
-            file_revision=revision.revision,
-            file_path=revision.path,
-        ),
-    )
-    return result
-
-
-def _provided_reference(
-    root_files: RootFileService,
-    revision: FileRevision | WorkingFileRevision,
-    filename: str,
-    *,
-    mime_type: str = "application/octet-stream",
-) -> ToolAttachment:
-    return ToolAttachment(
-        b"",
-        mime_type,
-        filename,
-        kind="file",
-        category="downloaded",
-        file_root_id=UUID(root_files.root_identity(FileRoot.SESSION)),
-        file_id=revision.file_id,
-        file_revision=revision.revision,
-        file_path=revision.path,
+    return ToolResult.json(
+        {"root": arguments.root, "path": path, "filename": filename, "provided": True,
+         "sizeBytes": action.size_bytes, "sessionId": str(target_session_id)},
+        file_actions=(action,),
     )
 
 
@@ -677,7 +531,7 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
                 "sha256": result.sha256,
             },
             file_actions=files_access.workspace_file_action(
-                context, "write", result.path, result.size
+                context, "edit" if arguments.expected_sha256 is not None else "create", result.path, result.size
             ),
         )
     written = await asyncio.to_thread(
@@ -696,7 +550,9 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
             "sizeBytes": len(encoded),
             "sha256": hashlib.sha256(encoded).hexdigest(),
         },
-        file_actions=files_access.regular_file_action(context, "write", arguments.root, written),
+        file_actions=files_access.regular_file_action(
+            context, "edit" if arguments.expected_sha256 is not None else "create", arguments.root, written
+        ),
     )
 
 
@@ -786,7 +642,7 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
                 "sha256": result.sha256,
             },
             file_actions=files_access.workspace_file_action(
-                context, "write", result.path, result.size
+                context, "edit", result.path, result.size
             ),
         )
     edited = await asyncio.to_thread(
@@ -808,7 +664,7 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
             "sizeBytes": len(edited_bytes),
             "sha256": hashlib.sha256(edited_bytes).hexdigest(),
         },
-        file_actions=files_access.regular_file_action(context, "write", arguments.root, edited),
+        file_actions=files_access.regular_file_action(context, "edit", arguments.root, edited),
     )
 
 
@@ -920,12 +776,13 @@ async def _apply_patch(
     file_actions = tuple(
         files_access.workspace_file_action(
             context,
-            "move" if file.operation == "move" else "write",
+            {"add": "create", "update": "edit", "delete": "delete", "move": "move"}[file.operation],
             file.destination or file.path,
             file.size,
+            source_path=file.path if file.operation == "move" else None,
+            source_root="workspace" if file.operation == "move" else None,
         )[0]
         for file in result.files
-        if file.operation != "delete"
     )
     return ToolResult.json(
         result.model_dump(mode="json", by_alias=True), file_actions=file_actions
@@ -962,11 +819,17 @@ async def _create_directory(
         )
         assert isinstance(result, WorkspacePathResult)
         files_access.require_workspace_path(result.path, path)
-        return ToolResult.json({"root": arguments.root, "created": result.path})
+        return ToolResult.json(
+            {"root": arguments.root, "created": result.path},
+            file_actions=files_access.workspace_file_action(context, "mkdir", result.path, kind="directory"),
+        )
     created = await asyncio.to_thread(
         context.root_files.create_directory, arguments.root, arguments.path
     )
-    return ToolResult.json({"root": arguments.root, "created": created})
+    return ToolResult.json(
+        {"root": arguments.root, "created": created},
+        file_actions=files_access.regular_file_action(context, "mkdir", arguments.root, created),
+    )
 
 
 async def _delete_path(arguments: DeletePathArguments, context: ToolContext) -> ToolResult:
@@ -999,7 +862,15 @@ async def _delete_path(arguments: DeletePathArguments, context: ToolContext) -> 
             arguments.path,
             recursive=arguments.recursive,
         )
-    return ToolResult.json({"root": arguments.root, "deleted": arguments.path})
+    return ToolResult.json(
+        {"root": arguments.root, "deleted": arguments.path},
+        file_actions=(
+            files_access.workspace_file_action(
+                context, "delete", files_access.execution_path(context, arguments.path), kind="path"
+            ) if arguments.root == "workspace" else
+            files_access.regular_file_action(context, "delete", arguments.root, arguments.path)
+        ),
+    )
 
 
 async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> ToolResult:
@@ -1052,7 +923,10 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
         )
         assert isinstance(result, WorkspacePathResult)
         files_access.require_workspace_path(result.path, destination)
-        file_actions: tuple[ToolFileAction, ...] = ()
+        source = files_access.execution_path(context, arguments.source_path)
+        file_actions = files_access.workspace_file_action(
+            context, "copy", result.path, kind="path", source_path=source, source_root="workspace"
+        )
         client = files_access.workspace_client(context)
         if client.supports("filesystem.stat"):
             try:
@@ -1062,11 +936,10 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
                 if (
                     isinstance(stat_result, WorkspaceStatResult)
                     and stat_result.path == result.path
-                    and stat_result.kind == "file"
-                    and stat_result.size is not None
                 ):
                     file_actions = files_access.workspace_file_action(
-                        context, "copy", result.path, stat_result.size
+                        context, "copy", result.path, stat_result.size, kind=stat_result.kind,
+                        source_path=source, source_root="workspace",
                     )
             except ExecutionClientError:
                 pass
@@ -1100,7 +973,8 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
             return ToolResult.json(
                 {"root": arguments.destination_root, "copied": copied.path},
                 file_actions=files_access.regular_file_action(
-                    context, "copy", arguments.destination_root, copied.path
+                    context, "copy", arguments.destination_root, copied.path,
+                    source_path=source, source_root=arguments.source_root,
                 ),
             )
         with context.root_files.open_file(FileRoot.SESSION, source) as handle:
@@ -1112,7 +986,8 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
         return ToolResult.json(
             {"root": arguments.destination_root, "copied": copied.path},
             file_actions=files_access.workspace_file_action(
-                context, "copy", copied.path, copied.size
+                context, "copy", copied.path, copied.size,
+                source_path=source, source_root=arguments.source_root,
             ),
         )
     copied = await asyncio.to_thread(
@@ -1125,7 +1000,8 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
     return ToolResult.json(
         {"root": arguments.destination_root, "copied": copied},
         file_actions=files_access.regular_file_action(
-            context, "copy", arguments.destination_root, copied
+            context, "copy", arguments.destination_root, copied,
+            source_path=arguments.source_path, source_root=arguments.source_root,
         ),
     )
 
@@ -1176,7 +1052,10 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
         )
         assert isinstance(result, WorkspacePathResult)
         files_access.require_workspace_path(result.path, destination)
-        file_actions: tuple[ToolFileAction, ...] = ()
+        source = files_access.execution_path(context, arguments.source_path)
+        file_actions = files_access.workspace_file_action(
+            context, "move", result.path, kind="path", source_path=source, source_root="workspace"
+        )
         client = files_access.workspace_client(context)
         if client.supports("filesystem.stat"):
             try:
@@ -1186,11 +1065,10 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
                 if (
                     isinstance(stat_result, WorkspaceStatResult)
                     and stat_result.path == result.path
-                    and stat_result.kind == "file"
-                    and stat_result.size is not None
                 ):
                     file_actions = files_access.workspace_file_action(
-                        context, "move", result.path, stat_result.size
+                        context, "move", result.path, stat_result.size, kind=stat_result.kind,
+                        source_path=source, source_root="workspace",
                     )
             except ExecutionClientError:
                 pass
@@ -1208,7 +1086,8 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
     return ToolResult.json(
         {"root": arguments.destination_root, "moved": moved},
         file_actions=files_access.regular_file_action(
-            context, "move", arguments.destination_root, moved
+            context, "move", arguments.destination_root, moved,
+            source_path=arguments.source_path, source_root=arguments.source_root,
         ),
     )
 
@@ -1271,7 +1150,8 @@ GREP = ToolDefinition(
 PROVIDE_FILE = ToolDefinition(
             "provide_file",
             "On explicit file, image result, download, or ZIP request, provide path (file/folder) or paths "
-            "(files). Folders/lists become ZIPs.",
+            "(files) as a reference. Contents are fetched only when the user opens or downloads it. "
+            "Folders/lists become ZIPs on download. References open the current file; computer files are not copied to session storage.",
             ProvideFileArguments,
             _provide_file,
             tool_type="shared",

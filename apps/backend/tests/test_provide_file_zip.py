@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
+from functools import partial
 from io import BytesIO
 from pathlib import PurePosixPath
 from threading import Event
@@ -14,47 +15,52 @@ import pytest
 from pydantic import ValidationError
 from test_agent_tools_contract import _context
 
-import mato_loop_backend.files.access as mock_files_access
 import mato_loop_backend.files.archives as files_archives
-import mato_loop_backend.tools.files as mock_tools_files
+from mato_loop_backend.api.errors import ApiError
+from mato_loop_backend.api.routes import workspace as workspace_route
 from mato_loop_backend.execution.client import WorkspaceListResult, WorkspaceStatResult
 from mato_loop_backend.files.archives import ArchiveEntry, ArchivePage, FileArchiveError
 from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.tools.catalog import tool_registry
-from mato_loop_backend.tools.contracts import ToolAttachment
 
 
-def _zip_contents(result, filename, context):
+async def _download(result, context, monkeypatch):
     assert not result.is_error, result.content
-    assert len(result.attachments) == 1
-    attachment = result.attachments[0]
-    assert isinstance(attachment, ToolAttachment)
-    assert (attachment.kind, attachment.mime_type, attachment.filename) == (
-        "file", "application/zip", filename
+    assert not result.attachments
+    action, = result.file_actions
+    client = context.execution_client if action.root == "workspace" else None
+    file_context = workspace_route._FileContext(
+        root_files=context.root_files, root=action.root,
+        agent_id=client.agent_id if client else None,
+        agent_operations=frozenset({"filesystem.stat", "filesystem.list", "filesystem.export"}),
     )
-    assert attachment.file_id is not None
-    payload = json.loads(result.content)
-    assert payload["filename"] == filename
-    files = RootFileService(
-        context.session.id,
-        project_id=context.session.project_id,
-        run_id=context.run_id,
-        session_storage=context.root_files.session_storage,
+    monkeypatch.setattr(workspace_route, "_file_context", AsyncMock(return_value=file_context))
+    if client:
+        async def stat(_context, path):
+            item = await client.request("filesystem.stat", {"path": path}, WorkspaceStatResult)
+            return {**item.model_dump(), "name": PurePosixPath(path).name}
+        async def request(_context, operation, arguments):
+            return (await client.request(operation, arguments, WorkspaceListResult)).model_dump(by_alias=True)
+        async def export(_context, path, _request, *, max_bytes):
+            handle = await client.open_export(path, limit=max_bytes)
+            return handle, len(handle.getvalue()), hashlib.sha256(handle.getvalue()).hexdigest()
+        monkeypatch.setattr(workspace_route, "_agent_stat", stat)
+        monkeypatch.setattr(workspace_route, "_agent_request", request)
+        monkeypatch.setattr(workspace_route, "_agent_export", export)
+    return await workspace_route.download_file(
+        Mock(), AsyncMock(), action.path, request=Mock(),
+        scope=workspace_route.FileScope.SESSION if action.root == "session" else workspace_route.FileScope.FILESYSTEM,
+        session_id=context.session.id, archive="zip" if action.kind != "file" else None,
+        paths=list(action.paths) if action.paths else None, root_contents=action.archive_root_contents,
     )
-    if attachment.file_revision is None:
-        handle = files.open_working_file(
-            attachment.file_id, expected_sha256=payload["sha256"]
-        )
-    else:
-        handle = files.open_revision_by_id(
-            attachment.file_id, attachment.file_revision
-        )
-    with handle:
-        data = handle.read()
-    assert payload["sizeBytes"] == len(data)
-    assert payload["sha256"] == hashlib.sha256(data).hexdigest()
+
+
+async def _zip_contents(result, filename, context, monkeypatch):
+    response = await _download(result, context, monkeypatch)
+    assert filename in response.headers["content-disposition"]
+    data = b"".join([part async for part in response.body_iterator])
     with ZipFile(BytesIO(data)) as archive:
         assert archive.testzip() is None
         assert len(archive.namelist()) == len(set(archive.namelist()))
@@ -102,7 +108,7 @@ def _computer(context, nodes):
 
 
 @pytest.mark.parametrize("selection", ["folder", "root", "list", "single-item-list"])
-async def test_managed_zip_contents_and_names(tmp_path, selection):
+async def test_managed_zip_contents_and_names(tmp_path, monkeypatch, selection):
     arguments = {
         "folder": {"path": "reports"},
         "root": {"path": "."},
@@ -125,7 +131,7 @@ async def test_managed_zip_contents_and_names(tmp_path, selection):
 
     result = await tool_registry.execute(call, context)
 
-    contents = _zip_contents(result, "reports.zip" if selection == "folder" else "download.zip", context)
+    contents = await _zip_contents(result, "reports.zip" if selection == "folder" else "download.zip", context, monkeypatch)
     prefix = "reports/" if selection in {"folder", "root"} else ""
     expected = {prefix + path: data for path, data in files.items()}
     if selection == "single-item-list":
@@ -147,7 +153,7 @@ def test_provide_file_rejects_invalid_choices(arguments):
 
 @pytest.mark.parametrize("root", ["files", "computer"])
 @pytest.mark.parametrize("empty", [False, True])
-async def test_zip_root_contents_have_no_root_prefix(tmp_path, root, empty):
+async def test_zip_root_contents_have_no_root_prefix(tmp_path, monkeypatch, root, empty):
     call = ToolCall("zip", "provide_file", {"root": root, "path": "."})
     context = _context(tmp_path, call)
     if root == "computer":
@@ -157,7 +163,7 @@ async def test_zip_root_contents_have_no_root_prefix(tmp_path, root, empty):
 
     result = await tool_registry.execute(call, context)
 
-    assert _zip_contents(result, "download.zip", context) == ({} if empty else {"a.txt": b"a"})
+    assert await _zip_contents(result, "download.zip", context, monkeypatch) == ({} if empty else {"a.txt": b"a"})
 
 
 def test_provide_file_list_has_schema_bound():
@@ -186,7 +192,7 @@ async def test_file_list_rejects_directories_before_reading(tmp_path):
 
 @pytest.mark.parametrize("selection", ["folder", "list"])
 @pytest.mark.parametrize("deny_source", [False, True])
-async def test_computer_pagination_and_authorization_before_reads(tmp_path, selection, deny_source):
+async def test_computer_pagination_and_authorization_before_reads(tmp_path, monkeypatch, selection, deny_source):
     nodes = {
         "/work/reports": None,
         "/work/reports/a.txt": b"public",
@@ -227,7 +233,8 @@ async def test_computer_pagination_and_authorization_before_reads(tmp_path, sele
         assert not result.attachments
         client.open_export.assert_not_awaited()
     else:
-        contents = _zip_contents(result, "reports.zip" if selection == "folder" else "download.zip", context)
+        client.open_export.assert_not_awaited()
+        contents = await _zip_contents(result, "reports.zip" if selection == "folder" else "download.zip", context, monkeypatch)
         prefix = "reports/" if selection == "folder" else ""
         assert {name: data for name, data in contents.items() if not name.endswith("/")} == {
             prefix + "a.txt": b"public", prefix + "nested/.env": b"confidential",
@@ -257,9 +264,7 @@ async def test_computer_rejects_empty_single_file_before_import(tmp_path):
 
 
 @pytest.mark.parametrize("selection", ["zip", "single"])
-async def test_cancelled_import_discards_only_the_new_run_output(
-    tmp_path, monkeypatch, selection
-):
+async def test_providing_computer_files_neither_exports_nor_creates_session_files(tmp_path, selection):
     path = "reports" if selection == "zip" else "report.txt"
     call = ToolCall("provide", "provide_file", {"root": "computer", "path": path})
     context = _context(tmp_path, call)
@@ -269,46 +274,10 @@ async def test_cancelled_import_discards_only_the_new_run_output(
         else {"/work/report.txt": b"report"}
     )
     client = _computer(context, nodes)
-    source = BytesIO(b"report")
-    if selection == "single":
-        client.open_export.return_value = source
-        client.open_export.side_effect = None
     context.root_files.write_file("session", "keep.txt", "keep")
-    created, release = Event(), Event()
-    archives = []
-    create_output = RootFileService.create_output_stream
-    create_archive = mock_tools_files.create_zip_archive
-
-    def blocked_create(files, *args, **kwargs):
-        revision = create_output(files, *args, **kwargs)
-        created.set()
-        assert release.wait(5)
-        return revision
-
-    async def capture_archive(*args, **kwargs):
-        archive = await create_archive(*args, **kwargs)
-        archives.append(archive)
-        return archive
-
-    monkeypatch.setattr(RootFileService, "create_output_stream", blocked_create)
-    monkeypatch.setattr(mock_tools_files, 'create_zip_archive', capture_archive)
-    task = asyncio.create_task(tool_registry.execute(call, context))
-    try:
-        assert await asyncio.to_thread(created.wait, 5)
-        task.cancel()
-        await asyncio.sleep(0)
-        task.cancel()
-        await asyncio.sleep(0)
-        assert not task.done()
-    finally:
-        release.set()
-
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    if selection == "zip":
-        assert archives[0].content.closed
-    else:
-        assert source.closed
+    result = await tool_registry.execute(call, context)
+    assert not result.is_error
+    client.open_export.assert_not_awaited()
     assert [entry.path for entry in context.root_files.list_entries("session").entries] == [
         "keep.txt"
     ]
@@ -325,7 +294,7 @@ async def test_cancelled_import_discards_only_the_new_run_output(
     ("/work/reports/a.txt", "symlink"),
     ("/work/reports/a.txt", "other"),
 ])
-async def test_computer_rejects_unsafe_listing_before_reads(tmp_path, entry_path, kind):
+async def test_computer_rejects_unsafe_listing_before_reads(tmp_path, monkeypatch, entry_path, kind):
     call = ToolCall("zip", "provide_file", {"root": "computer", "path": "reports"})
     context = _context(tmp_path, call)
     client = _computer(context, {"/work/reports": None})
@@ -345,13 +314,13 @@ async def test_computer_rejects_unsafe_listing_before_reads(tmp_path, entry_path
 
     result = await tool_registry.execute(call, context)
 
-    assert result.is_error
-    assert not result.attachments
+    with pytest.raises(ApiError):
+        await _download(result, context, monkeypatch)
     client.open_export.assert_not_awaited()
 
 
 @pytest.mark.parametrize("kind", ["symlink", "fifo"])
-async def test_managed_zip_rejects_symlinks_and_special_files(tmp_path, kind):
+async def test_managed_zip_rejects_symlinks_and_special_files(tmp_path, monkeypatch, kind):
     call = ToolCall("zip", "provide_file", {"root": "files", "path": "reports"})
     context = _context(tmp_path, call)
     context.root_files.create_directory("session", "reports")
@@ -365,8 +334,8 @@ async def test_managed_zip_rejects_symlinks_and_special_files(tmp_path, kind):
 
     result = await tool_registry.execute(call, context)
 
-    assert result.is_error
-    assert not result.attachments
+    with pytest.raises(ApiError):
+        await _download(result, context, monkeypatch)
     context.root_files.open_file.assert_not_called()
 
 
@@ -377,21 +346,13 @@ async def test_zip_limits_use_small_budgets(tmp_path, monkeypatch, limit):
     context.root_files.create_directory("session", "reports")
     for path in ("a.txt", "b.txt"):
         context.root_files.write_file("session", f"reports/{path}", "12345678")
-    if limit == "source":
-        _mock_value = 12
-        for _mock_target in (mock_tools_files, mock_files_access,):
-            monkeypatch.setattr(_mock_target, 'MAX_EXPORT_BYTES', _mock_value)
-    elif limit == "entries":
-        monkeypatch.setattr(mock_tools_files, 'MAX_EXPORT_ENTRIES', 1)
-    else:
-        _mock_value = 64
-        for _mock_target in (mock_tools_files, mock_files_access,):
-            monkeypatch.setattr(_mock_target, 'MAX_EXPORT_BYTES', _mock_value)
+    budget = {"source": {"max_source_bytes": 12}, "entries": {"max_entries": 1}, "archive": {"max_output_bytes": 64}}[limit]
+    monkeypatch.setattr(workspace_route, "create_zip_archive", partial(files_archives.create_zip_archive, **budget))
 
     result = await tool_registry.execute(call, context)
 
-    assert result.is_error
-    assert not result.attachments
+    with pytest.raises(ApiError):
+        await _download(result, context, monkeypatch)
 
 
 @pytest.mark.parametrize("replacement", ["symlink", "fifo"])
@@ -418,8 +379,8 @@ async def test_zip_rejects_file_replaced_after_listing(tmp_path, monkeypatch, re
     monkeypatch.setattr(os, "open", replace_before_open)
     result = await tool_registry.execute(call, context)
 
-    assert result.is_error
-    assert not result.attachments
+    with pytest.raises(ApiError):
+        await _download(result, context, monkeypatch)
 
 
 async def test_archive_streams_a_simulated_source_above_64_mib_in_bounded_chunks():

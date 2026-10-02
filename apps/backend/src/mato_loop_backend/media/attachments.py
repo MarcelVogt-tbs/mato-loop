@@ -1166,6 +1166,15 @@ class AttachmentService:
                 seen_files.add(file_id)
             actions = []
             for action in reversed(state.get("fileActions", [])):
+                if "kind" in action:
+                    # Operation receipts survive deletion and repeated edits. Only provided
+                    # session references need their final published revision attached.
+                    if action.get("operation") == "provide" and action.get("fileId"):
+                        current = revisions.get(UUID(action["fileId"]))
+                        if current is not None and action.get("rootIdentity") == str(session.id):
+                            action = {**action, "fileRevision": current.revision, "sizeBytes": current.size_bytes}
+                    actions.append(action)
+                    continue
                 key = (
                     action.get("root"),
                     action.get("rootIdentity"),

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { useControlCenterStore } from 'src/stores/control-center'
+import { safeFileDownloadUrl } from 'src/features/files/attachments'
 import {
   clearCachedSubtree,
   parentPath,
@@ -179,11 +180,22 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.rootIdentity = null
       this.toolContext = null
     },
+    async resolveFileTarget(action) {
+      if (action?.operation === 'provide' && action.targetUrl) {
+        const downloadUrl = safeFileDownloadUrl(action.downloadUrl)
+        if (!downloadUrl || action.targetUrl !== downloadUrl.replace(/download$/, 'target')) return null
+        const { data } = await api.get(action.targetUrl.slice(4))
+        return this.fileTargetFromAction({ ...data, revision: action.revision })
+      }
+      return this.fileTargetFromAction(action)
+    },
     fileTargetFromAction(action) {
       if (
         !['session', 'workspace'].includes(action?.root)
         || !action.path
         || !action.filename
+        || (action.kind && action.kind !== 'file')
+        || action.operation === 'delete'
       ) return null
       if (action.root === 'session') {
         if (!action.rootIdentity) return null
@@ -192,7 +204,8 @@ export const useWorkspaceStore = defineStore('workspace', {
           path: action.path,
           name: action.filename,
           rootIdentity: action.rootIdentity,
-          readOnly: false
+          readOnly: action.revision != null,
+          ...(action.revision != null ? { revision: action.revision, fileId: action.fileId } : {})
         }
       }
       if (!action.executionAgentId || !action.currentDirectory || !action.path.startsWith('/')) return null

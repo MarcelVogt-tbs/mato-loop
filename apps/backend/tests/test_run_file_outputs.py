@@ -478,8 +478,8 @@ async def test_provided_working_file_and_actions_publish_only_final_output(tmp_p
         ProvideFileArguments(root="session", path="model.scad"),
         SimpleNamespace(run_id=run_id, root_files=files, session=session),
     )
-    assert provided.attachments[0].file_revision is None
-    assert provided.attachments[0].file_id == working.file_id
+    assert provided.file_actions[0].file_revision is None
+    assert provided.file_actions[0].file_id == str(working.file_id)
     assert "downloadUrl" not in json.loads(provided.content)
     service = AttachmentService(storage, run_id=run_id)
     db = AsyncMock(spec=AsyncSession)
@@ -524,7 +524,7 @@ async def test_provided_working_file_and_actions_publish_only_final_output(tmp_p
     assert messages[1].provider_data["_matoloop"]["fileActions"] == []
 
 
-async def test_provided_zip_persists_fixed_snapshot_after_source_edit(tmp_path, monkeypatch):
+async def test_provided_reference_retains_final_revision_without_creating_attachment(tmp_path, monkeypatch):
     session = ChatSession(id=uuid4(), user_id=uuid4())
     run_id = uuid4()
     storage = SessionStorage(tmp_path / "sessions")
@@ -537,42 +537,25 @@ async def test_provided_zip_persists_fixed_snapshot_after_source_edit(tmp_path, 
     monkeypatch.setattr(mock_files_access, 'filesystem_permission', lambda *_args, **_kwargs: None)
     monkeypatch.setattr(mock_tools_access, 'allow', AsyncMock(return_value=True))
     provided = await mock_tools_files._provide_file(
-        ProvideFileArguments(root="session", path="reports"),
+        ProvideFileArguments(root="session", path="reports/notes.txt"),
         SimpleNamespace(run_id=run_id, root_files=files, session=session),
     )
     assert not provided.is_error
-    output, = provided.attachments
-    assert output.mime_type == "application/zip"
-    assert output.file_id is not None
-    assert output.file_revision is None
-    message = tool_message(session, run_id)
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = session
     service = AttachmentService(storage, run_id=run_id)
-    pending = await service.create_reference(
-        db, message, file_root_id=output.file_root_id, file_id=output.file_id,
-        file_revision=output.file_revision, file_path=output.file_path,
-        filename=output.filename, position=0, category=output.category,
-        mime_type=output.mime_type,
+    message, _, _ = await mock_tool_round.persist_tool_result(
+        db, SimpleNamespace(id=run_id), session, ToolCall("provide", "provide_file", {}),
+        content=provided.content, metadata=provided.metadata, attachments=provided.attachments,
+        file_actions=provided.file_actions, trust_level=TrustLevel.PUBLIC,
+        ephemeral_output=False, limits=InstanceLimits(), attachment_service=lambda **_kwargs: service,
     )
-    assert pending.file_revision is None
-    assert pending.file_id != source.file_id
-    db.add.assert_not_called()
     files.append_output_revision(source.file_id, b"edited")
     db.scalars.return_value = Mock(all=Mock(return_value=[message]))
     await service.finalize_run(db, session, run_id)
     db.add.assert_called_once()
-    attachment = db.add.call_args.args[0]
-    assert isinstance(attachment, MessageAttachment)
-    assert attachment.id == pending.id and attachment.file_revision == 1
-    assert (attachment.purpose, attachment.mime_type) == ("artifact", "application/zip")
-    assert pending_attachments(message) == []
-    assert message.provider_data["_matoloop"]["fileOutputsPending"] is False
-    path = await AttachmentService(storage).verified_path(attachment, session.id)
-    stored = path.read_bytes()
-    with zipfile.ZipFile(BytesIO(stored)) as archive:
-        assert archive.read("reports/notes.txt") == b"original"
-    assert files.read_bytes("session", "reports/notes.txt", limit=100) == b"edited"
+    action, = message.provider_data["_matoloop"]["fileActions"]
+    assert (action["fileId"], action["fileRevision"], action["sizeBytes"]) == (str(source.file_id), 1, 6)
 
 
 @pytest.mark.parametrize("quota_mib,used_mib,allowed", [(1, 2, False), (1000, 600, True)])

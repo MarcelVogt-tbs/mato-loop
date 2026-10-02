@@ -27,19 +27,14 @@ export const streamActions = {
       const source = new EventSource(`/api/sessions/${sessionId}/runs/${runId}/events`)
       const workspace = useWorkspaceStore()
       const controlCenter = useControlCenterStore()
-      const outputView = run.outputView || {
-        viewVersion: workspace.viewVersion,
-        controlCenterOpen: controlCenter.open,
-        activeContentId: controlCenter.activeContentId
-      }
-      const openFinalOutputs = async (session) => {
+      const refreshChangedFiles = async (session) => {
         if (!session || session.activeRun || this.current?.id !== sessionId || this.selectedSessionId !== sessionId) return
         const actions = new Map()
         for (const message of session.messages || []) {
           if (message.role !== 'tool' || message.runId !== runId) continue
           const tool = session.messages.flatMap((item) => item.toolCalls || []).find((item) => item.id === message.toolCallId)
           for (const action of [
-            ...toolFileActions(message),
+            ...toolFileActions(message).filter((action) => action.operation !== 'provide'),
             ...toolOutputAttachments(tool, message.attachments).map((attachment) => managedSessionFileTarget(attachment, sessionId)).filter(Boolean)
           ]) {
             const target = workspace.fileTargetFromAction(action)
@@ -50,9 +45,6 @@ export const streamActions = {
             }
           }
         }
-        const shouldOpen = workspace.viewVersion === outputView.viewVersion
-          && controlCenter.open === outputView.controlCenterOpen
-          && controlCenter.activeContentId === outputView.activeContentId
         for (const target of actions.values()) {
           if (this.current?.id !== sessionId || this.selectedSessionId !== sessionId || this.running) return
           const sameOpenFile = workspace.viewedEntry?.path === target.path
@@ -62,11 +54,7 @@ export const streamActions = {
               : (workspace.toolContext?.executionAgentId || workspace.workspaceContext?.executionAgentId) === target.executionAgentId)
           workspace.noteFileTabMutations(controlCenter.fileTabsForTarget(target)
             .filter((tab) => tab.fileTarget.revision == null && (!sameOpenFile || tab.tabId !== workspace.activeFileTabId)).map((tab) => tab.tabId))
-          if (sameOpenFile) {
-            workspace.noteFileMutation(target.path)
-            continue
-          }
-          if (shouldOpen) await controlCenter.openFile(target)
+          if (sameOpenFile) workspace.noteFileMutation(target.path)
         }
         if (actions.size) void workspace.refreshStorageUsage(sessionId)
       }
@@ -466,7 +454,7 @@ export const streamActions = {
         if (useSubagentStore().parentId === sessionId) void useSubagentStore().loadChildren()
         if (!this.historyActionPending) {
           void this.refreshSession(sessionId)
-            .then(openFinalOutputs)
+            .then(refreshChangedFiles)
             .catch(() => {})
             .finally(() => {
               this.cancelQueueDrain()
@@ -520,7 +508,7 @@ export const streamActions = {
           this.clearActivity()
           this.setSessionRunStatus(sessionId, null)
           void this.refreshSession(sessionId).then((session) => {
-            if (terminal) return openFinalOutputs(session)
+            if (terminal) return refreshChangedFiles(session)
           }).catch(() => {})
           this.refreshSessions()
           useApprovalStore().fetchPending()
@@ -534,7 +522,7 @@ export const streamActions = {
           }
           this.reconnectTimer = setTimeout(() => {
             if (this.selectedSessionId !== sessionId || this.runId !== runId) return
-            this.watchRun(sessionId, runId, { ...runState, reconnecting: true, outputView })
+            this.watchRun(sessionId, runId, { ...runState, reconnecting: true })
           }, this.reconnectAttempts * 1000)
         }
 

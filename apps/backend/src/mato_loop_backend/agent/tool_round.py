@@ -104,7 +104,13 @@ async def persist_tool_result(
                         "path": action.path,
                         "filename": action.filename,
                         "sizeBytes": action.size_bytes,
-                        "presentation": action.presentation,
+                        "kind": action.kind,
+                        **({"sourcePath": action.source_path, "sourceRoot": action.source_root}
+                           if action.source_path is not None else {}),
+                        **({"paths": list(action.paths)} if action.paths is not None else {}),
+                        **({"archiveRootContents": True} if action.archive_root_contents else {}),
+                        **({"fileId": action.file_id, "fileRevision": action.file_revision}
+                           if action.file_id is not None else {}),
                         **({
                             "executionAgentId": action.execution_agent_id,
                             "currentDirectory": action.current_directory,

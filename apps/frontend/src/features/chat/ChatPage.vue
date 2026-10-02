@@ -693,8 +693,8 @@ function resizeWorkspacePane(event) {
 async function openToolFile(action) {
   const sessionId = action?.sessionId
   if (!sessionId || chat.current?.id !== sessionId) return
-  const target = workspace.fileTargetFromAction(action)
-  if (target) await controlCenter.openFile(target)
+  const target = await workspace.resolveFileTarget(action)
+  if (target && chat.current?.id === sessionId) await controlCenter.openFile(target)
 }
 
 async function openApprovalDraft(approval) {

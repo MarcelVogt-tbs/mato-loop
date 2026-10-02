@@ -13,7 +13,6 @@ import {
   toolFileAttachment,
   toolOpenFileActions,
   toolOutputAttachments,
-  deduplicateFileOutputAttachments,
   videoMimeTypeSupported
 } from '../src/utils/attachments'
 
@@ -190,7 +189,7 @@ describe('persisted attachments', () => {
     expect(toolFileActions({ fileActions: [action] })).toEqual([expected])
     expect(toolFileActions({ fileActions: [{ ...action, path: '/home/user/reports/other.zip' }] })).toEqual([])
     expect(toolFileActions({ fileActions: [{ ...action, currentDirectory: '/other' }] })).toEqual([])
-    expect(toolFileActions({ fileActions: [{ ...action, operation: 'delete' }] })).toEqual([])
+    expect(toolFileActions({ fileActions: [{ ...action, operation: 'execute' }] })).toEqual([])
   })
 
   it('accepts an ordinary relative session file action', () => {
@@ -233,29 +232,6 @@ describe('persisted attachments', () => {
       .toMatchObject({ path: attachment.filePath, fileRevision: 2 })
     expect(managedSessionFileTarget({ ...attachment, fileRevision: 0 }, sessionId)).toBeNull()
     expect(managedSessionFileTarget({ ...attachment, filePath: '../generated.bin' }, sessionId)).toBeNull()
-  })
-
-  it('removes only attachments represented by the same file action', () => {
-    const attachments = [
-      { id: 'same', fileRootId: rootId, filePath: 'reports/large.zip' },
-      { id: 'other', fileRootId: rootId, filePath: 'reports/other.zip' },
-      { id: 'managed', fileRootId: rootId, filePath: 'reports/generated.bin' }
-    ]
-
-    expect(deduplicateFileOutputAttachments(attachments, [{
-      rootIdentity: rootId,
-      path: 'reports/large.zip'
-    }]).map((attachment) => attachment.id)).toEqual(['other', 'managed'])
-    expect(deduplicateFileOutputAttachments(attachments, [])).toEqual(attachments)
-  })
-
-  it('uses the bound file URL rather than untrusted attachment metadata for deduplication', () => {
-    expect(deduplicateFileOutputAttachments([{
-      id: 'provided',
-      fileRootId: rootId,
-      filePath: '/home/user/reports/other.zip',
-      url: downloadUrl
-    }], [{ executionAgentId, path: '/home/user/reports/large.zip' }])).toEqual([])
   })
 
   it('does not expose legacy draft actions as reusable file outputs', () => {

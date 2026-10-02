@@ -38,14 +38,21 @@ _PUBLIC_WARNING_CODES = {"privacy.placeholderRestorationIncomplete", "agent.tool
 class _StoredFileAction(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    operation: str = Field(pattern=r"^(write|copy|move)$")
+    operation: Literal["write", "create", "edit", "delete", "mkdir", "copy", "move", "provide"]
     root: str = Field(pattern=r"^(session|workspace)$")
     root_identity: str | None = Field(
         default=None, alias="rootIdentity", min_length=1, max_length=1_000
     )
     path: str = Field(min_length=1, max_length=4_096)
     filename: str = Field(min_length=1, max_length=1_000)
-    size_bytes: int = Field(alias="sizeBytes", ge=0)
+    size_bytes: int | None = Field(alias="sizeBytes", ge=0)
+    kind: Literal["file", "directory", "collection", "path"] = "file"
+    source_path: str | None = Field(default=None, alias="sourcePath", max_length=4_096)
+    source_root: Literal["session", "workspace"] | None = Field(default=None, alias="sourceRoot")
+    paths: list[str] | None = Field(default=None, min_length=1, max_length=1_000)
+    archive_root_contents: bool = Field(default=False, alias="archiveRootContents")
+    file_id: str | None = Field(default=None, alias="fileId")
+    file_revision: int | None = Field(default=None, alias="fileRevision", ge=1)
     presentation: Literal["result", "internal"] = "result"
     execution_agent_id: str | None = Field(
         default=None, alias="executionAgentId", min_length=1, max_length=36
@@ -57,13 +64,29 @@ class _StoredFileAction(BaseModel):
     @model_validator(mode="after")
     def validate_paths(self) -> _StoredFileAction:
         service = RootFileService(UUID(int=0))
+        if self.file_id is not None and (self.root != "session" or str(UUID(self.file_id)) != self.file_id):
+            raise ValueError("file identity must be a canonical session file UUID")
+        if self.paths is not None:
+            if self.operation != "provide" or self.kind != "collection":
+                raise ValueError("file lists are only supported for provided collections")
+            for path in self.paths:
+                if len(path) > 4_096 or (
+                    self.root == "session" and (service.normalize_relative_path(path) != path or path == ".")
+                ) or (self.root == "workspace" and not PurePosixPath(path).is_absolute()):
+                    raise ValueError("invalid provided file path")
         if self.root == "session" and (
-            service.normalize_relative_path(self.path) != self.path or self.path == "."
+            service.normalize_relative_path(self.path) != self.path
+            or (self.path == "." and not (self.operation == "provide" and self.kind == "directory"))
         ):
             raise ValueError("path must be a normalized file path")
         if self.root == "workspace" and not PurePosixPath(self.path).is_absolute():
             raise ValueError("workspace path must be absolute")
-        if self.filename != self.path.rsplit("/", 1)[-1]:
+        if self.filename != self.path.rsplit("/", 1)[-1] and not (
+            self.operation == "provide" and (
+                (self.kind == "collection" and self.paths and self.filename == "files.zip")
+                or (self.kind == "directory" and self.path in {".", "/"} and self.filename == "files")
+            )
+        ):
             raise ValueError("filename must match path")
         snapshot_fields = {"execution_agent_id", "current_directory"}
         if self.root == "session":
@@ -165,7 +188,7 @@ def _public_active_duration_ms(item: Message) -> int | None:
     )
 
 
-def _public_file_actions(item: Message) -> list[dict[str, Any]]:
+def public_file_actions(item: Message) -> list[dict[str, Any]]:
     if item.role != "tool" or not isinstance(item.provider_data, dict):
         return []
     runtime_data = item.provider_data.get("_matoloop")
@@ -200,12 +223,16 @@ def _public_file_actions(item: Message) -> list[dict[str, Any]]:
                 execution_agent_id=action.execution_agent_id,
                 current_directory=action.current_directory,
             )
+        reference_url = f"/api/workspace/files/provided/{item.session_id}/{item.id}/{len(actions)}"
         actions.append(
             {
                 **action.model_dump(
-                    mode="json", by_alias=True, exclude_none=True, exclude={"presentation"}
+                    mode="json", by_alias=True, exclude_none=True, exclude_unset=True, exclude={"presentation"}
                 ),
-                "downloadUrl": "/api/workspace/files/download?" + urlencode(query),
+                "downloadUrl": (
+                    reference_url + "/download" if action.operation == "provide"
+                    else "/api/workspace/files/download?" + urlencode(query)
+                ),
             }
         )
     return actions
@@ -455,7 +482,7 @@ def message_payload(
         "activeDurationMs": _public_active_duration_ms(item),
         "warnings": _public_warnings(item),
         "research": _public_research_payload(item),
-        "fileActions": _public_file_actions(item),
+        "fileActions": public_file_actions(item),
         "preparedReply": _public_prepared_reply(item),
         **(
             {"runId": run_id, "agentProfileId": agent_profile_id}

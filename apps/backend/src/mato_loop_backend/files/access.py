@@ -27,7 +27,6 @@ from mato_loop_backend.files.archives import MAX_EXPORT_BYTES
 from mato_loop_backend.files.service import (
     FileRevision,
     FileRoot,
-    RootFileError,
     RootFileService,
     WorkingFileRevision,
 )
@@ -250,22 +249,23 @@ async def project_read_files(
 
 def regular_file_action(
     context: ToolContext,
-    operation: Literal["write", "copy", "move"],
+    operation: Literal["write", "create", "edit", "delete", "mkdir", "copy", "move"],
     root: Literal["session", "workspace"],
     path: str,
+    *,
+    source_path: str | None = None,
+    source_root: Literal["session", "workspace"] | None = None,
 ) -> tuple[ToolFileAction, ...]:
     path = (
         execution_path(context, path)
         if root == "workspace"
         else context.root_files.normalize_relative_path(path)
     )
-    try:
+    kind = "path" if operation == "delete" else context.root_files.path_kind(root, path)
+    size = None
+    if kind == "file":
         with context.root_files.open_file(root, path) as handle:
             size = os.fstat(handle.fileno()).st_size
-    except RootFileError as exc:
-        if exc.code == "file.fileNotFound":
-            return ()
-        raise
     return (
         ToolFileAction(
             operation=operation,
@@ -274,14 +274,21 @@ def regular_file_action(
             path=path,
             filename=path.rsplit("/", 1)[-1],
             size_bytes=size,
+            kind=kind,
+            source_path=source_path,
+            source_root=source_root,
         ),
     )
 
 def workspace_file_action(
     context: ToolContext,
-    operation: Literal["write", "copy", "move"],
+    operation: Literal["write", "create", "edit", "delete", "mkdir", "copy", "move"],
     path: str,
-    size: int,
+    size: int | None = None,
+    *,
+    kind: Literal["file", "directory", "path"] = "file",
+    source_path: str | None = None,
+    source_root: Literal["session", "workspace"] | None = None,
 ) -> tuple[ToolFileAction, ...]:
     client = workspace_client(context)
     return (
@@ -294,5 +301,8 @@ def workspace_file_action(
             size_bytes=size,
             execution_agent_id=str(client.agent_id),
             current_directory=client.current_directory,
+            kind=kind,
+            source_path=source_path,
+            source_root=source_root,
         ),
     )

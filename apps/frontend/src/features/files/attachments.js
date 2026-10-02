@@ -18,6 +18,9 @@ const PROVIDED_IMAGE_MIME_TYPES = new Map([
   ['.webp', 'image/webp']
 ])
 const UUID_PATTERN = new RegExp(`^${UUID}$`, 'i')
+const PROVIDED_FILE_DOWNLOAD_URL = new RegExp(
+  `^/api/workspace/files/provided/(${UUID})/(${UUID})/(0|[1-9][0-9]*)/download$`, 'i'
+)
 const FILE_EXTENSION_ICONS = {
   pdf: 'picture_as_pdf',
   doc: 'article', docx: 'article', odt: 'article', rtf: 'article',
@@ -95,6 +98,7 @@ function safeFileUrl(value, expectedPath) {
 }
 
 export function safeFileDownloadUrl(value) {
+  if (typeof value === 'string' && PROVIDED_FILE_DOWNLOAD_URL.test(value)) return value
   return safeFileUrl(value, INTERNAL_FILE_DOWNLOAD_PATH)
 }
 
@@ -191,14 +195,6 @@ export function managedSessionFileTarget(attachment, sessionId) {
   }
 }
 
-export function deduplicateFileOutputAttachments(attachments, fileActions) {
-  const actionKeys = new Set(fileActions.map((action) => `${action.rootIdentity || action.executionAgentId}:${action.path}`))
-  return attachments.filter((attachment) => {
-    const target = attachmentFileTarget(attachment)
-    return !target || !actionKeys.has(`${target.rootIdentity}:${target.path}`)
-  })
-}
-
 export function toolFileActions(result) {
   if (!Array.isArray(result?.fileActions)) return []
   return result.fileActions.flatMap((action) => {
@@ -212,25 +208,30 @@ export function toolFileActions(result) {
     const scope = action.root === 'session' ? 'session' : action.root === 'workspace' ? 'filesystem' : null
     const executionAgentId = typeof action.executionAgentId === 'string' ? action.executionAgentId : ''
     const currentDirectory = typeof action.currentDirectory === 'string' ? action.currentDirectory : ''
+    const provided = action.operation === 'provide' && safeUrl?.match(PROVIDED_FILE_DOWNLOAD_URL)
+    const kind = action.kind || 'file'
     if (
       !safeUrl
       || !scope
-      || !['write', 'copy', 'move'].includes(action.operation)
-      || !Number.isSafeInteger(size)
-      || size < 0
-      || filename !== path.split('/').at(-1)
+      || !['write', 'create', 'edit', 'delete', 'mkdir', 'copy', 'move', 'provide'].includes(action.operation)
+      || !['file', 'directory', 'collection', 'path'].includes(kind)
+      || (action.sizeBytes == null && !action.kind)
+      || (action.sizeBytes != null && (!Number.isSafeInteger(size) || size < 0))
+      || (filename !== path.split('/').at(-1) && !(provided && (
+        (kind === 'collection' && filename === 'files.zip') || (kind === 'directory' && ['.', '/'].includes(path) && filename === 'files')
+      )))
       || filename.length > 255
     ) return []
     const params = new URL(safeUrl, 'https://mato-loop.invalid').searchParams
-    const sessionId = params.get('session_id')
+    const sessionId = provided ? provided[1] : params.get('session_id')
     if (
-      params.get('scope') !== scope
-      || params.get('path') !== path
-      || (scope === 'session' && params.get('root_identity') !== rootIdentity)
+      (!provided && (params.get('scope') !== scope || params.get('path') !== path))
+      || (scope === 'session' && (!UUID_PATTERN.test(rootIdentity) || !validRelativePath(path, provided && kind === 'directory')
+        || (!provided && params.get('root_identity') !== rootIdentity)))
       || !sessionId
       || (scope === 'filesystem' && (
-        params.get('execution_agent_id') !== executionAgentId
-        || params.get('current_directory') !== currentDirectory
+        !UUID_PATTERN.test(executionAgentId) || !path.startsWith('/') || !currentDirectory.startsWith('/')
+        || (!provided && (params.get('execution_agent_id') !== executionAgentId || params.get('current_directory') !== currentDirectory))
         || rootIdentity
       ))
       || (scope === 'session' && [
@@ -239,12 +240,19 @@ export function toolFileActions(result) {
     ) return []
     return [{
       operation: action.operation,
+      ...(action.kind ? { kind } : {}),
       root: action.root,
       ...(rootIdentity ? { rootIdentity } : {}),
       path,
       filename,
-      sizeBytes: size,
+      sizeBytes: action.sizeBytes == null ? null : size,
       sessionId,
+      ...(typeof action.sourcePath === 'string' ? { sourcePath: action.sourcePath, sourceRoot: action.sourceRoot } : {}),
+      ...(provided ? {
+        targetUrl: safeUrl.replace(/download$/, 'target'),
+        fileId: UUID_PATTERN.test(action.fileId || '') ? action.fileId : null,
+        fileRevision: Number.isSafeInteger(action.fileRevision) && action.fileRevision > 0 ? action.fileRevision : null
+      } : {}),
       ...(scope === 'filesystem'
         ? { executionAgentId, currentDirectory }
         : {}),

@@ -131,8 +131,9 @@ from mato_loop_backend.media.attachments import (
     validate_image,
 )
 from mato_loop_backend.media.svg import MAX_SAFE_SVG_BYTES, validate_svg
-from mato_loop_backend.models import ChatSession, ExecutionAgent, UserAccount
+from mato_loop_backend.models import ChatSession, ExecutionAgent, Message, UserAccount
 from mato_loop_backend.security import hash_token, require_user
+from mato_loop_backend.sessions.serialization import public_file_actions
 from mato_loop_backend.settings import load_effective_integrations
 
 router = APIRouter(prefix="/workspace")
@@ -1289,6 +1290,59 @@ async def render_openscad_file(
     )
 
 
+@router.get("/files/provided/{session_id}/{message_id}/{index}/{action}")
+async def provided_file(
+    session_id: UUID,
+    message_id: UUID,
+    index: int,
+    action: Literal["target", "download"],
+    request: Request,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    message = await db.scalar(
+        select(Message).join(ChatSession, Message.session_id == ChatSession.id).where(
+            Message.id == message_id, Message.session_id == session_id,
+            ChatSession.user_id == user.id, Message.role == "tool",
+        )
+    )
+    references = public_file_actions(message) if message is not None else []
+    if index < 0 or index >= len(references) or references[index]["operation"] != "provide":
+        raise ApiError(404, "file.fileNotFound")
+    reference = references[index]
+    scope = FileScope.SESSION if reference["root"] == "session" else FileScope.FILESYSTEM
+    context = await _file_context(
+        scope, session_id, user, db,
+        root_identity=reference.get("rootIdentity"),
+        execution_agent_id=UUID(reference["executionAgentId"]) if reference.get("executionAgentId") else None,
+        current_directory=reference.get("currentDirectory"),
+    )
+    path = reference["path"]
+    if reference.get("fileId") and not reference.get("fileRevision"):
+        raise ApiError(404, "file.fileNotFound")
+    if reference.get("fileId") and reference.get("fileRevision"):
+        try:
+            revision = await asyncio.to_thread(
+                context.root_files.file_revision, UUID(reference["fileId"]), reference["fileRevision"]
+            )
+            path = revision.path
+        except RootFileError as exc:
+            raise _context_error(exc) from exc
+    if action == "target":
+        if reference["kind"] != "file":
+            raise ApiError(400, "file.notAFile")
+        return {**reference, "path": path, "filename": PurePosixPath(path).name, "sessionId": str(session_id)}
+    return await download_file(
+        user, db, path, request, scope, session_id,
+        current_directory=reference.get("currentDirectory"),
+        root_identity=reference.get("rootIdentity"),
+        execution_agent_id=context.agent_id,
+        archive="zip" if reference["kind"] in {"directory", "collection"} else None,
+        paths=reference.get("paths"),
+        root_contents=reference.get("archiveRootContents", False),
+    )
+
+
 @router.get("/files/download")
 async def download_file(
     user: Annotated[UserAccount, Depends(require_user)],
@@ -1301,7 +1355,11 @@ async def download_file(
     root_identity: Annotated[str | None, Query(max_length=1_200)] = None,
     execution_agent_id: UUID | None = None,
     archive: Literal["zip"] | None = None,
+    paths: Annotated[list[str] | None, Query(min_length=1, max_length=1_000)] = None,
+    root_contents: bool = False,
 ) -> StreamingResponse:
+    if paths is not None and archive != "zip":
+        raise ApiError(400, "file.invalidPath")
     context = await _file_context(
         scope,
         session_id,
@@ -1398,10 +1456,13 @@ async def download_file(
                     _normalize_agent_path(path)
                     if context.agent_id is not None
                     else context.root_files.normalize_relative_path(path)
+                    for path in (paths or [path])
                 ],
                 stat_path=stat_source,
                 list_directory=list_source,
                 open_file=open_source,
+                file_list=paths is not None,
+                root_contents=root_contents,
             )
             handle, size, filename, media_type = (
                 archived.content,

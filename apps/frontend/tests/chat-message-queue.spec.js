@@ -610,7 +610,7 @@ describe('chat message queue', () => {
   })
 
   it.each(['run.completed', 'run.failed', 'run.cancelled', 'reconnect', 'navigation', 'session-switch'])(
-    'opens only canonical final outputs after %s, never at tool completion', async (terminal) => {
+    'keeps canonical outputs closed until the user opens them after %s', async (terminal) => {
       const chat = useChatStore()
       const sessionId = '550e8400-e29b-41d4-a716-446655440000'
       const runId = '550e8400-e29b-41d4-a716-446655440001'
@@ -653,14 +653,8 @@ describe('chat message queue', () => {
       if (terminal === 'navigation') useWorkspaceStore().viewVersion += 1
       if (terminal === 'session-switch') activeSession(chat, 'another-session')
       resolveFinal(final)
-      if (['navigation', 'session-switch'].includes(terminal)) {
-        for (let tick = 0; tick < 5; tick++) await Promise.resolve()
-        expect(open).not.toHaveBeenCalled()
-        return
-      }
-      await vi.waitFor(() => expect(open).toHaveBeenCalledTimes(2))
-      expect(open).toHaveBeenCalledWith(expect.objectContaining({ path: 'final.stl', readOnly: false }))
-      expect(open.mock.calls.map(([target]) => target.path)).toEqual(['final.stl', 'second.stl'])
+       for (let tick = 0; tick < 5; tick++) await Promise.resolve()
+       expect(open).not.toHaveBeenCalled()
     }
   )
 

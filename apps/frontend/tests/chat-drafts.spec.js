@@ -1837,7 +1837,7 @@ describe('chat drafts', () => {
     expect(refresh).toHaveBeenCalledTimes(2)
   })
 
-  it('opens a final file action only while the file view stays unchanged', async () => {
+  it('keeps final file actions closed until explicitly opened', async () => {
     global.EventSource = EventSourceMock
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
     const rootIdentity = sessionId
@@ -1873,65 +1873,11 @@ describe('chat drafts', () => {
     expect(open).not.toHaveBeenCalled()
     expect(chat.completedToolCallId).toBe('call-1')
     source.emit('run.completed', {})
-    await vi.waitFor(() => expect(open).toHaveBeenCalledWith({
-      scope: 'session',
-      path: 'result.md',
-      name: 'result.md',
-      rootIdentity,
-      readOnly: false
-    }))
-  })
-
-  it('opens a newly managed binary attachment through the guarded file view', async () => {
-    global.EventSource = EventSourceMock
-    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
-    const rootIdentity = sessionId
-    const attachment = {
-      kind: 'file',
-      filename: 'generated.bin',
-      sizeBytes: 12,
-      fileRootId: rootIdentity,
-      fileId: '550e8400-e29b-41d4-a716-446655440008',
-      fileRevision: 1,
-      filePath: 'generated/generated.bin'
-    }
-    api.get.mockResolvedValue({
-      data: {
-        id: sessionId,
-        projectId: rootIdentity,
-        messages: [
-          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'generate_file', arguments: {} }] },
-          { role: 'tool', runId: 'run-1', toolCallId: 'call-1', attachments: [attachment] }
-        ]
-      }
-    })
-    const workspace = useWorkspaceStore()
-    workspace.sessionId = sessionId
-    workspace.scope = 'session'
-    workspace.rootIdentity = rootIdentity
-    const controlCenter = useControlCenterStore()
-    const open = vi.spyOn(controlCenter, 'openFile').mockResolvedValue('file-generated')
-    const chat = useChatStore()
-    chat.current = { id: sessionId, projectId: rootIdentity, messages: [] }
-    chat.selectedSessionId = sessionId
-    chat.watchRun(sessionId, 'run-1', { status: 'running' })
-    const source = EventSourceMock.instances[0]
-
-    source.emit('run.phase', { phase: 'processing_tool', tool: 'generate_file', toolCallId: 'call-1' })
-    source.emit('tool.completed', { tool: 'generate_file', toolCallId: 'call-1', metadata: {} })
-
+    await vi.waitFor(() => expect(chat.current.messages).toHaveLength(2))
     expect(open).not.toHaveBeenCalled()
-    source.emit('run.completed', {})
-    await vi.waitFor(() => expect(open).toHaveBeenCalledWith({
-      scope: 'session',
-      path: 'generated/generated.bin',
-      name: 'generated.bin',
-      rootIdentity,
-      readOnly: false
-    }))
   })
 
-  it('opens a newly managed attachment without replacing a dirty edit', async () => {
+  it('keeps a dirty edit active when a managed attachment arrives', async () => {
     global.EventSource = EventSourceMock
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
     const rootIdentity = sessionId
@@ -1973,7 +1919,8 @@ describe('chat drafts', () => {
     source.emit('tool.completed', { tool: 'generate_file', toolCallId: 'call-1', metadata: {} })
     source.emit('run.completed', {})
 
-    await vi.waitFor(() => expect(open).toHaveBeenCalledWith(expect.objectContaining({ path: 'generated.bin' })))
+    await vi.waitFor(() => expect(chat.current.messages).toHaveLength(1))
+    expect(open).not.toHaveBeenCalled()
     expect(workspace.editorDraft).toBe('lokal')
   })
 

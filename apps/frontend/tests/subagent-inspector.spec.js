@@ -36,7 +36,32 @@ afterEach(() => {
 })
 
 describe('subagent inspector navigation and presentation', () => {
-  it('keeps tool output visible when work history is collapsed', async () => {
+  it('summarizes repeated and deleted file operations without output cards', () => {
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    const action = {
+      root: 'session', rootIdentity: sessionId, path: 'temporary.txt', filename: 'temporary.txt', kind: 'file', sizeBytes: 4,
+      downloadUrl: `/api/workspace/files/download?path=temporary.txt&scope=session&session_id=${sessionId}&root_identity=${sessionId}`
+    }
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => h(AgentActivityPanel, {
+      history: { entries: ['create', 'edit', 'edit', 'delete'].map((operation, index) => ({
+        key: String(index), type: 'tool', tool: { id: String(index), name: 'edit_file' },
+        result: { fileActions: [{ ...action, operation }] }
+      })) }
+    }) })
+    app.use(createPinia()).use(Quasar, { components })
+    app.mount(root)
+    expect({
+      rows: root.querySelectorAll('.q-list .q-item').length,
+      caption: root.querySelector('.q-list .q-item__label--caption')?.textContent.trim(),
+      output: root.querySelector('.work-history__outputs'),
+      clickable: root.querySelector('.q-list .q-item--clickable')
+    }).toEqual({ rows: 1, caption: 'Erstellt · Geändert · Gelöscht · Session-Ablage', output: null, clickable: null })
+  })
+
+  it('keeps generated media visible alongside a provided reference when history is collapsed', async () => {
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
     root = document.createElement('div')
     document.body.append(root)
     app = createApp({
@@ -46,7 +71,14 @@ describe('subagent inspector navigation and presentation', () => {
             {
               key: 'image', type: 'tool',
               tool: { id: 'image', name: 'generate_image', arguments: { prompt: 'Tiger' } },
-              result: { attachments: [{ id: 'tiger', kind: 'image', presentation: 'result', filename: 'tiger.png', mimeType: 'image/png' }] }
+              result: { attachments: [{ id: 'tiger', kind: 'image', presentation: 'result', filename: 'tiger.png', mimeType: 'image/png', fileRootId: sessionId, filePath: 'tiger.png' }] }
+            },
+            {
+              key: 'provided', type: 'tool', tool: { id: 'provided', name: 'provide_file' },
+              result: { fileActions: [{
+                operation: 'provide', kind: 'file', root: 'session', rootIdentity: sessionId, path: 'tiger.png', filename: 'tiger.png', sizeBytes: 12,
+                downloadUrl: `/api/workspace/files/provided/${sessionId}/550e8400-e29b-41d4-a716-446655440001/0/download`
+              }] }
             },
             {
               key: 'research', type: 'tool',
@@ -61,11 +93,11 @@ describe('subagent inspector navigation and presentation', () => {
     app.mount(root)
 
     expect(root.querySelector('.work-history__timeline')).toBeNull()
-    expect(root.querySelectorAll('.work-history__outputs')).toHaveLength(1)
+    expect(root.querySelectorAll('.work-history__outputs')).toHaveLength(2)
     root.querySelector('.work-history__toggle').click()
     await nextTick()
     expect(root.querySelector('.work-history__timeline')).not.toBeNull()
-    expect(root.querySelectorAll('.work-history__outputs')).toHaveLength(1)
+    expect(root.querySelectorAll('.work-history__outputs')).toHaveLength(2)
   })
 
   it.each(['tool', 'reasoning', 'context-summary'])('opens %s details independently of history and preserves them during regrouping', async (type) => {
@@ -1053,9 +1085,9 @@ describe('subagent inspector navigation and presentation', () => {
       spawnedByRunId: 'run', spawnedByToolCallId: 'call', run: { status: 'running' }
     }
     const fileAction = {
-      operation: 'write', root: 'session', rootIdentity: '550e8400-e29b-41d4-a716-446655440009', path: 'result.txt',
+      operation: 'provide', kind: 'file', root: 'session', rootIdentity: '550e8400-e29b-41d4-a716-446655440009', path: 'result.txt',
       filename: 'result.txt', sizeBytes: 7,
-      downloadUrl: '/api/workspace/files/download?path=result.txt&scope=session&session_id=550e8400-e29b-41d4-a716-446655440000&root_identity=550e8400-e29b-41d4-a716-446655440009'
+      downloadUrl: '/api/workspace/files/provided/550e8400-e29b-41d4-a716-446655440000/550e8400-e29b-41d4-a716-446655440001/0/download'
     }
     root = document.createElement('div')
     document.body.append(root)

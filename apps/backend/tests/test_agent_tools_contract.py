@@ -2936,7 +2936,7 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
         return service
 
     _mock_value = approval_files
-    for _mock_target in (mock_tools_files, mock_tools_skills, mock_files_access,):
+    for _mock_target in (mock_tools_skills, mock_files_access,):
         monkeypatch.setattr(_mock_target, 'RootFileService', _mock_value)
     context.skill_draft_handler = AsyncMock(
         return_value=SkillDraft(
@@ -4744,6 +4744,22 @@ async def test_memory_write_requires_session_permission_before_mutation(
     create_memory.assert_not_awaited()
 
 
+@pytest.mark.parametrize("name,arguments,operation", [
+    ("write_file", {"root": "files", "path": "new.txt", "content": "new"}, "create"),
+    ("edit_file", {"root": "files", "path": "a.txt", "oldText": "old", "newText": "new"}, "edit"),
+    ("create_directory", {"root": "files", "path": "folder"}, "mkdir"),
+    ("delete_path", {"root": "files", "path": "a.txt"}, "delete"),
+    ("copy_path", {"source_root": "files", "source_path": "a.txt", "destination_root": "files", "destination_path": "b.txt"}, "copy"),
+    ("move_path", {"source_root": "files", "source_path": "a.txt", "destination_root": "files", "destination_path": "b.txt"}, "move"),
+])
+async def test_file_operations_report_confirmed_actions(tmp_path, name, arguments, operation):
+    call = ToolCall("mutation", name, arguments)
+    context = _context(tmp_path, call)
+    context.root_files.write_file("session", "a.txt", "old")
+    result = await tool_registry.execute(call, context)
+    assert [action.operation for action in result.file_actions] == [operation]
+
+
 async def test_provide_file_does_not_open_after_denial(tmp_path) -> None:
     call = ToolCall(
         id="provide",
@@ -4776,9 +4792,10 @@ async def test_provide_file_supports_session_files(tmp_path) -> None:
     assert payload["sizeBytes"] == 6
     assert not {"revision", "downloadUrl", "fileId", "runId"} & payload.keys()
     assert payload["path"] == "report.pdf"
-    assert result.attachments[0].file_id is not None
-    assert result.attachments[0].file_revision == 1
-    assert result.attachments[0].file_path == "report.pdf"
+    assert not result.attachments
+    assert result.file_actions[0].file_id is not None
+    assert result.file_actions[0].file_revision == 1
+    assert result.file_actions[0].path == "report.pdf"
 
 
 async def test_provide_file_rejects_empty_managed_file(tmp_path) -> None:

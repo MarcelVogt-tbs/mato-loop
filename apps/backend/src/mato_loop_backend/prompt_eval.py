@@ -5525,7 +5525,8 @@ _V2_TOOL_DESCRIPTIONS = {
         "truncated=true: more/clipped text/size limit."
     ),
     "provide_file": "On explicit file, image result, download, or ZIP request, provide path (file/folder) or paths "
-    "(files). Folders/lists become ZIPs.",
+    "(files) as a reference. Contents are fetched only when the user opens or downloads it. "
+    "Folders/lists become ZIPs on download. References open the current file; computer files are not copied to session storage.",
     "write_file": "Write complete UTF-8 content to one file, creating or replacing it.",
     "create_directory": "Create one directory; its parent must exist.",
     "delete_path": "Delete one path; non-empty directories require recursive=true.",
