@@ -230,7 +230,6 @@ async def persist_model_response(
     openscad_render_pending: bool,
     openscad_source_review_pending: tuple[str, str] | None,
     rejected_batch_code: str | None,
-    failed_tool_call_signatures: dict[str, str],
     tool_budget_exhausted: bool,
     performance: dict[str, Any],
     memory_overview_runtime_state: dict[str, Any] | None,
@@ -250,7 +249,6 @@ async def persist_model_response(
         memory_write_pending or openscad_render_pending
         or openscad_source_review_pending is not None or starts_memory_workflow
         or bool(rejected_batch_code)
-        or (bool(failed_tool_call_signatures) and bool(calls))
     )
     message_warnings = list(visible_response.warnings)
     if tool_budget_exhausted:

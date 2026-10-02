@@ -2819,8 +2819,16 @@ async def test_failed_mutation_allows_an_honest_negative_final_response(monkeypa
     assert [event.get("delta") for event in events].count("Die Datei konnte nicht erstellt werden.") == 1
 
 
-async def test_final_response_streams_after_failed_webfetch(monkeypatch) -> None:
+@pytest.mark.parametrize("with_question", [False, True])
+async def test_response_streams_and_persists_after_failed_webfetch(monkeypatch, with_question) -> None:
     answer = "Die Website war nicht erreichbar."
+    response = ProviderResult(content=answer, finish_reason="stop")
+    if with_question:
+        response.tool_calls = [ToolCall("ask", "question", {"questions": [{
+            "id": "next", "type": "free_text", "header": "Quelle",
+            "question": "Welche Quelle soll ich stattdessen nutzen?",
+        }]})]
+        response.finish_reason = "tool_calls"
     db, run, _requests, _projections, events = await _runtime_setup(
         monkeypatch,
         [
@@ -2834,13 +2842,15 @@ async def test_final_response_streams_after_failed_webfetch(monkeypatch) -> None
                 ],
                 finish_reason="tool_calls",
             ),
-            ProviderResult(content=answer, finish_reason="stop"),
+            response,
+            *([ProviderResult(content="Verstanden.", finish_reason="stop")] if with_question else []),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
-        tool_result=ToolResult.error(
-            "webfetch.requestFailed", params={"statusCode": 404}
-        ),
     )
+    tool_registry._execute_definition.side_effect = [
+        ToolResult.error("webfetch.requestFailed", params={"statusCode": 404}),
+        ToolResult.json({"next": ["Eine andere Quelle"]}),
+    ]
     complete = ProviderService.complete
 
     async def assert_streaming(_db, **kwargs):
@@ -2853,7 +2863,7 @@ async def test_final_response_streams_after_failed_webfetch(monkeypatch) -> None
 
     await AgentRuntime._execute_loop(db, run)
 
-    assert _assistant_messages(db)[-1].content == answer
+    assert _assistant_messages(db)[1].content == answer
     assert [event.get("delta") for event in events].count(answer) == 1
 
 
@@ -3012,7 +3022,6 @@ async def test_successful_mutation_correction_releases_the_final_response(monkey
     await AgentRuntime._execute_loop(db, run)
 
     persisted = [message.content for message in _assistant_messages(db)]
-    assert "Schon erledigt." not in persisted
     assert persisted[-1] == "Die Datei wurde erstellt."
     assert [event.get("delta") for event in events].count("Die Datei wurde erstellt.") == 1
 

@@ -684,7 +684,6 @@ async def execute_loop_body(
             openscad_render_pending=openscad_render_pending,
             openscad_source_review_pending=openscad_source_review_pending,
             rejected_batch_code=rejected_batch_code,
-            failed_tool_call_signatures=failed_tool_call_signatures,
             tool_budget_exhausted=tool_budget_exhausted,
             performance=performance,
             memory_overview_runtime_state=memory_overview_runtime_state,
