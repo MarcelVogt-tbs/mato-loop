@@ -13,6 +13,7 @@ vi.mock('src/features/chat/components/MessageAttachments.vue', () => ({ default:
 import SubagentInspector from '../src/features/subagents/SubagentInspector.vue'
 import SubagentRows from '../src/features/subagents/SubagentRows.vue'
 import AgentActivityPanel from '../src/features/chat/components/AgentActivityPanel.vue'
+import FileChanges from '../src/features/chat/components/FileChanges.vue'
 import ApprovalCard from '../src/features/approvals/ApprovalCard.vue'
 import QuestionDock from '../src/features/questions/QuestionDock.vue'
 import SubagentRequestLink from '../src/features/subagents/SubagentRequestLink.vue'
@@ -44,20 +45,16 @@ describe('subagent inspector navigation and presentation', () => {
     }
     root = document.createElement('div')
     document.body.append(root)
-    app = createApp({ render: () => h(AgentActivityPanel, {
-      history: { entries: ['create', 'edit', 'edit', 'delete'].map((operation, index) => ({
-        key: String(index), type: 'tool', tool: { id: String(index), name: 'edit_file' },
-        result: { fileActions: [{ ...action, operation }] }
-      })) }
+    app = createApp({ render: () => h(FileChanges, {
+      actions: ['create', 'edit', 'edit', 'delete'].map((operation) => ({ ...action, operation }))
     }) })
     app.use(createPinia()).use(Quasar, { components })
     app.mount(root)
     expect({
       rows: root.querySelectorAll('.q-list .q-item').length,
-      caption: root.querySelector('.q-list .q-item__label--caption')?.textContent.trim(),
-      output: root.querySelector('.work-history__outputs'),
+      caption: root.querySelector('.q-list .q-item__section--side:last-child')?.textContent.trim(),
       clickable: root.querySelector('.q-list .q-item--clickable')
-    }).toEqual({ rows: 1, caption: 'Erstellt · Geändert · Gelöscht · Session-Ablage', output: null, clickable: null })
+    }).toEqual({ rows: 1, caption: 'Erstellt · Geändert · Gelöscht', clickable: null })
   })
 
   it('keeps generated media visible alongside a provided reference when history is collapsed', async () => {

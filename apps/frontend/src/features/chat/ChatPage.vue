@@ -197,6 +197,7 @@
               class="q-mt-sm"
               :attachments="message.attachments"
             />
+            <FileChanges :actions="message.fileChanges" @open-file="openToolFile" />
             <div
               v-if="message.generationStatus === 'interrupted' && !message.redirected"
               class="app-muted text-caption row items-center q-gutter-x-xs q-mt-sm"
@@ -460,6 +461,7 @@ import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
 import AgentActivityPanel from 'src/features/chat/components/AgentActivityPanel.vue'
+import FileChanges from 'src/features/chat/components/FileChanges.vue'
 import AppLogo from 'src/shared/ui/AppLogo.vue'
 import ChatComposer from 'src/features/chat/components/ChatComposer.vue'
 import ChatQueuedMessages from 'src/features/chat/components/ChatQueuedMessages.vue'

@@ -29,6 +29,10 @@ export function withLiveTranscriptMessage(messages, liveMessage) {
     if (currentIndex >= 0 && !displayed[currentIndex].agentProfileId && liveMessage.agentProfileId) {
       displayed[currentIndex] = { ...displayed[currentIndex], agentProfileId: liveMessage.agentProfileId }
     }
+    if (currentIndex >= 0 && displayed[currentIndex].currentTurn && displayed[currentIndex].fileChanges?.length) {
+      liveMessage = { ...liveMessage, fileChanges: displayed[currentIndex].fileChanges }
+      displayed[currentIndex] = { ...displayed[currentIndex], fileChanges: [] }
+    }
     return [...displayed, liveMessage]
   }
   if (currentIndex >= 0) {
@@ -303,6 +307,7 @@ export function buildChatTranscript(
       || message.workHistory
     ))
     if (visibleMessages.length) {
+      visibleMessages.at(-1).fileChanges = response.fileActions.filter((action) => action.operation !== 'provide')
       visibleMessages[0].showAgentLabel = true
       visibleMessages.forEach((message, index) => {
         message.currentTurn = currentTurn

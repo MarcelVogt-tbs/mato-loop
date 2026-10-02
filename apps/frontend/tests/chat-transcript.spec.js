@@ -87,6 +87,27 @@ describe('chat transcript', () => {
     }])
   })
 
+  it.each([false, true])('keeps file changes at the end of the answer (streaming: %s)', (streaming) => {
+    const rootIdentity = '550e8400-e29b-41d4-a716-446655440000'
+    const action = {
+      operation: 'write', root: 'session', rootIdentity, path: 'result.txt', filename: 'result.txt', sizeBytes: 7,
+      downloadUrl: `/api/workspace/files/download?scope=session&root_identity=${rootIdentity}&session_id=${rootIdentity}&path=result.txt`
+    }
+    const transcript = buildChatTranscript([
+      { id: 'user', role: 'user', content: 'Erstelle die Datei' },
+      { id: 'tool', role: 'assistant', toolCalls: [{ id: 'call', name: 'write_file', arguments: {} }] },
+      { id: 'result', role: 'tool', toolCallId: 'call', fileActions: [action] },
+      ...(!streaming ? [{ id: 'final', role: 'assistant', content: 'Fertig' }] : [])
+    ], [], { running: streaming })
+    const messages = streaming ? withLiveTranscriptMessage(transcript.messages, {
+      id: 'live', role: 'assistant', content: 'Fertig', currentTurn: true
+    }) : transcript.messages
+
+    expect(messages.filter((message) => message.fileChanges?.length).map((message) => [
+      message.id, message.fileChanges.map((change) => change.path)
+    ])).toEqual([[streaming ? 'live' : 'final', ['result.txt']]])
+  })
+
   it('offers retry only for the current backend-approved failed response', () => {
     const error = {
       id: 'error-1', role: 'assistant', kind: 'runtime_error', retryAvailable: true

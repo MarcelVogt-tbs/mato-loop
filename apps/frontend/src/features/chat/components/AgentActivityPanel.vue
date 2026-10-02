@@ -76,7 +76,6 @@
         @open-file="emit('open-file', $event)"
       />
     </div>
-    <FileChanges :actions="fileChanges" :read-only="readOnly" @open-file="emit('open-file', $event)" />
     <SubagentRows class="work-history__children" :children="unmatchedSubagents" />
   </div>
 </template>
@@ -84,7 +83,6 @@
 <script setup>
 import { computed, nextTick, ref } from 'vue'
 import AgentActivityEntry from 'src/features/chat/components/AgentActivityEntry.vue'
-import FileChanges from 'src/features/chat/components/FileChanges.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
 import TurnDuration from 'src/features/chat/components/TurnDuration.vue'
 import {
@@ -177,9 +175,6 @@ const enrichedEntries = computed(() => preparedEntries.value.map((entry) => {
 }))
 const outputEntries = computed(() => enrichedEntries.value.filter((entry) => (
   entry.type === 'tool' && (entry.output.attachments.length || entry.output.fileActions.length)
-)))
-const fileChanges = computed(() => preparedEntries.value.flatMap((entry) => (
-  entry.type === 'tool' ? toolFileActions(entry.result).filter((action) => action.operation !== 'provide') : []
 )))
 const entries = computed(() => groupWorkHistoryEntries(
   enrichedEntries.value, enrichedEntries.value.find((entry) => entry.key === presentation.value.entry?.key)
