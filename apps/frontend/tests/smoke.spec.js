@@ -21,7 +21,7 @@ describe('MatoLoop frontend scaffold', () => {
     const routeNames = appRoute.children.map((route) => route.name)
     const settingsRoute = appRoute.children.find((route) => route.name === 'settings')
 
-    expect(routeNames).toEqual(['chat', 'settings', 'admin'])
+    expect(routeNames).toEqual(['chat', 'archive', 'settings', 'admin'])
     expect(settingsRoute.children.map((route) => route.name)).toEqual([
       'settings-providers',
       'settings-agents',

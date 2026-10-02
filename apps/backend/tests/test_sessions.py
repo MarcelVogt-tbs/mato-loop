@@ -417,7 +417,7 @@ async def test_failed_project_move_restores_the_session_tree(monkeypatch) -> Non
         id=uuid4(), user_id=user.id, title="Move", project_id=source_project_id
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session.id, None, 0]
+    db.scalar.side_effect = [session.id, None, None, 0]
     db.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
     db.commit.side_effect = RuntimeError("commit failed")
     persisted_location = MagicMock()
@@ -497,7 +497,7 @@ async def test_project_move_rejects_files_referenced_by_another_session(monkeypa
     user = _user()
     session = ChatSession(id=uuid4(), user_id=user.id, title="Move", project_id=uuid4())
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session.id, None, 2]
+    db.scalar.side_effect = [session.id, None, None, 2]
     storage = MagicMock()
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
     monkeypatch.setattr(
@@ -520,7 +520,7 @@ async def test_project_move_rejects_references_to_another_sessions_files(monkeyp
     user = _user()
     session = ChatSession(id=uuid4(), user_id=user.id, title="Move", project_id=uuid4())
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session.id, None, 1]
+    db.scalar.side_effect = [session.id, None, None, 1]
     storage = MagicMock()
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
     monkeypatch.setattr(
@@ -625,7 +625,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
         role="user",
         content="Erste Nachricht",
     )
-    db.scalar.side_effect = [project, persisted_message, None]
+    db.scalar.side_effect = [project, persisted_message, None, None]
 
     result = await create_session(
         SessionCreateRequest(

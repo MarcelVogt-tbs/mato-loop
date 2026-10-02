@@ -2,7 +2,7 @@
 import { createApp, h, nextTick, reactive } from 'vue'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, QBanner, QBtn, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QMenu, QPopupProxy, QScrollArea, QSelect, QSeparator, QSpinner, QToggle, ClosePopup, Ripple } from 'quasar'
+import { Quasar, QBanner, QBtn, QCheckbox, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QMenu, QPopupProxy, QScrollArea, QSelect, QSeparator, QSpinner, QToggle, ClosePopup, Ripple } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 const mocks = vi.hoisted(() => ({ stores: {}, confirm: vi.fn(async () => true) }))
@@ -10,7 +10,6 @@ vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: mocks.
 vi.mock('stores/automations', () => ({ useAutomationStore: () => mocks.stores.automations }))
 vi.mock('stores/chat', () => ({ useChatStore: () => mocks.stores.chat }))
 vi.mock('stores/control-center', () => ({ useControlCenterStore: () => mocks.stores.controlCenter }))
-vi.mock('stores/skills', () => ({ useSkillStore: () => mocks.stores.skills }))
 import AutomationApp from '../src/features/automations/AutomationApp.vue'
 import { scheduleDraft } from '../src/utils/automation-schedules'
 
@@ -36,8 +35,7 @@ async function mount(value = definition(), selected = value ? 'automation' : 'ne
   mocks.stores = {
     automations: store,
     chat: reactive({ current: { id: 'session', title: 'Meine Session' }, running: false }),
-    controlCenter: reactive({ sessionId: 'session', activeAppId: 'automation', ensureApp: vi.fn() }),
-    skills: reactive({ items: [], fetchSkills: vi.fn(async () => {}) })
+    controlCenter: reactive({ sessionId: 'session', activeAppId: 'automation', ensureApp: vi.fn() })
   }
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/', name: 'chat', component: AutomationApp }
@@ -46,7 +44,7 @@ async function mount(value = definition(), selected = value ? 'automation' : 'ne
   root = document.createElement('div'); document.body.append(root)
   let page
   app = createApp({ render: () => h(RouterView, null, { default: ({ Component }) => h(Component, { ref: (value) => { if (value) page = value.$.setupState } }) }) })
-  app.use(router).use(Quasar, { components: { QBanner, QBtn, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QMenu, QPopupProxy, QScrollArea, QSelect, QSeparator, QSpinner, QToggle }, directives: { ClosePopup, Ripple } })
+  app.use(router).use(Quasar, { components: { QBanner, QBtn, QCheckbox, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QMenu, QPopupProxy, QScrollArea, QSelect, QSeparator, QSpinner, QToggle }, directives: { ClosePopup, Ripple } })
   app.config.globalProperties.$q.notify = vi.fn()
   app.mount(root)
   await vi.waitFor(() => expect(page?.savedDraft).toBeTruthy())
@@ -61,8 +59,8 @@ it('creates an automation in the current session without runtime copies or outpu
   page.form.task = 'Prüfe die Aufgabe.'
   await page.save()
   expect(store.createAutomation).toHaveBeenCalledWith({
-    name: 'Meine Session', task: 'Prüfe die Aufgabe.', sessionId: 'session', skillId: null,
-    enabled: true, schedules: [], archiveAfterSuccess: false
+    name: 'Meine Session', task: 'Prüfe die Aufgabe.', sessionId: 'session',
+    enabled: true, schedules: [], triggers: []
   })
 })
 
@@ -81,6 +79,14 @@ it('validates schedules and preserves existing one-time timestamps', async () =>
       { runAt: '2027-02-03T11:12:43.123456+01:00', enabled: false }
     ]
   }))
+})
+
+it('saves an event trigger through the normal automation form', async () => {
+  const { page, store } = await mount()
+  root.querySelector('.q-checkbox').click()
+  await nextTick()
+  await page.save()
+  expect(store.updateAutomation).toHaveBeenCalledWith('automation', expect.objectContaining({ triggers: ['agent_response'] }))
 })
 
 it('preserves dirty inputs on status updates and refuses an unsaved manual start', async () => {

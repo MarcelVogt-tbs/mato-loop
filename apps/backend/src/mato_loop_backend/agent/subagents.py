@@ -246,6 +246,7 @@ async def run_tasks(
                     )
                     child = AgentRun(
                         id=child_run_id, session_id=child_session.id, parent_run_id=None,
+                        automation_origin=bool(parent.automation_origin),
                         input_message_id=message.id, status="queued",
                         agent_profile_id=child_session.agent_profile_id,
                         model_config_id=parent.model_config_id, model_name=parent.model_name,

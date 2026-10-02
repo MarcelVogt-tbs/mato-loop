@@ -44,6 +44,11 @@ export const useProjectStore = defineStore('projects', {
       this.items = this.items.map((project) => project.id === id ? data : project)
       return data
     },
+    async setArchived(id, archived) {
+      const { data } = await api.post(`/projects/${id}/archive`, { archived })
+      await this.fetchAll()
+      return data
+    },
     async remove(id, { automationMode = null, automationImpact, suppressErrorToast = false } = {}) {
       const config = {
         ...(suppressErrorToast ? { suppressErrorToast: true } : {}),

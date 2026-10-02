@@ -15,7 +15,6 @@ export const useAutomationStore = defineStore('automations', {
     loaded: false,
     loadFailed: false,
     dirty: false,
-    listArchived: false,
     listRevision: 0,
     runsRevision: 0
   }),
@@ -26,11 +25,10 @@ export const useAutomationStore = defineStore('automations', {
       if (revision === this.sessionItemsRevision) this.sessionItems = data.items
       return data.items
     },
-    async fetchAutomations({ archived = false, includeArchived = false, suppressErrorToast = false } = {}) {
+    async fetchAutomations({ suppressErrorToast = false } = {}) {
       const revision = ++this.listRevision
-      this.listArchived = archived
       this.loading = true
-      const params = { archived, summary: true, ...(includeArchived ? { includeArchived: true } : {}) }
+      const params = { summary: true }
       try {
         const { data } = await (suppressErrorToast
           ? api.get('/automations', { params, suppressErrorToast: true })

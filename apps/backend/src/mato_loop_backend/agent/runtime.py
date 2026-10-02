@@ -86,7 +86,6 @@ from mato_loop_backend.settings import (
     AiSettings,
     InstanceLimits,
     SettingsStore,
-    SkillDefinition,
     ToolExecutionPolicy,
     apply_agent_profile_ai,
     effective_model_pseudonymization,
@@ -189,7 +188,6 @@ class AgentRuntime:
         automation_run: AutomationRun | None = None,
         model_id_override: UUID | None = None,
         agent_profile_id_override: UUID | None = None,
-        required_skill: SkillDefinition | None = None,
         active_file: dict[str, Any] | None = None,
         source_type: str = "app",
         source_provider: str | None = None,
@@ -205,10 +203,15 @@ class AgentRuntime:
             select(ChatSession)
             .where(ChatSession.id == chat_session.id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if locked_session is None:
             raise AgentRunError("session.notFound")
         chat_session = locked_session
+        from mato_loop_backend.sessions.archive import is_session_archived
+
+        if await is_session_archived(db, chat_session):
+            raise AgentRunError("session.archived")
         active_run = await db.scalar(
             select(AgentRun.id).where(
                 AgentRun.session_id == chat_session.id,
@@ -305,6 +308,7 @@ class AgentRuntime:
         run = AgentRun(
             id=run_id,
             session_id=chat_session.id,
+            automation_origin=automation_run is not None,
             agent_profile_id=profile_id,
             status="queued",
             model_config_id=model_id,
@@ -315,9 +319,6 @@ class AgentRuntime:
             execution_agent_revision=(execution_agent.revision if execution_agent else None),
             current_directory_snapshot=current_directory,
             execution_operations=execution_operations,
-            required_skill=(
-                required_skill.model_dump(mode="json") if required_skill is not None else None
-            ),
         )
         db.add_all([message, run])
         generate_title = (
@@ -420,6 +421,10 @@ class AgentRuntime:
         chat_session: ChatSession,
         failed_run: AgentRun,
     ) -> AgentRun:
+        from mato_loop_backend.sessions.archive import is_session_archived
+
+        if await is_session_archived(db, chat_session):
+            raise AgentRunError("session.archived")
         if failed_run.session_id != chat_session.id or failed_run.status != "failed":
             raise AgentRunError("session.retryUnavailable")
         await cls._ensure_user_active(db, chat_session.user_id)
@@ -467,6 +472,7 @@ class AgentRuntime:
         run = AgentRun(
             id=uuid4(),
             session_id=chat_session.id,
+            automation_origin=bool(failed_run.automation_origin),
             agent_profile_id=chat_session.agent_profile_id,
             input_message_id=failed_run.input_message_id,
             status="queued",
@@ -880,6 +886,9 @@ class AgentRuntime:
                     transition_run_status(run, "completed")
                     run.completed_at = datetime.now(UTC)
                     await cls._persist_run_duration(db, run)
+                    from mato_loop_backend.automations import AutomationService
+
+                    await AutomationService.enqueue_event(db, run, "agent_response")
                     await db.commit()
                     run_completed = True
                     cls._cancellable_runs.discard(run_id)
@@ -1072,6 +1081,9 @@ class AgentRuntime:
                                     "_matoloop": agent_run_support._run_metadata(failed_run, **runtime_data),
                                 }
                             await cls._persist_run_duration(db, failed_run)
+                            from mato_loop_backend.automations import AutomationService
+
+                            await AutomationService.enqueue_event(db, failed_run, "agent_error")
                             await db.commit()
                             failure_committed = True
                             if diagnostics_active:

@@ -299,6 +299,7 @@ def session_payload(
         "spawnedByToolCallId": item.spawned_by_tool_call_id,
         "spawnIndex": item.spawn_index,
         "readOnly": item.parent_session_id is not None,
+        "archivedAt": item.archived_at.isoformat() if item.archived_at else None,
         "projectId": str(item.project_id) if item.project_id else None,
         "title": item.title,
         "titleGenerationStatus": item.title_generation_status,

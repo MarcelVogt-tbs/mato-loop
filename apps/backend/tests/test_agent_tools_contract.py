@@ -171,6 +171,54 @@ async def test_task_tool_has_bounded_prompt_and_delegates(tmp_path) -> None:
     assert schema["parameters"]["$defs"]["DelegatedTask"]["properties"]["prompt"]["maxLength"] == 8_000
 
 
+@pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
+@pytest.mark.parametrize("decision", [PermissionDecision.ALLOW, PermissionDecision.ASK, PermissionDecision.DENY, PermissionDecision.USER_DENIED])
+async def test_permission_preparation_never_executes_the_proposed_write(tmp_path, monkeypatch, trust, decision):
+    import mato_loop_backend.tools.permissions as permissions
+
+    call = ToolCall("prepare", "request_session_permissions", {"requests": [{
+        "tool": "write_file", "arguments": {"root": "files", "path": "report.txt", "content": "must not be written"},
+    }]})
+    context = _context(tmp_path, call)
+    context.model_trust_level = trust
+    context.tool_settings.select_trust(trust)
+    monkeypatch.setattr(permissions, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=IntegrationSettings()))
+    async def authorize(_request, check_only=False):
+        if decision == PermissionDecision.USER_DENIED:
+            return PermissionDecision.ASK if check_only else decision
+        return decision if check_only else PermissionDecision.ALLOW
+
+    context.ask_handler = AsyncMock(side_effect=authorize)
+    result = await tool_registry.execute(call, context)
+    assert result.is_error == (decision in (PermissionDecision.DENY, PermissionDecision.USER_DENIED))
+    assert context.user_denied == (decision == PermissionDecision.USER_DENIED)
+    assert not (context.root_files.session_storage.session_path(context.session.id) / "files" / "report.txt").exists()
+    assert tool_registry.action_default("permissions.request", trust) == ToolExecutionPolicy.AUTO
+    if decision == PermissionDecision.ASK:
+        assert context.ask_handler.await_args.args[0].available_decisions == ("allow_session", "deny")
+
+
+@pytest.mark.parametrize("blocked_by", ["policy", "delegation"])
+async def test_permission_preparation_cannot_offer_disabled_targets(tmp_path, monkeypatch, blocked_by):
+    import mato_loop_backend.tools.permissions as permissions
+
+    call = ToolCall("prepare", "request_session_permissions", {"requests": [{
+        "tool": "write_file", "arguments": {"root": "files", "path": "report.txt", "content": "text"},
+    }]})
+    context = _context(tmp_path, call)
+    if blocked_by == "policy":
+        for capability in ("session.files.write", "filesystem.write"):
+            context.tool_settings.private_permissions.policies[capability] = ToolExecutionPolicy.DISABLED
+    else:
+        context.tool_settings._delegation_ceiling = {"toolNames": ["request_session_permissions"]}
+    monkeypatch.setattr(permissions, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=IntegrationSettings()))
+    result = await tool_registry.execute(call, context)
+    assert result.is_error
+    context.ask_handler.assert_not_awaited()
+
+
 async def test_delegated_file_handler_rejects_internal_root_before_permissions(tmp_path) -> None:
     call = ToolCall("read", "read", {"root": "files", "path": "note.txt"})
     context = _context(tmp_path, call)
@@ -1489,12 +1537,12 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     assert "source_session_id" not in create["properties"]
     assert "output_session_id" not in create["properties"]
     assert create["properties"]["schedules"]["maxItems"] == 50
-    assert "archive_after_success" in create["properties"]
+    assert "triggers" in create["properties"]
     schedule_schema = create["properties"]["schedules"]["items"]
     schedule_schema = create["$defs"][schedule_schema["$ref"].rsplit("/", 1)[-1]]
     assert "run_at" in schedule_schema["properties"]
     assert "not with run_at" in schedule_schema["properties"]["valid_until"]["description"]
-    assert "One run_at only" in create["properties"]["archive_after_success"]["description"]
+    assert "skill_id" not in create["properties"]
     edit = definitions["edit_automation"].schema()["parameters"]
     assert "output_mode" not in edit["properties"]
     assert "expected_revision" in edit["required"]
@@ -1503,7 +1551,7 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
         assert "schedules" in schema["required"]
         assert schema["properties"]["schedules"].get("minItems", 0) == 0
         assert schema["properties"]["schedules"]["maxItems"] == 50
-        assert "Empty for manual runs only" in schema["properties"]["schedules"]["description"]
+        assert "Empty when no time-based starts" in schema["properties"]["schedules"]["description"]
 
 
 @pytest.mark.parametrize("arguments", [CreateAutomationArguments, EditAutomationArguments])
@@ -1576,15 +1624,6 @@ def test_automation_schedule_arguments_accept_one_time_schedule() -> None:
             }
         )
 
-    without_skill = CreateAutomationArguments.model_validate(
-        {
-            "name": "Bericht",
-            "task": "Erstellen",
-            "skill_id": "null",
-            "schedules": [{"run_at": "2026-08-21T10:30:00+02:00"}],
-        }
-    )
-    assert without_skill.skill_id is None
     with pytest.raises(ValueError):
         CreateAutomationArguments.model_validate(
             {
@@ -1651,9 +1690,6 @@ async def test_create_automation_approval_uses_current_session_boundaries(
         revision=1,
         enabled=True,
     )
-    monkeypatch.setattr(
-        mock_tools_automations.AutomationService, "skill", AsyncMock(return_value=None)
-    )
     create = AsyncMock(return_value=created)
     monkeypatch.setattr(mock_tools_automations.AutomationService, "create", create)
 
@@ -1666,7 +1702,7 @@ async def test_create_automation_approval_uses_current_session_boundaries(
     assert permission.approval_details["automationPreview"]["sessionId"] == str(context.session.id)
     if manual:
         assert permission.approval_details["automationPreview"]["schedules"] == []
-        assert next(item for item in permission.display_items if item.label == "Zeitpläne").value == ("Nur manuell",)
+        assert next(item for item in permission.display_items if item.label == "Zeitpläne").value == ("Keine Zeitpläne",)
         assert create.await_args.kwargs["schedules"] == []
     else:
         assert permission.approval_details["automationPreview"]["schedules"][0][
@@ -1676,7 +1712,7 @@ async def test_create_automation_approval_uses_current_session_boundaries(
             2026, 8, 28, 6, tzinfo=UTC
         )
     assert create.await_args.kwargs["session_id"] == context.session.id
-    assert create.await_args.kwargs["archive_after_success"] is False
+    assert create.await_args.kwargs["triggers"] == []
 
 
 async def test_edit_automation_approval_labels_removing_schedules_as_manual(tmp_path, monkeypatch):
@@ -1688,13 +1724,12 @@ async def test_edit_automation_approval_labels_removing_schedules_as_manual(tmp_
     context = _context(tmp_path, call)
     automation = Automation(
         id=automation_id, user_id=context.session.user_id, revision=1, name="Manual",
-        task="Do work", enabled=True, archive_after_success=False,
+        task="Do work", enabled=True,
         schedules=[AutomationSchedule(
             cron_expression="0 8 * * *", timezone="UTC", enabled=True,
         )],
     )
     monkeypatch.setattr(mock_tools_automations.AutomationService, "owned", AsyncMock(return_value=automation))
-    monkeypatch.setattr(mock_tools_automations.AutomationService, "skill", AsyncMock(return_value=None))
     replace = AsyncMock(return_value=automation)
     monkeypatch.setattr(mock_tools_automations.AutomationService, "replace", replace)
     result = await tool_registry.execute(call, context)
@@ -1702,7 +1737,7 @@ async def test_edit_automation_approval_labels_removing_schedules_as_manual(tmp_
     permission = context.ask_handler.await_args.args[0]
     assert permission.capability == "automation.update"
     changes = permission.approval_details["automationChange"]["changes"]
-    assert len(changes) == 1 and changes[0].endswith(" -> Nur manuell")
+    assert len(changes) == 1 and changes[0].endswith(" -> Keine Zeitpläne")
     assert replace.await_args.kwargs["schedules"] == []
     assert replace.await_args.kwargs["expected_revision"] == 1
 

@@ -200,7 +200,7 @@ export const sessionsActions = {
       do {
         const response = await api.get('/sessions', {
           ...(config || {}),
-          params: { ...(config?.params || {}), pageSize: 100, cursor: cursor || undefined }
+          params: { ...(config?.params || {}), includeArchived: true, pageSize: 100, cursor: cursor || undefined }
         })
         sessions.push(...response.data.items)
         cursor = response.data.nextCursor
@@ -367,6 +367,10 @@ export const sessionsActions = {
       } finally {
         if (this.sessionRefreshPromise === refresh) this.sessionRefreshPromise = null
       }
+    },
+    async fetchSession(id) {
+      const { data } = await api.get(`/sessions/${id}`)
+      return data
     },
     async loadOlderMessages(id = this.current?.id) {
       const session = this.current
@@ -551,6 +555,13 @@ export const sessionsActions = {
       this.updateCachedSession(id, (session) => ({ ...session, ...data }))
       if (this.current?.id === id) this.current = { ...this.current, ...data }
     },
+    async setArchived(id, archived) {
+      const { data } = await api.post(`/sessions/${id}/archive`, { archived })
+      this.removeCachedSession(id)
+      if (this.current?.id === id) this.current = { ...this.current, ...data }
+      await this.refreshSessions(null, data.projectId || null)
+      return data
+    },
     async deleteSession(id, { automationMode = null, automationImpact = null, suppressErrorToast = false } = {}) {
       const config = {
         ...(suppressErrorToast ? { suppressErrorToast: true } : {}),
@@ -629,6 +640,7 @@ export const sessionsActions = {
       this.updateCachedSession(sessionId, (session) => ({ ...session, activeRunStatus: status }))
     },
     updateSessionSummary(session) {
+      if (session.archived) { this.removeCachedSession(session.id); return }
       const summary = { ...session }
       delete summary.messages
       delete summary.contextSummaries

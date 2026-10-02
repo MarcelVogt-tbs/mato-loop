@@ -9,18 +9,17 @@ export function automationStatus(automation) {
   }[automation?.effectiveState?.activeRunStatus]
   if (active) return active
   if (!automation) return { label: 'Noch nicht gespeichert', icon: 'edit', color: 'grey-6' }
-  if (automation.archivedAt) return { label: 'Archiviert', icon: 'archive', color: 'grey-6' }
+  if (!automation.enabled) return { label: 'Deaktiviert', icon: 'pause_circle_outline', color: 'grey-6' }
+  if (automation.triggers?.length) return { label: 'Wartet auf Ereignisse', icon: 'bolt', color: 'primary' }
   if (!(automation.scheduleCount ?? automation.schedules?.length)) return { label: 'Nur manuell', icon: 'touch_app', color: 'grey-6' }
-  if (!automation.enabled) return { label: 'Zeitpläne pausiert', icon: 'pause_circle_outline', color: 'grey-6' }
   if (automation.effectiveState?.enabled && automation.effectiveState.nextRunAt) return { label: 'Geplant', icon: 'schedule', color: 'primary' }
   return { label: 'Keine weiteren Termine', icon: 'event_busy', color: 'grey-6' }
 }
 
 export function automationTiming(automation) {
   if (!automation) return ''
-  if (automation.archivedAt) return `Archiviert am ${formatAbsoluteDateTime(automation.archivedAt)}`
   if (!(automation.scheduleCount ?? automation.schedules?.length)) return 'Keine automatischen Starts'
-  if (!automation.enabled) return 'Zeitpläne pausiert; manuelle Starts bleiben möglich.'
+  if (!automation.enabled) return 'Automatische Starts sind deaktiviert.'
   if (automation.effectiveState?.enabled && automation.effectiveState.nextRunAt) return `Nächster Start: ${formatAbsoluteDateTime(automation.effectiveState.nextRunAt)}`
   return 'Kein weiterer Termin geplant; manuelle Starts bleiben möglich.'
 }

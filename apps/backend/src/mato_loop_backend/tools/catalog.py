@@ -10,6 +10,7 @@ import mato_loop_backend.tools.identity as tools_identity
 import mato_loop_backend.tools.interaction as tools_interaction
 import mato_loop_backend.tools.media as tools_media
 import mato_loop_backend.tools.memory as tools_memory
+import mato_loop_backend.tools.permissions as tools_permissions
 import mato_loop_backend.tools.personal_settings as tools_personal_settings
 import mato_loop_backend.tools.sessions as tools_sessions
 import mato_loop_backend.tools.skills as tools_skills
@@ -134,6 +135,7 @@ tool_registry = ToolRegistry(
         tools_coding.CODING_LIST_PLANS,
         tools_coding.CODING_ENQUEUE,
         tools_interaction.QUESTION,
+        tools_permissions.REQUEST_SESSION_PERMISSIONS,
         tools_interaction.TASK,
         tools_interaction.TODO_WRITE,
         tools_computer.LIST_EXECUTION_AGENTS,

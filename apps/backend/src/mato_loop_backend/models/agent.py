@@ -49,13 +49,13 @@ class AgentRun(Base):
     )
     agent_profile_id: Mapped[UUID | None] = mapped_column(nullable=True)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="queued", index=True)
+    automation_origin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     input_message_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("messages.id", ondelete="SET NULL", use_alter=True), nullable=True, index=True
     )
     result_message_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("messages.id", ondelete="SET NULL", use_alter=True), nullable=True, unique=True
     )
-    required_skill: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     model_config_id: Mapped[UUID | None] = mapped_column(nullable=True)
     model_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     trust_level: Mapped[str] = mapped_column(

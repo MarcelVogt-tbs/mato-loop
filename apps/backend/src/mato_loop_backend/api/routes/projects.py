@@ -30,6 +30,7 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.security import require_user
+from mato_loop_backend.sessions.archive import ArchiveRequest, set_archived
 from mato_loop_backend.sessions.cleanup import descendant_sessions
 from mato_loop_backend.sessions.service import (
     SessionServiceError,
@@ -76,6 +77,7 @@ class ProjectResponse(BaseModel):
 
     id: UUID
     name: str
+    archived_at: datetime | None = Field(default=None, alias="archivedAt")
     instructions: str
     default_execution_agent_id: UUID | None = Field(alias="defaultExecutionAgentId")
     default_current_directory: str | None = Field(alias="defaultCurrentDirectory")
@@ -95,6 +97,7 @@ def _payload(project: Project, session_count: int) -> ProjectResponse:
     return ProjectResponse(
         id=project.id,
         name=project.name,
+        archivedAt=project.archived_at,
         instructions=project.instructions,
         defaultExecutionAgentId=project.default_execution_agent_id,
         defaultCurrentDirectory=project.default_current_directory,
@@ -214,6 +217,7 @@ def _validate_automation_policy(
 async def list_projects(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    archived: bool = False,
 ) -> ProjectListResponse:
     rows = (
         await db.execute(
@@ -224,7 +228,7 @@ async def list_projects(
                 & (ChatSession.user_id == Project.user_id)
                 & ChatSession.parent_session_id.is_(None),
             )
-            .where(Project.user_id == user.id)
+            .where(Project.user_id == user.id, Project.archived_at.is_not(None) if archived else Project.archived_at.is_(None))
             .group_by(Project.id)
             .order_by(Project.updated_at.desc(), Project.id.desc())
         )
@@ -232,6 +236,18 @@ async def list_projects(
     return ProjectListResponse(
         items=[_payload(project, session_count) for project, session_count in rows]
     )
+
+
+@router.post("/{project_id}/archive", response_model=ProjectResponse)
+async def archive_project(
+    project_id: UUID, payload: ArchiveRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ProjectResponse:
+    project = await _owned_project(db, project_id, user.id, for_update=True)
+    await set_archived(db, project, payload.archived)
+    await db.commit()
+    return _payload(project, await _session_count(db, project))
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)

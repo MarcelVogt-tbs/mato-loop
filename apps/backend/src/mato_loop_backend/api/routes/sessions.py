@@ -65,6 +65,7 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.security import require_user
 from mato_loop_backend.sessions import service as session_service
+from mato_loop_backend.sessions.archive import ArchiveRequest, is_session_archived, set_archived
 from mato_loop_backend.sessions.serialization import (
     LAST_MESSAGE_AT_UNSET as _LAST_MESSAGE_AT_UNSET,
 )
@@ -552,6 +553,7 @@ async def _session_payload(
     last_message_at: Any = _LAST_MESSAGE_AT_UNSET,
     has_unread_messages: bool | None = None,
 ) -> dict[str, Any]:
+    archived = await is_session_archived(db, item)
     workspace_context = await session_service.workspace_context(db, item)
     first_user_message = (
         await db.scalar(
@@ -576,7 +578,7 @@ async def _session_payload(
         else {"type": "app"}
     )
     if item.memory_mode == MemoryMode.DISABLED.value:
-        return session_payload(
+        return {**session_payload(
             item,
             effective_memory_mode=MemoryMode.DISABLED,
             memory_tools_available=False,
@@ -585,13 +587,13 @@ async def _session_payload(
             last_message_at=last_message_at,
             has_unread_messages=has_unread_messages,
             default_channel=default_channel,
-        )
+        ), "archived": archived}
     ai = await session_service._profile_ai(db, item.user_id, item.agent_profile_id)
     memory = await SettingsStore.load(db, MemorySettings, user_id=item.user_id)
     model_id = item.model_config_id or ai.default_model_id
     model = _model_for_session(ai, model_id) if _model_available(ai, model_id) else None
     state = effective_memory(item, memory, _provider_for_session(ai, model), model)
-    return session_payload(
+    return {**session_payload(
         item,
         effective_memory_mode=state.mode,
         memory_tools_available=state.tools_enabled,
@@ -600,7 +602,7 @@ async def _session_payload(
         last_message_at=last_message_at,
         has_unread_messages=has_unread_messages,
         default_channel=default_channel,
-    )
+    ), "archived": archived}
 
 
 async def _duplicate_submission_response(
@@ -631,6 +633,8 @@ async def list_sessions(
     cursor: Annotated[str | None, Query()] = None,
     project_id: Annotated[UUID | None, Query(alias="projectId")] = None,
     standalone: Annotated[bool, Query()] = False,
+    archived: bool = False,
+    include_archived: Annotated[bool, Query(alias="includeArchived")] = False,
 ) -> dict[str, Any]:
     try:
         return await session_service.list_sessions(
@@ -641,9 +645,26 @@ async def list_sessions(
             project_id=project_id,
             standalone=standalone,
             session_serializer=_session_payload,
+            archived=archived,
+            include_archived=include_archived,
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)
+
+
+@router.post("/{session_id}/archive")
+async def archive_session(
+    session_id: UUID,
+    payload: ArchiveRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, Any]:
+    item = await _mutable_session(db, session_id, user.id, for_update=True)
+    if item is None:
+        raise ApiError(404, "session.notFound")
+    await set_archived(db, item, payload.archived)
+    await db.commit()
+    return await _session_payload(db, item)
 
 
 async def _create_session(

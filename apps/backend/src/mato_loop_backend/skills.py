@@ -14,10 +14,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.models import Automation
 from mato_loop_backend.settings import (
     DEFAULT_SKILLS,
     InstanceSkillsSettings,
@@ -185,14 +183,6 @@ class SkillService:
         settings, owner_id = await SkillService._load_scoped(
             db, user_id, scope, for_update=True
         )
-        referenced = await db.scalar(
-            select(Automation.id).where(
-                *( [Automation.user_id == user_id] if scope == "personal" else [] ),
-                Automation.skill_id == skill_id,
-            )
-        )
-        if referenced is not None:
-            raise SkillError("skill.inUse")
         current = next((item for item in settings.skills if item.id == skill_id), None)
         if current is None:
             raise SkillError("skill.notFound")

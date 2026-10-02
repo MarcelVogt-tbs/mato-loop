@@ -41,57 +41,71 @@
           tabindex="0"
           aria-label="Projekte und Sessions"
         >
-          <section aria-labelledby="automations-heading" class="q-mb-md">
-            <q-item dense class="q-px-sm q-py-xs">
-              <q-item-section role="button" tabindex="0" aria-controls="automation-list" :aria-expanded="automationsSectionOpen" @click="automationsSectionOpen = !automationsSectionOpen" @keydown.enter="automationsSectionOpen = !automationsSectionOpen" @keydown.space.prevent="automationsSectionOpen = !automationsSectionOpen">
-                <q-item-label id="automations-heading" header class="q-pa-none text-subtitle2 text-weight-medium" :class="$q.dark.isActive ? 'text-grey-5' : 'text-grey-7'">
-                  Automationen <q-icon :name="automationsSectionOpen ? 'expand_more' : 'chevron_right'" size="18px" />
-                </q-item-label>
+          <section aria-labelledby="automations-heading" class="q-mx-sm q-mb-sm">
+            <q-item
+              clickable v-ripple class="rounded-borders q-px-sm"
+              aria-controls="automation-list" :aria-expanded="automationsSectionOpen"
+              @click="automationsSectionOpen = !automationsSectionOpen"
+            >
+              <q-item-section side><q-icon name="auto_awesome" color="primary" size="24px" /></q-item-section>
+              <q-item-section>
+                <q-item-label id="automations-heading" class="text-weight-medium">Automationen</q-item-label>
               </q-item-section>
               <q-item-section side>
-                <q-btn flat round dense size="sm" icon="add" aria-label="Automation erstellen" @click="createAutomation"><q-tooltip>Automation erstellen</q-tooltip></q-btn>
+                <q-btn flat round dense size="sm" icon="add" class="drawer-section__action" aria-label="Automation erstellen" @click.stop="createAutomation"><q-tooltip>Automation erstellen</q-tooltip></q-btn>
+              </q-item-section>
+              <q-item-section side class="q-pl-sm">
+                <q-icon :name="automationsSectionOpen ? 'expand_more' : 'chevron_right'" size="20px" />
               </q-item-section>
             </q-item>
-            <q-list v-show="automationsSectionOpen" id="automation-list">
-              <q-item v-if="automations.loadFailed" dense><q-item-section><q-btn flat dense no-caps label="Automationen erneut laden" @click="automations.fetchAutomations({ includeArchived: true }).catch(() => {})" /></q-item-section></q-item>
+            <q-list v-show="automationsSectionOpen" id="automation-list" class="q-ml-md">
+              <q-item v-if="automations.loadFailed" dense><q-item-section><q-btn flat dense no-caps label="Automationen erneut laden" @click="automations.fetchAutomations().catch(() => {})" /></q-item-section></q-item>
               <q-item v-else-if="automations.loading && !automations.loaded" dense><q-item-section><q-skeleton type="text" /></q-item-section></q-item>
-              <q-item v-for="automation in automations.items" :key="automation.id" clickable dense v-ripple class="rounded-borders q-px-sm q-py-xs q-my-xs" :active="routeSessionId === automation.executionSessionId" @click="openAutomation(automation)">
-                <q-item-section>
-                  <q-item-label lines="1" class="text-body2">{{ automation.name }}</q-item-label>
-                  <q-item-label caption>{{ sessionStatuses.get(automation.executionSessionId)?.label || automationStatus(automation).label }}</q-item-label>
-                </q-item-section>
-                <q-item-section side><q-icon :name="automationStatus(automation).icon" :color="automationStatus(automation).color" size="18px" /></q-item-section>
-              </q-item>
+              <SidebarSessionItem
+                v-for="automation in automations.items"
+                :key="automation.id"
+                :session="automationMenuSessions[automation.executionSessionId] || { id: automation.executionSessionId }"
+                :title="automation.name"
+                :caption="sessionStatuses.get(automation.executionSessionId)?.label || automationStatus(automation).label"
+                :active="routeSessionId === automation.executionSessionId"
+                :show-pin="false"
+                :draggable="false"
+                :menu-open="openAutomationMenuId === automation.id"
+                @update:menu-open="setAutomationMenu(automation, $event)"
+                @open="openSession"
+                @rename="openRenameDialog"
+                @move="openMoveDialog"
+                @archive="archiveSession"
+                @delete="removeSession"
+              />
               <q-item v-if="automations.loaded && !automations.items.length" dense class="q-px-sm"><q-item-section><q-item-label caption>Noch keine Automationen</q-item-label></q-item-section></q-item>
             </q-list>
           </section>
-          <section aria-labelledby="projects-heading">
+          <section aria-labelledby="projects-heading" class="q-mx-sm">
             <q-item
-              clickable dense tag="div" class="q-px-sm q-py-xs"
+              clickable v-ripple class="rounded-borders q-px-sm"
               aria-controls="project-list" :aria-expanded="projectsSectionOpen"
               @click="projectsSectionOpen = !projectsSectionOpen"
             >
+              <q-item-section side><q-icon :name="mdiFolderOutline" color="primary" size="24px" /></q-item-section>
               <q-item-section>
-                <q-item-label
-                  id="projects-heading" header class="q-pa-none text-subtitle2 text-weight-medium"
-                  :class="$q.dark.isActive ? 'text-grey-5' : 'text-grey-7'"
-                >
-                  Projekte
-                  <q-icon :name="projectsSectionOpen ? 'expand_more' : 'chevron_right'" size="18px" />
-                </q-item-label>
+                <q-item-label id="projects-heading" class="text-weight-medium">Projekte</q-item-label>
               </q-item-section>
               <q-item-section side>
                 <q-btn
-                  flat round dense size="sm" icon="create_new_folder"
+                  flat round dense size="sm" icon="add"
                   class="drawer-section__action" aria-label="Projekt erstellen"
                   @click.stop="openProjectDialog('create')"
                 >
                   <q-tooltip>Projekt erstellen</q-tooltip>
                 </q-btn>
               </q-item-section>
+              <q-item-section side class="q-pl-sm">
+                <q-icon :name="projectsSectionOpen ? 'expand_more' : 'chevron_right'" size="20px" />
+              </q-item-section>
             </q-item>
 
-            <q-list id="project-list" v-show="projectsSectionOpen" class="project-list">
+            <q-list id="project-list" v-show="projectsSectionOpen" class="project-list q-ml-md">
               <div v-if="projects.loading && !projects.loaded" class="row justify-center q-pa-sm" aria-label="Projekte werden geladen">
                 <q-spinner-dots color="primary" size="24px" />
               </div>
@@ -145,6 +159,10 @@
                         <q-item-section>Projekt bearbeiten</q-item-section>
                       </q-item>
                       <q-separator />
+                      <q-item clickable v-ripple v-close-popup @click="archiveProject(project)">
+                        <q-item-section avatar><q-icon name="archive" /></q-item-section>
+                        <q-item-section>Projekt archivieren</q-item-section>
+                      </q-item>
                       <q-item
                         clickable v-ripple v-close-popup class="text-negative"
                         @click="deleteProject(project)"
@@ -167,6 +185,7 @@
                   @drag-start="startSessionDrag"
                   @drag-end="endSessionDrag"
                   @delete="removeSession"
+                  @archive="archiveSession"
                   @toggle-pin="toggleSessionPinned"
                   @load-more="loadMoreSessions(project.id)"
                   @retry-more="retrySessionPagination(project.id)"
@@ -180,40 +199,37 @@
           </section>
 
           <section
-            class="q-mt-md"
+            class="q-mx-sm q-mt-sm"
             :class="{ 'app-surface-tonal': sessionDropTarget === null }"
             aria-labelledby="sessions-heading"
             @dragover="dragSessionOver($event, null)"
             @dragleave="leaveSessionDropTarget"
             @drop="dropSession($event, null)"
           >
-            <q-item dense tag="div" class="q-px-sm q-py-xs">
-              <q-item-section
-                role="button" tabindex="0" aria-controls="standalone-session-list"
-                :aria-expanded="sessionsSectionOpen"
-                @click="sessionsSectionOpen = !sessionsSectionOpen"
-                @keydown.enter="sessionsSectionOpen = !sessionsSectionOpen"
-                @keydown.space.prevent="sessionsSectionOpen = !sessionsSectionOpen"
-              >
-                <q-item-label
-                  id="sessions-heading" header class="q-pa-none text-subtitle2 text-weight-medium"
-                  :class="$q.dark.isActive ? 'text-grey-5' : 'text-grey-7'"
-                >
-                  Sessions
-                  <q-icon :name="sessionsSectionOpen ? 'expand_more' : 'chevron_right'" size="18px" />
-                </q-item-label>
+            <q-item
+              clickable v-ripple class="rounded-borders q-px-sm"
+              aria-controls="standalone-session-list" :aria-expanded="sessionsSectionOpen"
+              @click="sessionsSectionOpen = !sessionsSectionOpen"
+            >
+              <q-item-section side><q-icon name="chat_bubble_outline" color="primary" size="24px" /></q-item-section>
+              <q-item-section>
+                <q-item-label id="sessions-heading" class="text-weight-medium">Sessions</q-item-label>
               </q-item-section>
               <q-item-section side>
                 <q-btn
-                  flat round dense size="sm" icon="add_comment" class="drawer-section__action"
+                  flat round dense size="sm" icon="add" class="drawer-section__action"
                   aria-label="Neue Session" @click.stop="openNewSession(null)"
                 >
                   <q-tooltip>Neue Session</q-tooltip>
                 </q-btn>
               </q-item-section>
+              <q-item-section side class="q-pl-sm">
+                <q-icon :name="sessionsSectionOpen ? 'expand_more' : 'chevron_right'" size="20px" />
+              </q-item-section>
             </q-item>
             <SidebarSessionList
               id="standalone-session-list"
+              class="q-ml-md"
               v-show="sessionsSectionOpen"
               :list="standaloneSessionList"
               :active-session-id="routeSessionId"
@@ -226,6 +242,7 @@
               @drag-start="startSessionDrag"
               @drag-end="endSessionDrag"
               @delete="removeSession"
+              @archive="archiveSession"
               @toggle-pin="toggleSessionPinned"
               @load-more="loadMoreSessions(null)"
               @retry-more="retrySessionPagination(null)"
@@ -236,6 +253,10 @@
       </div>
 
       <div class="drawer-user-area q-pa-sm">
+        <q-item clickable v-ripple :to="{ name: 'archive' }" class="rounded-borders q-px-sm q-mb-sm" @click="closeDrawerOnMobile">
+          <q-item-section side><q-icon name="archive" color="primary" size="24px" /></q-item-section>
+          <q-item-section><q-item-label class="text-weight-medium">Archiv</q-item-label></q-item-section>
+        </q-item>
         <q-btn
           id="user-menu-trigger" unelevated no-caps class="full-width app-user-menu-trigger"
           :aria-label="userMenuLabel"
@@ -333,6 +354,7 @@ import ProjectDialog from 'src/features/projects/ProjectDialog.vue'
 import SearchDialog from 'src/features/search/SearchDialog.vue'
 import SidebarActionMenu from 'src/features/chat/components/SidebarActionMenu.vue'
 import SidebarSessionList from 'src/features/chat/components/SidebarSessionList.vue'
+import SidebarSessionItem from 'src/features/chat/components/SidebarSessionItem.vue'
 import SessionDialogs from 'src/features/chat/components/SessionDialogs.vue'
 import { useProjectNavigation } from 'src/features/projects/useProjectNavigation'
 import { useSidebarSessions } from 'src/features/chat/useSidebarSessions'
@@ -375,6 +397,8 @@ const routeSessionId = computed(() => (
 ))
 const sessionsSectionOpen = ref(true)
 const automationsSectionOpen = ref(true)
+const openAutomationMenuId = ref(null)
+const automationMenuSessions = ref({})
 const accountDialogOpen = ref(false)
 const {
   projectOptions, standaloneSessionList, sessionStatuses,
@@ -417,8 +441,20 @@ function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
 }
 
-async function openAutomation(automation) {
-  await openSession({ id: automation.executionSessionId })
+async function setAutomationMenu(automation, open) {
+  if (!open) {
+    if (openAutomationMenuId.value === automation.id) openAutomationMenuId.value = null
+    return
+  }
+  openAutomationMenuId.value = automation.id
+  try {
+    const session = chat.findCachedSession(automation.executionSessionId)
+      || await chat.fetchSession(automation.executionSessionId)
+    automationMenuSessions.value[automation.executionSessionId] = session
+  } catch {
+    if (openAutomationMenuId.value === automation.id) openAutomationMenuId.value = null
+    // The central Axios interceptor displays the error.
+  }
 }
 
 async function createAutomation() {
@@ -427,6 +463,29 @@ async function createAutomation() {
     await controlCenter.openApp('automation')
   } catch {
     // The central Axios interceptor displays the error.
+  }
+}
+
+async function archiveSession(session) {
+  if (!await props.confirmDiscardedEdit()) return
+  try {
+    await chat.setArchived(session.id, true)
+    await automations.fetchAutomations()
+    $q.notify({ type: 'positive', message: 'Session archiviert' })
+  } catch {
+    // The Axios interceptor displays the error.
+  }
+}
+
+async function archiveProject(project) {
+  if (!await props.confirmDiscardedEdit()) return
+  try {
+    await projects.setArchived(project.id, true)
+    await automations.fetchAutomations()
+    if (chat.current?.projectId === project.id) await chat.refreshSession(chat.current.id)
+    $q.notify({ type: 'positive', message: 'Projekt archiviert' })
+  } catch {
+    // The Axios interceptor displays the error.
   }
 }
 

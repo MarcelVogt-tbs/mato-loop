@@ -315,6 +315,8 @@ class ProjectCodingService:
         locked = await cls._lock_project(db, user_id, project.id)
         if locked is None:
             raise ProjectCodingError("project.notFound")
+        if locked.archived_at is not None:
+            raise ProjectCodingError("project.archived")
         current = (
             locked.coding_integration_id,
             locked.coding_project_key,
@@ -679,6 +681,8 @@ class ProjectCodingService:
         locked = await cls._lock_project(db, user_id, project.id)
         if locked is None:
             raise ProjectCodingError("project.notFound")
+        if locked.archived_at is not None:
+            raise ProjectCodingError("project.archived")
         if not locked.coding_execution_model_key:
             raise ProjectCodingError("project.codingExecutionModelRequired")
         bound = await cls.resolve(db, user_id, locked)
@@ -943,6 +947,7 @@ class CodingScheduler:
                     .where(
                         ProjectPlanExecution.status == "queued",
                         Project.coding_queue_pause_reason.is_(None),
+                        Project.archived_at.is_(None),
                         UserAccount.is_active.is_(True),
                         ~active.exists(),
                     )

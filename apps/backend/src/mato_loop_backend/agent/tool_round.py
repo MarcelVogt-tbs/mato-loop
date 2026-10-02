@@ -222,8 +222,8 @@ class ToolBatchResult:
     required_search_called: bool = False
     required_search_succeeded: bool = False
     required_search_error: str | None = None
-    required_skill_load_called: bool = False
-    required_skill_load_succeeded: bool = False
+    skill_load_called: bool = False
+    skill_load_succeeded: bool = False
 
 
 async def execute_tool_batch(
@@ -684,7 +684,7 @@ async def execute_tool_batch(
             else:
                 state.required_search_succeeded = True
         if call.name == "load_skill":
-            state.required_skill_load_called = True
+            state.skill_load_called = True
             if not isinstance(metadata.get("errorCode"), str):
-                state.required_skill_load_succeeded = True
+                state.skill_load_succeeded = True
     return state

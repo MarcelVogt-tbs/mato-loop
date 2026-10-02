@@ -61,7 +61,6 @@ def select_turn_tools(
     web_fetch_enabled: bool,
     required_search: bool,
     required_search_completed: bool,
-    required_skill_pending: bool,
     memory_write_pending: bool,
     source_review_pending: tuple[str, str] | None,
     render_pending: bool,
@@ -143,9 +142,7 @@ def select_turn_tools(
     if (project is None or project.coding_integration_id is None) and toolset is not None:
         toolset = toolset.without(*PROJECT_CODING_TOOL_NAMES)
     search_pending = required_search and not required_search_completed and not tool_budget_exhausted
-    if required_skill_pending and toolset is not None:
-        toolset = toolset.only("load_skill")
-    elif search_pending and toolset is not None:
+    if search_pending and toolset is not None:
         toolset = toolset.only("load_skill", "edit_skill", "web_search")
     elif memory_write_pending and toolset is not None:
         toolset = toolset.only("memory_retrieve", "memory_write")

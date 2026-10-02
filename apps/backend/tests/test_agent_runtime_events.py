@@ -1254,6 +1254,7 @@ async def test_shutdown_cancel_is_persisted_as_backend_restart(monkeypatch) -> N
 
 
 async def test_cancel_after_completed_response_does_not_add_interruption(monkeypatch) -> None:
+    monkeypatch.setattr("mato_loop_backend.automations.AutomationService.enqueue_event", AsyncMock())
     monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     run = AgentRun(id=uuid4(), session_id=uuid4(), status="running")
     db = AsyncMock(spec=AsyncSession)

@@ -50,7 +50,7 @@ from mato_loop_backend.web.fetch import WebFetchError
 
 
 async def execute_definition(
-    self, call: ToolCall, context: ToolContext, tool: BoundTool
+    self, call: ToolCall, context: ToolContext, tool: BoundTool, *, permissions_only: bool = False,
 ) -> ToolResult:
     from mato_loop_backend.tools.registry import _model_revision, _tool_available, logger
     definition = tool.definition
@@ -269,6 +269,13 @@ async def execute_definition(
             else tool.source_revision
         )
     try:
+        if permissions_only and definition.authorization_factory is None:
+            from mato_loop_backend.tools.permissions import (
+                authorize_session_requests,
+                builtin_permissions,
+            )
+
+            return await authorize_session_requests(context, await builtin_permissions(arguments, context, call.name))
         if definition.actions and (
             selected_integration_id is not None or aggregate_integration_ids
         ):
@@ -357,9 +364,16 @@ async def execute_definition(
                 for key in tuple(context.approval_resolution):
                     if key.startswith("browser_approved:"):
                         context.approval_resolution.pop(key)
-            for request in requests:
-                if not await self.allow(context, request):
-                    return ToolResult.error("permission.denied")
+            if permissions_only:
+                from mato_loop_backend.tools.permissions import authorize_session_requests
+
+                result = await authorize_session_requests(context, requests)
+                if result.is_error:
+                    return result
+            else:
+                for request in requests:
+                    if not await self.allow(context, request):
+                        return ToolResult.error("permission.denied")
             if selected_integration_id is not None:
                 if not await integration_is_current(selected_integration_id):
                     return ToolResult.error("tool.unavailable")
@@ -400,6 +414,10 @@ async def execute_definition(
             for request in requests:
                 if await context.ask_handler(request, check_only=True) != PermissionDecision.ALLOW:
                     return ToolResult.error("permission.denied")
+        if permissions_only:
+            return ToolResult.json({"permissionsReady": True, "executed": False}) if (
+                selected_integration_id is not None or aggregate_integration_ids
+            ) else ToolResult.error("permission.preflightUnavailable")
         result = await definition.handler(arguments, context)
         if definition.releases_private_data and not result.is_error:
             result.metadata["privateIntegrationData"] = True

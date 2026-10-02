@@ -284,8 +284,8 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'automation.alreadyRunning' } })).toBe(
       'Für diese Automation läuft bereits ein Auftrag.'
     )
-    expect(apiErrorMessage({ error: { code: 'automation.archived' } })).toBe(
-      'Diese Automation ist archiviert.'
+    expect(apiErrorMessage({ error: { code: 'session.archived' } })).toBe(
+      'Stelle die archivierte Session oder ihr Projekt wieder her, bevor du neue Arbeit startest.'
     )
     expect(apiErrorMessage({
       error: { code: 'session.automationOutputRequired', params: { automationCount: 2 } }

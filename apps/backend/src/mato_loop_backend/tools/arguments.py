@@ -1070,14 +1070,13 @@ class AutomationScheduleArguments(ToolArguments):
 class AutomationDefinitionArguments(ToolArguments):
     name: str = Field(min_length=1, max_length=240)
     task: str = Field(min_length=1, max_length=40_000)
-    skill_id: UUID | None = None
     enabled: bool = True
     schedules: list[AutomationScheduleArguments] = Field(
-        max_length=50, description="Empty for manual runs only."
+        max_length=50, description="Empty when no time-based starts are needed."
     )
-    archive_after_success: bool = Field(
-        default=False,
-        description="One run_at only.",
+    triggers: list[Literal["agent_response", "agent_error"]] = Field(
+        default_factory=list, max_length=2,
+        description="Events from the owner's non-automation agent runs. Put optional conditions in task.",
     )
 
     @field_validator("name", "task")
@@ -1086,11 +1085,6 @@ class AutomationDefinitionArguments(ToolArguments):
         if not (cleaned := value.strip()):
             raise ValueError("automation text must not be blank")
         return cleaned
-
-    @field_validator("skill_id", mode="before")
-    @classmethod
-    def normalize_null_skill_id(cls, value: Any) -> Any:
-        return None if value == "null" else value
 
     @model_validator(mode="after")
     def schedules_are_unique(self) -> AutomationDefinitionArguments:
@@ -1102,10 +1096,6 @@ class AutomationDefinitionArguments(ToolArguments):
         ]
         if len(keys) != len(set(keys)):
             raise ValueError("automation schedules must be unique")
-        if self.archive_after_success and (
-            len(self.schedules) != 1 or self.schedules[0].run_at is None
-        ):
-            raise ValueError("archive_after_success requires one one-time schedule")
         return self
 
 

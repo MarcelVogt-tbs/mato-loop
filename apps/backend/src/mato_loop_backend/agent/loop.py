@@ -58,7 +58,6 @@ from mato_loop_backend.settings import (
     InstanceLimits,
     MemorySettings,
     SettingsStore,
-    SkillDefinition,
     UserProfileSettings,
     apply_agent_profile_ai,
     effective_model_pseudonymization,
@@ -116,14 +115,6 @@ async def execute_loop_body(
         db, chat_session.user_id, enabled_only=True
     )
     skill_state = RunSkillState.from_skills(skills)
-    required_skill = (
-        SkillDefinition.model_validate(run.required_skill)
-        if run.required_skill is not None
-        else None
-    )
-    if required_skill is not None:
-        skill_state = RunSkillState(catalog={required_skill.id: required_skill})
-    required_skill_pending = required_skill is not None
     selected_execution_agent = (
         await db.get(ExecutionAgent, run.execution_agent_id)
         if run.execution_agent_id is not None
@@ -255,7 +246,6 @@ async def execute_loop_body(
             tool_call_limit is not None and tool_calls_used >= tool_call_limit
         )
         if tool_budget_exhausted:
-            required_skill_pending = False
             memory_write_pending = False
             openscad_render_pending = False
             openscad_source_review_pending = None
@@ -342,7 +332,6 @@ async def execute_loop_body(
             web_fetch_enabled=web_fetch_enabled,
             required_search=required_search,
             required_search_completed=required_search_completed,
-            required_skill_pending=required_skill_pending,
             memory_write_pending=memory_write_pending,
             source_review_pending=openscad_source_review_pending,
             render_pending=openscad_render_pending,
@@ -430,8 +419,7 @@ async def execute_loop_body(
             "tool_choice": (
                 "none" if tool_budget_exhausted else
                 "required"
-                if required_skill_pending
-                or search_pending
+                if search_pending
                 or memory_write_pending
                 or openscad_render_pending
                 or openscad_source_review_pending is not None
@@ -592,10 +580,6 @@ async def execute_loop_body(
                 "stop", "tool_calls", "content_filter", *_OUTPUT_LIMIT_REASONS,
             } else {}),
         }
-        if required_skill_pending and not rejected_batch_code and (
-            len(normalized_calls) != 1 or normalized_calls[0].name != "load_skill"
-        ):
-            raise AgentRunError("automation.skillActivationFailed")
         if search_pending and not rejected_batch_code and (
             not normalized_calls
             or any(call.name not in offered_tool_names for call in normalized_calls)
@@ -760,8 +744,8 @@ async def execute_loop_body(
         required_search_called = batch.required_search_called
         required_search_succeeded = batch.required_search_succeeded
         required_search_error = batch.required_search_error
-        required_skill_load_called = batch.required_skill_load_called
-        required_skill_load_succeeded = batch.required_skill_load_succeeded
+        skill_load_called = batch.skill_load_called
+        skill_load_succeeded = batch.skill_load_succeeded
         if repeated_tool_call_seen:
             repeated_tool_call_repair_available = False
         if tool_budget_exhausted:
@@ -806,12 +790,7 @@ async def execute_loop_body(
                     ):
                         raise AgentRunError(required_search_error)
                     raise AgentRunError("agent.requiredWebSearchFailed")
-            elif required_skill_load_called and not required_skill_load_succeeded:
+            elif skill_load_called and not skill_load_succeeded:
                 required_search_retries += 1
                 if required_search_retries > REQUIRED_WEB_SEARCH_RETRIES and not budget_finalization:
                     raise AgentRunError("agent.requiredWebSearchMissing")
-        if required_skill_pending:
-            if required_skill_load_succeeded:
-                required_skill_pending = False
-            elif required_skill_load_called and not budget_finalization:
-                raise AgentRunError("automation.skillActivationFailed")

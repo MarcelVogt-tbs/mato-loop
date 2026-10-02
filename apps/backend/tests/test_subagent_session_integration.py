@@ -31,6 +31,7 @@ from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.models import (
     AgentRun,
     Automation,
+    AutomationRun,
     ChatSession,
     LoginSession,
     Message,
@@ -406,7 +407,7 @@ async def test_multiple_automations_share_session_and_deletion_preserves_its_tre
     ids = [item[0].id for item in tree.records]
     automation, other = [await AutomationService.create(
         tree.db, user_id=tree.user.id, session_id=parent.id, name=name,
-        task="Task", skill_id=None, enabled=True, schedules=[],
+        task="Task", enabled=True, schedules=[],
     ) for name in ("Daily report", "Weekly report")]
     await tree.db.commit()
     await AutomationService.delete(tree.db, automation.id, tree.user.id, expected_revision=automation.revision)
@@ -414,3 +415,51 @@ async def test_multiple_automations_share_session_and_deletion_preserves_its_tre
     assert await tree.db.scalar(select(Automation.id).where(Automation.execution_session_id == parent.id)) == other.id
     assert all(tree.storage.session_path(item_id).exists() for item_id in ids)
     assert list(tree.storage.trash_dir.iterdir()) == []
+
+
+async def test_archive_restoration_keeps_individual_session_state_and_drops_queued_work(tree):
+    from datetime import UTC, datetime, timedelta
+
+    from mato_loop_backend.sessions.archive import is_session_archived, set_archived
+
+    db = tree.db
+    session = tree.records[0][0]
+    project = Project(user_id=tree.user.id, name="Archive test")
+    db.add(project)
+    await db.flush()
+    session.project_id = project.id
+    past = datetime.now(UTC) - timedelta(days=1)
+    automation = await AutomationService.create(db, user_id=tree.user.id, session_id=session.id,
+        name="Report", task="Report", enabled=True, schedules=[{"run_at": past, "enabled": True}], now=past - timedelta(seconds=1))
+    queued = await AutomationService.enqueue_manual(db, automation.id, tree.user.id)
+    await set_archived(db, session, True)
+    await set_archived(db, project, True)
+    await set_archived(db, project, False)
+    assert await is_session_archived(db, session)
+    await db.refresh(queued)
+    assert queued.status == "cancelled"
+    await set_archived(db, session, False)
+    assert not await is_session_archived(db, session)
+    assert automation.enabled and session.project_id == project.id
+    assert await AutomationService.enqueue_due(db) == 0
+
+
+@pytest.mark.parametrize("trigger", ["agent_response", "agent_error"])
+async def test_event_triggers_are_owner_bound_deduplicated_and_do_not_chain(tree, trigger):
+    db = tree.db
+    session, source, _message = tree.records[0]
+    automation = await AutomationService.create(db, user_id=tree.user.id, session_id=session.id,
+        name="Listener", task="Act only when needed", enabled=True, schedules=[], triggers=[trigger])
+    foreign_session = ChatSession(user_id=tree.foreign.id, title="Foreign")
+    db.add(foreign_session)
+    await db.flush()
+    await AutomationService.create(db, user_id=tree.foreign.id, session_id=foreign_session.id,
+        name="Foreign listener", task="Do work", enabled=True, schedules=[], triggers=[trigger])
+    await AutomationService.enqueue_event(db, source, trigger)
+    await db.flush()
+    await AutomationService.enqueue_event(db, source, trigger)
+    automated = AgentRun(id=uuid4(), session_id=session.id, automation_origin=True, status="completed")
+    await AutomationService.enqueue_event(db, automated, trigger)
+    rows = (await db.scalars(select(AutomationRun).where(AutomationRun.source_run_id == source.id))).all()
+    assert [row.automation_id for row in rows] == [automation.id]
+    assert not (await db.scalars(select(AutomationRun).where(AutomationRun.source_run_id == automated.id))).all()

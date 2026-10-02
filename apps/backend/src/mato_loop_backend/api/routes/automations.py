@@ -29,6 +29,7 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.security import require_user
+from mato_loop_backend.sessions.archive import active_session_clause, is_session_archived
 
 router = APIRouter(prefix="/automations", dependencies=[Depends(require_user)])
 
@@ -78,9 +79,8 @@ class AutomationRequest(BaseModel):
     name: str = Field(min_length=1, max_length=240)
     task: str = Field(min_length=1, max_length=40_000)
     session_id: UUID | None = Field(default=None, alias="sessionId", strict=False)
-    skill_id: UUID | None = Field(default=None, alias="skillId", strict=False)
     enabled: bool = True
-    archive_after_success: bool = Field(default=False, alias="archiveAfterSuccess")
+    triggers: list[Literal["agent_response", "agent_error"]] = Field(default_factory=list, max_length=2)
     schedules: list[ScheduleRequest] = Field(max_length=50)
     expected_revision: int | None = Field(default=None, alias="expectedRevision", ge=1)
 
@@ -105,7 +105,7 @@ class AutomationStatusResponse(BaseModel):
     id: UUID
     revision: int
     enabled: bool
-    archived_at: datetime | None = Field(alias="archivedAt")
+    triggers: list[str] = Field(default_factory=list)
     schedule_count: int = Field(alias="scheduleCount")
     effective_state: AutomationEffectiveState = Field(alias="effectiveState")
 
@@ -124,7 +124,7 @@ class AutomationRunSummaryResponse(BaseModel):
     id: UUID
     automation_id: UUID = Field(alias="automationId")
     status: str
-    trigger: Literal["scheduled", "manual"]
+    trigger: Literal["scheduled", "manual", "agent_response", "agent_error"]
     automation_revision: int = Field(alias="automationRevision")
     scheduled_for: datetime | None = Field(alias="scheduledFor")
     created_at: datetime | None = Field(alias="createdAt")
@@ -155,20 +155,20 @@ async def _active_run_statuses(
 
 
 def _automation_status(
-    item: Automation, active_run_status: str | None
+    item: Automation, active_run_status: str | None, *, archived: bool = False,
 ) -> AutomationStatusResponse:
     next_at = min(
         (schedule.next_run_at for schedule in item.schedules if schedule.enabled),
         default=None,
-    ) if item.enabled and item.archived_at is None else None
+    ) if item.enabled and not archived else None
     return AutomationStatusResponse(
         id=item.id,
         revision=item.revision,
         enabled=item.enabled,
-        archivedAt=item.archived_at,
+        triggers=item.triggers or [],
         scheduleCount=len(item.schedules),
         effectiveState=AutomationEffectiveState(
-            enabled=next_at is not None,
+            enabled=bool(item.enabled and not archived and (next_at is not None or item.triggers)),
             activeRunStatus=active_run_status,
             nextRunAt=next_at,
         ),
@@ -184,7 +184,7 @@ def _raise(exc: AutomationError) -> None:
         "automation.sessionNotFound": 404,
         "skill.notFound": 404,
         "automation.alreadyRunning": 409,
-        "automation.archived": 409,
+        "session.archived": 409,
         "automation.deliveryUnavailable": 409,
         "automation.scheduleDuplicate": 409,
         "automation.runtimeActive": 409,
@@ -227,18 +227,15 @@ async def _automation_payload(
     )
     schedules = [_schedule_payload(schedule) for schedule in item.schedules]
     effective_enabled = (
-        item.archived_at is None
-        and item.enabled
-        and any(schedule["enabled"] for schedule in schedules)
+        item.enabled and not await is_session_archived(db, execution_session)
+        and (bool(item.triggers) or any(schedule["enabled"] for schedule in schedules))
     )
     payload = {
         "id": str(item.id),
         "name": item.name,
         "task": item.task,
-        "skillId": str(item.skill_id) if item.skill_id else None,
         "enabled": item.enabled,
-        "archiveAfterSuccess": item.archive_after_success,
-        "archivedAt": item.archived_at.isoformat() if item.archived_at else None,
+        "triggers": item.triggers or [],
         "revision": item.revision,
         "executionSessionId": str(item.execution_session_id),
         "runtime": runtime_snapshot(execution_session),
@@ -255,7 +252,7 @@ async def _automation_payload(
                     ),
                     default=None,
                 )
-                if item.archived_at is None
+                if effective_enabled
                 else None
             ),
         },
@@ -346,23 +343,20 @@ def _schedule_drafts(payload: AutomationRequest) -> list[dict[str, Any]]:
 async def list_automations(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-    archived: bool = False,
     summary: bool = False,
-    include_archived: Annotated[bool, Query(alias="includeArchived")] = False,
     session_id: Annotated[UUID | None, Query(alias="sessionId")] = None,
 ) -> AutomationSummaryListResponse | dict[str, Any]:
     items = list(
         (
             await db.scalars(
                 select(Automation)
+                .join(ChatSession, ChatSession.id == Automation.execution_session_id)
                 .options(selectinload(Automation.schedules))
                 .where(
                     Automation.user_id == user.id,
                     Automation.execution_session_id == session_id
                     if session_id is not None
-                    else True if include_archived
-                    else Automation.archived_at.is_not(None)
-                    if archived else Automation.archived_at.is_(None),
+                    else active_session_clause(),
                 )
                 .order_by(Automation.updated_at.desc(), Automation.id.desc())
             )
@@ -370,9 +364,12 @@ async def list_automations(
     )
     if summary:
         active_statuses = await _active_run_statuses(db, [item.id for item in items])
+        archived = session_id is not None and await db.scalar(select(ChatSession.id).where(
+            ChatSession.id == session_id, ChatSession.user_id == user.id, active_session_clause(),
+        )) is None
         return AutomationSummaryListResponse(items=[
             AutomationSummaryResponse(
-                **_automation_status(item, active_statuses.get(item.id)).model_dump(by_alias=True),
+                **_automation_status(item, active_statuses.get(item.id), archived=archived).model_dump(by_alias=True),
                 name=item.name,
                 executionSessionId=item.execution_session_id,
                 taskExcerpt=item.task[:240],
@@ -397,10 +394,9 @@ async def create_automation(
             session_id=payload.session_id,
             name=payload.name,
             task=payload.task,
-            skill_id=payload.skill_id,
             enabled=payload.enabled,
             schedules=_schedule_drafts(payload),
-            archive_after_success=payload.archive_after_success,
+            triggers=payload.triggers,
         )
     except AutomationError as exc:
         _raise(exc)
@@ -431,7 +427,10 @@ async def get_automation_status(
     try:
         item = await AutomationService.owned(db, automation_id, user.id)
         active_statuses = await _active_run_statuses(db, [item.id])
-        return _automation_status(item, active_statuses.get(item.id))
+        active_session = await db.scalar(select(ChatSession.id).where(
+            ChatSession.id == item.execution_session_id, active_session_clause(),
+        ))
+        return _automation_status(item, active_statuses.get(item.id), archived=active_session is None)
     except AutomationError as exc:
         _raise(exc)
 
@@ -455,10 +454,9 @@ async def replace_automation(
             expected_revision=payload.expected_revision,
             name=payload.name,
             task=payload.task,
-            skill_id=payload.skill_id,
             enabled=payload.enabled,
             schedules=_schedule_drafts(payload),
-            archive_after_success=payload.archive_after_success,
+            triggers=payload.triggers,
         )
         await db.commit()
         return await _automation_payload(db, item)

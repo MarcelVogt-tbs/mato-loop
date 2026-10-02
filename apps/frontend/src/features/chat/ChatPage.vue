@@ -17,6 +17,13 @@
           :child-id="routeSubagentId"
         />
         <div v-show="!routeSubagentId" class="chat-page__pane column no-wrap full-height">
+    <q-banner v-if="chat.current?.archived" class="app-surface-tonal" dense>
+      Diese Session ist archiviert. Zum Weiterarbeiten bitte wiederherstellen.
+      <template #action>
+        <q-btn v-if="chat.running" flat no-caps label="Lauf stoppen" @click="chat.stop()" />
+        <q-btn flat no-caps color="primary" label="Archiv öffnen" :to="{ name: 'archive' }" />
+      </template>
+    </q-banner>
     <q-scroll-area
       id="chat-scroll-area"
       ref="scrollArea"
@@ -205,7 +212,7 @@
               class="chat-message__meta items-center"
             >
               <q-btn
-                v-if="message.role === 'user' && !String(message.id).startsWith('local-')"
+                v-if="message.role === 'user' && !chat.current?.archived && !String(message.id).startsWith('local-')"
                 flat
                 round
                 dense
@@ -308,7 +315,7 @@
     </div>
 
     <div
-      v-else-if="!chat.loadError && !chat.current?.readOnly && (!routeSessionId || chat.current)"
+      v-else-if="!chat.loadError && !chat.current?.readOnly && !chat.current?.archived && (!routeSessionId || chat.current)"
       class="chat-composer-region"
     >
       <transition name="chat-scroll-jump">
@@ -754,7 +761,7 @@ function messageTrustLabel(value) {
 }
 
 function canRetryMessage(message) {
-  return retryAvailableForMessage(message, chat.current?.messages, chat.running)
+  return !chat.current?.archived && retryAvailableForMessage(message, chat.current?.messages, chat.running)
 }
 
 async function undoMessage(message) {

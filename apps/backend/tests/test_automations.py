@@ -78,14 +78,12 @@ def test_schedule_request_accepts_exactly_one_schedule_kind() -> None:
 
 
 def test_automation_request_accepts_browser_uuid_and_datetime_values() -> None:
-    skill_id = uuid4()
     session_id = uuid4()
 
     request = AutomationRequest.model_validate(
         {
             "name": "Bericht",
             "task": "Erstelle einen Bericht",
-            "skillId": str(skill_id),
             "sessionId": str(session_id),
             "schedules": [
                 {"runAt": "2026-08-21T10:30:00+02:00", "enabled": True}
@@ -93,7 +91,6 @@ def test_automation_request_accepts_browser_uuid_and_datetime_values() -> None:
         }
     )
 
-    assert request.skill_id == skill_id
     assert request.session_id == session_id
     assert request.schedules[0].run_at == datetime(2026, 8, 21, 8, 30, tzinfo=UTC)
 
@@ -127,6 +124,7 @@ async def test_manual_automation_is_never_scheduled_but_can_start(monkeypatch) -
     mirror = AsyncMock()
     monkeypatch.setattr(AutomationService, "mirror_agent_runs", mirror)
     db.scalar.return_value = None
+    db.get.return_value = None
 
     def add(run):
         run.id = uuid4()
@@ -163,7 +161,6 @@ def test_manual_api_rejects_archiving_and_omitted_schedules(automation_api, meth
     client, db, user = automation_api
     automation = Automation(id=uuid4(), user_id=user.id, revision=1, execution_session_id=uuid4())
     db.scalar.return_value = automation
-    monkeypatch.setattr(AutomationService, "skill", AsyncMock(return_value=None))
     path = "/automations" if method == "post" else f"/automations/{automation.id}"
     draft = {"name": "Manual", "task": "Do work", "expectedRevision": 1, "sessionId": str(automation.execution_session_id)}
     missing = client.request(method, path, json=draft)
@@ -172,7 +169,7 @@ def test_manual_api_rejects_archiving_and_omitted_schedules(automation_api, meth
     assert missing.json()["error"]["field"] == "schedules"
     invalid = client.request(method, path, json={**draft, "schedules": [], "archiveAfterSuccess": True})
     assert invalid.status_code == 422
-    assert invalid.json()["error"]["code"] == "automation.archiveRequiresOneTimeSchedule"
+    assert invalid.json()["error"]["field"] == "archiveAfterSuccess"
     db.add.assert_not_called()
     db.commit.assert_not_awaited()
 
@@ -192,7 +189,7 @@ def test_status_and_list_summary_are_compact_and_batch_active_statuses(automatio
     response = client.get("/automations?summary=true")
     assert response.status_code == 200
     payload = response.json()["items"]
-    status_keys = {"id", "revision", "enabled", "archivedAt", "scheduleCount", "effectiveState"}
+    status_keys = {"id", "revision", "enabled", "triggers", "scheduleCount", "effectiveState"}
     assert all(set(item) == status_keys | {"name", "taskExcerpt", "executionSessionId"} for item in payload)
     assert payload[0]["taskExcerpt"] == "x" * 240
     assert payload[0]["scheduleCount"] == 0
@@ -206,7 +203,7 @@ def test_status_and_list_summary_are_compact_and_batch_active_statuses(automatio
     db.scalars.assert_awaited_once()
     query = db.scalars.await_args.args[0].compile()
     assert user.id in query.params.values()
-    assert "automations.archived_at IS NULL" in str(query)
+    assert "chat_sessions.archived_at IS NULL" in str(query)
     active_query = db.execute.await_args.args[0].compile()
     assert [item.id for item in items] in active_query.params.values()
     assert "definition_snapshot" not in str(active_query)
@@ -215,21 +212,19 @@ def test_status_and_list_summary_are_compact_and_batch_active_statuses(automatio
         response = client.get(f"/automations/{item.id}/status")
         assert response.status_code == 200
         assert response.json() == {key: summary[key] for key in status_keys}
-    client.get("/automations?summary=true&archived=true")
-    assert "automations.archived_at IS NOT NULL" in str(db.scalars.await_args.args[0])
     db.get.assert_not_awaited()
 
 
-@pytest.mark.parametrize("enabled,archived", [(True, False), (False, False), (True, True)])
-def test_status_next_run_requires_effective_schedule(enabled, archived):
+@pytest.mark.parametrize("enabled", [True, False])
+def test_status_next_run_requires_effective_schedule(enabled):
     now = datetime(2026, 9, 1, tzinfo=UTC)
     item = Automation(
-        id=uuid4(), revision=1, enabled=enabled, archived_at=now if archived else None,
+        id=uuid4(), revision=1, enabled=enabled,
         schedules=[AutomationSchedule(enabled=True, next_run_at=now)],
     )
     state = routes._automation_status(item, None).effective_state
-    assert state.enabled == (enabled and not archived)
-    assert state.next_run_at == (now if enabled and not archived else None)
+    assert state.enabled == enabled
+    assert state.next_run_at == (now if enabled else None)
 
 
 @pytest.mark.parametrize("suffix", ["/status", "?includeHistory=false", "/runs?summary=true"])
@@ -369,26 +364,12 @@ def test_recurring_schedule_advances_until_inclusive_cutoff() -> None:
     assert schedule.enabled is False
 
 
-@pytest.mark.parametrize("invalid", [[], [{"cron": "0 8 * * *", "timezone": "UTC"}],
-    [{"run_at": datetime(2026, 8, 21, 10, 30, tzinfo=UTC)}] * 2])
-def test_archive_policy_requires_one_one_time_schedule(invalid) -> None:
-    AutomationService.validate_archive_policy(
-        [{"run_at": datetime(2026, 8, 21, 10, 30, tzinfo=UTC)}], True
-    )
-
-    with pytest.raises(AutomationError) as exc_info:
-        AutomationService.validate_archive_policy(invalid, True)
-
-    assert exc_info.value.code == "automation.archiveRequiresOneTimeSchedule"
-
-
 @pytest.mark.parametrize("manual", [False, True])
 async def test_create_attaches_automation_to_existing_session(monkeypatch, manual) -> None:
     db = AsyncMock(spec=AsyncSession)
     session = ChatSession(id=uuid4(), user_id=uuid4(), session_type="chat")
     db.scalar.return_value = None
     monkeypatch.setattr(AutomationService, "normal_session", AsyncMock(return_value=session))
-    monkeypatch.setattr(AutomationService, "skill", AsyncMock(return_value=None))
 
     automation = await AutomationService.create(
         db,
@@ -396,7 +377,6 @@ async def test_create_attaches_automation_to_existing_session(monkeypatch, manua
         session_id=session.id,
         name="Erinnerung",
         task="Erinnere mich",
-        skill_id=None,
         enabled=True,
         schedules=[] if manual else [
             {
@@ -448,7 +428,6 @@ async def test_replace_deletes_existing_schedules_before_inserting_replacements(
         )
 
     db.flush.side_effect = flush
-    monkeypatch.setattr(AutomationService, "skill", AsyncMock(return_value=None))
 
     await AutomationService.replace(
         db,
@@ -456,7 +435,6 @@ async def test_replace_deletes_existing_schedules_before_inserting_replacements(
         expected_revision=1,
         name=automation.name,
         task=automation.task,
-        skill_id=None,
         enabled=True,
         schedules=[] if manual else [{"cron": "0 8 * * *", "timezone": "UTC", "enabled": True}],
         now=datetime(2026, 8, 20, 12, tzinfo=UTC),
@@ -542,7 +520,7 @@ async def test_due_schedules_are_bundled_into_one_skipped_run() -> None:
     db.commit.assert_awaited_once()
 
 
-async def test_disabled_bound_skill_fails_only_its_due_run(monkeypatch) -> None:
+async def test_missing_context_fails_only_its_due_run(monkeypatch) -> None:
     now = datetime(2026, 8, 18, 12, tzinfo=UTC)
     automation = Automation(
         id=uuid4(),
@@ -552,7 +530,6 @@ async def test_disabled_bound_skill_fails_only_its_due_run(monkeypatch) -> None:
         task="Erstelle einen Bericht",
         revision=1,
         enabled=True,
-        skill_id=uuid4(),
     )
     schedule = AutomationSchedule(
         id=uuid4(),
@@ -570,14 +547,14 @@ async def test_disabled_bound_skill_fails_only_its_due_run(monkeypatch) -> None:
     monkeypatch.setattr(
         AutomationService,
         "_snapshot",
-        AsyncMock(side_effect=AutomationError("skill.notFound")),
+        AsyncMock(side_effect=AutomationError("automation.executionSessionMissing")),
     )
 
     assert await AutomationService.enqueue_due(db, now=now) == 1
 
     run = next(call.args[0] for call in db.add.call_args_list if isinstance(call.args[0], AutomationRun))
     assert run.status == "queued"
-    assert run.definition_snapshot["errorCode"] == "skill.notFound"
+    assert run.definition_snapshot["errorCode"] == "automation.executionSessionMissing"
     assert schedule.next_run_at > now
     db.commit.assert_awaited_once()
 
@@ -684,7 +661,7 @@ async def test_manual_enqueue_rejects_a_changed_revision(monkeypatch) -> None:
     db.add.assert_not_called()
 
 
-async def test_completed_scheduled_one_time_run_archives_automation(monkeypatch) -> None:
+async def test_completed_scheduled_one_time_run_retains_automation(monkeypatch) -> None:
     completed_at = datetime(2026, 8, 20, 14, 20, tzinfo=UTC)
     automation = Automation(
         id=uuid4(),
@@ -693,7 +670,6 @@ async def test_completed_scheduled_one_time_run_archives_automation(monkeypatch)
         name="Erinnerung",
         task="Erinnere mich",
         revision=2,
-        archive_after_success=True,
     )
     agent_run = AgentRun(
         id=uuid4(),
@@ -721,7 +697,7 @@ async def test_completed_scheduled_one_time_run_archives_automation(monkeypatch)
 
     assert changed == 1
     assert run.status == "completed"
-    assert automation.archived_at == completed_at
+    db.delete.assert_not_awaited()
     db.commit.assert_awaited_once()
 
 
@@ -813,7 +789,7 @@ async def test_create_supports_multiple_automations_in_the_same_session(monkeypa
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = uuid4()
     created = [await AutomationService.create(db, user_id=session.user_id, session_id=session.id,
-        name=name, task="Work", skill_id=None, enabled=True, schedules=[]) for name in ("Daily", "Weekly")]
+        name=name, task="Work", enabled=True, schedules=[]) for name in ("Daily", "Weekly")]
     assert [item.execution_session_id for item in created] == [session.id, session.id]
 
 

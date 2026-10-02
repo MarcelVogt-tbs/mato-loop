@@ -117,7 +117,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     sessionActivityRefreshPending = true
     try {
       const requests = [
-        automations.fetchAutomations({ includeArchived: true, suppressErrorToast: true }),
+        automations.fetchAutomations({ suppressErrorToast: true }),
         approvals.fetchPending({ suppressErrorToast: true }),
         questions.fetchPending({ suppressErrorToast: true })
       ]
@@ -216,7 +216,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     refreshAppPresence()
     await Promise.allSettled([
       approvals.fetchPending(),
-      automations.fetchAutomations({ includeArchived: true, suppressErrorToast: true }),
+      automations.fetchAutomations({ suppressErrorToast: true }),
       questions.fetchPending(),
       notifications.fetchLatest({ suppressErrorToast: true }),
       notifications.reconcilePush({ suppressErrorToast: true }),

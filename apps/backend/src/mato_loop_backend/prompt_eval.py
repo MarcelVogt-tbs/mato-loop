@@ -1265,6 +1265,13 @@ CASES = (
         expected_tool="list_automations",
     ),
     PromptCase(
+        id="session_permissions_are_requested_without_execution",
+        kind="general",
+        user="Frage die Session-Freigabe für session_search mit dem Suchbegriff Projektstatus vorab an. Suche noch nicht.",
+        tools=("request_session_permissions", "session_search"),
+        expected_tool="request_session_permissions",
+    ),
+    PromptCase(
         id="automation_get_uses_exact_id",
         kind="general",
         user=f"Zeige mir die vollständige Automation {AUTOMATION_ID}.",
@@ -1361,7 +1368,6 @@ CASES = (
             "name": "Tagesbericht",
             "task": "Erstelle den kompakten Tagesbericht",
             "enabled": True,
-            "skill_id": None,
             "schedules": [
                 {
                     "cron": "0 9 * * *",
@@ -5357,7 +5363,7 @@ _COMPACT_TOOL_DESCRIPTIONS = {
     ),
     "create_automation": (
         "Create only on an explicit latest request. Same task in one automation. Deliver reminders to "
-        "the current session. Never archive multiple schedules."
+        "the current session. Conditions and skill instructions belong in the saved task."
     ),
     "edit_automation": "Replace an owned automation at an exact revision on an explicit latest-message request.",
     "tasks_create_many": "Create up to 50 tasks, skipping duplicate open titles.",

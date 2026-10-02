@@ -23,6 +23,7 @@ from mato_loop_backend.permissions.policy import (
     automation_collection_scope,
     automation_scope,
 )
+from mato_loop_backend.sessions.archive import active_session_clause, is_session_archived
 from mato_loop_backend.tools.actions import (
     _AUTOMATION_CREATE,
     _AUTOMATION_DELETE,
@@ -123,7 +124,10 @@ def _automation_schedule_lines(schedules: list[dict[str, Any]]) -> tuple[str, ..
         f'{"aktiv" if item["enabled"] else "inaktiv"}'
         f'{" | gültig bis " + item["valid_until"] if item.get("valid_until") else ""}'
         for item in _automation_schedule_json(schedules)
-    ) or ("Nur manuell",)
+    ) or ("Keine Zeitpläne",)
+
+
+_TRIGGER_LABELS = {"agent_response": "Agent hat geantwortet", "agent_error": "Agent-Auftrag fehlgeschlagen"}
 
 
 async def _automation_definition_payload(
@@ -136,12 +140,8 @@ async def _automation_definition_payload(
         "id": str(automation.id),
         "name": automation.name,
         "task": automation.task,
-        "skillId": str(automation.skill_id) if automation.skill_id else None,
         "enabled": automation.enabled,
-        "archiveAfterSuccess": automation.archive_after_success,
-        "archivedAt": (
-            automation.archived_at.isoformat() if automation.archived_at else None
-        ),
+        "triggers": automation.triggers or [],
         "revision": automation.revision,
         "schedules": [
             {
@@ -161,6 +161,7 @@ async def _automation_definition_payload(
             for item in automation.schedules
         ],
         "executionSessionId": str(automation.execution_session_id),
+        "sessionArchived": await is_session_archived(db, execution_session),
         "runtime": runtime_snapshot(execution_session),
         "contentIsUntrusted": True,
     }
@@ -186,10 +187,11 @@ async def _list_automations(
         (
             await context.db.scalars(
                 select(Automation)
+                .join(ChatSession, ChatSession.id == Automation.execution_session_id)
                 .options(selectinload(Automation.schedules))
                 .where(
                     Automation.user_id == context.session.user_id,
-                    Automation.archived_at.is_(None),
+                    active_session_clause(),
                 )
                 .order_by(Automation.updated_at.desc(), Automation.id.desc())
                 .limit(arguments.limit + 1)
@@ -205,6 +207,7 @@ async def _list_automations(
                     "executionSessionId": str(item.execution_session_id),
                     "name": item.name,
                     "enabled": item.enabled,
+                    "triggers": item.triggers or [],
                     "revision": item.revision,
                     "scheduleCount": len(item.schedules),
                     "nextRunAt": (
@@ -266,15 +269,11 @@ async def _create_automation(
 ) -> ToolResult:
     schedules = _automation_schedules(arguments.schedules)
     try:
-        skill = await AutomationService.skill(
-            context.db, context.session.user_id, arguments.skill_id
-        )
         preview = {
             "name": arguments.name,
             "task": arguments.task,
-            "skillId": str(arguments.skill_id) if arguments.skill_id else None,
             "enabled": arguments.enabled,
-            "archiveAfterSuccess": arguments.archive_after_success,
+            "triggers": arguments.triggers,
             "schedules": _automation_schedule_json(schedules),
             "sessionId": str(context.session.id),
         }
@@ -292,10 +291,8 @@ async def _create_automation(
                 PermissionDisplayItem(
                     "Zeitpläne", _automation_schedule_lines(schedules), "list"
                 ),
-                PermissionDisplayItem("Skill", skill.name if skill else "Keiner"),
                 PermissionDisplayItem(
-                    "Nach Erfolg",
-                    "Archivieren" if arguments.archive_after_success else "Aktiv lassen",
+                    "Auslöser", tuple(_TRIGGER_LABELS[item] for item in arguments.triggers) or ("Keine Ereignisse",), "list",
                 ),
                 PermissionDisplayItem(
                     "Ausführung", "Aktuelle Session",
@@ -311,10 +308,9 @@ async def _create_automation(
             session_id=context.session.id,
             name=arguments.name,
             task=arguments.task,
-            skill_id=arguments.skill_id,
             enabled=arguments.enabled,
             schedules=schedules,
-            archive_after_success=arguments.archive_after_success,
+            triggers=arguments.triggers,
         )
         await context.db.commit()
         return ToolResult.json(
@@ -359,21 +355,16 @@ def _automation_edit_diff(
     comparisons = (
         ("Name", automation.name, arguments.name),
         ("Aufgabe", automation.task, arguments.task),
-        (
-            "Skill",
-            str(automation.skill_id) if automation.skill_id else "Keiner",
-            str(arguments.skill_id) if arguments.skill_id else "Keiner",
-        ),
         ("Aktiv", str(automation.enabled), str(arguments.enabled)),
         (
-            "Nach Erfolg archivieren",
-            str(automation.archive_after_success),
-            str(arguments.archive_after_success),
+            "Auslöser",
+            ", ".join(_TRIGGER_LABELS[item] for item in automation.triggers or []) or "Keine Ereignisse",
+            ", ".join(_TRIGGER_LABELS[item] for item in arguments.triggers) or "Keine Ereignisse",
         ),
         (
             "Zeitpläne",
-            json.dumps(before_schedules) if before_schedules else "Nur manuell",
-            json.dumps(_automation_schedule_json(schedules)) if schedules else "Nur manuell",
+            json.dumps(before_schedules) if before_schedules else "Keine Zeitpläne",
+            json.dumps(_automation_schedule_json(schedules)) if schedules else "Keine Zeitpläne",
         ),
     )
     for label, before, after in comparisons:
@@ -390,15 +381,10 @@ async def _edit_automation(
         automation = await AutomationService.owned(
             context.db, arguments.automation_id, context.session.user_id
         )
-        if automation.archived_at is not None:
-            raise AutomationError("automation.archived")
         if automation.revision != arguments.expected_revision:
             raise AutomationError(
                 "automation.changed", params={"currentRevision": automation.revision}
             )
-        await AutomationService.skill(
-            context.db, context.session.user_id, arguments.skill_id
-        )
         changes = _automation_edit_diff(
             automation, arguments, schedules
         )
@@ -437,10 +423,9 @@ async def _edit_automation(
             expected_revision=arguments.expected_revision,
             name=arguments.name,
             task=arguments.task,
-            skill_id=arguments.skill_id,
             enabled=arguments.enabled,
             schedules=schedules,
-            archive_after_success=arguments.archive_after_success,
+            triggers=arguments.triggers,
         )
         await context.db.commit()
         return ToolResult.json(
@@ -464,8 +449,6 @@ async def _run_automation(
         automation = await AutomationService.owned(
             context.db, arguments.automation_id, context.session.user_id
         )
-        if automation.archived_at is not None:
-            raise AutomationError("automation.archived")
         if automation.revision != arguments.expected_revision:
             raise AutomationError(
                 "automation.changed", params={"currentRevision": automation.revision}
@@ -590,7 +573,16 @@ CREATE_AUTOMATION = ToolDefinition(
             group="automations",
             label="Automation erstellen",
             icon="add_task",
-            actions=(_AUTOMATION_CREATE,),
+             actions=(_AUTOMATION_CREATE,),
+             prompt_fragments=(
+                 "Automations run in their session with its environment and permission grants. "
+                 "Triggers agent_response and agent_error observe the owner's ordinary agent runs; "
+                 "automation-origin work never emits these triggers. Put optional event conditions in task. "
+                 "The triggered agent checks those conditions and may take no action. Use "
+                 "skill names in the task and load them through load_skill as in any conversation. Use "
+                 "request_session_permissions for known required or recommended access before enabling work; "
+                 "never execute a mutation just to obtain permission. Archived sessions and projects do not run automations.",
+             ),
         )
 
 EDIT_AUTOMATION = ToolDefinition(

@@ -30,110 +30,24 @@
         >
           {{ group.label }}
         </q-item-label>
-        <q-item
+        <SidebarSessionItem
           v-for="session in group.sessions"
           :key="session.id"
-          clickable
-          dense
-          v-ripple
-          class="session-list-item items-center rounded-borders q-px-sm q-py-xs q-my-xs"
-          :class="{ 'session-list-item--menu-open': openActionMenuSessionId === session.id }"
+          :session="session"
           :active="activeSessionId === session.id"
-          :active-class="$q.dark.isActive ? 'bg-grey-9 text-white' : 'bg-grey-3 text-dark'"
-          @mouseenter="prepareTitleScroll"
-          @focusin="prepareTitleScroll"
-          @click="emit('open', session)"
-        >
-          <q-item-section
-            class="session-list-item__content"
-            draggable="true"
-            @dragstart="emit('drag-start', $event, session)"
-            @dragend="emit('drag-end')"
-          >
-            <q-item-label
-              class="session-list-item__title text-body2"
-              :class="{
-                'text-weight-bold': session.hasUnreadMessages,
-                'text-weight-medium': !session.hasUnreadMessages && activeSessionId === session.id
-              }"
-            >
-              <span class="session-list-item__title-text">{{ session.title }}</span>
-              <span v-if="session.hasUnreadMessages" class="app-sr-only">, ungelesene Nachrichten</span>
-            </q-item-label>
-          </q-item-section>
-          <q-item-section side class="session-list-item__actions row no-wrap items-center self-center">
-            <span
-              v-if="statuses.get(session.id)"
-              class="session-list-item__status-slot row items-center justify-center q-mr-xs"
-              role="status"
-              :aria-label="statuses.get(session.id)?.label"
-            >
-              <template v-if="statuses.get(session.id)?.kind === 'approval'">
-                <q-icon name="pending_actions" color="warning" size="18px" />
-                <q-badge
-                  v-if="statuses.get(session.id).count > 1"
-                  floating
-                  rounded
-                  color="warning"
-                  text-color="dark"
-                  :label="statuses.get(session.id).count"
-                />
-              </template>
-              <q-spinner-dots
-                v-else-if="statuses.get(session.id)?.kind === 'active'"
-                color="primary"
-                size="18px"
-              />
-              <q-tooltip v-if="$q.platform.is.mobile !== true">
-                {{ statuses.get(session.id).label }}
-              </q-tooltip>
-            </span>
-            <q-btn
-              flat
-              round
-              dense
-              size="sm"
-              icon="push_pin"
-              class="session-list-item__action session-list-item__pin-button"
-              :class="{ 'session-list-item__pin-button--pinned': session.pinned }"
-              :color="session.pinned ? 'primary' : ($q.dark.isActive ? 'grey-5' : 'grey-7')"
-              :loading="pinningSessionId === session.id"
-              :aria-label="session.pinned ? `${session.title} nicht mehr anheften` : `${session.title} anheften`"
-              @click.stop="emit('toggle-pin', session)"
-            >
-              <q-tooltip>{{ session.pinned ? 'Nicht mehr anheften' : 'Anheften' }}</q-tooltip>
-            </q-btn>
-            <SidebarActionMenu
-              :model-value="openActionMenuSessionId === session.id"
-              class="session-list-item__action session-list-item__menu-button"
-              :color="$q.dark.isActive ? 'grey-5' : 'grey-7'"
-              :aria-label="`Aktionen für ${session.title}`"
-              list-class="session-actions-menu"
-              @update:model-value="setActionMenu(session.id, $event)"
-            >
-              <q-item clickable v-ripple v-close-popup @click="emit('rename', session)">
-                <q-item-section avatar><q-icon name="edit" /></q-item-section>
-                <q-item-section>Umbenennen</q-item-section>
-              </q-item>
-              <q-item clickable v-ripple v-close-popup @click="emit('move', session)">
-                <q-item-section avatar><q-icon name="drive_file_move" /></q-item-section>
-                <q-item-section>Verschieben</q-item-section>
-              </q-item>
-              <q-separator class="q-my-xs" />
-              <q-item
-                clickable
-                v-ripple
-                v-close-popup
-                class="text-negative"
-                v-confirm="{ message: `Session „${session.title}“ löschen?`, title: 'Session löschen', okLabel: 'Löschen' }"
-                @click="emit('delete', session)"
-              >
-                <q-item-section avatar><q-icon name="delete_outline" /></q-item-section>
-                <q-item-section>Löschen</q-item-section>
-              </q-item>
-            </SidebarActionMenu>
-          </q-item-section>
-        </q-item>
+          :status="statuses.get(session.id)"
+          :pinning="pinningSessionId === session.id"
+          :menu-open="openActionMenuSessionId === session.id"
+          @update:menu-open="setActionMenu(session.id, $event)"
+          @open="emit('open', $event)"
+          @rename="emit('rename', $event)"
+          @move="emit('move', $event)"
+          @archive="emit('archive', $event)"
+          @delete="emit('delete', $event)"
+          @toggle-pin="emit('toggle-pin', $event)"
+          @drag-start="emit('drag-start', $event, session)"
+          @drag-end="emit('drag-end')"
+        />
       </template>
     </q-list>
     <div v-if="list.loadingMore" class="q-px-sm q-pb-xs" role="status" aria-label="Weitere Sessions werden geladen">
@@ -155,7 +69,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import SidebarActionMenu from 'src/features/chat/components/SidebarActionMenu.vue'
+import SidebarSessionItem from './SidebarSessionItem.vue'
 import { groupSessionsByRecency } from 'src/utils/session-groups'
 
 defineOptions({ name: 'SidebarSessionList' })
@@ -175,6 +89,7 @@ const emit = defineEmits([
   'drag-start',
   'drag-end',
   'delete',
+  'archive',
   'toggle-pin',
   'load-more',
   'retry-more',
@@ -182,14 +97,6 @@ const emit = defineEmits([
 ])
 const openActionMenuSessionId = ref(null)
 const groupedSessions = computed(() => groupSessionsByRecency(props.list.items))
-
-function prepareTitleScroll(event) {
-  const title = event.currentTarget.querySelector('.session-list-item__title')
-  const text = title.querySelector('.session-list-item__title-text')
-  const distance = Math.max(0, text.getBoundingClientRect().width - title.clientWidth)
-  title.style.setProperty('--session-title-scroll-distance', `${-distance}px`)
-  title.style.setProperty('--session-title-scroll-duration', `${distance / 35}s`)
-}
 
 function setActionMenu(id, open) {
   if (open) openActionMenuSessionId.value = id

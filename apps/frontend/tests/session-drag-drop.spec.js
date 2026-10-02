@@ -6,6 +6,7 @@ import { useChatStore } from 'stores/chat'
 import { useBrowserStore } from 'stores/browser'
 import { useControlCenterStore } from 'stores/control-center'
 import { useIntegrationStore } from 'stores/integrations'
+import { useAutomationStore } from 'stores/automations'
 import { useRoute } from 'vue-router'
 
 const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, terminal, workspace } = vi.hoisted(() => {
@@ -35,7 +36,9 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
       sessionList: (id) => sessionLists[id ?? 'standalone'],
       ensureSessionList: (id) => sessionLists[id ?? 'standalone'],
       setSessionScope: vi.fn().mockResolvedValue(),
-      moveSession: vi.fn().mockResolvedValue()
+      moveSession: vi.fn().mockResolvedValue(),
+      findCachedSession: vi.fn((id) => sessions.find((session) => session.id === id)),
+      fetchSession: vi.fn()
     },
     projects: { loaded: true, items: [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }], fetchAll: vi.fn().mockResolvedValue() },
     pending: { pending: [], forSession: () => [], fetchPending: vi.fn().mockResolvedValue() },
@@ -93,7 +96,11 @@ vi.mock('stores/integrations', async () => {
   return { useIntegrationStore: () => store }
 })
 vi.mock('stores/auth', () => ({ useAuthStore: () => ({ username: 'Tester' }) }))
-vi.mock('stores/automations', () => ({ useAutomationStore: () => ({ items: [], fetchAutomations: vi.fn().mockResolvedValue() }) }))
+vi.mock('stores/automations', async () => {
+  const { reactive } = await import('vue')
+  const store = reactive({ items: [], fetchAutomations: vi.fn().mockResolvedValue() })
+  return { useAutomationStore: () => store }
+})
 vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({ byId: (id) => id === 'agent-1' ? { connected: true, operations: [] } : null }) }))
 vi.mock('stores/workspace', () => ({ useWorkspaceStore: () => workspace }))
 vi.mock('stores/search', () => ({ useSearchStore: () => ({ openDialog: vi.fn() }) }))
@@ -107,6 +114,7 @@ vi.mock('src/features/computers/ExecutionAgentDirectoryPickerDialog.vue', () => 
 let app, root
 beforeEach(async () => {
   vi.clearAllMocks()
+  useAutomationStore().items = []
   quasar.dark.isActive = false
   quasar.screen = reactive({ lt: { sm: false, md: false, lg: false } })
   useChatStore().current = null
@@ -229,6 +237,20 @@ it('keeps project and session actions visible while their shared menu is open', 
   sessionAction.querySelector('.menu-stub__show').click()
   await nextTick()
   expect(sessionAction.closest('.session-list-item').classList.contains('session-list-item--menu-open')).toBe(true)
+})
+
+it('uses the linked session project in the automation session menu even when it is not cached', async () => {
+  useAutomationStore().items = [{ id: 'automation', executionSessionId: 'linked', name: 'Bericht', enabled: true }]
+  chat.fetchSession.mockImplementation(async (id) => id === 'linked' ? { id, title: 'Recherche', projectId: 'b' } : null)
+  await nextTick()
+  expect(root.querySelector('#automation-list .session-list-item__pin-button')).toBeNull()
+  root.querySelector('[aria-label="Aktionen für Bericht"] .menu-stub__show').click()
+  await nextTick()
+  await nextTick()
+  const move = [...root.querySelectorAll('.session-actions-menu [clickable]')].find((item) => item.textContent === 'Verschieben')
+  move.click()
+  await nextTick()
+  expect(root.querySelector('[role="dialog"] select').value).toBe('b')
 })
 
 it('scrolls an overflowing session title only by its hidden width on hover', () => {

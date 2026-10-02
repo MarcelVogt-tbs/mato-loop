@@ -35,19 +35,18 @@ describe('automation store', () => {
     resolveFirst({ data: { items: [{ id: 'old' }] } })
     await first
 
-    expect(api.get).toHaveBeenCalledWith('/automations', { params: { archived: false, summary: true } })
+    expect(api.get).toHaveBeenCalledWith('/automations', { params: { summary: true } })
     expect(store.items).toEqual([automation])
     expect(store.loading).toBe(false)
   })
 
-  it('loads archived automations separately', async () => {
-    api.get.mockResolvedValue({ data: { items: [{ ...automation, archivedAt: '2026-08-20T14:20:00Z' }] } })
+  it('keeps disabled automations in the normal list', async () => {
+    api.get.mockResolvedValue({ data: { items: [{ ...automation, enabled: false }] } })
     const store = useAutomationStore()
 
-    await store.fetchAutomations({ archived: true })
+    await store.fetchAutomations()
 
-    expect(api.get).toHaveBeenCalledWith('/automations', { params: { archived: true, summary: true } })
-    expect(store.items[0].archivedAt).toBeTruthy()
+    expect(store.items[0].enabled).toBe(false)
   })
 
   it('loads one automation for routed detail and editing pages', async () => {

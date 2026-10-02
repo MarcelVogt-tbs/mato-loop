@@ -11,17 +11,17 @@ it('distinguishes manual, paused, exhausted and scheduled definitions from runni
   automation.enabled = false
   automation.effectiveState.activeRunStatus = 'running'
   expect(automationStatus(automation).label).toBe('Läuft')
-  expect(automationTiming(automation)).toContain('Zeitpläne pausiert')
+  expect(automationTiming(automation)).toContain('deaktiviert')
   automation.effectiveState.activeRunStatus = 'waiting_approval'
   expect(automationStatus(automation).label).toBe('Freigabe erforderlich')
   automation.effectiveState.activeRunStatus = null
-  expect(automationStatus(automation).label).toBe('Zeitpläne pausiert')
-  automation.archivedAt = '2026-12-01T08:00:00Z'
-  expect(automationStatus(automation).label).toBe('Archiviert')
-  expect(automationTiming(automation)).toContain('Archiviert am')
+  expect(automationStatus(automation).label).toBe('Deaktiviert')
+  automation.enabled = true
+  automation.triggers = ['agent_response']
+  expect(automationStatus(automation).label).toBe('Wartet auf Ereignisse')
 })
 
 it('accepts full definitions after saving without requiring a status round trip', () => {
   expect(automationStatus({ enabled: true, schedules: [] }).label).toBe('Nur manuell')
-  expect(automationStatus({ enabled: false, schedules: [{}] }).label).toBe('Zeitpläne pausiert')
+  expect(automationStatus({ enabled: false, schedules: [{}] }).label).toBe('Deaktiviert')
 })

@@ -33,13 +33,13 @@
               <q-item-section>
                 <q-item-label lines="1" class="text-weight-medium">{{ item.name }}</q-item-label>
                 <q-item-label caption>{{ timingLabel(item) }}</q-item-label>
-                <q-item-label caption>{{ automationStatus(item).label }}</q-item-label>
+                <q-item-label caption>{{ archived ? 'Ruhend' : automationStatus(item).label }}</q-item-label>
               </q-item-section>
               <q-item-section side @click.stop @keydown.stop>
                 <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${item.name}`" :disable="saving || starting">
                   <q-menu><q-list dense>
-                    <q-item v-if="!item.archivedAt" clickable v-close-popup :disable="Boolean(item.effectiveState?.activeRunStatus)" @click="runNow(item)"><q-item-section>Jetzt ausführen</q-item-section></q-item>
-                    <q-item v-if="!item.archivedAt && item.schedules.length" clickable v-close-popup @click="toggleEnabled(item)"><q-item-section>{{ item.enabled ? 'Pausieren' : 'Fortsetzen' }}</q-item-section></q-item>
+                    <q-item clickable v-close-popup :disable="archived || Boolean(item.effectiveState?.activeRunStatus)" @click="runNow(item)"><q-item-section>Jetzt ausführen</q-item-section></q-item>
+                    <q-item clickable v-close-popup :disable="archived" @click="toggleEnabled(item)"><q-item-section>{{ item.enabled ? 'Deaktivieren' : 'Aktivieren' }}</q-item-section></q-item>
                     <q-item clickable v-close-popup class="text-negative" @click="remove(item)"><q-item-section>Entfernen</q-item-section></q-item>
                   </q-list></q-menu>
                 </q-btn>
@@ -52,7 +52,7 @@
             Die Automation wurde geändert. Deine Eingaben bleiben erhalten.
             <template #action><q-btn flat no-caps color="primary" label="Aktuellen Stand laden" @click="reload" /></template>
           </q-banner>
-          <q-banner v-if="archived" rounded class="app-surface-tonal q-mb-md">Diese Automation ist archiviert. Das Gespräch bleibt erhalten.</q-banner>
+          <q-banner v-if="archived" rounded class="app-surface-tonal q-mb-md">Diese Session ist archiviert. Automationen ruhen bis zur Wiederherstellung.</q-banner>
           <q-form ref="formRef" :inert="saving ? '' : null" @submit.prevent="save">
             <div class="row items-center q-mb-sm">
               <h3 class="text-subtitle2 text-weight-bold q-my-none col">Auftrag</h3>
@@ -75,16 +75,21 @@
               <h3 class="text-subtitle2 text-weight-bold q-my-none col">Zeitpläne</h3>
               <q-btn v-if="!archived" flat dense no-caps color="primary" icon="add" label="Hinzufügen" :disable="form.schedules.length >= 50" @click="addSchedule" />
             </div>
-            <p v-if="!form.schedules.length" class="text-body2 app-muted">Nur auf Knopfdruck – kein automatischer Start.</p>
+            <p v-if="!form.schedules.length" class="text-body2 app-muted">Kein zeitgesteuerter Start.</p>
             <q-list v-else bordered separator class="rounded-borders">
               <AutomationScheduleEditor v-for="(schedule, index) in form.schedules" :key="`${selectedId}-${index}`" v-model="form.schedules[index]" :expanded="expandedSchedule === index" :readonly="archived" :error="validationAttempted ? scheduleError(schedule) : ''" @update:expanded="expandedSchedule = $event ? index : expandedSchedule === index ? null : expandedSchedule" @remove="removeSchedule(index)" />
             </q-list>
             <div v-if="definition && savedState.effectiveState?.nextRunAt" class="text-caption app-muted q-mt-sm">{{ automationTiming(savedState) }}</div>
 
+            <q-separator class="q-my-md" />
+            <h3 class="text-subtitle2 text-weight-bold q-mt-none q-mb-xs">Auslöser</h3>
+            <div class="text-caption app-muted q-mb-sm">Ereignisse in deinen Sessions. Optionale Bedingungen stehen im Auftrag.</div>
+            <div v-for="trigger in triggerOptions" :key="trigger.value">
+              <q-checkbox v-model="form.triggers" :val="trigger.value" :label="trigger.label" :disable="archived" dense class="q-my-xs" />
+            </div>
             <q-expansion-item v-model="optionsOpen" dense label="Weitere Optionen" class="q-mt-md">
               <div class="q-pa-sm q-gutter-sm">
-                <q-select v-model="form.skillId" :readonly="archived" outlined dense emit-value map-options clearable label="Skill verwenden (optional)" :options="skillOptions" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" />
-                <q-toggle v-if="canArchive" v-model="form.archiveAfterSuccess" :disable="archived" dense label="Nach erfolgreicher Ausführung archivieren" />
+                <q-toggle v-model="form.enabled" :disable="archived" dense label="Automatische Starts aktiv" />
                 <q-btn v-if="definition" flat dense no-caps color="negative" icon="delete_outline" label="Automation entfernen" :disable="saving" @click="remove(definition)" />
               </div>
             </q-expansion-item>
@@ -102,7 +107,7 @@
         <div class="row items-center q-gutter-xs">
           <q-btn v-if="dirty || !definition" unelevated no-caps no-wrap color="primary" label="Speichern" :loading="saving" :disable="archived || conflict" @click="save" />
           <q-btn v-if="definition" :unelevated="!dirty" :flat="dirty" no-caps no-wrap color="primary" icon="play_arrow" label="Jetzt ausführen" :loading="starting" :disable="dirty || archived || conflict || busy || saving" @click="runNow(definition)" />
-          <q-btn v-if="definition?.schedules.length && !archived" flat no-caps no-wrap :icon="savedState.enabled ? 'pause' : 'play_arrow'" :label="savedState.enabled ? 'Pausieren' : 'Fortsetzen'" :disable="dirty || conflict || saving" @click="toggleEnabled(definition)" />
+          <q-btn v-if="definition && !archived" flat no-caps no-wrap :icon="savedState.enabled ? 'pause' : 'play_arrow'" :label="savedState.enabled ? 'Deaktivieren' : 'Aktivieren'" :disable="dirty || conflict || saving" @click="toggleEnabled(definition)" />
         </div>
       </footer>
     </template>
@@ -120,16 +125,16 @@ import { scheduleDraft, scheduleError, schedulePayload, scheduleSummary } from '
 import { automationStatus, automationTiming } from 'src/utils/automation-status'
 import { isPwaUpdateReload } from 'src/utils/pwa-update'
 import { useAutomationStore } from 'stores/automations'
+import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
-import { useSkillStore } from 'stores/skills'
 
 const $q = useQuasar()
 const route = useRoute()
 const router = useRouter()
 const { confirm } = useConfirm()
 const automations = useAutomationStore()
+const chat = useChatStore()
 const controlCenter = useControlCenterStore()
-const skills = useSkillStore()
 const sessionId = computed(() => controlCenter.sessionId)
 const selectedId = computed(() => typeof route.query.automation === 'string' ? route.query.automation : null)
 const definition = ref(null)
@@ -145,30 +150,25 @@ const optionsOpen = ref(false)
 const editingTask = ref(false)
 const taskExpanded = ref(false)
 const expandedSchedule = ref(null)
-const form = reactive({ name: '', task: '', enabled: true, schedules: [], skillId: null, archiveAfterSuccess: false })
+const form = reactive({ name: '', task: '', enabled: true, schedules: [], triggers: [] })
+const triggerOptions = [{ value: 'agent_response', label: 'Agent hat geantwortet' }, { value: 'agent_error', label: 'Agent-Auftrag fehlgeschlagen' }]
 const summaries = computed(() => new Map(automations.items.map((item) => [item.id, item])))
 const entries = computed(() => automations.sessionItems
   .filter((item) => item.executionSessionId === sessionId.value)
   .map((item) => ({ ...item, ...summaries.value.get(item.id) })))
 const summary = computed(() => summaries.value.get(definition.value?.id))
 const savedState = computed(() => summary.value || definition.value)
-const status = computed(() => automationStatus(savedState.value))
-const archived = computed(() => Boolean(savedState.value?.archivedAt))
+const status = computed(() => archived.value ? { label: 'Ruhend', icon: 'archive', color: 'grey-6' } : automationStatus(savedState.value))
+const archived = computed(() => Boolean(chat.current?.archived))
 const conflict = computed(() => Boolean(definition.value && summary.value && summary.value.revision !== definition.value.revision))
 const busy = computed(() => Boolean(savedState.value?.effectiveState?.activeRunStatus))
-const canArchive = computed(() => form.schedules.length === 1 && form.schedules[0].kind === 'once')
 const draftSignature = () => JSON.stringify(form, (key, value) => key === 'advanced' ? undefined : value)
 const dirty = computed(() => Boolean(selectedId.value && savedDraft.value) && draftSignature() !== savedDraft.value)
-const skillOptions = computed(() => {
-  const options = skills.items.map((skill) => ({ label: skill.name, value: skill.id }))
-  if (form.skillId && !options.some((item) => item.value === form.skillId)) options.push({ label: 'Gespeicherter Skill nicht verfügbar', value: form.skillId })
-  return options
-})
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtfeld'
 let version = 0
 
 function timingLabel(item) {
-  if (!item.schedules.length) return 'Nur auf Knopfdruck'
+  if (!item.schedules.length) return item.triggers?.length ? item.triggers.map((id) => triggerOptions.find((option) => option.value === id)?.label).join(' · ') : 'Nur auf Knopfdruck'
   return scheduleSummary(scheduleDraft(item.schedules[0])) + (item.schedules.length > 1 ? ` · +${item.schedules.length - 1} weitere` : '')
 }
 
@@ -177,7 +177,7 @@ function assign(value) {
   Object.assign(form, {
     name: value?.name || '', task: value?.task || '', enabled: value?.enabled ?? true,
     schedules: value?.schedules?.map(scheduleDraft) || [],
-    skillId: value?.skillId || null, archiveAfterSuccess: value?.archiveAfterSuccess || false
+    triggers: [...(value?.triggers || [])]
   })
   savedDraft.value = draftSignature()
   validationAttempted.value = false
@@ -216,8 +216,8 @@ async function select(id) {
 function payload() {
   return {
     name: form.name.trim(), task: form.task.trim(), sessionId: sessionId.value,
-    skillId: form.skillId, enabled: form.enabled, schedules: form.schedules.map(schedulePayload),
-    archiveAfterSuccess: Boolean(canArchive.value && form.archiveAfterSuccess)
+    enabled: form.enabled, schedules: form.schedules.map(schedulePayload),
+    triggers: form.triggers
   }
 }
 
@@ -249,7 +249,7 @@ async function save() {
 }
 
 async function runNow(item = definition.value) {
-  if (!item || item.effectiveState?.activeRunStatus || dirty.value || item.archivedAt || starting.value || saving.value || conflict.value) return
+  if (!item || item.effectiveState?.activeRunStatus || dirty.value || archived.value || starting.value || saving.value || conflict.value) return
   const current = version
   starting.value = true
   try { await automations.runNow(item.id, item.revision) } catch {
@@ -265,9 +265,9 @@ async function toggleEnabled(item = definition.value) {
     const saved = await automations.fetchAutomation(item.id)
     if (current !== version) return
     const value = await automations.updateAutomation(item.id, {
-      name: saved.name, task: saved.task, skillId: saved.skillId, enabled: !item.enabled,
+      name: saved.name, task: saved.task, enabled: !item.enabled,
       schedules: saved.schedules.map((schedule) => schedulePayload(scheduleDraft(schedule))),
-      archiveAfterSuccess: saved.archiveAfterSuccess || false, expectedRevision: saved.revision
+      triggers: saved.triggers || [], expectedRevision: saved.revision
     })
     if (current === version && definition.value?.id === item.id) assign(value)
   } catch {
@@ -324,7 +324,6 @@ watch([sessionId, selectedId], () => { if (sessionId.value) void load(); else ve
 watch(() => automations.items.filter((item) => item.executionSessionId === sessionId.value).map((item) => `${item.id}:${item.revision}`).join(','), () => {
   if (sessionId.value && !selectedId.value && !loading.value && !saving.value) void load()
 })
-void skills.fetchSkills().catch(() => {})
 window.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { version += 1; automations.dirty = false; window.removeEventListener('beforeunload', beforeUnload) })
 </script>

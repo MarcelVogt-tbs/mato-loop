@@ -33,6 +33,7 @@ class Project(Base):
         ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     instructions: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=""
     )

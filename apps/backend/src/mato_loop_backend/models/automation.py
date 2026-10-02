@@ -39,16 +39,10 @@ class Automation(Base):
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)
     task: Mapped[str] = mapped_column(Text, nullable=False)
-    skill_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
-    archive_after_success: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default=text("false")
-    )
-    archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    triggers: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     revision: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default=text("1")
     )
@@ -113,8 +107,9 @@ class AutomationRun(Base):
     __tablename__ = "automation_runs"
     __table_args__ = (
         CheckConstraint(
-            "trigger IN ('scheduled', 'manual')", name="trigger_valid"
+            "trigger IN ('scheduled', 'manual', 'agent_response', 'agent_error')", name="trigger_valid"
         ),
+        UniqueConstraint("automation_id", "trigger", "source_run_id"),
         CheckConstraint(
             "status IN ('queued', 'running', 'waiting_approval', 'waiting_input', "
             "'completed', 'failed', 'cancelled', 'skipped')",
@@ -148,6 +143,9 @@ class AutomationRun(Base):
     )
     automation_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     trigger: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL", use_alter=True), nullable=True,
+    )
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="queued")
     scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     schedule_snapshots: Mapped[list[dict[str, Any]]] = mapped_column(

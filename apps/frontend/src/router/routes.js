@@ -14,6 +14,7 @@ const routes = [
     component: () => import('src/app/MainLayout.vue'),
     children: [
       { path: '', name: 'chat', component: () => import('src/features/chat/ChatPage.vue') },
+      { path: 'archive', name: 'archive', component: () => import('src/features/archive/ArchivePage.vue') },
       {
         path: 'settings',
         name: 'settings',

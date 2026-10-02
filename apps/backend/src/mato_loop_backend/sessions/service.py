@@ -845,7 +845,10 @@ async def list_sessions(
     project_id: UUID | None,
     standalone: bool,
     session_serializer: PayloadSerializer,
+    archived: bool = False,
+    include_archived: bool = False,
 ) -> dict[str, Any]:
+    from mato_loop_backend.sessions.archive import active_session_clause
     if project_id is not None and standalone:
         raise SessionServiceError(400, "validation.invalid", field="projectId")
     if project_id is not None:
@@ -855,6 +858,8 @@ async def list_sessions(
         if owned_project is None:
             raise SessionServiceError(404, "project.notFound", field="projectId")
     scope = str(project_id) if project_id is not None else "standalone" if standalone else "all"
+    if archived or include_archived:
+        scope += ":archived" if archived else ":including-archived"
     active_run_status = (
         select(AgentRun.status)
         .where(
@@ -903,6 +908,12 @@ async def list_sessions(
         statement = statement.where(ChatSession.project_id == project_id)
     elif standalone:
         statement = statement.where(ChatSession.project_id.is_(None))
+    if not include_archived:
+        statement = statement.where(~active_session_clause() if archived else active_session_clause())
+        if archived and project_id is None:
+            statement = statement.where(~select(Project.id).where(
+                Project.id == ChatSession.project_id, Project.archived_at.is_not(None),
+            ).exists())
     if cursor is not None:
         cursor_pinned, cursor_activity_at, cursor_id = _decode_session_cursor(
             cursor, user_id, scope
@@ -980,6 +991,8 @@ async def create_session(
         )
         if project is None:
             raise SessionServiceError(404, "project.notFound", field="projectId")
+        if project.archived_at is not None:
+            raise SessionServiceError(409, "project.archived")
     agent_profile_id = payload.agent_profile_id or GENERAL_PROFILE_ID
     await validate_agent_profile(db, user.id, agent_profile_id)
     ai = await _profile_ai(db, user.id, agent_profile_id)
@@ -1164,6 +1177,10 @@ async def continue_run(
     session = await owned_session_query(db, session_id, user.id, for_update=True)
     if session is None:
         raise SessionServiceError(404, "session.notFound")
+    from mato_loop_backend.sessions.archive import is_session_archived
+
+    if await is_session_archived(db, session):
+        raise SessionServiceError(409, "session.archived")
     message = await db.scalar(
         select(Message).where(Message.id == payload.message_id).options(selectinload(Message.attachments))
     )
@@ -1354,6 +1371,10 @@ async def update_session(
         else item.agent_profile_id
     )
     if fields & policy_fields:
+        from mato_loop_backend.sessions.archive import is_session_archived
+
+        if await is_session_archived(db, item):
+            raise SessionServiceError(409, "session.archived")
         active = await db.scalar(
             select(AgentRun.id).where(
                 AgentRun.session_id == session_id,
@@ -1370,7 +1391,7 @@ async def update_session(
     if target_project_id is not None and target_project_id != source_project_id:
         project = await db.scalar(
             select(Project.id)
-            .where(Project.id == target_project_id, Project.user_id == user.id)
+            .where(Project.id == target_project_id, Project.user_id == user.id, Project.archived_at.is_(None))
             .with_for_update()
         )
         if project is None:

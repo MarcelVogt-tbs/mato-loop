@@ -182,7 +182,6 @@ export function useProjectNavigation({
     await chat.removeProjectScope(project.id, impact.sessionIds, outboxDeletion)
     if (automationMode) {
       void automations.fetchAutomations({
-        archived: automations.listArchived,
         suppressErrorToast: true
       }).catch(() => {})
       if (automationMode === 'deleteAutomations') {

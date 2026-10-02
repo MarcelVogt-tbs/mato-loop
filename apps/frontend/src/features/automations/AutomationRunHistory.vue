@@ -88,7 +88,7 @@ function runStatus(run) {
 }
 
 function triggerLabel(trigger) {
-  return ({ manual: 'Manuell', scheduled: 'Zeitplan' })[trigger] || 'Unbekannt'
+  return ({ manual: 'Manuell', scheduled: 'Zeitplan', agent_response: 'Agent hat geantwortet', agent_error: 'Agent-Auftrag fehlgeschlagen' })[trigger] || 'Unbekannt'
 }
 
 function runVersion(run) {
