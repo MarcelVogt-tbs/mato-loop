@@ -551,7 +551,8 @@ const liveWorkHistory = computed(() => ({
   activeDurationUpdatedAt: chat.activity.activeDurationUpdatedAt
 }))
 const userMessageLabel = (message) => (
-  message.source?.type === 'endpoint' && message.source.provider === 'telegram'
+  message.sourceType === 'automationRun' ? `Automation${message.automationName ? ` · ${message.automationName}` : ''}`
+    : message.source?.type === 'endpoint' && message.source.provider === 'telegram'
     ? 'Du · Telegram'
     : 'Du'
 )
@@ -870,7 +871,9 @@ async function reconcileRouteProject() {
       ...(typeof route.query.controlCenter === 'string'
         ? { controlCenter: route.query.controlCenter }
         : {}),
-      ...(routeMessageId.value ? { message: routeMessageId.value } : {})
+      ...(routeMessageId.value ? { message: routeMessageId.value } : {}),
+      ...(typeof route.query.automation === 'string' ? { automation: route.query.automation } : {}),
+      ...(typeof route.query.run === 'string' ? { run: route.query.run } : {})
     }
   })
 }
@@ -1334,7 +1337,8 @@ watch(
       query: {
         ...(routeProjectId.value ? { project: routeProjectId.value } : {}),
         session: result.sessionId,
-        ...(result.appId ? { controlCenter: result.appId } : {})
+        ...(result.appId ? { controlCenter: result.appId } : {}),
+        ...(result.appId === 'automation' ? { automation: 'new' } : {})
       }
     })
   }

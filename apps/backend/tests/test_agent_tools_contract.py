@@ -1456,11 +1456,11 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     assert definitions["edit_automation"].actions[0].mutates
     assert definitions["run_automation"].actions[0].mutates
     assert definitions["delete_automation"].actions[0].mutates
-    assert "Same task uses one automation" in definitions["create_automation"].description
-    assert "Chat reminders set deliver_to_current_session=true" in definitions[
+    assert "Reuse an existing automation for the same task" in definitions["create_automation"].description
+    assert "current session" in definitions[
         "create_automation"
     ].description
-    assert "calendar event reminders use the calendar event tools" in definitions[
+    assert "Calendar event reminders use the calendar event tools" in definitions[
         "create_automation"
     ].description
     assert "cron+timezone or offset run_at" in definitions["create_automation"].description
@@ -1497,7 +1497,7 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     assert "not with run_at" in schedule_schema["properties"]["valid_until"]["description"]
     assert "One run_at only" in create["properties"]["archive_after_success"]["description"]
     edit = definitions["edit_automation"].schema()["parameters"]
-    assert edit["properties"]["output_mode"]["enum"] == ["keep", "current", "none"]
+    assert "output_mode" not in edit["properties"]
     assert "expected_revision" in edit["required"]
     for name in ("create_automation", "edit_automation"):
         schema = definitions[name].schema()["parameters"]
@@ -1640,8 +1640,6 @@ async def test_create_automation_approval_uses_current_session_boundaries(
                     "valid_until": "2026-08-28T08:00:00+02:00",
                 }
             ],
-            "deliver_to_current_session": False,
-            "output_session_required": True,
         },
     )
     context = _context(tmp_path, call)
@@ -1659,9 +1657,6 @@ async def test_create_automation_approval_uses_current_session_boundaries(
     )
     create = AsyncMock(return_value=created)
     monkeypatch.setattr(mock_tools_automations.AutomationService, "create", create)
-    monkeypatch.setattr(
-        mock_tools_automations.AutomationService, "provision_and_commit", AsyncMock()
-    )
 
     result = await tool_registry.execute(call, context)
 
@@ -1669,7 +1664,7 @@ async def test_create_automation_approval_uses_current_session_boundaries(
     permission = context.ask_handler.await_args.args[0]
     assert permission.capability == "automation.create"
     assert permission.title == "Automation erstellen?"
-    assert permission.approval_details["automationPreview"]["output"] == "current"
+    assert permission.approval_details["automationPreview"]["sessionId"] == str(context.session.id)
     if manual:
         assert permission.approval_details["automationPreview"]["schedules"] == []
         assert next(item for item in permission.display_items if item.label == "Zeitpläne").value == ("Nur manuell",)
@@ -1681,8 +1676,7 @@ async def test_create_automation_approval_uses_current_session_boundaries(
         assert create.await_args.kwargs["schedules"][0]["valid_until"] == datetime(
             2026, 8, 28, 6, tzinfo=UTC
         )
-    assert create.await_args.kwargs["source_session_id"] == context.session.id
-    assert create.await_args.kwargs["output_session_id"] == context.session.id
+    assert create.await_args.kwargs["session_id"] == context.session.id
     assert create.await_args.kwargs["archive_after_success"] is False
 
 
@@ -1696,7 +1690,7 @@ async def test_edit_automation_approval_labels_removing_schedules_as_manual(tmp_
     automation = Automation(
         id=automation_id, user_id=context.session.user_id, revision=1, name="Manual",
         task="Do work", enabled=True, archive_after_success=False,
-        output_session_required=False, schedules=[AutomationSchedule(
+        schedules=[AutomationSchedule(
             cron_expression="0 8 * * *", timezone="UTC", enabled=True,
         )],
     )

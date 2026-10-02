@@ -194,7 +194,7 @@ export function useSidebarSessions({
   }
 
   async function openNewSession(projectId = null) {
-    if (!await confirmDiscardedEdit()) return
+    if (!await confirmDiscardedEdit()) return false
     if ($q.screen.lt.md) drawerOpen.value = false
     try {
       await chat.setSessionScope(projectId)
@@ -203,6 +203,7 @@ export function useSidebarSessions({
     }
     await chat.loadSession(null)
     await router.push({ name: 'chat', query: chatQuery(null, projectId) })
+    return true
   }
 
   async function openSession(session, messageId = null) {
@@ -267,15 +268,6 @@ export function useSidebarSessions({
       )
       if (!accepted) return
       automationMode = 'deleteAutomations'
-    } else if (impact.automationCount) {
-      const count = impact.automationCount
-      const accepted = await confirm(
-        `Die Session ist Ausgabeziel von ${count} Automation${count === 1 ? '' : 'en'}. Verknüpfung lösen und Session löschen?`,
-        'Verknüpfte Session löschen?',
-        { okLabel: 'Lösen und löschen' }
-      )
-      if (!accepted) return
-      automationMode = 'unlink'
     }
     const affectedTabs = controlCenter.fileTabs.filter((tab) => (
       tab.fileTarget.scope === 'session' && tab.fileTarget.rootIdentity === id

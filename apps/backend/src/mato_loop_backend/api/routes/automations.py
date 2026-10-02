@@ -77,17 +77,9 @@ class AutomationRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=240)
     task: str = Field(min_length=1, max_length=40_000)
+    session_id: UUID | None = Field(default=None, alias="sessionId", strict=False)
     skill_id: UUID | None = Field(default=None, alias="skillId", strict=False)
     enabled: bool = True
-    source_session_id: UUID | None = Field(default=None, alias="sourceSessionId", strict=False)
-    output_session_id: UUID | None = Field(default=None, alias="outputSessionId", strict=False)
-    output_session_required: bool = Field(default=False, alias="outputSessionRequired")
-    delivery_channel_type: Literal["app", "endpoint"] | None = Field(
-        default=None, alias="deliveryChannelType"
-    )
-    delivery_endpoint_id: UUID | None = Field(
-        default=None, alias="deliveryEndpointId", strict=False
-    )
     archive_after_success: bool = Field(default=False, alias="archiveAfterSuccess")
     schedules: list[ScheduleRequest] = Field(max_length=50)
     expected_revision: int | None = Field(default=None, alias="expectedRevision", ge=1)
@@ -96,19 +88,6 @@ class AutomationRequest(BaseModel):
     @classmethod
     def normalize(cls, value: str) -> str:
         return value.strip()
-
-    @model_validator(mode="after")
-    def required_output_present(self) -> AutomationRequest:
-        if self.output_session_required and self.output_session_id is None:
-            raise ValueError("outputSessionId is required")
-        if (self.delivery_channel_type == "endpoint") != (
-            self.delivery_endpoint_id is not None
-        ):
-            raise ValueError("deliveryEndpointId is required only for endpoint delivery")
-        if self.delivery_channel_type is not None and self.output_session_id is None:
-            raise ValueError("outputSessionId is required for delivery configuration")
-        return self
-
 
 class AutomationRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
@@ -133,17 +112,12 @@ class AutomationStatusResponse(BaseModel):
 
 class AutomationSummaryResponse(AutomationStatusResponse):
     name: str
+    execution_session_id: UUID = Field(alias="executionSessionId")
     task_excerpt: str = Field(alias="taskExcerpt", max_length=240)
 
 
 class AutomationSummaryListResponse(BaseModel):
     items: list[AutomationSummaryResponse]
-
-
-class AutomationRunDeliverySummary(BaseModel):
-    status: str
-    attempts: int
-    next_attempt_at: datetime | None = Field(alias="nextAttemptAt")
 
 
 class AutomationRunSummaryResponse(BaseModel):
@@ -156,7 +130,6 @@ class AutomationRunSummaryResponse(BaseModel):
     created_at: datetime | None = Field(alias="createdAt")
     started_at: datetime | None = Field(alias="startedAt")
     completed_at: datetime | None = Field(alias="completedAt")
-    delivery: AutomationRunDeliverySummary
 
 
 class AutomationRunSummaryListResponse(BaseModel):
@@ -216,6 +189,7 @@ def _raise(exc: AutomationError) -> None:
         "automation.scheduleDuplicate": 409,
         "automation.runtimeActive": 409,
         "automation.changed": 409,
+        "session.controlCenterFull": 409,
     }
     raise ApiError(
         statuses.get(exc.code, 422),
@@ -266,18 +240,6 @@ async def _automation_payload(
         "archiveAfterSuccess": item.archive_after_success,
         "archivedAt": item.archived_at.isoformat() if item.archived_at else None,
         "revision": item.revision,
-        "outputSessionId": str(item.output_session_id) if item.output_session_id else None,
-        "outputSessionRequired": item.output_session_required,
-        "deliveryChannel": (
-            {
-                "type": item.delivery_channel_type,
-                "endpointId": str(item.delivery_endpoint_id)
-                if item.delivery_endpoint_id
-                else None,
-            }
-            if item.delivery_channel_type
-            else None
-        ),
         "executionSessionId": str(item.execution_session_id),
         "runtime": runtime_snapshot(execution_session),
         "schedules": schedules,
@@ -353,6 +315,9 @@ async def _run_payload(db: AsyncSession, run: AutomationRun) -> dict[str, Any]:
         "scheduleSnapshots": run.schedule_snapshots,
         "definition": run.definition_snapshot,
         "agentRunId": str(run.agent_run_id) if run.agent_run_id else None,
+        "messageId": str(result_message.id) if result_message is not None else (
+            str(agent_run.input_message_id) if agent_run is not None and agent_run.input_message_id else None
+        ),
         "agentProfileId": (
             str(agent_run.agent_profile_id)
             if agent_run is not None and agent_run.agent_profile_id
@@ -367,23 +332,6 @@ async def _run_payload(db: AsyncSession, run: AutomationRun) -> dict[str, Any]:
             else None
         ),
         "error": error,
-        "delivery": {
-            "status": run.delivery_status,
-            "attempts": run.delivery_attempts,
-            "nextAttemptAt": (
-                run.delivery_next_attempt_at.isoformat()
-                if run.delivery_next_attempt_at
-                else None
-            ),
-            "outputSessionId": str(run.output_session_id) if run.output_session_id else None,
-            "outputMessageId": str(run.output_message_id) if run.output_message_id else None,
-            "channel": {
-                "type": run.delivery_channel_type,
-                "endpointId": str(run.delivery_endpoint_id)
-                if run.delivery_endpoint_id
-                else None,
-            },
-        },
         "createdAt": run.created_at.isoformat() if run.created_at else None,
         "startedAt": run.started_at.isoformat() if run.started_at else None,
         "completedAt": run.completed_at.isoformat() if run.completed_at else None,
@@ -400,6 +348,8 @@ async def list_automations(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     archived: bool = False,
     summary: bool = False,
+    include_archived: Annotated[bool, Query(alias="includeArchived")] = False,
+    session_id: Annotated[UUID | None, Query(alias="sessionId")] = None,
 ) -> AutomationSummaryListResponse | dict[str, Any]:
     items = list(
         (
@@ -408,9 +358,11 @@ async def list_automations(
                 .options(selectinload(Automation.schedules))
                 .where(
                     Automation.user_id == user.id,
-                    Automation.archived_at.is_not(None)
-                    if archived
-                    else Automation.archived_at.is_(None),
+                    Automation.execution_session_id == session_id
+                    if session_id is not None
+                    else True if include_archived
+                    else Automation.archived_at.is_not(None)
+                    if archived else Automation.archived_at.is_(None),
                 )
                 .order_by(Automation.updated_at.desc(), Automation.id.desc())
             )
@@ -422,6 +374,7 @@ async def list_automations(
             AutomationSummaryResponse(
                 **_automation_status(item, active_statuses.get(item.id)).model_dump(by_alias=True),
                 name=item.name,
+                executionSessionId=item.execution_session_id,
                 taskExcerpt=item.task[:240],
             )
             for item in items
@@ -435,29 +388,24 @@ async def create_automation(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, Any]:
+    if payload.session_id is None:
+        raise ApiError(422, "validation.required", field="sessionId")
     try:
         item = await AutomationService.create(
             db,
             user_id=user.id,
+            session_id=payload.session_id,
             name=payload.name,
             task=payload.task,
             skill_id=payload.skill_id,
             enabled=payload.enabled,
-            source_session_id=payload.source_session_id,
-            output_session_id=payload.output_session_id,
-            output_session_required=payload.output_session_required,
-            delivery_channel_type=payload.delivery_channel_type,
-            delivery_endpoint_id=payload.delivery_endpoint_id,
             schedules=_schedule_drafts(payload),
             archive_after_success=payload.archive_after_success,
         )
     except AutomationError as exc:
         _raise(exc)
-    try:
-        await AutomationService.provision_and_commit(db, item)
-    except AutomationError as exc:
-        _raise(exc)
-    return await _automation_payload(db, item, detail=True)
+    await db.commit()
+    return await _automation_payload(db, item)
 
 
 @router.get("/{automation_id}")
@@ -499,6 +447,8 @@ async def replace_automation(
         raise ApiError(422, "validation.required", field="expectedRevision")
     try:
         item = await AutomationService.owned(db, automation_id, user.id, for_update=True)
+        if payload.session_id is not None and payload.session_id != item.execution_session_id:
+            raise ApiError(422, "validation.invalid", field="sessionId")
         item = await AutomationService.replace(
             db,
             item,
@@ -507,16 +457,11 @@ async def replace_automation(
             task=payload.task,
             skill_id=payload.skill_id,
             enabled=payload.enabled,
-            source_session_id=payload.source_session_id,
-            output_session_id=payload.output_session_id,
-            output_session_required=payload.output_session_required,
-            delivery_channel_type=payload.delivery_channel_type,
-            delivery_endpoint_id=payload.delivery_endpoint_id,
             schedules=_schedule_drafts(payload),
             archive_after_success=payload.archive_after_success,
         )
         await db.commit()
-        return await _automation_payload(db, item, detail=True)
+        return await _automation_payload(db, item)
     except AutomationError as exc:
         await db.rollback()
         _raise(exc)
@@ -568,8 +513,6 @@ async def list_automation_runs(
             AutomationRun.trigger, AutomationRun.automation_revision,
             AutomationRun.scheduled_for, AutomationRun.created_at,
             AutomationRun.started_at, AutomationRun.completed_at,
-            AutomationRun.delivery_status, AutomationRun.delivery_attempts,
-            AutomationRun.delivery_next_attempt_at,
             raiseload=True,
         ))
     rows = list((await db.scalars(statement)).all())
@@ -586,11 +529,6 @@ async def list_automation_runs(
                     createdAt=run.created_at,
                     startedAt=run.started_at,
                     completedAt=run.completed_at,
-                    delivery=AutomationRunDeliverySummary(
-                        status=run.delivery_status,
-                        attempts=run.delivery_attempts,
-                        nextAttemptAt=run.delivery_next_attempt_at,
-                    ),
                 )
                 for run in rows[:page_size]
             ],
@@ -632,22 +570,6 @@ async def get_automation_run(
         return await _run_payload(
             db, await _owned_run(db, automation_id, run_id, user.id)
         )
-    except AutomationError as exc:
-        _raise(exc)
-
-
-@router.post("/{automation_id}/runs/{run_id}/delivery-retry")
-async def retry_automation_delivery(
-    automation_id: UUID,
-    run_id: UUID,
-    user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> dict[str, Any]:
-    try:
-        run = await AutomationService.retry_delivery(
-            db, automation_id, run_id, user.id
-        )
-        return await _run_payload(db, run)
     except AutomationError as exc:
         _raise(exc)
 

@@ -225,6 +225,7 @@ import { Notify } from 'quasar'
 import AppClosableTab from 'src/shared/ui/AppClosableTab.vue'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import { useApprovalStore } from 'stores/approvals'
+import { useAutomationStore } from 'stores/automations'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
@@ -257,6 +258,7 @@ const emit = defineEmits(['close'])
 const { confirm } = useConfirm()
 const controlCenter = useControlCenterStore()
 const approvals = useApprovalStore()
+const automations = useAutomationStore()
 const questions = useQuestionStore()
 const notifications = useInAppNotificationStore()
 const mail = useMailStore()
@@ -339,6 +341,8 @@ async function removeIntegration(appId) {
   }
   const terminalHint = appId === 'terminal'
     ? ' Die laufende Shell und ihr sichtbarer Verlauf gehen verloren.'
+    : appId === 'automation' && automations.dirty
+      ? ' Ungespeicherte Änderungen am Auftrag werden verworfen.'
     : ''
   const accepted = await confirm(
     `„${item.label}“ wird aus dieser Session entfernt.${terminalHint} Gespeicherte Daten werden nicht gelöscht. Die App kann später erneut hinzugefügt werden.`,

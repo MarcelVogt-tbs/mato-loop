@@ -1050,7 +1050,6 @@ def test_one_time_automation_evaluator_accepts_redundant_timezone() -> None:
         "_reason": "Die gewünschte Erinnerung einrichten.",
         "task": "Erinnere mich an Niklas",
         "enabled": True,
-        "deliver_to_current_session": True,
         "schedules": [
             {
                 "cron": None,

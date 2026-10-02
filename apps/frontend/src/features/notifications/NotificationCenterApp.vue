@@ -118,7 +118,7 @@
           class="q-pa-xl"
           icon="notifications_none"
           title="Noch keine Hinweise"
-          description="Ergebnisse und Fehler von Automationen erscheinen hier."
+          description="Neue Hinweise erscheinen hier. Agent-Antworten findest du in der jeweiligen Session."
         />
         <q-list v-else bordered separator class="rounded-borders app-surface">
           <q-item

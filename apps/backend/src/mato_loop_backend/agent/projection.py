@@ -402,6 +402,9 @@ def message_dict(
     runtime_data = provider_data.get("_matoloop")
     if not isinstance(runtime_data, dict):
         runtime_data = {}
+    source = runtime_data.get("source")
+    if message.role == "user" and isinstance(source, dict) and source.get("type") == "automationRun":
+        content = f"[Saved automation task started by the host.]\n\n{content}"
     tool_calls = message.tool_calls
     edited_calls = runtime_data.get("userEditedToolCalls")
     if message.role == "assistant" and tool_calls and isinstance(edited_calls, dict):

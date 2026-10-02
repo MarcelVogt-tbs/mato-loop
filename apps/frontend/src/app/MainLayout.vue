@@ -78,6 +78,7 @@ import AppNavigation from 'src/app/AppNavigation.vue'
 import ControlCenterPanel from 'src/app/control-center/ControlCenterPanel.vue'
 import { useShellSync } from 'src/app/useShellSync'
 import { useApprovalStore } from 'stores/approvals'
+import { useAutomationStore } from 'stores/automations'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
@@ -95,6 +96,7 @@ const controlCenter = useControlCenterStore()
 const workspace = useWorkspaceStore()
 const { confirm } = useConfirm()
 const approvals = useApprovalStore()
+const automations = useAutomationStore()
 const notifications = useInAppNotificationStore()
 const questions = useQuestionStore()
 const showFloatingNavigation = computed(() => !drawerOpen.value)
@@ -133,13 +135,16 @@ function openNavigation() {
 }
 
 async function confirmDiscardedEdit({ discard = true } = {}) {
-  if (!workspace.hasDirtyEditors) return true
+  if (!workspace.hasDirtyEditors && !automations.dirty) return true
   const accepted = await confirm(
     'Sollen die ungespeicherten Änderungen verworfen werden?',
     'Änderungen verwerfen?',
     { okLabel: 'Verwerfen' }
   )
-  if (accepted && discard) workspace.discardAllEdits()
+  if (accepted && discard) {
+    workspace.discardAllEdits()
+    automations.dirty = false
+  }
   return accepted
 }
 
@@ -160,6 +165,8 @@ async function setControlCenterOpen(open) {
 }
 
 onBeforeRouteUpdate((to, from) => {
+  if (to.name === 'chat' && from.name === 'chat'
+    && to.query.session === from.query.session && to.query.project === from.query.project) return true
   if (to.name === 'chat' && from.name === 'chat'
     && to.query.session === from.query.session
     && (to.query.subagent !== from.query.subagent

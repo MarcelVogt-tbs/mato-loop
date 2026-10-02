@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { applySchedulePreset, browserTimezone, cronPreset, scheduleDraft, scheduleError, schedulePayload } from '../src/utils/automation-schedules'
+import { applySchedulePreset, browserTimezone, cronPreset, scheduleDraft, scheduleError, schedulePayload, scheduleSummary } from '../src/utils/automation-schedules'
 
 describe('automation schedule presets', () => {
+  it.each([
+    ['0 18 26 8 *', 'Jährlich am 26. August um 18:00 Uhr'],
+    ['*/30 * * * *', 'Alle 30 Minuten'],
+    ['0 * * * *', 'Jede volle Stunde'],
+    ['0 8 * * 1,3', 'Individueller Zeitplan'],
+    ['*/7 * * * *', 'Individueller Zeitplan']
+  ])('describes %s without exposing or misrepresenting the time rule', (cron, label) => {
+    expect(scheduleSummary(scheduleDraft({ cron }))).toBe(label)
+  })
   it.each([
     ['0 8 * * *', 'daily'], ['30 17 * * 1-5', 'weekdays'], ['15 9 * * 0', 'weekly'], ['0 12 31 * *', 'monthly']
   ])('recognizes and round-trips %s as %s', (cron, preset) => {

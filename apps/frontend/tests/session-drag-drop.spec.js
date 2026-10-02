@@ -93,7 +93,7 @@ vi.mock('stores/integrations', async () => {
   return { useIntegrationStore: () => store }
 })
 vi.mock('stores/auth', () => ({ useAuthStore: () => ({ username: 'Tester' }) }))
-vi.mock('stores/automations', () => ({ useAutomationStore: () => ({}) }))
+vi.mock('stores/automations', () => ({ useAutomationStore: () => ({ items: [], fetchAutomations: vi.fn().mockResolvedValue() }) }))
 vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({ byId: (id) => id === 'agent-1' ? { connected: true, operations: [] } : null }) }))
 vi.mock('stores/workspace', () => ({ useWorkspaceStore: () => workspace }))
 vi.mock('stores/search', () => ({ useSearchStore: () => ({ openDialog: vi.fn() }) }))

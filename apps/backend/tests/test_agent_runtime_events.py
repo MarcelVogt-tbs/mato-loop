@@ -1094,16 +1094,17 @@ async def test_normal_run_push_uses_canonical_session_target(
     assert payload.notification.target.session_id == session.id
 
 
-async def test_automation_run_does_not_emit_a_second_session_push(monkeypatch) -> None:
+async def test_automation_run_uses_the_normal_session_push(monkeypatch) -> None:
     run = AgentRun(id=uuid4(), session_id=uuid4())
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = uuid4()
+    db.get.return_value = ChatSession(id=run.session_id, user_id=uuid4(), title="Automation")
     deliver = AsyncMock()
     monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", deliver)
 
     await AgentRuntime._deliver_run_push(db, run, failed=False)
 
-    deliver.assert_not_awaited()
+    assert deliver.await_args.args[1].notification.target.session_id == run.session_id
 
 
 @pytest.mark.parametrize("redirected", [False, True])

@@ -1278,7 +1278,7 @@ CASES = (
         user=(
             "Erstelle jetzt die aktive Automation Tagesbericht mit der Aufgabe "
             '"Erstelle den Tagesbericht", täglich um 08:00 Uhr in Europe/Berlin. '
-            "Liefere das Ergebnis in diese Session; die Zustellung ist erforderlich."
+            "Führe den Auftrag in dieser Session aus."
         ),
         tools=("create_automation",),
         expected_tool="create_automation",
@@ -1286,8 +1286,6 @@ CASES = (
             "name": "Tagesbericht",
             "task": "Erstelle den Tagesbericht",
             "enabled": True,
-            "deliver_to_current_session": True,
-            "output_session_required": True,
             "schedules": [
                 {
                     "cron": "0 8 * * *",
@@ -1314,7 +1312,6 @@ CASES = (
             "name": "Erinnerung",
             "task": "Erinnere mich an Niklas",
             "enabled": True,
-            "deliver_to_current_session": True,
         },
         argument_contains={"schedules": ("run_at", "2026-07-27")},
     ),
@@ -1329,7 +1326,6 @@ CASES = (
         tools=("create_automation",),
         expected_tool="create_automation",
         expected_tool_call_count=1,
-        expected_arguments={"deliver_to_current_session": True},
         argument_contains={
             "schedules": (
                 "2026-07-28T09:00:00+02:00",
@@ -1348,7 +1344,6 @@ CASES = (
         tools=("memory_retrieve", "create_automation"),
         expected_tool="create_automation",
         expected_tool_call_count=1,
-        expected_arguments={"deliver_to_current_session": True},
     ),
     PromptCase(
         id="explicit_automation_edit_uses_revision",
@@ -1356,7 +1351,7 @@ CASES = (
         user=(
             f"Ändere jetzt Automation {AUTOMATION_ID} in Revision 3 vollständig: Name Tagesbericht, "
             'Aufgabe "Erstelle den kompakten Tagesbericht", aktiv, kein Skill, täglich um 09:00 Uhr '
-            "in Europe/Berlin, Ausgabe in dieser Session erforderlich, Runtime nicht kopieren."
+            "in Europe/Berlin."
         ),
         tools=("edit_automation",),
         expected_tool="edit_automation",
@@ -1367,9 +1362,6 @@ CASES = (
             "task": "Erstelle den kompakten Tagesbericht",
             "enabled": True,
             "skill_id": None,
-            "output_mode": "current",
-            "output_session_required": True,
-            "copy_runtime_from_current_session": False,
             "schedules": [
                 {
                     "cron": "0 9 * * *",

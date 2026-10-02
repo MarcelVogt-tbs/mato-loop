@@ -474,6 +474,9 @@ def message_payload(
             if isinstance(source, dict) and source.get("type") == "automationRun"
             else None
         ),
+        **({"automationName": source["automationName"][:240]}
+           if isinstance(source, dict) and source.get("type") == "automationRun"
+           and isinstance(source.get("automationName"), str) else {}),
         "source": (
             {
                 "type": "endpoint",

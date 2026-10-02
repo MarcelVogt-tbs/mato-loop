@@ -1,4 +1,5 @@
 import AgentCodingApp from 'src/features/coding/AgentCodingApp.vue'
+import AutomationApp from 'src/features/automations/AutomationApp.vue'
 import ComputerFileExplorerPanel from 'src/features/files/components/ComputerFileExplorerPanel.vue'
 import FileExplorerPanel from 'src/features/files/components/FileExplorerPanel.vue'
 import FileExplorerFooter from 'src/features/files/components/FileExplorerFooter.vue'
@@ -23,6 +24,7 @@ const components = {
   session: SessionApp,
   'agent-coding': AgentCodingApp,
   files: FileExplorerPanel,
+  automation: AutomationApp,
   'computer-files': ComputerFileExplorerPanel,
   'file-viewer': FileViewerApp,
   mail: MailApp,

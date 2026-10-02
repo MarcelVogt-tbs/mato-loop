@@ -5,12 +5,10 @@ import routes, { adminRoutes, settingsRoutes } from '../src/router/routes'
 
 describe('MatoLoop frontend scaffold', () => {
   it('routes legacy automation editing and exact-run links to the shared page', async () => {
-    const automation = settingsRoutes.find((route) => route.name === 'settings-automations')
     const component = { render: () => null }
-    const router = createRouter({ history: createMemoryHistory(), routes: [{
-      ...automation, path: '/settings/automations', component,
-      children: automation.children.map((route) => ({ ...route, component }))
-    }] })
+    const router = createRouter({ history: createMemoryHistory(), routes: settingsRoutes
+      .filter((route) => route.path.startsWith('automations'))
+      .map((route) => ({ ...route, path: `/settings/${route.path}`, component })) })
     expect(router.resolve('/settings/automations/new').name).toBe('settings-automation-create')
     await router.push('/settings/automations/automation-1/edit?run=run-1')
     expect(router.currentRoute.value.name).toBe('settings-automation-detail')
@@ -36,6 +34,9 @@ describe('MatoLoop frontend scaffold', () => {
       'settings-execution-agents',
       'settings-skills',
       'settings-automations',
+      'settings-automation-create',
+      'settings-automation-edit',
+      'settings-automation-detail',
       'settings-personalization',
       'settings-persona',
       'settings-memory',
@@ -55,12 +56,12 @@ describe('MatoLoop frontend scaffold', () => {
         .map((route) => route.name)
     ).toEqual(['settings-agent-create', 'settings-agent-edit'])
     expect(
-      settingsRoute.children.find((route) => route.name === 'settings-automations').children
+      settingsRoute.children.filter((route) => route.path.startsWith('automations/'))
         .map(({ name, path }) => ({ name, path }))
     ).toEqual([
-      { name: 'settings-automation-create', path: 'new' },
-      { name: 'settings-automation-edit', path: ':automationId/edit' },
-      { name: 'settings-automation-detail', path: ':automationId' }
+      { name: 'settings-automation-create', path: 'automations/new' },
+      { name: 'settings-automation-edit', path: 'automations/:automationId/edit' },
+      { name: 'settings-automation-detail', path: 'automations/:automationId' }
     ])
     expect(routes.find((route) => route.name === 'markdown-print')?.path).toBe('/print/markdown')
     expect(appRoute.children.find((route) => route.name === 'admin')?.meta.requiresAdmin).toBe(true)

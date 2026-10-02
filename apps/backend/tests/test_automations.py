@@ -17,7 +17,6 @@ from mato_loop_backend.automations import (
     AutomationService,
     advance_schedule,
     automation_impact_token,
-    copy_runtime,
     next_run_at,
     runtime_snapshot,
 )
@@ -32,9 +31,7 @@ from mato_loop_backend.models import (
     Notification,
     UserAccount,
 )
-from mato_loop_backend.notifications import NotificationService
 from mato_loop_backend.security import require_user
-from mato_loop_backend.settings import GENERAL_PROFILE_ID
 
 
 def test_cron_uses_debian_dst_semantics_and_rejects_six_fields() -> None:
@@ -82,16 +79,14 @@ def test_schedule_request_accepts_exactly_one_schedule_kind() -> None:
 
 def test_automation_request_accepts_browser_uuid_and_datetime_values() -> None:
     skill_id = uuid4()
-    source_session_id = uuid4()
-    output_session_id = uuid4()
+    session_id = uuid4()
 
     request = AutomationRequest.model_validate(
         {
             "name": "Bericht",
             "task": "Erstelle einen Bericht",
             "skillId": str(skill_id),
-            "sourceSessionId": str(source_session_id),
-            "outputSessionId": str(output_session_id),
+            "sessionId": str(session_id),
             "schedules": [
                 {"runAt": "2026-08-21T10:30:00+02:00", "enabled": True}
             ],
@@ -99,8 +94,7 @@ def test_automation_request_accepts_browser_uuid_and_datetime_values() -> None:
     )
 
     assert request.skill_id == skill_id
-    assert request.source_session_id == source_session_id
-    assert request.output_session_id == output_session_id
+    assert request.session_id == session_id
     assert request.schedules[0].run_at == datetime(2026, 8, 21, 8, 30, tzinfo=UTC)
 
 
@@ -167,11 +161,11 @@ def automation_api():
 @pytest.mark.parametrize("method", ["post", "put"])
 def test_manual_api_rejects_archiving_and_omitted_schedules(automation_api, method, monkeypatch):
     client, db, user = automation_api
-    automation = Automation(id=uuid4(), user_id=user.id, revision=1)
+    automation = Automation(id=uuid4(), user_id=user.id, revision=1, execution_session_id=uuid4())
     db.scalar.return_value = automation
     monkeypatch.setattr(AutomationService, "skill", AsyncMock(return_value=None))
     path = "/automations" if method == "post" else f"/automations/{automation.id}"
-    draft = {"name": "Manual", "task": "Do work", "expectedRevision": 1}
+    draft = {"name": "Manual", "task": "Do work", "expectedRevision": 1, "sessionId": str(automation.execution_session_id)}
     missing = client.request(method, path, json=draft)
     assert missing.status_code == 422
     assert missing.json()["error"]["code"] == "validation.required"
@@ -188,9 +182,9 @@ def test_status_and_list_summary_are_compact_and_batch_active_statuses(automatio
     now = datetime(2026, 9, 1, tzinfo=UTC)
     items = [
         Automation(id=uuid4(), user_id=user.id, name="Manual", task="x" * 300,
-                   enabled=True, revision=1, schedules=[]),
+                   execution_session_id=uuid4(), enabled=True, revision=1, schedules=[]),
         Automation(id=uuid4(), user_id=user.id, name="Paused", task="Task",
-                   enabled=False, revision=2, schedules=[AutomationSchedule(enabled=True, next_run_at=now)]),
+                   execution_session_id=uuid4(), enabled=False, revision=2, schedules=[AutomationSchedule(enabled=True, next_run_at=now)]),
     ]
     db.scalars.return_value = MagicMock(all=MagicMock(return_value=items))
     db.execute.return_value = MagicMock(all=MagicMock(return_value=[(items[0].id, "queued")]))
@@ -199,7 +193,7 @@ def test_status_and_list_summary_are_compact_and_batch_active_statuses(automatio
     assert response.status_code == 200
     payload = response.json()["items"]
     status_keys = {"id", "revision", "enabled", "archivedAt", "scheduleCount", "effectiveState"}
-    assert all(set(item) == status_keys | {"name", "taskExcerpt"} for item in payload)
+    assert all(set(item) == status_keys | {"name", "taskExcerpt", "executionSessionId"} for item in payload)
     assert payload[0]["taskExcerpt"] == "x" * 240
     assert payload[0]["scheduleCount"] == 0
     assert payload[0]["effectiveState"] == {
@@ -297,10 +291,7 @@ def test_run_summary_skips_snapshots_and_result_lookups_but_full_reads_keep_them
     assert len(data["items"]) == 1
     assert set(data["items"][0]) == {
         "id", "automationId", "status", "trigger", "automationRevision", "scheduledFor",
-        "createdAt", "startedAt", "completedAt", "delivery",
-    }
-    assert data["items"][0]["delivery"] == {
-        "status": "not_requested", "attempts": 0, "nextAttemptAt": None,
+        "createdAt", "startedAt", "completedAt",
     }
     db.get.assert_not_awaited()
     db.scalars.assert_awaited_once()
@@ -392,33 +383,21 @@ def test_archive_policy_requires_one_one_time_schedule(invalid) -> None:
 
 
 @pytest.mark.parametrize("manual", [False, True])
-async def test_create_flushes_execution_session_before_automation(monkeypatch, manual) -> None:
-    events = []
-    added = []
+async def test_create_attaches_automation_to_existing_session(monkeypatch, manual) -> None:
     db = AsyncMock(spec=AsyncSession)
-
-    def add(item) -> None:
-        added.append(item)
-        events.append(("add", type(item)))
-
-    db.add.side_effect = add
-
-    async def flush() -> None:
-        events.append(("flush", None))
-
-    db.flush.side_effect = flush
+    session = ChatSession(id=uuid4(), user_id=uuid4(), session_type="chat")
+    db.scalar.return_value = None
+    monkeypatch.setattr(AutomationService, "normal_session", AsyncMock(return_value=session))
     monkeypatch.setattr(AutomationService, "skill", AsyncMock(return_value=None))
 
     automation = await AutomationService.create(
         db,
-        user_id=uuid4(),
+        user_id=session.user_id,
+        session_id=session.id,
         name="Erinnerung",
         task="Erinnere mich",
         skill_id=None,
         enabled=True,
-        source_session_id=None,
-        output_session_id=None,
-        output_session_required=False,
         schedules=[] if manual else [
             {
                 "run_at": datetime(2026, 8, 21, 10, 30, tzinfo=UTC),
@@ -428,14 +407,9 @@ async def test_create_flushes_execution_session_before_automation(monkeypatch, m
         now=datetime(2026, 8, 20, 12, tzinfo=UTC),
     )
 
-    assert events == [
-        ("add", ChatSession),
-        ("flush", None),
-        ("add", Automation),
-        ("flush", None),
-    ]
-    assert automation.execution_session_id is not None
-    assert added[0].agent_profile_id == GENERAL_PROFILE_ID
+    assert automation.execution_session_id == session.id
+    db.add.assert_called_once_with(automation)
+    assert any(tab["app_id"] == "automation" for tab in session.control_center["tabs"])
     assert len(automation.schedules) == (0 if manual else 1)
 
 
@@ -484,9 +458,6 @@ async def test_replace_deletes_existing_schedules_before_inserting_replacements(
         task=automation.task,
         skill_id=None,
         enabled=True,
-        source_session_id=None,
-        output_session_id=None,
-        output_session_required=False,
         schedules=[] if manual else [{"cron": "0 8 * * *", "timezone": "UTC", "enabled": True}],
         now=datetime(2026, 8, 20, 12, tzinfo=UTC),
     )
@@ -514,15 +485,6 @@ def test_runtime_snapshot_contains_only_validated_session_binding() -> None:
     assert snapshot["currentDirectory"] == "/advertised/project"
     assert snapshot["agentProfileId"] == str(agent_profile_id)
     assert "workspacePath" not in snapshot
-
-
-def test_copy_runtime_includes_agent_profile() -> None:
-    source = ChatSession(agent_profile_id=uuid4())
-    target = ChatSession(agent_profile_id=GENERAL_PROFILE_ID)
-
-    copy_runtime(source, target)
-
-    assert target.agent_profile_id == source.agent_profile_id
 
 
 async def test_due_schedules_are_bundled_into_one_skipped_run() -> None:
@@ -613,9 +575,9 @@ async def test_disabled_bound_skill_fails_only_its_due_run(monkeypatch) -> None:
 
     assert await AutomationService.enqueue_due(db, now=now) == 1
 
-    run = db.add.call_args.args[0]
-    assert run.status == "failed"
-    assert run.error_code == "skill.notFound"
+    run = next(call.args[0] for call in db.add.call_args_list if isinstance(call.args[0], AutomationRun))
+    assert run.status == "queued"
+    assert run.definition_snapshot["errorCode"] == "skill.notFound"
     assert schedule.next_run_at > now
     db.commit.assert_awaited_once()
 
@@ -754,7 +716,6 @@ async def test_completed_scheduled_one_time_run_archives_automation(monkeypatch)
     rows.all.return_value = [(run, automation, agent_run)]
     db = AsyncMock(spec=AsyncSession)
     db.execute.return_value = rows
-    monkeypatch.setattr(AutomationService, "_notify_terminal", AsyncMock())
 
     changed = await AutomationService.mirror_agent_runs(db)
 
@@ -772,7 +733,6 @@ def test_session_delete_impact_changes_with_linked_automation_revision() -> None
         name="Bericht",
         task="Erstelle einen Bericht",
         revision=1,
-        output_session_required=False,
     )
 
     original = automation_impact_token([automation])
@@ -781,7 +741,7 @@ def test_session_delete_impact_changes_with_linked_automation_revision() -> None
     assert automation_impact_token([automation]) != original
 
 
-async def test_start_failure_cancels_pending_delivery(monkeypatch) -> None:
+async def test_start_failure_is_visible_in_the_session() -> None:
     run = AutomationRun(
         id=uuid4(),
         automation_id=uuid4(),
@@ -792,74 +752,14 @@ async def test_start_failure_cancels_pending_delivery(monkeypatch) -> None:
         delivery_status="pending",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [run, None]
+    db.get.side_effect = [run, Automation(id=run.automation_id, execution_session_id=uuid4(), task="Task")]
+    db.scalar.return_value = None
 
     await AutomationService._fail_start(db, run.id, "automation.snapshotInvalid")
 
     assert run.status == "failed"
-    assert run.delivery_status == "cancelled"
+    assert db.add.call_args.args[0].error_code == "automation.snapshotInvalid"
     db.commit.assert_awaited_once()
-
-
-async def test_third_delivery_failure_is_terminal_and_notifies_once(
-    monkeypatch,
-) -> None:
-    automation = Automation(
-        id=uuid4(),
-        user_id=uuid4(),
-        execution_session_id=uuid4(),
-        name="Bericht",
-        task="Erstelle einen Bericht",
-    )
-    run = AutomationRun(
-        id=uuid4(),
-        automation_id=automation.id,
-        automation_revision=1,
-        trigger="manual",
-        status="completed",
-        definition_snapshot={},
-        delivery_status="pending",
-        delivery_attempts=2,
-    )
-    notification_id = uuid4()
-    create = AsyncMock(return_value=notification_id)
-    monkeypatch.setattr(NotificationService, "create", create)
-
-    push = await AutomationService._delivery_failure(
-        AsyncMock(spec=AsyncSession), run, automation
-    )
-
-    assert run.delivery_status == "failed"
-    assert run.delivery_attempts == 3
-    assert run.delivery_next_attempt_at is None
-    draft = create.await_args.args[1]
-    assert draft.kind == "automation.deliveryFailed"
-    assert draft.automation_run_id == run.id
-    assert push.notification.tag == f"notification:{notification_id}"
-    assert push.notification.target.run_id == run.id
-
-
-async def test_delivery_retry_rejects_delivery_still_in_progress() -> None:
-    run = AutomationRun(
-        id=uuid4(),
-        automation_id=uuid4(),
-        automation_revision=1,
-        trigger="manual",
-        status="completed",
-        definition_snapshot={},
-        output_session_id=uuid4(),
-        delivery_status="pending",
-    )
-    db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = run
-
-    with pytest.raises(AutomationError) as exc_info:
-        await AutomationService.retry_delivery(
-            db, run.automation_id, run.id, uuid4()
-        )
-
-    assert exc_info.value.code == "automation.deliveryUnavailable"
-    db.scalar.assert_awaited_once()
 
 
 def test_notification_exposes_automation_run_target() -> None:
@@ -897,3 +797,44 @@ def test_notification_exposes_automation_run_target() -> None:
         "automationId": str(automation.id),
         "runId": str(run.id),
     }
+
+
+async def test_delete_automation_keeps_session_and_its_running_agent(monkeypatch):
+    automation = Automation(id=uuid4(), user_id=uuid4(), execution_session_id=uuid4(), revision=1)
+    monkeypatch.setattr(AutomationService, "owned", AsyncMock(return_value=automation))
+    db = AsyncMock(spec=AsyncSession)
+    await AutomationService.delete(db, automation.id, automation.user_id, expected_revision=1)
+    db.delete.assert_awaited_once_with(automation)
+
+
+async def test_create_supports_multiple_automations_in_the_same_session(monkeypatch):
+    session = ChatSession(id=uuid4(), user_id=uuid4())
+    monkeypatch.setattr(AutomationService, "normal_session", AsyncMock(return_value=session))
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = uuid4()
+    created = [await AutomationService.create(db, user_id=session.user_id, session_id=session.id,
+        name=name, task="Work", skill_id=None, enabled=True, schedules=[]) for name in ("Daily", "Weekly")]
+    assert [item.execution_session_id for item in created] == [session.id, session.id]
+
+
+async def test_busy_session_start_remains_queued(monkeypatch):
+    from mato_loop_backend.agent.run_contracts import AgentRunError
+    from mato_loop_backend.agent.runtime import AgentRuntime
+
+    automation = Automation(id=uuid4(), execution_session_id=uuid4())
+    run = AutomationRun(id=uuid4(), automation_id=automation.id, status="queued", definition_snapshot={"task": "Task"})
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = run
+    db.get.side_effect = [automation, ChatSession(id=automation.execution_session_id)]
+    monkeypatch.setattr(AgentRuntime, "start", AsyncMock(side_effect=AgentRunError("session.runAlreadyActive")))
+    await AutomationService.process_next(db)
+    assert run.status == "queued"
+
+
+def test_create_cannot_bind_a_foreign_session(automation_api):
+    client, db, _user = automation_api
+    db.scalar.return_value = None
+    response = client.post('/automations', json={
+        'sessionId': str(uuid4()), 'name': 'Task', 'task': 'Work', 'schedules': [],
+    })
+    assert response.status_code == 404

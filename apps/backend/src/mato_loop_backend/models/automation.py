@@ -27,18 +27,6 @@ class Automation(Base):
     __tablename__ = "automations"
     __table_args__ = (
         CheckConstraint("revision >= 1", name="revision_positive"),
-        CheckConstraint(
-            "NOT output_session_required OR output_session_id IS NOT NULL",
-            name="required_output_session_present",
-        ),
-        CheckConstraint(
-            "(output_session_id IS NULL AND delivery_channel_type IS NULL "
-            "AND delivery_endpoint_id IS NULL) OR "
-            "(output_session_id IS NOT NULL AND (delivery_channel_type IS NULL OR "
-            "(delivery_channel_type = 'app' AND delivery_endpoint_id IS NULL) OR "
-            "(delivery_channel_type = 'endpoint' AND delivery_endpoint_id IS NOT NULL)))",
-            name="automation_delivery_channel_valid",
-        ),
         Index("ix_automations_user_updated", "user_id", "updated_at", "id"),
     )
 
@@ -47,17 +35,7 @@ class Automation(Base):
         ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False, index=True
     )
     execution_session_id: Mapped[UUID] = mapped_column(
-        ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, unique=True
-    )
-    output_session_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("chat_sessions.id", ondelete="SET NULL"), nullable=True, index=True
-    )
-    output_session_required: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default=text("false")
-    )
-    delivery_channel_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    delivery_endpoint_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("messaging_endpoints.id", ondelete="SET NULL"), nullable=True, index=True
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)
     task: Mapped[str] = mapped_column(Text, nullable=False)

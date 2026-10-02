@@ -71,6 +71,7 @@ _MESSAGES = {
     "automation.scheduleDuplicate": "The automation schedule is duplicated.",
     "automation.scheduleInvalid": "The automation schedule is invalid.",
     "automation.sessionNotFound": "The selected chat session was not found.",
+    "session.controlCenterFull": "The session already has the maximum number of apps and files open.",
     "automation.snapshotInvalid": "The automation snapshot is invalid.",
     "automation.skillActivationFailed": "The required automation skill could not be activated.",
     "automation.timezoneInvalid": "The schedule timezone is invalid.",

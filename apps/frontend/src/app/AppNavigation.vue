@@ -41,6 +41,30 @@
           tabindex="0"
           aria-label="Projekte und Sessions"
         >
+          <section aria-labelledby="automations-heading" class="q-mb-md">
+            <q-item dense class="q-px-sm q-py-xs">
+              <q-item-section role="button" tabindex="0" aria-controls="automation-list" :aria-expanded="automationsSectionOpen" @click="automationsSectionOpen = !automationsSectionOpen" @keydown.enter="automationsSectionOpen = !automationsSectionOpen" @keydown.space.prevent="automationsSectionOpen = !automationsSectionOpen">
+                <q-item-label id="automations-heading" header class="q-pa-none text-subtitle2 text-weight-medium" :class="$q.dark.isActive ? 'text-grey-5' : 'text-grey-7'">
+                  Automationen <q-icon :name="automationsSectionOpen ? 'expand_more' : 'chevron_right'" size="18px" />
+                </q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <q-btn flat round dense size="sm" icon="add" aria-label="Automation erstellen" @click="createAutomation"><q-tooltip>Automation erstellen</q-tooltip></q-btn>
+              </q-item-section>
+            </q-item>
+            <q-list v-show="automationsSectionOpen" id="automation-list">
+              <q-item v-if="automations.loadFailed" dense><q-item-section><q-btn flat dense no-caps label="Automationen erneut laden" @click="automations.fetchAutomations({ includeArchived: true }).catch(() => {})" /></q-item-section></q-item>
+              <q-item v-else-if="automations.loading && !automations.loaded" dense><q-item-section><q-skeleton type="text" /></q-item-section></q-item>
+              <q-item v-for="automation in automations.items" :key="automation.id" clickable dense v-ripple class="rounded-borders q-px-sm q-py-xs q-my-xs" :active="routeSessionId === automation.executionSessionId" @click="openAutomation(automation)">
+                <q-item-section>
+                  <q-item-label lines="1" class="text-body2">{{ automation.name }}</q-item-label>
+                  <q-item-label caption>{{ sessionStatuses.get(automation.executionSessionId)?.label || automationStatus(automation).label }}</q-item-label>
+                </q-item-section>
+                <q-item-section side><q-icon :name="automationStatus(automation).icon" :color="automationStatus(automation).color" size="18px" /></q-item-section>
+              </q-item>
+              <q-item v-if="automations.loaded && !automations.items.length" dense class="q-px-sm"><q-item-section><q-item-label caption>Noch keine Automationen</q-item-label></q-item-section></q-item>
+            </q-list>
+          </section>
           <section aria-labelledby="projects-heading">
             <q-item
               clickable dense tag="div" class="q-px-sm q-py-xs"
@@ -324,6 +348,7 @@ import { useSearchStore } from 'stores/search'
 import { useProjectStore } from 'stores/projects'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
+import { automationStatus } from 'src/utils/automation-status'
 
 const props = defineProps({ confirmDiscardedEdit: { type: Function, required: true } })
 const drawerOpen = defineModel({ type: Boolean, required: true })
@@ -349,6 +374,7 @@ const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
 ))
 const sessionsSectionOpen = ref(true)
+const automationsSectionOpen = ref(true)
 const accountDialogOpen = ref(false)
 const {
   projectOptions, standaloneSessionList, sessionStatuses,
@@ -389,6 +415,19 @@ const userMenuLabel = computed(() => 'Benutzermenü öffnen')
 
 function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
+}
+
+async function openAutomation(automation) {
+  await openSession({ id: automation.executionSessionId })
+}
+
+async function createAutomation() {
+  if (!await openNewSession(null)) return
+  try {
+    await controlCenter.openApp('automation')
+  } catch {
+    // The central Axios interceptor displays the error.
+  }
 }
 
 function closeDrawerOnMobile() {

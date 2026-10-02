@@ -4,7 +4,6 @@ import asyncio
 import json
 from datetime import datetime
 from typing import Any
-from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -161,10 +160,7 @@ async def _automation_definition_payload(
             }
             for item in automation.schedules
         ],
-        "outputSessionId": (
-            str(automation.output_session_id) if automation.output_session_id else None
-        ),
-        "outputSessionRequired": automation.output_session_required,
+        "executionSessionId": str(automation.execution_session_id),
         "runtime": runtime_snapshot(execution_session),
         "contentIsUntrusted": True,
     }
@@ -206,6 +202,7 @@ async def _list_automations(
             "automations": [
                 {
                     "id": str(item.id),
+                    "executionSessionId": str(item.execution_session_id),
                     "name": item.name,
                     "enabled": item.enabled,
                     "revision": item.revision,
@@ -268,7 +265,6 @@ async def _create_automation(
     arguments: CreateAutomationArguments, context: ToolContext
 ) -> ToolResult:
     schedules = _automation_schedules(arguments.schedules)
-    deliver = arguments.deliver_to_current_session or arguments.output_session_required
     try:
         skill = await AutomationService.skill(
             context.db, context.session.user_id, arguments.skill_id
@@ -280,8 +276,7 @@ async def _create_automation(
             "enabled": arguments.enabled,
             "archiveAfterSuccess": arguments.archive_after_success,
             "schedules": _automation_schedule_json(schedules),
-            "output": "current" if deliver else "none",
-            "outputSessionRequired": arguments.output_session_required,
+            "sessionId": str(context.session.id),
         }
         permission = _automation_collection_permission(
             context,
@@ -303,8 +298,7 @@ async def _create_automation(
                     "Archivieren" if arguments.archive_after_success else "Aktiv lassen",
                 ),
                 PermissionDisplayItem(
-                    "Ausgabe",
-                    "Aktuelle Session" if deliver else "Keine Session",
+                    "Ausführung", "Aktuelle Session",
                 ),
             ),
             approval_details={"automationPreview": preview},
@@ -314,17 +308,15 @@ async def _create_automation(
         automation = await AutomationService.create(
             context.db,
             user_id=context.session.user_id,
+            session_id=context.session.id,
             name=arguments.name,
             task=arguments.task,
             skill_id=arguments.skill_id,
             enabled=arguments.enabled,
-            source_session_id=context.session.id,
-            output_session_id=context.session.id if deliver else None,
-            output_session_required=arguments.output_session_required,
             schedules=schedules,
             archive_after_success=arguments.archive_after_success,
         )
-        await AutomationService.provision_and_commit(context.db, automation)
+        await context.db.commit()
         return ToolResult.json(
             {
                 "id": str(automation.id),
@@ -343,7 +335,6 @@ def _automation_edit_diff(
     automation: Automation,
     arguments: EditAutomationArguments,
     schedules: list[dict[str, Any]],
-    output_session_id: UUID | None,
 ) -> tuple[str, ...]:
     before_schedules = [
         {
@@ -384,22 +375,10 @@ def _automation_edit_diff(
             json.dumps(before_schedules) if before_schedules else "Nur manuell",
             json.dumps(_automation_schedule_json(schedules)) if schedules else "Nur manuell",
         ),
-        (
-            "Ausgabe",
-            str(automation.output_session_id) if automation.output_session_id else "Keine",
-            str(output_session_id) if output_session_id else "Keine",
-        ),
-        (
-            "Ausgabe erforderlich",
-            str(automation.output_session_required),
-            str(arguments.output_session_required),
-        ),
     )
     for label, before, after in comparisons:
         if before != after:
             changes.append(f"{label}: {before} -> {after}")
-    if arguments.copy_runtime_from_current_session:
-        changes.append("Runtime: aus aktueller Session übernehmen")
     return tuple(changes or ("Keine inhaltliche Änderung",))
 
 
@@ -417,20 +396,11 @@ async def _edit_automation(
             raise AutomationError(
                 "automation.changed", params={"currentRevision": automation.revision}
             )
-        output_session_id = {
-            "keep": automation.output_session_id,
-            "current": context.session.id,
-            "none": None,
-        }[arguments.output_mode]
-        if arguments.output_session_required and output_session_id is None:
-            return ToolResult.error(
-                "tool.invalidArguments", field="output_session_required"
-            )
         await AutomationService.skill(
             context.db, context.session.user_id, arguments.skill_id
         )
         changes = _automation_edit_diff(
-            automation, arguments, schedules, output_session_id
+            automation, arguments, schedules
         )
         if not await tools_access.allow(
             context,
@@ -469,19 +439,6 @@ async def _edit_automation(
             task=arguments.task,
             skill_id=arguments.skill_id,
             enabled=arguments.enabled,
-            source_session_id=(
-                context.session.id
-                if arguments.copy_runtime_from_current_session
-                else None
-            ),
-            output_session_id=output_session_id,
-            output_session_required=arguments.output_session_required,
-            delivery_channel_type=(
-                automation.delivery_channel_type if output_session_id else None
-            ),
-            delivery_endpoint_id=(
-                automation.delivery_endpoint_id if output_session_id else None
-            ),
             schedules=schedules,
             archive_after_success=arguments.archive_after_success,
         )
@@ -579,7 +536,7 @@ async def _delete_automation(
                 display_items=(
                     PermissionDisplayItem(
                         "Auswirkung",
-                        "Aktive Läufe werden beendet; Ausführungssession und Historie werden gelöscht.",
+                        "Auftrag, Zeitpläne und Laufhistorie werden gelöscht. Die Session bleibt erhalten.",
                     ),
                 ),
             ),
@@ -627,7 +584,7 @@ GET_AUTOMATION = ToolDefinition(
 
 CREATE_AUTOMATION = ToolDefinition(
             "create_automation",
-            "Create if asked. Same task uses one automation. Chat reminders set deliver_to_current_session=true; calendar event reminders use the calendar event tools. Use cron+timezone or offset run_at; valid_until is cron-only.",
+             "Create an automation in the current session if asked. Reuse an existing automation for the same task. Calendar event reminders use the calendar event tools. Use cron+timezone or offset run_at; valid_until is cron-only.",
             CreateAutomationArguments,
             _create_automation,
             group="automations",

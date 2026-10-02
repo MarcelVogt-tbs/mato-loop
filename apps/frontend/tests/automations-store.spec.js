@@ -54,10 +54,10 @@ describe('automation store', () => {
     api.get.mockResolvedValue({ data: automation })
     const store = useAutomationStore()
 
-    await store.fetchAutomation(automation.id)
+    const result = await store.fetchAutomation(automation.id)
 
     expect(api.get).toHaveBeenCalledWith('/automations/automation-1', { params: { includeHistory: false } })
-    expect(store.detail).toEqual(automation)
+    expect(result).toEqual(automation)
   })
 
   it('creates, updates and deletes only after successful requests', async () => {
@@ -86,7 +86,6 @@ describe('automation store', () => {
     await expect(store.updateAutomation(automation.id, { expectedRevision: 1 })).rejects.toThrow('request failed')
 
     expect(store.items).toEqual([automation])
-    expect(store.detail).toBeNull()
   })
 
   it('loads and appends run pages without duplicates', async () => {
@@ -124,24 +123,6 @@ describe('automation store', () => {
     expect(store.items[0].effectiveState.activeRunStatus).toBe('queued')
   })
 
-  it('keeps live status separate from the editing definition and invalidates late responses', async () => {
-    const store = useAutomationStore()
-    store.detail = automation
-    api.get.mockResolvedValueOnce({ data: { ...automation, revision: 2 } })
-    await store.fetchAutomationStatus(automation.id)
-    expect(api.get).toHaveBeenLastCalledWith('/automations/automation-1/status', {})
-    expect(store.status.revision).toBe(2)
-    expect(store.detail.revision).toBe(1)
-    let resolveStatus
-    api.get.mockReturnValueOnce(new Promise((resolve) => { resolveStatus = resolve }))
-    const request = store.fetchAutomationStatus(automation.id)
-    store.clearDetail()
-    resolveStatus({ data: automation })
-    await request
-    expect(store.status).toBeNull()
-    expect(store.detail).toBeNull()
-  })
-
   it('updates first-page pagination on refresh while retaining already loaded later pages', async () => {
     const store = useAutomationStore()
     api.get.mockResolvedValueOnce({ data: { items: [run], page: 1, hasMore: false } })
@@ -158,20 +139,13 @@ describe('automation store', () => {
     expect(store.hasMore).toBe(false)
   })
 
-  it('loads a run and retries failed delivery', async () => {
-    const failed = { ...run, delivery: { status: 'failed', attempts: 1 } }
-    const retried = { ...run, delivery: { status: 'pending', attempts: 2 } }
-    api.get.mockResolvedValue({ data: failed })
-    api.post.mockResolvedValue({ data: retried })
+  it('loads a run for its session history', async () => {
+    api.get.mockResolvedValue({ data: run })
     const store = useAutomationStore()
 
-    await store.fetchRun(automation.id, run.id)
-    store.runs = [failed]
-    await store.retryDelivery(automation.id, run.id)
+    const result = await store.fetchRun(automation.id, run.id)
 
     expect(api.get).toHaveBeenCalledWith('/automations/automation-1/runs/run-1')
-    expect(api.post).toHaveBeenCalledWith('/automations/automation-1/runs/run-1/delivery-retry')
-    expect(store.selectedRun).toEqual(retried)
-    expect(store.runs).toEqual([retried])
+    expect(result).toEqual(run)
   })
 })

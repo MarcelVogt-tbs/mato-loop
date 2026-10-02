@@ -1621,14 +1621,14 @@ async def session_delete_impact(
             await db.scalars(
                 select(Automation).where(
                     Automation.user_id == user_id,
-                    Automation.output_session_id == session_id,
+                    Automation.execution_session_id == session_id,
                 )
             )
         ).all()
     )
     return {
         "automationCount": len(linked),
-        "requiredAutomationCount": sum(item.output_session_required for item in linked),
+        "requiredAutomationCount": len(linked),
         "automationImpact": automation_impact_token(linked),
         "fileReferenceCount": await _external_file_reference_count_for_roots(
             db,
@@ -1737,12 +1737,12 @@ async def delete_session(
             await db.scalars(
                 select(Automation).where(
                     Automation.user_id == user_id,
-                    Automation.output_session_id == session_id,
+                    Automation.execution_session_id == session_id,
                 )
             )
         ).all()
     )
-    required_count = sum(item.output_session_required for item in linked_automations)
+    required_count = len(linked_automations)
     if automation_mode is not None and automation_impact != automation_impact_token(
         linked_automations
     ):
@@ -1756,30 +1756,6 @@ async def delete_session(
                 "totalAutomationCount": len(linked_automations),
             },
         )
-    if linked_automations and automation_mode is None:
-        raise SessionServiceError(
-            409,
-            "session.automationOutputLinked",
-            params={"automationCount": len(linked_automations)},
-        )
-    automation_agent_run_ids = (
-        list(
-            (
-                await db.scalars(
-                    select(AgentRun.id)
-                    .join(AutomationRun, AutomationRun.agent_run_id == AgentRun.id)
-                    .where(
-                        AutomationRun.automation_id.in_(
-                            [automation.id for automation in linked_automations]
-                        ),
-                        AgentRun.status.in_(ACTIVE_RUN_STATUSES),
-                    )
-                )
-            ).all()
-        )
-        if automation_mode == "deleteAutomations" and linked_automations
-        else []
-    )
     active_runs = list(
         (
             await db.scalars(
@@ -1791,10 +1767,8 @@ async def delete_session(
             )
         ).all()
     )
-    active_run_ids = [*automation_agent_run_ids, *(run.id for run in active_runs)]
+    active_run_ids = [run.id for run in active_runs]
     descendant_roots = [session_id]
-    if automation_mode == "deleteAutomations":
-        descendant_roots.extend(automation.execution_session_id for automation in linked_automations)
     if active_run_ids:
         await db.rollback()
         for run_id in active_run_ids:
@@ -1808,7 +1782,7 @@ async def delete_session(
                 select(Automation)
                 .where(
                     Automation.user_id == user_id,
-                    Automation.output_session_id == session_id,
+                    Automation.execution_session_id == session_id,
                 )
                 .with_for_update()
             )
@@ -1823,13 +1797,13 @@ async def delete_session(
                 select(Automation)
                 .where(
                     Automation.user_id == user_id,
-                    Automation.output_session_id == session_id,
+                    Automation.execution_session_id == session_id,
                 )
                 .with_for_update()
             )
         ).all()
     )
-    required_count = sum(item.output_session_required for item in linked_automations)
+    required_count = len(linked_automations)
     if automation_mode is not None and automation_impact != automation_impact_token(
         linked_automations
     ):
@@ -1842,12 +1816,6 @@ async def delete_session(
                 "automationCount": required_count,
                 "totalAutomationCount": len(linked_automations),
             },
-        )
-    if linked_automations and automation_mode is None:
-        raise SessionServiceError(
-            409,
-            "session.automationOutputLinked",
-            params={"automationCount": len(linked_automations)},
         )
     if automation_mode == "deleteAutomations" and linked_automations:
         late_agent_run_ids = list(
@@ -1877,29 +1845,9 @@ async def delete_session(
                 storage_factory=storage_factory,
                 owned_session_query=owned_session_query,
             )
-    if automation_mode == "unlink":
-        for automation in linked_automations:
-            automation.output_session_id = None
-            automation.delivery_channel_type = None
-            automation.delivery_endpoint_id = None
-            automation.revision += 1
-    execution_sessions = []
-    if automation_mode == "deleteAutomations":
-        execution_sessions = list(
-            (
-                await db.scalars(
-                    select(ChatSession).where(
-                        ChatSession.id.in_(
-                            [automation.execution_session_id for automation in linked_automations]
-                        )
-                    )
-                )
-            ).all()
-        )
     session_storage = storage_factory()
     storage_sessions = [
         (session_id, item.project_id),
-        *((execution_session.id, None) for execution_session in execution_sessions),
     ]
     storage_sessions.extend(
         await descendant_sessions(db, [storage_id for storage_id, _ in storage_sessions])
@@ -1981,8 +1929,6 @@ async def delete_session(
                 await db.delete(automation)
         if automation_mode == "deleteAutomations":
             await db.flush()
-            for execution_session in execution_sessions:
-                await db.delete(execution_session)
         await db.delete(item)
         commit_task = asyncio.create_task(db.commit())
         await asyncio.shield(commit_task)

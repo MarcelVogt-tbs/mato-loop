@@ -87,25 +87,22 @@ export const settingsRoutes = [
   {
     path: 'automations',
     name: 'settings-automations',
-    component: () => import('src/features/automations/AutomationSettingsPage.vue'),
-    meta: { settingsLabel: 'Automationen', settingsIcon: 'schedule' },
-    children: [
-      {
-        path: 'new',
-        name: 'settings-automation-create',
-        component: () => import('src/features/automations/AutomationEditorPage.vue')
-      },
-      {
-        path: ':automationId/edit',
-        name: 'settings-automation-edit',
-        redirect: (to) => ({ name: 'settings-automation-detail', params: to.params, query: to.query })
-      },
-      {
-        path: ':automationId',
-        name: 'settings-automation-detail',
-        component: () => import('src/features/automations/AutomationEditorPage.vue')
-      }
-    ]
+    component: () => import('src/features/automations/AutomationLinkPage.vue')
+  },
+  {
+    path: 'automations/new',
+    name: 'settings-automation-create',
+    component: () => import('src/features/automations/AutomationLinkPage.vue')
+  },
+  {
+    path: 'automations/:automationId/edit',
+    name: 'settings-automation-edit',
+    redirect: (to) => ({ name: 'settings-automation-detail', params: to.params, query: to.query })
+  },
+  {
+    path: 'automations/:automationId',
+    name: 'settings-automation-detail',
+    component: () => import('src/features/automations/AutomationLinkPage.vue')
   },
   {
     path: 'personalization',

@@ -215,13 +215,11 @@ async def test_project_delete_impact_counts_sessions_and_linked_automations() ->
             id=uuid4(),
             user_id=user.id,
             execution_session_id=uuid4(),
-            output_session_id=uuid4(),
-            output_session_required=required,
             name="Automation",
             task="Task",
             revision=index,
         )
-        for index, required in ((1, False), (3, True))
+        for index in (1, 3)
     ]
     session_ids = [uuid4(), uuid4(), uuid4(), uuid4()]
     db = AsyncMock(spec=AsyncSession)
@@ -238,7 +236,7 @@ async def test_project_delete_impact_counts_sessions_and_linked_automations() ->
         "sessionCount": 4,
         "sessionIds": [str(item) for item in sorted(session_ids)],
         "automationCount": 2,
-        "requiredAutomationCount": 1,
+        "requiredAutomationCount": 2,
         "fileReferenceCount": 2,
         "automationImpact": project_delete_impact_token(session_ids, automations),
     }
@@ -316,9 +314,7 @@ async def test_delete_project_enforces_automation_mode_and_impact() -> None:
     automation = Automation(
         id=uuid4(),
         user_id=user.id,
-        execution_session_id=uuid4(),
-        output_session_id=session_id,
-        output_session_required=True,
+        execution_session_id=session_id,
         name="Required",
         task="Task",
         revision=2,
@@ -507,15 +503,10 @@ async def test_delete_project_restores_storage_when_commit_fails(
     session = ChatSession(
         id=uuid4(), user_id=user.id, project_id=project.id, title="Session"
     )
-    execution_session = ChatSession(
-        id=uuid4(), user_id=user.id, session_type="automation", title="Automation"
-    )
     automation = Automation(
         id=uuid4(),
         user_id=user.id,
-        execution_session_id=execution_session.id,
-        output_session_id=session.id,
-        output_session_required=True,
+        execution_session_id=session.id,
         name="Automation",
         task="Task",
         revision=1,
@@ -523,7 +514,7 @@ async def test_delete_project_restores_storage_when_commit_fails(
     storage.provision(session.id, project.id)
     shared_file = storage.logical_root_path(session.id, project.id) / "files" / "shared.txt"
     shared_file.write_text("shared", encoding="utf-8")
-    execution_file = storage.provision(execution_session.id) / "files" / "run.txt"
+    execution_file = storage.logical_root_path(session.id, project.id) / "files" / "run.txt"
     execution_file.write_text("history", encoding="utf-8")
     monkeypatch.setattr(projects_route, "SessionStorage", lambda: storage)
     db = AsyncMock(spec=AsyncSession)
@@ -532,12 +523,9 @@ async def test_delete_project_restores_storage_when_commit_fails(
         _rows(session.id),
         _rows(automation),
         _rows(),
-        _rows(),
         _rows(session),
         _rows(automation),
         _rows(),
-        _rows(),
-        _rows(execution_session),
     ]
     db.commit.side_effect = RuntimeError("commit failed")
 
@@ -562,5 +550,3 @@ async def test_delete_project_restores_storage_when_commit_fails(
     assert shared_file.read_text(encoding="utf-8") == "shared"
     assert execution_file.read_text(encoding="utf-8") == "history"
     assert list(storage.trash_dir.iterdir()) == []
-    execution_session_query = db.scalars.await_args_list[8].args[0]
-    assert user.id in execution_session_query.compile().params.values()

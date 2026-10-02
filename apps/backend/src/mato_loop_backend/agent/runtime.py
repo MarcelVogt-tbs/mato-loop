@@ -135,10 +135,6 @@ class AgentRuntime:
 
     @staticmethod
     async def _deliver_run_push(db: AsyncSession, run: AgentRun, *, failed: bool) -> None:
-        if await db.scalar(
-            select(AutomationRun.id).where(AutomationRun.agent_run_id == run.id)
-        ) is not None:
-            return
         chat_session = await db.get(ChatSession, run.session_id)
         if chat_session is None:
             return
@@ -294,6 +290,11 @@ class AgentRuntime:
             trust_level=trust_level.value,
             provider_data={"_matoloop": {
                 "executionAgentId": str(execution_agent.id) if execution_agent else None,
+                **({"source": {
+                    "type": "automationRun", "automationId": str(automation_run.automation_id),
+                    "runId": str(automation_run.id), "trigger": automation_run.trigger,
+                    "automationName": automation_run.definition_snapshot.get("name"),
+                }} if automation_run is not None else {}),
                 **({"activeFile": active_file} if active_file is not None else {}),
             }},
             source_type=source_type,

@@ -3,6 +3,7 @@ import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'
 import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useApprovalStore } from 'stores/approvals'
+import { useAutomationStore } from 'stores/automations'
 import { useBrowserStore } from 'stores/browser'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
@@ -26,6 +27,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   const route = useRoute()
   const identity = useAgentIdentityStore()
   const approvals = useApprovalStore()
+  const automations = useAutomationStore()
   const browser = useBrowserStore()
   const chat = useChatStore()
   const controlCenter = useControlCenterStore()
@@ -115,6 +117,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     sessionActivityRefreshPending = true
     try {
       const requests = [
+        automations.fetchAutomations({ includeArchived: true, suppressErrorToast: true }),
         approvals.fetchPending({ suppressErrorToast: true }),
         questions.fetchPending({ suppressErrorToast: true })
       ]
@@ -173,6 +176,12 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     ])
   }, { immediate: true })
 
+  watch([() => chat.current?.id, () => controlCenter.ready,
+    () => automations.items.some((item) => item.executionSessionId === chat.current?.id)],
+  ([id, ready, configured]) => {
+    if (id && ready && configured) void controlCenter.ensureApp('automation')?.catch(() => {})
+  }, { immediate: true })
+
   watch(() => route.name === 'chat' && routeSessionId.value === chat.current?.id ? chat.current?.id : null,
     (id) => browser.setDisplayedSession(id), { immediate: true, flush: 'sync' })
 
@@ -207,6 +216,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     refreshAppPresence()
     await Promise.allSettled([
       approvals.fetchPending(),
+      automations.fetchAutomations({ includeArchived: true, suppressErrorToast: true }),
       questions.fetchPending(),
       notifications.fetchLatest({ suppressErrorToast: true }),
       notifications.reconcilePush({ suppressErrorToast: true }),

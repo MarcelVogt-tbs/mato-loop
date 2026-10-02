@@ -17,8 +17,7 @@ import mato_loop_backend.agent.loop as mock_agent_loop
 import mato_loop_backend.agent.runtime as mock_agent_runtime
 import mato_loop_backend.agent.summarization as mock_agent_summarization
 import mato_loop_backend.agent.titles as mock_agent_titles
-import mato_loop_backend.api.routes.terminals as api_routes_terminals
-import mato_loop_backend.db.session as db_session
+import mato_loop_backend.execution.terminals as execution_terminals
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api import workspace_service
 from mato_loop_backend.api.errors import register_error_handlers
@@ -26,12 +25,14 @@ from mato_loop_backend.api.routes import approvals, projects, sessions, workspac
 from mato_loop_backend.automations import AutomationError, AutomationService
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.execution import ExecutionClientError
 from mato_loop_backend.files.service import FileRoot, RootFileService
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.models import (
     AgentRun,
     Automation,
     ChatSession,
+    LoginSession,
     Message,
     PermissionGrant,
     Project,
@@ -56,8 +57,6 @@ async def tree(request, tmp_path, monkeypatch):
     ))
     for module in (sessions, projects, cleanup):
         monkeypatch.setattr(module, "SessionStorage", lambda: storage)
-    monkeypatch.setattr("mato_loop_backend.chat_history.SessionStorage", lambda: storage)
-    monkeypatch.setattr("mato_loop_backend.automations.SessionStorage", lambda: storage)
     async with engine.connect() as connection:
         transaction = await connection.begin()
         try:
@@ -385,31 +384,33 @@ async def test_suffix_undo_preserves_earlier_children_and_removes_child_run_cycl
 async def test_automation_and_terminal_attach_reject_real_child(tree, monkeypatch):
     child = tree.records[1][0]
     with pytest.raises(AutomationError, match="session.readOnly"):
-        await AutomationService.normal_session(tree.db, child.id, tree.user.id, field="outputSessionId")
+        await AutomationService.normal_session(tree.db, child.id, tree.user.id, field="sessionId")
 
     @asynccontextmanager
     async def database():
         yield tree.db
 
-    monkeypatch.setattr(db_session, "AsyncSessionFactory", database)
-    connection = SimpleNamespace(
-        user_id=tree.user.id, agent_id=uuid4(), error=AsyncMock(),
-        websocket=SimpleNamespace(receive_json=AsyncMock(side_effect=[
-            {"type": "attach", "sessionId": str(child.id)}, {"type": "close"},
-        ])),
+    monkeypatch.setattr(execution_terminals, "AsyncSessionFactory", database)
+    login = LoginSession(
+        user_id=tree.user.id, token_hash=uuid4().hex,
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
     )
-    await api_routes_terminals._handle_browser(connection)
-    connection.error.assert_awaited_once_with("session.readOnly")
+    tree.db.add(login)
+    await tree.db.flush()
+    with pytest.raises(ExecutionClientError, match="session.notFound"):
+        await execution_terminals.validate_terminal_access(tree.user.id, child.id, uuid4(), login.id)
 
 
-async def test_automation_delete_cleans_native_child_sessions(tree):
+async def test_multiple_automations_share_session_and_deletion_preserves_its_tree(tree):
     parent = tree.records[0][0]
-    parent.session_type = "automation"
     ids = [item[0].id for item in tree.records]
-    automation = Automation(user_id=tree.user.id, execution_session_id=parent.id, name="Delete tree", task="Task")
-    tree.db.add(automation)
+    automation, other = [await AutomationService.create(
+        tree.db, user_id=tree.user.id, session_id=parent.id, name=name,
+        task="Task", skill_id=None, enabled=True, schedules=[],
+    ) for name in ("Daily report", "Weekly report")]
     await tree.db.commit()
     await AutomationService.delete(tree.db, automation.id, tree.user.id, expected_revision=automation.revision)
-    assert not (await tree.db.scalars(select(ChatSession.id).where(ChatSession.id.in_(ids)))).all()
-    assert all(not tree.storage.session_path(item_id).exists() for item_id in ids)
+    assert set((await tree.db.scalars(select(ChatSession.id).where(ChatSession.id.in_(ids)))).all()) == set(ids)
+    assert await tree.db.scalar(select(Automation.id).where(Automation.execution_session_id == parent.id)) == other.id
+    assert all(tree.storage.session_path(item_id).exists() for item_id in ids)
     assert list(tree.storage.trash_dir.iterdir()) == []

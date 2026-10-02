@@ -1075,7 +1075,6 @@ class AutomationDefinitionArguments(ToolArguments):
     schedules: list[AutomationScheduleArguments] = Field(
         max_length=50, description="Empty for manual runs only."
     )
-    output_session_required: bool = False
     archive_after_success: bool = Field(
         default=False,
         description="One run_at only.",
@@ -1119,20 +1118,12 @@ class GetAutomationArguments(ToolArguments):
 
 
 class CreateAutomationArguments(AutomationDefinitionArguments):
-    deliver_to_current_session: bool = False
+    pass
 
 
 class EditAutomationArguments(AutomationDefinitionArguments):
     automation_id: UUID
     expected_revision: int = Field(ge=1)
-    output_mode: Literal["keep", "current", "none"] = "keep"
-    copy_runtime_from_current_session: bool = False
-
-    @model_validator(mode="after")
-    def required_output_is_possible(self) -> EditAutomationArguments:
-        if self.output_session_required and self.output_mode == "none":
-            raise ValueError("required output cannot use none")
-        return self
 
 
 class RunAutomationArguments(ToolArguments):

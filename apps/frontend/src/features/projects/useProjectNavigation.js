@@ -148,15 +148,6 @@ export function useProjectNavigation({
       )
       if (!automationsAccepted) return
       automationMode = 'deleteAutomations'
-    } else if (impact.automationCount) {
-      const count = impact.automationCount
-      const automationsAccepted = await confirm(
-        `Das Projekt enthält Ausgabeziele von ${count} Automation${count === 1 ? '' : 'en'}. Verknüpfungen lösen und Projekt löschen?`,
-        'Verknüpfte Sessions löschen?',
-        { okLabel: 'Lösen und löschen' }
-      )
-      if (!automationsAccepted) return
-      automationMode = 'unlink'
     }
     const affectedTabs = controlCenter.fileTabs.filter((tab) => (
       tab.fileTarget.scope === 'session' && impact.sessionIds.includes(tab.fileTarget.rootIdentity)

@@ -2,6 +2,7 @@ export const controlCenterIntegrationManifest = Object.freeze([
   { id: 'session', label: 'Session', icon: 'tune', fixed: true },
   { id: 'agent-coding', label: 'Agent-Coding', icon: 'smart_toy' },
   { id: 'files', label: 'Ablage', icon: 'folder_open' },
+  { id: 'automation', label: 'Automationen', icon: 'schedule' },
   { id: 'computer-files', label: 'Computer-Dateien', icon: 'folder_shared' },
   { id: 'mail', label: 'E-Mail', icon: 'mail' },
   { id: 'tbs-desk', label: 'tbs.Desk', icon: 'confirmation_number' },

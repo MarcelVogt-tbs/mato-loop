@@ -23,4 +23,4 @@ Die endgültige Antwort wird als normale Nachricht zugestellt und zusammen mit d
 
 ## Administrative Freigabe
 
-Telegram ist bei einer neuen Installation zunächst erlaubt. Administratoren können den Anbieter unter **Einstellungen > Kanäle > Verfügbare Kanäle** global sperren oder erneut erlauben. Während einer Sperrung bleiben persönliche Telegram-Instanzen und ihre Automationseinstellungen gespeichert, werden aber ausgeblendet und nicht verwendet. Automationsläufe fallen in dieser Zeit auf die MatoLoop-App zurück; bereits wartende Telegram-Zustellungen werden nicht später nachgesendet.
+Telegram is enabled for new installations. Administrators can disable or enable the provider under **Einstellungen > Kanäle > Verfügbare Kanäle**. While disabled, personal Telegram instances remain stored but are unavailable. Queued Telegram deliveries are not replayed after re-enabling the provider. Scheduled automation turns and their results are available in their normal MatoLoop session; there is no separate automation output-channel configuration.

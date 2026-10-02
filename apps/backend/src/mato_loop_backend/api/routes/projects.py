@@ -22,7 +22,6 @@ from mato_loop_backend.files.storage import SessionStorage, SessionStorageError
 from mato_loop_backend.models import (
     AgentRun,
     Automation,
-    AutomationRun,
     ChatSession,
     Message,
     MessageAttachment,
@@ -179,7 +178,7 @@ async def _linked_automations(
 ) -> list[Automation]:
     statement = select(Automation).where(
         Automation.user_id == user_id,
-        Automation.output_session_id.in_(_project_session_ids(project_id, user_id)),
+        Automation.execution_session_id.in_(_project_session_ids(project_id, user_id)),
     )
     if for_update:
         statement = statement.execution_options(populate_existing=True).with_for_update()
@@ -199,7 +198,7 @@ def _validate_automation_policy(
     automations: list[Automation],
     automation_mode: Literal["unlink", "deleteAutomations"] | None,
 ) -> None:
-    required_count = sum(item.output_session_required for item in automations)
+    required_count = len(automations)
     if required_count and automation_mode != "deleteAutomations":
         raise ApiError(
             409,
@@ -208,12 +207,6 @@ def _validate_automation_policy(
                 "automationCount": required_count,
                 "totalAutomationCount": len(automations),
             },
-        )
-    if automations and automation_mode is None:
-        raise ApiError(
-            409,
-            "session.automationOutputLinked",
-            params={"automationCount": len(automations)},
         )
 
 
@@ -355,9 +348,7 @@ async def project_delete_impact(
         "sessionCount": len(sorted_session_ids),
         "sessionIds": [str(item) for item in sorted_session_ids],
         "automationCount": len(linked),
-        "requiredAutomationCount": sum(
-            item.output_session_required for item in linked
-        ),
+        "requiredAutomationCount": len(linked),
         "fileReferenceCount": await _external_file_reference_count(
             db, storage_session_ids
         ),
@@ -392,10 +383,8 @@ async def delete_project(
         raise ApiError(409, "session.automationImpactChanged")
     _validate_automation_policy(linked_automations, automation_mode)
 
-    async def active_run_ids(
-        current_session_ids: list[UUID], automation_ids: list[UUID]
-    ) -> list[UUID]:
-        run_ids = list(
+    async def active_run_ids(current_session_ids: list[UUID]) -> list[UUID]:
+        return list(
             (
                 await db.scalars(
                     select(AgentRun.id).where(
@@ -406,20 +395,6 @@ async def delete_project(
                 )
             ).all()
         )
-        if automation_mode == "deleteAutomations" and automation_ids:
-            run_ids.extend(
-                (
-                    await db.scalars(
-                        select(AgentRun.id)
-                        .join(AutomationRun, AutomationRun.agent_run_id == AgentRun.id)
-                        .where(
-                            AutomationRun.automation_id.in_(automation_ids),
-                            AgentRun.status.in_(ACTIVE_STATUSES),
-                        )
-                    )
-                ).all()
-            )
-        return list(dict.fromkeys(run_ids))
 
     async def cancel_runs(run_ids: list[UUID]) -> None:
         not_local = []
@@ -434,11 +409,8 @@ async def delete_project(
         ):
             raise ApiError(409, "session.runAlreadyActive")
 
-    automation_ids = [item.id for item in linked_automations]
     cancellation_roots = [*session_ids]
-    if automation_mode == "deleteAutomations":
-        cancellation_roots.extend(item.execution_session_id for item in linked_automations)
-    if run_ids := await active_run_ids(session_ids, automation_ids):
+    if run_ids := await active_run_ids(session_ids):
         await db.rollback()
         await cancel_runs(run_ids)
     await db.rollback()
@@ -468,10 +440,7 @@ async def delete_project(
         ):
             raise ApiError(409, "session.automationImpactChanged")
         _validate_automation_policy(linked_automations, automation_mode)
-        automation_ids = [item.id for item in linked_automations]
         deletion_roots = [item.id for item in sessions]
-        if automation_mode == "deleteAutomations":
-            deletion_roots.extend(item.execution_session_id for item in linked_automations)
         descendants = await descendant_sessions(db, deletion_roots)
         storage_session_ids = [
             *deletion_roots,
@@ -489,9 +458,7 @@ async def delete_project(
                 "session.filesReferenced",
                 params={"referenceCount": reference_count},
             )
-        late_run_ids = await active_run_ids(
-            storage_session_ids, automation_ids
-        )
+        late_run_ids = await active_run_ids(storage_session_ids)
         coding_execution_id = await db.scalar(
             select(ProjectPlanExecution.id)
             .where(
@@ -511,24 +478,8 @@ async def delete_project(
         if attempt == 1:
             raise ApiError(409, "session.runAlreadyActive")
 
-    execution_sessions = []
-    if automation_mode == "deleteAutomations" and linked_automations:
-        execution_session_ids = [
-            item.execution_session_id for item in linked_automations
-        ]
-        execution_sessions = list(
-            (
-                await db.scalars(
-                    select(ChatSession).where(
-                        ChatSession.id.in_(execution_session_ids),
-                        ChatSession.user_id == owner_id,
-                    )
-                )
-            ).all()
-        )
     extra_storage = dict(
-        [(item.id, item.project_id) for item in execution_sessions]
-        + [(child_id, child_project) for child_id, child_project in descendants
+        [(child_id, child_project) for child_id, child_project in descendants
            if child_project != project_db_id]
     )
 
@@ -602,10 +553,6 @@ async def delete_project(
 
     commit_task: asyncio.Task[None] | None = None
     try:
-        if automation_mode == "unlink":
-            for automation in linked_automations:
-                automation.output_session_id = None
-                automation.revision += 1
         if automation_mode == "deleteAutomations":
             for automation in linked_automations:
                 await db.delete(automation)
