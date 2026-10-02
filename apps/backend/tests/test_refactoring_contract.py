@@ -1,4 +1,4 @@
-"""Freeze the public model contract, including the unified personal settings tool."""
+"""Freeze the public model contract, including automation triggers and administrator input."""
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -30,4 +30,4 @@ def test_model_contract_survives_module_extraction():
                 ),
             })
     digest = hashlib.sha256(json.dumps(contracts, sort_keys=True).encode()).hexdigest()
-    assert digest == "159883c35e71b008667b05931ec9b980a481e5a9adbb96c2d7c3eb1ba115db5e"
+    assert digest == "f82ade86d556bd960e2a8b16da43b2a96a1ce9f75c6b2792b47c32216fb623eb"

@@ -109,8 +109,8 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     prompt_tokens = estimate_tokens(prompt, 4.0) + estimate_tokens(memory_prompt, 4.0)
     schema_tokens = estimate_tokens(schemas, 4.0)
 
-    assert len(schemas) == 55
-    assert {"load_skill", "build_skill", "edit_skill"} <= {
+    assert len(schemas) == 56
+    assert {"load_skill", "build_skill", "edit_skill", "request_session_permissions"} <= {
         schema["name"] for schema in schemas
     }
     build_skill = next(schema for schema in schemas if schema["name"] == "build_skill")
@@ -119,7 +119,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
         "brief",
         "name_hint",
     }
-    assert prompt_tokens <= 7_800, prompt_tokens
-    # Protected text, Wi-Fi QR and optional administrator arguments expand the schemas.
-    assert schema_tokens <= 12_800, schema_tokens
-    assert prompt_tokens + schema_tokens <= 20_600, prompt_tokens + schema_tokens
+    # Event-driven automations, permission preparation and administrator input expand the contract.
+    assert prompt_tokens <= 8_000, prompt_tokens
+    assert schema_tokens <= 13_200, schema_tokens
+    assert prompt_tokens + schema_tokens <= 21_200, prompt_tokens + schema_tokens

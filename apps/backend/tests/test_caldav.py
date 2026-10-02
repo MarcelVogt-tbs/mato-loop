@@ -378,16 +378,19 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
         tool_settings=settings,
     )
 
-    assert len(effective.prompt_fragments) == 3
-    assert effective.prompt_fragments[0].startswith("A default calendar is configured.")
-    assert "call calendar_query_events or calendar_create_event directly" in (
-        effective.prompt_fragments[0]
+    calendar_fragment = next(
+        fragment for fragment in effective.prompt_fragments
+        if fragment.startswith("A default calendar is configured.")
     )
-    assert "omit both integration_id and calendar_key" in effective.prompt_fragments[0]
-    assert "For another calendar, include both" in effective.prompt_fragments[0]
-    assert "copy eventToken, integrationId, and calendarKey" in effective.prompt_fragments[1]
-    assert "mutation succeeds only" in effective.prompt_fragments[1]
-    assert "copy taskToken, integrationId, and taskListKey" in effective.prompt_fragments[2]
+    assert "call calendar_query_events or calendar_create_event directly" in (
+        calendar_fragment
+    )
+    assert "omit both integration_id and calendar_key" in calendar_fragment
+    assert "For another calendar, include both" in calendar_fragment
+    instructions = "\n".join(effective.prompt_fragments)
+    assert "copy eventToken, integrationId, and calendarKey" in instructions
+    assert "mutation succeeds only" in instructions
+    assert "copy taskToken, integrationId, and taskListKey" in instructions
     for name in ("calendar_query_events", "calendar_create_event"):
         tool = effective.tools[name]
         assert tool.default_arguments == {
@@ -418,13 +421,13 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
     ]["required"]
     assert "integration_id" in required
     assert "calendar_key" in required
-    assert len(without_active_default.prompt_fragments) == 2
-    assert "copy eventToken, integrationId, and calendarKey" in (
-        without_active_default.prompt_fragments[0]
+    assert not any(
+        fragment.startswith("A default calendar is configured.")
+        for fragment in without_active_default.prompt_fragments
     )
-    assert "copy taskToken, integrationId, and taskListKey" in (
-        without_active_default.prompt_fragments[1]
-    )
+    instructions = "\n".join(without_active_default.prompt_fragments)
+    assert "copy eventToken, integrationId, and calendarKey" in instructions
+    assert "copy taskToken, integrationId, and taskListKey" in instructions
 
 
 def test_active_default_task_list_is_bound_to_query_and_create_tools() -> None:
