@@ -272,7 +272,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
             client.agent_id, client.current_directory, capability=f"shell.{inspection.classification}",
             command=arguments.command, inspection=inspection,
         )
-        if not await tools_access.allow(context, permission):
+        if not await administrator.authorize(context, permission, arguments.sudo_password_ref):
             return ToolResult.error("permission.denied")
         resolved = await resolve_secret_refs(context, arguments.environment)
         if isinstance(resolved, ToolResult):
@@ -297,7 +297,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
             )
         except ExecutionClientError as exc:
             if exc.code in {"process.sudoAuthFailed", "process.sudoAuthRequired"}:
-                discard_sudo_reference(context, client.agent_id, reference)
+                discard_sudo_reference(context, reference)
             raise
     terminal = terminal_coordinator.attached_for(
         user_id=context.session.user_id,
@@ -424,9 +424,10 @@ SHELL_RUN = ToolDefinition(
              "attached terminal. It uses the same shell.read/shell.write classification as ordinary execution. "
             "Use environment references for explicit variables; elevated commands preserve only "
             "those named variables through sudo. "
-             "The host combines administrator approval and any missing password in one request. "
-             "An existing computer-specific sudo reference may be passed as sudo_password_ref. "
-             "Do not ask for a password or duplicate confirmation before calling the tool. "
+             "Select an existing password reference by its name or description and target computer, "
+             "or call secret_input with administrator=true on the masked password field. "
+             "Pass the reference as sudo_password_ref. The input grants administrator access for "
+             "this run; the user may extend it to the session in the input dialog. "
             "Do not put sudo, password pipes, or a password in the command.",
             ShellRunArguments,
             _shell_run,

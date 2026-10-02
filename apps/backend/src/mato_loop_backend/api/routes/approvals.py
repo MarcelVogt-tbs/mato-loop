@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +13,13 @@ from mato_loop_backend.agent.run_support import approval_payload
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.memory.service import MemoryApprovalEdit, MemoryService
-from mato_loop_backend.models import ApprovalRequest, ChatSession, PermissionGrant, UserAccount
+from mato_loop_backend.models import (
+    ApprovalRequest,
+    ChatSession,
+    ExecutionAgent,
+    PermissionGrant,
+    UserAccount,
+)
 from mato_loop_backend.permissions.decisions import ApprovalDecisionError, decide_agent_action
 from mato_loop_backend.security import require_user
 from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
@@ -39,18 +45,10 @@ class ApprovalDecisionRequest(BaseModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
-    sudo_password: str | None = Field(default=None, min_length=1, max_length=4096, repr=False)
-
-    @field_validator("sudo_password")
-    @classmethod
-    def single_line_password(cls, value: str | None) -> str | None:
-        if value is not None and any(character in value for character in "\r\n\0"):
-            raise ValueError("Invalid sudo password")
-        return value
 
 
-def _permission_payload(
-    grant: PermissionGrant, source: ApprovalRequest | None = None
+async def _permission_payload(
+    db: AsyncSession, user: UserAccount, grant: PermissionGrant, source: ApprovalRequest | None = None
 ) -> dict:
     resource_display = None
     shell_details = {}
@@ -79,6 +77,10 @@ def _permission_payload(
                 "shellClassification": source.payload.get("shellClassification"),
                 "shellPrefixes": source.payload.get("shellPrefixes"),
             }
+    if grant.resource_type == "execution_administrator":
+        computer = await db.get(ExecutionAgent, UUID(grant.resource_scope))
+        if computer is not None and computer.user_id == user.id:
+            resource_display = computer.alias
     return {
         "id": str(grant.id),
         "capability": grant.capability,
@@ -132,11 +134,6 @@ async def decide_approval(
     approval = await db.get(ApprovalRequest, approval_id)
     if approval is None or approval.user_id != user.id:
         raise ApiError(404, "approval.notFound")
-    if payload.sudo_password is not None and (
-        not payload.decision.startswith("allow") or approval.resource_type != "execution_administrator"
-        or not (approval.payload or {}).get("sudoPasswordInput")
-    ):
-        raise ApiError(400, "validation.invalid", field="sudo_password")
     if payload.memory_edit is not None and (
         payload.decision != "approve"
         or approval.request_type != "memory_change"
@@ -177,7 +174,6 @@ async def decide_approval(
                 else ()
             ),
             argument_revision=payload.argument_revision,
-            sudo_password=payload.sudo_password,
         )
     except ApprovalDecisionError as exc:
         raise ApiError(
@@ -256,7 +252,7 @@ async def list_permissions(
             if item.source_approval_id is not None
             else None
         )
-        payloads.append(_permission_payload(item, source))
+        payloads.append(await _permission_payload(db, user, item, source))
     return payloads
 
 
@@ -279,7 +275,7 @@ async def all_permissions(
     ).all()
     return [
         {
-            **_permission_payload(grant, source),
+            **await _permission_payload(db, user, grant, source),
             "sessionId": str(session.id),
             "sourceSession": {"id": str(session.id), "title": session.title},
         }

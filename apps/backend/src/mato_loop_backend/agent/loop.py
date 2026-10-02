@@ -87,6 +87,7 @@ async def execute_loop_body(
     one_time_secrets: dict[UUID, str],
 ) -> None:
     run_secret_refs: dict[str, str] = {}
+    administrator_access: set[UUID] = set()
     visible_response = visible_response or _VisibleResponse()
     chat_session = await db.get(ChatSession, run.session_id)
     if chat_session is None:
@@ -713,6 +714,7 @@ async def execute_loop_body(
                 session_read_cursors=session_read_cursors,
                 one_time_secrets=one_time_secrets,
                 run_secret_refs=run_secret_refs,
+                administrator_access=administrator_access,
                 ephemeral_images=ephemeral_images, live_tool_calls=live_tool_calls,
                 model_request=model_request, diagnostics_active=diagnostics_active,
                 next_helper_request=next_helper_request,

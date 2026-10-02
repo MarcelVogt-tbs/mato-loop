@@ -68,7 +68,7 @@ it('masks password questions, submits exact values, and clears failed drafts', a
   await vi.waitFor(() => expect(input.value).toBe(''))
 })
 
-it('submits visible and masked one-time credentials together and clears both', async () => {
+it.each([false, true])('submits protected credentials with optional administrator consent (admin=%s)', async (administrator) => {
   api.post.mockRejectedValue(new Error('network'))
   const request = {
     id: 'question-1',
@@ -85,7 +85,8 @@ it('submits visible and masked one-time credentials together and clears both', a
         header: 'Passwort',
         question: 'Wie lautet das Passwort?',
         type: 'password',
-        one_time: true
+        one_time: true,
+        ...(administrator ? { administrator: { agent_id: 'computer-1', alias: 'AI-PC' } } : {})
       }
     ]
   }
@@ -99,7 +100,7 @@ it('submits visible and masked one-time credentials together and clears both', a
   app.mount(root)
   await nextTick()
 
-  expect(root.textContent).toContain('standardmäßig nur einmal verwendet')
+  expect(root.textContent).toContain('im laufenden Durchlauf verwendet')
   expect(root.textContent).toContain('Für diese Session merken')
   expect(root.textContent).toContain('nicht dauerhaft gespeichert')
   const username = root.querySelector('input[type="text"]')
@@ -114,6 +115,11 @@ it('submits visible and masked one-time credentials together and clears both', a
 
   const password = root.querySelector('input[type="password"]')
   expect(root.querySelector('[role="checkbox"]').getAttribute('aria-checked')).toBe('false')
+  if (administrator) {
+    expect(root.textContent).toContain('Administratorzugriffe auf AI-PC für diese Session erlauben')
+    expect(root.textContent).not.toContain('Für diese Session merken')
+    root.querySelector('[role="checkbox"]').click()
+  }
   expect(password.autocomplete).toBe('new-password')
   password.value = '  exact secret  '
   password.dispatchEvent(new Event('input', { bubbles: true }))
@@ -124,7 +130,7 @@ it('submits visible and masked one-time credentials together and clears both', a
       SSH_USERNAME: ['  viktor  '],
       SSH_PASSWORD: ['  exact secret  ']
     },
-    remember_for_session: ['SSH_USERNAME']
+    remember_for_session: administrator ? ['SSH_USERNAME', 'SSH_PASSWORD'] : ['SSH_USERNAME']
   }))
   await vi.waitFor(() => expect(password.value).toBe(''))
   ;[...root.querySelectorAll('button')].find((button) => button.textContent.includes('Zurück')).click()

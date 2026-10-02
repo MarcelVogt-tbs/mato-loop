@@ -1,7 +1,7 @@
 import json
 from dataclasses import replace
 from unittest.mock import AsyncMock, Mock
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -796,9 +796,8 @@ async def test_policy_revocation_while_waiting_for_approval_stops_action(
     assert decision == PermissionDecision.DENY
 
 
-async def test_administrator_password_and_once_approval_are_reused_for_revalidation(tmp_path, monkeypatch):
+async def test_administrator_once_approval_is_reused_for_revalidation(tmp_path, monkeypatch):
     from mato_loop_backend.agent.run_contracts import ApprovalResolution
-    from mato_loop_backend.agent.session_secrets import session_secrets
 
     agent = ExecutionAgent(id=uuid4(), user_id=uuid4(), home_directory="/home/user", home_filesystem_policy="auto", external_filesystem_policy="ask")
     session = _session(user_id=agent.user_id, preferred_execution_agent_id=agent.id, current_directory="/work")
@@ -809,32 +808,25 @@ async def test_administrator_password_and_once_approval_are_reused_for_revalidat
     monkeypatch.setattr(mock_agent_runtime, "delegation_snapshot", AsyncMock(return_value=None))
     monkeypatch.setattr(mock_agent_runtime, "load_agent_profile_tools", AsyncMock(return_value=(settings, sysadmin_profile())))
     monkeypatch.setattr(mock_agent_runtime, "load_effective_integrations", AsyncMock(return_value=IntegrationSettings()))
-    approve = AsyncMock(return_value=ApprovalResolution("allow_once", sudo_password="private password"))
+    approve = AsyncMock(return_value=ApprovalResolution("allow_once"))
     monkeypatch.setattr(AgentRuntime, "_request_approval", approve)
     request = administrator_permission(agent.id, "/work", capability="filesystem.write", path="/etc/demo.conf")
-    request = replace(request, approval_details={**request.approval_details, "sudoPasswordInput": True})
     run = AgentRun(id=uuid4(), session_id=session.id)
     call = ToolCall("edit", "edit_file", {"root": "computer", "path": "/etc/demo.conf", "oldText": "old", "newText": "new", "elevated": True})
     resolution = {}
     roots = _root_files(tmp_path, session)
-    try:
-        assert await AgentRuntime._authorize(db, run, session, call, request, roots, resolution) == PermissionDecision.ALLOW
-        reference = session_secrets.references(session.id)[f"SUDO_PASSWORD_{agent.id.hex.upper()}"]
-        assert session_secrets.resolve(session.id, UUID(reference.split(":")[1])) == "private password"
-        checked = replace(request, approval_details={**request.approval_details, "sudoPasswordInput": False})
-        assert await AgentRuntime._authorize(db, run, session, call, checked, roots, resolution, check_only=True) == PermissionDecision.ALLOW
-        assert approve.await_count == 1
-        resolution.clear()
-        resolution["argument_edit_approved"] = json.dumps({
-            "arguments": call.arguments, "permission": mock_agent_run_support._argument_edit_permission_binding(checked),
-        })
-        assert await AgentRuntime._authorize(db, run, session, call, checked, roots, resolution) == PermissionDecision.ALLOW
-        assert await AgentRuntime._authorize(db, run, session, call, checked, roots, resolution, check_only=True) == PermissionDecision.ALLOW
-        assert approve.await_count == 1
-        settings.permissions.policies["filesystem.write"] = ToolExecutionPolicy.DISABLED
-        assert await AgentRuntime._authorize(db, run, session, call, checked, roots, resolution, check_only=True) == PermissionDecision.DENY
-    finally:
-        session_secrets.clear_session(session.id)
+    assert await AgentRuntime._authorize(db, run, session, call, request, roots, resolution) == PermissionDecision.ALLOW
+    assert await AgentRuntime._authorize(db, run, session, call, request, roots, resolution, check_only=True) == PermissionDecision.ALLOW
+    assert approve.await_count == 1
+    resolution.clear()
+    resolution["argument_edit_approved"] = json.dumps({
+        "arguments": call.arguments, "permission": mock_agent_run_support._argument_edit_permission_binding(request),
+    })
+    assert await AgentRuntime._authorize(db, run, session, call, request, roots, resolution) == PermissionDecision.ALLOW
+    assert await AgentRuntime._authorize(db, run, session, call, request, roots, resolution, check_only=True) == PermissionDecision.ALLOW
+    assert approve.await_count == 1
+    settings.permissions.policies["filesystem.write"] = ToolExecutionPolicy.DISABLED
+    assert await AgentRuntime._authorize(db, run, session, call, request, roots, resolution, check_only=True) == PermissionDecision.DENY
 
 
 @pytest.mark.parametrize("kind", ["file", "shell"])

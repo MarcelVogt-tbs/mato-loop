@@ -227,12 +227,6 @@ def test_skill_write_is_deny_only_and_directs_user_to_matoloop(action_kind) -> N
     )
 
 
-def test_administrator_password_is_entered_in_matoloop_not_a_channel() -> None:
-    approval = _approval()
-    approval.payload["sudoPasswordInput"] = True
-    assert [action.decision for action in build_approval_actions(approval)] == ["deny"]
-
-
 def test_agent_actions_intersect_supported_decisions_in_stable_order() -> None:
     approval = _approval()
     approval.available_decisions = ["deny", "approve", "allow_once"]

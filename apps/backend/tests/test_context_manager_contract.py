@@ -1740,8 +1740,8 @@ def test_secret_input_prompt_routes_all_credentials_before_probing() -> None:
     assert "returned environment references to shell_run.environment" in prompt
     assert "references remain reusable throughout the current run" in prompt
     assert "shell_run(elevated=true), without sudo in the command" in prompt
-    assert "combines approval and any missing administrator password" in prompt
-    assert "Administrator passwords are handled by elevated tools' approval requests" in prompt
+    assert "secret_input with administrator=true" in prompt
+    assert "Submitting administrator input grants access" in prompt
     assert "Try elevated shell commands without a password first" not in prompt
     assert "not a confirmed disclosure" in prompt
 

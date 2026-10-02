@@ -186,18 +186,6 @@
             />
             <q-chip v-if="shellClassification.incomplete" dense square outline label="Analyse unvollständig" />
           </div>
-          <q-input
-            v-if="approval.payload?.sudoPasswordInput"
-            v-model="sudoPassword"
-            outlined
-            type="password"
-            autocomplete="current-password"
-            label="Administrator-Passwort"
-            hint="Leer lassen, wenn sudo ohne Passwort eingerichtet ist."
-            :maxlength="4096"
-            :disable="Boolean(loadingDecision)"
-            class="q-mt-md"
-          />
         </div>
         <div v-if="skillPreview" class="approval-resource q-mt-md">
           <div class="text-caption app-muted">Skill-Vorschau</div>
@@ -348,7 +336,6 @@ const memoryCategoryOptions = ['context', 'fact', 'goal', 'identity', 'preferenc
 const memoryAudienceOptions = ['private_only', 'public_only', 'both']
   .map((value) => ({ value, label: memoryAudienceLabel(value) }))
 const rememberForSession = ref(false)
-const sudoPassword = ref('')
 const shellClassification = computed(() => shellClassificationDisplay(props.approval))
 const sessionGrantDisplay = computed(() => (
   props.approval.details?.displayItems || props.approval.payload?.displayItems || []
@@ -530,9 +517,7 @@ async function decide(decision) {
           }))
         }
       : undefined
-    await approvals.decide(props.approval.id, decision, draftRevision.value, edit, toolEdit,
-      decision.startsWith('allow') && props.approval.payload?.sudoPasswordInput ? sudoPassword.value || undefined : undefined)
-    sudoPassword.value = ''
+    await approvals.decide(props.approval.id, decision, draftRevision.value, edit, toolEdit)
   } catch {
     // The central API interceptor displays the error; local edits remain available.
   } finally {

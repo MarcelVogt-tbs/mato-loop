@@ -184,15 +184,23 @@ class PersonalVariableSaveProposal(ToolArguments):
         return self
 
 
+class AdministratorQuestionTarget(ToolArguments):
+    agent_id: UUID
+    alias: str
+
+
 class ProtectedQuestionItem(QuestionBase):
     type: Literal["value", "password"]
     save_proposal: PersonalVariableSaveProposal | None = None
     one_time: bool = False
+    administrator: AdministratorQuestionTarget | None = None
 
     @model_validator(mode="after")
     def type_matches_proposal(self) -> ProtectedQuestionItem:
         if self.default_answers:
             raise ValueError("protected questions cannot have defaults")
+        if self.administrator is not None and (not self.one_time or self.type != "password"):
+            raise ValueError("administrator input requires a temporary password")
         if (self.save_proposal is None) == (not self.one_time):
             raise ValueError("protected question requires exactly one purpose")
         if self.save_proposal is not None and (
@@ -246,6 +254,8 @@ def validate_protected_question_answers(
             or len(value) > 20_000
         ):
             raise ValueError("protected answer is invalid")
+        if question.administrator is not None and (len(value) > 4096 or any(char in value for char in "\r\n")):
+            raise ValueError("administrator password must be a single line of at most 4096 characters")
         validated[question.id] = [value]
     return validated
 
@@ -505,6 +515,10 @@ class SecretInputField(ToolArguments):
         description="Optional purpose for session reuse; never include the value.",
     )
     masked: bool = True
+    administrator: bool = Field(
+        default=False,
+        description="Request administrator access to the selected computer with this password input.",
+    )
 
     @field_validator("label", "question")
     @classmethod
@@ -522,6 +536,10 @@ class SecretInputArguments(ToolArguments):
         names = [item.name for item in self.inputs]
         if len(names) != len(set(names)):
             raise ValueError("input names must be unique")
+        if sum(item.administrator for item in self.inputs) > 1 or any(
+            item.administrator and not item.masked for item in self.inputs
+        ):
+            raise ValueError("administrator input requires one masked field")
         return self
 
 

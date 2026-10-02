@@ -11,7 +11,9 @@ from PIL import Image
 from pydantic import ValidationError
 
 import mato_loop_backend.tools.interaction as mock_tools_interaction
+from mato_loop_backend.agent.question_decisions import answer_question
 from mato_loop_backend.agent.run_support import _external_working_directory_policy, _tool_policy
+from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.agent.subagents import permission_snapshot
 from mato_loop_backend.execution import (
@@ -48,7 +50,14 @@ from mato_loop_backend.execution.transfers import (
 )
 from mato_loop_backend.files.access import execution_path
 from mato_loop_backend.files.service import RootFileService, SessionStorage
-from mato_loop_backend.models import ChatSession, Credential, ExecutionAgent, PermissionGrant
+from mato_loop_backend.models import (
+    AgentRun,
+    ChatSession,
+    Credential,
+    ExecutionAgent,
+    PermissionGrant,
+    QuestionRequest,
+)
 from mato_loop_backend.permissions.policy import (
     PermissionDecision,
     PermissionDisplayItem,
@@ -95,7 +104,7 @@ class FakeExecutionClient:
     async def request(self, operation, arguments, _result_model, **_kwargs):
         self.requests.append((operation, arguments))
         if operation == "administrator.run" and arguments["operation"] == "authenticate":
-            return AdministratorAuthenticationResult(passwordless=False)
+            return self.responses.get("authenticate", AdministratorAuthenticationResult(passwordless=True))
         if operation == "shell.classify" or operation == "administrator.run" and arguments["operation"] == "shell.inspect":
             return ShellInspectResult(
                 classification="read", read_only=True, analysis_complete=operation != "shell.classify",
@@ -154,7 +163,7 @@ def test_shell_tool_cannot_select_execution_targets() -> None:
         "sudo_password_ref",
     }
     assert shell["parameters"]["required"] == ["command"]
-    assert "combines administrator approval and any missing password" in shell["description"]
+    assert "secret_input with administrator=true" in shell["description"]
     assert "command's purpose" in shell["parameters"]["properties"]["_reason"]["description"]
     assert ShellRunArguments(command="pwd").timeout is None
     assert not ShellRunArguments(command="pwd").elevated
@@ -490,7 +499,6 @@ async def test_elevated_files_use_structured_worker_and_existing_permissions(tmp
     assert not result.is_error
     assert client.requests[-1][1]["operation"] == operation
     assert context.ask_handler.await_args.args[0].capability == ("filesystem.read" if tool == "read" else "filesystem.write")
-    assert context.ask_handler.await_args.args[0].approval_details["sudoPasswordInput"] is True
 
 
 async def test_apply_patch_resolves_paths_and_checks_each_permission(tmp_path) -> None:
@@ -718,7 +726,6 @@ async def test_elevated_shell_uses_read_classification_and_privileged_inspection
         command="ls /root", elevated=True,
     ), context)
     assert not result.is_error
-    assert [operation for operation, _ in client.requests] == ["shell.classify", "administrator.run", "administrator.run", "administrator.run"]
     request = context.ask_handler.await_args.args[0]
     assert request.capability == "shell.read"
     assert request.resource_type == "execution_administrator"
@@ -784,7 +791,7 @@ async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_p
 
     async def execute(operation, _arguments, _model, *, on_event=None, **_kwargs):
         if operation == "administrator.run" and _arguments["operation"] == "authenticate":
-            return AdministratorAuthenticationResult(passwordless=False)
+            return AdministratorAuthenticationResult(passwordless=True)
         if operation == "shell.classify" or _arguments["operation"] == "shell.inspect":
             return ShellInspectResult(classification="read", read_only=True, analysis_complete=True, inspection_revision="a" * 64, targets=[], commands=[])
         assert operation == "administrator.run"
@@ -826,7 +833,7 @@ async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_p
         assert request.await_count == 1  # Classification never executes a command.
 
 
-async def test_elevated_shell_reuses_only_this_agents_session_password(tmp_path) -> None:
+async def test_password_reference_does_not_grant_access_to_another_computer(tmp_path) -> None:
     response = ProcessResult(
         exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0,
         stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
@@ -845,11 +852,12 @@ async def test_elevated_shell_reuses_only_this_agents_session_password(tmp_path)
         )
         assert "private password" not in result.content
         client.agent_id = uuid4()
+        context.ask_handler.return_value = PermissionDecision.ASK
         result = await _shell_run(ShellRunArguments(
             command="id -u", elevated=True, sudo_password_ref=references[name],
         ), context)
         assert result.is_error
-        assert json.loads(result.content)["error"]["code"] == "secret.valueRefUnavailable"
+        assert json.loads(result.content)["error"]["code"] == "permission.denied"
     finally:
         session_secrets.clear_session(context.session.id)
 
@@ -889,7 +897,7 @@ async def test_elevated_shell_reprompts_only_for_rejected_passwords(tmp_path, re
 
     client = FakeExecutionClient({"administrator.run": fail}, {"shell.run", "shell.classify", "administrator.run"})
     context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
-    name = f"SUDO_PASSWORD_{client.agent_id.hex.upper()}"
+    name = "SERVER_PASSWORD"
     other_name = f"SUDO_PASSWORD_{uuid4().hex.upper()}"
     other_refs = session_secrets.put(context.session.id, {other_name: "other password"})
     question = AsyncMock(side_effect=[
@@ -905,6 +913,7 @@ async def test_elevated_shell_reprompts_only_for_rejected_passwords(tmp_path, re
     try:
         context.tool_call = secret
         original = await tools.execute(secret, context)
+        shell.arguments["sudo_password_ref"] = json.loads(original.content)["environment"][name]
         context.tool_call = shell
         failed = await tools.execute(shell, context)
         assert json.loads(failed.content)["error"]["code"] == error_code
@@ -922,6 +931,7 @@ async def test_elevated_shell_reprompts_only_for_rejected_passwords(tmp_path, re
             stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
         )
         context.tool_call = shell
+        shell.arguments["sudo_password_ref"] = json.loads(replacement.content)["environment"][name]
         result = await tools.execute(shell, context)
         assert not result.is_error
         assert client.requests[-1][1]["sudoPassword"] == ("correct" if rejected else "wrong")
@@ -935,6 +945,94 @@ async def test_elevated_shell_requires_a_capable_agent_before_approval(tmp_path)
     result = await _shell_run(ShellRunArguments(command="id", elevated=True), context)
     assert json.loads(result.content)["error"]["code"] == "executionAgent.operationUnavailable"
     context.ask_handler.assert_not_awaited()
+
+
+@pytest.mark.parametrize("remember", [False, True])
+async def test_administrator_input_grants_run_or_revocable_session_access(tmp_path, monkeypatch, remember):
+    client = FakeExecutionClient({"administrator.run": ProcessResult(
+        exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0,
+        stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
+    )}, {"shell.run", "shell.classify", "administrator.run"})
+    call = ToolCall("password", "secret_input", {"inputs": [{
+        "name": "SERVER_PASSWORD", "label": "Administrator", "question": "Enter the password",
+        "administrator": True,
+    }]})
+    context = _context(tmp_path, call, client)
+    context.session.preferred_execution_agent_id = client.agent_id
+    context.agent_profile_id = uuid4()
+    agent = ExecutionAgent(
+        id=client.agent_id, alias="AI-PC", user_id=context.session.user_id,
+        home_filesystem_policy="auto", external_filesystem_policy="auto",
+        home_shell_enabled=True, external_shell_enabled=True,
+    )
+    context.db.scalar.side_effect = [agent, None, None] if remember else [agent]
+    context.db.add = Mock()
+    context.db.get.side_effect = [AgentRun(
+        id=context.run_id, session_id=context.session.id,
+        execution_agent_id=client.agent_id, agent_profile_id=context.agent_profile_id, trust_level="public",
+    ), context.session]
+    resolved = Mock(return_value=True)
+    monkeypatch.setattr(AgentRuntime, "claim_question_resolution", Mock(return_value=True))
+    monkeypatch.setattr(AgentRuntime, "resolve_question", resolved)
+    monkeypatch.setattr("mato_loop_backend.agent.question_decisions.run_events.publish", AsyncMock())
+
+    async def submit(questions):
+        question = QuestionRequest(
+            id=uuid4(), session_id=context.session.id, run_id=context.run_id, status="pending",
+            questions=questions.model_dump(mode="json")["questions"],
+        )
+        await answer_question(context.db, question, {"SERVER_PASSWORD": ["private password"]},
+                              remember_for_session=["SERVER_PASSWORD"] if remember else [])
+        assert question.answers == {"SERVER_PASSWORD": ["received"]}
+        return resolved.call_args.args[1]
+
+    context.question_handler = AsyncMock(side_effect=submit)
+    try:
+        result = await _tools(client.operations).execute(call, context)
+        reference = json.loads(result.content)["environment"]["SERVER_PASSWORD"]
+        target = context.question_handler.await_args.args[0].questions[0].administrator
+        assert (target.agent_id, target.alias) == (client.agent_id, "AI-PC")
+        grants = [item.args[0] for item in context.db.add.call_args_list]
+        assert {grant.capability for grant in grants} == ({"resource.read", "resource.write"} if remember else set())
+        assert all(grant.resource_scope == str(client.agent_id) and grant.session_id == context.session.id
+                   and grant.agent_profile_id == context.agent_profile_id and grant.trust_level == "public" for grant in grants)
+        context.db.scalar.side_effect = None
+        context.db.scalar.return_value = agent
+        context.db.scalars.return_value = Mock(all=Mock(side_effect=lambda: grants))
+
+        async def permission(request, *, check_only=False):
+            decision = await PermissionPolicy.evaluate(
+                context.db, context.session, request, context.root_files, ToolExecutionPolicy.ASK,
+                agent_profile_id=context.agent_profile_id, trust_level=context.model_trust_level,
+            )
+            return decision
+
+        context.ask_handler = AsyncMock(side_effect=permission)
+        shell = ShellRunArguments(command="id -u", elevated=True, sudo_password_ref=reference)
+        assert not (await _shell_run(shell, context)).is_error
+        assert client.requests[-1][1]["sudoPassword"] == "private password"
+        if remember:
+            grants.clear()
+        else:
+            context.administrator_access.clear()
+        assert (await _shell_run(shell, context)).is_error
+        context.administrator_access.add(client.agent_id)
+        agent.external_shell_enabled = False
+        assert (await _shell_run(shell, context)).is_error
+    finally:
+        session_secrets.clear_session(context.session.id)
+
+
+async def test_missing_administrator_password_returns_to_input_before_approval(tmp_path):
+    client = FakeExecutionClient(
+        {"authenticate": AdministratorAuthenticationResult(passwordless=False)},
+        {"shell.run", "shell.classify", "administrator.run"},
+    )
+    call = ToolCall("admin", "shell_run", {"command": "id -u", "elevated": True})
+    context = _context(tmp_path, call, client)
+    result = await _tools(client.operations).execute(call, context)
+    assert json.loads(result.content)["error"]["code"] == "process.sudoAuthRequired"
+    assert all(item.kwargs.get("check_only") for item in context.ask_handler.await_args_list)
 
 
 def test_shell_session_grants_include_cwd_and_every_target_directory() -> None:

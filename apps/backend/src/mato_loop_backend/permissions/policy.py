@@ -1656,7 +1656,7 @@ class PermissionPolicy:
                     or outside and external_working_directory_policy == ToolExecutionPolicy.DISABLED
                 ):
                     return PermissionDecision.DENY
-                if request.force_ask or (request.approval_details or {}).get("sudoPasswordInput"):
+                if request.force_ask:
                     return PermissionDecision.ASK
                 if policy == ToolExecutionPolicy.AUTO and (not outside or external_working_directory_policy == ToolExecutionPolicy.AUTO):
                     return PermissionDecision.ALLOW

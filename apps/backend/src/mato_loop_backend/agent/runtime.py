@@ -1625,11 +1625,6 @@ class AgentRuntime:
             argument_edit=agent_run_support._argument_edit_payload(definition, call.arguments),
         )
         if isinstance(resolution, ApprovalResolution) and resolution.argument_edits:
-            if request.resource_type == "execution_administrator" and (request.approval_details or {}).get("sudoPasswordInput"):
-                from mato_loop_backend.agent.session_secrets import session_secrets
-
-                agent_id = UUID(request.approval_details["administratorAgentId"])
-                session_secrets.put(chat_session.id, {f"SUDO_PASSWORD_{agent_id.hex.upper()}": resolution.sudo_password or ""})
             raise ToolArgumentsEdited(
                 resolution.argument_edits,
                 agent_run_support._argument_edit_permission_binding(request),
@@ -1702,14 +1697,6 @@ class AgentRuntime:
         )
         if current_decision != PermissionDecision.DENY and browser_approval_key is not None:
             approval_resolution[browser_approval_key] = approval_decision
-        if (
-            current_decision != PermissionDecision.DENY and request.resource_type == "execution_administrator"
-            and (request.approval_details or {}).get("sudoPasswordInput")
-        ):
-            from mato_loop_backend.agent.session_secrets import session_secrets
-
-            agent_id = UUID(request.approval_details["administratorAgentId"])
-            session_secrets.put(chat_session.id, {f"SUDO_PASSWORD_{agent_id.hex.upper()}": resolution.sudo_password or "" if isinstance(resolution, ApprovalResolution) else ""})
         return (
             PermissionDecision.DENY
             if current_decision == PermissionDecision.DENY

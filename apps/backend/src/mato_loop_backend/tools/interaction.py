@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
+
 import mato_loop_backend.permissions.resolution as permissions_resolution
 import mato_loop_backend.tools.access as tools_access
 from mato_loop_backend.agent.session_secrets import session_secrets
+from mato_loop_backend.models import ExecutionAgent
 from mato_loop_backend.permissions.policy import personal_variables_permission
 from mato_loop_backend.personal_variables import (
     get_personal_variable,
@@ -15,6 +18,7 @@ from mato_loop_backend.personal_variables import (
 from mato_loop_backend.settings import ToolExecutionPolicy
 from mato_loop_backend.tools.actions import _SECRETS_ACCESS, _SECRETS_WRITE
 from mato_loop_backend.tools.arguments import (
+    AdministratorQuestionTarget,
     ProtectedQuestionArguments,
     ProtectedQuestionItem,
     ProtectedQuestionResolution,
@@ -101,6 +105,19 @@ async def _secret_input(
             "environment": {item.name: known[item.name] for item in arguments.inputs},
             "instruction": SECRET_INPUT_USAGE,
         })
+    administrator = None
+    if any(item.administrator for item in missing):
+        client = context.execution_client
+        if client is None or client.agent_id != context.session.preferred_execution_agent_id:
+            return ToolResult.error("permission.denied")
+        agent = await context.db.scalar(select(ExecutionAgent).where(
+            ExecutionAgent.id == client.agent_id,
+            ExecutionAgent.user_id == context.session.user_id,
+            ExecutionAgent.revoked_at.is_(None),
+        ))
+        if agent is None:
+            return ToolResult.error("permission.denied")
+        administrator = AdministratorQuestionTarget(agent_id=agent.id, alias=agent.alias)
     answers = await context.ask_user(
         ProtectedQuestionArguments(
             questions=[
@@ -110,6 +127,7 @@ async def _secret_input(
                     question=item.question,
                     type="password" if item.masked else "value",
                     one_time=True,
+                    administrator=administrator if item.administrator else None,
                 )
                 for item in missing
             ]
@@ -120,6 +138,13 @@ async def _secret_input(
     if answers == "rejected":
         return ToolResult.error("question.rejected")
     assert isinstance(answers, ProtectedQuestionResolution)
+    if administrator is not None:
+        await context.db.refresh(context.session)
+        if context.session.preferred_execution_agent_id != administrator.agent_id:
+            return ToolResult.error("permission.denied")
+        admin_input = next(item for item in missing if item.administrator)
+        if admin_input.name not in answers.remember_for_session:
+            context.administrator_access.add(administrator.agent_id)
     remembered = {
         item.name: answers.answers[item.name][0]
         for item in missing
@@ -129,9 +154,9 @@ async def _secret_input(
         context.session.id,
         remembered,
         {
-            item.name: item.description
+            item.name: item.description or f"Administrator password for {administrator.alias}"
             for item in missing
-            if item.description and item.name in answers.remember_for_session
+            if (item.description or item.administrator) and item.name in answers.remember_for_session
         },
     )
     environment = {item.name: known[item.name] for item in arguments.inputs if item.name in known}
@@ -281,6 +306,9 @@ SECRET_INPUT = ToolDefinition(
              "current run. Continue the requested work in this run before a final answer. "
              "Call alone, then pass references to tools that accept protected text "
             "parts, shell_run.environment, or the personal settings tool. "
+            "For the selected computer's administrator password, set administrator=true and masked=true "
+            "on that field, then pass its reference as sudo_password_ref to elevated tools. "
+            "Submitting this field grants administrator access for the run; the user may grant session access instead. "
             "Reuse the exact name/reference pairs instead of asking again. Set masked false only for values the user may see while "
             "typing. Use customize_matoloop only for explicitly requested durable storage.",
             SecretInputArguments,

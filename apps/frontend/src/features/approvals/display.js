@@ -229,6 +229,13 @@ function sanitize(value, depth, seen, key = '', truncate = true) {
 }
 
 export function permissionGrantDisplay(grant, sessions = []) {
+  if (grant?.resourceType === 'execution_administrator') {
+    return {
+      label: grant.capability === 'resource.write' ? 'Administrator-Schreibzugriffe' : 'Administrator-Lesezugriffe',
+      value: grant.resourceDisplay || `Computer ${grant.resourceScope}`,
+      icon: 'admin_panel_settings'
+    }
+  }
   const resource = approvalResource(grant, sessions)
   if (['resource.read', 'resource.write'].includes(grant?.capability)) {
     const includesShell = grant.resourceType === 'execution_directory'

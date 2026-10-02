@@ -1098,7 +1098,7 @@ READ = ToolDefinition(
             "Pagination applies to directories and text. "
             "To inspect an image, read its source path in root=computer or root=files directly; "
              "do not copy it or call provide_file first. elevated=true supports regular UTF-8 computer files; "
-             "the host combines administrator approval and any missing password in one request. "
+             "pass a matching sudo_password_ref, or obtain one with secret_input(administrator=true on the masked field). "
              "Reuse its returned file SHA-256 as expectedSha256 when changing the file.",
             ReadArguments,
             _read,
@@ -1166,7 +1166,7 @@ WRITE_FILE = ToolDefinition(
             "Write complete UTF-8 content to one file, creating or replacing it. content may "
             "contain protected text parts with value_ref from secret_input; resolve only after "
              "file access is authorized. elevated=true uses administrator rights for root=computer; "
-             "the host handles approval and any missing password.",
+              "pass sudo_password_ref from an existing variable or secret_input with administrator=true on the masked field.",
             WriteFileArguments,
             _write_file,
             tool_type="shared",
@@ -1183,7 +1183,8 @@ EDIT_FILE = ToolDefinition(
             "edit_file",
             "Replace exact text in one existing UTF-8 file. oldText must be unique unless replaceAll is true. "
              "oldText and newText may contain protected text parts with value_ref from secret_input. "
-             "elevated=true uses administrator rights for root=computer; the host handles approval and any missing password.",
+              "elevated=true uses administrator rights for root=computer; pass sudo_password_ref from an existing variable "
+              "or secret_input with administrator=true on the masked field.",
             EditFileArguments,
             _edit_file,
             tool_type="shared",

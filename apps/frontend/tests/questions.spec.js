@@ -6,6 +6,7 @@ vi.mock('src/boot/axios', () => ({
 }))
 
 import { useQuestionStore } from '../src/stores/questions'
+import { useApprovalStore } from '../src/stores/approvals'
 import { api } from 'src/boot/axios'
 
 describe('agent questions', () => {
@@ -38,6 +39,17 @@ describe('agent questions', () => {
       answers,
       remember_for_session: ['SSH_USERNAME']
     })
+  })
+
+  it('refreshes visible grants after administrator session consent', async () => {
+    api.post.mockResolvedValue({ data: { status: 'answered' } })
+    api.get.mockResolvedValue({ data: [] })
+    const approvals = useApprovalStore()
+    approvals.grantsLoaded = true
+    const questions = useQuestionStore()
+    questions.add({ id: 'admin', questions: [{ id: 'PASSWORD', administrator: { alias: 'AI-PC' } }] })
+    await questions.answer('admin', { PASSWORD: ['secret'] }, ['PASSWORD'])
+    expect(api.get).toHaveBeenCalledWith('/approvals/permissions', { suppressErrorToast: true })
   })
 
   it('ignores malformed pending responses', async () => {

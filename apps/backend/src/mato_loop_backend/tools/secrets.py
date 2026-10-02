@@ -95,14 +95,17 @@ def effective_sudo_reference(
     return session_secrets.references(session_id).get(name) or run_secret_refs.get(name)
 
 
-def discard_sudo_reference(context: ToolContext, agent_id: UUID, reference: UUID | str | None) -> None:
+def discard_sudo_reference(context: ToolContext, reference: UUID | str | None) -> None:
     if reference is None:
         return
-    name = f"SUDO_PASSWORD_{agent_id.hex.upper()}"
-    session_secrets.discard(context.session.id, name, reference)
-    if context.run_secret_refs.get(name) == reference:
-        context.run_secret_refs.pop(name)
-        context.one_time_secrets.pop(UUID(str(reference).removeprefix("run-secret:")), None)
+    for name, value in session_secrets.references(context.session.id).items():
+        if value == reference:
+            session_secrets.discard(context.session.id, name, reference)
+    for name, value in list(context.run_secret_refs.items()):
+        if value == reference:
+            context.run_secret_refs.pop(name)
+    if isinstance(reference, str) and reference.startswith("run-secret:"):
+        context.one_time_secrets.pop(UUID(reference.removeprefix("run-secret:")), None)
 
 
 async def resolve_sudo_password(
@@ -112,8 +115,5 @@ async def resolve_sudo_password(
     reference = effective_sudo_reference(context.session.id, context.run_secret_refs, agent_id, reference)
     if reference is None:
         return None
-    if isinstance(reference, str) and reference.startswith("session-secret:"):
-        if session_secrets.references(context.session.id).get(name) != reference:
-            return ToolResult.error("secret.valueRefUnavailable")
     values = await resolve_secret_refs(context, {name: reference})
     return values if isinstance(values, ToolResult) else values[name]

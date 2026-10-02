@@ -89,22 +89,20 @@ async function selectOption(card, label, option) {
 }
 
 describe('notification center', () => {
-  it('submits a masked administrator password and session approval in one action', async () => {
+  it('submits administrator session approval without collecting a password', async () => {
     responses['/approvals/pending'][0] = {
       ...responses['/approvals/pending'][0], requestType: 'agent_action', resourceType: 'execution_administrator',
       capability: 'filesystem.write', availableDecisions: ['allow_once', 'allow_session', 'deny'],
-      payload: { sudoPasswordInput: true }
+      payload: {}
     }
     await mountCenter()
     const card = root.querySelector('.approval-card')
-    const password = card.querySelector('input[type="password"]')
-    password.value = 'private password'
-    password.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(card.querySelector('input[type="password"]')).toBeNull()
     card.querySelector('.q-checkbox').click()
     await nextTick()
     button(card, 'Für Session erlauben').click()
     await vi.waitFor(() => expect(api.post).toHaveBeenCalledExactlyOnceWith('/approvals/approval/decisions', {
-      decision: 'allow_session', sudo_password: 'private password'
+      decision: 'allow_session'
     }))
   })
 

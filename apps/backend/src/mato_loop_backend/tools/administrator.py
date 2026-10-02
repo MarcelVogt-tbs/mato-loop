@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.execution import ExecutionClientError
 from mato_loop_backend.execution.client import ExecutionResult
 from mato_loop_backend.permissions.policy import (
@@ -25,16 +24,17 @@ class AdministratorAuthenticationResult(ExecutionResult):
 
 
 async def authorize(context: ToolContext, request: PermissionRequest, reference=None) -> bool:
-    if await context.ask_handler(request, check_only=True) in {PermissionDecision.DENY, PermissionDecision.USER_DENIED}:
+    if context.user_denied or await context.ask_handler(request, check_only=True) in {PermissionDecision.DENY, PermissionDecision.USER_DENIED}:
         return False
     reference = effective_sudo_reference(context.session.id, context.run_secret_refs, context.execution_client.agent_id, reference)
     if reference is None:
         authentication = await context.execution_client.request(
             "administrator.run", {"operation": "authenticate", "arguments": {}}, AdministratorAuthenticationResult,
         )
-        if authentication.passwordless:
-            name = f"SUDO_PASSWORD_{context.execution_client.agent_id.hex.upper()}"
-            reference = session_secrets.put(context.session.id, {name: ""})[name]
+        if not authentication.passwordless:
+            raise ExecutionClientError("process.sudoAuthRequired")
+    if context.execution_client.agent_id in context.administrator_access and not request.force_ask:
+        return True
     previews = []
     fields = (
         (("oldText", "Vorher"), ("newText", "Nachher")) if context.tool_call.name == "edit_file"
@@ -46,7 +46,6 @@ async def authorize(context: ToolContext, request: PermissionRequest, reference=
         previews.append(PermissionDisplayItem(label, preview, "code"))
     return await access.allow(context, replace(
         request, action_kind=context.tool_call.name,
-        approval_details={**(request.approval_details or {}), "sudoPasswordInput": reference is None},
         display_items=(*request.display_items, *previews),
     ))
 
@@ -69,5 +68,5 @@ async def invoke(context: ToolContext, operation: str, arguments: dict, result_t
     except ExecutionClientError as exc:
         if exc.code in {"process.sudoAuthFailed", "process.sudoAuthRequired"}:
             reference = effective_sudo_reference(context.session.id, context.run_secret_refs, context.execution_client.agent_id, reference)
-            discard_sudo_reference(context, context.execution_client.agent_id, reference)
+            discard_sudo_reference(context, reference)
         raise

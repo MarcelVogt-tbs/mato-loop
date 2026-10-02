@@ -160,9 +160,7 @@ def build_approval_actions(approval: ApprovalRequest) -> list[MessagingApprovalA
     if approval.request_type != "agent_action":
         return []
     decisions: Iterable[ApprovalDecision]
-    if (approval.payload or {}).get("sudoPasswordInput") or (
-        approval.capability == "skills.write" and approval.action_kind in {"build_skill", "edit_skill"}
-    ):
+    if approval.capability == "skills.write" and approval.action_kind in {"build_skill", "edit_skill"}:
         decisions = ("deny",)
     else:
         available = set(approval.available_decisions)
@@ -206,8 +204,6 @@ def build_approval_prompt_text(approval: ApprovalRequest) -> str:
         lines.extend(("", "Prüfe diese Skill-Freigabe in MatoLoop."))
     if summary:
         lines.extend(("", summary))
-    if (approval.payload or {}).get("sudoPasswordInput"):
-        lines.extend(("", "Öffne diese Freigabe in MatoLoop und gib dort das Administrator-Passwort ein."))
     if reason:
         lines.extend(("", f"Grund: {reason}"))
 

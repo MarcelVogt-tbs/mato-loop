@@ -240,8 +240,9 @@ def general_system_prompt(
         parts.append(
             "Credential routing overrides the missing-information contract. Account usernames count as credentials even when they are visible. "
             "Before authentication probes, integration setup, or commands, call secret_input, not question, once with all currently missing "
-            "credentials. Administrator passwords are handled by elevated tools' approval requests; "
-            "do not request them separately. Use "
+            "credentials. Select an existing administrator password reference by variable name or description "
+            "and target computer; use variable_read for stored variables when needed. If none matches, "
+            "call secret_input with administrator=true on the masked password field for the selected computer. Use "
             "masked=false for visible identifiers and masked=true for secrets. Pass only references to "
              "customize_matoloop; references remain reusable throughout the current run. For protected text, "
             "use literal and {value_ref: reference} parts; never interpolate values in model text. Reuse available references. "
@@ -255,7 +256,9 @@ def general_system_prompt(
                 "In shell commands, reference only environment variable names; never reveal, transform, "
              "persist, or trace credential values, session cookies, or derived authentication tokens. "
                 "For administrator commands use shell_run(elevated=true), without sudo in the command. "
-                "The host combines approval and any missing administrator password in one request. "
+                "Pass the password reference as sudo_password_ref. Submitting administrator input grants access "
+                "for the run; the user may extend it to the session in that dialog. If authentication is missing "
+                "or rejected, request fresh protected input and retry rather than ending the task. "
                 "A secret-output warning identifies a possible risk, not a confirmed disclosure; assess "
                 "the command, execution status, and result."
             )
