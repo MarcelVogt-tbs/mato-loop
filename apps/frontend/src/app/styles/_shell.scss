@@ -202,12 +202,6 @@ body.body--dark .app-floating-control--flat {
   line-height: 1;
 }
 
-.session-title-tooltip {
-  max-width: 240px;
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
 .session-actions-menu {
   min-width: 176px;
 }
@@ -233,6 +227,23 @@ body.body--dark .app-floating-control--flat {
   .session-list-item--menu-open .session-list-item__pin-button,
   .session-list-item--menu-open .session-list-item__menu-button {
     display: inline-flex;
+  }
+}
+
+@keyframes session-title-scroll {
+  to {
+    transform: translateX(var(--session-title-scroll-distance, 0px));
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .session-list-item:is(:hover, :focus-within) .session-list-item__title {
+    text-overflow: clip;
+  }
+
+  .session-list-item:is(:hover, :focus-within) .session-list-item__title-text {
+    display: inline-block;
+    animation: session-title-scroll var(--session-title-scroll-duration, 0s) linear 700ms forwards;
   }
 }
 

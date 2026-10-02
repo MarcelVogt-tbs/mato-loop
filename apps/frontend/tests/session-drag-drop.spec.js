@@ -231,6 +231,18 @@ it('keeps project and session actions visible while their shared menu is open', 
   expect(sessionAction.closest('.session-list-item').classList.contains('session-list-item--menu-open')).toBe(true)
 })
 
+it('scrolls an overflowing session title only by its hidden width on hover', () => {
+  const row = source('standalone').closest('.session-list-item')
+  const title = row.querySelector('.session-list-item__title')
+  const text = row.querySelector('.session-list-item__title-text')
+  Object.defineProperty(title, 'clientWidth', { value: 120 })
+  vi.spyOn(text, 'getBoundingClientRect').mockReturnValue({ width: 260 })
+
+  row.dispatchEvent(new Event('mouseenter'))
+
+  expect(title.style.getPropertyValue('--session-title-scroll-distance')).toBe('-140px')
+})
+
 it.each([false, true])('beforeunload only warns about dirty editors (%s), leaving a cancelled exit connected', (dirty) => {
   workspace.hasDirtyEditors = dirty
   const event = new Event('beforeunload', { cancelable: true })

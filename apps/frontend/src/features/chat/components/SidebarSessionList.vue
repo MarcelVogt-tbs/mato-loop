@@ -40,6 +40,8 @@
           :class="{ 'session-list-item--menu-open': openActionMenuSessionId === session.id }"
           :active="activeSessionId === session.id"
           :active-class="$q.dark.isActive ? 'bg-grey-9 text-white' : 'bg-grey-3 text-dark'"
+          @mouseenter="prepareTitleScroll"
+          @focusin="prepareTitleScroll"
           @click="emit('open', session)"
         >
           <q-item-section
@@ -49,29 +51,15 @@
             @dragend="emit('drag-end')"
           >
             <q-item-label
-              lines="1"
               class="session-list-item__title text-body2"
               :class="{
                 'text-weight-bold': session.hasUnreadMessages,
                 'text-weight-medium': !session.hasUnreadMessages && activeSessionId === session.id
               }"
             >
-              {{ session.title }}
+              <span class="session-list-item__title-text">{{ session.title }}</span>
               <span v-if="session.hasUnreadMessages" class="app-sr-only">, ungelesene Nachrichten</span>
             </q-item-label>
-            <q-tooltip
-              v-if="$q.platform.is.mobile !== true"
-              :delay="700"
-              anchor="bottom middle"
-              self="top middle"
-              :offset="[0, 8]"
-              class="session-title-tooltip"
-            >
-              <div>{{ session.title }}</div>
-              <div v-if="session.currentDirectory" class="q-mt-xs text-grey-4">
-                {{ session.currentDirectory }}
-              </div>
-            </q-tooltip>
           </q-item-section>
           <q-item-section side class="session-list-item__actions row no-wrap items-center self-center">
             <span
@@ -194,6 +182,14 @@ const emit = defineEmits([
 ])
 const openActionMenuSessionId = ref(null)
 const groupedSessions = computed(() => groupSessionsByRecency(props.list.items))
+
+function prepareTitleScroll(event) {
+  const title = event.currentTarget.querySelector('.session-list-item__title')
+  const text = title.querySelector('.session-list-item__title-text')
+  const distance = Math.max(0, text.getBoundingClientRect().width - title.clientWidth)
+  title.style.setProperty('--session-title-scroll-distance', `${-distance}px`)
+  title.style.setProperty('--session-title-scroll-duration', `${distance / 35}s`)
+}
 
 function setActionMenu(id, open) {
   if (open) openActionMenuSessionId.value = id
