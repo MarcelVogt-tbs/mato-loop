@@ -191,8 +191,7 @@ class ToolDefinition:
                 "minLength": 1,
                 "maxLength": 500,
                 "description": (
-                    "Optional explanation in the user's language of why this action is needed. "
-                    "If provided, it is shown when approval is required."
+                    "Optional reason for this action in the user's language, shown when approval is required."
                     + (" " + self.permission_reason_instruction if self.permission_reason_instruction else "")
                 ),
             }

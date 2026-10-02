@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import mato_loop_backend.agent.runtime as mock_agent_runtime
+import mato_loop_backend.agent.questions as mock_agent_questions
 from mato_loop_backend.agent import question_decisions as question_decisions_module
 from mato_loop_backend.agent.question_decisions import QuestionDecisionError
 from mato_loop_backend.agent.question_decisions import (
@@ -189,7 +189,7 @@ async def test_agent_question_push_is_sent_after_commit(monkeypatch) -> None:
     db.flush.side_effect = flush
     monkeypatch.setattr(run_events, "publish", publish)
     push = AsyncMock(side_effect=deliver)
-    monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", push)
+    monkeypatch.setattr(mock_agent_questions.WebPushService, "deliver_after_commit", push)
     task = asyncio.create_task(
         AgentRuntime._request_question(
             db,

@@ -120,7 +120,7 @@ def env(monkeypatch):
         return settings
     for _mock_target in (mock_agent_runtime, mock_agent_loop,):
         monkeypatch.setattr(_mock_target, 'filter_agent_profile_integrations', _mock_value)
-    monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", AsyncMock())
+    monkeypatch.setattr(mock_permissions_requests.WebPushService, "deliver_after_commit", AsyncMock())
     monkeypatch.setattr(mock_agent_runtime.run_events, "publish", AsyncMock())
     monkeypatch.setattr(shared_shell.run_events, "publish", AsyncMock())
     monkeypatch.setattr(TerminalRuntime, "check_access", AsyncMock())

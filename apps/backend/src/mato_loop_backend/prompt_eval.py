@@ -1258,6 +1258,21 @@ CASES = (
         expected_no_tools=True,
     ),
     PromptCase(
+        id="explicit_notification_uses_tool",
+        kind="general",
+        user=(
+            'Erstelle jetzt eine Benachrichtigung mit dem Titel "Wartung" '
+            'und dem Text "Der Server wird heute um 18 Uhr neu gestartet."'
+        ),
+        tools=("notify",),
+        expected_tool="notify",
+        expected_tool_call_count=1,
+        expected_arguments={
+            "title": "Wartung",
+            "body": "Der Server wird heute um 18 Uhr neu gestartet.",
+        },
+    ),
+    PromptCase(
         id="automation_list_uses_bounded_tool",
         kind="general",
         user="Liste meine Automationen auf.",

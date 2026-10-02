@@ -17,6 +17,7 @@ import mato_loop_backend.agent.runtime as mock_agent_runtime
 import mato_loop_backend.agent.titles as mock_agent_titles
 import mato_loop_backend.agent.video_analysis as video_analysis
 import mato_loop_backend.memory as memory
+import mato_loop_backend.permissions.requests as mock_permissions_requests
 from mato_loop_backend.agent.context import ContextManager
 from mato_loop_backend.agent.projection import ContextProjection, message_dict
 from mato_loop_backend.agent.research import _linked_research_source_ids
@@ -2345,7 +2346,7 @@ async def test_direct_message_supersedes_approval_and_replans(monkeypatch, tmp_p
             session_id, session_storage=storage,
         ))
     monkeypatch.setattr(PermissionPolicy, "evaluate", AsyncMock(return_value=PermissionDecision.ASK))
-    monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", AsyncMock())
+    monkeypatch.setattr(mock_permissions_requests.WebPushService, "deliver_after_commit", AsyncMock())
     db.scalars.return_value = SimpleNamespace(all=lambda: [])
     db.scalar.side_effect = lambda statement: True if statement.column_descriptions[0]["entity"] is UserAccount else None
     db.get.side_effect = lambda model, key: records[0] if model is Message else session

@@ -5,7 +5,6 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import mato_loop_backend.agent.runtime as mock_agent_runtime
 import mato_loop_backend.permissions.requests as mock_permissions_requests
 from mato_loop_backend.agent.run_contracts import ApprovalResolution
 from mato_loop_backend.agent.runtime import AgentRuntime
@@ -634,7 +633,7 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch, reusable) ->
     db.flush.side_effect = flush
     monkeypatch.setattr(run_events, "publish", publish)
     push = AsyncMock(side_effect=deliver)
-    monkeypatch.setattr(mock_agent_runtime.WebPushService, "deliver_after_commit", push)
+    monkeypatch.setattr(mock_permissions_requests.WebPushService, "deliver_after_commit", push)
     enqueue = AsyncMock()
     _mock_value = enqueue
     for _mock_target in (mock_permissions_requests,):
