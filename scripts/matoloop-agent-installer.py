@@ -416,7 +416,6 @@ def install(arguments: argparse.Namespace) -> None:
     )
     websocket, insecure = backend_url(instance)
 
-    run("sudo", "-v")
     layout["data"].mkdir(parents=True, exist_ok=True)
     layout["data"].chmod(0o700)
     install_system_dependencies(layout)
@@ -494,6 +493,7 @@ def install(arguments: argparse.Namespace) -> None:
         "instanceUrl": instance.rstrip("/"),
         "wrapperPath": os.fspath(layout["wrapper"]),
     }
+    run("sudo", "-v")
     try:
         if active:
             run("sudo", "systemctl", "stop", "matoloop-agent.service")

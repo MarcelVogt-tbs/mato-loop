@@ -213,6 +213,7 @@ class InstallerTests(unittest.TestCase):
             system_service = base / "system/matoloop-agent.service"
 
             def fake_sync(layout, _source, destination):
+                self.assertNotIn(("sudo", "-v"), [call.args for call in commands.call_args_list])
                 executable = destination / "bin/matoloop-agent"
                 executable.parent.mkdir(parents=True)
                 executable.touch()
@@ -233,7 +234,7 @@ class InstallerTests(unittest.TestCase):
                 patch.object(installer, "SYSTEM_SERVICE_PATH", system_service),
                 patch.object(installer, "check_linux"),
                 patch.object(installer, "sync_environment", side_effect=fake_sync),
-                patch.object(installer, "run", side_effect=fake_run),
+                patch.object(installer, "run", side_effect=fake_run) as commands,
             ):
                 installer.install(arguments)
                 layout = installer.paths()
@@ -262,7 +263,7 @@ class InstallerTests(unittest.TestCase):
                 patch.object(installer, "SYSTEM_SERVICE_PATH", system_service),
                 patch.object(installer, "check_linux"),
                 patch.object(installer, "sync_environment", side_effect=fake_sync),
-                patch.object(installer, "run", side_effect=fail_start),
+                patch.object(installer, "run", side_effect=fail_start) as commands,
             ):
                 with self.assertRaises(subprocess.CalledProcessError):
                     installer.install(arguments)
