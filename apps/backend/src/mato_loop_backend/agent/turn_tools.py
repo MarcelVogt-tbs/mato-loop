@@ -135,7 +135,7 @@ def select_turn_tools(
                 toolset = toolset.without(
                     "read", "glob", "grep", "write_file", "edit_file",
                     "create_directory", "delete_path", "copy_path", "move_path",
-                    "analyze_video",
+                    "analyze_video", "transcribe_audio", "read_qr_code",
                 )
     if hide_skill_catalog_tools and toolset is not None:
         toolset = toolset.without("load_skill", "edit_skill")

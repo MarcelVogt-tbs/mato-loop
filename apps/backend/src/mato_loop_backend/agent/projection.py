@@ -448,7 +448,7 @@ def message_dict(
             else:
                 voice += ", automatic transcript unavailable; do not infer spoken words"
         attachment_markers.append(
-            f"[Session attachment: ID {attachment.id}, file "
+            "[Session attachment: root=files, file "
             f"{attachment.filename or 'attachment'}, kind {attachment.kind}, "
             f"MIME {attachment.mime_type}, path {attachment.file_path}{companion}{duration}{voice}]"
         )

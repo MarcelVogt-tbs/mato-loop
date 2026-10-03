@@ -109,10 +109,8 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
     )
     if not await tools_access.allow(context, request):
         return ToolResult.error("permission.denied")
-    normalized_path = (
-        files_access.execution_path(context, arguments.path)
-        if arguments.root == "workspace"
-        else root_files.normalize_relative_path(arguments.path)
+    normalized_path = files_access.file_path(
+        context, arguments.root, arguments.path, root_files=root_files,
     )
     if arguments.root == "workspace":
         stat_result = await files_access.workspace_request(
@@ -213,18 +211,10 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
                 }
             )
     if normalized_path.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
-        if arguments.root == "workspace":
-            client = files_access.workspace_client(context)
-            if not client.supports("filesystem.export"):
-                return ToolResult.error("executionAgent.operationUnavailable")
-            data = await client.read_bytes(normalized_path, limit=MAX_IMAGE_ATTACHMENT_BYTES)
-        else:
-            data = await asyncio.to_thread(
-                root_files.read_bytes, arguments.root, normalized_path,
-                limit=MAX_IMAGE_ATTACHMENT_BYTES,
-            )
-        if len(data) > MAX_IMAGE_ATTACHMENT_BYTES:
-            return ToolResult.error("file.tooLarge")
+        data = await files_access.read_bytes(
+            context, arguments.root, normalized_path,
+            limit=MAX_IMAGE_ATTACHMENT_BYTES, root_files=root_files,
+        )
         validated = validate_image(data, image_mime_type(data) or "")
         image, mime_type = normalize_provider_image(data, validated)
         result = ToolResult.json({
@@ -948,20 +938,12 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
             file_actions=file_actions,
         )
     if cross_root:
-        source = (
-            files_access.execution_path(context, arguments.source_path)
-            if arguments.source_root == "workspace"
-            else context.root_files.normalize_relative_path(arguments.source_path)
-        )
-        destination = (
-            files_access.execution_path(context, arguments.destination_path)
-            if arguments.destination_root == "workspace"
-            else context.root_files.normalize_relative_path(arguments.destination_path)
-        )
+        source = files_access.file_path(context, arguments.source_root, arguments.source_path)
+        destination = files_access.file_path(context, arguments.destination_root, arguments.destination_path)
         client = files_access.workspace_client(context)
         if arguments.source_root == "workspace":
-            data = await client.read_bytes(
-                source, limit=context.root_files.MAX_OPERATION_BYTES
+            data = await files_access.read_bytes(
+                context, arguments.source_root, source, limit=context.root_files.MAX_OPERATION_BYTES
             )
             copied = await asyncio.to_thread(
                 context.root_files.create_file,

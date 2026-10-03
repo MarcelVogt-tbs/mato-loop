@@ -84,7 +84,6 @@ EXISTING_MEMORY_ID = UUID("40000000-0000-4000-8000-000000000001")
 SECOND_MEMORY_ID = UUID("40000000-0000-4000-8000-000000000002")
 TOOL_RESULT_MESSAGE_ID = UUID("70000000-0000-4000-8000-000000000001")
 ATTACHMENT_ID = UUID("80000000-0000-4000-8000-000000000001")
-ATTACHMENT_ID_2 = UUID("80000000-0000-4000-8000-000000000002")
 CALENDAR_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000001")
 OPENSCAD_INTEGRATION_ID = UUID("90000000-0000-4000-8000-000000000002")
 OPENSCAD_AGENT_ID = UUID("90000000-0000-4000-8000-000000000003")
@@ -589,7 +588,7 @@ def _video_request(filename: str, instruction: str) -> str:
     path = f"attachments/{ATTACHMENT_ID}/{filename}"
     return (
         f"{instruction}\n\n"
-        f"[Session attachment: ID {ATTACHMENT_ID}, file {filename}, kind video, MIME "
+        f"[Session attachment: root=files, file {filename}, kind video, MIME "
         f"video/mp4, path {path}, duration 00:04:00.000]"
     )
 
@@ -2117,10 +2116,10 @@ CASES = (
     PromptCase(
         id="audio_attachment_uses_transcription",
         kind="general",
-        user=f"Transkribiere den Audioanhang mit ID {ATTACHMENT_ID} auf Deutsch.",
+        user="Transkribiere die Sitzungsdatei aufnahmen/gespraech.mp3 auf Deutsch.",
         tools=TRANSCRIPT_ROUTING_TOOLS,
         expected_tool="transcribe_audio",
-        expected_arguments={"attachment_id": str(ATTACHMENT_ID)},
+        expected_arguments={"root": "files", "path": "aufnahmen/gespraech.mp3"},
         argument_options={"language": ("de", "de-DE", "German", "Deutsch")},
         forbidden_tools=("fetch_transcript", "webfetch", "analyze_video"),
     ),
@@ -2168,12 +2167,12 @@ CASES = (
         forbidden_tools=("generate_image",),
     ),
     PromptCase(
-        id="read_qr_code_uses_attachment_uuid",
+        id="read_qr_code_uses_root_and_path",
         kind="general",
-        user=f"Lies alle QR-Codes aus dem Bildanhang mit ID {ATTACHMENT_ID}.",
+        user="Lies alle QR-Codes aus der Sitzungsdatei bilder/qr.png.",
         tools=("read_qr_code", "generate_image"),
         expected_tool="read_qr_code",
-        expected_arguments={"attachment_id": str(ATTACHMENT_ID)},
+        expected_arguments={"root": "files", "path": "bilder/qr.png"},
         forbidden_tools=("generate_image",),
     ),
     PromptCase(
@@ -2223,7 +2222,7 @@ CASES = (
         id="edit_image_preserves_unspecified_content",
         kind="general",
         user=(
-            f"Nutze Bild {ATTACHMENT_ID} als Basis und Bild {ATTACHMENT_ID_2} als Logo-Referenz. "
+            "Nutze die Sitzungsdatei bilder/basis.png als Basis und bilder/logo.png als Logo-Referenz. "
             "Ändere nur den Hintergrund der Basis zu Blau und lasse Motiv, Logo und Bildausschnitt "
             "unverändert."
         ),
@@ -2231,7 +2230,7 @@ CASES = (
         system_options={"tool_instructions": (GPT_IMAGE_2_EDIT_INSTRUCTIONS,)},
         expected_tool="edit_image",
         expected_arguments={
-            "attachment_ids": [str(ATTACHMENT_ID), str(ATTACHMENT_ID_2)]
+            "images": [{"root": "files", "path": "bilder/basis.png"}, {"root": "files", "path": "bilder/logo.png"}]
         },
         argument_contains={
             "prompt": (
@@ -2252,13 +2251,13 @@ CASES = (
         id="edit_image_confines_precise_object_change",
         kind="general",
         user=(
-            f"Bearbeite Bild {ATTACHMENT_ID}. Ändere ausschließlich die vordere weiße Tasse zu "
+            "Bearbeite die Sitzungsdatei bilder/basis.png. Ändere ausschließlich die vordere weiße Tasse zu "
             "Grün. Szene, Positionen, Licht und Bildausschnitt müssen gleich bleiben."
         ),
         tools=("edit_image",),
         system_options={"tool_instructions": (GPT_IMAGE_2_EDIT_INSTRUCTIONS,)},
         expected_tool="edit_image",
-        expected_arguments={"attachment_ids": [str(ATTACHMENT_ID)]},
+        expected_arguments={"images": [{"root": "files", "path": "bilder/basis.png"}]},
         argument_contains={
             "prompt": (
                 "EDIT Image 1",
@@ -2275,14 +2274,14 @@ CASES = (
         id="edit_image_preserves_person_identity",
         kind="general",
         user=(
-            f"Bearbeite Bild {ATTACHMENT_ID}. Ersetze nur die rote Jacke der Person durch eine "
+            "Bearbeite die Sitzungsdatei bilder/basis.png. Ersetze nur die rote Jacke der Person durch eine "
             "blaue Jacke. Gesicht, Körper, Pose, Ausdruck, Haare, Hintergrund und Kamera bleiben "
             "unverändert."
         ),
         tools=("edit_image",),
         system_options={"tool_instructions": (GPT_IMAGE_2_EDIT_INSTRUCTIONS,)},
         expected_tool="edit_image",
-        expected_arguments={"attachment_ids": [str(ATTACHMENT_ID)]},
+        expected_arguments={"images": [{"root": "files", "path": "bilder/basis.png"}]},
         argument_contains={
             "prompt": (
                 "EDIT Image 1",
@@ -2318,12 +2317,12 @@ CASES = (
         expected_arguments={"duration_seconds": 10},
     ),
     PromptCase(
-        id="transcribe_audio_uses_attachment_uuid",
+        id="transcribe_audio_uses_root_and_path",
         kind="general",
-        user=f"Transkribiere die Audioanlage mit ID {ATTACHMENT_ID} auf Deutsch.",
+        user="Transkribiere die Sitzungsdatei aufnahmen/gespraech.mp3 auf Deutsch.",
         tools=("transcribe_audio",),
         expected_tool="transcribe_audio",
-        expected_arguments={"attachment_id": str(ATTACHMENT_ID)},
+        expected_arguments={"root": "files", "path": "aufnahmen/gespraech.mp3"},
         argument_options={"language": ("de", "de-DE", "German", "Deutsch")},
     ),
     PromptCase(
@@ -3339,7 +3338,7 @@ CASES = (
         id="derived_attachment_path_is_read_exactly",
         kind="general",
         user=(
-            f"Lies den abgeleiteten Text dieser Anlage: [Session attachment: ID {ATTACHMENT_ID}, "
+            "Lies den abgeleiteten Text dieser Anlage: [Session attachment: root=files, "
             "file report.pdf, kind document, MIME application/pdf, path attachments/report.pdf, "
             "derivative derived/report/content.txt]"
         ),
@@ -4906,14 +4905,14 @@ _SEMANTIC_CONTRACTS = (
             "generate_image_uses_prompt",
             "generate_qr_code_avoids_image_generation",
             "research_url_is_not_turned_into_qr_code",
-            "read_qr_code_uses_attachment_uuid",
+            "read_qr_code_uses_root_and_path",
             "successful_qr_result_is_not_repeated",
             "edit_image_preserves_unspecified_content",
             "edit_image_confines_precise_object_change",
             "edit_image_preserves_person_identity",
             "generate_speech_uses_text",
             "generate_audio_uses_duration",
-            "transcribe_audio_uses_attachment_uuid",
+            "transcribe_audio_uses_root_and_path",
             "analyze_video_uses_root_and_path",
             "analyze_video_spoken_summary_uses_speech",
             "analyze_video_product_presentation_uses_overview",

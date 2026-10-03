@@ -55,7 +55,7 @@ def _available_secret_references(context: ToolContext) -> set[str]:
 def _attachment_items(message: Message) -> list[dict[str, Any]]:
     return [
         {
-            "id": str(attachment.id),
+            "root": "files",
             "filename": attachment.filename,
             "kind": attachment.kind,
             "mimeType": attachment.mime_type,

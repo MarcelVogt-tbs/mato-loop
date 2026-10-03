@@ -27,6 +27,7 @@ from mato_loop_backend.files.archives import MAX_EXPORT_BYTES
 from mato_loop_backend.files.service import (
     FileRevision,
     FileRoot,
+    RootFileError,
     RootFileService,
     WorkingFileRevision,
 )
@@ -93,6 +94,35 @@ def execution_path(context: ToolContext, path: str) -> str:
     if not resolved.startswith("/"):
         raise ExecutionClientError("file.invalidPath")
     return resolved
+
+
+def file_path(
+    context: ToolContext, root: FileRoot | str, path: str,
+    *, root_files: RootFileService | None = None,
+) -> str:
+    return (
+        execution_path(context, path)
+        if FileRoot(root) is FileRoot.WORKSPACE
+        else (root_files or context.root_files).normalize_relative_path(path)
+    )
+
+
+async def read_bytes(
+    context: ToolContext, root: FileRoot | str, path: str,
+    *, limit: int, root_files: RootFileService | None = None,
+) -> bytes:
+    """Read an authorized file, exporting computer bytes only on demand."""
+    normalized = file_path(context, root, path, root_files=root_files)
+    data = (
+        await workspace_client(context).read_bytes(normalized, limit=limit)
+        if FileRoot(root) is FileRoot.WORKSPACE
+        else await asyncio.to_thread(
+            (root_files or context.root_files).read_bytes, root, normalized, limit=limit,
+        )
+    )
+    if len(data) > limit:
+        raise RootFileError("file.tooLarge", "File exceeds the read limit")
+    return data
 
 
 def filesystem_permission(

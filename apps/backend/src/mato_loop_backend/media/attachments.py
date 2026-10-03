@@ -271,6 +271,8 @@ def _safe_metadata(metadata: dict | None) -> dict:
             "size",
             "authorizationSourceAttachmentIds",
             "sourceAttachmentIds",
+            "sourceFiles",
+            "authorizationSourceFiles",
             "sourceSha256",
             "targetTrustLevel",
             "toolOutputPresentation",
@@ -285,6 +287,13 @@ def _safe_metadata(metadata: dict | None) -> dict:
         } and isinstance(value, list):
             limit = 100 if key == "authorizationSourceAttachmentIds" else 5
             safe[key] = [item[:100] for item in value[:limit] if isinstance(item, str)]
+        elif key in {"sourceFiles", "authorizationSourceFiles"} and isinstance(value, list):
+            limit = 100 if key == "authorizationSourceFiles" else 5
+            safe[key] = [
+                {name: text[:2_000] for name, text in item.items()
+                 if name in {"root", "path", "sha256", "executionAgentId"} and isinstance(text, str)}
+                for item in value[:limit] if isinstance(item, dict)
+            ]
         elif isinstance(value, (bool, int, float)) or value is None:
             safe[key] = value
         if len(safe) == 32:
@@ -929,30 +938,6 @@ class AttachmentService:
         message.provider_data = {**data, "_matoloop": state}
         return SimpleNamespace(**values, message=message)
 
-    async def resolve(
-        self, db: AsyncSession, session_id: UUID, attachment_id: UUID, *, kind: str
-    ) -> MessageAttachment | SimpleNamespace | None:
-        attachment = await db.scalar(
-            select(MessageAttachment)
-            .join(Message)
-            .options(joinedload(MessageAttachment.message))
-            .where(
-                Message.session_id == session_id,
-                MessageAttachment.id == attachment_id,
-                MessageAttachment.kind == kind,
-            )
-        )
-        if attachment is not None:
-            return attachment
-        return next(
-            (
-                item
-                for item in await self.pending_for_run(db, session_id)
-                if item.id == attachment_id and item.kind == kind
-            ),
-            None,
-        )
-
     async def pending_for_run(self, db: AsyncSession, session_id: UUID) -> list[SimpleNamespace]:
         if self.run_id is None:
             return []
@@ -971,6 +956,39 @@ class AttachmentService:
             for item in pending_attachments(message)
             if item.run_id == self.run_id and item.session_id == session_id
         ]
+
+    async def resolve_path(
+        self, db: AsyncSession, root_files: RootFileService, path: str,
+    ) -> MessageAttachment | SimpleNamespace | None:
+        """Find metadata for the current file content, including this run's outputs."""
+        try:
+            revision = await asyncio.to_thread(root_files.working_revision, path)
+        except RootFileError as exc:
+            if exc.code == "file.revisionNotFound":
+                return None
+            raise
+        root_id = UUID(root_files.root_identity(FileRoot.SESSION))
+        if revision.revision is None:
+            if revision.run_id != self.run_id:
+                raise AttachmentError("attachment.notFound")
+            return next((
+                item for item in await self.pending_for_run(db, root_files.session_id)
+                if item.file_root_id == root_id and item.file_id == revision.file_id
+                and item.sha256 == revision.sha256
+            ), None)
+        return await db.scalar(
+            select(MessageAttachment)
+            .join(Message)
+            .options(joinedload(MessageAttachment.message))
+            .where(
+                Message.session_id == root_files.session_id,
+                MessageAttachment.file_root_id == root_id,
+                MessageAttachment.file_id == revision.file_id,
+                MessageAttachment.sha256 == revision.sha256,
+            )
+            .order_by(Message.created_at.desc(), MessageAttachment.position.desc())
+            .limit(1)
+        )
 
     def read_source(self, attachment, session_id: UUID, *, current_only: bool = False) -> bytes:
         if not 0 <= attachment.size_bytes <= ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES:

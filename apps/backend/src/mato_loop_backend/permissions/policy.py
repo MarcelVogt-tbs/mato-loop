@@ -831,13 +831,14 @@ def media_permission(
     model_name: str | None = None,
     trust_level: str | None = None,
     source_attachment_ids: tuple[UUID, ...] = (),
+    source_files: tuple[dict[str, str], ...] = (),
 ) -> PermissionRequest:
     labels = {
         "media.generate.image": ("Bild erzeugen?", "ein Bild erzeugen"),
         "media.edit.image": ("Bild bearbeiten?", "Bilder bearbeiten"),
         "media.generate.speech": ("Sprache erzeugen?", "eine Sprachaufnahme erzeugen"),
         "media.generate.audio": ("Audio erzeugen?", "eine Audiodatei erzeugen"),
-        "media.transcribe.audio": ("Audio transkribieren?", "einen Audioanhang transkribieren"),
+        "media.transcribe.audio": ("Audio transkribieren?", "eine Audiodatei transkribieren"),
         "media.analyze.video": ("Video analysieren?", "ein Video analysieren"),
     }
     title, action = labels.get(capability, ("Medienaktion erlauben?", "Medien verarbeiten"))
@@ -862,6 +863,7 @@ def media_permission(
                         if source_attachment_ids
                         else {}
                     ),
+                    **({"sourceFiles": list(source_files)} if source_files else {}),
                 },
                 ensure_ascii=True,
                 separators=(",", ":"),

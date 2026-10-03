@@ -137,7 +137,7 @@ def test_audio_projection_uses_reference_marker_without_file_data() -> None:
 
     projected = message_dict(message)
 
-    assert str(attachment.id) in projected["content"]
+    assert "root=files" in projected["content"]
     assert "aufnahme.wav" in projected["content"]
     assert "audio/wav" in projected["content"]
     assert attachment.file_path in projected["content"]
@@ -2789,7 +2789,7 @@ def test_message_dict_contains_only_internal_attachment_reference() -> None:
             ),
         }
     ]
-    assert str(message.attachments[0].id) in projected["content"]
+    assert "root=files" in projected["content"]
     assert message.attachments[0].file_path in projected["content"]
     assert "data:" not in str(projected)
 

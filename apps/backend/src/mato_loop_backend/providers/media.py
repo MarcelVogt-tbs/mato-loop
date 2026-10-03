@@ -500,7 +500,7 @@ class MediaService:
         *,
         prompt: str,
         images: tuple[tuple[bytes, str], ...],
-        source_attachment_ids: tuple[UUID, ...],
+        source_attachment_ids: tuple[UUID, ...] = (),
         timeout: float = 300,
         active_model_id: UUID | None = None,
         agent_profile_id: UUID | None = None,
@@ -509,7 +509,7 @@ class MediaService:
         user_id: UUID,
     ) -> MediaResult:
         prompt = _require_text(prompt, max_length=20_000)
-        if not 1 <= len(images) <= 5 or len(images) != len(source_attachment_ids):
+        if not 1 <= len(images) <= 5 or len(source_attachment_ids) > len(images):
             raise ProviderError(
                 "Invalid image edit inputs", code="provider.configurationInvalid"
             )

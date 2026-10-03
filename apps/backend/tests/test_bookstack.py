@@ -929,7 +929,7 @@ def _attachment(**overrides) -> BookStackAttachment:
 def _download_context(instance: IntegrationInstance, revision: str) -> SimpleNamespace:
     context = _context(instance, revision)
     context.current_integrations = AsyncMock(return_value=context.integration_settings)
-    context.session = SimpleNamespace(user_id=uuid4())
+    context.session = SimpleNamespace(user_id=uuid4(), parent_session_id=None)
     context.tool_settings = ToolSettings()
     context.ask = AsyncMock(return_value=PermissionDecision.ALLOW)
     context.db = AsyncMock()
@@ -1125,7 +1125,8 @@ async def test_missing_local_file_reports_file_not_found(monkeypatch) -> None:
     client.create_file_attachment.assert_not_awaited()
 
 
-async def test_attachment_from_workspace_uses_execution_client(monkeypatch) -> None:
+@pytest.mark.parametrize("path", ["notes/notiz.md", "/home/user/project/notes/notiz.md"])
+async def test_attachment_from_workspace_uses_execution_client(monkeypatch, path) -> None:
     instance = _base()
     revision = _revision(instance)
     token = integrations_bookstack_adapter._page_token(_page(), instance.id, revision, "book:7")
@@ -1151,14 +1152,14 @@ async def test_attachment_from_workspace_uses_execution_client(monkeypatch) -> N
         page_token=token,
         name="Notiz",
         root="workspace",
-        path="notes/notiz.md",
+        path=path,
     )
 
     result = await knowledge_create_attachment(arguments, context)
 
     assert not result.is_error
     context.execution_client.read_bytes.assert_awaited_once_with(
-        "notes/notiz.md", limit=MAX_ATTACHMENT_BYTES
+        "/home/user/project/notes/notiz.md", limit=MAX_ATTACHMENT_BYTES
     )
     context.root_files.read_bytes.assert_not_called()
 

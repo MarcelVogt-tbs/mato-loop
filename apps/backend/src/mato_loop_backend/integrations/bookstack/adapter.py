@@ -1460,13 +1460,21 @@ async def _local_attachment_source(
     import mimetypes
     from pathlib import PurePosixPath
 
-    from mato_loop_backend.files.access import filesystem_permission
+    from mato_loop_backend.execution import ExecutionClientError
+    from mato_loop_backend.files.access import (
+        delegated_session_files,
+        file_path,
+        filesystem_permission,
+        read_bytes,
+    )
     from mato_loop_backend.files.service import RootFileError
     from mato_loop_backend.tools.access import allow
     from mato_loop_backend.tools.contracts import ToolResult
 
+    if delegated_session_files(context, root):
+        return ToolResult.error("tool.unavailable")
     try:
-        normalized = context.root_files.normalize_relative_path(path)
+        normalized = file_path(context, root, path)
     except (RootFileError, ValueError, OSError):
         return ToolResult.error("file.fileNotFound", field="path")
     try:
@@ -1483,24 +1491,16 @@ async def _local_attachment_source(
     if not await allow(context, request):
         return ToolResult.error("permission.denied", field="path")
     try:
-        data = (
-            await context.execution_client.read_bytes(
-                normalized, limit=MAX_ATTACHMENT_BYTES
-            )
-            if root == "workspace"
-            else await asyncio.to_thread(
-                context.root_files.read_bytes,
-                root,
-                normalized,
-                limit=MAX_ATTACHMENT_BYTES,
-            )
+        data = await read_bytes(
+            context, root, normalized, limit=MAX_ATTACHMENT_BYTES,
         )
-    except RootFileError as exc:
-        return ToolResult.error(exc.code, field="path")
+    except (RootFileError, ExecutionClientError) as exc:
+        return ToolResult.error(
+            "integration.attachmentTooLarge" if exc.code == "file.tooLarge" else exc.code,
+            field="path",
+        )
     except (ValueError, OSError):
         return ToolResult.error("file.fileNotFound", field="path")
-    if len(data) > MAX_ATTACHMENT_BYTES:
-        return ToolResult.error("integration.attachmentTooLarge", field="path")
     if not data:
         return ToolResult.error("file.fileNotFound", field="path")
     filename = PurePosixPath(normalized).name or "attachment"

@@ -16,7 +16,6 @@ from mato_loop_backend.agent.media_prompt_profiles import (
 )
 from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.files.storage import SessionStorage
-from mato_loop_backend.media.attachments import AttachmentService
 from mato_loop_backend.models import ChatSession, Message, MessageAttachment
 from mato_loop_backend.permissions.policy import PermissionDecision, media_permission
 from mato_loop_backend.providers.base import ProviderError, ToolCall
@@ -45,6 +44,7 @@ from mato_loop_backend.settings.models import (
 )
 from mato_loop_backend.tools.catalog import effective_tool_capabilities, tool_registry
 from mato_loop_backend.tools.context import ToolContext
+from mato_loop_backend.tools.media import _qr_code_png
 
 
 def wav_bytes() -> bytes:
@@ -514,7 +514,7 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
         name="edit_image",
         arguments={
             "prompt": "Change only the background; keep both subjects unchanged.",
-            "attachment_ids": [str(item) for item in attachment_ids],
+            "images": [{"root": "files", "path": f"image-{index}.png"} for index in range(2)],
         },
     )
     tool_context = context(tmp_path, call)
@@ -530,6 +530,10 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
         content="Bearbeite diese Bilder",
         trust_level="public",
     )
+    images = [_qr_code_png("first"), _qr_code_png("second")]
+    revisions = [tool_context.root_files.create_output_file(f"image-{index}.png", data)
+                 for index, data in enumerate(images)]
+    call.arguments["images"] = [{"root": "files", "path": revision.path} for revision in revisions]
     attachments = [
         MessageAttachment(
             id=attachment_id,
@@ -541,12 +545,12 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
             purpose="artifact" if position == 0 else "attachment",
             processing_status="ready",
             mime_type="image/png",
-            size_bytes=5,
-            sha256="0" * 64,
-            file_root_id=uuid4(),
-            file_id=uuid4(),
-            file_revision=1,
-            file_path=f"attachments/{attachment_id}/image.png",
+            size_bytes=revisions[position].size_bytes,
+            sha256=revisions[position].sha256,
+            file_root_id=tool_context.session.id,
+            file_id=revisions[position].file_id,
+            file_revision=revisions[position].revision,
+            file_path=revisions[position].path,
             metadata_json=(
                 {"authorizationSourceAttachmentIds": [str(original_attachment_id)]}
                 if position == 0
@@ -559,8 +563,6 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
     scalars.all.return_value = list(reversed(attachments))
     tool_context.db.scalars.return_value = scalars
     tool_context.db.scalar.side_effect = attachments
-    read_image = AsyncMock(side_effect=[b"first", b"second"])
-    monkeypatch.setattr(AttachmentService, "read_image", read_image)
     edit = AsyncMock(
         return_value=MediaResult(
             b"result",
@@ -576,10 +578,9 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
     assert result.is_error is False
     assert result.content == "Image edited."
     assert edit.await_args.kwargs["images"] == (
-        (b"first", "image/png"),
-        (b"second", "image/png"),
+        (images[0], "image/png"),
+        (images[1], "image/png"),
     )
-    assert all(call.kwargs == {"current_only": True} for call in read_image.await_args_list)
     request = tool_context.ask_handler.await_args.args[0]
     scope = json.loads(request.resource_scope)
     assert request.capability == "media.edit.image"
@@ -609,7 +610,7 @@ async def test_edit_image_sends_authorized_private_sources_to_public_target(
     call = ToolCall(
         id="edit",
         name="edit_image",
-        arguments={"prompt": "Change the background", "attachment_ids": [str(attachment_id)]},
+        arguments={"prompt": "Change the background", "images": [{"root": "files", "path": "image.png"}]},
     )
     tool_context = context(tmp_path, call)
     ai, chat = codex_edit_settings()
@@ -630,7 +631,10 @@ async def test_edit_image_sends_authorized_private_sources_to_public_target(
         content="Privat",
         trust_level="private",
     )
-    file_root_id, file_id = uuid4(), uuid4()
+    image = _qr_code_png("private")
+    revision = tool_context.root_files.create_output_file("image.png", image)
+    call.arguments["images"][0]["path"] = revision.path
+    file_root_id, file_id = tool_context.session.id, revision.file_id
     attachment = MessageAttachment(
         id=attachment_id,
         message_id=message.id,
@@ -641,18 +645,17 @@ async def test_edit_image_sends_authorized_private_sources_to_public_target(
         purpose=purpose,
         processing_status="ready",
         mime_type="image/png",
-        size_bytes=5,
-        sha256="0" * 64,
+        size_bytes=revision.size_bytes,
+        sha256=revision.sha256,
         file_root_id=file_root_id,
         file_id=file_id,
         file_revision=1,
-        file_path=f"attachments/{attachment_id}/image.png",
+        file_path=revision.path,
     )
     scalars = MagicMock()
     scalars.all.return_value = [attachment]
     tool_context.db.scalars.return_value = scalars
     tool_context.db.scalar.return_value = attachment
-    monkeypatch.setattr(AttachmentService, "read_image", AsyncMock(return_value=b"private"))
     edit = AsyncMock(
         return_value=MediaResult(
             b"result",
@@ -666,10 +669,10 @@ async def test_edit_image_sends_authorized_private_sources_to_public_target(
     result = await tool_registry.execute(call, tool_context)
 
     assert result.is_error is False
-    assert edit.await_args.kwargs["images"] == ((b"private", "image/png"),)
+    assert edit.await_args.kwargs["images"] == ((image, "image/png"),)
     assert result.attachments[0].file_root_id == (file_root_id if reuses_identity else None)
     assert result.attachments[0].file_id == (file_id if reuses_identity else None)
-    tool_context.ask_handler.assert_not_awaited()
+    assert [call.args[0].capability for call in tool_context.ask_handler.await_args_list] == ["session.files.read"]
 
 
 async def test_policy_revocation_during_approval_stops_media_service(
@@ -776,7 +779,7 @@ async def test_media_timeout_is_returned_to_model_with_retry_context(
     assert generate.await_args.kwargs["timeout"] == 640
 
 
-async def test_transcription_cannot_load_attachment_from_other_session(
+async def test_transcription_cannot_read_path_outside_session(
     tmp_path, monkeypatch
 ) -> None:
     settings = ToolSettings(
@@ -786,7 +789,7 @@ async def test_transcription_cannot_load_attachment_from_other_session(
     call = ToolCall(
         id="transcribe",
         name="transcribe_audio",
-        arguments={"attachment_id": str(uuid4())},
+        arguments={"root": "files", "path": "../other-session/audio.wav"},
     )
     tool_context = context(tmp_path, call)
     tool_context.db.scalar.return_value = None
@@ -799,7 +802,71 @@ async def test_transcription_cannot_load_attachment_from_other_session(
 
     result = await tool_registry.execute(call, tool_context)
 
-    assert result.metadata == {"errorCode": "attachment.notFound"}
+    assert result.metadata == {"errorCode": "file.invalidPath"}
     transcribe.assert_not_awaited()
-    statement = tool_context.db.scalar.await_args.args[0]
-    assert tool_context.session.id in statement.compile().params.values()
+
+
+@pytest.mark.parametrize("name", ["read_qr_code", "transcribe_audio", "edit_image"])
+@pytest.mark.parametrize("location", ["files", "computer_relative", "computer_absolute"])
+async def test_media_tools_read_files_without_chat_attachments(tmp_path, monkeypatch, name, location):
+    filename = "audio.wav" if name == "transcribe_audio" else "image.png"
+    data = wav_bytes() if name == "transcribe_audio" else _qr_code_png("file input")
+    reference = {
+        "root": "files" if location == "files" else "computer",
+        "path": f"/work/{filename}" if location == "computer_absolute" else filename,
+    }
+    arguments = {"images": [reference], "prompt": "Make it blue"} if name == "edit_image" else reference
+    call = ToolCall("media", name, arguments)
+    tool_context = context(tmp_path, call)
+    tool_context.db.scalar.return_value = None
+    tool_context.db.get.return_value = SimpleNamespace(user_id=None)
+    if location == "files":
+        tool_context.root_files.create_file("session", filename, BytesIO(data), max_bytes=len(data))
+    else:
+        tool_context.execution_client = SimpleNamespace(
+            agent_id=uuid4(), current_directory="/work", read_bytes=AsyncMock(return_value=data),
+        )
+    if name == "edit_image":
+        ai, chat = codex_edit_settings()
+        tool_context.model_id = chat.id
+        provider = AsyncMock(return_value=MediaResult(data, "image/png", "edited.png"))
+        monkeypatch.setattr(MediaService, "edit_image", provider)
+    else:
+        ai = media_settings(ModelCapability.AUDIO_TRANSCRIPTION)
+        provider = AsyncMock(return_value=SimpleNamespace(text="transcribed"))
+        monkeypatch.setattr(MediaService, "transcribe_audio", provider)
+    mock_settings_load(monkeypatch, ToolSettings(), ai)
+
+    result = await tool_registry.execute(call, tool_context)
+
+    assert not result.is_error, result.content
+    if name == "read_qr_code":
+        assert json.loads(result.content) == {"codes": ["file input"]}
+    elif name == "transcribe_audio":
+        assert provider.await_args.kwargs["audio"] == data
+    else:
+        assert provider.await_args.kwargs["images"] == ((data, "image/png"),)
+        scope = json.loads(tool_context.ask_handler.await_args.args[0].resource_scope)
+        assert scope["sourceFiles"] == result.attachments[0].metadata["sourceFiles"]
+
+
+@pytest.mark.parametrize("failure,code", [
+    ("denied", "permission.denied"),
+    ("invalid", "attachment.unsupportedType"),
+    ("oversized", "file.tooLarge"),
+])
+async def test_media_file_read_enforces_permission_validation_and_limit(tmp_path, monkeypatch, failure, code):
+    import mato_loop_backend.tools.media as media
+
+    call = ToolCall("qr", "read_qr_code", {"root": "computer", "path": "qr.png"})
+    tool_context = context(tmp_path, call, PermissionDecision.DENY if failure == "denied" else PermissionDecision.ALLOW)
+    client = SimpleNamespace(agent_id=uuid4(), current_directory="/work", read_bytes=AsyncMock(return_value=b"invalid"))
+    tool_context.execution_client = client
+    if failure == "oversized":
+        monkeypatch.setattr(media, "MAX_IMAGE_ATTACHMENT_BYTES", 1)
+
+    result = await tool_registry.execute(call, tool_context)
+
+    assert result.metadata == {"errorCode": code}
+    if failure == "denied":
+        client.read_bytes.assert_not_awaited()

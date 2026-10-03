@@ -288,7 +288,7 @@ def test_transcript_routing_uses_the_production_tool_contract() -> None:
         assert "spoken content only, not of visual events" in messages[0]["content"]
         assert "does not inspect video visuals" in by_name["fetch_transcript"]["description"]
         assert "No audio, video, or caption extraction" in by_name["webfetch"]["description"]
-        assert "does not accept video attachments" in by_name["transcribe_audio"]["description"]
+        assert "does not accept video files" in by_name["transcribe_audio"]["description"]
         assert "does not accept URLs" in by_name["analyze_video"]["description"]
         parameters = by_name["fetch_transcript"]["parameters"]
         assert parameters["required"] == ["url"]
@@ -460,7 +460,7 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     assert "occupations use fact" in category["description"]
     assert "explicitly asks" in memory_messages[0]["content"]
 
-    media_messages, media_tools = build_case(_case("transcribe_audio_uses_attachment_uuid"))
+    media_messages, media_tools = build_case(_case("transcribe_audio_uses_root_and_path"))
     assert "verified PCM audio derivative" in media_messages[0]["content"]
     assert [tool["name"] for tool in media_tools] == ["transcribe_audio"]
 
@@ -1877,15 +1877,15 @@ def test_evaluate_rejects_invalid_uuid_tool_arguments() -> None:
 
 
 def test_transcription_accepts_schema_valid_german_language_representations_only() -> None:
-    case = _case("transcribe_audio_uses_attachment_uuid")
-    attachment_id = "80000000-0000-4000-8000-000000000001"
+    case = _case("transcribe_audio_uses_root_and_path")
+    reference = {"root": "files", "path": "aufnahmen/gespraech.mp3"}
     for language in ("de", "de-DE", "German", "Deutsch"):
         result = ProviderResult(
             tool_calls=[
                 ToolCall(
                     "1",
                     "transcribe_audio",
-                    {"attachment_id": attachment_id, "language": language, "_reason": "Die Aufnahme transkribieren."},
+                    {**reference, "language": language, "_reason": "Die Aufnahme transkribieren."},
                 )
             ]
         )
@@ -1896,7 +1896,7 @@ def test_transcription_accepts_schema_valid_german_language_representations_only
             ToolCall(
                 "1",
                 "transcribe_audio",
-                {"attachment_id": attachment_id, "language": "fr", "_reason": "Die Aufnahme transkribieren."},
+                {**reference, "language": "fr", "_reason": "Die Aufnahme transkribieren."},
             )
         ]
     )
@@ -1906,7 +1906,7 @@ def test_transcription_accepts_schema_valid_german_language_representations_only
                 "1",
                 "transcribe_audio",
                 {
-                    "attachment_id": "80000000-0000-4000-8000-000000000002",
+                    "root": "files", "path": "andere.mp3",
                     "language": "de",
                     "_reason": "Die Aufnahme transkribieren.",
                 },
@@ -1914,7 +1914,7 @@ def test_transcription_accepts_schema_valid_german_language_representations_only
         ]
     )
     assert any("expected one of" in failure for failure in evaluate(case, wrong_language))
-    assert any("attachment_id expected" in failure for failure in evaluate(case, wrong_attachment))
+    assert any("path expected" in failure for failure in evaluate(case, wrong_attachment))
 
 
 def test_evaluate_checks_dreaming_candidate_count_and_evidence() -> None:

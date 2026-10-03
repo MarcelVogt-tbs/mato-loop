@@ -46,6 +46,7 @@ from mato_loop_backend.models import (
     MessageAttachment,
     WebSearchPolicy,
 )
+from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.providers import service as provider_service
 from mato_loop_backend.providers.base import (
     ProviderError,
@@ -399,7 +400,7 @@ async def test_pending_images_edit_in_place_project_and_finalize_once(tmp_path, 
     assert public_files.list_revisions(first.file_path) == ()
     assert await service.read_image(first, session.id, current_only=True) == png("red")
     projected = message_dict(first_message)
-    assert str(first.id) in projected["content"]
+    assert first.file_path in projected["content"]
     assert projected["attachments"][0]["run_id"] == str(run_id)
     monkeypatch.setattr(provider_service, "AttachmentService", lambda: service)
     assert provider_service._read_image_data_url(projected["attachments"][0]).startswith(
@@ -415,7 +416,7 @@ async def test_pending_images_edit_in_place_project_and_finalize_once(tmp_path, 
 
     db.scalar.return_value = None
     db.scalars.return_value = Mock(all=Mock(return_value=[first_message]))
-    assert (await service.resolve(db, session.id, first.id, kind="image")).id == first.id
+    assert (await service.resolve_path(db, files, first.file_path)).id == first.id
     db.scalar.return_value = session
     second_message = tool_message(session, run_id)
     second = await service.create_image(
@@ -1277,13 +1278,29 @@ async def test_pending_audio_and_image_tools_use_owned_live_sources(tmp_path, mo
         agent_profile_id=None,
         model_id=target.model.id,
         tool_settings=ToolSettings(),
+        root_files=RootFileService(session.id, session_storage=storage, run_id=run_id),
+        tool_call=ToolCall("edit", "edit_image", {}),
+        ask=AsyncMock(return_value=PermissionDecision.ALLOW),
+        model_trust_level=TrustLevel.PUBLIC,
     )
     result = await mock_tools_media._edit_image(
-        SimpleNamespace(attachment_ids=[image.id], prompt="Make it blue"), context
+        SimpleNamespace(images=[SimpleNamespace(root="session", path=image.file_path)], prompt="Make it blue"), context
     )
     assert result.attachments[0].file_root_id is None
     assert result.attachments[0].file_id is None
     assert edit.await_args.kwargs["images"] == ((png("red"), "image/png"),)
+    transcribe = AsyncMock(return_value=SimpleNamespace(text="transcribed"))
+    monkeypatch.setattr(mock_tools_media.MediaService, "transcribe_audio", transcribe)
+    await mock_tools_media._transcribe_audio(
+        SimpleNamespace(root="session", path=attachment.file_path, language=None), context,
+    )
+    assert transcribe.await_args.kwargs["audio"] == audio_output.getvalue()
+    context.run_id = uuid4()
+    monkeypatch.setattr(mock_tools_media, "AttachmentService", AttachmentService)
+    with pytest.raises(AttachmentError):
+        await mock_tools_media._transcribe_audio(
+            SimpleNamespace(root="session", path=attachment.file_path, language=None), context,
+        )
     db.add.assert_not_called()
 
 

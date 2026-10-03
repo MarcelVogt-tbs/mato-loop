@@ -660,8 +660,13 @@ class GenerateQrCodeArguments(ToolArguments):
         return value
 
 
-class ReadQrCodeArguments(ToolArguments):
-    attachment_id: UUID
+class FileReference(ToolArguments):
+    root: Literal["session", "workspace"]
+    path: str = Field(min_length=1, max_length=2_000)
+
+
+class ReadQrCodeArguments(FileReference):
+    pass
 
 
 class EditImageArguments(ToolArguments):
@@ -676,20 +681,20 @@ class EditImageArguments(ToolArguments):
             "visible text that must remain verbatim."
         ),
     )
-    attachment_ids: list[UUID] = Field(
+    images: list[FileReference] = Field(
         min_length=1,
         max_length=5,
         description=(
-            "One to five image attachment IDs from the current session, ordered as Image 1, "
+            "One to five image files, ordered as Image 1, "
             "Image 2, and so on."
         ),
     )
 
-    @field_validator("attachment_ids")
+    @field_validator("images")
     @classmethod
-    def unique_attachment_ids(cls, value: list[UUID]) -> list[UUID]:
-        if len(set(value)) != len(value):
-            raise ValueError("attachment_ids must be unique")
+    def unique_images(cls, value: list[FileReference]) -> list[FileReference]:
+        if len({(item.root, item.path) for item in value}) != len(value):
+            raise ValueError("images must be unique")
         return value
 
 
@@ -707,14 +712,11 @@ class GenerateAudioArguments(ToolArguments):
     seed: int | None = Field(default=None, ge=0)
 
 
-class TranscribeAudioArguments(ToolArguments):
-    attachment_id: UUID
+class TranscribeAudioArguments(FileReference):
     language: str | None = Field(default=None, min_length=2, max_length=35)
 
 
-class AnalyzeVideoArguments(ToolArguments):
-    root: Literal["session", "workspace"]
-    path: str = Field(min_length=1, max_length=2_000)
+class AnalyzeVideoArguments(FileReference):
     language: str | None = Field(default=None, min_length=2, max_length=35)
     analysis_mode: Literal["speech", "overview", "fine_grained"] = Field(
         default="overview",

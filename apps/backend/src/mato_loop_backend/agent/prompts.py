@@ -411,6 +411,13 @@ def general_system_prompt(
             "argument values unchanged and add _reason in the user's language when useful. "
             "Use nextOffset for further chunks; never rerun the original tool."
         )
+    if offered_tool_names & {"transcribe_audio", "edit_image", "read_qr_code", "analyze_video"}:
+        parts.append(
+            "Media inputs use root and path, not attachment IDs. Use root=files for session files "
+            "and root=computer for computer files; computer bytes are transferred on demand. "
+            "For large files, copy_path to files before processing, especially for repeated use. "
+            "Copying does not bypass tool size limits."
+        )
     if file_tools_available:
         parts.append(
             "Use file tools for supported file changes, not shell/Python/Node.js scripts. "

@@ -767,9 +767,11 @@ async def test_read_qr_code_uses_current_session_image_and_source_trust(
     read_call = ToolCall(
         id="qr-read",
         name="read_qr_code",
-        arguments={"attachment_id": str(attachment_id)},
+        arguments={"root": "files", "path": "qr.png"},
     )
     context = _context(tmp_path, read_call)
+    revision = context.root_files.create_output_file("qr.png", generated.attachments[0].data)
+    read_call.arguments["path"] = revision.path
     message = Message(
         id=uuid4(),
         session_id=context.session.id,
@@ -787,40 +789,39 @@ async def test_read_qr_code_uses_current_session_image_and_source_trust(
         processing_status="ready",
         mime_type="image/png",
         size_bytes=len(generated.attachments[0].data),
-        sha256="0" * 64,
+        sha256=revision.sha256,
         file_root_id=context.session.id,
-        file_id=uuid4(),
-        file_revision=1,
-        file_path=f"attachments/{attachment_id}/qr.png",
+        file_id=revision.file_id,
+        file_revision=revision.revision,
+        file_path=revision.path,
     )
     context.db.scalar.return_value = attachment
-    read_image = AsyncMock(return_value=generated.attachments[0].data)
-    monkeypatch.setattr(AttachmentService, "read_image", read_image)
 
     result = await tool_registry.execute(read_call, context)
 
     assert json.loads(result.content) == {"codes": [content]}
     assert result.trust_level == TrustLevel.PRIVATE
-    read_image.assert_awaited_once_with(attachment, context.session.id, current_only=True)
     statement = context.db.scalar.await_args.args[0]
     assert context.session.id in statement.compile().params.values()
 
     attachment.metadata_json = {"protectedInput": True}
+    context.root_files.read_bytes = Mock(side_effect=AssertionError("Protected bytes must not be read"))
     blocked = await tool_registry.execute(read_call, context)
     assert blocked.metadata == {"errorCode": "permission.denied"}
-    read_image.assert_awaited_once()
+    context.root_files.read_bytes.assert_not_called()
     assert message_dict(message)["attachments"] == []
     assert str(attachment_id) not in message_dict(message)["content"]
 
 
-async def test_read_qr_code_rejects_stale_attachment_id(tmp_path, monkeypatch) -> None:
+async def test_read_qr_code_uses_current_file_after_edit(tmp_path, monkeypatch) -> None:
     attachment_id = uuid4()
     call = ToolCall(
-        id="qr-read", name="read_qr_code", arguments={"attachment_id": str(attachment_id)}
+        id="qr-read", name="read_qr_code", arguments={"root": "files", "path": "qr.png"}
     )
     context = _context(tmp_path, call)
     data = mock_tools_media._qr_code_png("original")
     revision = context.root_files.create_output_file("qr.png", data)
+    call.arguments["path"] = revision.path
     attachment = MessageAttachment(
         id=attachment_id,
         kind="image",
@@ -833,7 +834,7 @@ async def test_read_qr_code_rejects_stale_attachment_id(tmp_path, monkeypatch) -
         file_revision=revision.revision,
         file_path=revision.path,
     )
-    context.db.scalar.return_value = attachment
+    context.db.scalar.return_value = None
     monkeypatch.setattr(
         AttachmentService, "_root_files", lambda *_args, **_kwargs: context.root_files
     )
@@ -841,15 +842,15 @@ async def test_read_qr_code_rejects_stale_attachment_id(tmp_path, monkeypatch) -
 
     result = await tool_registry.execute(call, context)
 
-    assert result.metadata == {"errorCode": "attachment.notFound"}
+    assert json.loads(result.content) == {"codes": ["new"]}
     assert await AttachmentService().read_image(attachment, context.session.id) == data
 
 
-async def test_read_qr_code_rejects_unknown_session_attachment(tmp_path) -> None:
+async def test_read_qr_code_rejects_missing_session_file(tmp_path) -> None:
     read_call = ToolCall(
         id="qr-read",
         name="read_qr_code",
-        arguments={"attachment_id": str(uuid4())},
+        arguments={"root": "files", "path": "missing.png"},
     )
     context = _context(tmp_path, read_call)
     context.db.scalar.return_value = None
@@ -857,9 +858,7 @@ async def test_read_qr_code_rejects_unknown_session_attachment(tmp_path) -> None
 
     result = await tool_registry.execute(read_call, context)
 
-    assert result.metadata == {"errorCode": "attachment.notFound"}
-    statement = context.db.scalar.await_args.args[0]
-    assert context.session.id in statement.compile().params.values()
+    assert result.metadata == {"errorCode": "file.fileNotFound"}
 
 
 def test_effective_toolset_accepts_host_registered_integration_tools(monkeypatch) -> None:
@@ -4142,7 +4141,7 @@ async def test_session_tool_result_read_exposes_attachment_references(tmp_path) 
 
     assert json.loads(result.content)["attachments"] == [
         {
-            "id": str(attachment.id),
+            "root": "files",
             "filename": "generated.png",
             "kind": "image",
             "mimeType": "image/png",
@@ -4286,7 +4285,7 @@ async def test_session_read_exposes_historical_attachment_identity_and_path(tmp_
     payload = json.loads(result.content)
     assert payload["messages"][0]["attachments"] == [
         {
-            "id": str(attachment.id),
+            "root": "files",
             "filename": "bericht.pdf",
             "kind": "document",
             "mimeType": "application/pdf",
@@ -4701,11 +4700,12 @@ def test_video_analysis_schema_uses_semantic_modes() -> None:
     assert legacy.analysis_mode == "fine_grained"
 
 
-async def test_workspace_video_uses_execution_client_bytes(tmp_path) -> None:
+@pytest.mark.parametrize("path", ["video.mp4", "/home/user/project/video.mp4"])
+async def test_workspace_video_uses_execution_client_bytes(tmp_path, path) -> None:
     call = ToolCall(
         id="video",
         name="analyze_video",
-        arguments={"root": "computer", "path": "video.mp4"},
+        arguments={"root": "computer", "path": path},
     )
     context = _context(tmp_path, call)
     context.session.current_directory = "/home/user/project"
@@ -4726,7 +4726,7 @@ async def test_workspace_video_uses_execution_client_bytes(tmp_path) -> None:
 
     assert not result.is_error
     context.execution_client.read_bytes.assert_awaited_once_with(
-        "video.mp4", limit=mock_tools_media.MAX_VIDEO_BYTES
+        "/home/user/project/video.mp4", limit=mock_tools_media.MAX_VIDEO_BYTES
     )
     context.root_files.open_file.assert_not_called()
 
