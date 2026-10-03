@@ -13,17 +13,8 @@ const routes = [
     path: '/',
     component: () => import('src/app/MainLayout.vue'),
     children: [
-      {
-        path: '',
-        name: 'home',
-        redirect: (to) => ({
-          name: ['session', 'project', 'subagent', 'controlCenter', 'new'].some((key) => Object.hasOwn(to.query, key)) ? 'chat' : 'dashboard',
-          query: to.query,
-          hash: to.hash
-        })
-      },
-      { path: 'dashboard', name: 'dashboard', component: () => import('src/features/dashboard/DashboardPage.vue') },
-      { path: 'chat', name: 'chat', component: () => import('src/features/chat/ChatPage.vue') },
+      { path: '', alias: '/chat', name: 'chat', component: () => import('src/features/chat/ChatPage.vue') },
+      { path: 'dashboard', redirect: (to) => ({ name: 'chat', query: to.query, hash: to.hash }) },
       { path: 'archive', name: 'archive', component: () => import('src/features/archive/ArchivePage.vue') },
       {
         path: 'settings',

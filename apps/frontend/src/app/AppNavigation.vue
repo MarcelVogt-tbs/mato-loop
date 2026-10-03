@@ -27,7 +27,7 @@
       <q-separator class="lt-md" />
 
       <div class="col column no-wrap drawer-navigation q-py-xs">
-        <SidebarNavItem icon="space_dashboard" icon-color="primary" label="Dashboard" :to="{ name: 'dashboard' }" class="q-mx-sm q-mb-sm" @click="closeDrawerOnMobile" />
+        <SidebarNavItem icon="home" icon-color="primary" label="Home" :to="{ name: 'chat' }" :active="route.name === 'chat' && !routeSessionId && !Object.hasOwn(route.query, 'new')" class="q-mx-sm q-mb-sm" @click="closeDrawerOnMobile" />
         <q-scroll-area
           class="col session-scroll-area"
           :content-style="{ width: '100%' }"
@@ -83,7 +83,7 @@
               @click="projectsSectionOpen = !projectsSectionOpen"
             >
               <template #actions>
-                <SidebarIconButton class="sidebar-section__action" icon="add" aria-label="Projekt erstellen" @click="openProjectDialog('create')" />
+                <SidebarIconButton class="sidebar-section__action" icon="add" aria-label="Projekt erstellen" @click="openProjectDialog()" />
               </template>
             </SidebarNavItem>
 
@@ -131,7 +131,7 @@
                       :aria-label="`Aktionen für ${project.name}`"
                       @update:model-value="setProjectActionMenu(project.id, $event)"
                     >
-                      <SidebarNavItem icon="edit" label="Projekt bearbeiten" v-close-popup @click="openProjectDialog('edit', project)" />
+                      <SidebarNavItem icon="edit" label="Projekt bearbeiten" v-close-popup @click="openProjectDialog(project)" />
                       <q-separator />
                       <SidebarNavItem icon="archive" label="Projekt archivieren" v-close-popup @click="archiveProject(project)" />
                       <SidebarNavItem
@@ -243,21 +243,10 @@
   />
   <SearchDialog @open-project="openSearchProject" @open-session="openSearchSession" />
   <ProjectDialog
+    v-if="projectDialogOpen"
     v-model="projectDialogOpen"
-    v-model:name="projectName"
-    v-model:instructions="projectInstructions"
-    v-model:execution-agent-id="projectDefaultExecutionAgentId"
-    v-model:current-directory="projectDefaultCurrentDirectory"
-    v-model:directory-picker-open="projectDirectoryPickerOpen"
-    :mode="projectDialogMode"
-    :saving="projectSaving"
-    :execution-agent-options="projectDialogOpen ? projectExecutionAgentOptions : []"
-    :agents-loading="executionAgents.loading"
-    :selected-agent="projectSelectedExecutionAgent"
-    :directory-picker-available="projectDirectoryPickerAvailable"
-    :required-rule="requiredRule"
-    @select-agent="selectProjectExecutionAgent"
-    @save="saveProject"
+    :project="projectDialogTarget"
+    @created="onProjectCreated"
   />
   <SessionDialogs
     v-model:rename-open="renameDialogOpen"
@@ -296,7 +285,6 @@ import { useAutomationStore } from 'stores/automations'
 import { useAuthStore } from 'stores/auth'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
-import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useQuestionStore } from 'stores/questions'
 import { useSearchStore } from 'stores/search'
@@ -313,7 +301,6 @@ const router = useRouter()
 const auth = useAuthStore()
 const chat = useChatStore()
 const controlCenter = useControlCenterStore()
-const executionAgents = useExecutionAgentStore()
 const workspace = useWorkspaceStore()
 const approvals = useApprovalStore()
 const automations = useAutomationStore()
@@ -351,14 +338,11 @@ const {
 })
 const {
   projectsSectionOpen, expandedProjects, openProjectActionMenuId,
-  projectDialogOpen, projectDialogMode, projectName, projectInstructions,
-  projectDefaultExecutionAgentId, projectDefaultCurrentDirectory,
-  projectDirectoryPickerOpen, projectSaving, projectSelectedExecutionAgent,
-  projectExecutionAgentOptions, projectDirectoryPickerAvailable,
-  loadProjects, openProjectDialog, selectProjectExecutionAgent,
-  setProjectActionMenu, saveProject, deleteProject
+  projectDialogOpen, projectDialogTarget,
+  loadProjects, openProjectDialog, onProjectCreated,
+  setProjectActionMenu, deleteProject
 } = useProjectNavigation({
-  projects, executionAgents, chat, controlCenter, workspace, automations,
+  projects, chat, controlCenter, workspace, automations,
   notifications, router, $q, confirm, selectedProjectId,
   confirmDiscardedEdit: props.confirmDiscardedEdit, openNewSession
 })

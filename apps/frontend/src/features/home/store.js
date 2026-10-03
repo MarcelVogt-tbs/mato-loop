@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 
-export const useDashboardStore = defineStore('dashboard', {
+export const useHomeStore = defineStore('home', {
   state: () => ({ sessions: [], loading: false, loaded: false, loadFailed: false }),
   actions: {
     async load(config = {}) {

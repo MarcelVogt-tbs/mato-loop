@@ -7,7 +7,7 @@
           :model-value="draft"
           borderless
           autogrow
-          autofocus
+          :autofocus="autofocus"
           type="textarea"
           rows="1"
           class="chat-composer__input"
@@ -236,6 +236,7 @@ import { formatAttachmentDuration } from 'src/utils/attachments'
 defineOptions({ name: 'ChatComposer' })
 
 const props = defineProps({
+  autofocus: { type: Boolean, default: true },
   session: { type: Object, default: null },
   draft: { type: String, default: '' },
   disabled: Boolean,

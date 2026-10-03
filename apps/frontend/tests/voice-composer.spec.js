@@ -4,9 +4,9 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ notify: vi.fn(), api: { post: vi.fn(), get: vi.fn(), patch: vi.fn(), delete: vi.fn() }, recorder: null }))
+const mocks = vi.hoisted(() => ({ notify: vi.fn(), api: { post: vi.fn(), get: vi.fn(), patch: vi.fn(), delete: vi.fn() }, recorder: null, mobile: false }))
 vi.mock('src/boot/axios', () => ({ api: mocks.api }))
-vi.mock('quasar', () => ({ useQuasar: () => ({ notify: mocks.notify, screen: { gt: { sm: true } } }) }))
+vi.mock('quasar', () => ({ useQuasar: () => ({ notify: mocks.notify, platform: { is: { mobile: mocks.mobile } }, screen: { gt: { sm: !mocks.mobile } } }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: async () => true }) }))
 vi.mock('src/features/chat/audio-recorder', () => ({
   useAudioRecorder: (options) => { mocks.onAutoStopped = options.onAutoStopped; return mocks.recorder },
@@ -28,6 +28,7 @@ vi.mock('src/features/chat/components/SessionSettingsFields.vue', () => ({ defau
 vi.mock('src/features/approvals/ApprovalCard.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/chat/components/AgentActivityPanel.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/shared/ui/AppLogo.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/home/HomeContent.vue', () => ({ default: { render: () => h('section', { class: 'home-stub' }, 'Übersicht') } }))
 vi.mock('src/features/chat/components/ChatQueuedMessages.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/app/control-center/ControlCenterPanel.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: { render: () => null } }))
@@ -56,6 +57,7 @@ async function click(label) {
 }
 
 beforeEach(async () => {
+  mocks.mobile = false
   setActivePinia(createPinia())
   chat = useChatStore()
   sentMessages = []
@@ -130,6 +132,10 @@ beforeEach(async () => {
     methods: { focus() { this.$el.focus() } },
     render() { return h('textarea', { disabled: this.disable, value: this.modelValue }) }
   })
+  app.component('QSelect', {
+    props: ['modelValue', 'options', 'disable'], emits: ['update:modelValue'],
+    render() { return h('select', { value: this.modelValue ?? '', disabled: this.disable, onChange: event => this.$emit('update:modelValue', event.target.value || null) }, this.options.map(option => h('option', { value: option.value ?? '' }, option.label))) }
+  })
   for (const name of ['QCard', 'QForm', 'QIcon', 'QSpace', 'QBanner', 'QTooltip', 'QSpinner', 'QChip', 'QPopupProxy', 'QToolbar', 'QToolbarTitle', 'QSeparator', 'QCardSection']) {
     app.component(name, { methods: { focus() {} }, render() { return h('div', this.$slots.default?.()) } })
   }
@@ -153,6 +159,66 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it.each([false, true])('keeps the Home composer and draft through chat transitions (mobile=%s)', async (mobile) => {
+    mocks.mobile = mobile
+    chat.outboxLoaded = true
+    mocks.api.get.mockImplementation(async (url) => ({ data: url.startsWith('/sessions/session-')
+      ? { id: url.split('/').pop(), messages: [] } : {} }))
+    await router.push('/')
+    showPage.value = true
+    await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
+    chat.setDraft('Entwurf für Home')
+    await chat.addAttachmentFiles([file('entwurf.wav')])
+    await nextTick()
+    const input = root.querySelector('.chat-input-dock textarea')
+    expect(document.activeElement).not.toBe(input)
+    expect(mocks.api.post).not.toHaveBeenCalled()
+
+    await router.push('/?new=1')
+    await vi.waitFor(() => expect(root.querySelector('h1')?.textContent).toBe('Neue Session'))
+    expect(root.querySelector('.home-stub')).toBeNull()
+    expect(root.querySelector('.chat-input-dock textarea')).toBe(input)
+    expect(input.value).toBe('Entwurf für Home')
+    await router.push('/')
+    await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
+
+    chat.current = { id: 'created', messages: [] }
+    await nextTick()
+    expect(root.querySelector('.chat-input-dock textarea')).toBe(input)
+    await router.push('/?session=session-2')
+    await vi.waitFor(() => expect(chat.current?.id).toBe('session-2'))
+    await router.push('/')
+    await vi.waitFor(() => expect(root.querySelector('.chat-input-dock textarea')?.value).toBe('Entwurf für Home'))
+    expect(chat.activeAttachmentDraft[0].file.name).toBe('entwurf.wav')
+  })
+
+  it('removes a draft project with its content only after navigation succeeds', async () => {
+    chat.outboxLoaded = true
+    mocks.api.get.mockResolvedValue({ data: { items: [] } })
+    await chat.setSessionScope('project-1')
+    await router.push('/?new=1&project=project-1')
+    showPage.value = true
+    await vi.waitFor(() => expect(chat.current).toBeNull())
+    chat.setDraft('Entwurf mit Anhang')
+    chat.addAttachmentFiles([file('mitnehmen.wav')])
+    await nextTick()
+    const guard = vi.fn(() => false)
+    const unblock = router.beforeEach(guard)
+    const select = root.querySelector('#draft-project-select')
+    select.value = ''
+    select.dispatchEvent(new Event('change'))
+    await vi.waitFor(() => expect(guard).toHaveBeenCalled())
+    await vi.waitFor(() => expect(chat.sessionSettingsPending).toBe(0))
+    expect([router.currentRoute.value.query.project, chat.activeDraft, chat.activeAttachmentDraft[0].file.name])
+      .toEqual(['project-1', 'Entwurf mit Anhang', 'mitnehmen.wav'])
+    unblock()
+    select.value = ''
+    select.dispatchEvent(new Event('change'))
+    await vi.waitFor(() => expect(router.currentRoute.value.query).toEqual({ new: '1' }))
+    await vi.waitFor(() => expect(chat.activeDraft).toBe('Entwurf mit Anhang'))
+    expect(chat.activeAttachmentDraft[0].file.name).toBe('mitnehmen.wav')
+  })
+
   it('cycles agents, keeps the composer focused and sends with Enter after an idle switch', async () => {
     chat.selectedSessionId = 'session-1'
     chat.current.agentProfileId = 'agent-a'

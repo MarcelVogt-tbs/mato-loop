@@ -36,6 +36,7 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
       sessionList(id) { return this.sessionLists[id ?? 'standalone'] },
       ensureSessionList(id) { return this.sessionLists[id ?? 'standalone'] },
       setSessionScope: vi.fn().mockResolvedValue(),
+      loadSession: vi.fn().mockResolvedValue(),
       moveSession: vi.fn().mockResolvedValue(),
       setSessionPinned: vi.fn().mockResolvedValue(),
       findCachedSession: vi.fn((id) => sessions.find((session) => session.id === id)),
@@ -71,7 +72,7 @@ vi.mock('stores/chat', async () => {
   return { useChatStore: () => store }
 })
 vi.mock('stores/projects', () => ({ useProjectStore: () => projects }))
-vi.mock('src/features/dashboard/store', () => ({ useDashboardStore: () => ({ load: vi.fn().mockResolvedValue() }) }))
+vi.mock('src/features/home/store', () => ({ useHomeStore: () => ({ load: vi.fn().mockResolvedValue() }) }))
 vi.mock('stores/approvals', () => ({ useApprovalStore: () => pending }))
 vi.mock('stores/questions', () => ({ useQuestionStore: () => pending }))
 vi.mock('stores/agent-identity', () => ({ useAgentIdentityStore: () => ({ fetchIdentity: vi.fn().mockResolvedValue() }) }))
@@ -232,6 +233,12 @@ it('reports the visible session, reads it only when focused and releases presenc
 
   focus.mockRestore()
   visibility.mockRestore()
+})
+
+it.each([['Neue Session', null], ['Neue Session in Alpha', 'a']])('opens the blank new-session view from %s', async (label, projectId) => {
+  root.querySelector(`[aria-label="${label}"]`).click()
+  await vi.waitFor(() => expect(useRoute().query).toEqual({ ...(projectId ? { project: projectId } : {}), new: '1' }))
+  expect(chat.loadSession).toHaveBeenCalledWith(null)
 })
 
 it('keeps project and session actions visible while their shared menu is open', async () => {

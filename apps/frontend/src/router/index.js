@@ -18,7 +18,7 @@ export default defineRouter(() => {
     const auth = useAuthStore()
     if (!auth.statusLoaded) await auth.fetchStatus()
     if (to.meta.public) {
-      if (to.name === 'login' && auth.authenticated) return { name: 'dashboard' }
+      if (to.name === 'login' && auth.authenticated) return { name: 'chat' }
       return true
     }
     if (!auth.authenticated) return { name: 'login', query: { redirect: to.fullPath } }

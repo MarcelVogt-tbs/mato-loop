@@ -1,9 +1,9 @@
 <template>
   <q-dialog v-model="open" :maximized="$q.screen.lt.sm" :persistent="saving">
     <q-card class="integration-dialog app-surface column">
-      <q-form class="col column no-wrap" @submit.prevent="emit('save')">
+      <q-form class="col column no-wrap" @submit.prevent="save">
         <q-card-section>
-          <div class="text-h6">{{ mode === 'create' ? 'Projekt erstellen' : 'Projekt bearbeiten' }}</div>
+          <div class="text-h6">{{ project ? 'Projekt bearbeiten' : 'Projekt erstellen' }}</div>
         </q-card-section>
         <q-card-section class="col scroll q-pt-none">
           <q-input
@@ -34,8 +34,8 @@
             map-options
             label="Computer"
             :options="executionAgentOptions"
-            :loading="agentsLoading"
-            @update:model-value="emit('select-agent', $event)"
+            :loading="executionAgents.loading"
+            @update:model-value="selectExecutionAgent"
           >
             <template #option="scope">
               <q-item v-bind="scope.itemProps">
@@ -90,22 +90,81 @@
 </template>
 
 <script setup>
+import { computed, ref, watch } from 'vue'
+import { useQuasar } from 'quasar'
+import { useProjectStore } from 'stores/projects'
+import { useExecutionAgentStore } from 'stores/execution-agents'
 import ExecutionAgentDirectoryPickerDialog from 'src/features/computers/ExecutionAgentDirectoryPickerDialog.vue'
 
-defineProps({
-  mode: { type: String, required: true },
-  saving: Boolean,
-  executionAgentOptions: { type: Array, required: true },
-  agentsLoading: Boolean,
-  selectedAgent: { type: Object, default: null },
-  directoryPickerAvailable: Boolean,
-  requiredRule: { type: Function, required: true }
-})
-const emit = defineEmits(['save', 'select-agent'])
+const props = defineProps({ project: { type: Object, default: null } })
+const emit = defineEmits(['created'])
 const open = defineModel({ type: Boolean, required: true })
-const name = defineModel('name', { type: String, required: true })
-const instructions = defineModel('instructions', { type: String, required: true })
-const executionAgentId = defineModel('executionAgentId', { type: String, default: null })
-const currentDirectory = defineModel('currentDirectory', { type: String, default: null })
-const directoryPickerOpen = defineModel('directoryPickerOpen', { type: Boolean, required: true })
+const $q = useQuasar()
+const projects = useProjectStore()
+const executionAgents = useExecutionAgentStore()
+const name = ref('')
+const instructions = ref('')
+const executionAgentId = ref(null)
+const currentDirectory = ref(null)
+const directoryPickerOpen = ref(false)
+const saving = ref(false)
+const selectedAgent = computed(() => executionAgents.byId(executionAgentId.value))
+const executionAgentOptions = computed(() => {
+  const options = [
+    { label: 'Keine Projektvorgabe', value: null, connected: null, caption: 'Allgemeine Session-Vorgabe verwenden' },
+    ...executionAgents.items.map(agent => ({
+      label: agent.alias, value: agent.id, connected: agent.connected,
+      disable: !agent.connected && agent.id !== executionAgentId.value,
+      caption: agent.connected ? agent.computerName || agent.platform : 'Offline'
+    }))
+  ]
+  if (executionAgentId.value && !selectedAgent.value) {
+    options.push({ label: 'Nicht verfügbarer Computer', value: executionAgentId.value, connected: false, caption: 'Nicht mehr eingerichtet' })
+  }
+  return options
+})
+const directoryPickerAvailable = computed(() => selectedAgent.value?.connected === true
+  && selectedAgent.value.operations?.includes('filesystem.list'))
+const requiredRule = value => Boolean(String(value || '').trim()) || 'Pflichtfeld'
+
+watch(open, (shown) => {
+  if (!shown) return
+  name.value = props.project?.name || ''
+  instructions.value = props.project?.instructions || ''
+  executionAgentId.value = props.project?.defaultExecutionAgentId || null
+  currentDirectory.value = props.project?.defaultCurrentDirectory || null
+  directoryPickerOpen.value = false
+  void executionAgents.fetchAll({ suppressErrorToast: true }).catch(() => {})
+}, { immediate: true })
+
+function selectExecutionAgent(id) {
+  directoryPickerOpen.value = false
+  currentDirectory.value = executionAgents.byId(id)?.homeDirectory || null
+}
+
+async function save() {
+  const title = name.value.trim()
+  if (!title || saving.value) return
+  const defaults = {
+    defaultExecutionAgentId: executionAgentId.value,
+    defaultCurrentDirectory: executionAgentId.value ? currentDirectory.value?.trim() || null : null
+  }
+  saving.value = true
+  try {
+    if (props.project) {
+      await projects.update(props.project.id, title, instructions.value.trim(), defaults)
+      open.value = false
+      $q.notify({ type: 'positive', message: 'Projekt gespeichert.' })
+    } else {
+      const project = await projects.create(title, instructions.value.trim(), defaults)
+      open.value = false
+      $q.notify({ type: 'positive', message: 'Projekt erstellt.' })
+      emit('created', project)
+    }
+  } catch {
+    // The central API interceptor displays the error; the dialog remains open.
+  } finally {
+    saving.value = false
+  }
+}
 </script>

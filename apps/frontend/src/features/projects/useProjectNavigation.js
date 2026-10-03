@@ -1,8 +1,8 @@
-import { computed, reactive, ref } from 'vue'
+import { reactive, ref } from 'vue'
 import { notifyError } from 'src/utils/notifications'
 
 export function useProjectNavigation({
-  projects, executionAgents, chat, controlCenter, workspace, automations,
+  projects, chat, controlCenter, workspace, automations,
   notifications, router, $q, confirm, selectedProjectId, confirmDiscardedEdit,
   openNewSession
 }) {
@@ -10,47 +10,7 @@ export function useProjectNavigation({
   const expandedProjects = reactive({})
   const openProjectActionMenuId = ref(null)
   const projectDialogOpen = ref(false)
-  const projectDialogMode = ref('create')
   const projectDialogTarget = ref(null)
-  const projectName = ref('')
-  const projectInstructions = ref('')
-  const projectDefaultExecutionAgentId = ref(null)
-  const projectDefaultCurrentDirectory = ref(null)
-  const projectDirectoryPickerOpen = ref(false)
-  const projectSaving = ref(false)
-  const projectSelectedExecutionAgent = computed(() => (
-    executionAgents.byId(projectDefaultExecutionAgentId.value)
-  ))
-  const projectExecutionAgentOptions = computed(() => {
-    const options = [
-      {
-        label: 'Keine Projektvorgabe',
-        value: null,
-        connected: null,
-        caption: 'Allgemeine Session-Vorgabe verwenden'
-      },
-      ...executionAgents.items.map((agent) => ({
-        label: agent.alias,
-        value: agent.id,
-        connected: agent.connected,
-        disable: !agent.connected && agent.id !== projectDefaultExecutionAgentId.value,
-        caption: agent.connected ? agent.computerName || agent.platform : 'Offline'
-      }))
-    ]
-    if (projectDefaultExecutionAgentId.value && !projectSelectedExecutionAgent.value) {
-      options.push({
-        label: 'Nicht verfügbarer Computer',
-        value: projectDefaultExecutionAgentId.value,
-        connected: false,
-        caption: 'Nicht mehr eingerichtet'
-      })
-    }
-    return options
-  })
-  const projectDirectoryPickerAvailable = computed(() => (
-    projectSelectedExecutionAgent.value?.connected === true
-    && projectSelectedExecutionAgent.value.operations?.includes('filesystem.list')
-  ))
 
   async function loadProjects() {
     try {
@@ -60,60 +20,23 @@ export function useProjectNavigation({
     }
   }
 
-  function openProjectDialog(mode, project = null) {
-    projectDialogMode.value = mode
+  function openProjectDialog(project = null) {
     projectDialogTarget.value = project
-    projectName.value = mode === 'edit' ? project?.name || '' : ''
-    projectInstructions.value = mode === 'edit' ? project?.instructions || '' : ''
-    projectDefaultExecutionAgentId.value = mode === 'edit'
-      ? project?.defaultExecutionAgentId || null
-      : null
-    projectDefaultCurrentDirectory.value = mode === 'edit'
-      ? project?.defaultCurrentDirectory || null
-      : null
-    projectDirectoryPickerOpen.value = false
-    void executionAgents.fetchAll({ suppressErrorToast: true }).catch(() => {})
     projectDialogOpen.value = true
   }
 
-  function selectProjectExecutionAgent(agentId) {
-    projectDirectoryPickerOpen.value = false
-    projectDefaultCurrentDirectory.value = executionAgents.byId(agentId)?.homeDirectory || null
+  async function onProjectCreated(project) {
+    expandedProjects[project.id] = true
+    try {
+      await openNewSession(project.id)
+    } catch (error) {
+      notifyError(error)
+    }
   }
 
   function setProjectActionMenu(id, open) {
     if (open) openProjectActionMenuId.value = id
     else if (openProjectActionMenuId.value === id) openProjectActionMenuId.value = null
-  }
-
-  async function saveProject() {
-    const name = projectName.value.trim()
-    const instructions = projectInstructions.value.trim()
-    const defaults = {
-      defaultExecutionAgentId: projectDefaultExecutionAgentId.value,
-      defaultCurrentDirectory: projectDefaultExecutionAgentId.value
-        ? projectDefaultCurrentDirectory.value?.trim() || null
-        : null
-    }
-    if (!name) return
-    projectSaving.value = true
-    try {
-      if (projectDialogMode.value === 'create') {
-        const project = await projects.create(name, instructions, defaults)
-        projectDialogOpen.value = false
-        $q.notify({ type: 'positive', message: 'Projekt erstellt.' })
-        expandedProjects[project.id] = true
-        await openNewSession(project.id)
-      } else if (projectDialogTarget.value) {
-        await projects.update(projectDialogTarget.value.id, name, instructions, defaults)
-        projectDialogOpen.value = false
-        $q.notify({ type: 'positive', message: 'Projekt gespeichert.' })
-      }
-    } catch {
-      // The central API interceptor displays the error; the dialog remains open.
-    } finally {
-      projectSaving.value = false
-    }
   }
 
   async function deleteProject(project) {
@@ -196,11 +119,8 @@ export function useProjectNavigation({
 
   return {
     projectsSectionOpen, expandedProjects, openProjectActionMenuId,
-    projectDialogOpen, projectDialogMode, projectName, projectInstructions,
-    projectDefaultExecutionAgentId, projectDefaultCurrentDirectory,
-    projectDirectoryPickerOpen, projectSaving, projectSelectedExecutionAgent,
-    projectExecutionAgentOptions, projectDirectoryPickerAvailable,
-    loadProjects, openProjectDialog, selectProjectExecutionAgent,
-    setProjectActionMenu, saveProject, deleteProject
+    projectDialogOpen, projectDialogTarget,
+    loadProjects, openProjectDialog, onProjectCreated,
+    setProjectActionMenu, deleteProject
   }
 }

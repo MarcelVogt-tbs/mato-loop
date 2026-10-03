@@ -4,16 +4,21 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import routes, { adminRoutes, settingsRoutes } from '../src/router/routes'
 
 describe('MatoLoop frontend scaffold', () => {
-  it('opens the dashboard by default and preserves existing chat deep links', async () => {
+  it('uses chat as Home and preserves dashboard and chat deep links', async () => {
     const children = routes.find((route) => Array.isArray(route.children)).children
     const router = createRouter({ history: createMemoryHistory(), routes: children
-      .filter((route) => ['home', 'dashboard', 'chat'].includes(route.name))
+      .filter((route) => route.name === 'chat' || route.path === 'dashboard')
       .map((route) => ({ ...route, path: `/${route.path}`, component: { render: () => null } })) })
     await router.push('/')
-    expect(router.currentRoute.value.name).toBe('dashboard')
+    expect(router.currentRoute.value.name).toBe('chat')
     await router.push('/?session=session-1&project=project-1&controlCenter=files')
     expect(router.currentRoute.value.name).toBe('chat')
     expect(router.currentRoute.value.query).toEqual({ session: 'session-1', project: 'project-1', controlCenter: 'files' })
+    await router.push('/chat?session=session-2')
+    expect(router.currentRoute.value.query.session).toBe('session-2')
+    await router.push('/dashboard?project=project-1')
+    expect(router.currentRoute.value.name).toBe('chat')
+    expect(router.currentRoute.value.query).toEqual({ project: 'project-1' })
     await router.push({ name: 'chat' })
     expect(router.currentRoute.value.query).toEqual({})
   })
@@ -35,7 +40,7 @@ describe('MatoLoop frontend scaffold', () => {
     const routeNames = appRoute.children.map((route) => route.name)
     const settingsRoute = appRoute.children.find((route) => route.name === 'settings')
 
-    expect(routeNames).toEqual(['home', 'dashboard', 'chat', 'archive', 'settings', 'admin'])
+    expect(routeNames).toEqual(['chat', undefined, 'archive', 'settings', 'admin'])
     expect(settingsRoute.children.map((route) => route.name)).toEqual([
       'settings-providers',
       'settings-agents',

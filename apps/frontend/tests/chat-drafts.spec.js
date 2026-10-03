@@ -2182,6 +2182,33 @@ describe('chat drafts', () => {
     })
   })
 
+  it('moves new-session text, attachments and recovery audio into an empty project draft', async () => {
+    api.get.mockResolvedValue(sessionPage([]))
+    const chat = useChatStore()
+    const attachment = new File(['content'], 'entwurf.txt', { type: 'text/plain' })
+    const recording = new File(['audio'], 'aufnahme.wav', { type: 'audio/wav' })
+    chat.setDraft('Mitnehmen')
+    chat.addAttachmentFiles([attachment])
+    chat.setAudioDictation({ files: [recording] })
+    await chat.setSessionScope('project-1')
+    chat.moveNewSessionDraft(null, 'project-1')
+    expect({ message: chat.activeDraft, files: chat.activeAttachmentDraft.map(item => item.file), audio: chat.getAudioDictation()?.files, sourceOccupied: chat.hasNewSessionDraft(null) })
+      .toEqual({ message: 'Mitnehmen', files: [attachment], audio: [recording], sourceOccupied: false })
+  })
+
+  it.each(['text', 'attachment', 'recording', 'queue'])('does not overwrite a destination containing %s', async (kind) => {
+    api.get.mockResolvedValue(sessionPage([]))
+    const chat = useChatStore()
+    chat.setDraft('Bisheriger Entwurf')
+    await chat.setSessionScope('project-1')
+    if (kind === 'text') chat.setDraft('Vorhandener Entwurf')
+    if (kind === 'attachment') chat.addAttachmentFiles([new File(['content'], 'vorhanden.txt', { type: 'text/plain' })])
+    if (kind === 'recording') chat.setAudioDictation({ files: [new File(['audio'], 'aufnahme.wav')] })
+    if (kind === 'queue') chat.queuedMessages['new:project-1'] = [{ id: 'queued' }]
+    expect([chat.moveNewSessionDraft(null, 'project-1'), chat.drafts.newSessions.standalone.message, chat.hasNewSessionDraft('project-1')])
+      .toEqual([false, 'Bisheriger Entwurf', true])
+  })
+
   it('shares an in-flight page request across callers', async () => {
     let resolvePage
     api.get.mockReturnValue(new Promise((resolve) => { resolvePage = resolve }))

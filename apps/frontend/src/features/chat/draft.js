@@ -2,7 +2,7 @@ import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { useInstanceLimitsStore } from 'src/stores/instance-limits'
 import { attachmentKind, attachmentPreviewUrl, MAX_ATTACHMENT_DRAFT_BYTES, normalizedMimeType, releaseAttachmentDrafts } from 'src/features/chat/attachments'
-import { clearPersistedDrafts, defaultSessionOptions, emptyActivity, emptyDrafts, groupedOutbox, loadDrafts, normalizedNewSessionDraft, persistDrafts, sanitizedSessionOptions, sessionScopeKey } from 'src/features/chat/state'
+import { clearPersistedDrafts, defaultSessionOptions, emptyActivity, emptyDrafts, groupedOutbox, loadDrafts, newSessionQueueKey, normalizedNewSessionDraft, persistDrafts, sanitizedSessionOptions, sessionScopeKey } from 'src/features/chat/state'
 import { mergeAgentActivity } from 'src/utils/agent-activity'
 import { clearChatOutbox, loadChatOutbox } from 'src/utils/chat-outbox'
 
@@ -149,6 +149,31 @@ export const draftActions = {
       if (this.current) this.drafts.sessionMessages[this.current.id] = message
       else this.drafts.newSession.message = message
       this.persistDrafts()
+    },
+    hasNewSessionDraft(projectId = this.sessionsProjectId) {
+      const scope = sessionScopeKey(projectId)
+      return Boolean(this.drafts.newSessions[scope]?.message
+        || this.attachmentDrafts.newSessions[scope]?.length
+        || this.audioDictations.newSessions[scope]
+        || this.queuedMessages[newSessionQueueKey(projectId)]?.length)
+    },
+    moveNewSessionDraft(sourceProjectId, targetProjectId) {
+      const source = sessionScopeKey(sourceProjectId)
+      const target = sessionScopeKey(targetProjectId)
+      const draft = this.drafts.newSessions[source]
+      if (this.current || source === target || !draft
+        || sessionScopeKey(this.sessionsProjectId) !== target
+        || this.hasNewSessionDraft(targetProjectId)) return false
+      this.drafts.newSession.message = draft.message
+      draft.message = ''
+      this.attachmentDrafts.newSessions[target] = this.attachmentDrafts.newSessions[source] || []
+      this.attachmentDrafts.newSession = this.attachmentDrafts.newSessions[target]
+      this.attachmentDrafts.newSessions[source] = []
+      this.audioDictations.newSessions[target] = this.audioDictations.newSessions[source] || null
+      this.audioDictations.newSession = this.audioDictations.newSessions[target]
+      this.audioDictations.newSessions[source] = null
+      this.persistDrafts()
+      return true
     },
     addAttachmentFiles(files, {
       sessionId = this.current?.id || null,

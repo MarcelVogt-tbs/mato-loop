@@ -202,7 +202,7 @@ export function useSidebarSessions({
       // The new-session draft remains usable while the sidebar offers a list retry.
     }
     await chat.loadSession(null)
-    await router.push({ name: 'chat', query: chatQuery(null, projectId) })
+    await router.push({ name: 'chat', query: chatQuery(null, projectId, { new: '1' }) })
     return true
   }
 

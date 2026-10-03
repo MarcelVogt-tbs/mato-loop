@@ -142,20 +142,6 @@
   box-sizing: border-box;
 }
 
-.chat-welcome {
-  width: min(680px, 100%);
-  margin: max(64px, 12vh) auto 0;
-}
-
-.chat-welcome p {
-  max-width: 590px;
-}
-
-.chat-welcome__activity {
-  width: 100%;
-  margin-top: 28px;
-}
-
 .chat-session-state {
   width: min(560px, 100%);
   margin: max(64px, 12vh) auto 0;
@@ -175,6 +161,16 @@
   margin: 0 auto;
   flex: 0 0 auto;
   padding-bottom: max(16px, env(safe-area-inset-bottom));
+}
+
+.draft-project-select {
+  min-width: 0;
+  border: 1px solid var(--app-surface-border);
+  border-radius: 999px;
+}
+
+.draft-project-select:focus-within {
+  border-color: var(--q-primary);
 }
 
 .chat-input-dock--with-todos .chat-composer__card,

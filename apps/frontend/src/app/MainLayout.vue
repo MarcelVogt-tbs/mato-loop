@@ -88,8 +88,8 @@ import { useConfirm } from 'src/composables/confirm'
 
 defineOptions({ name: 'MainLayout' })
 
-const drawerOpen = ref(true)
 const $q = useQuasar()
+const drawerOpen = ref(!$q.screen.lt.md)
 const route = useRoute()
 const chat = useChatStore()
 const controlCenter = useControlCenterStore()

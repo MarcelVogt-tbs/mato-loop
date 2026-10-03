@@ -59,12 +59,12 @@
           />
         </div>
 
-        <div v-else-if="!chat.current" class="chat-welcome text-center q-pa-lg">
-          <AppLogo :size="72" />
-          <h1 class="text-h4 text-weight-bold q-mb-sm">Willkommen bei MatoLoop</h1>
-          <p class="text-body1 app-muted q-mx-auto">
-            Was möchtest du tun?
-          </p>
+        <HomeContent v-else-if="showHome && !runPresentation.showActivity" />
+        <div v-else-if="isNewConversation" class="chat-session-state text-center q-pa-lg">
+          <template v-if="!runPresentation.showActivity">
+            <h1 class="text-h5 text-weight-bold q-mb-sm">Neue Session</h1>
+            <p class="text-body1 app-muted">Was möchtest du besprechen?</p>
+          </template>
           <AgentActivityPanel
             v-if="runPresentation.showActivity"
             :history="liveWorkHistory"
@@ -73,15 +73,15 @@
             :context-summary="chat.streamContextSummary"
             :warnings="chat.runWarnings"
             :trusted-image-origins="trustedImageOrigins"
+            class="text-left"
             running
-            class="chat-welcome__activity text-left q-mx-auto"
             @resize-start="beginActivityResize"
             @resized="finishActivityResize"
           />
         </div>
 
         <q-virtual-scroll
-          v-else
+          v-else-if="chat.current"
           :key="chat.current.id"
           ref="virtualScroll"
           class="chat-transcript q-pa-md"
@@ -353,6 +353,26 @@
         @undo="undoQueuedMessage"
       />
       <div class="chat-input-dock q-pa-md" :class="{ 'chat-input-dock--with-todos': chat.current?.todos?.length }">
+        <h2 v-if="showHome" class="text-subtitle2 q-mt-none q-mb-sm">Neues Gespräch</h2>
+        <div v-if="isNewConversation" class="row no-wrap items-center q-mb-sm">
+          <q-select
+            id="draft-project-select"
+            :model-value="routeProjectId"
+            :options="draftProjectOptions"
+            :display-value="routeProjectId ? projects.items.find(project => project.id === routeProjectId)?.name || 'Projekt' : 'Projekt wählen'"
+            :disable="draftProjectDisabled"
+            :loading="projects.loading || changingDraftProject"
+            borderless dense clearable emit-value map-options options-dense hide-bottom-space
+            behavior="menu" popup-content-class="app-menu-popup"
+            class="draft-project-select col-shrink q-px-sm text-body2"
+            aria-label="Projekt wählen oder wechseln"
+            @popup-show="loadDraftProjects"
+            @update:model-value="changeDraftProject"
+          >
+            <template #prepend><q-icon name="folder_open" size="18px" /></template>
+          </q-select>
+          <q-btn flat round dense size="sm" icon="add" class="col-auto q-ml-xs" aria-label="Neues Projekt erstellen" :disable="draftProjectDisabled" @click="openDraftProjectCreation" />
+        </div>
         <SessionTodoStrip
           :todos="chat.current?.todos || []"
           :collapsed="chat.current?.todosCollapsed || false"
@@ -370,9 +390,10 @@
         <ChatComposer
           v-else
           ref="composer"
+          :autofocus="!showHome"
           :session="chat.activeContext"
           :draft="chat.activeDraft"
-          :disabled="!chat.outboxLoaded
+          :disabled="changingDraftProject || !chat.outboxLoaded
             || chat.outboxSaving
             || chat.historyActionPending
             || chat.sessionSettingsPending > 0
@@ -452,6 +473,7 @@
         </q-scroll-area>
       </q-card>
     </q-dialog>
+    <ProjectDialog v-if="draftProjectDialogOpen" v-model="draftProjectDialogOpen" @created="selectCreatedDraftProject" />
   </q-page>
 </template>
 
@@ -462,7 +484,8 @@ import { useRoute, useRouter } from 'vue-router'
 import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
 import AgentActivityPanel from 'src/features/chat/components/AgentActivityPanel.vue'
 import FileChanges from 'src/features/chat/components/FileChanges.vue'
-import AppLogo from 'src/shared/ui/AppLogo.vue'
+import HomeContent from 'src/features/home/HomeContent.vue'
+import ProjectDialog from 'src/features/projects/ProjectDialog.vue'
 import ChatComposer from 'src/features/chat/components/ChatComposer.vue'
 import ChatQueuedMessages from 'src/features/chat/components/ChatQueuedMessages.vue'
 import SessionTodoStrip from 'src/features/chat/components/SessionTodoStrip.vue'
@@ -506,6 +529,7 @@ import {
   withLiveTranscriptMessage
 } from 'src/utils/chat-transcript'
 import { apiErrorMessage } from 'src/utils/api-errors'
+import { notifyError } from 'src/utils/notifications'
 import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'
 
 defineOptions({ name: 'ChatPage' })
@@ -581,6 +605,20 @@ const routeSubagentId = computed(() => (
 const routeProjectId = computed(() => (
   typeof route.query.project === 'string' ? route.query.project : null
 ))
+const isNewConversation = computed(() => !routeSessionId.value && !chat.current && !chat.loading && !chat.loadError)
+const newSessionRequested = computed(() => Object.hasOwn(route.query, 'new'))
+const showHome = computed(() => isNewConversation.value && !newSessionRequested.value)
+const changingDraftProject = ref(false)
+const draftProjectDialogOpen = ref(false)
+let draftProjectCreationContext = null
+const draftProjectOptions = computed(() => [
+  { label: 'Ohne Projekt', value: null },
+  ...projects.items.map(project => ({ label: project.name, value: project.id }))
+])
+const draftProjectDisabled = computed(() => changingDraftProject.value || !isNewConversation.value
+  || routeProjectId.value !== chat.sessionsProjectId || !chat.outboxLoaded
+  || chat.running || chat.outboxSaving || chat.sessionSettingsPending > 0
+  || chat.activeQueuedMessages.length > 0 || Boolean(chat.emptySessionPromise || chat.queueDrainPromise))
 const routeMessageId = computed(() => (
   typeof route.query.message === 'string' ? route.query.message : null
 ))
@@ -838,6 +876,64 @@ async function retryMessage(message) {
   }
 }
 
+async function loadDraftProjects() {
+  if (projects.loading || projects.loaded && !projects.loadFailed) return
+  try {
+    await projects.fetchAll()
+  } catch {
+    // The central API interceptor displays the error; reopening retries the list.
+  }
+}
+
+function openDraftProjectCreation() {
+  if (draftProjectDisabled.value) return
+  draftProjectCreationContext = { path: route.fullPath, ownerUserId: chat.draftOwnerUserId }
+  draftProjectDialogOpen.value = true
+}
+
+async function selectCreatedDraftProject(project) {
+  const context = draftProjectCreationContext
+  draftProjectCreationContext = null
+  if (!context || context.path !== route.fullPath || context.ownerUserId !== chat.draftOwnerUserId) return
+  await changeDraftProject(project.id)
+}
+
+async function changeDraftProject(projectId) {
+  if (draftProjectDisabled.value || projectId === chat.sessionsProjectId) return
+  const sourceProjectId = chat.sessionsProjectId
+  const ownerUserId = chat.draftOwnerUserId
+  changingDraftProject.value = true
+  chat.sessionSettingsPending += 1
+  try {
+    await composer.value?.prepareAudioNavigation?.()
+    if (!isNewConversation.value || chat.sessionsProjectId !== sourceProjectId || chat.draftOwnerUserId !== ownerUserId) return
+    let carryDraft = chat.hasNewSessionDraft(sourceProjectId)
+    if (carryDraft && chat.hasNewSessionDraft(projectId)) {
+      if (!await confirm(
+        'Im Ziel gibt es bereits einen Entwurf oder vorgemerkte Nachrichten. Dein aktueller Entwurf bleibt im bisherigen Bereich erhalten. Möchtest du den vorhandenen Stand öffnen?',
+        'Vorhandener Entwurf', { okLabel: 'Vorhandenen öffnen', okColor: 'primary' }
+      )) return
+      carryDraft = false
+    }
+    if (!isNewConversation.value || chat.sessionsProjectId !== sourceProjectId || chat.draftOwnerUserId !== ownerUserId) return
+    const query = { ...route.query }
+    if (projectId) query.project = projectId
+    else delete query.project
+    if (await router.replace({ name: 'chat', query })) return
+    if (!isNewConversation.value || routeProjectId.value !== projectId || chat.draftOwnerUserId !== ownerUserId) return
+    await chat.setSessionScope(projectId).catch(() => {})
+    if (!isNewConversation.value || routeProjectId.value !== projectId || chat.draftOwnerUserId !== ownerUserId) return
+    if (carryDraft && !chat.moveNewSessionDraft(sourceProjectId, projectId)) {
+      $q.notify({ type: 'info', message: 'Der vorhandene Entwurf wurde geöffnet. Dein bisheriger Entwurf bleibt erhalten.' })
+    }
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    changingDraftProject.value = false
+    chat.sessionSettingsPending = Math.max(0, chat.sessionSettingsPending - 1)
+  }
+}
+
 async function loadRouteSession() {
   const sessionId = routeSessionId.value
   await composer.value?.prepareAudioNavigation?.()
@@ -862,7 +958,7 @@ async function loadRouteSession() {
   }
   await nextTick()
   if (routeMessageId.value) await revealRouteMessage()
-  else composer.value?.focus()
+  else if (!showHome.value) composer.value?.focus()
 }
 
 async function reconcileRouteProject() {
@@ -1232,7 +1328,7 @@ function scheduleFollowScroll() {
 }
 
 function scheduleBottomScroll() {
-  if (userScrollActive || scrollFrame !== null) return
+  if (showHome.value || userScrollActive || scrollFrame !== null) return
   scrollFrame = window.requestAnimationFrame(() => {
     scrollFrame = null
     if (scrollTarget) scrollChatToBottom(scrollTarget)
@@ -1264,6 +1360,17 @@ function chatPageStyle(offset, height) {
   }
 }
 
+watch([newSessionRequested, routeProjectId], async ([requested]) => {
+  if (!requested || !isNewConversation.value) return
+  await nextTick()
+  composer.value?.focus()
+})
+watch(showHome, async (shown) => {
+  if (!shown) return
+  cancelFollowScroll()
+  await nextTick()
+  if (scrollTarget) scrollTarget.scrollTop = 0
+})
 watch(routeSessionId, (id) => {
   approvalDraftPreview.value = null
   void subagents.loadChildren(id)
@@ -1361,6 +1468,7 @@ onMounted(() => {
   executionAgents.startPolling()
 })
 onBeforeUnmount(() => {
+  draftProjectCreationContext = null
   approvalDraftPreview.value = null
   void subagents.loadChildren(null)
   virtualScrollRefreshVersion += 1
