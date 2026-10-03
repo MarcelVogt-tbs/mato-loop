@@ -144,6 +144,16 @@ _IMAGE_PREVIEW_BYTES = MAX_SAFE_SVG_BYTES
 _STL_PREVIEW_BYTES = MAX_FILE_ATTACHMENT_BYTES
 _IMAGE_SUFFIXES = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 _MARKDOWN_SUFFIXES = {".md", ".markdown"}
+_AUDIO_MIME_TYPES = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".opus": "audio/ogg",
+}
 _FILE_RESPONSE_HEADERS = {
     "Cache-Control": "private, no-store",
     "Cross-Origin-Resource-Policy": "same-origin",
@@ -640,6 +650,15 @@ async def preview_file(
         else image_preview_bytes
     )
     try:
+        if suffix in _AUDIO_MIME_TYPES:
+            if context.agent_id is not None:
+                entry = await _agent_stat(context, _normalize_agent_path(path))
+                if entry["kind"] != "file":
+                    raise ApiError(400, "file.notAFile")
+            else:
+                handle = await asyncio.to_thread(_open_context, context, path)
+                handle.close()
+            return {"kind": "audio", "mimeType": _AUDIO_MIME_TYPES[suffix]}
         if suffix == ".stl":
             if context.agent_id is not None:
                 if request is None:
@@ -697,6 +716,8 @@ async def preview_file(
 async def _preview_bytes(
     data: bytes, suffix: str, image_preview_bytes: int, text_preview_bytes: int
 ) -> dict:
+    if suffix in _AUDIO_MIME_TYPES:
+        return {"kind": "audio", "mimeType": _AUDIO_MIME_TYPES[suffix]}
     if suffix == ".stl":
         try:
             await asyncio.to_thread(validate_binary_stl, data)
@@ -888,6 +909,8 @@ async def preview_file_revision(
             file_id or path, revision,
         )
         with handle:
+            if suffix in _AUDIO_MIME_TYPES:
+                return {"kind": "audio", "mimeType": _AUDIO_MIME_TYPES[suffix]}
             data = handle.read(max_bytes + 1)
     except RootFileError as exc:
         raise _context_error(exc) from exc
@@ -920,6 +943,7 @@ async def content_file_revision(
         suffix = PurePosixPath(metadata.path if metadata else path).suffix.casefold()
         max_bytes = (
             _STL_PREVIEW_BYTES if suffix == ".stl"
+            else context.instance_limits.max_upload_bytes if suffix in _AUDIO_MIME_TYPES
             else context.instance_limits.max_image_preview_bytes
         )
         handle = await asyncio.to_thread(
@@ -933,7 +957,7 @@ async def content_file_revision(
     if len(data) > max_bytes:
         raise ApiError(415, "file.previewUnavailable")
     preview = await _preview_bytes(data, suffix, max_bytes, 0)
-    if preview["kind"] not in {"image", "stl"}:
+    if preview["kind"] not in {"image", "stl", "audio"}:
         raise ApiError(415, "file.previewUnavailable")
     mime_type = preview["mimeType"]
     return Response(
@@ -1039,6 +1063,8 @@ async def preview_image(
     suffix = PurePosixPath(path).suffix.casefold()
     image_preview_bytes = context.instance_limits.max_image_preview_bytes
     max_bytes = _STL_PREVIEW_BYTES if suffix == ".stl" else image_preview_bytes
+    if suffix in _AUDIO_MIME_TYPES:
+        max_bytes = context.instance_limits.max_upload_bytes
     if suffix == ".svg":
         max_bytes = min(max_bytes, MAX_SAFE_SVG_BYTES)
     try:
@@ -1054,7 +1080,9 @@ async def preview_image(
             data = await asyncio.to_thread(
                 _read_context, context, path, max_bytes
             )
-        if suffix == ".stl":
+        if suffix in _AUDIO_MIME_TYPES:
+            mime_type = _AUDIO_MIME_TYPES[suffix]
+        elif suffix == ".stl":
             await asyncio.to_thread(validate_binary_stl, data)
             mime_type = "model/stl"
         elif suffix == ".svg":

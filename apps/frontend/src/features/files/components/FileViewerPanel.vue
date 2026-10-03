@@ -45,13 +45,13 @@
           <q-tooltip>STL erzeugen und herunterladen</q-tooltip>
         </q-btn>
         <q-btn
-          v-if="preview.kind === 'image' && imageUrl"
+          v-if="preview.kind === 'image' && contentUrl"
           class="file-icon-action"
           flat
           round
           dense
           icon="open_in_new"
-          :href="imageUrl"
+          :href="contentUrl"
           target="_blank"
           rel="noopener noreferrer"
           aria-label="Bild in neuem Tab öffnen"
@@ -233,11 +233,22 @@
         <div v-if="imageLoading" class="fit flex flex-center"><q-spinner color="primary" size="36px" /></div>
         <img
           v-show="!imageLoading"
-          :src="imageUrl"
+          :src="contentUrl"
           :alt="viewerName || 'Bildvorschau'"
           class="file-viewer__image"
           @load="imageLoaded"
           @error="imageFailed"
+        />
+      </div>
+      <div v-else-if="preview.kind === 'audio'" class="fit flex flex-center">
+        <audio
+          :src="contentUrl"
+          controls
+          preload="metadata"
+          class="full-width"
+          :style="{ colorScheme: $q.dark.isActive ? 'dark' : 'light' }"
+          :aria-label="`Audio abspielen: ${viewerName}`"
+          @error="preview = { kind: 'none', reason: 'invalidAudio' }"
         />
       </div>
       <MessageContent
@@ -421,7 +432,7 @@ const draft = computed({
   get: () => workspace.editorDraft ?? '',
   set: (value) => workspace.updateEditorDraft(value, preview.value.content)
 })
-const imageUrl = computed(() => props.entry?.path
+const contentUrl = computed(() => props.entry?.path
   ? historical.value
     ? workspace.revisionDownloadUrl(props.entry.path, props.entry.revision, props.entry.fileId, 'content')
     : workspace.fileUrl('content', props.entry.path)
@@ -442,7 +453,7 @@ const canActivateRevision = computed(() => Boolean(
 ))
 const canDownload = computed(() => Boolean(directModel.value) || workspace.operationAvailable('filesystem.export'))
 const stlUrl = computed(() => directModel.value?.url
-  || imageUrl.value)
+  || contentUrl.value)
 const openScadViewOptions = computed(() => [
   {
     label: $q.screen.gt.xs ? 'Quelltext' : undefined,
@@ -492,6 +503,7 @@ const currentRevisionId = computed(() => (
 ))
 const revisionActionPending = computed(() => activatingRevisionId.value)
 const unavailableMessage = computed(() => ({
+  invalidAudio: 'Die Audiodatei konnte nicht geladen werden oder wird von diesem Browser nicht unterstützt.',
   invalidImage: 'Die Bilddatei ist beschädigt oder ungültig.',
   unsafeSvg: 'Die SVG-Datei enthält aktive oder externe Inhalte und kann nicht sicher angezeigt werden.',
   tooLarge: 'Die Datei ist für eine Vorschau zu groß.',
@@ -535,7 +547,7 @@ async function loadPreview() {
       : await workspace.preview(props.entry.path)
     if (version === previewVersion && result) {
       preview.value = result
-      imageLoading.value = result.kind === 'image' && loadedImageUrl.value !== imageUrl.value
+      imageLoading.value = result.kind === 'image' && loadedImageUrl.value !== contentUrl.value
       if (editable.value && (result.kind !== 'openscad' || workspace.editorActive)) {
         workspace.editorDraft = result.content || ''
         workspace.editorActive = true
@@ -839,7 +851,7 @@ function imageFailed() {
 }
 
 function imageLoaded() {
-  loadedImageUrl.value = imageUrl.value
+  loadedImageUrl.value = contentUrl.value
   imageLoading.value = false
 }
 

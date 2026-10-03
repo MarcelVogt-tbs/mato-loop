@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({ confirm: vi.fn(), api: { get: vi.fn(), put: vi
 vi.mock('src/boot/axios', () => ({ api: mocks.api }))
 vi.mock('quasar', () => ({
   copyToClipboard: vi.fn(),
-  useQuasar: () => ({ screen: { gt: { xs: true }, lt: { sm: false } }, notify: vi.fn() })
+  useQuasar: () => ({ dark: { isActive: false }, screen: { gt: { xs: true }, lt: { sm: false } }, notify: vi.fn() })
 }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ resolve: () => ({ href: '/print' }) }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: mocks.confirm }) }))
@@ -194,7 +194,7 @@ async function mountLiveViewer({ kind = 'text', path = 'note.txt', toolContext =
   app.directive('close-popup', {})
   app.directive('ripple', {})
   app.mount(root)
-  await vi.waitFor(() => expect(root.querySelector('textarea, pre, article, img, [data-model-src], [aria-label="OpenSCAD-Ansicht wählen"], [role="alert"]')).not.toBeNull())
+  await vi.waitFor(() => expect(root.querySelector('textarea, pre, article, img, audio, [data-model-src], [aria-label="OpenSCAD-Ansicht wählen"], [role="alert"]')).not.toBeNull())
   return { root, workspace, preview, saveFile, render, toggleFullscreen }
 }
 
@@ -205,6 +205,11 @@ function button(root, label) {
   expect(element, label).toBeTruthy()
   return element
 }
+
+it('plays audio through the binary content endpoint', async () => {
+  const { root, workspace } = await mountLiveViewer({ kind: 'audio', path: 'song.mp3' })
+  expect(root.querySelector('audio[controls]').getAttribute('src')).toBe(workspace.fileUrl('content', 'song.mp3'))
+})
 
 it('offers an exit for a fullscreen image without enabling the fullscreen toggle', () => {
   const root = document.createElement('div')

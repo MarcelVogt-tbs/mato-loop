@@ -490,6 +490,7 @@ async def test_revision_api_activates_without_deleting_and_rejects_stale_confirm
 @pytest.mark.parametrize("filename,kind", [
     ("notes.txt", "text"), ("notes.md", "markdown"), ("model.scad", "openscad"),
     ("image.png", "image"), ("image.svg", "image"), ("model.stl", "stl"),
+    ("song.MP3", "audio"),
 ])
 async def test_historical_preview_and_content_use_exact_revision_bytes(
     tmp_path: Path, monkeypatch, filename: str, kind: str,
@@ -517,7 +518,7 @@ async def test_historical_preview_and_content_use_exact_revision_bytes(
     get_context.assert_awaited_with(
         FileScope.SESSION, service.session_id, user, db, root_identity=str(service.session_id)
     )
-    if kind in {"image", "stl"}:
+    if kind in {"image", "stl", "audio"}:
         response = await workspace_route.content_file_revision(*args, **kwargs)
         assert response.body == data
         assert response.headers["x-content-type-options"] == "nosniff"
@@ -566,6 +567,26 @@ async def test_historical_endpoints_reject_foreign_owners_and_roots(monkeypatch,
     with pytest.raises(ApiError) as wrong_root:
         await endpoint(1, user, db, "notes.md", session.id, root_identity=str(uuid4()), file_id=uuid4())
     assert wrong_root.value.code == "file.fileNotFound"
+
+
+@pytest.mark.parametrize("agent", [False, True])
+async def test_audio_preview_and_content(tmp_path: Path, monkeypatch, agent: bool) -> None:
+    context, root = _session_context(tmp_path)
+    data = b"ID3\xff\x00audio"
+    path = "song.MP3"
+    (root / "files" / path).write_bytes(data)
+    if agent:
+        context = workspace_route._FileContext(agent_id=uuid4(), current_directory="/work")
+        path = "/work/song.MP3"
+        monkeypatch.setattr(workspace_route, "_agent_stat", AsyncMock(return_value={"kind": "file"}))
+        monkeypatch.setattr(workspace_route, "_agent_export", AsyncMock(return_value=(BytesIO(data), len(data), "")))
+    monkeypatch.setattr(workspace_route, "_file_context", AsyncMock(return_value=context))
+    args = (_user(), AsyncMock(spec=AsyncSession), path)
+    preview = await workspace_route.preview_file(*args, request=MagicMock())
+    content = await workspace_route.preview_image(*args, request=MagicMock())
+    assert (preview, content.media_type, content.body) == (
+        {"kind": "audio", "mimeType": "audio/mpeg"}, "audio/mpeg", data,
+    )
 
 
 async def test_preview_validates_stl_and_static_svg(tmp_path: Path, monkeypatch) -> None:
