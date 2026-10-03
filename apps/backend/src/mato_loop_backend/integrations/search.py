@@ -10,6 +10,7 @@ from typing import Literal
 import httpx
 from bs4 import BeautifulSoup
 from ddgs import DDGS
+from ddgs.exceptions import DDGSException
 
 from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
@@ -187,10 +188,15 @@ async def search_without_api_key(
     def execute() -> list[dict[str, str]]:
         client = DDGS(timeout=30)
         search = client.images if search_type == "images" else client.text
-        return search(
-            query=query,
-            max_results=8,
-        )
+        try:
+            return search(
+                query=query,
+                max_results=8,
+            )
+        except DDGSException as exc:
+            if str(exc) != "No results found.":
+                raise
+            return []
 
     try:
         async with asyncio.timeout(35):

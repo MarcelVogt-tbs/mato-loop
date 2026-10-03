@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from ddgs.exceptions import DDGSException
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ValidationError
@@ -1049,6 +1050,9 @@ async def test_no_key_provider_uses_ddgs_auto_search_and_normalizes_results(
             "publishedDate": None,
         }
     ]
+
+    text.side_effect = DDGSException("No results found.")
+    assert json.loads(await search_module.search_without_api_key("MatoLoop")) == []
 
 
 async def test_no_key_provider_supports_image_search(monkeypatch) -> None:
