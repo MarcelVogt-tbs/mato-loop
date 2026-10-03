@@ -10,11 +10,11 @@
         Nicht aktuell verfügbar: {{ failedSources.join(', ') }}.
         <template #action><q-btn flat no-caps label="Erneut laden" :loading="refreshing" @click="refresh" /></template>
       </q-banner>
-      <q-item v-if="attentionReady && attentionCount" clickable v-ripple class="app-surface-tonal rounded-borders q-mb-lg" @click="controlCenter.openApp('notifications').catch(() => {})">
-        <q-item-section side class="q-pr-sm"><q-icon name="pending_actions" color="warning" /></q-item-section>
+      <q-item v-if="notificationCount" clickable v-ripple class="app-surface-tonal rounded-borders q-mb-lg" @click="controlCenter.openApp('notifications').catch(() => {})">
+        <q-item-section side class="q-pr-sm"><q-icon name="notifications" color="primary" /></q-item-section>
         <q-item-section>
-          <q-item-label class="text-weight-medium">Braucht deine Aufmerksamkeit</q-item-label>
-          <q-item-label caption>{{ attentionCount }} offene {{ attentionCount === 1 ? 'Anfrage' : 'Anfragen' }} · Freigaben und Rückfragen</q-item-label>
+          <q-item-label class="text-weight-medium">Benachrichtigungen</q-item-label>
+          <q-item-label caption>{{ notificationSummary }}</q-item-label>
         </q-item-section>
         <q-item-section side><q-icon name="chevron_right" /></q-item-section>
       </q-item>
@@ -70,6 +70,7 @@ import { useApprovalStore } from 'stores/approvals'
 import { useAutomationStore } from 'stores/automations'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
+import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useProjectStore } from 'stores/projects'
 import { useQuestionStore } from 'stores/questions'
 import { useUserProfileStore } from 'stores/user-profile'
@@ -84,6 +85,7 @@ const controlCenter = useControlCenterStore()
 const computers = useExecutionAgentStore()
 const approvals = useApprovalStore()
 const questions = useQuestionStore()
+const notifications = useInAppNotificationStore()
 const profile = useUserProfileStore()
 const refreshing = ref(false)
 const ready = (store) => store.loaded && !store.loadFailed
@@ -94,11 +96,16 @@ const greeting = computed(() => {
   return name ? `Willkommen zurück, ${name}` : 'Willkommen zurück'
 })
 const onlineComputers = computed(() => computers.items.filter((item) => item.connected).length)
-const attentionReady = computed(() => ready(approvals) && ready(questions))
-const attentionCount = computed(() => approvals.pending.length + questions.pending.length)
+const attentionCount = computed(() => (ready(approvals) ? approvals.pending.length : 0) + (ready(questions) ? questions.pending.length : 0))
+const unreadCount = computed(() => ready(notifications) ? notifications.unreadCount : 0)
+const notificationCount = computed(() => attentionCount.value + unreadCount.value)
+const notificationSummary = computed(() => [
+  attentionCount.value ? `${attentionCount.value} offene ${attentionCount.value === 1 ? 'Aufgabe' : 'Aufgaben'}` : null,
+  unreadCount.value ? `${unreadCount.value} ungelesene ${unreadCount.value === 1 ? 'Benachrichtigung' : 'Benachrichtigungen'}` : null
+].filter(Boolean).join(' · '))
 const failedSources = computed(() => [
   ['Sessions', home], ['Projekte', projects], ['Automationen', automations],
-  ['Computer', computers], ['Freigaben', approvals], ['Rückfragen', questions], ['Profil', profile]
+  ['Computer', computers], ['Freigaben', approvals], ['Rückfragen', questions], ['Benachrichtigungen', notifications], ['Profil', profile]
 ].filter(([, store]) => store.loadFailed).map(([label]) => label))
 const recentSessions = computed(() => home.sessions.map((session) => ({
   ...session,
@@ -117,7 +124,7 @@ async function refresh() {
   try {
     await Promise.allSettled([
       home.load(), projects.fetchAll(), automations.fetchAutomations(),
-      computers.fetchAll(), approvals.fetchPending(), questions.fetchPending(), profile.fetchProfile()
+      computers.fetchAll(), approvals.fetchPending(), questions.fetchPending(), notifications.fetchLatest(), profile.fetchProfile()
     ])
   } finally {
     refreshing.value = false

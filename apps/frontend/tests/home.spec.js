@@ -14,6 +14,7 @@ import { useProjectStore } from '../src/features/projects/store'
 import { useAutomationStore } from '../src/features/automations/store'
 import { useApprovalStore } from '../src/features/approvals/store'
 import { useQuestionStore } from '../src/features/questions/store'
+import { useInAppNotificationStore } from '../src/stores/in-app-notifications'
 import { useUserProfileStore } from '../src/features/personalization/store'
 
 let app, root
@@ -28,6 +29,7 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   useAutomationStore().$patch({ items: automations, loaded: true })
   useApprovalStore().$patch({ pending: [{ id: 'approval-1' }], loaded: true })
   useQuestionStore().$patch({ loaded: true })
+  useInAppNotificationStore().$patch({ loaded: true, unreadCount: 2 })
   useExecutionAgentStore().$patch({ loaded: true, items: [{ id: 'computer-1', connected: true }, { id: 'computer-2', connected: false }] })
   let sessions = [{ id: 'session-1', title: 'Ein Gespräch fortsetzen', projectId: 'project-1', createdAt: '2026-10-03T12:00:00Z', hasUnreadMessages: true, activeRunStatus: 'running' }]
   let failed = false
@@ -37,6 +39,7 @@ it('shows effective status, opens a session and lets failed or empty data be ref
       '/sessions': { items: sessions }, '/projects': { items: projects },
       '/automations': { items: automations }, '/execution-agents': { items: [{ id: 'computer-1', connected: true }, { id: 'computer-2', connected: false }] },
       '/approvals/pending': [{ id: 'approval-1' }], '/questions/pending': [],
+      '/notifications': { items: [], unreadCount: 2 },
       '/user-profile': { preferredName: { privateOnly: 'Ada', publicOnly: 'A.' }, fullName: { both: 'Ada Lovelace' } }
     }[path] }
   })
@@ -60,7 +63,7 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   expect(root.textContent).toContain('Neue Antwort')
   expect(root.textContent).toContain('Agent arbeitet')
   expect(root.textContent).toContain('1 von 2 Computern online')
-  expect(root.textContent).toContain('1 offene Anfrage')
+  expect(root.textContent).toContain('1 offene Aufgabe · 2 ungelesene Benachrichtigungen')
   expect(root.querySelector('#home-automations')).toBeNull()
   useAutomationStore().items[0].effectiveState = { enabled: true, nextRunAt: '2026-10-04T12:00:00Z' }
   await vi.waitFor(() => expect(root.textContent).toContain('Nächste Automationen'))
