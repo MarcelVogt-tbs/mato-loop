@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { apiErrorMessage, decodeBlobApiError, errorDescriptor } from '../src/utils/api-errors'
 
 describe('API error messages', () => {
+  it('explains unavailable native audio analysis', () => {
+    expect(apiErrorMessage({ error: { code: 'audio.analysisUnavailable' } })).toBe(
+      'Für die direkte Audioanalyse ist kein audiofähiges Chatmodell verfügbar.'
+    )
+  })
   it('localizes an invalid computer-switch batch without leaking backend details', () => {
     expect(apiErrorMessage({ error: {
       code: 'executionAgent.exclusiveCallRequired', message: 'internal detail'

@@ -947,6 +947,7 @@ async def test_model_delete_clears_defaults_and_sessions_in_its_scope(
         "dreaming_model_id",
         "vision_model_id",
         "video_model_id",
+        "audio_analysis_model_id",
         "image_generation_model_id",
         "speech_generation_model_id",
         "audio_generation_model_id",

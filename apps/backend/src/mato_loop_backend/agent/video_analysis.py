@@ -8,8 +8,14 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from mato_loop_backend.agent.media_analysis import (
+    ResolvedAnalysisModel,
+    TranscriptionHandler,
+    TranscriptSegment,
+    resolve_chat_target,
+    transcribe_segments,
+)
 from mato_loop_backend.media.video_processing import (
-    AudioSegment,
     MediaInfo,
     VideoAnalysisMode,
     VideoFrame,
@@ -18,15 +24,11 @@ from mato_loop_backend.media.video_processing import (
     extract_video_audio,
     extract_video_frames,
     probe_video,
-    split_wav_audio,
 )
 from mato_loop_backend.providers.media import resolve_media_target
 from mato_loop_backend.settings.models import (
     AiSettings,
-    LlmProviderConfig,
-    ModelAvailability,
     ModelCapability,
-    ModelConfig,
     ModelInputModality,
     TrustLevel,
 )
@@ -47,19 +49,6 @@ class NativeVideoResult:
 
 
 @dataclass(frozen=True, slots=True)
-class ResolvedVideoModel:
-    provider: LlmProviderConfig
-    model: ModelConfig
-
-
-@dataclass(frozen=True, slots=True)
-class TranscriptSegment:
-    start_ms: int
-    end_ms: int
-    text: str
-
-
-@dataclass(frozen=True, slots=True)
 class VisualSegment:
     start_ms: int
     end_ms: int
@@ -74,33 +63,6 @@ FrameVisionHandler = Callable[
     [list[VideoFrame], list[TranscriptSegment], int, TrustLevel, str | None],
     Awaitable[list[VisualSegment]],
 ]
-TranscriptionHandler = Callable[[bytes, str | None, TrustLevel], Awaitable[str]]
-
-
-def _clean_transcript(value: str) -> str:
-    lines = []
-    previous = None
-    for line in (line.strip() for line in value.splitlines()):
-        if line and line != previous:
-            lines.append(line)
-        previous = line
-    return "\n".join(lines)
-
-
-async def _transcribe_segments(
-    audio: bytes,
-    *,
-    language: str | None,
-    source_trust: TrustLevel,
-    handler: TranscriptionHandler,
-) -> list[TranscriptSegment]:
-    segments: list[AudioSegment] = await asyncio.to_thread(split_wav_audio, audio)
-    result = []
-    for segment in segments:
-        text = _clean_transcript(await handler(segment.data, language, source_trust))
-        if text:
-            result.append(TranscriptSegment(segment.start_ms, segment.end_ms, text))
-    return result
 
 
 def _segment_dict(segment: TranscriptSegment | VisualSegment) -> dict[str, Any]:
@@ -111,55 +73,33 @@ def _segment_dict(segment: TranscriptSegment | VisualSegment) -> dict[str, Any]:
     }
 
 
-def _chat_target(
-    settings: AiSettings, model_id: UUID | None
-) -> tuple[LlmProviderConfig, ModelConfig] | None:
-    model = next((item for item in settings.models if item.id == model_id), None)
-    provider = (
-        next((item for item in settings.providers if item.id == model.provider_id), None)
-        if model is not None
-        else None
-    )
-    if (
-        model is None
-        or provider is None
-        or not model.enabled
-        or not provider.enabled
-        or (provider.adapter_type == "openai-codex" and provider.credential_id is None)
-        or model.availability != ModelAvailability.AVAILABLE
-        or ModelCapability.CHAT not in model.capabilities
-    ):
-        return None
-    return provider, model
-
-
 def resolve_native_video_target(
     settings: AiSettings, *, active_model_id: UUID | None
-) -> ResolvedVideoModel | None:
+) -> ResolvedAnalysisModel | None:
     for model_id in dict.fromkeys((active_model_id, settings.video_model_id)):
-        target = _chat_target(settings, model_id)
+        target = resolve_chat_target(settings, model_id)
         if target is None:
             continue
-        provider, model = target
+        provider, model = target.provider, target.model
         if (
             ModelInputModality.VIDEO in model.input_modalities
             and provider.adapter_type == "openai-compatible"
             and provider.config.get("api_type", "chat_completions") == "chat_completions"
         ):
-            return ResolvedVideoModel(provider, model)
+            return target
     return None
 
 
 def resolve_video_vision_targets(
     settings: AiSettings, *, active_model_id: UUID | None
-) -> tuple[ResolvedVideoModel, ...]:
+) -> tuple[ResolvedAnalysisModel, ...]:
     targets = []
     for model_id in dict.fromkeys(
         (active_model_id, settings.video_model_id, settings.vision_model_id)
     ):
-        target = _chat_target(settings, model_id)
-        if target is not None and target[1].supports_image_input:
-            targets.append(ResolvedVideoModel(*target))
+        target = resolve_chat_target(settings, model_id)
+        if target is not None and target.model.supports_image_input:
+            targets.append(target)
     return tuple(targets)
 
 
@@ -226,7 +166,7 @@ async def analyze_video(
             if transcription_handler is None:
                 raise VideoAnalysisError("video.audioAnalysisUnavailable")
             transcription_started_at = time.monotonic()
-            transcript_segments = await _transcribe_segments(
+            transcript_segments = await transcribe_segments(
                 audio,
                 language=language,
                 source_trust=source_trust,
@@ -261,7 +201,7 @@ async def analyze_video(
         if audio is not None and not native.audio_analyzed:
             if transcription_handler is None:
                 raise VideoAnalysisError("video.audioAnalysisUnavailable")
-            transcript_segments = await _transcribe_segments(
+            transcript_segments = await transcribe_segments(
                 audio,
                 language=language,
                 source_trust=source_trust,
@@ -317,7 +257,7 @@ async def analyze_video(
         if transcription_handler is None:
             raise VideoAnalysisError("video.audioAnalysisUnavailable")
         transcription_started_at = time.monotonic()
-        transcript_segments = await _transcribe_segments(
+        transcript_segments = await transcribe_segments(
             audio,
             language=language,
             source_trust=source_trust,

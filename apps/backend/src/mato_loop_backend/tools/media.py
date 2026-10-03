@@ -16,7 +16,9 @@ from pydantic import ValidationError
 import mato_loop_backend.files.access as files_access
 import mato_loop_backend.permissions.resolution as permissions_resolution
 import mato_loop_backend.tools.access as tools_access
-from mato_loop_backend.agent.video_analysis import ResolvedVideoModel, VideoAnalysisError
+from mato_loop_backend.agent.audio_analysis import MAX_AUDIO_ANALYSIS_BYTES, AudioAnalysisError
+from mato_loop_backend.agent.media_analysis import ResolvedAnalysisModel
+from mato_loop_backend.agent.video_analysis import VideoAnalysisError
 from mato_loop_backend.media.attachments import (
     ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES,
     MAX_IMAGE_ATTACHMENT_BYTES,
@@ -37,6 +39,7 @@ from mato_loop_backend.providers.media import MediaService, ResolvedMediaModel
 from mato_loop_backend.settings import ModelCapability, ToolExecutionPolicy, TrustLevel
 from mato_loop_backend.tools.actions import ToolAction
 from mato_loop_backend.tools.arguments import (
+    AnalyzeAudioArguments,
     AnalyzeVideoArguments,
     EditImageArguments,
     FileReference,
@@ -111,7 +114,7 @@ async def _read_media_file(
 async def _authorize_media(
     context: ToolContext,
     capability: str,
-    target: ResolvedMediaModel | ResolvedVideoModel | None = None,
+    target: ResolvedMediaModel | ResolvedAnalysisModel | None = None,
     source_attachment_ids: tuple[UUID, ...] = (),
     source_files: tuple[dict[str, str], ...] = (),
 ) -> ToolResult | None:
@@ -578,6 +581,45 @@ async def _analyze_video(
     )
 
 
+async def _analyze_audio(
+    arguments: AnalyzeAudioArguments, context: ToolContext,
+) -> ToolResult:
+    if context.audio_analysis_handler is None or context.audio_analysis_target is None:
+        return ToolResult.error("tool.unavailable")
+    target = context.audio_analysis_target(arguments.analysis_mode)
+    if target is None:
+        return ToolResult.error(
+            "audio.transcriptionUnavailable" if arguments.analysis_mode == "speech"
+            else "audio.analysisUnavailable"
+        )
+    source = await _read_media_file(arguments, context, kind="audio", limit=MAX_AUDIO_ANALYSIS_BYTES)
+    if isinstance(source, ToolResult):
+        return source
+    if error := await _authorize_media(
+        context, "media.analyze.audio", target,
+        (source.attachment.id,) if source.attachment is not None else (),
+        ({"root": arguments.root, "path": source.path, "sha256": source.sha256},),
+    ):
+        return error
+    try:
+        result = await context.audio_analysis_handler(
+            source.data, source.mime_type, source.path, source.trust_level,
+            arguments.language, arguments.analysis_mode, arguments.focus,
+        )
+    except TimeoutError:
+        return ToolResult.error("audio.analysisTimeout")
+    except (AudioAnalysisError, AttachmentProcessingError) as exc:
+        return ToolResult.error(exc.code)
+    return ToolResult.json(
+        {"root": arguments.root, "path": source.path, "sha256": source.sha256, **result},
+        metadata={
+            "sourceRoot": arguments.root, "sourcePath": source.path, "sourceSha256": source.sha256,
+            **({"sourceAttachmentId": str(source.attachment.id)} if source.attachment else {}),
+        },
+        trust_level=source.trust_level,
+    )
+
+
 logger = logging.getLogger("mato_loop_backend.agent.tools")
 
 
@@ -716,8 +758,10 @@ ANALYZE_VIDEO = ToolDefinition(
             "analyze_video",
             "Analyze one MP4/WebM from files or computer. It does not accept URLs or published captions. "
             "Choose speech for spoken content, overview "
-            "for visual summaries, or fine_grained for exact visual steps. Do not repeat a successful "
-            "analysis; timeout does not indicate video length.",
+            "for visual summaries, or fine_grained for detailed events or passage search. Put the "
+            "objective and approximate lyrics in focus. Reuse successful results; only analyze a "
+            "narrower excerpt again when needed to locate a passage more precisely. "
+            "Timeout does not indicate video length.",
             AnalyzeVideoArguments,
             _analyze_video,
             required_capability="media.analyze.video",
@@ -733,3 +777,22 @@ ANALYZE_VIDEO = ToolDefinition(
                 ),
             ),
         )
+
+ANALYZE_AUDIO = ToolDefinition(
+    "analyze_audio",
+    "Analyze one audio file from files or computer using root and path, never a URL. "
+    "Use speech for transcript segments, overview for a summary, fine_grained for audible events "
+    "or finding approximate sung lyrics with estimated timestamps. Put the search objective in focus. "
+    "Native analysis requires an audio chat model; transcription alone cannot assess sounds or music. "
+    "Use transcribe_audio for plain transcription. Reuse results; analyze a narrower excerpt only "
+    "when more precise localization is needed. Do not wrap audio in a video.",
+    AnalyzeAudioArguments,
+    _analyze_audio,
+    required_capability="media.analyze.audio",
+    group="media",
+    label="Audio analysieren",
+    icon="audio_file",
+    actions=(ToolAction(
+        "media.analyze.audio", "Audio analysieren", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK,
+    ),),
+)

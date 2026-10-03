@@ -803,6 +803,7 @@ const form = reactive({
   dreamingModelId: null,
   visionModelId: null,
   videoModelId: null,
+  audioAnalysisModelId: null,
   imageGenerationModelId: null,
   speechGenerationModelId: null,
   audioGenerationModelId: null,
@@ -830,6 +831,7 @@ const ownership = reactive({
   dreamingModelId: false,
   visionModelId: false,
   videoModelId: false,
+  audioAnalysisModelId: false,
   imageGenerationModelId: false,
   speechGenerationModelId: false,
   audioGenerationModelId: false,
@@ -859,7 +861,7 @@ const sessionWriteModeOptions = [
 const modelFields = [
   'defaultModelId', 'reasoningEffort', 'compactionModelId', 'titleGenerationModelId',
   'titleVisionFallbackEnabled', 'skillCreationModelId', 'dreamingModelId', 'visionModelId',
-  'videoModelId', 'imageGenerationModelId', 'speechGenerationModelId',
+  'videoModelId', 'audioAnalysisModelId', 'imageGenerationModelId', 'speechGenerationModelId',
   'audioGenerationModelId', 'audioTranscriptionModelId'
 ]
 const additionalModelSettings = [
@@ -869,6 +871,7 @@ const additionalModelSettings = [
   { field: 'dreamingModelId', title: 'Dreaming', description: 'Verarbeitet Gespräche zu langfristigen Erinnerungen.', label: 'Dreaming-Modell', requiresTools: true },
   { field: 'visionModelId', title: 'Bildanalyse', description: 'Liest Bilder und bildbasierte Dokumentseiten.', label: 'Visionmodell', options: 'vision' },
   { field: 'videoModelId', title: 'Videoanalyse', description: 'Analysiert Videos nativ oder über Einzelbilder.', label: 'Videomodell', options: 'video' },
+  { field: 'audioAnalysisModelId', title: 'Audioanalyse', description: 'Analysiert hörbare Inhalte mit einem audiofähigen Chatmodell. Transkription wird separat konfiguriert.', label: 'Audioanalyse-Modell', options: 'audio' },
   { field: 'imageGenerationModelId', title: 'Bildgenerierung', description: 'Erzeugt Bilder aus Text.', label: 'Bildmodell', capability: 'image_generation' },
   { field: 'speechGenerationModelId', title: 'Sprachausgabe', description: 'Wandelt Text in Sprache um.', label: 'Sprachmodell', capability: 'speech_generation' },
   { field: 'audioGenerationModelId', title: 'Audio und Musik', description: 'Erzeugt Audio oder Musik.', label: 'Audiomodell', capability: 'audio_generation' },
@@ -1090,6 +1093,7 @@ function assignValues(agent) {
     dreamingModelId: agent?.dreamingModelId || null,
     visionModelId: agent?.visionModelId || null,
     videoModelId: agent?.videoModelId || null,
+    audioAnalysisModelId: agent?.audioAnalysisModelId || null,
     imageGenerationModelId: agent?.imageGenerationModelId || null,
     speechGenerationModelId: agent?.speechGenerationModelId || null,
     audioGenerationModelId: agent?.audioGenerationModelId || null,
@@ -1157,7 +1161,9 @@ function modelOptions(setting) {
     ? providers.visionModelOptions
     : setting.options === 'video'
       ? providers.videoModelOptions
-      : providers.selectionOptions(
+      : setting.options === 'audio'
+        ? providers.audioAnalysisModelOptions
+        : providers.selectionOptions(
           selected,
           setting.requiresTools === true,
           setting.capability || 'chat'

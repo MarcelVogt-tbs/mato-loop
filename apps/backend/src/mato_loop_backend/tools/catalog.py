@@ -33,6 +33,7 @@ _MEDIA_SETTINGS_FIELDS = {
     "media.generate.audio": "generate_audio",
     "media.transcribe.audio": "transcribe_audio",
     "media.analyze.video": "analyze_video",
+    "media.analyze.audio": "analyze_audio",
 }
 
 
@@ -50,12 +51,13 @@ def effective_tool_capabilities(
     media_capabilities: set[ModelCapability] | None = None,
     *,
     video_available: bool | None = None,
+    audio_available: bool | None = None,
     identity_update_available: bool | None = None,
 ) -> set[str]:
     capabilities = {
         capability
         for capability, field_name in _MEDIA_SETTINGS_FIELDS.items()
-        if capability != "media.analyze.video"
+        if capability not in {"media.analyze.video", "media.analyze.audio"}
         if permissions_resolution.tool_execution_policy(
             settings,
             capability,
@@ -67,19 +69,16 @@ def effective_tool_capabilities(
             or _MEDIA_MODEL_CAPABILITIES[capability] in media_capabilities
         )
     }
-    if (
-        permissions_resolution.tool_execution_policy(
-            settings,
-            "media.analyze.video",
-            tool_registry.action_default("media.analyze.video", settings.trust_level),
-        )
-        != ToolExecutionPolicy.DISABLED
-        and (
-            video_available is True
-            or (video_available is None and media_capabilities is None)
-        )
+    for capability, available in (
+        ("media.analyze.video", video_available), ("media.analyze.audio", audio_available),
     ):
-        capabilities.add("media.analyze.video")
+        if (
+            permissions_resolution.tool_execution_policy(
+                settings, capability, tool_registry.action_default(capability, settings.trust_level),
+            ) != ToolExecutionPolicy.DISABLED
+            and (available is True or (available is None and media_capabilities is None))
+        ):
+            capabilities.add(capability)
     if (
         identity_update_available is not False
         and permissions_resolution.tool_execution_policy(
@@ -163,6 +162,7 @@ tool_registry = ToolRegistry(
         tools_media.GENERATE_AUDIO,
         tools_media.TRANSCRIBE_AUDIO,
         tools_media.ANALYZE_VIDEO,
+        tools_media.ANALYZE_AUDIO,
         tools_sessions.SESSION_READ,
         tools_sessions.SESSION_TOOL_RESULT_READ,
         tools_sessions.SESSION_BROWSE,

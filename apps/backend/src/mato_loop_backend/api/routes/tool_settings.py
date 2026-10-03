@@ -58,6 +58,10 @@ class ToolConfigurationRequest(BaseModel):
     analyze_video: MediaTimeoutRequest = Field(
         validation_alias=AliasChoices("analyzeVideo", "analyze_video")
     )
+    analyze_audio: MediaTimeoutRequest = Field(
+        default_factory=lambda: MediaTimeoutRequest(timeout_seconds=1_800),
+        validation_alias=AliasChoices("analyzeAudio", "analyze_audio"),
+    )
 
 
 def tool_configuration_payload(settings: ToolSettings) -> dict:
@@ -83,6 +87,7 @@ def tool_configuration_payload(settings: ToolSettings) -> dict:
         "generateAudio": {"timeoutSeconds": settings.generate_audio.timeout_seconds},
         "transcribeAudio": {"timeoutSeconds": settings.transcribe_audio.timeout_seconds},
         "analyzeVideo": {"timeoutSeconds": settings.analyze_video.timeout_seconds},
+        "analyzeAudio": {"timeoutSeconds": settings.analyze_audio.timeout_seconds},
     }
 
 
@@ -132,6 +137,7 @@ async def update_tool_configuration(
         "generate_audio",
         "transcribe_audio",
         "analyze_video",
+        "analyze_audio",
     ):
         getattr(settings, field_name).timeout_seconds = getattr(
             payload, field_name

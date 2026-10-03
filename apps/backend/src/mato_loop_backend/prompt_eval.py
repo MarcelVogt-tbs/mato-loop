@@ -2338,6 +2338,35 @@ CASES = (
         },
     ),
     PromptCase(
+        id="analyze_audio_finds_approximate_sung_lyrics",
+        kind="general",
+        user=(
+            "Die letzten zehn Minuten des Streams liegen bereits unter root=files, path=stream.mp3. "
+            "Finde die gesungene Stelle ungefähr mit 'only you ... without you' und "
+            "'you got me begging for more'. Nenne den Zeitbereich in der Datei."
+        ),
+        tools=("analyze_audio", "transcribe_audio", "analyze_video", "webfetch"),
+        system_options={"tool_instructions": (
+            "analyze_audio available modes: speech (transcript only, no sound or music assessment); "
+            "overview and fine_grained (native audio input).",
+        )},
+        expected_tool="analyze_audio",
+        expected_arguments={"root": "files", "path": "stream.mp3", "analysis_mode": "fine_grained"},
+        argument_contains={"focus": ("only you", "begging for more")},
+        forbidden_tools=("transcribe_audio", "analyze_video", "webfetch"),
+    ),
+    PromptCase(
+        id="analyze_audio_transcription_cannot_identify_sounds",
+        kind="general",
+        user="Welche Instrumente hört man in root=files, path=stream.mp3?",
+        tools=("analyze_audio", "transcribe_audio"),
+        system_options={"tool_instructions": (
+            "analyze_audio available modes: speech (transcript only, no sound or music assessment).",
+        )},
+        expected_no_tools=True,
+        content_contains_any=(("nicht", "kein", "unmöglich"), ("Transkription", "Audiomodell", "Audioanalyse", "audiofähig")),
+    ),
+    PromptCase(
         id="analyze_video_spoken_summary_uses_speech",
         kind="general",
         user=_video_request(
@@ -5046,6 +5075,7 @@ def _general_offered_tools(case: PromptCase) -> EffectiveToolSet:
         "generate_audio": "media.generate.audio",
         "transcribe_audio": "media.transcribe.audio",
         "analyze_video": "media.analyze.video",
+        "analyze_audio": "media.analyze.audio",
         "update_agent_identity": "settings.agent_identity.update",
     }
     capabilities = {capability_by_tool[name] for name in case.tools if name in capability_by_tool}

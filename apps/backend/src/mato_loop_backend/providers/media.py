@@ -664,6 +664,8 @@ class MediaService:
         timeout: float = 300,
         active_model_id: UUID | None = None,
         agent_profile_id: UUID | None = None,
+        expected_model_id: UUID | None = None,
+        expected_trust_level: TrustLevel | None = None,
         user_id: UUID,
     ) -> TranscriptionResult:
         if not isinstance(audio, bytes) or not audio or len(audio) > lemonade.MAX_AUDIO_BYTES:
@@ -676,6 +678,14 @@ class MediaService:
             agent_profile_id=agent_profile_id,
             user_id=user_id,
         )
+        if (
+            (expected_model_id is not None and resolved.model.id != expected_model_id)
+            or (expected_trust_level is not None
+                and effective_model_trust(resolved.provider, resolved.model) != expected_trust_level)
+        ):
+            raise ProviderError(
+                "Audio transcription target changed", code="provider.modelCapabilityUnavailable",
+            )
         await db.commit()
         transcribe = (
             azure_speech.transcribe_audio

@@ -77,6 +77,21 @@ function effectiveVideoModelOptions(state) {
   })
 }
 
+function effectiveAudioAnalysisModelOptions(state) {
+  const models = state.availableModels || state.models
+  const providers = state.availableProviders || state.providers
+  return models.flatMap((model) => {
+    const provider = providers.find((item) => item.id === model.providerId)
+    return isModelEffective(model, provider, state.codex)
+      && modelSupportsCapability(model, 'chat')
+      && model.inputModalities?.includes('audio')
+      && provider?.adapterType === 'openai-compatible'
+      && (provider.config?.apiType || provider.config?.api_type || 'chat_completions') === 'chat_completions'
+      ? [modelOption(model, provider)]
+      : []
+  })
+}
+
 async function mutateAndRefresh(store, request) {
   const scope = store.scope
   const response = await request()
@@ -113,6 +128,7 @@ export const useProviderStore = defineStore('providers', {
     capabilityOptions: (state) => (capability) => effectiveModelOptions(state, capability),
     visionModelOptions: (state) => effectiveVisionModelOptions(state),
     videoModelOptions: (state) => effectiveVideoModelOptions(state),
+    audioAnalysisModelOptions: (state) => effectiveAudioAnalysisModelOptions(state),
     skillCreationModelOptions: (state) => effectiveModelOptions(state)
       .filter((option) => (state.availableModels || state.models)
         .find((model) => model.id === option.value)?.supportsTools === true),

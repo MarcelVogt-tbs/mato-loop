@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 
 const defaultMediaSettings = () => ({ timeoutSeconds: 300 })
-const defaultVideoAnalysisSettings = () => ({ timeoutSeconds: 1800 })
+const defaultAnalysisSettings = () => ({ timeoutSeconds: 1800 })
 const defaultConfigurationWebFetch = () => ({
   userAgent: '',
   maxResponseMiB: 64,
@@ -17,7 +17,8 @@ export const useToolSettingsStore = defineStore('tool-settings', {
     generateSpeech: defaultMediaSettings(),
     generateAudio: defaultMediaSettings(),
     transcribeAudio: defaultMediaSettings(),
-    analyzeVideo: defaultVideoAnalysisSettings(),
+    analyzeVideo: defaultAnalysisSettings(),
+    analyzeAudio: defaultAnalysisSettings(),
     transcribeAudioAvailable: true,
     toolAvailability: {},
     loaded: false,
@@ -127,7 +128,8 @@ export const useToolSettingsStore = defineStore('tool-settings', {
         this[field] = { ...defaultMediaSettings(), ...data?.[field] }
       }
       this.editImage = { ...defaultMediaSettings(), ...data?.editImage }
-      this.analyzeVideo = { ...defaultVideoAnalysisSettings(), ...data?.analyzeVideo }
+      this.analyzeVideo = { ...defaultAnalysisSettings(), ...data?.analyzeVideo }
+      this.analyzeAudio = { ...defaultAnalysisSettings(), ...data?.analyzeAudio }
     }
   }
 })

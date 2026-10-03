@@ -4687,7 +4687,7 @@ def test_video_analysis_schema_uses_semantic_modes() -> None:
     assert "visual summaries" in mode["description"]
     assert "spoken content" in mode["description"]
     assert "focus" not in schema["parameters"]["required"]
-    assert "Do not repeat a successful analysis" in schema["description"]
+    assert "Reuse successful results" in schema["description"]
     assert "timeout does not indicate video length" in schema["description"].lower()
     legacy = definition.arguments_model.model_validate(
         {
@@ -4701,10 +4701,11 @@ def test_video_analysis_schema_uses_semantic_modes() -> None:
 
 
 @pytest.mark.parametrize("path", ["video.mp4", "/home/user/project/video.mp4"])
-async def test_workspace_video_uses_execution_client_bytes(tmp_path, path) -> None:
+@pytest.mark.parametrize("kind", ["audio", "video"])
+async def test_workspace_media_uses_execution_client_bytes(tmp_path, path, kind) -> None:
     call = ToolCall(
         id="video",
-        name="analyze_video",
+        name=f"analyze_{kind}",
         arguments={"root": "computer", "path": path},
     )
     context = _context(tmp_path, call)
@@ -4714,15 +4715,15 @@ async def test_workspace_video_uses_execution_client_bytes(tmp_path, path) -> No
         current_directory="/home/user/project",
         read_bytes=AsyncMock(return_value=b"video"),
     )
-    context.video_analysis_target = Mock(return_value="video-model")
-    context.video_analysis_handler = AsyncMock(return_value={"summary": "ok"})
-    context.tool_settings.permissions.policies["media.analyze.video"] = (
+    setattr(context, f"{kind}_analysis_target", Mock(return_value="media-model"))
+    setattr(context, f"{kind}_analysis_handler", AsyncMock(return_value={"summary": "ok"}))
+    context.tool_settings.permissions.policies[f"media.analyze.{kind}"] = (
         ToolExecutionPolicy.AUTO
     )
     context.root_files.open_file = Mock(side_effect=AssertionError("must not read locally"))
-    arguments = tool_registry._definitions["analyze_video"].validate_arguments(call.arguments)
+    arguments = tool_registry._definitions[call.name].validate_arguments(call.arguments)
 
-    result = await mock_tools_media._analyze_video(arguments, context)
+    result = await tool_registry._definitions[call.name].handler(arguments, context)
 
     assert not result.is_error
     context.execution_client.read_bytes.assert_awaited_once_with(

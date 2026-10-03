@@ -219,6 +219,7 @@ class AgentProfileAccessOverrides(BaseModel):
     dreaming_model_id: UUID | None = None
     vision_model_id: UUID | None = None
     video_model_id: UUID | None = None
+    audio_analysis_model_id: UUID | None = None
     image_generation_model_id: UUID | None = None
     speech_generation_model_id: UUID | None = None
     audio_generation_model_id: UUID | None = None
@@ -239,6 +240,7 @@ class AgentProfileAccessOverrides(BaseModel):
             "dreaming_model_id",
             "vision_model_id",
             "video_model_id",
+            "audio_analysis_model_id",
             "image_generation_model_id",
             "speech_generation_model_id",
             "audio_generation_model_id",
@@ -300,6 +302,7 @@ class AgentProfile(BaseModel):
     dreaming_model_id: UUID | None = None
     vision_model_id: UUID | None = None
     video_model_id: UUID | None = None
+    audio_analysis_model_id: UUID | None = None
     image_generation_model_id: UUID | None = None
     speech_generation_model_id: UUID | None = None
     audio_generation_model_id: UUID | None = None
@@ -372,6 +375,7 @@ class AgentProfileOverrides(BaseModel):
     dreaming_model_id: UUID | None = None
     vision_model_id: UUID | None = None
     video_model_id: UUID | None = None
+    audio_analysis_model_id: UUID | None = None
     image_generation_model_id: UUID | None = None
     speech_generation_model_id: UUID | None = None
     audio_generation_model_id: UUID | None = None
@@ -400,6 +404,7 @@ class AgentProfileOverrides(BaseModel):
             "dreaming_model_id",
             "vision_model_id",
             "video_model_id",
+            "audio_analysis_model_id",
             "image_generation_model_id",
             "speech_generation_model_id",
             "audio_generation_model_id",
@@ -1083,6 +1088,10 @@ class ToolSettingsBase(SettingsDocument):
         default_factory=lambda: MediaToolSettings(timeout_seconds=1_800),
         validation_alias=AliasChoices("analyze_video", "analyzeVideo"),
     )
+    analyze_audio: MediaToolSettings = Field(
+        default_factory=lambda: MediaToolSettings(timeout_seconds=1_800),
+        validation_alias=AliasChoices("analyze_audio", "analyzeAudio"),
+    )
 
     @property
     def permissions(self) -> AgentProfilePermissions:
@@ -1246,6 +1255,7 @@ class AiSettingsBase(SettingsDocument):
     dreaming_model_id: UUID | None = None
     vision_model_id: UUID | None = None
     video_model_id: UUID | None = None
+    audio_analysis_model_id: UUID | None = None
     image_generation_model_id: UUID | None = None
     speech_generation_model_id: UUID | None = None
     audio_generation_model_id: UUID | None = None

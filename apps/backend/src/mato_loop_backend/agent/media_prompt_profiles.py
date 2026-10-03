@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from uuid import UUID
 
+from mato_loop_backend.agent.audio_analysis import resolve_audio_target
 from mato_loop_backend.providers.codex_oauth import CODEX_IMAGE_MODEL_ID
 from mato_loop_backend.providers.media import resolve_media_target
 from mato_loop_backend.settings import AiSettings
@@ -69,6 +70,13 @@ def with_media_prompt_profiles(
 ) -> EffectiveToolSet:
     tools = dict(toolset.tools)
     instructions = []
+    if "analyze_audio" in tools:
+        modes = []
+        if resolve_audio_target(settings, active_model_id=active_model_id, speech=True):
+            modes.append("speech (transcript only, no sound or music assessment)")
+        if resolve_audio_target(settings, active_model_id=active_model_id):
+            modes.append("overview and fine_grained (native audio input)")
+        instructions.append("analyze_audio available modes: " + ("; ".join(modes) or "none") + ".")
     for tool_name, capability in _TOOL_CAPABILITIES.items():
         tool = tools.get(tool_name)
         if tool is None:

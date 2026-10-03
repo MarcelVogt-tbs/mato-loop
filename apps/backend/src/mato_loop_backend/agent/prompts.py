@@ -411,7 +411,7 @@ def general_system_prompt(
             "argument values unchanged and add _reason in the user's language when useful. "
             "Use nextOffset for further chunks; never rerun the original tool."
         )
-    if offered_tool_names & {"transcribe_audio", "edit_image", "read_qr_code", "analyze_video"}:
+    if offered_tool_names & {"transcribe_audio", "edit_image", "read_qr_code", "analyze_video", "analyze_audio"}:
         parts.append(
             "Media inputs use root and path, not attachment IDs. Use root=files for session files "
             "and root=computer for computer files; computer bytes are transferred on demand. "
@@ -450,6 +450,12 @@ def general_system_prompt(
             "transcribe_audio uses the verified PCM audio derivative automatically. "
             "For voice recordings with transcripts included in user text, respond to that text; "
             "do not transcribe again unless requested."
+        )
+    if offered_tool_names & {"analyze_audio", "analyze_video"}:
+        parts.append(
+            "Media search: put approximate lyrics in focus. Transcript-only results cannot assess sounds "
+            "or music. Lyric matches do not confirm titles. Derive clock times and past stream windows "
+            "only from verified source timing."
         )
     if "memory_write" in offered_tool_names:
         parts.append(

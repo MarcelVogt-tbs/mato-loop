@@ -40,6 +40,7 @@ _AI_DEFAULT_FIELDS = (
     "dreaming_model_id",
     "vision_model_id",
     "video_model_id",
+    "audio_analysis_model_id",
     "image_generation_model_id",
     "speech_generation_model_id",
     "audio_generation_model_id",

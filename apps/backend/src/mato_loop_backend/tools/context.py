@@ -7,7 +7,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.agent.video_analysis import ResolvedVideoModel
+from mato_loop_backend.agent.media_analysis import ResolvedAnalysisModel
 from mato_loop_backend.execution import ExecutionClient
 from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.integrations.contracts import IntegrationResource
@@ -59,7 +59,11 @@ VideoAnalysisHandler = Callable[
 ]
 
 
-VideoAnalysisTargetResolver = Callable[[int], ResolvedVideoModel | None]
+VideoAnalysisTargetResolver = Callable[[int], ResolvedAnalysisModel | None]
+AudioAnalysisHandler = Callable[
+    [bytes, str, str, TrustLevel, str | None, VideoAnalysisMode, str | None],
+    Awaitable[dict[str, Any]],
+]
 
 
 if TYPE_CHECKING:
@@ -85,6 +89,8 @@ class ToolContext:
     pdf_vision_handler: PdfVisionHandler | None = None
     video_analysis_handler: VideoAnalysisHandler | None = None
     video_analysis_target: VideoAnalysisTargetResolver | None = None
+    audio_analysis_handler: AudioAnalysisHandler | None = None
+    audio_analysis_target: Callable[[VideoAnalysisMode], ResolvedAnalysisModel | None] | None = None
     assistant_message_id: UUID | None = None
     memory_read_enabled: bool = False
     memory_write_enabled: bool = False

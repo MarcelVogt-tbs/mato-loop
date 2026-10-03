@@ -421,6 +421,7 @@ async def execute_tool_batch(
             (
                 pdf_vision_handler, video_analysis_handler, video_target,
                 analyze_image_batch, fallback_vision_model,
+                audio_analysis_handler, audio_target,
             ) = media_model_handlers(
                 db=db, run=run, session=session, ai_settings=ai_settings,
                 model=model, model_trust_level=trust_level,
@@ -435,6 +436,8 @@ async def execute_tool_batch(
                 ask_handler=ask, question_handler=question, tool_settings=tool_settings,
                 pdf_vision_handler=pdf_vision_handler,
                 video_analysis_handler=video_analysis_handler,
+                audio_analysis_handler=audio_analysis_handler,
+                audio_analysis_target=audio_target,
                 video_analysis_target=video_target, assistant_message_id=assistant.id,
                 memory_read_enabled=current_memory_state.read_enabled,
                 memory_write_enabled=current_memory_state.write_enabled,

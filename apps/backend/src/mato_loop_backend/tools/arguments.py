@@ -739,6 +739,22 @@ class AnalyzeVideoArguments(FileReference):
         return {"standard": "overview", "detailed": "fine_grained"}.get(value, value)
 
 
+class AnalyzeAudioArguments(FileReference):
+    language: str | None = Field(default=None, min_length=2, max_length=35)
+    analysis_mode: Literal["speech", "overview", "fine_grained"] = Field(
+        default="overview",
+        description=(
+            "speech returns transcript segments only; overview summarizes audible content; "
+            "fine_grained locates passages or describes events with estimated timestamps. "
+            "overview and fine_grained require a native audio chat model."
+        ),
+    )
+    focus: str | None = Field(
+        default=None, min_length=1, max_length=2_000,
+        description="Question or search objective, including approximate words or sung lyrics.",
+    )
+
+
 class SessionReadArguments(ToolArguments):
     session_id: UUID | None = Field(
         default=None,

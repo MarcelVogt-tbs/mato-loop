@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from mato_loop_backend.agent import run_support
+from mato_loop_backend.agent.audio_analysis import audio_analysis_available
 from mato_loop_backend.agent.media_prompt_profiles import with_media_prompt_profiles
 from mato_loop_backend.agent.projection import estimate_tokens
 from mato_loop_backend.agent.run_contracts import AgentRunError
@@ -70,6 +71,7 @@ def select_turn_tools(
         tool_settings,
         available_media_capabilities(ai_settings, active_model_id=model.id),
         video_available=video_analysis_available(ai_settings, active_model_id=model.id),
+        audio_available=audio_analysis_available(ai_settings, active_model_id=model.id),
         identity_update_available=(
             identity.personal_display_name_enabled or identity.persona_editable
         ),
@@ -135,7 +137,7 @@ def select_turn_tools(
                 toolset = toolset.without(
                     "read", "glob", "grep", "write_file", "edit_file",
                     "create_directory", "delete_path", "copy_path", "move_path",
-                    "analyze_video", "transcribe_audio", "read_qr_code",
+                    "analyze_video", "analyze_audio", "transcribe_audio", "read_qr_code",
                 )
     if hide_skill_catalog_tools and toolset is not None:
         toolset = toolset.without("load_skill", "edit_skill")

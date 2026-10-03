@@ -53,6 +53,7 @@ DEFAULT_MODEL_FIELDS: dict[str, tuple[str, ModelCapability]] = {
     "dreaming_model_id": ("dreamingModelId", ModelCapability.CHAT),
     "vision_model_id": ("visionModelId", ModelCapability.CHAT),
     "video_model_id": ("videoModelId", ModelCapability.CHAT),
+    "audio_analysis_model_id": ("audioAnalysisModelId", ModelCapability.CHAT),
     "image_generation_model_id": (
         "imageGenerationModelId",
         ModelCapability.IMAGE_GENERATION,
@@ -153,6 +154,16 @@ def model_reference_available(
         and not (
             field == "video_model_id"
             and not video_analysis_model_available(settings, model_id)
+        )
+        and not (
+            field == "audio_analysis_model_id"
+            and not (
+                ModelInputModality.AUDIO in value.input_modalities
+                and provider(settings, value.provider_id).adapter_type == "openai-compatible"
+                and provider(settings, value.provider_id).config.get(
+                    "api_type", "chat_completions"
+                ) == "chat_completions"
+            )
         )
         and not (
             capability != ModelCapability.CHAT

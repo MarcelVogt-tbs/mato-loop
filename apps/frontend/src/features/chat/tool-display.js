@@ -28,6 +28,7 @@ const TOOL_DISPLAY = {
   generate_audio: { label: 'Audio erzeugen', icon: 'graphic_eq' },
   transcribe_audio: { label: 'Audio transkribieren', icon: 'mic' },
   analyze_video: { label: 'Video analysieren', icon: 'video_file' },
+  analyze_audio: { label: 'Audio analysieren', icon: 'audio_file' },
   calendar_list_accounts: { label: 'Kalenderkonten auflisten', icon: 'account_circle' },
   calendar_list_calendars: { label: 'Kalender auflisten', icon: 'calendar_month' },
   calendar_query_events: { label: 'Termine lesen', icon: 'event' },

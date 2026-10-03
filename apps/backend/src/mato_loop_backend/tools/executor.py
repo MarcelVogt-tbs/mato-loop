@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from referencing.exceptions import Unresolvable
 from sqlalchemy.exc import SQLAlchemyError
 
+from mato_loop_backend.agent.audio_analysis import audio_analysis_available
 from mato_loop_backend.agent.video_analysis import video_analysis_available
 from mato_loop_backend.execution import ExecutionClientError
 from mato_loop_backend.files.service import RootFileError
@@ -182,6 +183,9 @@ async def execute_definition(
                 ai_settings, active_model_id=context.model_id
             ),
             video_available=video_analysis_available(
+                ai_settings, active_model_id=context.model_id
+            ),
+            audio_available=audio_analysis_available(
                 ai_settings, active_model_id=context.model_id
             ),
         ):

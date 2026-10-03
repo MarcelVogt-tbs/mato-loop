@@ -10,6 +10,7 @@ import pytest
 from PIL import Image
 
 import mato_loop_backend.media.video_processing as media_video_processing
+from mato_loop_backend.media.audio_processing import split_wav_audio
 
 
 def probe_payload(
@@ -162,7 +163,7 @@ def test_video_analysis_mode_profiles_and_audio_segments() -> None:
         wav_file.setframerate(16_000)
         wav_file.writeframes(b"\x00\x00" * 40_000)
 
-    segments = media_video_processing.split_wav_audio(buffer.getvalue(), segment_seconds=1)
+    segments = split_wav_audio(buffer.getvalue(), segment_seconds=1)
 
     assert [(item.start_ms, item.end_ms) for item in segments] == [
         (0, 1_000),

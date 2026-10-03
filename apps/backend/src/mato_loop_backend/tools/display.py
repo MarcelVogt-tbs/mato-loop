@@ -36,6 +36,7 @@ TOOL_ACTIVITY_LABELS = {
     "read_qr_code": "QR-Code lesen", "generate_image": "Bild erzeugen", "edit_image": "Bild bearbeiten",
     "generate_speech": "Sprache erzeugen", "generate_audio": "Audio erzeugen",
     "transcribe_audio": "Audio transkribieren", "analyze_video": "Video analysieren",
+    "analyze_audio": "Audio analysieren",
     "calendar_list_accounts": "Kalenderkonten auflisten", "calendar_list_calendars": "Kalender auflisten",
     "calendar_query_events": "Termine lesen", "calendar_create_event": "Termin erstellen",
     "calendar_update_event": "Termin ändern", "calendar_delete_event": "Termin löschen",
@@ -114,6 +115,7 @@ _TOOL_GROUPS = {
         for name in (
             "generate_qr_code", "read_qr_code", "generate_image", "edit_image",
             "generate_speech", "generate_audio", "transcribe_audio", "analyze_video",
+            "analyze_audio",
         )
     },
     **{

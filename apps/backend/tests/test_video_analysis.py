@@ -1,6 +1,6 @@
 import pytest
 
-from mato_loop_backend.agent import video_analysis
+from mato_loop_backend.agent import media_analysis, video_analysis
 from mato_loop_backend.agent.video_analysis import (
     NativeVideoResult,
     VideoAnalysisError,
@@ -9,8 +9,8 @@ from mato_loop_backend.agent.video_analysis import (
     resolve_native_video_target,
     resolve_video_vision_targets,
 )
+from mato_loop_backend.media.audio_processing import AudioSegment
 from mato_loop_backend.media.video_processing import (
-    AudioSegment,
     MediaInfo,
     VideoFrame,
     VideoProcessingError,
@@ -158,7 +158,7 @@ async def test_frame_fallback_combines_timestamps_and_transcript(monkeypatch) ->
     monkeypatch.setattr(video_analysis, "extract_video_audio", lambda _data: b"wav")
     monkeypatch.setattr(video_analysis, "extract_video_frames", lambda _data, **_kwargs: frames)
     monkeypatch.setattr(
-        video_analysis,
+        media_analysis,
         "split_wav_audio",
         lambda _data: [AudioSegment(0, 2_000, b"wav")],
     )
@@ -213,7 +213,7 @@ async def test_speech_analysis_skips_frames_and_native_video(monkeypatch) -> Non
 
     monkeypatch.setattr(video_analysis, "extract_video_frames", unexpected_frames)
     monkeypatch.setattr(
-        video_analysis,
+        media_analysis,
         "split_wav_audio",
         lambda _data: [AudioSegment(0, 2_000, b"wav")],
     )

@@ -89,7 +89,8 @@ const loadFailed = ref(false)
 const saved = ref('')
 const mediaByName = {
   generate_image: 'generateImage', edit_image: 'editImage', generate_speech: 'generateSpeech',
-  generate_audio: 'generateAudio', transcribe_audio: 'transcribeAudio', analyze_video: 'analyzeVideo'
+  generate_audio: 'generateAudio', transcribe_audio: 'transcribeAudio', analyze_video: 'analyzeVideo',
+  analyze_audio: 'analyzeAudio'
 }
 const descriptions = {
   get_system_info: 'Liest grundlegende Informationen zum ausgewählten Computer.',
@@ -111,8 +112,9 @@ const descriptions = {
   edit_image: 'Bearbeitet Bildanhänge, ohne die Originale zu verändern.',
   generate_speech: 'Erzeugt gesprochene WAV-Audiodateien aus Text.',
   generate_audio: 'Erzeugt Audio oder Musik aus einem Prompt.',
-  transcribe_audio: 'Transkribiert WAV-Anhänge aus der aktuellen Session.',
+  transcribe_audio: 'Wandelt Audiodateien in Text um.',
   analyze_video: 'Analysiert MP4- und WebM-Videos.',
+  analyze_audio: 'Analysiert Audiodateien und sucht Passagen. Ohne audiofähiges Chatmodell ist nur Transkription verfügbar.',
   session_read: 'Liest Nachrichten aus Sessions.',
   session_tool_result_read: 'Liest ein persistiertes Tool-Ergebnis.',
   session_browse: 'Listet letzte Sessions auf.',

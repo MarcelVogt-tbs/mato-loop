@@ -30,7 +30,6 @@ MAX_PROBE_BYTES = 64 * 1024
 FFPROBE_TIMEOUT_SECONDS = 30
 FFMPEG_FRAME_TIMEOUT_SECONDS = 30
 FFMPEG_AUDIO_TIMEOUT_SECONDS = 180
-AUDIO_SEGMENT_SECONDS = 120
 
 VideoAnalysisMode = Literal["speech", "overview", "fine_grained"]
 _FRAME_PROFILES: dict[VideoAnalysisMode, tuple[int, int]] = {
@@ -74,13 +73,6 @@ class MediaInfo:
 @dataclass(frozen=True, slots=True)
 class VideoFrame:
     timestamp_ms: int
-    data: bytes
-
-
-@dataclass(frozen=True, slots=True)
-class AudioSegment:
-    start_ms: int
-    end_ms: int
     data: bytes
 
 
@@ -428,48 +420,3 @@ def extract_video_audio(data: bytes) -> bytes | None:
     if not valid:
         raise VideoProcessingError
     return wav_data
-
-
-def split_wav_audio(
-    data: bytes, *, segment_seconds: int = AUDIO_SEGMENT_SECONDS
-) -> list[AudioSegment]:
-    if isinstance(segment_seconds, bool) or not 1 <= segment_seconds <= 300:
-        raise VideoProcessingError
-    try:
-        with wave.open(BytesIO(data), "rb") as source:
-            if (
-                source.getnchannels() != 1
-                or source.getsampwidth() != 2
-                or source.getframerate() != 16_000
-            ):
-                raise VideoProcessingError
-            rate = source.getframerate()
-            frames_per_segment = segment_seconds * rate
-            segments = []
-            start_frame = 0
-            while start_frame < source.getnframes():
-                frames = source.readframes(frames_per_segment)
-                if not frames:
-                    break
-                end_frame = start_frame + len(frames) // source.getsampwidth()
-                output = BytesIO()
-                with wave.open(output, "wb") as target:
-                    target.setnchannels(1)
-                    target.setsampwidth(2)
-                    target.setframerate(rate)
-                    target.writeframes(frames)
-                segments.append(
-                    AudioSegment(
-                        start_ms=start_frame * 1_000 // rate,
-                        end_ms=end_frame * 1_000 // rate,
-                        data=output.getvalue(),
-                    )
-                )
-                start_frame = end_frame
-    except VideoProcessingError:
-        raise
-    except (EOFError, OSError, wave.Error) as exc:
-        raise VideoProcessingError from exc
-    if not segments:
-        raise VideoProcessingError
-    return segments

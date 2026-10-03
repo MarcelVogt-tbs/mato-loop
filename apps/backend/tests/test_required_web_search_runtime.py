@@ -1,7 +1,9 @@
 import asyncio
 import json
 import logging
+import wave
 from datetime import UTC, datetime
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -3413,7 +3415,8 @@ async def test_private_pdf_pages_use_public_active_vision_model(monkeypatch) -> 
     assert requests[1]["image_inputs"][0].trust_level == TrustLevel.PRIVATE.value
 
 
-async def test_native_video_uses_loaded_runtime_safety(monkeypatch) -> None:
+@pytest.mark.parametrize("kind", ["video", "audio"])
+async def test_native_media_uses_loaded_runtime_safety(monkeypatch, kind) -> None:
     monkeypatch.setattr(
         video_analysis, "probe_video",
         lambda _data: MediaInfo("mp4", "video/mp4", 8_000, 640, 360, 0, None),
@@ -3422,18 +3425,30 @@ async def test_native_video_uses_loaded_runtime_safety(monkeypatch) -> None:
         monkeypatch,
         [
             ProviderResult(tool_calls=[ToolCall(
-                id="video", name="analyze_video",
+                id="media", name=f"analyze_{kind}",
                 arguments={"root": "session", "path": "video.mp4"},
             )]),
-            ProviderResult(content="Video description"),
+            ProviderResult(content="Video description" if kind == "video" else
+                           '{"segments":[{"startMs":0,"endMs":10,"text":"Quiet audio"}]}'),
             ProviderResult(content="Analysis complete"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE, safety_reserve_tokens=128,
     )
     ai = await SettingsStore.load(db, AiSettings)
-    ai.models[0].input_modalities = [ModelInputModality.TEXT, ModelInputModality.VIDEO]
+    ai.models[0].input_modalities = [ModelInputModality.TEXT, ModelInputModality(kind)]
 
     async def execute(_call, context, _tool):
+        if kind == "audio":
+            buffer = BytesIO()
+            with wave.open(buffer, "wb") as audio:
+                audio.setnchannels(1)
+                audio.setsampwidth(2)
+                audio.setframerate(8_000)
+                audio.writeframes(b"\x00\x00" * 80)
+            return ToolResult.json(await context.audio_analysis_handler(
+                buffer.getvalue(), "audio/wav", "audio.wav", TrustLevel.PUBLIC,
+                None, "overview", "Describe audible content",
+            ))
         return ToolResult.json(await context.video_analysis_handler(
             b"video", TrustLevel.PUBLIC, None, "overview", None,
         ))
@@ -3442,7 +3457,7 @@ async def test_native_video_uses_loaded_runtime_safety(monkeypatch) -> None:
     await AgentRuntime._execute_loop(db, run)
 
     assert len(requests) == 3
-    assert requests[1]["media_inputs"][0].modality == "video"
+    assert requests[1]["media_inputs"][0].modality == kind
     assert requests[1]["safety_reserve_tokens"] == 128
 
 

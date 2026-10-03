@@ -92,7 +92,7 @@ describe('provider store', () => {
     expect(store.visionModelOptions.map((option) => option.value)).toEqual(['canonical', 'legacy'])
   })
 
-  it('offers native video and frame-analysis models', () => {
+  it('offers native media and frame-analysis models only on supported transports', () => {
     const store = useProviderStore()
     store.codex = { authenticated: true }
     store.providers = [
@@ -107,11 +107,12 @@ describe('provider store', () => {
       name: provider.name,
       enabled: true,
       capabilities: ['chat'],
-      inputModalities: ['text', 'video']
+      inputModalities: ['text', 'video', 'audio']
     }))
     store.models.find((model) => model.id === 'codex').inputModalities = ['text', 'image']
 
     expect(store.videoModelOptions.map((option) => option.value)).toEqual(['chat', 'codex'])
+    expect(store.audioAnalysisModelOptions.map((option) => option.value)).toEqual(['chat'])
   })
 
   it('keeps existing models visible while sync is pending and reloads afterward', async () => {
