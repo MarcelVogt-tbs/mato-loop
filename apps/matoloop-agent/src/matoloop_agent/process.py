@@ -948,9 +948,7 @@ def _path_operands(tokens: list[str], depth: int = 0) -> list[tuple[str, str, bo
             return []
         # Read sources are retained separately so executable symlink chains use the
         # ordinary executable resolver, not generic no-follow content inspection.
-        operands = []
-        operands.extend(_path_operands(payload[0], depth + 1))
-        return operands
+        return _path_operands(payload[0], depth + 1)
     if tokens[0] in {".", "source"}:
         return [(arguments[0], "source", True)] if arguments else []
     if executable == "find":
