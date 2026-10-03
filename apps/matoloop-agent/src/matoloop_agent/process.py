@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
+import getopt
 import hashlib
 import json
 import os
@@ -43,6 +44,7 @@ _ALWAYS_WRITES = {
     "rm",
     "rmdir",
     "shutdown",
+    "shred",
     "tee",
     "touch",
     "truncate",
@@ -231,6 +233,7 @@ _CURL_WRITE_OPTIONS = {
     "--data-urlencode",
     "--form",
     "--form-string",
+    "--json",
     "--output",
     "--remote-name",
     "--remote-name-all",
@@ -332,6 +335,117 @@ def _subcommand(arguments: list[str], value_options: set[str]) -> str | None:
             continue
         return argument
     return None
+
+
+def _git_clean_dry_run(arguments: list[str]) -> bool:
+    # GNU getopt can stop at operands under this host setting; never exempt a partial parse.
+    if os.environ.get("POSIXLY_CORRECT"):
+        return False
+    try:
+        _, remaining = getopt.getopt(
+            arguments,
+            "C:c:",
+            [
+                "git-dir=",
+                "work-tree=",
+                "namespace=",
+                "config-env=",
+                "no-pager",
+                "paginate",
+                "bare",
+                "literal-pathspecs",
+                "glob-pathspecs",
+                "noglob-pathspecs",
+                "icase-pathspecs",
+                "no-optional-locks",
+                "no-replace-objects",
+            ],
+        )
+        if remaining[:1] != ["clean"]:
+            return False
+        options, _ = getopt.gnu_getopt(
+            remaining[1:],
+            "dfinqxXe:",
+            ["dry-run", "force", "interactive", "quiet", "exclude="],
+        )
+    except getopt.GetoptError:
+        return False
+    return any(option in {"-n", "--dry-run"} for option, _ in options) and not any(
+        option in {"-i", "--interactive"} for option, _ in options
+    )
+
+
+def _xargs_payload(
+    arguments: list[str], depth: int = 0
+) -> tuple[list[str], list[tuple[str, int, str]]] | None:
+    """Return static argv and read-source operands with their original indices and kinds."""
+    if depth > 8:
+        return None
+    required = {
+        "--arg-file",
+        "--delimiter",
+        "--max-args",
+        "--max-procs",
+        "--max-chars",
+        "--process-slot-var",
+    }
+    optional = {"--eof", "--replace", "--max-lines"}
+    flags = {
+        "--null",
+        "--open-tty",
+        "--interactive",
+        "--no-run-if-empty",
+        "--verbose",
+        "--exit",
+        "--show-limits",
+        "--help",
+        "--version",
+    }
+    files = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            index += 1
+            break
+        if argument == "-" or not argument.startswith("-"):
+            break
+        if argument.startswith("--"):
+            option, separator, value = argument.partition("=")
+            if option in required:
+                if not separator:
+                    index += 1
+                    if index == len(arguments):
+                        return None
+                    value = arguments[index]
+                if option == "--arg-file":
+                    files.append((value, index, "input"))
+            elif option not in optional and (option not in flags or separator):
+                return None
+        else:
+            for offset, option in enumerate(argument[1:], start=1):
+                if option in "0oprtx":
+                    continue
+                if option not in "adEILnPseil":
+                    return None
+                value = argument[offset + 1 :]
+                if not value and option not in "eil":
+                    index += 1
+                    if index == len(arguments):
+                        return None
+                    value = arguments[index]
+                if option == "a":
+                    files.append((value, index, "input"))
+                break
+        index += 1
+    payload = arguments[index:] or ["echo"]
+    if "/" in payload[0]:
+        files.append((payload[0], index, "executable"))
+    if Path(payload[0]).name == "xargs":
+        nested = _xargs_payload(payload[1:], depth + 1)
+        if nested is not None:
+            files.extend((path, index + 1 + offset, kind) for path, offset, kind in nested[1])
+    return payload, files
 
 
 def _docker_command(arguments: list[str]) -> tuple[list[str], list[str]] | None:
@@ -493,6 +607,9 @@ def _container_command_writes(tokens: list[str], depth: int) -> bool:
     if depth > 8 or not tokens or any(c in tokens[0] for c in "$`*?[]{}~"):
         return True
     executable = Path(tokens[0]).name
+    if executable == "xargs":
+        payload = _xargs_payload(tokens[1:])
+        return payload is None or _container_command_writes(payload[0], depth + 1)
     if executable not in {"sh", "bash", "dash"}:
         if tokens[0] == "." or executable in {"env", "sudo", "eval", "exec", "command", "source"}:
             return True
@@ -632,6 +749,12 @@ def _definitely_writes(
 ) -> bool:
     executable = Path(tokens[0]).name
     arguments = tokens[1:]
+    if executable == "xargs":
+        # Bound executor nesting; stdin-derived argv remains incomplete in inspection.
+        if depth > 8:
+            return True
+        payload = _xargs_payload(arguments)
+        return payload is not None and _definitely_writes(payload[0], depth=depth + 1)
     if executable.startswith("python"):
         python = _python_command(arguments)
         if python is not None and python[0] == "m" and python[1][:1] == ["pip"]:
@@ -668,13 +791,15 @@ def _definitely_writes(
         return group in _WRITE_SUBCOMMANDS["docker"]
     if executable in _WRITE_SUBCOMMANDS:
         value_options = (
-            {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
+            {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
             if executable == "git"
             else {"--cache", "--prefix", "--registry", "--userconfig"}
             if executable in {"npm", "pnpm", "yarn"}
             else set()
         )
         subcommand = _subcommand(arguments, value_options)
+        if executable == "git" and subcommand == "clean":
+            return not _git_clean_dry_run(arguments)
         if subcommand in _WRITE_SUBCOMMANDS[executable]:
             return True
         if executable == "git":
@@ -812,9 +937,20 @@ def _definitely_writes(
     return False
 
 
-def _path_operands(tokens: list[str]) -> list[tuple[str, str, bool]]:
+def _path_operands(tokens: list[str], depth: int = 0) -> list[tuple[str, str, bool]]:
     executable = Path(tokens[0]).name
     arguments = tokens[1:]
+    if executable == "xargs":
+        if depth > 8:
+            return []
+        payload = _xargs_payload(arguments)
+        if payload is None:
+            return []
+        # Read sources are retained separately so executable symlink chains use the
+        # ordinary executable resolver, not generic no-follow content inspection.
+        operands = []
+        operands.extend(_path_operands(payload[0], depth + 1))
+        return operands
     if tokens[0] in {".", "source"}:
         return [(arguments[0], "source", True)] if arguments else []
     if executable == "find":
@@ -979,6 +1115,8 @@ def _command_prefix(tokens: list[str]) -> list[str] | None:
     if "/" in tokens[0]:
         return None
     executable = tokens[0]
+    if executable == "xargs":
+        return None
     arguments = tokens[1:]
     if executable.startswith("python"):
         python = _python_command(arguments)
@@ -1187,6 +1325,34 @@ class ProcessRunner:
                     tokens.append(values[0] if len(values) == 1 else "$unresolved")
             output_indices = set()
             discard_indices = set()
+            if tokens and Path(tokens[0]).name == "xargs":
+                # Input can append arbitrary paths/argv; no reusable prefix proves them safe.
+                analysis_complete = False
+                payload = _xargs_payload(tokens[1:])
+                if payload is not None:
+                    for path, index, kind in payload[1]:
+                        output_indices.add(index + 1)
+                        if index + 1 >= len(words):
+                            continue
+                        word = words[index + 1]
+                        if _has_ansi_quoting(word):
+                            unsupported_target_quoting = True
+                        elif kind == "executable" and not _unresolved_wrapper_words(source, [word]):
+                            executable_targets = (
+                                self.filesystem.resolve_executable_targets(path, current)
+                                if resolve_paths
+                                else [{"path": posixpath.normpath(posixpath.join(current, path))}]
+                            )
+                            for target in executable_targets:
+                                retain(target, "executable", "read")
+                        else:
+                            add(
+                                path,
+                                kind,
+                                access="read",
+                                must_exist=True,
+                                literal=not _unresolved_wrapper_words(source, [word]),
+                            )
             if tokens and Path(tokens[0]).name == "curl":
                 for option, path, index in _curl_options(tokens[1:]):
                     if option not in {"-o", "--output"} or index + 1 >= len(words):

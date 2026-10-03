@@ -437,6 +437,9 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                 "git stash list",
                 "git tag --list",
                 "git worktree list",
+                "git clean --dry-run",
+                "git clean -nfd",
+                "curl --user-agent '--json' https://example.invalid",
             ):
                 with self.subTest(command=command):
                     inspected = runner.inspect_shell(command, os.fspath(root))
@@ -456,12 +459,97 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                 "curl -X GET -X POST https://example.invalid",
                 "curl --request=GET --request=POST https://example.invalid",
                 "curl -ooutput.txt https://example.invalid",
+                'curl --json \'{"name":"test"}\' https://example.invalid',
+                "shred target",
             ):
                 with self.subTest(command=command):
                     self.assertEqual(
                         runner.inspect_shell(command, os.fspath(root))["classification"],
                         "write",
                     )
+
+    def test_git_clean_dry_run_requires_an_actual_option(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "clean").mkdir()
+            runner = ProcessRunner(configuration(root), Filesystem(configuration(root)))
+            for command, classification in (
+                ("git -C clean clean -n", "read"),
+                ("git clean target -n", "read"),
+                ("git clean -e -n -f", "write"),
+                ("git clean --exclude=-n -f", "write"),
+                ("git clean -fen", "write"),
+                ("git clean -- --dry-run", "write"),
+                ("git clean -n target --no-dry-run -f", "write"),
+            ):
+                with self.subTest(command=command):
+                    self.assertEqual(
+                        runner.inspect_shell(command, str(root))["classification"], classification
+                    )
+            with patch.dict(os.environ, {"POSIXLY_CORRECT": "1"}):
+                self.assertEqual(
+                    runner.inspect_shell("git clean -n target --no-dry-run -f", str(root))[
+                        "classification"
+                    ],
+                    "write",
+                )
+
+    def test_xargs_classifies_targets_not_option_values_or_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runner = ProcessRunner(configuration(root), Filesystem(configuration(root)))
+            for command, classification in (
+                ("printf '%s\\n' target | xargs rm", "write"),
+                ("xargs -0rn1 rm", "write"),
+                ("xargs --max-args=1 rm", "write"),
+                ("xargs --replace rm", "write"),
+                ("xargs -i rm", "write"),
+                ("xargs -E rm cat", "read"),
+                ("xargs --eof=rm echo", "read"),
+                ("xargs echo 'rm target'", "read"),
+                ("xargs xargs rm", "write"),
+                ("docker exec server xargs sh -c 'rm /container-only/file'", "write"),
+            ):
+                with self.subTest(command=command):
+                    self.assertEqual(
+                        runner.inspect_shell(command, str(root))["classification"], classification
+                    )
+            inspected = runner.inspect_shell("xargs cat", str(root))
+            self.assertFalse(inspected["analysisComplete"])
+            self.assertNotIn("prefix", inspected["commands"][0])
+
+    def test_xargs_argument_file_is_revision_bound_and_no_follow(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "list"
+            path.write_text("target\n")
+            runner = ProcessRunner(configuration(root), Filesystem(configuration(root)))
+            for command in (f"xargs -a {path} rm", f"xargs xargs -a {path} rm"):
+                inspected = runner.inspect_shell(command, str(root))
+                self.assertEqual(
+                    [(target["kind"], target["access"]) for target in inspected["targets"]],
+                    [("input", "read")],
+                )
+            inspected = runner.inspect_shell(f"xargs -a {path} rm", str(root))
+            path.write_text("different-target\n")
+            self.assertNotEqual(
+                inspected["inspectionRevision"],
+                runner.inspect_shell(f"xargs -a {path} rm", str(root))["inspectionRevision"],
+            )
+            link = root / "link"
+            link.symlink_to(path)
+            with self.assertRaises(AgentError):
+                runner.inspect_shell(f"xargs --arg-file={link} rm", str(root))
+            with self.assertRaises(AgentError):
+                runner.inspect_shell("xargs -a$'/etc/hosts' rm", str(root))
+            executable = root / "rm"
+            executable.write_text("#!/bin/sh\nexit 0\n")
+            executable.chmod(0o755)
+            inspected = runner.inspect_shell(f"xargs {executable} ./list", str(root))
+            self.assertEqual(
+                {(target["kind"], target["access"]) for target in inspected["targets"]},
+                {("executable", "read"), ("path", "write")},
+            )
 
     def test_inspection_reads_compose_file_and_quoted_docker_template(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
