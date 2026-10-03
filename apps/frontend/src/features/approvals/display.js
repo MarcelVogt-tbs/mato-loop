@@ -229,6 +229,9 @@ function sanitize(value, depth, seen, key = '', truncate = true) {
 }
 
 export function permissionGrantDisplay(grant, sessions = []) {
+  if (grant?.resourceType === 'run_action') {
+    return { label: 'Bestätigte Aktion', value: grant.resourceDisplay || 'Mit den freigegebenen Werten', icon: 'verified_user' }
+  }
   if (grant?.resourceType === 'execution_administrator') {
     return {
       label: grant.capability === 'resource.write' ? 'Administrator-Schreibzugriffe' : 'Administrator-Lesezugriffe',

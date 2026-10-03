@@ -14,6 +14,7 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.memory.service import MemoryApprovalEdit, MemoryService
 from mato_loop_backend.models import (
+    AgentRun,
     ApprovalRequest,
     ChatSession,
     ExecutionAgent,
@@ -22,7 +23,11 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.permissions.decisions import ApprovalDecisionError, decide_agent_action
 from mato_loop_backend.security import require_user
-from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
+from mato_loop_backend.sessions.service import (
+    ACTIVE_RUN_STATUSES,
+    SessionServiceError,
+    get_owned_session,
+)
 
 router = APIRouter(prefix="/approvals", dependencies=[Depends(require_user)])
 
@@ -83,6 +88,7 @@ async def _permission_payload(
             resource_display = computer.alias
     return {
         "id": str(grant.id),
+        "runId": str(grant.run_id) if grant.run_id is not None else None,
         "capability": grant.capability,
         "resourceType": grant.resource_type,
         "resourceScope": grant.resource_scope,
@@ -241,6 +247,9 @@ async def list_permissions(
             await db.scalars(
                 select(PermissionGrant)
                 .where(PermissionGrant.session_id == session_id)
+                .where(PermissionGrant.run_id.is_(None) | PermissionGrant.run_id.in_(
+                    select(AgentRun.id).where(AgentRun.status.in_(ACTIVE_RUN_STATUSES))
+                ))
                 .order_by(PermissionGrant.created_at)
             )
         ).all()
@@ -270,6 +279,9 @@ async def all_permissions(
                 ApprovalRequest.id == PermissionGrant.source_approval_id,
             )
             .where(ChatSession.user_id == user.id, ChatSession.parent_session_id.is_(None))
+            .where(PermissionGrant.run_id.is_(None) | PermissionGrant.run_id.in_(
+                select(AgentRun.id).where(AgentRun.status.in_(ACTIVE_RUN_STATUSES))
+            ))
             .order_by(PermissionGrant.created_at)
         )
     ).all()

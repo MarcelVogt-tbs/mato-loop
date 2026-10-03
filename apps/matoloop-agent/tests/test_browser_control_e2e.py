@@ -244,7 +244,7 @@ async def control_scenario(
         before = len(evidence["websockets"])
         await page.locator(".chat-composer textarea").fill("Request browser control for this chat.")
         await page.get_by_role("button", name="Nachricht senden", exact=True).click()
-        allow = page.get_by_role("button", name="Einmal erlauben", exact=True)
+        allow = page.get_by_role("button", name="Für diesen Lauf erlauben", exact=True)
         await expect(allow).to_be_visible()
         approvals = await api("GET", "/approvals/pending")
         assert len(approvals) == 1 and approvals[0]["sourceSession"]["id"] == session_id, approvals

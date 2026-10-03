@@ -1525,7 +1525,27 @@ class AgentRuntime:
             agent_profile_id=agent_profile_id,
             trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
             session_write_paths=session_write_paths,
+            run_id=run.id,
             **permission_namespace,
+        )
+        if (
+            decision == PermissionDecision.ASK and request.action_kind == "browser_action"
+            and not check_only
+        ):
+            from mato_loop_backend.integrations.browser.adapter import capture_browser_approval
+
+            request = await capture_browser_approval(
+                request, call, chat_session, run, approval_resolution,
+            )
+        action_grant = dict(
+            session_id=origin.id, run_id=run.id, capability=request.capability,
+            resource_type="run_action",
+            resource_scope=agent_run_support._run_action_scope(request, call),
+            agent_profile_id=agent_profile_id,
+            trust_level=run.trust_level or TrustLevel.PUBLIC.value,
+        )
+        action_approved = decision == PermissionDecision.ASK and isinstance(
+            await db.scalar(select(PermissionGrant.id).filter_by(**action_grant)), UUID
         )
         browser_approval_key = None
         if approval_resolution is not None and (
@@ -1539,6 +1559,10 @@ class AgentRuntime:
                 request.use_integration_policy, str(request.policy_integration_id),
                 request.policy_resource_key, request.force_ask,
             ])
+        if action_approved:
+            decision = PermissionDecision.ALLOW
+            if browser_approval_key is not None:
+                approval_resolution[browser_approval_key] = "allow_once"
         edited_approval = (
             approval_resolution.get("argument_edit_approved")
             if approval_resolution is not None
@@ -1556,13 +1580,13 @@ class AgentRuntime:
             == agent_run_support._argument_edit_permission_binding(request)
         ):
             approval_resolution.pop("argument_edit_approved", None)
-            if request.resource_type == "execution_administrator" and decision != PermissionDecision.DENY:
+            if decision == PermissionDecision.DENY:
+                return PermissionDecision.DENY
+            db.add(PermissionGrant(**action_grant))
+            await db.commit()
+            if browser_approval_key is not None:
                 approval_resolution[browser_approval_key] = "allow_once"
-            return (
-                PermissionDecision.DENY
-                if decision == PermissionDecision.DENY
-                else PermissionDecision.ALLOW
-            )
+            return PermissionDecision.ALLOW
         if (
             decision == PermissionDecision.ASK
             and (check_only or request.resource_type == "execution_administrator")
@@ -1582,12 +1606,6 @@ class AgentRuntime:
             ):
                 approval_resolution["expected_revision"] = draft_file["initialRevision"]
             return decision
-        if request.action_kind == "browser_action":
-            from mato_loop_backend.integrations.browser.adapter import capture_browser_approval
-
-            request = await capture_browser_approval(
-                request, call, chat_session, run, approval_resolution,
-            )
         definition = (
             tool_registry._combined_definitions(integration_settings)[0].get(call.name)
             or tool_registry._operation_definitions.get(call.name)
@@ -1674,6 +1692,7 @@ class AgentRuntime:
             agent_profile_id=agent_profile_id,
             trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
             session_write_paths=session_write_paths,
+            run_id=run.id,
             **permission_namespace,
         )
         if current_decision != PermissionDecision.DENY and browser_approval_key is not None:

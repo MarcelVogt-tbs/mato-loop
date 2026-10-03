@@ -172,7 +172,7 @@
                 class="q-mb-sm"
               />
               <q-banner v-if="argumentEditDirty" rounded class="app-surface-tonal">
-                Die bearbeitete Aktion wird mit den endgültigen Werten erneut validiert und einmalig freigegeben.
+                Die bearbeitete Aktion wird erneut validiert und mit diesen Werten für den aktuellen Lauf freigegeben.
               </q-banner>
             </q-form>
           </div>
@@ -232,15 +232,18 @@
             : 'Passende Aktionen in dieser Session nicht mehr nachfragen'"
           :disable="Boolean(loadingDecision) || matchingDraftDirty"
         />
-        <ul v-if="rememberForSession || !hasBothAllowDecisions" class="text-body2 q-my-sm q-pl-md">
+        <ul class="text-body2 q-my-sm q-pl-md">
           <li v-for="line in sessionGrantDisplay" :key="line">{{ line }}</li>
         </ul>
         <div v-if="rememberForSession || !hasBothAllowDecisions" class="text-caption app-muted q-ml-sm">
-          Kann in den Session-Freigaben widerrufen werden.
+          Gilt auch für weitere Läufe dieser Session. Kann in den Session-Freigaben widerrufen werden.
+        </div>
+        <div v-else class="text-caption app-muted q-ml-sm">
+          Gilt bis zum Abschluss oder Abbruch dieses Laufs.
         </div>
       </div>
       <div v-else-if="argumentEditDirty" class="text-caption app-muted">
-        Bearbeitete Aktionen werden einmalig freigegeben.
+        Gilt für die bearbeitete Aktion mit diesen Werten bis zum Ende dieses Laufs.
       </div>
       <q-space />
       <q-btn
@@ -268,7 +271,7 @@
         outline
         no-caps
         color="primary"
-        label="Einmal erlauben"
+        label="Für diesen Lauf erlauben"
         :loading="loadingDecision === 'allow_once'"
         :disable="Boolean(loadingDecision) || matchingDraftDirty"
         @click="decide('allow_once')"
@@ -288,7 +291,7 @@
         unelevated
         no-caps
         color="primary"
-        :label="argumentEditDirty ? 'Änderungen einmal erlauben' : rememberForSession ? 'Für Session erlauben' : 'Einmal erlauben'"
+        :label="rememberForSession && !argumentEditDirty ? 'Für Session erlauben' : 'Für diesen Lauf erlauben'"
         :loading="loadingDecision === allowDecision"
         :disable="Boolean(loadingDecision) || matchingDraftDirty"
         @click="decide(allowDecision)"
@@ -339,7 +342,7 @@ const rememberForSession = ref(false)
 const shellClassification = computed(() => shellClassificationDisplay(props.approval))
 const sessionGrantDisplay = computed(() => (
   props.approval.details?.displayItems || props.approval.payload?.displayItems || []
-).find((item) => item.label === 'Für diese Session')?.value || [])
+).find((item) => ['Freigegebener Bereich', 'Für diese Session'].includes(item.label))?.value || [])
 const argumentEditPayload = computed(() => props.approval.payload?.argumentEdit)
 const canEditArguments = computed(() => (
   props.approval.status === 'pending'

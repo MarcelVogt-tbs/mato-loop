@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import UTC, date, datetime
 from uuid import UUID
 
@@ -220,12 +221,18 @@ async def _decide_agent_action(
     if not skill_draft_approval and expected_revision is not None:
         raise ApprovalDecisionError(400, "validation.invalid", field="expected_revision")
     scopes = (approval.payload or {}).get("sessionGrants")
+    if decision == "allow_once" and approval.run_id is None:
+        raise ApprovalDecisionError(409, "approval.runInactive")
+    reusable = decision == "allow_session" or (
+        decision == "allow_once" and "allow_session" in approval.available_decisions
+        and bool(scopes) and not approval.payload.get("runActionOnly")
+    )
     if not AgentRuntime.claim_approval_resolution(approval.id):
         approval.status = "expired"
         approval.resolved_at = datetime.now(UTC)
         await db.commit()
         raise ApprovalDecisionError(409, "approval.runInactive")
-    if decision == "allow_session" and (
+    if reusable and (
         not isinstance(scopes, list)
         or not 1 <= len(scopes) <= 257
         or (approval.payload or {}).get("sessionGrantsFingerprint")
@@ -274,7 +281,7 @@ async def _decide_agent_action(
         }
 
     created_grants: list[PermissionGrant] = []
-    if decision == "allow_session":
+    if decision.startswith("allow"):
         profile_id = approval.payload.get("agentProfileId")
         trust_level = approval.payload.get("trustLevel")
         try:
@@ -283,11 +290,14 @@ async def _decide_agent_action(
             profile_id = None
         if trust_level not in {"private", "public"}:
             trust_level = None
+    if reusable:
+        grant_run_id = approval.run_id if decision == "allow_once" else None
         for scope in scopes:
             capability = f"resource.{scope['access']}"
             existing_grant = await db.scalar(
                 select(PermissionGrant).where(
                     PermissionGrant.session_id == approval.session_id,
+                    PermissionGrant.run_id == grant_run_id,
                     PermissionGrant.capability == capability,
                     PermissionGrant.resource_type == scope["resourceType"],
                     PermissionGrant.resource_scope == scope["resourceScope"],
@@ -298,6 +308,7 @@ async def _decide_agent_action(
             if existing_grant is None:
                 grant = PermissionGrant(
                     session_id=approval.session_id,
+                    run_id=grant_run_id,
                     capability=capability,
                     resource_type=scope["resourceType"],
                     resource_scope=scope["resourceScope"],
@@ -307,6 +318,19 @@ async def _decide_agent_action(
                 )
                 created_grants.append(grant)
                 db.add(grant)
+
+    elif decision == "allow_once" and isinstance(
+        action_scope := (approval.payload or {}).get("runActionScope"), str
+    ) and re.fullmatch(r"[a-f0-9]{64}", action_scope):
+        grant = PermissionGrant(
+            session_id=approval.session_id, run_id=approval.run_id,
+            capability=approval.capability, resource_type="run_action",
+            resource_scope=action_scope,
+            agent_profile_id=profile_id, trust_level=trust_level,
+            source_approval_id=approval.id,
+        )
+        created_grants.append(grant)
+        db.add(grant)
 
     try:
         await db.commit()

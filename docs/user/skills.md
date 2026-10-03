@@ -39,7 +39,7 @@ Das Builder-Modell erhält zusätzlich den aktuellen Skill und liefert nur die g
 
 Bei der Richtlinie **Nachfragen** zeigt die Freigabekarte Name, Einsatzbeschreibung und Anweisungen. Über **Entwurf öffnen und bearbeiten** können Sie die strikte JSON-Datei im Session-Bereich `files` bearbeiten. Speichern Sie Änderungen vor der Entscheidung.
 
-MatoLoop importiert nur exakt die Dateiversion, deren SHA-256-Revision Sie freigeben. Eine zwischenzeitlich erneut geänderte oder ungültige Datei wird nicht übernommen. **Einmal erlauben** importiert diesen Entwurf. **Für Session erlauben** gilt bei Erstellungen für die persönliche Skill-Sammlung und bei Bearbeitungen nur für den exakt ausgewählten Skill. Bei **Automatisch** wird der unveränderte generierte Entwurf direkt importiert.
+MatoLoop imports only the exact file revision checked for the action. A changed or invalid draft is not imported. **Für diesen Lauf erlauben** grants matching access within the current run; **Für Session erlauben** also covers later runs. Creation grants cover the personal skill collection; edit grants cover only the selected skill. With **Automatisch**, the unchanged generated draft is imported directly.
 
 Die Entwurfsdatei bleibt nach Import, Ablehnung oder Fehler in den Session-Dateien erhalten. Sie können sie dort später prüfen oder manuell löschen.
 

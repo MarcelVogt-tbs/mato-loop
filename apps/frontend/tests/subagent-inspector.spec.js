@@ -281,7 +281,7 @@ describe('subagent inspector navigation and presentation', () => {
     expect(inspector.querySelector('.work-history')).not.toBeNull()
     expect(inspector.querySelector('.approval-card, .question-dock')).toBeNull()
     expect(inspector.querySelector('textarea, input, [contenteditable="true"]')).toBeNull()
-    expect(inspector.textContent).not.toMatch(/Einmal erlauben|Antworten senden|Ablehnen|Erneut versuchen|Einstellungen/)
+    expect(inspector.textContent).not.toMatch(/Für diesen Lauf erlauben|Antworten senden|Ablehnen|Erneut versuchen|Einstellungen/)
     const olderButton = [...inspector.querySelectorAll('button')].find((button) => button.textContent.includes('Ältere Nachrichten laden'))
     olderButton.click()
     await vi.waitFor(() => expect(inspector.textContent).toContain('Alter Auftrag'))
@@ -1175,7 +1175,7 @@ describe('subagent inspector navigation and presentation', () => {
       expect(root.querySelector(`a[href="/?session=parent&subagent=child-${id}"]`).textContent).toContain(`Auftrag ${id}`)
     }
     const cards = root.querySelectorAll('.approval-card')
-    const allow = [...cards[0].querySelectorAll('button')].find((button) => button.textContent.includes('Einmal erlauben'))
+    const allow = [...cards[0].querySelectorAll('button')].find((button) => button.textContent.includes('Für diesen Lauf erlauben'))
     allow.click()
     await vi.waitFor(() => expect(root.querySelectorAll('.approval-card')).toHaveLength(1))
     expect(root.querySelector('.approval-card').textContent).toContain('Auftrag two')

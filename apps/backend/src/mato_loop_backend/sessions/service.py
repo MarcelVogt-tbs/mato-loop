@@ -233,6 +233,7 @@ async def add_directory_grant(
     existing = await db.scalar(
         select(PermissionGrant.id).where(
             PermissionGrant.session_id == session_id,
+            PermissionGrant.run_id.is_(None),
             PermissionGrant.capability == "execution.directory",
             PermissionGrant.resource_type == "execution_directory",
             PermissionGrant.resource_scope == scope,

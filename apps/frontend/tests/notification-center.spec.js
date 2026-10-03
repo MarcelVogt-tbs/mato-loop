@@ -142,7 +142,7 @@ describe('notification center', () => {
     expect(actions.querySelector('.question-dock')).not.toBeNull()
     expect(api.post).toHaveBeenCalledExactlyOnceWith('/notifications/read-all')
 
-    button(actions.querySelector('.approval-card'), 'Einmal erlauben').click()
+    button(actions.querySelector('.approval-card'), 'Für diesen Lauf erlauben').click()
     await vi.waitFor(() => expect(actions.querySelector('.approval-card')).toBeNull())
     expect(api.post).toHaveBeenCalledWith('/approvals/approval/decisions', { decision: 'allow_once' })
     expect(actions.querySelector('.question-dock')).not.toBeNull()

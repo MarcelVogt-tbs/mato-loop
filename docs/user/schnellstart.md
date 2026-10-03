@@ -38,7 +38,7 @@ Den aktuellen absoluten Ordner wählen Sie bei Bedarf unter **Control Center > D
 
 ## 6. Freigaben prüfen
 
-Benötigt eine Aktion Ihre Zustimmung, erscheint die Anfrage direkt beim zugehörigen Tool-Aufruf. Prüfen Sie Ressource, Risikostufe und Details, bevor Sie **Einmal erlauben**, **Für Session erlauben** oder **Ablehnen** wählen.
+When an action requires consent, its approval appears next to the tool call. Review the resource, risk level and details before choosing **Für diesen Lauf erlauben**, **Für Session erlauben** or **Ablehnen**. Run consent covers matching actions until that run ends; session consent also covers later runs in the same chat session.
 
 Under **Control Center > Benachrichtigungen**, normal pending approvals and agent questions from all sessions appear above informational notices and can both be answered directly, including shared-terminal shell approvals. Marking notices read does not resolve these actions. For a pending terminal command, you can alternatively edit its real shell line and press Enter to allow the rechecked draft once.
 

@@ -722,7 +722,7 @@ def _approval_result_text(
 ) -> str:
     if result is not None:
         return {
-            "allow_once": "Einmalige Freigabe erteilt.",
+            "allow_once": "Für diesen Lauf freigegeben.",
             "allow_session": "Für diese Session freigegeben.",
             "deny": "Freigabe abgelehnt.",
         }.get(result.get("decision", ""), "Freigabe wurde verarbeitet.")

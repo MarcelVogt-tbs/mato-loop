@@ -57,6 +57,7 @@ export const useApprovalStore = defineStore('approvals', {
         if (revision !== this.revision || !Array.isArray(data)) return
         this.pending = data
         this.loaded = true
+        if (this.grantsLoaded) void this.fetchGrants({ suppressErrorToast: true }).catch(() => {})
       } catch (error) {
         if (revision === this.revision) this.loadFailed = true
         throw error
@@ -91,7 +92,7 @@ export const useApprovalStore = defineStore('approvals', {
         this.revision += 1
         this.pending = this.pending.filter((item) => item.id !== id)
         this.loading = false
-        if (decision === 'allow_session' && this.grantsLoaded) {
+        if (decision.startsWith('allow') && this.grantsLoaded) {
           void this.fetchGrants({ suppressErrorToast: true }).catch(() => {})
         }
       } catch (error) {

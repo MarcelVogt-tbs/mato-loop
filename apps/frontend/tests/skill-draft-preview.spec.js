@@ -123,7 +123,7 @@ describe('child skill draft previews', () => {
     expect(workspace.editorDirty).toBe(true)
     click('Entwurfsvorschau schließen', dialog)
     await nextTick()
-    click('Einmal erlauben')
+    click('Für diesen Lauf erlauben')
     await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/approvals/skill-approval/decisions', {
       decision: 'allow_once', expected_revision: initialRevision
     }))
@@ -139,7 +139,7 @@ describe('child skill draft previews', () => {
 
   it('can approve the initial inline skill preview without opening the draft file', async () => {
     const { preview } = await mountPage()
-    click('Einmal erlauben')
+    click('Für diesen Lauf erlauben')
     await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/approvals/skill-approval/decisions', {
       decision: 'allow_once', expected_revision: initialRevision
     }))

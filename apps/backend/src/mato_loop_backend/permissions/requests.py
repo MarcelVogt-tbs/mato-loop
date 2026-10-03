@@ -107,6 +107,8 @@ async def request_approval(
             ),
             "trustLevel": run.trust_level,
             "sessionGrants": grant_payload,
+            "runActionScope": agent_run_support._run_action_scope(permission, call),
+            "runActionOnly": permission.force_ask,
             "sessionGrantsFingerprint": session_grants_fingerprint(
                 permission.capability,
                 permission.resource_type,
@@ -124,7 +126,7 @@ async def request_approval(
                 }
                 for item in permission.display_items
             ] + ([{
-                "label": "Für diese Session",
+                "label": "Freigegebener Bereich",
                 "value": session_grants_display(permission),
                 "format": "list",
             }] if "allow_session" in available_decisions else []),

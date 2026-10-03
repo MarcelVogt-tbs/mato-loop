@@ -1644,7 +1644,7 @@ async def test_telegram_delivery_renders_approval_as_native_buttons(monkeypatch)
     assert sent["text"] == "Freigabe erforderlich\n\nDatei schreiben?"
     assert "/approval" not in sent["text"]
     buttons = [row[0] for row in sent["reply_markup"].inline_keyboard]
-    assert [button.text for button in buttons] == ["Einmal erlauben", "Ablehnen"]
+    assert [button.text for button in buttons] == ["Für diesen Lauf erlauben", "Ablehnen"]
     assert [decode_approval_callback(button.callback_data) for button in buttons] == [
         (approval.id, "allow_once"),
         (approval.id, "deny"),

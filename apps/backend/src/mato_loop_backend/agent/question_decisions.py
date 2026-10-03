@@ -108,6 +108,7 @@ async def answer_question(
                 raise QuestionDecisionError(409, "approval.targetChanged")
             for access in ("read", "write"):
                 scope = dict(
+                    run_id=None,
                     session_id=request.session_id, capability=f"resource.{access}",
                     resource_type="execution_administrator", resource_scope=str(question.administrator.agent_id),
                     agent_profile_id=run.agent_profile_id or session.agent_profile_id,

@@ -17,10 +17,12 @@ The global **Benachrichtigungen** view in the Control Center places normal pendi
 | Entscheidung | Wirkung |
 | --- | --- |
 | Ablehnen | Die Aktion wird nicht ausgeführt |
-| Einmal erlauben | Gilt nur für diese konkrete Aktion und ist die sichere Vorauswahl |
+| Für diesen Lauf erlauben | Default: permits matching actions until the current run finishes or is cancelled |
 | Passende Aktionen in dieser Session nicht mehr nachfragen | Der Haken ändert den Hauptbutton zu **Für Session erlauben** und erstellt eine widerrufbare Freigabe für den angezeigten Ressourcenumfang |
 
 Granted permissions for the current session can be viewed and revoked individually or together under **Session > Session-Freigaben** in the Control Center, not in the global notification center. They are not pending requests and do not increase its badge count.
+
+**Für Session erlauben** also covers later runs in the same chat session, until revocation or session deletion. Reloading the browser does not end a grant. Both choices retain the displayed resource and read/write scope. Sensitive actions and edited arguments remain bound to the approved values and content revisions. Run-only grants apply to the executing run, including when that run belongs to a subagent; they do not transfer to other runs.
 
 Der Haken ist bei jeder neuen Anfrage ausgeschaltet und wird nicht im Browser gespeichert. Manche sensible oder nicht sicher eingrenzbare Aktionen bieten bewusst keine Session-Freigabe an.
 

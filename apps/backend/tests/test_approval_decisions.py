@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.permissions.requests as mock_permissions_requests
 from mato_loop_backend.agent.run_contracts import ApprovalResolution
+from mato_loop_backend.agent.run_support import _run_action_scope
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.approvals import ApprovalDecisionRequest, decide_approval
@@ -61,7 +62,8 @@ def _fingerprint(approval: ApprovalRequest) -> None:
     )
 
 
-async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None:
+@pytest.mark.parametrize("decision", ["allow_once", "allow_session"])
+async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision) -> None:
     approval = _approval()
     profile_id = uuid4()
     agent_id = uuid4()
@@ -101,7 +103,7 @@ async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None
     monkeypatch.setattr(run_events, "publish", publish)
 
     result = await decide_approval(
-        approval.id, ApprovalDecisionRequest(decision="allow_session"), user, db
+        approval.id, ApprovalDecisionRequest(decision=decision), user, db
     )
 
     grants = [call.args[0] for call in db.add.call_args_list]
@@ -112,22 +114,30 @@ async def test_allow_session_persists_grant_before_resuming(monkeypatch) -> None
         execution_directory_scope(agent_id, "/target"),
     ]
     assert all(grant.session_id == approval.session_id for grant in grants)
+    assert all(grant.run_id == (approval.run_id if decision == "allow_once" else None) for grant in grants)
     assert all(grant.agent_profile_id == profile_id for grant in grants)
     assert all(grant.trust_level == "public" for grant in grants)
     assert approval.status == "approved"
     db.commit.assert_awaited_once()
     db.refresh.assert_awaited_once_with(approval, with_for_update=True)
     resolve.assert_called_once_with(
-        approval.id, ApprovalResolution(decision="allow_session")
+        approval.id, ApprovalResolution(decision=decision)
     )
-    assert result == {"status": "approved", "decision": "allow_session"}
+    assert result == {"status": "approved", "decision": decision}
 
 
-async def test_administrator_decision_creates_read_and_write_grants(monkeypatch):
+@pytest.mark.parametrize("decision, confidential", [("allow_session", False), ("allow_once", False), ("allow_once", True)])
+async def test_administrator_decision_creates_scoped_grants(monkeypatch, decision, confidential):
     approval = _approval()
-    request = administrator_permission(uuid4(), "/work", capability="filesystem.write", path="/etc/demo.conf")
+    path = "/root/.ssh/config" if confidential else "/etc/demo.conf"
+    request = administrator_permission(uuid4(), "/work", capability="filesystem.write", path=path)
     approval.resource_type, approval.resource_scope, approval.capability = request.resource_type, request.resource_scope, request.capability
-    approval.payload = {**request.approval_details, "sessionGrants": session_grants_payload(request)}
+    approval.available_decisions = list(request.available_decisions)
+    approval.payload = {
+        **request.approval_details, "sessionGrants": session_grants_payload(request),
+        "runActionOnly": request.force_ask,
+        "runActionScope": _run_action_scope(request, ToolCall("edit", "edit_file", {"path": path})),
+    }
     _fingerprint(approval)
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = approval
@@ -137,8 +147,11 @@ async def test_administrator_decision_creates_read_and_write_grants(monkeypatch)
     monkeypatch.setattr(AgentRuntime, "resolve_approval", resolve)
     monkeypatch.setattr(run_events, "publish", AsyncMock())
     user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
-    await decide_approval(approval.id, ApprovalDecisionRequest(decision="allow_session"), user, db)
-    assert [call.args[0].resource_type for call in db.add.call_args_list] == ["execution_administrator", "execution_administrator"]
+    await decide_approval(approval.id, ApprovalDecisionRequest(decision=decision), user, db)
+    assert [(call.args[0].resource_type, call.args[0].run_id) for call in db.add.call_args_list] == (
+        [("run_action", approval.run_id)] if confidential else
+        [("execution_administrator", approval.run_id if decision == "allow_once" else None)] * 2
+    )
 
 
 async def test_mcp_allow_session_persists_tool_grant(monkeypatch) -> None:
@@ -368,7 +381,8 @@ async def test_allow_session_accepts_257_scopes_and_rejects_258(monkeypatch) -> 
     assert db.add.call_count == 257
 
 
-async def test_allow_session_rejects_a_changed_scope_fingerprint(monkeypatch) -> None:
+@pytest.mark.parametrize("decision", ["allow_once", "allow_session"])
+async def test_allow_rejects_a_changed_scope_fingerprint(monkeypatch, decision) -> None:
     approval = _approval()
     agent_id = uuid4()
     approval.capability = "filesystem.read"
@@ -397,7 +411,7 @@ async def test_allow_session_rejects_a_changed_scope_fingerprint(monkeypatch) ->
 
     with pytest.raises(ApiError) as exc_info:
         await decide_approval(
-            approval.id, ApprovalDecisionRequest(decision="allow_session"), user, db
+            approval.id, ApprovalDecisionRequest(decision=decision), user, db
         )
 
     assert exc_info.value.code == "approval.targetChanged"

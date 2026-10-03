@@ -1454,6 +1454,7 @@ class PermissionPolicy:
         agent_profile_id: UUID | None = None,
         trust_level: TrustLevel | None = None,
         permission_session_id: UUID | None = None,
+        run_id: UUID | None = None,
         session_write_paths: list[str] | None = None,
     ) -> PermissionDecision:
         grant_session_id = permission_session_id or chat_session.id
@@ -1465,14 +1466,15 @@ class PermissionPolicy:
                 return PermissionDecision.DENY
 
         def grant_binding_conditions() -> tuple[Any, ...]:
+            lifetime = PermissionGrant.run_id.is_(None) | (PermissionGrant.run_id == run_id)
             if trust_level is None:
-                return ()
+                return (lifetime,)
             profile_condition = (
                 PermissionGrant.agent_profile_id.is_(None)
                 if agent_profile_id is None
                 else PermissionGrant.agent_profile_id == agent_profile_id
             )
-            return (profile_condition, PermissionGrant.trust_level == trust_level.value)
+            return (lifetime, profile_condition, PermissionGrant.trust_level == trust_level.value)
 
         if request.resource_type == "user_profile":
             scope = _user_profile_scope(request.resource_scope)

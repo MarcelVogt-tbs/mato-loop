@@ -133,7 +133,7 @@ it('edits a shell command and approves the final value in one action', async () 
 
   expect(root.textContent).not.toContain('Keine Schreibaktion erkannt')
   expect(root.querySelector('.q-checkbox')).toBeNull()
-  const allow = [...root.querySelectorAll('button')].find((button) => button.textContent.includes('Änderungen einmal erlauben'))
+  const allow = [...root.querySelectorAll('button')].find((button) => button.textContent.includes('Für diesen Lauf erlauben'))
   allow.click()
   await vi.waitFor(() => expect(api.post).toHaveBeenCalled())
   expect(api.post).toHaveBeenCalledWith('/approvals/editable/decisions', {

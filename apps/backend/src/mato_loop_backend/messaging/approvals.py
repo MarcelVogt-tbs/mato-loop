@@ -28,7 +28,7 @@ MAX_APPROVAL_PAYLOAD_TEXT = 4_096
 _MAX_DISPLAY_ITEMS = 6
 _MAX_DISPLAY_LIST_ITEMS = 6
 _ACTION_LABELS: dict[ApprovalDecision, str] = {
-    "allow_once": "Einmal erlauben",
+    "allow_once": "Für diesen Lauf erlauben",
     "allow_session": "Für Session erlauben",
     "deny": "Ablehnen",
 }
@@ -54,10 +54,12 @@ class MessagingApprovalAction(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
     decision: ApprovalDecision
-    label: Literal["Einmal erlauben", "Für Session erlauben", "Ablehnen"]
+    label: Literal["Für diesen Lauf erlauben", "Einmal erlauben", "Für Session erlauben", "Ablehnen"]
 
     @model_validator(mode="after")
     def label_matches_decision(self) -> MessagingApprovalAction:
+        if self.decision == "allow_once" and self.label == "Einmal erlauben":
+            object.__setattr__(self, "label", _ACTION_LABELS[self.decision])
         if self.label != _ACTION_LABELS[self.decision]:
             raise ValueError("invalid approval action label")
         return self

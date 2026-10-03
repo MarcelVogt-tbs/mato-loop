@@ -183,6 +183,9 @@ class PermissionGrant(Base):
     session_id: Mapped[UUID] = mapped_column(
         ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     capability: Mapped[str] = mapped_column(String(120), nullable=False)
     resource_type: Mapped[str] = mapped_column(String(80), nullable=False)
     resource_scope: Mapped[str] = mapped_column(Text, nullable=False)

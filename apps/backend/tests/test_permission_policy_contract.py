@@ -4,7 +4,9 @@ from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 import mato_loop_backend.agent.loop as mock_agent_loop
 import mato_loop_backend.agent.run_support as mock_agent_run_support
@@ -827,6 +829,62 @@ async def test_administrator_once_approval_is_reused_for_revalidation(tmp_path, 
     assert approve.await_count == 1
     settings.permissions.policies["filesystem.write"] = ToolExecutionPolicy.DISABLED
     assert await AgentRuntime._authorize(db, run, session, call, request, roots, resolution, check_only=True) == PermissionDecision.DENY
+
+
+@pytest.mark.parametrize("lifetime", ["run", "session", "exact"])
+async def test_runtime_grant_lifetime_and_boundaries(tmp_path, monkeypatch, lifetime):
+    session = _session(user_id=uuid4(), agent_profile_id=uuid4())
+    run = AgentRun(id=uuid4(), session_id=session.id, trust_level="public")
+    roots = _root_files(tmp_path, session)
+    request = replace(_path_request(roots, "notes.txt"), force_ask=lifetime == "exact")
+    call = ToolCall("first", "read", {"path": "notes.txt"})
+    grant = _grant(request, session.id, run_id=None if lifetime == "session" else run.id,
+                   agent_profile_id=session.agent_profile_id, trust_level="public")
+    if lifetime == "exact":
+        grant.capability = request.capability
+        grant.resource_type = "run_action"
+        grant.resource_scope = mock_agent_run_support._run_action_scope(request, call)
+    settings = _tool_settings({"policies": {request.capability: "ask"}})
+    monkeypatch.setattr(mock_agent_runtime, "load_agent_profile_tools", AsyncMock(return_value=(settings, sysadmin_profile())))
+    monkeypatch.setattr(mock_agent_runtime, "load_effective_integrations", AsyncMock(return_value=IntegrationSettings()))
+    monkeypatch.setattr(AgentRuntime, "_request_approval", AsyncMock(return_value="deny"))
+    engine = create_engine("sqlite://")
+    PermissionGrant.__table__.create(engine)
+    try:
+        with Session(engine) as stored:
+            stored.add(grant)
+            stored.commit()
+            db = AsyncMock(spec=AsyncSession)
+            db.scalar.side_effect = stored.scalar
+            db.scalars.side_effect = stored.scalars
+
+            async def authorize(current_run=run, permission=request, tool_call=call):
+                return await AgentRuntime._authorize(db, current_run, session, tool_call, permission, roots)
+
+            outcomes = [
+                await authorize(),
+                await authorize(tool_call=ToolCall("next", "read", {"path": "notes.txt", "_reason": "Read again"})),
+                await authorize(AgentRun(id=uuid4(), session_id=session.id, trust_level="public")),
+                await authorize(permission=replace(request, resource_scope=_path_request(roots, "other.txt").resource_scope)),
+                await authorize(AgentRun(id=run.id, session_id=session.id, trust_level="private")),
+                await authorize(AgentRun(id=run.id, session_id=session.id, trust_level="public", agent_profile_id=uuid4())),
+            ]
+            if lifetime == "exact":
+                outcomes.extend([
+                    await authorize(tool_call=ToolCall("changed", "read", {"path": "notes.txt", "offset": 10})),
+                    await authorize(permission=replace(request, approval_details={"revision": "changed"})),
+                ])
+            settings.permissions.policies[request.capability] = ToolExecutionPolicy.DISABLED
+            outcomes.append(await authorize())
+            assert outcomes == [
+                PermissionDecision.ALLOW, PermissionDecision.ALLOW,
+                PermissionDecision.ALLOW if lifetime == "session" else PermissionDecision.USER_DENIED,
+                PermissionDecision.USER_DENIED, PermissionDecision.USER_DENIED, PermissionDecision.USER_DENIED,
+                *([PermissionDecision.USER_DENIED] * 2 if lifetime == "exact" else []),
+                PermissionDecision.DENY,
+            ]
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.parametrize("kind", ["file", "shell"])
