@@ -35,6 +35,10 @@ one metadata graph. The frontend groups pages, components, stores, and helpers
 by domain under `features/`. Its existing `stores/*` and moved `utils/*` imports
 are stable, stateless re-export facades. Application layout and Control Center
 composition live under `app/`; shared presentation remains under `shared/`.
+Standard content pages use `shared/ui/AppPage.vue` for their page container,
+title, description, and optional header actions. The shell reserves space above
+these pages for its floating navigation button, using the same size and inset
+variables as the button and including the device safe-area inset.
 The standalone implementation lives in `apps/matoloop-agent` under the `matoloop_agent`
 package. It has no backend package or database dependency.
 

@@ -1,9 +1,9 @@
 <template>
-  <q-page class="app-page settings-page column no-wrap">
-    <AppPageHeader
-      :title="admin ? 'Administration' : 'Einstellungen'"
-      :subtitle="admin ? 'Zentrale Verwaltung der MatoLoop-Instanz.' : 'Personalisierung, persönliche Provider, Computer, Integrationen, Kanäle und Funktionen verwalten.'"
-    />
+  <AppPage
+    class="settings-page column no-wrap"
+    :title="admin ? 'Administration' : 'Einstellungen'"
+    :subtitle="admin ? 'Zentrale Verwaltung der MatoLoop-Instanz.' : 'Personalisierung, persönliche Provider, Computer, Integrationen, Kanäle und Funktionen verwalten.'"
+  >
 
     <q-tabs
       no-caps
@@ -47,12 +47,12 @@
         <router-view />
       </main>
     </div>
-  </q-page>
+  </AppPage>
 </template>
 
 <script setup>
 import { computed } from 'vue'
-import AppPageHeader from 'src/shared/ui/AppPageHeader.vue'
+import AppPage from 'src/shared/ui/AppPage.vue'
 import { adminRoutes, settingsRoutes } from 'src/features/settings/routes'
 import { useAuthStore } from 'stores/auth'
 import { useProviderStore } from 'stores/providers'

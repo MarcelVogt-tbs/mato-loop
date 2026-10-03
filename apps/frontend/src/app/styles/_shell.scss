@@ -14,20 +14,25 @@
   line-height: 1.1;
 }
 
+.app-shell {
+  --app-floating-control-size: 48px;
+  --app-floating-control-inset: 12px;
+}
+
 .app-floating-controls {
   position: fixed;
   z-index: 3000;
-  top: calc(12px + env(safe-area-inset-top) + var(--app-visual-viewport-offset-top, 0px));
-  right: 12px;
-  left: 12px;
+  top: calc(var(--app-floating-control-inset) + env(safe-area-inset-top) + var(--app-visual-viewport-offset-top, 0px));
+  right: var(--app-floating-control-inset);
+  left: var(--app-floating-control-inset);
   display: flex;
   align-items: center;
   pointer-events: none;
 }
 
 .app-floating-control {
-  width: 48px;
-  height: 48px;
+  width: var(--app-floating-control-size);
+  height: var(--app-floating-control-size);
   border: 1px solid var(--app-surface-border);
   background: color-mix(in srgb, var(--app-surface) 94%, transparent);
   color: var(--app-text);
@@ -358,8 +363,8 @@ body.body--dark .app-floating-control--flat {
   padding: 24px;
 }
 
-.app-shell--navigation-overlay .settings-page {
-  padding-top: max(72px, calc(24px + env(safe-area-inset-top)));
+.app-shell--navigation-overlay .app-page {
+  padding-top: calc(var(--app-floating-control-inset) + var(--app-floating-control-size) + var(--app-floating-control-inset) + env(safe-area-inset-top));
 }
 
 .app-page-header {

@@ -1,10 +1,8 @@
 <template>
-  <q-page class="app-page">
-    <AppPageHeader title="Variablen &amp; Secrets" subtitle="Persönliche Werte benutzerweit für Agenten und Tools hinterlegen.">
-      <template #actions>
-        <q-btn unelevated no-caps no-wrap color="primary" icon="add" label="Variable hinzufügen" @click="openCreate" />
-      </template>
-    </AppPageHeader>
+  <AppPage title="Variablen &amp; Secrets" subtitle="Persönliche Werte benutzerweit für Agenten und Tools hinterlegen.">
+    <template #actions>
+      <q-btn unelevated no-caps no-wrap color="primary" icon="add" label="Variable hinzufügen" @click="openCreate" />
+    </template>
 
     <q-banner rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="shield" color="primary" /></template>
@@ -90,13 +88,13 @@
         </q-form>
       </q-card>
     </q-dialog>
-  </q-page>
+  </AppPage>
 </template>
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
-import AppPageHeader from 'src/shared/ui/AppPageHeader.vue'
+import AppPage from 'src/shared/ui/AppPage.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { usePersonalVariableStore } from 'stores/personal-variables'
 

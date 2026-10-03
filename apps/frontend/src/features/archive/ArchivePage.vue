@@ -1,6 +1,5 @@
 <template>
-  <q-page class="app-page">
-    <AppPageHeader title="Archiv" subtitle="Archivierte Gespräche bleiben erhalten. Zum Weiterarbeiten wiederherstellen." />
+  <AppPage title="Archiv" subtitle="Archivierte Gespräche bleiben erhalten. Zum Weiterarbeiten wiederherstellen.">
     <q-banner v-if="archive.failed" rounded class="app-surface-tonal q-mb-md">
       Das Archiv konnte nicht geladen werden.
       <template #action><q-btn flat no-caps label="Erneut laden" @click="archive.load" /></template>
@@ -33,13 +32,13 @@
       <p v-else class="app-muted">Keine einzeln archivierten Sessions.</p>
       <q-btn v-if="archive.sessionLists.sessions?.nextCursor" flat no-caps label="Weitere Sessions" @click="loadSessions(null, true)" />
     </template>
-  </q-page>
+  </AppPage>
 </template>
 
 <script setup>
 import { onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
-import AppPageHeader from 'src/shared/ui/AppPageHeader.vue'
+import AppPage from 'src/shared/ui/AppPage.vue'
 import { useArchiveStore } from './store'
 import { useChatStore } from 'stores/chat'
 import { useProjectStore } from 'stores/projects'
