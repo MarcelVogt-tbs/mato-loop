@@ -15,6 +15,7 @@ const routes = [
     children: [
       { path: '', alias: '/chat', name: 'chat', component: () => import('src/features/chat/ChatPage.vue') },
       { path: 'dashboard', redirect: (to) => ({ name: 'chat', query: to.query, hash: to.hash }) },
+      { path: 'personal-variables', name: 'personal-variables', component: () => import('src/features/personal-variables/PersonalVariablesPage.vue') },
       { path: 'archive', name: 'archive', component: () => import('src/features/archive/ArchivePage.vue') },
       {
         path: 'settings',

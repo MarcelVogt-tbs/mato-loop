@@ -1,12 +1,10 @@
 <template>
-  <section>
-    <header class="settings-section-header">
-      <div>
-        <h2 class="text-h6 text-weight-bold q-my-none">Variablen &amp; Secrets</h2>
-        <p class="text-body2 app-muted q-mb-none q-mt-xs">Persönliche Werte sicher für Agenten und Tools hinterlegen.</p>
-      </div>
-      <q-btn unelevated no-caps no-wrap color="primary" icon="add" label="Variable hinzufügen" @click="openCreate" />
-    </header>
+  <q-page class="app-page">
+    <AppPageHeader title="Variablen &amp; Secrets" subtitle="Persönliche Werte benutzerweit für Agenten und Tools hinterlegen.">
+      <template #actions>
+        <q-btn unelevated no-caps no-wrap color="primary" icon="add" label="Variable hinzufügen" @click="openCreate" />
+      </template>
+    </AppPageHeader>
 
     <q-banner rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="shield" color="primary" /></template>
@@ -92,16 +90,17 @@
         </q-form>
       </q-card>
     </q-dialog>
-  </section>
+  </q-page>
 </template>
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
+import AppPageHeader from 'src/shared/ui/AppPageHeader.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { usePersonalVariableStore } from 'stores/personal-variables'
 
-defineOptions({ name: 'PersonalVariablesSettingsPage' })
+defineOptions({ name: 'PersonalVariablesPage' })
 
 const $q = useQuasar()
 const { confirm } = useConfirm()

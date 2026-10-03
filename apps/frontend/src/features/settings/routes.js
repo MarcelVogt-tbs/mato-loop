@@ -64,8 +64,7 @@ export const settingsRoutes = [
   {
     path: 'personal-variables',
     name: 'settings-personal-variables',
-    component: () => import('src/features/personal-variables/PersonalVariablesSettingsPage.vue'),
-    meta: { settingsLabel: 'Variablen & Secrets', settingsIcon: 'key' }
+    redirect: { name: 'personal-variables' }
   },
   {
     path: 'approvals',

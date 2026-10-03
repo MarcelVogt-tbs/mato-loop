@@ -40,7 +40,7 @@ describe('MatoLoop frontend scaffold', () => {
     const routeNames = appRoute.children.map((route) => route.name)
     const settingsRoute = appRoute.children.find((route) => route.name === 'settings')
 
-    expect(routeNames).toEqual(['chat', undefined, 'archive', 'settings', 'admin'])
+    expect(routeNames).toEqual(['chat', undefined, 'personal-variables', 'archive', 'settings', 'admin'])
     expect(settingsRoute.children.map((route) => route.name)).toEqual([
       'settings-providers',
       'settings-agents',
@@ -94,8 +94,8 @@ describe('MatoLoop frontend scaffold', () => {
     expect(settingsRoutes.find((route) => route.name === 'settings-mcp')?.meta).toEqual({
       settingsLabel: 'MCP-Server', settingsIcon: 'hub'
     })
-    expect(settingsRoutes.find((route) => route.name === 'settings-personal-variables')?.meta).toEqual({
-      settingsLabel: 'Variablen & Secrets', settingsIcon: 'key'
+    expect(settingsRoutes.find((route) => route.name === 'settings-personal-variables')?.redirect).toEqual({
+      name: 'personal-variables'
     })
     expect(settingsRoutes.find((route) => route.name === 'settings-approvals')?.redirect).toEqual({
       name: 'chat', query: { controlCenter: 'notifications' }

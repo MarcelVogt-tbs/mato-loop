@@ -27,7 +27,7 @@
       <q-separator class="lt-md" />
 
       <div class="col column no-wrap drawer-navigation q-py-xs">
-        <SidebarNavItem icon="home" icon-color="primary" label="Home" :to="{ name: 'chat' }" :active="route.name === 'chat' && !routeSessionId && !Object.hasOwn(route.query, 'new')" class="q-mx-sm q-mb-sm" @click="closeDrawerOnMobile" />
+        <SidebarNavItem icon="home" icon-color="primary" label="Home" :to="{ name: 'chat' }" :active="route.name === 'chat' && !routeSessionId && !Object.hasOwn(route.query, 'new')" class="q-mx-xs q-mb-xs" @click="closeDrawerOnMobile" />
         <q-scroll-area
           class="col session-scroll-area"
           :content-style="{ width: '100%' }"
@@ -35,7 +35,7 @@
           tabindex="0"
           aria-label="Projekte und Sessions"
         >
-          <section aria-labelledby="automations-heading" class="q-mx-sm q-mb-sm">
+          <section aria-labelledby="automations-heading" class="q-mx-xs q-mb-xs">
             <SidebarNavItem
               icon="auto_awesome" icon-color="primary" label="Automationen" label-id="automations-heading" :expanded="automationsSectionOpen"
               aria-controls="automation-list" :aria-expanded="automationsSectionOpen"
@@ -76,7 +76,7 @@
               <q-item v-if="automations.loaded && !automations.items.length" dense class="q-px-sm"><q-item-section><q-item-label caption>Noch keine Automationen</q-item-label></q-item-section></q-item>
             </q-list>
           </section>
-          <section aria-labelledby="projects-heading" class="q-mx-sm">
+          <section aria-labelledby="projects-heading" class="q-mx-xs">
             <SidebarNavItem
               :icon="mdiFolderOutline" icon-color="primary" label="Projekte" label-id="projects-heading" :expanded="projectsSectionOpen"
               aria-controls="project-list" :aria-expanded="projectsSectionOpen"
@@ -168,7 +168,7 @@
           </section>
 
           <section
-            class="q-mx-sm q-mt-sm"
+            class="q-mx-xs q-mt-xs"
             :class="{ 'app-surface-tonal': sessionDropTarget === null }"
             aria-labelledby="sessions-heading"
             @dragover="dragSessionOver($event, null)"
@@ -209,8 +209,9 @@
         </q-scroll-area>
       </div>
 
-      <div class="drawer-user-area q-pa-sm">
-        <SidebarNavItem icon="archive" icon-color="primary" label="Archiv" :to="{ name: 'archive' }" class="q-mb-sm" @click="closeDrawerOnMobile" />
+      <div class="drawer-user-area q-pa-xs">
+        <SidebarNavItem icon="key" icon-color="primary" label="Variablen &amp; Secrets" :to="{ name: 'personal-variables' }" class="q-mb-xs" @click="closeDrawerOnMobile" />
+        <SidebarNavItem icon="archive" icon-color="primary" label="Archiv" :to="{ name: 'archive' }" class="q-mb-xs" @click="closeDrawerOnMobile" />
         <SidebarNavItem
           id="user-menu-trigger" :label="auth.username || 'Benutzer'"
           :aria-label="userMenuLabel" aria-haspopup="menu" role="button"
