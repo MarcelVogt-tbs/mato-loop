@@ -16,57 +16,52 @@
           @click="closeDrawerOnMobile"
         >
           <AppLogo />
-          <div>
-            <div class="app-brand__name">MatoLoop</div>
-            <div class="app-brand__tagline">Personal Agent Workspace</div>
-          </div>
+          <div class="app-brand__name">MatoLoop</div>
         </router-link>
 
         <q-space />
 
-        <q-btn flat round dense icon="search" aria-label="Suche öffnen" @click="search.openDialog">
-          <q-tooltip>Sessions und Projekte durchsuchen</q-tooltip>
-        </q-btn>
-
-        <q-btn flat round dense icon="menu" aria-label="Navigation schließen" @click="closeNavigation" />
+        <SidebarIconButton icon="search" aria-label="Suche öffnen" @click="search.openDialog" />
+        <SidebarIconButton icon="menu" aria-label="Navigation schließen" @click="closeNavigation" />
       </q-toolbar>
       <q-separator class="lt-md" />
 
-      <div class="col column no-wrap drawer-navigation q-py-sm">
+      <div class="col column no-wrap drawer-navigation q-py-xs">
+        <SidebarNavItem icon="space_dashboard" icon-color="primary" label="Dashboard" :to="{ name: 'dashboard' }" class="q-mx-sm q-mb-sm" @click="closeDrawerOnMobile" />
         <q-scroll-area
           class="col session-scroll-area"
           :content-style="{ width: '100%' }"
           :content-active-style="{ width: '100%' }"
-          visible
           tabindex="0"
           aria-label="Projekte und Sessions"
         >
           <section aria-labelledby="automations-heading" class="q-mx-sm q-mb-sm">
-            <q-item
-              clickable v-ripple class="rounded-borders q-px-sm"
+            <SidebarNavItem
+              icon="auto_awesome" icon-color="primary" label="Automationen" label-id="automations-heading" :expanded="automationsSectionOpen"
               aria-controls="automation-list" :aria-expanded="automationsSectionOpen"
               @click="automationsSectionOpen = !automationsSectionOpen"
             >
-              <q-item-section side><q-icon name="auto_awesome" color="primary" size="24px" /></q-item-section>
-              <q-item-section>
-                <q-item-label id="automations-heading" class="text-weight-medium">Automationen</q-item-label>
-              </q-item-section>
-              <q-item-section side>
-                <q-btn flat round dense size="sm" icon="add" class="drawer-section__action" aria-label="Automation erstellen" @click.stop="createAutomation"><q-tooltip>Automation erstellen</q-tooltip></q-btn>
-              </q-item-section>
-              <q-item-section side class="q-pl-sm">
-                <q-icon :name="automationsSectionOpen ? 'expand_more' : 'chevron_right'" size="20px" />
-              </q-item-section>
-            </q-item>
-            <q-list v-show="automationsSectionOpen" id="automation-list" class="q-ml-md">
-              <q-item v-if="automations.loadFailed" dense><q-item-section><q-btn flat dense no-caps label="Automationen erneut laden" @click="automations.fetchAutomations().catch(() => {})" /></q-item-section></q-item>
+              <template #label-suffix>
+                <span class="q-ml-sm" :aria-label="automations.loadFailed ? 'Automationen konnten nicht geladen werden' : `${automations.items.length} Automationen`">
+                  <q-icon v-if="automations.loadFailed" name="error_outline" color="warning" size="16px" />
+                  <q-badge v-else-if="automations.loaded" :color="$q.dark.isActive ? 'grey-9' : 'grey-3'" :text-color="$q.dark.isActive ? 'grey-4' : 'grey-8'" :label="automations.items.length" />
+                </span>
+              </template>
+              <template #actions>
+                <SidebarIconButton class="sidebar-section__action" icon="add" aria-label="Automation erstellen" @click="createAutomation" />
+              </template>
+            </SidebarNavItem>
+            <q-list v-show="automationsSectionOpen" id="automation-list">
+              <SidebarNavItem v-if="automations.loadFailed" icon="refresh" label="Automationen erneut laden" @click="automations.fetchAutomations().catch(() => {})" />
               <q-item v-else-if="automations.loading && !automations.loaded" dense><q-item-section><q-skeleton type="text" /></q-item-section></q-item>
               <SidebarSessionItem
                 v-for="automation in automations.items"
                 :key="automation.id"
-                :session="automationMenuSessions[automation.executionSessionId] || { id: automation.executionSessionId }"
+                :session="automationSession(automation)"
+                :now="sidebarNow"
                 :title="automation.name"
-                :caption="sessionStatuses.get(automation.executionSessionId)?.label || automationStatus(automation).label"
+                :caption="automationStatus(automation).label"
+                :status="sessionStatuses.get(automation.executionSessionId)"
                 :active="routeSessionId === automation.executionSessionId"
                 :show-pin="false"
                 :draggable="false"
@@ -82,101 +77,73 @@
             </q-list>
           </section>
           <section aria-labelledby="projects-heading" class="q-mx-sm">
-            <q-item
-              clickable v-ripple class="rounded-borders q-px-sm"
+            <SidebarNavItem
+              :icon="mdiFolderOutline" icon-color="primary" label="Projekte" label-id="projects-heading" :expanded="projectsSectionOpen"
               aria-controls="project-list" :aria-expanded="projectsSectionOpen"
               @click="projectsSectionOpen = !projectsSectionOpen"
             >
-              <q-item-section side><q-icon :name="mdiFolderOutline" color="primary" size="24px" /></q-item-section>
-              <q-item-section>
-                <q-item-label id="projects-heading" class="text-weight-medium">Projekte</q-item-label>
-              </q-item-section>
-              <q-item-section side>
-                <q-btn
-                  flat round dense size="sm" icon="add"
-                  class="drawer-section__action" aria-label="Projekt erstellen"
-                  @click.stop="openProjectDialog('create')"
-                >
-                  <q-tooltip>Projekt erstellen</q-tooltip>
-                </q-btn>
-              </q-item-section>
-              <q-item-section side class="q-pl-sm">
-                <q-icon :name="projectsSectionOpen ? 'expand_more' : 'chevron_right'" size="20px" />
-              </q-item-section>
-            </q-item>
+              <template #actions>
+                <SidebarIconButton class="sidebar-section__action" icon="add" aria-label="Projekt erstellen" @click="openProjectDialog('create')" />
+              </template>
+            </SidebarNavItem>
 
-            <q-list id="project-list" v-show="projectsSectionOpen" class="project-list q-ml-md">
+            <q-list id="project-list" v-show="projectsSectionOpen" class="project-list q-pl-sm">
               <div v-if="projects.loading && !projects.loaded" class="row justify-center q-pa-sm" aria-label="Projekte werden geladen">
                 <q-spinner-dots color="primary" size="24px" />
               </div>
-              <div v-else-if="projects.loadFailed && !projects.loaded" class="q-pa-sm">
-                <q-btn
-                  flat dense no-caps class="full-width" color="primary" icon-right="refresh"
-                  label="Projekte erneut laden" @click="loadProjects"
-                />
-              </div>
+              <SidebarNavItem v-else-if="projects.loadFailed && !projects.loaded" icon="refresh" label="Projekte erneut laden" @click="loadProjects" />
               <q-expansion-item
                 v-for="project in projects.items"
                 :key="project.id"
                 v-model="expandedProjects[project.id]"
                 dense
                 hide-expand-icon
-                class="project-list-item rounded-borders q-my-xs"
+                class="project-list-item rounded-borders"
                 :class="{
                   'app-surface-tonal': sessionDropTarget === project.id,
                   'project-list-item--menu-open': openProjectActionMenuId === project.id
                 }"
-                header-class="project-list-item__header q-px-sm"
+                header-class="sidebar-row project-list-item__header rounded-borders q-px-sm q-py-xs"
                 @dragover="dragSessionOver($event, project.id)"
                 @dragleave="leaveSessionDropTarget"
                 @drop="dropSession($event, project.id)"
                 @show="loadProjectSessions(project.id)"
               >
                 <template #header>
-                  <q-item-section avatar class="project-list-item__icon">
-                    <q-icon :name="expandedProjects[project.id] ? mdiFolderOpenOutline : mdiFolderOutline" size="22px" />
+                  <q-item-section side class="q-pr-sm">
+                    <q-icon :name="expandedProjects[project.id] ? mdiFolderOpenOutline : mdiFolderOutline" :color="$q.dark.isActive ? 'white' : 'dark'" size="22px" />
                   </q-item-section>
                   <q-item-section>
-                    <q-item-label lines="1" class="text-body2" :class="project.hasUnreadMessages ? 'text-weight-bold' : 'text-weight-medium'">
+                    <q-item-label lines="1" class="text-body2" :class="{ 'text-weight-medium': project.hasUnreadMessages }">
                       {{ project.name }}<span v-if="project.hasUnreadMessages" class="app-sr-only">, ungelesene Nachrichten</span>
                     </q-item-label>
                   </q-item-section>
                   <q-item-section side class="project-list-item__actions row no-wrap items-center">
-                    <q-btn
-                      flat round dense size="sm" icon="add_comment"
+                    <SidebarIconButton
+                      icon="add_comment"
                       class="project-list-item__action"
                       :aria-label="`Neue Session in ${project.name}`"
-                      @click.stop="openNewSession(project.id)"
-                    >
-                      <q-tooltip>Neue Session</q-tooltip>
-                    </q-btn>
+                      @click="openNewSession(project.id)"
+                    />
                     <SidebarActionMenu
                       :model-value="openProjectActionMenuId === project.id"
                       class="project-list-item__action"
                       :aria-label="`Aktionen für ${project.name}`"
                       @update:model-value="setProjectActionMenu(project.id, $event)"
                     >
-                      <q-item clickable v-ripple v-close-popup @click="openProjectDialog('edit', project)">
-                        <q-item-section avatar><q-icon name="edit" /></q-item-section>
-                        <q-item-section>Projekt bearbeiten</q-item-section>
-                      </q-item>
+                      <SidebarNavItem icon="edit" label="Projekt bearbeiten" v-close-popup @click="openProjectDialog('edit', project)" />
                       <q-separator />
-                      <q-item clickable v-ripple v-close-popup @click="archiveProject(project)">
-                        <q-item-section avatar><q-icon name="archive" /></q-item-section>
-                        <q-item-section>Projekt archivieren</q-item-section>
-                      </q-item>
-                      <q-item
-                        clickable v-ripple v-close-popup class="text-negative"
+                      <SidebarNavItem icon="archive" label="Projekt archivieren" v-close-popup @click="archiveProject(project)" />
+                      <SidebarNavItem
+                        icon="delete_outline" label="Projekt löschen" v-close-popup class="text-negative"
                         @click="deleteProject(project)"
-                      >
-                        <q-item-section avatar><q-icon name="delete_outline" /></q-item-section>
-                        <q-item-section>Projekt löschen</q-item-section>
-                      </q-item>
+                      />
                     </SidebarActionMenu>
                   </q-item-section>
                 </template>
                 <SidebarSessionList
                   :list="projectSessionList(project.id)"
+                  :now="sidebarNow"
                   :active-session-id="routeSessionId"
                   :statuses="sessionStatuses"
                   :pinning-session-id="pinningSessionId"
@@ -208,32 +175,20 @@
             @dragleave="leaveSessionDropTarget"
             @drop="dropSession($event, null)"
           >
-            <q-item
-              clickable v-ripple class="rounded-borders q-px-sm"
+            <SidebarNavItem
+              icon="chat_bubble_outline" icon-color="primary" label="Sessions" label-id="sessions-heading" :expanded="sessionsSectionOpen"
               aria-controls="standalone-session-list" :aria-expanded="sessionsSectionOpen"
               @click="sessionsSectionOpen = !sessionsSectionOpen"
             >
-              <q-item-section side><q-icon name="chat_bubble_outline" color="primary" size="24px" /></q-item-section>
-              <q-item-section>
-                <q-item-label id="sessions-heading" class="text-weight-medium">Sessions</q-item-label>
-              </q-item-section>
-              <q-item-section side>
-                <q-btn
-                  flat round dense size="sm" icon="add" class="drawer-section__action"
-                  aria-label="Neue Session" @click.stop="openNewSession(null)"
-                >
-                  <q-tooltip>Neue Session</q-tooltip>
-                </q-btn>
-              </q-item-section>
-              <q-item-section side class="q-pl-sm">
-                <q-icon :name="sessionsSectionOpen ? 'expand_more' : 'chevron_right'" size="20px" />
-              </q-item-section>
-            </q-item>
+              <template #actions>
+                <SidebarIconButton class="sidebar-section__action" icon="add" aria-label="Neue Session" @click="openNewSession(null)" />
+              </template>
+            </SidebarNavItem>
             <SidebarSessionList
               id="standalone-session-list"
-              class="q-ml-md"
               v-show="sessionsSectionOpen"
               :list="standaloneSessionList"
+              :now="sidebarNow"
               :active-session-id="routeSessionId"
               :statuses="sessionStatuses"
               :pinning-session-id="pinningSessionId"
@@ -255,54 +210,28 @@
       </div>
 
       <div class="drawer-user-area q-pa-sm">
-        <q-item clickable v-ripple :to="{ name: 'archive' }" class="rounded-borders q-px-sm q-mb-sm" @click="closeDrawerOnMobile">
-          <q-item-section side><q-icon name="archive" color="primary" size="24px" /></q-item-section>
-          <q-item-section><q-item-label class="text-weight-medium">Archiv</q-item-label></q-item-section>
-        </q-item>
-        <q-btn
-          id="user-menu-trigger" unelevated no-caps class="full-width app-user-menu-trigger"
-          :aria-label="userMenuLabel"
+        <SidebarNavItem icon="archive" icon-color="primary" label="Archiv" :to="{ name: 'archive' }" class="q-mb-sm" @click="closeDrawerOnMobile" />
+        <SidebarNavItem
+          id="user-menu-trigger" :label="auth.username || 'Benutzer'"
+          :aria-label="userMenuLabel" aria-haspopup="menu" role="button"
         >
-          <div class="row no-wrap items-center full-width">
-            <q-avatar color="primary" text-color="white" size="36px">{{ userInitials }}</q-avatar>
-            <div class="col ellipsis text-left text-body2 q-ml-md">
-              {{ auth.username || 'Benutzer' }}
-            </div>
-            <q-icon name="keyboard_arrow_up" size="20px" class="q-ml-sm" />
-          </div>
+          <template #icon>
+            <q-item-section side class="q-pr-sm"><q-avatar color="primary" text-color="white" size="24px">{{ userInitials }}</q-avatar></q-item-section>
+          </template>
+          <template #actions><q-icon name="keyboard_arrow_up" size="22px" /></template>
 
           <q-menu anchor="top right" self="bottom right" :offset="[0, 8]" class="app-user-popup app-action-menu">
             <q-list padding>
-              <q-item clickable v-ripple to="/settings" v-close-popup @click="closeDrawerOnMobile">
-                <q-item-section avatar><q-icon name="tune" /></q-item-section>
-                <q-item-section>Einstellungen</q-item-section>
-              </q-item>
-              <q-item v-if="auth.isAdmin" clickable v-ripple :to="{ name: 'admin-users' }" v-close-popup @click="closeDrawerOnMobile">
-                <q-item-section avatar><q-icon name="admin_panel_settings" /></q-item-section>
-                <q-item-section>Administration</q-item-section>
-              </q-item>
-              <q-item clickable v-ripple v-close-popup @click="openAccountDialog">
-                <q-item-section avatar><q-icon name="manage_accounts" /></q-item-section>
-                <q-item-section>Konto</q-item-section>
-              </q-item>
-              <q-item clickable v-ripple v-close-popup @click="$q.dark.toggle()">
-                <q-item-section avatar><q-icon :name="$q.dark.isActive ? 'light_mode' : 'dark_mode'" /></q-item-section>
-                <q-item-section>{{ $q.dark.isActive ? 'Heller Modus' : 'Dunkler Modus' }}</q-item-section>
-              </q-item>
-              <q-item
-                clickable v-ripple href="/docs/" target="_blank" rel="noopener noreferrer" v-close-popup
-              >
-                <q-item-section avatar><q-icon name="menu_book" /></q-item-section>
-                <q-item-section>Dokumentation</q-item-section>
-              </q-item>
+              <SidebarNavItem icon="tune" label="Einstellungen" to="/settings" v-close-popup @click="closeDrawerOnMobile" />
+              <SidebarNavItem v-if="auth.isAdmin" icon="admin_panel_settings" label="Administration" :to="{ name: 'admin-users' }" v-close-popup @click="closeDrawerOnMobile" />
+              <SidebarNavItem icon="manage_accounts" label="Konto" v-close-popup @click="openAccountDialog" />
+              <SidebarNavItem :icon="$q.dark.isActive ? 'light_mode' : 'dark_mode'" :label="$q.dark.isActive ? 'Heller Modus' : 'Dunkler Modus'" v-close-popup @click="$q.dark.toggle()" />
+              <SidebarNavItem icon="menu_book" label="Dokumentation" href="/docs/" target="_blank" rel="noopener noreferrer" v-close-popup />
               <q-separator class="q-my-sm" />
-              <q-item clickable v-ripple v-close-popup class="text-negative" @click="logout">
-                <q-item-section avatar><q-icon name="logout" /></q-item-section>
-                <q-item-section>Abmelden</q-item-section>
-              </q-item>
+              <SidebarNavItem icon="logout" label="Abmelden" v-close-popup class="text-negative" @click="logout" />
             </q-list>
           </q-menu>
-        </q-btn>
+        </SidebarNavItem>
       </div>
     </div>
   </q-drawer>
@@ -346,12 +275,14 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { mdiFolderOpenOutline, mdiFolderOutline } from '@quasar/extras/mdi-v7'
 import { useRoute, useRouter } from 'vue-router'
 import AccountDialog from 'src/features/auth/AccountDialog.vue'
 import AppLogo from 'src/shared/ui/AppLogo.vue'
+import SidebarIconButton from 'src/shared/ui/SidebarIconButton.vue'
+import SidebarNavItem from 'src/shared/ui/SidebarNavItem.vue'
 import ProjectDialog from 'src/features/projects/ProjectDialog.vue'
 import SearchDialog from 'src/features/search/SearchDialog.vue'
 import SidebarActionMenu from 'src/features/chat/components/SidebarActionMenu.vue'
@@ -398,7 +329,9 @@ const routeSessionId = computed(() => (
   typeof route.query.session === 'string' ? route.query.session : null
 ))
 const sessionsSectionOpen = ref(true)
-const automationsSectionOpen = ref(true)
+const automationsSectionOpen = ref(false)
+const sidebarNow = ref(Date.now())
+let clockTimer
 const openAutomationMenuId = ref(null)
 const automationMenuSessions = ref({})
 const accountDialogOpen = ref(false)
@@ -438,6 +371,19 @@ const userInitials = computed(() => {
   return `${first}${last}`.toUpperCase()
 })
 const userMenuLabel = computed(() => 'Benutzermenü öffnen')
+
+function automationSession(automation) {
+  const id = automation.executionSessionId
+  const session = chat.findCachedSession(id) || automationMenuSessions.value[id]
+  const lastMessageAt = session?.lastMessageAt
+  return {
+    ...session,
+    id,
+    lastMessageAt: !lastMessageAt || Date.parse(automation.lastActivityAt) > Date.parse(lastMessageAt)
+      ? automation.lastActivityAt : lastMessageAt,
+    activeRunStatus: automation.effectiveState?.activeRunStatus
+  }
+}
 
 function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
@@ -516,6 +462,10 @@ async function logout() {
   await auth.logout()
 }
 
+watch(() => automations.items.some((item) => item.executionSessionId === routeSessionId.value), (selected) => {
+  if (selected) automationsSectionOpen.value = true
+}, { immediate: true })
+
 watch(selectedProjectId, (projectId, previousProjectId) => {
   if (projectId) {
     projectsSectionOpen.value = true
@@ -529,6 +479,10 @@ watch(selectedProjectId, (projectId, previousProjectId) => {
 }, { immediate: true })
 
 onMounted(async () => {
+  clockTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') sidebarNow.value = Date.now()
+  }, 60_000)
   await Promise.allSettled([loadProjects(), loadStandaloneSessions()])
 })
+onBeforeUnmount(() => window.clearInterval(clockTimer))
 </script>

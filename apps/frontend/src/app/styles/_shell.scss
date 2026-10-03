@@ -14,13 +14,6 @@
   line-height: 1.1;
 }
 
-.app-brand__tagline {
-  margin-top: 2px;
-  color: var(--app-muted);
-  font-size: 0.7rem;
-  line-height: 1;
-}
-
 .app-floating-controls {
   position: fixed;
   z-index: 3000;
@@ -130,13 +123,18 @@ body.body--dark .app-floating-control--flat {
   min-height: 0;
 }
 
-.project-list-item__header {
-  border-radius: 12px;
+.sidebar-icon-button {
+  width: 28px;
+  height: 28px;
 }
 
-.project-list-item__icon {
-  min-width: auto;
-  padding-right: 8px;
+.sidebar-row {
+  min-height: 36px;
+}
+
+.sidebar-row.sidebar-row--active {
+  background: var(--app-surface-border);
+  color: var(--app-text);
 }
 
 .project-list-item__actions {
@@ -145,8 +143,8 @@ body.body--dark .app-floating-control--flat {
   flex-direction: row;
 }
 
-.sidebar-session-list--nested {
-  padding-left: 28px;
+.sidebar-session-group-label {
+  padding-left: calc(8px + 22px + 8px);
 }
 
 .session-list {
@@ -178,18 +176,23 @@ body.body--dark .app-floating-control--flat {
   white-space: nowrap;
 }
 
-.session-list-item .session-list-item__actions {
+.session-list-item .session-list-item__trailing {
   min-width: auto;
-  padding-left: 0;
+  padding-left: 8px;
   flex: 0 0 auto;
   flex-direction: row;
+  align-items: center;
+}
+
+.session-list-item__time {
+  min-width: 28px;
+  font-variant-numeric: tabular-nums;
 }
 
 .session-list-item__status-slot {
   position: relative;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
+  width: 22px;
+  height: 22px;
 }
 
 .session-list-item__status-slot .q-badge--floating {
@@ -211,22 +214,63 @@ body.body--dark .app-floating-control--flat {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .project-list-item__action,
-  .session-list-item__pin-button:not(.session-list-item__pin-button--pinned),
-  .session-list-item__menu-button {
-    display: none;
+  .session-list-item {
+    --session-title-fade-width: 12px;
   }
 
-  .project-list-item:hover .project-list-item__action,
-  .project-list-item:focus-within .project-list-item__action,
+  .session-list-item__utility {
+    display: grid;
+    grid-template-columns: 0 minmax(28px, auto);
+  }
+
+  .session-list-item__utility:has(.session-list-item__pin-button--pinned) {
+    grid-template-columns: 28px minmax(28px, auto);
+  }
+
+  .session-list-item:has(.session-list-item__pin-button:not(.session-list-item__pin-button--pinned)) {
+    --session-title-fade-inset: 20px;
+  }
+
+  .session-list-item__actions {
+    display: contents;
+  }
+
+  .session-list-item__pin-button {
+    grid-area: 1 / 1;
+    justify-self: end;
+  }
+
+  .session-list-item__time {
+    grid-area: 1 / 2;
+  }
+
+  .session-list-item__menu-button {
+    grid-area: 1 / 2;
+    justify-self: end;
+  }
+
+  .session-list-item:is(:hover, :focus-visible, :has(:focus-visible), .session-list-item--menu-open) .session-list-item__time {
+    visibility: hidden;
+  }
+
+  .session-list-item:is(:hover, :focus-visible, :has(:focus-visible), .session-list-item--menu-open) .session-list-item__content {
+    mask-image: linear-gradient(to right, #000 calc(100% - var(--session-title-fade-inset, 0px) - var(--session-title-fade-width)), transparent calc(100% - var(--session-title-fade-inset, 0px)));
+  }
+
+  .project-list-item__action,
+  .sidebar-section__action,
+  .session-list-item__actions > .sidebar-icon-button {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .project-list-item__header:is(:hover, :focus-visible, :has(:focus-visible)) .project-list-item__action,
   .project-list-item--menu-open .project-list-item__action,
-  .session-list-item:hover .session-list-item__pin-button,
-  .session-list-item:hover .session-list-item__menu-button,
-  .session-list-item:focus-within .session-list-item__pin-button,
-  .session-list-item:focus-within .session-list-item__menu-button,
-  .session-list-item--menu-open .session-list-item__pin-button,
-  .session-list-item--menu-open .session-list-item__menu-button {
-    display: inline-flex;
+  .sidebar-row:is(:hover, :focus-visible, :has(:focus-visible)) .sidebar-section__action,
+  .session-list-item:is(:hover, :focus-visible, :has(:focus-visible), .session-list-item--menu-open) .session-list-item__actions > .sidebar-icon-button,
+  .session-list-item__actions > .session-list-item__pin-button--pinned {
+    opacity: 1;
+    pointer-events: auto;
   }
 }
 
@@ -237,41 +281,30 @@ body.body--dark .app-floating-control--flat {
 }
 
 @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
-  .session-list-item:is(:hover, :focus-within) .session-list-item__title {
+  .session-list-item:is(:hover, :focus-visible, :has(:focus-visible)) .session-list-item__title {
     text-overflow: clip;
   }
 
-  .session-list-item:is(:hover, :focus-within) .session-list-item__title-text {
+  .session-list-item:is(:hover, :focus-visible, :has(:focus-visible)) .session-list-item__title-text {
     display: inline-block;
     animation: session-title-scroll var(--session-title-scroll-duration, 0s) linear 700ms forwards;
   }
 }
 
 @media (hover: none) and (pointer: coarse) {
-  .session-list-item {
+  .sidebar-row {
     min-height: 48px;
   }
 
-  .drawer-section__action,
-  .project-list-item__action,
-  .session-list-item__action {
-    min-width: 40px;
-    min-height: 40px;
+  .sidebar-icon-button {
+    width: 40px;
+    height: 40px;
   }
 }
 
 .drawer-user-area {
   background: var(--app-shell-bg);
   flex: 0 0 auto;
-}
-
-.app-user-menu-trigger {
-  min-height: 52px;
-  border-radius: 12px;
-}
-
-.app-user-menu-trigger .q-btn__content {
-  width: 100%;
 }
 
 .app-user-popup {

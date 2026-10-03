@@ -635,6 +635,7 @@ async def list_sessions(
     standalone: Annotated[bool, Query()] = False,
     archived: bool = False,
     include_archived: Annotated[bool, Query(alias="includeArchived")] = False,
+    sort: Literal["pinned", "recent"] = "pinned",
 ) -> dict[str, Any]:
     try:
         return await session_service.list_sessions(
@@ -647,6 +648,7 @@ async def list_sessions(
             session_serializer=_session_payload,
             archived=archived,
             include_archived=include_archived,
+            sort=sort,
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)

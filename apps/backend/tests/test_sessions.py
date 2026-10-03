@@ -320,7 +320,8 @@ async def test_session_list_first_page_has_cursor_and_payload_metadata() -> None
     assert 2 in statement.compile().params.values()
 
 
-async def test_session_list_next_page_uses_full_keyset_and_preserves_order() -> None:
+@pytest.mark.parametrize("sort", ["pinned", "recent"])
+async def test_session_list_next_page_uses_full_keyset_and_preserves_order(sort) -> None:
     user = _user()
     pinned = ChatSession(
         id=uuid4(),
@@ -344,7 +345,7 @@ async def test_session_list_next_page_uses_full_keyset_and_preserves_order() -> 
     ]
     first_db = AsyncMock(spec=AsyncSession)
     first_db.execute.return_value = first_result
-    first_page = await list_sessions(user, first_db, page_size=1)
+    first_page = await list_sessions(user, first_db, page_size=1, sort=sort)
 
     second_result = MagicMock()
     second_result.all.return_value = [
@@ -353,23 +354,31 @@ async def test_session_list_next_page_uses_full_keyset_and_preserves_order() -> 
     second_db = AsyncMock(spec=AsyncSession)
     second_db.execute.return_value = second_result
     second_page = await list_sessions(
-        user, second_db, page_size=2, cursor=first_page["nextCursor"]
+        user, second_db, page_size=2, cursor=first_page["nextCursor"], sort=sort,
     )
 
     assert [item["id"] for item in second_page["items"]] == [str(overflow.id)]
     assert second_page["nextCursor"] is None
     statement = second_db.execute.await_args.args[0]
     sql = str(statement)
-    assert "chat_sessions.is_pinned IS false OR chat_sessions.is_pinned IS true" in sql
+    if sort == "pinned":
+        assert "chat_sessions.is_pinned IS false OR chat_sessions.is_pinned IS true" in sql
+        assert sql.index("chat_sessions.is_pinned DESC") < sql.index(
+            "coalesce(anon_1.last_message_at, chat_sessions.created_at) DESC"
+        )
+    else:
+        assert "chat_sessions.is_pinned IS" not in sql
+        assert "chat_sessions.is_pinned DESC" not in str(first_db.execute.await_args.args[0]) + sql
     assert "coalesce(anon_1.last_message_at, chat_sessions.created_at) <" in sql
     assert "coalesce(anon_1.last_message_at, chat_sessions.created_at) =" in sql
     assert "chat_sessions.id <" in sql
-    assert sql.index("chat_sessions.is_pinned DESC") < sql.index(
-        "coalesce(anon_1.last_message_at, chat_sessions.created_at) DESC"
-    ) < sql.index("chat_sessions.id DESC")
+    assert sql.index("coalesce(anon_1.last_message_at, chat_sessions.created_at) DESC") < sql.index("chat_sessions.id DESC")
     assert user.id in statement.compile().params.values()
     assert pinned.created_at in statement.compile().params.values()
     assert pinned.id in statement.compile().params.values()
+    with pytest.raises(ApiError) as exc_info:
+        await list_sessions(user, second_db, cursor=first_page["nextCursor"], sort="recent" if sort == "pinned" else "pinned")
+    assert exc_info.value.field == "cursor"
 
 
 async def test_session_list_rejects_malformed_cursor() -> None:

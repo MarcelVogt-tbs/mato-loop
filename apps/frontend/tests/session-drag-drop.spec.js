@@ -33,10 +33,11 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
     routeUpdate: { callback: null },
     chat: {
       cachedSessions: sessions, sessionLists,
-      sessionList: (id) => sessionLists[id ?? 'standalone'],
-      ensureSessionList: (id) => sessionLists[id ?? 'standalone'],
+      sessionList(id) { return this.sessionLists[id ?? 'standalone'] },
+      ensureSessionList(id) { return this.sessionLists[id ?? 'standalone'] },
       setSessionScope: vi.fn().mockResolvedValue(),
       moveSession: vi.fn().mockResolvedValue(),
+      setSessionPinned: vi.fn().mockResolvedValue(),
       findCachedSession: vi.fn((id) => sessions.find((session) => session.id === id)),
       fetchSession: vi.fn(),
       markSessionRead: vi.fn().mockResolvedValue()
@@ -70,6 +71,7 @@ vi.mock('stores/chat', async () => {
   return { useChatStore: () => store }
 })
 vi.mock('stores/projects', () => ({ useProjectStore: () => projects }))
+vi.mock('src/features/dashboard/store', () => ({ useDashboardStore: () => ({ load: vi.fn().mockResolvedValue() }) }))
 vi.mock('stores/approvals', () => ({ useApprovalStore: () => pending }))
 vi.mock('stores/questions', () => ({ useQuestionStore: () => pending }))
 vi.mock('stores/agent-identity', () => ({ useAgentIdentityStore: () => ({ fetchIdentity: vi.fn().mockResolvedValue() }) }))
@@ -137,7 +139,7 @@ beforeEach(async () => {
   for (const name of ['QLayout', 'QDrawer', 'QToolbar', 'QSpace', 'QSeparator', 'QScrollArea', 'QItem', 'QItemSection', 'QItemLabel', 'QIcon', 'QList', 'QAvatar', 'QBadge', 'QCard', 'QCardSection', 'QCardActions', 'QBanner', 'QPageContainer', 'RouterLink']) {
     app.component(name, container)
   }
-  for (const name of ['QTooltip', 'QInput', 'QSkeleton', 'QSpinnerDots', 'RouterView']) app.component(name, { render: () => null })
+  for (const name of ['QTooltip', 'QInput', 'QSkeleton', 'QSpinner', 'QSpinnerDots', 'RouterView']) app.component(name, { render: () => null })
   app.component('QMenu', {
     props: ['modelValue'], emits: ['update:modelValue'],
     render() {
@@ -242,35 +244,65 @@ it('keeps project and session actions visible while their shared menu is open', 
   expect(projectAction.closest('.project-list-item').classList.contains('project-list-item--menu-open')).toBe(false)
 
   const sessionAction = root.querySelector('[aria-label="Aktionen für Project session"]')
+  root.querySelector('button[aria-label="Project session anheften"]').click()
+  await nextTick()
+  expect(chat.setSessionPinned).toHaveBeenCalledWith('project-session', true)
+  expect(useRoute().query).toEqual({})
   sessionAction.querySelector('.menu-stub__show').click()
   await nextTick()
   expect(sessionAction.closest('.session-list-item').classList.contains('session-list-item--menu-open')).toBe(true)
+  expect(root.querySelector('.session-actions-menu [aria-label="Project session anheften"]')).toBeNull()
 })
 
 it('uses the linked session project in the automation session menu even when it is not cached', async () => {
-  useAutomationStore().items = [{ id: 'automation', executionSessionId: 'linked', name: 'Bericht', enabled: true }]
+  useAutomationStore().items = [{ id: 'automation', executionSessionId: 'linked', name: 'Bericht', enabled: true, lastActivityAt: new Date(Date.now() - 120_000).toISOString() }]
   chat.fetchSession.mockImplementation(async (id) => id === 'linked' ? { id, title: 'Recherche', projectId: 'b' } : null)
   await nextTick()
-  expect(root.querySelector('#automation-list .session-list-item__pin-button')).toBeNull()
+  const toggle = root.querySelector('[aria-controls="automation-list"]')
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  toggle.click()
+  await nextTick()
+  expect(root.querySelector('#automation-list time').textContent).toBe('2m')
   root.querySelector('[aria-label="Aktionen für Bericht"] .menu-stub__show').click()
   await nextTick()
   await nextTick()
+  expect(root.querySelector('[aria-label="Recherche anheften"]')).toBeNull()
   const move = [...root.querySelectorAll('.session-actions-menu [clickable]')].find((item) => item.textContent === 'Verschieben')
   move.click()
   await nextTick()
   expect(root.querySelector('[role="dialog"] select').value).toBe('b')
 })
 
-it('scrolls an overflowing session title only by its hidden width on hover', () => {
+it('shows compact activity times and prioritizes approval over the unread dot', async () => {
+  const session = useChatStore().cachedSessions.find((item) => item.id === 'standalone')
+  Object.assign(session, { hasUnreadMessages: true, lastMessageAt: new Date(Date.now() - 120_000).toISOString() })
+  await nextTick()
+  const row = source('standalone').closest('.session-list-item')
+  expect([row.querySelector('time').textContent, row.querySelector('[role="status"]').getAttribute('aria-label')]).toEqual(['2m', 'Ungelesene Antwort'])
+  session.activeRunStatus = 'waiting_approval'
+  await nextTick()
+  expect(row.querySelector('[role="status"]').getAttribute('aria-label')).toBe('Freigabe erforderlich')
+  session.pinned = true
+  await nextTick()
+  expect(source('standalone').closest('.session-list-item').querySelector('time').textContent).toBe('2m')
+  root.querySelector('button[aria-label="Standalone nicht mehr anheften"]').click()
+  await nextTick()
+  expect(chat.setSessionPinned).toHaveBeenCalledWith('standalone', false)
+  Object.assign(session, { pinned: false, hasUnreadMessages: false, lastMessageAt: null, activeRunStatus: null })
+})
+
+it('scrolls an overflowing session title clear of the fade and button overlap', () => {
   const row = source('standalone').closest('.session-list-item')
   const title = row.querySelector('.session-list-item__title')
   const text = row.querySelector('.session-list-item__title-text')
+  title.style.setProperty('--session-title-fade-width', '12px')
+  title.style.setProperty('--session-title-fade-inset', '20px')
   Object.defineProperty(title, 'clientWidth', { value: 120 })
   vi.spyOn(text, 'getBoundingClientRect').mockReturnValue({ width: 260 })
 
   row.dispatchEvent(new Event('mouseenter'))
 
-  expect(title.style.getPropertyValue('--session-title-scroll-distance')).toBe('-140px')
+  expect(title.style.getPropertyValue('--session-title-scroll-distance')).toBe('-172px')
 })
 
 it.each([false, true])('beforeunload only warns about dirty editors (%s), leaving a cancelled exit connected', (dirty) => {

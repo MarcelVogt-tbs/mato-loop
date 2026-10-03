@@ -1,13 +1,8 @@
 <template>
-  <q-btn
-    flat
-    round
-    dense
-    size="sm"
+  <SidebarIconButton
     icon="more_horiz"
     :color="color"
     :aria-label="ariaLabel"
-    @click.stop
   >
     <q-menu
       v-model="open"
@@ -20,10 +15,11 @@
         <slot />
       </q-list>
     </q-menu>
-  </q-btn>
+  </SidebarIconButton>
 </template>
 
 <script setup>
+import SidebarIconButton from 'src/shared/ui/SidebarIconButton.vue'
 defineOptions({ name: 'SidebarActionMenu' })
 
 defineProps({

@@ -1,14 +1,27 @@
 <template>
   <q-item
     clickable dense v-ripple
-    class="session-list-item items-center rounded-borders q-px-sm q-py-xs q-my-xs"
+    class="sidebar-row session-list-item items-center rounded-borders q-px-sm q-py-xs"
     :class="{ 'session-list-item--menu-open': menuOpen }"
     :active="active"
-    :active-class="$q.dark.isActive ? 'bg-grey-9 text-white' : 'bg-grey-3 text-dark'"
+    active-class="sidebar-row--active"
     @mouseenter="prepareTitleScroll"
     @focusin="prepareTitleScroll"
     @click="emit('open', session)"
   >
+    <q-item-section side class="q-pr-sm">
+      <span class="session-list-item__status-slot row items-center justify-center">
+        <span v-if="indicator" role="status" :aria-label="indicator.label">
+          <template v-if="indicator.kind === 'approval'">
+            <q-icon name="pending_actions" color="warning" size="16px" />
+            <q-badge v-if="indicator.count > 1" floating rounded color="warning" text-color="dark" :label="indicator.count" />
+          </template>
+          <q-spinner v-else-if="indicator.kind === 'active'" size="14px" />
+          <q-icon v-else name="fiber_manual_record" color="primary" size="8px" />
+          <q-tooltip v-if="$q.platform.is.mobile !== true">{{ indicator.label }}</q-tooltip>
+        </span>
+      </span>
+    </q-item-section>
     <q-item-section
       class="session-list-item__content"
       :draggable="draggable"
@@ -17,80 +30,66 @@
     >
       <q-item-label
         class="session-list-item__title text-body2"
-        :class="{ 'text-weight-bold': session.hasUnreadMessages, 'text-weight-medium': !session.hasUnreadMessages && active }"
+        :class="{ 'text-weight-medium': active }"
+        :title="caption || undefined"
       >
         <span class="session-list-item__title-text">{{ title || session.title }}</span>
         <span v-if="session.hasUnreadMessages" class="app-sr-only">, ungelesene Nachrichten</span>
       </q-item-label>
-      <q-item-label v-if="caption" caption>{{ caption }}</q-item-label>
     </q-item-section>
-    <q-item-section side class="session-list-item__actions row no-wrap items-center self-center">
-      <span
-        v-if="status"
-        class="session-list-item__status-slot row items-center justify-center q-mr-xs"
-        role="status"
-        :aria-label="status.label"
-      >
-        <template v-if="status.kind === 'approval'">
-          <q-icon name="pending_actions" color="warning" size="18px" />
-          <q-badge v-if="status.count > 1" floating rounded color="warning" text-color="dark" :label="status.count" />
-        </template>
-        <q-spinner-dots v-else-if="status.kind === 'active'" color="primary" size="18px" />
-        <q-tooltip v-if="$q.platform.is.mobile !== true">{{ status.label }}</q-tooltip>
-      </span>
-      <q-btn
-        v-if="showPin"
-        flat round dense size="sm" icon="push_pin"
-        class="session-list-item__action session-list-item__pin-button"
-        :class="{ 'session-list-item__pin-button--pinned': session.pinned }"
-        :color="session.pinned ? 'primary' : ($q.dark.isActive ? 'grey-5' : 'grey-7')"
-        :loading="pinning"
-        :aria-label="session.pinned ? `${session.title} nicht mehr anheften` : `${session.title} anheften`"
-        @click.stop="emit('toggle-pin', session)"
-      >
-        <q-tooltip>{{ session.pinned ? 'Nicht mehr anheften' : 'Anheften' }}</q-tooltip>
-      </q-btn>
-      <SidebarActionMenu
-        v-model="menuOpen"
-        class="session-list-item__action session-list-item__menu-button"
-        :color="$q.dark.isActive ? 'grey-5' : 'grey-7'"
-        :aria-label="`Aktionen für ${title || session.title}`"
-        list-class="session-actions-menu"
-      >
-        <template v-if="session.title != null">
-          <q-item clickable v-ripple v-close-popup @click="emit('rename', session)">
-            <q-item-section avatar><q-icon name="edit" /></q-item-section>
-            <q-item-section>Umbenennen</q-item-section>
-          </q-item>
-          <q-item clickable v-ripple v-close-popup @click="emit('move', session)">
-            <q-item-section avatar><q-icon name="drive_file_move" /></q-item-section>
-            <q-item-section>Verschieben</q-item-section>
-          </q-item>
-          <q-separator class="q-my-xs" />
-          <q-item clickable v-ripple v-close-popup @click="emit('archive', session)">
-            <q-item-section avatar><q-icon name="archive" /></q-item-section>
-            <q-item-section>Archivieren</q-item-section>
-          </q-item>
-          <q-item
-            clickable v-ripple v-close-popup class="text-negative"
-            v-confirm="{ message: `Session „${session.title}“ löschen?`, title: 'Session löschen', okLabel: 'Löschen' }"
-            @click="emit('delete', session)"
+    <q-item-section side class="session-list-item__trailing self-center">
+      <div class="session-list-item__utility row no-wrap items-center">
+        <div class="session-list-item__actions row no-wrap items-center">
+          <SidebarIconButton
+            v-if="showPin" icon="push_pin" class="session-list-item__pin-button"
+            :class="{ 'session-list-item__pin-button--pinned': session.pinned }"
+            :color="session.pinned ? 'primary' : ($q.dark.isActive ? 'grey-5' : 'grey-7')"
+            :loading="pinning"
+            :aria-label="session.pinned ? `${session.title} nicht mehr anheften` : `${session.title} anheften`"
+            @click="emit('toggle-pin', session)"
+          />
+          <SidebarActionMenu
+            v-model="menuOpen"
+            class="session-list-item__menu-button"
+            :color="$q.dark.isActive ? 'grey-5' : 'grey-7'"
+            :aria-label="`Aktionen für ${title || session.title}`"
+            list-class="session-actions-menu"
           >
-            <q-item-section avatar><q-icon name="delete_outline" /></q-item-section>
-            <q-item-section>Löschen</q-item-section>
-          </q-item>
-        </template>
-        <q-item v-else><q-item-section>Session wird geladen …</q-item-section></q-item>
-      </SidebarActionMenu>
+            <template v-if="session.title != null">
+              <SidebarNavItem icon="edit" label="Umbenennen" v-close-popup @click="emit('rename', session)" />
+              <SidebarNavItem icon="drive_file_move" label="Verschieben" v-close-popup @click="emit('move', session)" />
+              <q-separator class="q-my-xs" />
+              <SidebarNavItem icon="archive" label="Archivieren" v-close-popup @click="emit('archive', session)" />
+              <SidebarNavItem
+                icon="delete_outline" label="Löschen" v-close-popup class="text-negative"
+                v-confirm="{ message: `Session „${session.title}“ löschen?`, title: 'Session löschen', okLabel: 'Löschen' }"
+                @click="emit('delete', session)"
+              />
+            </template>
+            <q-item v-else><q-item-section>Session wird geladen …</q-item-section></q-item>
+          </SidebarActionMenu>
+        </div>
+        <time
+          v-if="timestamp" class="session-list-item__time q-ml-xs text-caption app-muted text-no-wrap text-right"
+          :datetime="timestamp" :title="`Letzte Aktivität: ${formatAbsoluteDateTime(timestamp)}`"
+          :aria-label="`Letzte Aktivität: ${formatAbsoluteDateTime(timestamp)}`"
+        >{{ formatCompactAge(timestamp, now) }}</time>
+      </div>
     </q-item-section>
   </q-item>
 </template>
 
 <script setup>
+import { computed } from 'vue'
+import { formatAbsoluteDateTime, formatCompactAge } from 'src/utils/date-time'
+import { sessionSidebarStatus } from '../session-groups'
+import SidebarIconButton from 'src/shared/ui/SidebarIconButton.vue'
+import SidebarNavItem from 'src/shared/ui/SidebarNavItem.vue'
 import SidebarActionMenu from './SidebarActionMenu.vue'
 
-defineProps({
+const props = defineProps({
   session: { type: Object, required: true },
+  now: { type: Number, default: Date.now },
   active: Boolean,
   title: { type: String, default: '' },
   caption: { type: String, default: '' },
@@ -101,11 +100,17 @@ defineProps({
 })
 const menuOpen = defineModel('menuOpen', { type: Boolean, default: false })
 const emit = defineEmits(['open', 'rename', 'move', 'archive', 'delete', 'toggle-pin', 'drag-start', 'drag-end'])
+const timestamp = computed(() => props.session.lastMessageAt || props.session.createdAt)
+const indicator = computed(() => props.status || sessionSidebarStatus(props.session)
+  || (props.session.hasUnreadMessages ? { kind: 'unread', label: 'Ungelesene Antwort' } : null))
 
 function prepareTitleScroll(event) {
   const title = event.currentTarget.querySelector('.session-list-item__title')
   const text = title.querySelector('.session-list-item__title-text')
-  const distance = Math.max(0, text.getBoundingClientRect().width - title.clientWidth)
+  const style = window.getComputedStyle(title)
+  const fade = (parseFloat(style.getPropertyValue('--session-title-fade-width')) || 0)
+    + (parseFloat(style.getPropertyValue('--session-title-fade-inset')) || 0)
+  const distance = Math.max(0, text.getBoundingClientRect().width - title.clientWidth + fade)
   title.style.setProperty('--session-title-scroll-distance', `${-distance}px`)
   title.style.setProperty('--session-title-scroll-duration', `${distance / 35}s`)
 }

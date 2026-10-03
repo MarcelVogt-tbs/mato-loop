@@ -847,6 +847,7 @@ async def list_sessions(
     session_serializer: PayloadSerializer,
     archived: bool = False,
     include_archived: bool = False,
+    sort: Literal["pinned", "recent"] = "pinned",
 ) -> dict[str, Any]:
     from mato_loop_backend.sessions.archive import active_session_clause
     if project_id is not None and standalone:
@@ -860,6 +861,8 @@ async def list_sessions(
     scope = str(project_id) if project_id is not None else "standalone" if standalone else "all"
     if archived or include_archived:
         scope += ":archived" if archived else ":including-archived"
+    if sort == "recent":
+        scope += ":recent"
     active_run_status = (
         select(AgentRun.status)
         .where(
@@ -922,18 +925,21 @@ async def list_sessions(
             activity_at < cursor_activity_at,
             and_(activity_at == cursor_activity_at, ChatSession.id < cursor_id),
         )
-        statement = statement.where(
-            or_(
-                ChatSession.is_pinned.is_(False),
-                and_(ChatSession.is_pinned.is_(True), activity_tail),
+        if sort == "pinned":
+            activity_tail = (
+                or_(
+                    ChatSession.is_pinned.is_(False),
+                    and_(ChatSession.is_pinned.is_(True), activity_tail),
+                )
+                if cursor_pinned
+                else and_(ChatSession.is_pinned.is_(False), activity_tail)
             )
-            if cursor_pinned
-            else and_(ChatSession.is_pinned.is_(False), activity_tail)
-        )
+        statement = statement.where(activity_tail)
+    if sort == "pinned":
+        statement = statement.order_by(ChatSession.is_pinned.desc())
     rows = (
         await db.execute(
             statement.order_by(
-                ChatSession.is_pinned.desc(),
                 activity_at.desc(),
                 ChatSession.id.desc(),
             ).limit(page_size + 1)

@@ -15,6 +15,7 @@ import { useQuestionStore } from 'stores/questions'
 import { useSearchStore } from 'stores/search'
 import { useTerminalStore } from 'stores/terminal'
 import { useWorkspaceStore } from 'stores/workspace'
+import { useDashboardStore } from 'src/features/dashboard/store'
 import { terminalControlCenterState } from 'src/app/control-center/manifest'
 import { isPwaUpdateReload } from 'src/utils/pwa-update'
 import { searchShortcutAction } from 'src/utils/search-shortcut'
@@ -31,6 +32,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   const automations = useAutomationStore()
   const browser = useBrowserStore()
   const chat = useChatStore()
+  const dashboard = useDashboardStore()
   const controlCenter = useControlCenterStore()
   const executionAgents = useExecutionAgentStore()
   const notifications = useInAppNotificationStore()
@@ -97,6 +99,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   function refreshSessionsWhenVisible() {
     refreshAppPresence()
     if (document.visibilityState !== 'visible') return
+    if (route.name === 'dashboard') void dashboard.load({ suppressErrorToast: true }).catch(() => {})
     void projects.fetchAll({ suppressErrorToast: true }).catch(() => {})
     if (chat.current?.id && !chat.running) {
       void chat.refreshSession(chat.current.id, { suppressErrorToast: true }).catch(() => {})
@@ -135,6 +138,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
         approvals.fetchPending({ suppressErrorToast: true }),
         questions.fetchPending({ suppressErrorToast: true })
       ]
+      if (route.name === 'dashboard') requests.push(dashboard.load({ suppressErrorToast: true }))
       if (appIsFocused()) requests.push(notifications.fetchLatest({ suppressErrorToast: true }))
       if (chat.current?.id && !chat.running) {
         requests.push(chat.refreshSession(chat.current.id, { suppressErrorToast: true }))

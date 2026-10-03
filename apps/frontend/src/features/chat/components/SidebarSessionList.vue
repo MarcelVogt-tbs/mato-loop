@@ -1,20 +1,9 @@
 <template>
-  <div class="sidebar-session-list" :class="{ 'sidebar-session-list--nested': nested }">
+  <div class="sidebar-session-list" :class="{ 'q-pl-sm': nested }">
     <div v-if="list.loading && !list.loaded" class="q-px-sm" role="status" aria-label="Sessions werden geladen">
       <q-skeleton v-for="index in 3" :key="index" type="text" height="32px" class="q-my-xs" />
     </div>
-    <div v-else-if="list.loadFailed && !list.loaded" class="q-pa-sm">
-      <q-btn
-        flat
-        dense
-        no-caps
-        class="full-width"
-        color="primary"
-        icon-right="refresh"
-        label="Erneut versuchen"
-        @click="emit('retry')"
-      />
-    </div>
+    <SidebarNavItem v-else-if="list.loadFailed && !list.loaded" icon="refresh" label="Erneut versuchen" @click="emit('retry')" />
     <q-list v-else class="session-list">
       <q-item v-if="list.loaded && !list.items.length" dense class="q-px-sm q-py-xs">
         <q-item-section>
@@ -25,7 +14,7 @@
         <q-item-label
           v-if="showGroups"
           header
-          class="q-px-sm q-pt-md q-pb-xs text-caption text-weight-medium"
+          class="sidebar-session-group-label q-pr-sm q-pt-sm q-pb-xs text-caption text-weight-medium"
           :class="$q.dark.isActive ? 'text-grey-5' : 'text-grey-7'"
         >
           {{ group.label }}
@@ -34,6 +23,7 @@
           v-for="session in group.sessions"
           :key="session.id"
           :session="session"
+          :now="now"
           :active="activeSessionId === session.id"
           :status="statuses.get(session.id)"
           :pinning="pinningSessionId === session.id"
@@ -53,13 +43,9 @@
     <div v-if="list.loadingMore" class="q-px-sm q-pb-xs" role="status" aria-label="Weitere Sessions werden geladen">
       <q-skeleton v-for="index in 3" :key="index" type="text" height="32px" class="q-my-xs" />
     </div>
-    <div v-else-if="list.nextCursor || list.loadMoreFailed" class="q-px-sm q-pb-xs">
-      <q-btn
-        flat
-        dense
-        no-caps
-        color="primary"
-        :icon-right="list.loadMoreFailed ? 'refresh' : undefined"
+    <div v-else-if="list.nextCursor || list.loadMoreFailed" class="q-pb-xs">
+      <SidebarNavItem
+        :icon="list.loadMoreFailed ? 'refresh' : 'expand_more'"
         :label="list.loadMoreFailed ? 'Erneut versuchen' : 'Mehr anzeigen'"
         @click="emit(list.loadMoreFailed ? 'retry-more' : 'load-more')"
       />
@@ -69,6 +55,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import SidebarNavItem from 'src/shared/ui/SidebarNavItem.vue'
 import SidebarSessionItem from './SidebarSessionItem.vue'
 import { groupSessionsByRecency } from 'src/utils/session-groups'
 
@@ -76,6 +63,7 @@ defineOptions({ name: 'SidebarSessionList' })
 
 const props = defineProps({
   list: { type: Object, required: true },
+  now: { type: Number, default: Date.now },
   activeSessionId: { type: String, default: null },
   statuses: { type: Map, default: () => new Map() },
   pinningSessionId: { type: String, default: null },

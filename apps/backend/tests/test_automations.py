@@ -184,13 +184,18 @@ def test_status_and_list_summary_are_compact_and_batch_active_statuses(automatio
                    execution_session_id=uuid4(), enabled=False, revision=2, schedules=[AutomationSchedule(enabled=True, next_run_at=now)]),
     ]
     db.scalars.return_value = MagicMock(all=MagicMock(return_value=items))
-    db.execute.return_value = MagicMock(all=MagicMock(return_value=[(items[0].id, "queued")]))
+    active_rows = MagicMock(all=MagicMock(return_value=[(items[0].id, "queued")]))
+    db.execute.side_effect = [
+        active_rows,
+        MagicMock(all=MagicMock(return_value=[(item.execution_session_id, now) for item in items])),
+    ]
     db.get.side_effect = AssertionError("Compact reads must not load sessions or results")
     response = client.get("/automations?summary=true")
     assert response.status_code == 200
     payload = response.json()["items"]
     status_keys = {"id", "revision", "enabled", "triggers", "scheduleCount", "effectiveState"}
-    assert all(set(item) == status_keys | {"name", "taskExcerpt", "executionSessionId"} for item in payload)
+    assert all(set(item) == status_keys | {"name", "taskExcerpt", "executionSessionId", "lastActivityAt"} for item in payload)
+    assert [datetime.fromisoformat(item["lastActivityAt"]) for item in payload] == [now, now]
     assert payload[0]["taskExcerpt"] == "x" * 240
     assert payload[0]["scheduleCount"] == 0
     assert payload[0]["effectiveState"] == {
@@ -199,14 +204,16 @@ def test_status_and_list_summary_are_compact_and_batch_active_statuses(automatio
     assert payload[1]["effectiveState"] == {
         "enabled": False, "activeRunStatus": None, "nextRunAt": None,
     }
-    db.execute.assert_awaited_once()
+    assert db.execute.await_count == 2
     db.scalars.assert_awaited_once()
     query = db.scalars.await_args.args[0].compile()
     assert user.id in query.params.values()
     assert "chat_sessions.archived_at IS NULL" in str(query)
-    active_query = db.execute.await_args.args[0].compile()
+    active_query = db.execute.await_args_list[0].args[0].compile()
     assert [item.id for item in items] in active_query.params.values()
     assert "definition_snapshot" not in str(active_query)
+    db.execute.side_effect = None
+    db.execute.return_value = active_rows
     for item, summary in zip(items, payload, strict=True):
         db.scalar.return_value = item
         response = client.get(f"/automations/{item.id}/status")
@@ -251,6 +258,7 @@ def test_detail_history_is_opt_out_and_default_list_stays_full(automation_api):
         execution_session_id=uuid4(), revision=1, schedules=[],
     )
     db.get.return_value = ChatSession(id=item.execution_session_id)
+    db.execute.return_value = MagicMock(all=MagicMock(return_value=[]))
     db.scalar.side_effect = [item, None, item, None, None]
     db.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
     light = client.get(f"/automations/{item.id}?includeHistory=false")

@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only, selectinload
 
@@ -114,6 +114,7 @@ class AutomationSummaryResponse(AutomationStatusResponse):
     name: str
     execution_session_id: UUID = Field(alias="executionSessionId")
     task_excerpt: str = Field(alias="taskExcerpt", max_length=240)
+    last_activity_at: datetime | None = Field(alias="lastActivityAt")
 
 
 class AutomationSummaryListResponse(BaseModel):
@@ -136,6 +137,20 @@ class AutomationRunSummaryListResponse(BaseModel):
     items: list[AutomationRunSummaryResponse]
     page: int
     has_more: bool = Field(alias="hasMore")
+
+
+async def _session_activity_times(
+    db: AsyncSession, session_ids: list[UUID]
+) -> dict[UUID, datetime]:
+    if not session_ids:
+        return {}
+    rows = await db.execute(
+        select(ChatSession.id, func.coalesce(func.max(Message.created_at), ChatSession.created_at))
+        .outerjoin(Message, (Message.session_id == ChatSession.id) & Message.role.in_(("user", "assistant")))
+        .where(ChatSession.id.in_(session_ids))
+        .group_by(ChatSession.id, ChatSession.created_at)
+    )
+    return dict(rows.all())
 
 
 async def _active_run_statuses(
@@ -238,6 +253,7 @@ async def _automation_payload(
         "triggers": item.triggers or [],
         "revision": item.revision,
         "executionSessionId": str(item.execution_session_id),
+        "lastActivityAt": (await _session_activity_times(db, [item.execution_session_id])).get(item.execution_session_id),
         "runtime": runtime_snapshot(execution_session),
         "schedules": schedules,
         "effectiveState": {
@@ -364,6 +380,7 @@ async def list_automations(
     )
     if summary:
         active_statuses = await _active_run_statuses(db, [item.id for item in items])
+        activity_times = await _session_activity_times(db, [item.execution_session_id for item in items])
         archived = session_id is not None and await db.scalar(select(ChatSession.id).where(
             ChatSession.id == session_id, ChatSession.user_id == user.id, active_session_clause(),
         )) is None
@@ -373,6 +390,7 @@ async def list_automations(
                 name=item.name,
                 executionSessionId=item.execution_session_id,
                 taskExcerpt=item.task[:240],
+                lastActivityAt=activity_times.get(item.execution_session_id),
             )
             for item in items
         ])
