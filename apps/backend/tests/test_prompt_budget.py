@@ -119,7 +119,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
         "brief",
         "name_hint",
     }
-    # Event-driven automations, permission preparation and administrator input expand the contract.
-    assert prompt_tokens <= 8_000, prompt_tokens
+    # Includes automation offers, event triggers, permission preparation and administrator input.
+    assert prompt_tokens <= 8_200, prompt_tokens
     assert schema_tokens <= 13_200, schema_tokens
-    assert prompt_tokens + schema_tokens <= 21_200, prompt_tokens + schema_tokens
+    assert prompt_tokens + schema_tokens <= 21_400, prompt_tokens + schema_tokens

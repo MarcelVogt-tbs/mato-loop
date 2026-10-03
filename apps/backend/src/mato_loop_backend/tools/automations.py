@@ -575,6 +575,10 @@ CREATE_AUTOMATION = ToolDefinition(
             icon="add_task",
              actions=(_AUTOMATION_CREATE,),
              prompt_fragments=(
+                 "By default, offer an automation when unfinished work requires a later check or "
+                 "continuation, or when a task would benefit from recurring execution. Follow the user's "
+                 "stated preferences on whether and when to make these offers. Keep the offer brief and "
+                 "specific about timing and scope, and use only supported scheduling or trigger capabilities.",
                  "Automations run in their session with its environment and permission grants. "
                  "Triggers agent_response and agent_error observe the owner's ordinary agent runs; "
                  "automation-origin work never emits these triggers. Put optional event conditions in task. "
