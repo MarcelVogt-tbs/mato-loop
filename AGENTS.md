@@ -21,6 +21,8 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - `docker-compose.yaml`: prepared production stack with a MatoLoop Agent.
 - `docker-compose.no-agent.yaml`: prepared production stack without a MatoLoop Agent.
 - `scripts/dev.sh`: unified entry point for development, checks, tests, and migrations.
+- `scripts/eval.sh`: entry point for opt-in evaluations through the development stack.
+- `docker-compose.eval.yaml`: evaluation-only overlay for the development Compose configuration.
 - `docs/ci-and-releases.md`: Forgejo runner, branch, image, and release contract.
 
 ## Language and Style
@@ -39,6 +41,7 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 ## Development Environment
 
 - Use only `docker-compose.dev.yaml` through `./scripts/dev.sh` for development work.
+- Run evaluations through `./scripts/eval.sh`; it delegates to `./scripts/dev.sh compose` and adds `docker-compose.eval.yaml` only for evaluation-specific services.
 - Start the prepared production stack only when explicitly requested.
 - The development stack consists of `db`, `embedding`, `backend`, `frontend`, and `matoloop-agent`.
 - Backend development data lives in the `db_data` and `app_data` named volumes. MatoLoop Agent state and home use the configured host bind mounts.

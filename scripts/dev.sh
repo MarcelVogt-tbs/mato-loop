@@ -25,15 +25,15 @@ usage() {
         "  logs [service]      Show logs" \
         "  status              Show service status" \
         "  config              Show the resolved Compose configuration" \
+        "  compose [args]      Run Docker Compose with development configuration" \
         "  doctor              Check pgvector and the embedding index" \
         "  db [args]           Run Alembic" \
         "  lock <target>       Update the backend, frontend, or MatoLoop Agent lockfile" \
         "  format <target>     Format backend or MatoLoop Agent code" \
         "  check [target]      Check backend, frontend, and MatoLoop Agent" \
         "  test [target]       Test backend, frontend, MatoLoop Agent, or local RAG stack" \
-        "  eval-prompts [args] Run serial live prompt evaluations" \
-        "  eval-session-cache [args] Evaluate cache reuse across real sessions" \
-        "  eval-coding-comparison [args] Compare persisted coding-run artifacts"
+        "" \
+        "Evaluations: ./scripts/eval.sh help"
 }
 
 run_backend() {
@@ -129,6 +129,7 @@ case "${1:-}" in
     logs) shift; compose logs -f "$@" ;;
     status) compose ps ;;
     config) compose config ;;
+    compose) shift; compose "$@" ;;
     doctor)
         compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT extversion AS vector_version FROM pg_extension WHERE extname = '\''vector'\'';"'
         compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT format_type(a.atttypid, a.atttypmod) AS embedding_type FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname = '\''memory_embeddings'\'' AND a.attname = '\''embedding'\'';"'
@@ -164,9 +165,6 @@ case "${1:-}" in
         ;;
     check) run_target check "${2:-all}" ;;
     test) run_target test "${2:-all}" "${@:3}" ;;
-    eval-prompts) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.prompt_eval "$@" ;;
-    eval-session-cache) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.session_cache_eval "$@" ;;
-    eval-coding-comparison) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.coding_eval "$@" ;;
     help|-h|--help|'') usage ;;
     *) usage >&2; exit 1 ;;
 esac

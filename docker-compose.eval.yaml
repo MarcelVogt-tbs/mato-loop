@@ -1,0 +1,27 @@
+services:
+  shell-decider-eval:
+    profiles: [evaluation]
+    build:
+      context: ./scripts/shell-decider-eval
+    init: true
+    cpus: 8
+    mem_limit: 12g
+    environment:
+      HF_HOME: /cache/huggingface
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      PYTHONPATH: /source/apps/matoloop-agent/src
+      PYTHONDONTWRITEBYTECODE: "1"
+      OMP_NUM_THREADS: "8"
+      OPENBLAS_NUM_THREADS: "8"
+    volumes:
+      - .:/source:ro
+      - ./data/shell-decider-eval:/results
+      - shell_decider_eval_cache:/cache
+    working_dir: /source/scripts/shell-decider-eval
+    entrypoint: [python, -u, evaluate.py]
+    networks:
+      - mato-loop
+
+volumes:
+  shell_decider_eval_cache:

@@ -55,7 +55,7 @@ remote processing. Output contains safe metrics, not credentials or raw provider
 Run in the development stack, with explicit owner and model IDs:
 
 ```bash
-bash -c 'source ./scripts/dev.sh help >/dev/null && compose exec -T backend /opt/mato-loop/backend/venv/bin/python -B -m mato_loop_backend.browser_perf_eval --live --owner-id "$1" --model-id "$2"' sh OWNER_UUID MODEL_UUID
+./scripts/eval.sh browser-performance --live --owner-id OWNER_UUID --model-id MODEL_UUID
 ```
 
 One serial four-cell sample on 2026-09-10, using `openai-codex/gpt-5.6-sol`:
@@ -131,7 +131,7 @@ character by character, navigation or the complete real browser UI. Those behavi
 covered separately by isolated headed worker tests.
 
 ```bash
-bash -c 'source ./scripts/dev.sh help >/dev/null && compose exec -T backend /opt/mato-loop/backend/venv/bin/python -B -m mato_loop_backend.browser_perf_eval --live --interface narrow --owner-id "$1" --model-id "$2"' sh OWNER_UUID MODEL_UUID
+./scripts/eval.sh browser-performance --live --interface narrow --owner-id OWNER_UUID --model-id MODEL_UUID
 ```
 
 One additional four-cell sample on 2026-09-10 with the same `openai-codex/gpt-5.6-sol` model:

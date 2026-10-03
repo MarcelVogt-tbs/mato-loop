@@ -87,6 +87,21 @@ Migrations:
 
 `.env.dev` contains the ready-to-run development configuration. Local overrides belong in `.env.dev.override`; use `.env.dev.override.example` as a template.
 
+### Evaluations
+
+Opt-in evaluations have a separate entry point using the same development Compose project and environment files:
+
+```bash
+./scripts/eval.sh help
+./scripts/eval.sh prompts --help
+./scripts/eval.sh session-cache --help
+./scripts/eval.sh coding-comparison --help
+./scripts/eval.sh browser-performance --help
+./scripts/eval.sh shell-decider --check
+```
+
+Arguments after the target are passed to the evaluator unchanged. `browser-performance` uses the running backend; the other targets use disposable containers. Shell-decider evaluations add `docker-compose.eval.yaml` and build their dedicated image only when invoked. The existing Qwen comparison and teacher experiments are available through `shell-decider --qwen-quick`, `--teacher-test`, and `--review-teacher`. See the [shell-decider report](docs/shell-decider-cpu-evaluation-2026-10.md) and [browser comparison](docs/browser-performance.md) for measurement details. Raw evaluation outputs remain local evidence under ignored `data/` paths.
+
 ## Development Data
 
 The development stack uses named volumes:
