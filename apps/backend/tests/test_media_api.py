@@ -305,7 +305,7 @@ async def test_common_voice_transcription_preserves_persisted_audio_and_is_idemp
         "completed" if outcome == "success" else "unavailable" if outcome == "unavailable" else "failed"
     )
     projected = message_dict(message)["content"]
-    assert f"ID {voice.id}" in projected
+    assert "root=files" in projected
     assert voice.file_path in projected
     assert ("transcript included in user text" in projected) == (outcome == "success")
     assert enqueue.await_count == (1 if outcome == "success" else 0)
