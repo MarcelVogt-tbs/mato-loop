@@ -1,5 +1,6 @@
 <template>
-  <div :class="compact ? 'row items-center q-gutter-xs' : 'column q-gutter-md'">
+  <div :class="compact ? has('computer') && $q.screen.lt.sm ? 'chat-start-settings-mobile' : 'row items-center q-gutter-xs' : 'column q-gutter-md'">
+    <slot name="before" />
     <q-banner v-if="showWarning && warning" dense rounded class="app-surface-tonal">
       <template #avatar><q-icon name="warning_amber" color="warning" /></template>
       {{ warning }}
@@ -145,9 +146,9 @@ const selectedModelTrustIcon = computed(() => selectedModelConfig.value?.effecti
 const reasoningEffortOptions = computed(() => modelReasoningEffortOptions(selectedModelConfig.value))
 const modelSupportsTools = computed(() => selectedModelConfig.value?.supportsTools !== false)
 const memoryModeOptions = [
-  { label: 'Nutzen und speichern', value: 'full', icon: 'memory', description: 'Vorherige Chats und Erinnerungen nutzen; neue Erinnerungen speichern' },
-  { label: 'Nur nutzen', value: 'read_only', icon: 'visibility', description: 'Vorherige Chats und Erinnerungen nutzen; nichts speichern' },
-  { label: 'Sitzungsübergreifend aus', value: 'disabled', icon: 'memory_alt', description: 'Keine Inhalte aus vorherigen Chats oder Erinnerungen nutzen' }
+  { label: 'Nutzen und speichern', shortLabel: 'Voll', value: 'full', icon: 'memory', description: 'Vorherige Chats und Erinnerungen nutzen; neue Erinnerungen speichern' },
+  { label: 'Nur nutzen', shortLabel: 'Nur nutzen', value: 'read_only', icon: 'visibility', description: 'Vorherige Chats und Erinnerungen nutzen; nichts speichern' },
+  { label: 'Sitzungsübergreifend aus', shortLabel: 'Aus', value: 'disabled', icon: 'memory_alt', description: 'Keine Inhalte aus vorherigen Chats oder Erinnerungen nutzen' }
 ]
 const effectiveMemoryMode = computed(() => props.session?.effectiveMemoryMode || props.session?.memoryMode || 'disabled')
 const memoryMessage = computed(() => {
@@ -165,6 +166,7 @@ const searchAvailable = computed(() => integrations.search.effectiveEnabled)
 const webSearchOptions = computed(() => [
   {
     label: searchAvailable.value && modelSupportsTools.value ? 'Erzwingen' : 'Erzwingen (nicht verfügbar)',
+    shortLabel: searchAvailable.value && modelSupportsTools.value ? 'Pflicht' : 'Nicht verfügbar',
     value: 'required',
     icon: 'travel_explore',
     disable: !searchAvailable.value || !modelSupportsTools.value,
@@ -172,11 +174,12 @@ const webSearchOptions = computed(() => [
   },
   {
     label: searchAvailable.value && modelSupportsTools.value ? 'Verfügbar' : 'Nicht verfügbar',
+    shortLabel: searchAvailable.value && modelSupportsTools.value ? 'Auto' : 'Nicht verfügbar',
     value: 'available',
     icon: 'public',
     description: 'Das Modell entscheidet über die Websuche'
   },
-  { label: 'Deaktiviert', value: 'disabled', icon: 'public_off', description: 'Kein Websuch-Tool anbieten' }
+  { label: 'Deaktiviert', shortLabel: 'Aus', value: 'disabled', icon: 'public_off', description: 'Kein Websuch-Tool anbieten' }
 ])
 const webSearchIcon = computed(() => ({
   required: 'travel_explore',
@@ -209,7 +212,7 @@ const warning = computed(() => {
     && (props.session?.memoryUnavailableReason || (!props.session?.memoryToolsAvailable && effectiveMemoryMode.value !== 'disabled'))
   ) warnings.push(memoryMessage.value)
   if (requiredSearchUnavailable.value) warnings.push(webSearchTooltip.value || 'Die erforderliche Websuche ist nicht verfügbar.')
-  if (executionAgentMessage.value) warnings.push(executionAgentMessage.value)
+  if (has('computer') && executionAgentMessage.value) warnings.push(executionAgentMessage.value)
   return warnings.join(' ')
 })
 
@@ -303,15 +306,26 @@ const ComputerField = defineComponent(() => () => [
   h(QSelect, selectProps({
     modelValue: props.session?.preferredExecutionAgentId,
     options: executionAgentOptions.value,
-    label: 'Computer',
-    hint: 'Der Computer wird für den nächsten Lauf verwendet.',
-    persistentHint: true,
+    label: props.compact ? undefined : 'Computer',
+    class: props.compact ? 'chat-start-select col-auto q-px-sm text-body2' : undefined,
+    behavior: props.compact ? 'menu' : 'default',
+    hideBottomSpace: props.compact,
+    'aria-label': 'Computer auswählen',
+    hint: props.compact ? undefined : 'Der Computer wird für den nächsten Lauf verwendet.',
+    persistentHint: !props.compact,
     'onUpdate:modelValue': selectExecutionAgent
   }), {
-    prepend: () => h(QIcon, { name: 'computer' }),
+    prepend: () => h(QIcon, {
+      name: props.compact && selectedExecutionAgent.value?.connected === false ? 'cloud_off' : 'computer',
+      size: props.compact ? '18px' : undefined,
+      color: props.compact && props.session?.preferredExecutionAgentId && executionAgentMessage.value ? 'warning' : undefined
+    }),
+    selected: props.compact ? () => h('span', { class: 'ellipsis' }, executionAgentOptions.value.find(
+      (option) => option.value === (props.session?.preferredExecutionAgentId || null)
+    )?.label) : undefined,
     option: (scope) => optionSlot(scope, (option) => option.connected === false ? 'cloud_off' : 'computer')
   }),
-  executionAgentMessage.value && !props.showWarning
+  executionAgentMessage.value && !props.showWarning && !props.compact
     ? h(QBanner, { dense: true, rounded: true, class: 'app-surface-tonal' }, {
         avatar: () => h(QIcon, {
           name: selectedExecutionAgent.value?.connected === false ? 'cloud_off' : 'info_outline',
@@ -324,23 +338,41 @@ const ComputerField = defineComponent(() => () => [
 const MemoryField = defineComponent(() => () => h(QSelect, selectProps({
   modelValue: props.session?.memoryMode,
   options: memoryModeOptions,
-  label: 'Memory',
-  hint: memoryMessage.value,
-  persistentHint: true,
+  label: props.compact ? undefined : 'Memory',
+  class: props.compact ? 'chat-start-select col-auto q-px-sm text-body2' : undefined,
+  behavior: props.compact ? 'menu' : 'default',
+  hideBottomSpace: props.compact,
+  'aria-label': 'Memory-Modus auswählen',
+  hint: props.compact ? undefined : memoryMessage.value,
+  persistentHint: !props.compact,
   'onUpdate:modelValue': (value) => update({ memory_mode: value })
 }), {
-  prepend: () => h(QIcon, { name: memoryModeIcon.value }),
+  prepend: () => h(QIcon, {
+    name: memoryModeIcon.value,
+    size: props.compact ? '18px' : undefined,
+    color: props.compact && props.session?.memoryMode !== 'disabled' && props.session?.memoryUnavailableReason ? 'warning' : undefined
+  }),
+  selected: props.compact ? () => h('span', { class: 'ellipsis' }, `Memory: ${memoryModeOptions.find(
+    (option) => option.value === props.session?.memoryMode
+  )?.[$q.screen.lt.sm ? 'shortLabel' : 'label'] || 'Nicht verfügbar'}`) : undefined,
   option: (scope) => optionSlot(scope, (option) => option.icon)
 }))
 const WebSearchField = defineComponent(() => () => h(QSelect, selectProps({
   modelValue: props.session?.webSearchPolicy,
   options: webSearchOptions.value,
-  label: 'Websuche',
-  hint: webSearchMessage.value,
-  persistentHint: true,
+  label: props.compact ? undefined : 'Websuche',
+  class: props.compact ? 'chat-start-select col-auto q-px-sm text-body2' : undefined,
+  behavior: props.compact ? 'menu' : 'default',
+  hideBottomSpace: props.compact,
+  'aria-label': 'Websuche konfigurieren',
+  hint: props.compact ? undefined : webSearchMessage.value,
+  persistentHint: !props.compact,
   'onUpdate:modelValue': (value) => update({ web_search_policy: value })
 }), {
-  prepend: () => h(QIcon, { name: webSearchIcon.value }),
+  prepend: () => h(QIcon, { name: webSearchIcon.value, size: props.compact ? '18px' : undefined, color: props.compact && requiredSearchUnavailable.value ? 'warning' : undefined }),
+  selected: props.compact ? () => h('span', { class: 'ellipsis' }, `${$q.screen.lt.sm ? 'Web' : 'Websuche'}: ${webSearchOptions.value.find(
+    (option) => option.value === props.session?.webSearchPolicy
+  )?.[$q.screen.lt.sm ? 'shortLabel' : 'label'] || 'Nicht verfügbar'}`) : undefined,
   option: (scope) => optionSlot(scope, (option) => option.icon)
 }))
 

@@ -59,7 +59,10 @@
           />
         </div>
 
-        <HomeContent v-else-if="showHome && !runPresentation.showActivity" />
+        <HomeContent
+          v-else-if="showHome && !runPresentation.showActivity"
+          :computer-selection-disabled="draftProjectDisabled"
+        />
         <div v-else-if="isNewConversation" class="chat-session-state text-center q-pa-lg">
           <template v-if="!runPresentation.showActivity">
             <h1 class="text-h5 text-weight-bold q-mb-sm">Neue Session</h1>
@@ -353,26 +356,46 @@
         @undo="undoQueuedMessage"
       />
       <div class="chat-input-dock q-pa-md" :class="{ 'chat-input-dock--with-todos': chat.current?.todos?.length }">
-        <h2 v-if="showHome" class="text-subtitle2 q-mt-none q-mb-sm">Neues Gespräch</h2>
-        <div v-if="isNewConversation" class="row no-wrap items-center q-mb-sm">
-          <q-select
-            id="draft-project-select"
-            :model-value="routeProjectId"
-            :options="draftProjectOptions"
-            :display-value="routeProjectId ? projects.items.find(project => project.id === routeProjectId)?.name || 'Projekt' : 'Projekt wählen'"
-            :disable="draftProjectDisabled"
-            :loading="projects.loading || changingDraftProject"
-            borderless dense clearable emit-value map-options options-dense hide-bottom-space
-            behavior="menu" popup-content-class="app-menu-popup"
-            class="draft-project-select col-shrink q-px-sm text-body2"
-            aria-label="Projekt wählen oder wechseln"
-            @popup-show="loadDraftProjects"
-            @update:model-value="changeDraftProject"
-          >
-            <template #prepend><q-icon name="folder_open" size="18px" /></template>
-          </q-select>
-          <q-btn flat round dense size="sm" icon="add" class="col-auto q-ml-xs" aria-label="Neues Projekt erstellen" :disable="draftProjectDisabled" @click="openDraftProjectCreation" />
-        </div>
+        <h2 v-if="showHome" class="text-subtitle2 q-mt-none q-mb-sm">Neue Sitzung starten</h2>
+        <SessionSettingsFields
+          v-if="isNewConversation"
+          :session="chat.activeContext"
+          :disabled="draftProjectDisabled"
+          :fields="['computer', 'memory', 'webSearch']"
+          compact
+          class="q-mb-sm"
+          @update="chat.updateActive"
+        >
+          <template #before>
+            <div class="chat-start-project row no-wrap items-center col-auto">
+              <q-select
+                id="draft-project-select"
+                :model-value="routeProjectId"
+                :options="draftProjectOptions"
+                :disable="draftProjectDisabled"
+                :loading="projects.loading || changingDraftProject"
+                :clearable="Boolean(routeProjectId)"
+                borderless dense emit-value map-options options-dense hide-bottom-space
+                behavior="menu" popup-content-class="app-menu-popup"
+                class="draft-project-select q-px-sm text-body2"
+                :class="$q.screen.lt.sm ? 'col' : 'col-shrink'"
+                aria-label="Projekt wählen oder wechseln"
+                @popup-show="loadDraftProjects"
+                @update:model-value="changeDraftProject"
+              >
+                <template #prepend><q-icon name="folder_open" size="18px" /></template>
+                <template #selected><span class="ellipsis">{{ draftProjectLabel }}</span></template>
+                <template #after-options>
+                  <q-item v-if="$q.screen.lt.sm" clickable v-close-popup :disable="draftProjectDisabled" aria-label="Neues Projekt erstellen" @click="openDraftProjectCreation">
+                    <q-item-section avatar><q-icon name="add" /></q-item-section>
+                    <q-item-section>Neues Projekt erstellen</q-item-section>
+                  </q-item>
+                </template>
+              </q-select>
+              <q-btn v-if="$q.screen.gt.xs" flat round dense size="sm" icon="add" class="col-auto q-ml-xs" aria-label="Neues Projekt erstellen" :disable="draftProjectDisabled" @click="openDraftProjectCreation" />
+            </div>
+          </template>
+        </SessionSettingsFields>
         <SessionTodoStrip
           :todos="chat.current?.todos || []"
           :collapsed="chat.current?.todosCollapsed || false"
@@ -489,6 +512,7 @@ import ProjectDialog from 'src/features/projects/ProjectDialog.vue'
 import ChatComposer from 'src/features/chat/components/ChatComposer.vue'
 import ChatQueuedMessages from 'src/features/chat/components/ChatQueuedMessages.vue'
 import SessionTodoStrip from 'src/features/chat/components/SessionTodoStrip.vue'
+import SessionSettingsFields from 'src/features/chat/components/SessionSettingsFields.vue'
 import ControlCenterPanel from 'src/app/control-center/ControlCenterPanel.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
 import MessageAttachments from 'src/features/chat/components/MessageAttachments.vue'
@@ -608,6 +632,9 @@ const routeProjectId = computed(() => (
 const isNewConversation = computed(() => !routeSessionId.value && !chat.current && !chat.loading && !chat.loadError)
 const newSessionRequested = computed(() => Object.hasOwn(route.query, 'new'))
 const showHome = computed(() => isNewConversation.value && !newSessionRequested.value)
+const draftProjectLabel = computed(() => routeProjectId.value
+  ? projects.items.find(project => project.id === routeProjectId.value)?.name || 'Projekt'
+  : $q.screen.lt.sm ? 'Projekt' : 'Projekt wählen')
 const changingDraftProject = ref(false)
 const draftProjectDialogOpen = ref(false)
 let draftProjectCreationContext = null

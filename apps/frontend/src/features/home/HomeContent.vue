@@ -19,11 +19,8 @@
         <q-item-section side><q-icon name="chevron_right" /></q-item-section>
       </q-item>
 
-      <section aria-labelledby="home-sessions">
-        <div class="row items-center justify-between q-mb-xs">
-          <h2 id="home-sessions" class="text-subtitle1 text-weight-medium q-my-none">Zuletzt aktiv</h2>
-          <q-btn flat dense no-caps icon="refresh" label="Aktualisieren" aria-label="Home aktualisieren" :loading="refreshing" @click="refresh" />
-        </div>
+      <section v-if="$q.screen.gt.xs" aria-labelledby="home-sessions">
+        <h2 id="home-sessions" class="text-subtitle1 text-weight-medium q-mt-none q-mb-xs">Zuletzt aktiv</h2>
         <div v-if="home.loading && !home.loaded" aria-label="Sessions werden geladen">
           <q-skeleton v-for="index in 3" :key="index" type="text" class="q-my-md" />
         </div>
@@ -56,8 +53,21 @@
           </q-item>
         </q-list>
       </section>
-      <div class="q-mt-lg">
-        <q-btn flat dense no-caps icon="computer" class="app-muted text-caption" :label="ready(computers) ? `${onlineComputers} von ${computers.items.length} Computern online` : 'Computer online: –'" :to="{ name: 'settings-execution-agents' }" />
+      <div v-if="$q.screen.gt.xs && ready(computers) && computers.items.length" class="q-mt-lg row items-center">
+        <q-btn
+          v-for="computer in computers.items"
+          :key="computer.id"
+          flat dense rounded no-caps no-wrap
+          class="col-shrink q-px-sm q-mr-xs q-mb-xs text-caption"
+          :class="chat.activeContext.preferredExecutionAgentId === computer.id ? 'app-surface-tonal' : 'app-muted'"
+          :disable="computerSelectionDisabled"
+          :aria-label="`${computer.alias}: ${computer.connected ? 'Online' : 'Offline'}. Computer auswählen`"
+          :aria-pressed="chat.activeContext.preferredExecutionAgentId === computer.id"
+          @click="selectComputer(computer)"
+        >
+          <q-icon name="computer" :color="computer.connected ? 'positive' : 'negative'" size="18px" class="q-mr-xs" aria-hidden="true" />
+          <span class="ellipsis">{{ computer.alias }}</span>
+        </q-btn>
       </div>
     </div>
   </section>
@@ -68,6 +78,7 @@ import { computed, onMounted, ref } from 'vue'
 import AppLogo from 'src/shared/ui/AppLogo.vue'
 import { useApprovalStore } from 'stores/approvals'
 import { useAutomationStore } from 'stores/automations'
+import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
@@ -78,7 +89,9 @@ import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-t
 import { sessionSidebarStatus } from 'src/features/chat/session-groups'
 import { useHomeStore } from './store'
 
+const props = defineProps({ computerSelectionDisabled: Boolean })
 const home = useHomeStore()
+const chat = useChatStore()
 const projects = useProjectStore()
 const automations = useAutomationStore()
 const controlCenter = useControlCenterStore()
@@ -95,7 +108,6 @@ const greeting = computed(() => {
     .find((value) => value?.trim())?.trim()
   return name ? `Willkommen zurück, ${name}` : 'Willkommen zurück'
 })
-const onlineComputers = computed(() => computers.items.filter((item) => item.connected).length)
 const attentionCount = computed(() => (ready(approvals) ? approvals.pending.length : 0) + (ready(questions) ? questions.pending.length : 0))
 const unreadCount = computed(() => ready(notifications) ? notifications.unreadCount : 0)
 const notificationCount = computed(() => attentionCount.value + unreadCount.value)
@@ -117,6 +129,14 @@ const upcoming = computed(() => automations.items
   .slice(0, 2))
 const projectName = (id) => id ? projects.items.find((item) => item.id === id)?.name || 'Projekt' : 'Ohne Projekt'
 const sessionRoute = (session) => ({ name: 'chat', query: { session: session.id, ...(session.projectId ? { project: session.projectId } : {}) } })
+
+function selectComputer(computer) {
+  if (props.computerSelectionDisabled || chat.activeContext.preferredExecutionAgentId === computer.id) return
+  void chat.updateActive({
+    preferred_execution_agent_id: computer.id,
+    current_directory: computer.homeDirectory || null
+  })
+}
 
 async function refresh() {
   if (refreshing.value) return

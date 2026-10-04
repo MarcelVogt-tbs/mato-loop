@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createApp, h } from 'vue'
+import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -16,6 +16,8 @@ import { useApprovalStore } from '../src/features/approvals/store'
 import { useQuestionStore } from '../src/features/questions/store'
 import { useInAppNotificationStore } from '../src/stores/in-app-notifications'
 import { useUserProfileStore } from '../src/features/personalization/store'
+import { useHomeStore } from '../src/features/home/store'
+import { useChatStore } from '../src/stores/chat'
 
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.resetAllMocks() })
@@ -30,14 +32,15 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   useApprovalStore().$patch({ pending: [{ id: 'approval-1' }], loaded: true })
   useQuestionStore().$patch({ loaded: true })
   useInAppNotificationStore().$patch({ loaded: true, unreadCount: 2 })
-  useExecutionAgentStore().$patch({ loaded: true, items: [{ id: 'computer-1', connected: true }, { id: 'computer-2', connected: false }] })
+  const computers = [{ id: 'computer-1', alias: 'Notebook', connected: true, homeDirectory: '/home/user' }, { id: 'computer-2', alias: 'Server', connected: false }]
+  useExecutionAgentStore().$patch({ loaded: true, items: computers })
   let sessions = [{ id: 'session-1', title: 'Ein Gespräch fortsetzen', projectId: 'project-1', createdAt: '2026-10-03T12:00:00Z', hasUnreadMessages: true, activeRunStatus: 'running' }]
   let failed = false
   mocks.get.mockImplementation(async (path) => {
     if (path === '/sessions' && failed) throw new Error('unavailable')
     return { data: {
       '/sessions': { items: sessions }, '/projects': { items: projects },
-      '/automations': { items: automations }, '/execution-agents': { items: [{ id: 'computer-1', connected: true }, { id: 'computer-2', connected: false }] },
+      '/automations': { items: automations }, '/execution-agents': { items: computers },
       '/approvals/pending': [{ id: 'approval-1' }], '/questions/pending': [],
       '/notifications': { items: [], unreadCount: 2 },
       '/user-profile': { preferredName: { privateOnly: 'Ada', publicOnly: 'A.' }, fullName: { both: 'Ada Lovelace' } }
@@ -62,8 +65,14 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   expect(mocks.get).toHaveBeenCalledWith('/sessions', { params: { pageSize: 6, sort: 'recent' } })
   expect(root.textContent).toContain('Neue Antwort')
   expect(root.textContent).toContain('Agent arbeitet')
-  expect(root.textContent).toContain('1 von 2 Computern online')
+  root.querySelector('[aria-label="Notebook: Online. Computer auswählen"]').click()
+  expect(useChatStore().activeContext).toMatchObject({ preferredExecutionAgentId: 'computer-1', currentDirectory: '/home/user' })
   expect(root.textContent).toContain('1 offene Aufgabe · 2 ungelesene Benachrichtigungen')
+  app.config.globalProperties.$q.screen.gt.xs = false
+  await nextTick()
+  expect([root.querySelector('h1').textContent, root.querySelector('#home-sessions'), root.querySelector('[aria-label="Notebook: Online. Computer auswählen"]')]).toEqual(['Willkommen zurück', null, null])
+  app.config.globalProperties.$q.screen.gt.xs = true
+  await nextTick()
   expect(root.querySelector('#home-automations')).toBeNull()
   useAutomationStore().items[0].effectiveState = { enabled: true, nextRunAt: '2026-10-04T12:00:00Z' }
   await vi.waitFor(() => expect(root.textContent).toContain('Nächste Automationen'))
@@ -72,10 +81,10 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   await router.push('/home')
   await vi.waitFor(() => expect(root.textContent).toContain('Ein Gespräch fortsetzen'))
   failed = true
-  root.querySelector('[aria-label="Home aktualisieren"]').click()
+  await useHomeStore().load().catch(() => {})
   await vi.waitFor(() => expect(root.textContent).toContain('Sessions konnten nicht geladen werden.'))
   failed = false
   sessions = []
-  root.querySelector('[aria-label="Home aktualisieren"]').click()
+  root.querySelector('button').click()
   await vi.waitFor(() => expect(root.textContent).toContain('Deine letzten Gespräche erscheinen hier.'))
 })

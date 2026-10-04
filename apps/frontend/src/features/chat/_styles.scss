@@ -163,14 +163,28 @@
   padding-bottom: max(16px, env(safe-area-inset-bottom));
 }
 
-.draft-project-select {
+.draft-project-select,
+.chat-start-select {
   min-width: 0;
   border: 1px solid var(--app-surface-border);
   border-radius: 999px;
 }
 
-.draft-project-select:focus-within {
+.draft-project-select:focus-within,
+.chat-start-select:focus-within {
   border-color: var(--q-primary);
+}
+
+.chat-start-project,
+.chat-start-select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.chat-start-settings-mobile {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
 }
 
 .chat-input-dock--with-todos .chat-composer__card,
@@ -464,35 +478,6 @@
 .composer-reasoning {
   width: 165px;
   min-width: 135px;
-}
-
-.composer-session-settings {
-  position: relative;
-}
-
-.composer-session-settings__warning {
-  position: absolute;
-  top: -2px;
-  right: -3px;
-}
-
-.chat-session-settings-panel {
-  width: min(380px, calc(100vw - 32px));
-  max-width: 380px;
-  max-height: min(620px, calc(100dvh - 32px));
-}
-
-.chat-session-settings-panel__toolbar {
-  min-height: 44px;
-  padding: 4px 8px 4px 12px;
-}
-
-.chat-session-settings-panel__content {
-  padding: 16px;
-}
-
-.chat-session-settings-panel__fields {
-  gap: 16px;
 }
 
 .chat-transcript {

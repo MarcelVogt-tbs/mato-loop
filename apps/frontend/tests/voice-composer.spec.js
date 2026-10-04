@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ notify: vi.fn(), api: { post: vi.fn(), get: vi.fn(), patch: vi.fn(), delete: vi.fn() }, recorder: null, mobile: false }))
 vi.mock('src/boot/axios', () => ({ api: mocks.api }))
-vi.mock('quasar', () => ({ useQuasar: () => ({ notify: mocks.notify, platform: { is: { mobile: mocks.mobile } }, screen: { gt: { sm: !mocks.mobile } } }) }))
+vi.mock('quasar', () => ({ useQuasar: () => ({ notify: mocks.notify, platform: { is: { mobile: mocks.mobile } }, screen: { gt: { xs: !mocks.mobile, sm: !mocks.mobile }, lt: { sm: mocks.mobile } } }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: async () => true }) }))
 vi.mock('src/features/chat/audio-recorder', () => ({
   useAudioRecorder: (options) => { mocks.onAutoStopped = options.onAutoStopped; return mocks.recorder },
@@ -16,13 +16,13 @@ vi.mock('src/features/chat/components/SessionSettingsFields.vue', () => ({ defau
   props: ['disabled'],
   emits: ['update', 'agent-popup-hide'],
   render() {
-    return h('button', {
+    return h('div', [this.$slots.before?.(), h('button', {
       type: 'button',
       onClick: () => {
         this.$emit('update', { agent_profile_id: 'agent-b' })
         this.$emit('agent-popup-hide')
       }
-    }, 'Agent wechseln')
+    }, 'Agent wechseln')])
   }
 } }))
 vi.mock('src/features/approvals/ApprovalCard.vue', () => ({ default: { render: () => null } }))
@@ -108,7 +108,7 @@ beforeEach(async () => {
     })
   })
   app.use(router)
-  app.config.globalProperties.$q = { screen: { lt: { sm: false }, gt: { xs: true } } }
+  app.config.globalProperties.$q = { screen: { lt: { get sm() { return mocks.mobile } }, gt: { get xs() { return !mocks.mobile } } } }
   app.component('QBtn', defineComponent({
     props: ['label', 'icon', 'disable', 'loading'],
     setup: (props, { slots }) => () => h('button', {
@@ -166,7 +166,8 @@ describe('voice attachment composer', () => {
       ? { id: url.split('/').pop(), messages: [] } : {} }))
     await router.push('/')
     showPage.value = true
-    await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
+    await vi.waitFor(() => expect(root.querySelector('.chat-start-project')).not.toBeNull())
+    expect(root.querySelector('.home-stub')).not.toBeNull()
     chat.setDraft('Entwurf für Home')
     await chat.addAttachmentFiles([file('entwurf.wav')])
     await nextTick()
@@ -180,11 +181,12 @@ describe('voice attachment composer', () => {
     expect(root.querySelector('.chat-input-dock textarea')).toBe(input)
     expect(input.value).toBe('Entwurf für Home')
     await router.push('/')
-    await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
+    await vi.waitFor(() => expect(root.querySelector('.chat-start-project')).not.toBeNull())
 
     chat.current = { id: 'created', messages: [] }
     await nextTick()
     expect(root.querySelector('.chat-input-dock textarea')).toBe(input)
+    expect(root.querySelector('.chat-start-project')).toBeNull()
     await router.push('/?session=session-2')
     await vi.waitFor(() => expect(chat.current?.id).toBe('session-2'))
     await router.push('/')

@@ -111,6 +111,7 @@ Example:
 - Use Quasar dialogs for input and decisions beyond simple confirmation.
 - Show local success messages with Quasar Notify; do not duplicate API error notifications.
 - Keep dialogs and drawers fully usable on small viewports.
+- Do not add tooltips by default. Use them only when they provide necessary information not already conveyed by visible labels or content; preserve accessible names independently of tooltips.
 - Avoid optimistic UI state that remains after a failed request.
 
 ## Secrets

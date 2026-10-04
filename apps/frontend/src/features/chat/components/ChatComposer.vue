@@ -67,62 +67,18 @@
             @change="selectAttachmentFiles"
           >
           <div class="chat-composer__actions row items-center">
-            <q-btn
-              flat
-              round
-              dense
-              type="button"
-              icon="tune"
-              class="composer-session-settings"
-              aria-label="Sessioneinstellungen öffnen"
-              :disable="interactionDisabled"
+            <q-icon
+              v-if="sessionSettingsWarning"
+              name="warning_amber"
+              color="warning"
+              size="20px"
+              class="q-mr-xs"
+              role="img"
+              :aria-label="sessionSettingsWarning"
+              tabindex="0"
             >
-              <q-icon
-                v-if="sessionSettingsWarning"
-                name="warning_amber"
-                color="warning"
-                size="15px"
-                class="composer-session-settings__warning"
-              />
-              <q-tooltip>{{ sessionSettingsWarning || 'Sessioneinstellungen' }}</q-tooltip>
-              <q-popup-proxy
-                v-model="settingsOpen"
-                :breakpoint="600"
-                :maximized="$q.screen.lt.sm"
-                anchor="top right"
-                self="bottom right"
-                :offset="[0, 8]"
-              >
-                <q-card class="chat-session-settings-panel column no-wrap">
-                  <q-toolbar class="chat-session-settings-panel__toolbar">
-                    <q-icon name="tune" size="20px" class="q-mr-sm" />
-                    <q-toolbar-title class="text-subtitle2 text-weight-medium">
-                      Sessioneinstellungen
-                    </q-toolbar-title>
-                    <q-btn
-                      flat
-                      round
-                      :dense="$q.screen.gt.xs"
-                      icon="close"
-                      aria-label="Sessioneinstellungen schließen"
-                      v-close-popup
-                    />
-                  </q-toolbar>
-
-                  <q-separator />
-
-                  <q-card-section class="chat-session-settings-panel__content scroll">
-                    <SessionSettingsFields
-                      :session="session"
-                      :disabled="interactionDisabled"
-                      :fields="['computer', 'memory', 'webSearch']"
-                      class="chat-session-settings-panel__fields"
-                      @update="$emit('update', $event)"
-                    />
-                  </q-card-section>
-                </q-card>
-              </q-popup-proxy>
-            </q-btn>
+              <q-tooltip>{{ sessionSettingsWarning }}</q-tooltip>
+            </q-icon>
             <q-btn
               flat
               round
@@ -256,7 +212,6 @@ const toolSettings = useToolSettingsStore()
 const input = ref(null)
 const attachmentInput = ref(null)
 const settingsFields = ref(null)
-const settingsOpen = ref(false)
 const sendMode = ref('interrupt')
 const sendingRecording = ref(false)
 const { confirm } = useConfirm()

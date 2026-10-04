@@ -215,31 +215,8 @@
     width: 160px;
   }
 
-  .composer-session-settings {
-    min-width: 0;
-  }
-
   .composer-attachment:not(.composer-attachment--image) {
     width: min(100%, 320px);
-  }
-
-  .chat-session-settings-panel {
-    width: 100%;
-    max-width: none;
-    max-height: none;
-  }
-
-  .chat-session-settings-panel__toolbar {
-    min-height: 56px;
-    padding: 6px 8px 6px 16px;
-  }
-
-  .chat-session-settings-panel__content {
-    padding: 20px 16px;
-  }
-
-  .chat-session-settings-panel__fields {
-    gap: 24px;
   }
 
   .approval-card .q-card__actions {
