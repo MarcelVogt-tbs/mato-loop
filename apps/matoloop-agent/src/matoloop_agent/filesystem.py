@@ -1053,13 +1053,15 @@ class Filesystem:
         parent_fd: int,
         name: str,
         forbidden: set[tuple[int, int]] | None = None,
+        *,
+        check_bytes: bool = True,
     ) -> tuple[int, int]:
         metadata = self._metadata(parent_fd, name)
         if forbidden and (metadata.st_dev, metadata.st_ino) in forbidden:
             raise AgentError("path.invalidDestination", "Destination is inside the source")
         kind = _kind(metadata)
         if kind == "file":
-            if metadata.st_size > self.max_transfer_bytes:
+            if check_bytes and metadata.st_size > self.max_transfer_bytes:
                 raise AgentError("operation.tooLarge", "Source exceeds operation limits")
             return 1, metadata.st_size
         if kind == "symlink":
@@ -1073,10 +1075,12 @@ class Filesystem:
         try:
             for child in os.listdir(child_fd):
                 _relative_parts(child)
-                child_entries, child_size = self._usage_at(child_fd, child, forbidden)
+                child_entries, child_size = self._usage_at(
+                    child_fd, child, forbidden, check_bytes=check_bytes
+                )
                 entries += child_entries
                 size += child_size
-                if entries > self.max_entries or size > self.max_transfer_bytes:
+                if entries > self.max_entries or (check_bytes and size > self.max_transfer_bytes):
                     raise AgentError("operation.tooLarge", "Source exceeds operation limits")
         finally:
             os.close(child_fd)
@@ -1105,7 +1109,7 @@ class Filesystem:
             self._lock,
             self._parent(path) as (parent, name, _),
         ):
-            self._usage_at(parent, name)
+            self._usage_at(parent, name, check_bytes=False)
             self._delete_at(parent, name, recursive)
             _fsync(parent)
         return {}

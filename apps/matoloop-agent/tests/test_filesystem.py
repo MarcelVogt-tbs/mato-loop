@@ -55,6 +55,13 @@ class FilesystemTests(unittest.TestCase):
         self.assertEqual((self.root / "moved.py").read_text(), "one\ntwo\n")
         self.assertEqual(os.stat(self.root / "moved.py").st_mode & 0o777, 0o600)
 
+    def test_delete_allows_files_above_the_transfer_limit(self) -> None:
+        target = self.root / "large.hgn"
+        with target.open("wb") as handle:
+            handle.truncate(self.filesystem.max_transfer_bytes + 1)
+        self.filesystem.delete(str(target), False)
+        self.assertFalse(target.exists())
+
     def test_rejects_relative_non_normalized_and_symlink_paths(self) -> None:
         outside = self.root / "outside"
         outside.mkdir()
