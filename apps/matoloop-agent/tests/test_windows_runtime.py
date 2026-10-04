@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -166,22 +167,30 @@ class WindowsRuntimeTests(unittest.TestCase):
         self.assertIn("approved", content["content"])
         self.assertNotIn("wrong target", content["content"])
 
-    def test_windows_installer_parses_without_running_setup(self) -> None:
-        installer = Path(__file__).parents[3] / "scripts/install-matoloop-agent.ps1"
-        script_path = str(installer).replace("'", "''")
-        command = (
-            "$tokens=$null; $errors=$null; "
-            "[System.Management.Automation.Language.Parser]::ParseFile("
-            f"'{script_path}', [ref]$tokens, [ref]$errors) | Out-Null; "
-            "if ($errors.Count) { $errors | Out-String | Write-Output; exit 1 }"
+    def test_installer_home_alias_does_not_overwrite_powershell_home(self) -> None:
+        root = Path(self.temporary.name) / "matoloop-agent"
+        root.mkdir()
+        (root / "install.json").write_text(
+            json.dumps({"source": "source", "homeDirectory": "workspace"}), encoding="utf-8"
         )
+        installer = Path(__file__).parents[3] / "scripts/install-matoloop-agent.ps1"
         result = subprocess.run(
-            [self.process.shell, "-NoProfile", "-NonInteractive", "-Command", command],
+            [
+                self.process.shell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-File",
+                str(installer),
+                "status",
+                "-Home",
+                "workspace",
+            ],
             capture_output=True,
             text=True,
             timeout=15,
+            env={**os.environ, "LOCALAPPDATA": self.temporary.name},
         )
-        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("Home: workspace", result.stdout)
 
     def test_maintenance_handoff_uses_only_a_fixed_task_and_bounded_job(self) -> None:
         from matoloop_agent.platform_windows import WindowsPlatform

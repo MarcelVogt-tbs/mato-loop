@@ -3,6 +3,7 @@ import { api } from 'src/boot/axios'
 import { useControlCenterStore } from 'src/stores/control-center'
 import { safeFileDownloadUrl } from 'src/features/files/attachments'
 import {
+  absoluteComputerPath,
   clearCachedSubtree,
   parentPath,
   persistedFileView,
@@ -208,7 +209,7 @@ export const useWorkspaceStore = defineStore('workspace', {
           ...(action.revision != null ? { revision: action.revision, fileId: action.fileId } : {})
         }
       }
-      if (!action.executionAgentId || !action.currentDirectory || !(/^(?:\/|[A-Z]:\/)/u.test(action.path))) return null
+      if (!action.executionAgentId || !action.currentDirectory || !absoluteComputerPath(action.path)) return null
       return {
         scope: 'filesystem',
         path: action.path,
@@ -366,7 +367,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.persistView()
     },
     openDirectory(path) {
-      if (typeof path !== 'string' || (this.scope === 'filesystem' && !(/^(?:\/|[A-Z]:\/)/u.test(path)))) return false
+      if (typeof path !== 'string' || (this.scope === 'filesystem' && !absoluteComputerPath(path))) return false
       this.directoryPath = path
       this.selectPath(path)
       return this.load(path)

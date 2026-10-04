@@ -29,3 +29,6 @@ installer for update or uninstall without purge, and sends the completion throug
 the same authenticated backend endpoint. It survives stopping the Agent task;
 Git runs without interactive credential prompts. Missing task setup omits the
 maintenance capability. Portal maintenance requires no Windows password request.
+
+The Windows installer's `-Home` option is an alias for `-HomeDirectory`; it never
+assigns to PowerShell's read-only `$HOME` automatic variable.

@@ -342,6 +342,7 @@ import { useQuasar } from 'quasar'
 import FileTreeNode from 'src/features/files/components/FileTreeNode.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { apiErrorMessage } from 'src/utils/api-errors'
+import { absoluteComputerPath } from 'src/features/files/state'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
@@ -703,7 +704,7 @@ function openAbsolutePath() {
       model: workspace.directoryPath,
       type: 'text',
       label: 'Absoluter Pfad',
-      isValid: (value) => /^(?:\/|[A-Z]:\/)/u.test(String(value || '').trim())
+      isValid: (value) => absoluteComputerPath(String(value || '').trim())
     },
     cancel: { label: 'Abbrechen', flat: true, noCaps: true },
     ok: { label: 'Öffnen', unelevated: true, noCaps: true, color: 'primary' }

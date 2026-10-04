@@ -1,4 +1,5 @@
 import { api } from 'src/boot/axios'
+import { absoluteComputerPath } from 'src/features/files/state'
 
 const SESSION_PAGE_SIZE = 20
 const ACTIVE_TITLE_GENERATION_STATUSES = new Set(['pending', 'running'])
@@ -13,8 +14,8 @@ const FILESYSTEM_MUTATION_TOOLS = new Set([
 const OUTBOX_RETRY_MS = 4000
 
 function absoluteToolPath(path, currentDirectory) {
-  if (path?.startsWith('/') || /^[A-Z]:\//u.test(path || '')) return path
-  if (!path || !(currentDirectory?.startsWith('/') || /^[A-Z]:\//u.test(currentDirectory || ''))) return null
+  if (absoluteComputerPath(path)) return path
+  if (!path || !absoluteComputerPath(currentDirectory)) return null
   const parts = `${currentDirectory}/${path}`.split('/')
   const drive = /^[A-Z]:\//u.test(currentDirectory) ? parts.shift() : null
   const normalized = []

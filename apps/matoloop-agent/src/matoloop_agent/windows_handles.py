@@ -255,6 +255,20 @@ def temporary_name() -> str:
 
 
 @contextmanager
+def staged_file(parent: int, name: str, *, replace: bool) -> Iterator[int]:
+    """Publish a completed temporary file, or remove it through its original handle."""
+    with child(parent, temporary_name(), create=True, write=True, delete=True) as created:
+        published = False
+        try:
+            yield created
+            rename(created, parent, name, replace=replace)
+            published = True
+        finally:
+            if not published:
+                remove(created)
+
+
+@contextmanager
 def stream(handle: int, mode: str = "rb") -> Iterator[BinaryIO]:
     duplicate = wintypes.HANDLE()
     _kernel.GetCurrentProcess.restype = wintypes.HANDLE

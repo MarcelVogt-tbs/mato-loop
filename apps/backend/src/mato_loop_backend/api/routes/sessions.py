@@ -39,7 +39,7 @@ from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.events import run_events
-from mato_loop_backend.execution.paths import absolute_path
+from mato_loop_backend.execution.paths import is_absolute_path
 from mato_loop_backend.files.service import RootFileError, RootFileService
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.media.attachments import (
@@ -95,14 +95,6 @@ _model_for_session = session_service.model_for_session
 _provider_for_session = session_service.provider_for_session
 _execution_home = session_service.execution_home
 _owned_session = session_service.owned_session
-
-
-def _normalized_absolute_path(value: str) -> bool:
-    try:
-        absolute_path(value)
-        return True
-    except ValueError:
-        return False
 
 
 def _raise_api_error(exc: session_service.SessionServiceError) -> None:
@@ -169,8 +161,8 @@ class ControlCenterFileTarget(BaseModel):
             self.root_identity is not None
             or self.execution_agent_id is None
             or self.current_directory is None
-            or not _normalized_absolute_path(self.path)
-            or not _normalized_absolute_path(self.current_directory)
+            or not is_absolute_path(self.path)
+            or not is_absolute_path(self.current_directory)
         ):
             raise ValueError("computer file targets require canonical absolute context")
         try:
@@ -237,7 +229,7 @@ class ControlCenterFileView(BaseModel):
                 raise ValueError("selected path must be normalized")
             if self.selected_path == "." and self.selected_kind != "directory":
                 raise ValueError("the root path must be a directory")
-        elif not _normalized_absolute_path(self.selected_path):
+        elif not is_absolute_path(self.selected_path):
             raise ValueError("filesystem paths must be absolute")
         if self.viewed_file_path is not None:
             if (
@@ -261,7 +253,7 @@ class ControlCenterFileView(BaseModel):
             valid_id = str(UUID(self.execution_agent_id)) == self.execution_agent_id
         except ValueError:
             valid_id = False
-        if not valid_id or not _normalized_absolute_path(self.current_directory):
+        if not valid_id or not is_absolute_path(self.current_directory):
             raise ValueError("workspace snapshot must use canonical absolute identifiers")
         return self
 

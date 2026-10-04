@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import shutil
 import stat
@@ -16,6 +15,7 @@ from typing import BinaryIO
 from . import windows_handles as handles
 from .config import AgentConfig
 from .errors import AgentError
+from .file_text import apply_hunks, decode_text, edited_text, parse_patch, read_result
 from .windows_paths import absolute, native
 
 
@@ -141,33 +141,7 @@ class WindowsFilesystem:
 
     def read(self, path: str, offset: int, limit: int, max_line_length: int) -> dict:
         data = self._read_bytes(path, self.max_file_bytes)
-        try:
-            lines = data.decode("utf-8").splitlines()
-        except UnicodeDecodeError as exc:
-            raise AgentError("file.invalidEncoding", "File is not UTF-8 text") from exc
-        selected, truncated = [], []
-        used = 0
-        for line_number, line in enumerate(lines[offset - 1 : offset - 1 + limit], offset):
-            rendered = f"{line_number}: {line[:max_line_length]}"
-            size = len(json.dumps(rendered).encode("utf-8")) + 1
-            if used + size > self.max_response_bytes:
-                if not selected:
-                    raise AgentError("operation.tooLarge", "Line exceeds the response limit")
-                break
-            selected.append(rendered)
-            used += size
-            if len(line) > max_line_length:
-                truncated.append(line_number)
-        next_offset = offset + len(selected)
-        more = next_offset - 1 < len(lines)
-        return {
-            "content": "\n".join(selected),
-            "linesRead": len(selected),
-            "hasMore": more,
-            "nextOffset": next_offset if more else None,
-            "truncatedLines": truncated,
-            "sha256": hashlib.sha256(data).hexdigest(),
-        }
+        return read_result(data, offset, limit, max_line_length, self.max_response_bytes)
 
     def _publish(
         self, path: str, data: bytes, expected_sha256: str | None, *, overwrite: bool
@@ -179,26 +153,18 @@ class WindowsFilesystem:
                 with handles.child(parent, name) as existing, handles.stream(existing) as reader:
                     if hashlib.file_digest(reader, "sha256").hexdigest() != expected_sha256:
                         raise AgentError("file.changed", "File changed since it was read")
-            temporary = handles.temporary_name()
-            with handles.child(parent, temporary, create=True, write=True, delete=True) as created:
-                published = False
-                try:
-                    with handles.stream(created, "wb") as writer:
-                        writer.write(data)
-                        writer.flush()
-                        os.fsync(writer.fileno())
-                    if expected_sha256 is not None:
-                        with (
-                            handles.child(parent, name) as existing,
-                            handles.stream(existing) as reader,
-                        ):
-                            if hashlib.file_digest(reader, "sha256").hexdigest() != expected_sha256:
-                                raise AgentError("file.changed", "File changed since it was read")
-                    handles.rename(created, parent, name, replace=overwrite)
-                    published = True
-                finally:
-                    if not published:
-                        handles.remove(created)
+            with handles.staged_file(parent, name, replace=overwrite) as created:
+                with handles.stream(created, "wb") as writer:
+                    writer.write(data)
+                    writer.flush()
+                    os.fsync(writer.fileno())
+                if expected_sha256 is not None:
+                    with (
+                        handles.child(parent, name) as existing,
+                        handles.stream(existing) as reader,
+                    ):
+                        if hashlib.file_digest(reader, "sha256").hexdigest() != expected_sha256:
+                            raise AgentError("file.changed", "File changed since it was read")
         return {"path": path, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
 
     def write(self, path: str, content: str, expected_sha256: str | None) -> dict:
@@ -222,109 +188,42 @@ class WindowsFilesystem:
         expected_sha256: str | None,
     ) -> dict:
         data = self._read_bytes(path, self.max_file_bytes)
-        digest = hashlib.sha256(data).hexdigest()
-        if expected_sha256 is not None and digest != expected_sha256:
-            raise AgentError("file.changed", "File changed since it was read")
-        try:
-            content = data.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise AgentError("file.invalidEncoding", "File is not UTF-8 text") from exc
-        crlf = "\r\n" in content
-        old = old_text.replace("\r\n", "\n")
-        new = new_text.replace("\r\n", "\n")
-        if crlf:
-            old, new = old.replace("\n", "\r\n"), new.replace("\n", "\r\n")
-        count = content.count(old)
-        if not count:
-            raise AgentError("file.editTextNotFound", "Edit text was not found")
-        if count > 1 and not replace_all:
-            raise AgentError("file.editTextNotUnique", "Edit text is not unique")
-        updated = content.replace(old, new, -1 if replace_all else 1)
+        updated, digest = edited_text(data, old_text, new_text, replace_all, expected_sha256)
         return self.write(path, updated, digest)
 
     def patch(self, patch: str, expected_sha256: dict[str, str]) -> dict:
-        if "\0" in patch or "\r" in patch or len(patch.encode()) > 512 * 1024:
-            raise AgentError("request.invalid", "Patch is invalid")
-        lines = patch.splitlines()
-        if len(lines) < 3 or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
-            raise AgentError("request.invalid", "Patch markers are invalid")
-        prepared = []
-        index = 1
-        while index < len(lines) - 1:
-            header = lines[index]
-            index += 1
-            if header.startswith("*** Add File: "):
-                action, path = "add", header[14:]
-            elif header.startswith("*** Update File: "):
-                action, path = "update", header[17:]
-            elif header.startswith("*** Delete File: "):
-                action, path = "delete", header[17:]
-            else:
-                raise AgentError("request.invalid", "Patch operation is invalid")
-            absolute(path)
-            destination = None
-            if index < len(lines) - 1 and lines[index].startswith("*** Move to: "):
-                if action != "update":
-                    raise AgentError("request.invalid", "Patch move is invalid")
-                destination = lines[index][13:]
-                absolute(destination)
-                index += 1
-            start = index
-            while index < len(lines) - 1 and not lines[index].startswith("*** "):
-                index += 1
-            body = lines[start:index]
-            prepared.append((action, path, destination, body))
-        if not prepared or len(prepared) > self.max_entries:
-            raise AgentError("request.invalid", "Patch has no operations")
-        revisions = {path for action, path, _, _ in prepared if action != "add"}
+        prepared = parse_patch(
+            patch,
+            max_bytes=self.max_transfer_bytes,
+            max_entries=self.max_entries,
+            validate_path=absolute,
+        )
+        revisions = {item.path for item in prepared if item.operation != "add"}
         if revisions != expected_sha256.keys():
             raise AgentError("request.invalid", "Patch revisions do not match its files")
-        paths = [p for _, path, destination, _ in prepared for p in (path, destination) if p]
+        paths = [p for item in prepared for p in (item.path, item.destination) if p]
         if len({p.casefold() for p in paths}) != len(paths):
             raise AgentError("request.invalid", "Patch paths must be unique")
         results = []
         with self._lock:
-            for action, path, destination, body in prepared:
+            for item in prepared:
+                action, path, destination = item.operation, item.path, item.destination
                 try:
                     if action == "add":
-                        if any(not line.startswith("+") for line in body):
-                            raise AgentError("request.invalid", "Patch addition is invalid")
-                        content = "\n".join(line[1:] for line in body) + ("\n" if body else "")
-                        result = self.write(path, content, None)
+                        result = self.write(path, item.content or "", None)
                     else:
                         data = self._read_bytes(path, self.max_file_bytes)
                         digest = hashlib.sha256(data).hexdigest()
                         if digest != expected_sha256[path]:
                             raise AgentError("file.changed", "File changed since it was read")
                         if action == "delete":
-                            if body:
-                                raise AgentError("request.invalid", "Patch deletion has a body")
                             self.delete(path, False)
                             result = {"path": path, "sha256": digest, "size": len(data)}
                         elif destination is not None:
-                            if body:
-                                raise AgentError("request.invalid", "Patch move has a body")
                             self.rename(path, destination)
                             result = {"path": path, "sha256": digest, "size": len(data)}
                         else:
-                            if not body:
-                                raise AgentError("request.invalid", "Patch update has no hunks")
-                            content = data.decode("utf-8")
-                            for marker, old, new in self._hunks(body):
-                                normalized = content.replace("\r\n", "\n")
-                                position = normalized.find(marker) if marker else 0
-                                if position < 0 or normalized.count(old, position) != 1:
-                                    raise AgentError(
-                                        "file.patchContextMismatch", "Patch context is not unique"
-                                    )
-                                normalized = normalized[:position] + normalized[position:].replace(
-                                    old, new, 1
-                                )
-                                content = (
-                                    normalized.replace("\n", "\r\n")
-                                    if "\r\n" in content
-                                    else normalized
-                                )
+                            content = apply_hunks(decode_text(data), item.hunks)
                             result = self.write(path, content, digest)
                 except Exception as exc:
                     raise AgentError(
@@ -347,29 +246,6 @@ class WindowsFilesystem:
                     }
                 )
         return {"files": results}
-
-    @staticmethod
-    def _hunks(body: list[str]):
-        index = 0
-        while index < len(body):
-            header = body[index]
-            if header != "@@" and not header.startswith("@@ "):
-                raise AgentError("request.invalid", "Patch hunk is invalid")
-            marker = header[3:] if header.startswith("@@ ") else None
-            index += 1
-            old, new = [], []
-            while index < len(body) and not body[index].startswith("@@"):
-                line = body[index]
-                if not line or line[0] not in " +-":
-                    raise AgentError("request.invalid", "Patch hunk line is invalid")
-                if line[0] in " -":
-                    old.append(line[1:])
-                if line[0] in " +":
-                    new.append(line[1:])
-                index += 1
-            if not old or old == new:
-                raise AgentError("request.invalid", "Patch hunk has no change")
-            yield marker, "\n".join(old), "\n".join(new)
 
     def mkdir(self, path: str, parents: bool) -> dict:
         if len(path) == 3:
@@ -512,31 +388,23 @@ class WindowsFilesystem:
         if expected_size > self.max_transfer_bytes:
             raise AgentError("file.tooLarge", "File exceeds the transfer limit")
         with self._lock, handles.parent(path, write=True) as (parent, name):
-            temporary = handles.temporary_name()
             digest, size = hashlib.sha256(), 0
-            with handles.child(parent, temporary, create=True, write=True, delete=True) as created:
-                published = False
-                try:
-                    with source.open("rb") as reader, handles.stream(created, "wb") as writer:
-                        while chunk := reader.read(1024 * 1024):
-                            size += len(chunk)
-                            if size > expected_size:
-                                raise AgentError(
-                                    "transfer.invalidContent", "Transferred file is too large"
-                                )
-                            digest.update(chunk)
-                            writer.write(chunk)
-                        writer.flush()
-                        os.fsync(writer.fileno())
-                    if size != expected_size or digest.hexdigest() != expected_sha256:
-                        raise AgentError(
-                            "transfer.invalidContent", "Transferred file failed validation"
-                        )
-                    handles.rename(created, parent, name, replace=overwrite)
-                    published = True
-                finally:
-                    if not published:
-                        handles.remove(created)
+            with handles.staged_file(parent, name, replace=overwrite) as created:
+                with source.open("rb") as reader, handles.stream(created, "wb") as writer:
+                    while chunk := reader.read(1024 * 1024):
+                        size += len(chunk)
+                        if size > expected_size:
+                            raise AgentError(
+                                "transfer.invalidContent", "Transferred file is too large"
+                            )
+                        digest.update(chunk)
+                        writer.write(chunk)
+                    writer.flush()
+                    os.fsync(writer.fileno())
+                if size != expected_size or digest.hexdigest() != expected_sha256:
+                    raise AgentError(
+                        "transfer.invalidContent", "Transferred file failed validation"
+                    )
         return {"path": path, "sha256": expected_sha256, "size": size}
 
     @contextmanager

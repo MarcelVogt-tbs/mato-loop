@@ -1,4 +1,5 @@
 import { formatByteSize } from 'src/utils/resource-metrics'
+import { absoluteComputerPath } from 'src/features/files/state'
 
 const ATTACHMENT_KINDS = new Set(['image', 'audio', 'video', 'text', 'document', 'file'])
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
@@ -91,8 +92,8 @@ function safeFileUrl(value, expectedPath) {
   const executionAgentId = parsed.searchParams.get('execution_agent_id')
   const currentDirectory = parsed.searchParams.get('current_directory')
   return UUID_PATTERN.test(executionAgentId || '')
-    && /^(?:\/|[A-Z]:\/)/u.test(path || '')
-    && /^(?:\/|[A-Z]:\/)/u.test(currentDirectory || '')
+    && absoluteComputerPath(path)
+    && absoluteComputerPath(currentDirectory)
     ? value
     : null
 }

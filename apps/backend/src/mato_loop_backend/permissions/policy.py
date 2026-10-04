@@ -12,7 +12,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.execution.paths import absolute_path, within
+from mato_loop_backend.execution.paths import absolute_path, is_absolute_path, within
 from mato_loop_backend.execution.paths import parent as computer_parent
 from mato_loop_backend.files.service import FileRoot, RootFileError, RootFileService
 from mato_loop_backend.integrations.youtube_transcript.client import canonicalize_youtube_video_url
@@ -1100,17 +1100,9 @@ def _execution_directory_scope(resource_scope: str) -> tuple[UUID, str] | None:
 def _path_is_within(resource: str | PurePosixPath, scope: str | PurePosixPath) -> bool:
     if str(scope) == ".":
         return True
-    if not _valid_computer_path(str(resource)):
+    if not is_absolute_path(str(resource)):
         return PurePosixPath(scope) in (PurePosixPath(resource), *PurePosixPath(resource).parents)
     return within(str(resource), str(scope))
-
-
-def _valid_computer_path(path: str) -> bool:
-    try:
-        absolute_path(path)
-        return True
-    except ValueError:
-        return False
 
 
 def _path_key(path: str) -> str:
@@ -1307,7 +1299,7 @@ def _shell_command_scope(resource_scope: str) -> dict[str, Any] | None:
         analysis_complete = value["analysisComplete"]
         if (
             not isinstance(current_directory, str)
-            or not _valid_computer_path(current_directory)
+            or not is_absolute_path(current_directory)
             or classification not in {"read", "write"}
             or not isinstance(analysis_complete, bool)
             or not isinstance(prefixes, list)
@@ -1334,7 +1326,7 @@ def _shell_command_scope(resource_scope: str) -> dict[str, Any] | None:
             or any(access not in {None, "read", "write", "exempt"} for access in target_accesses)
             or any(
                 not isinstance(path, str)
-                or not _valid_computer_path(path)
+                or not is_absolute_path(path)
                 for path in paths
             )
         ):

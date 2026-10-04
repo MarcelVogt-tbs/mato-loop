@@ -2,7 +2,8 @@ param(
     [ValidateSet('install', 'update', 'status', 'uninstall', 'pair', 'run', 'maintenance-run')]
     [string] $Command = 'install',
     [string] $InstanceUrl,
-    [string] $Home,
+    [Alias('Home')]
+    [string] $HomeDirectory,
     [string] $Branch = 'main',
     [string] $Source,
     [switch] $Purge,
@@ -184,14 +185,14 @@ if ($Command -eq 'update') {
 if (-not (Test-Path -LiteralPath (Join-Path $checkout 'apps\matoloop-agent\pyproject.toml'))) {
     Fail 'Source is not a MatoLoop checkout.'
 }
-if (-not $Home) { $Home = if ($existing) { $existing.homeDirectory } else {
+if (-not $HomeDirectory) { $HomeDirectory = if ($existing) { $existing.homeDirectory } else {
     Join-Path $env:USERPROFILE 'mato-loop-agent\workspace'
 } }
-$Home = [IO.Path]::GetFullPath($Home).TrimEnd('\')
-if ($Home.Equals($root, [StringComparison]::OrdinalIgnoreCase) -or
-    $Home.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase) -or
-    $root.StartsWith($Home + '\', [StringComparison]::OrdinalIgnoreCase)) { Fail 'Workspace must be outside the installation.' }
-New-Item -ItemType Directory -Path $Home -Force | Out-Null
+$HomeDirectory = [IO.Path]::GetFullPath($HomeDirectory).TrimEnd('\')
+if ($HomeDirectory.Equals($root, [StringComparison]::OrdinalIgnoreCase) -or
+    $HomeDirectory.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase) -or
+    $root.StartsWith($HomeDirectory + '\', [StringComparison]::OrdinalIgnoreCase)) { Fail 'Workspace must be outside the installation.' }
+New-Item -ItemType Directory -Path $HomeDirectory -Force | Out-Null
 if (-not $InstanceUrl) { $InstanceUrl = if ($existing) { $existing.instanceUrl } else {
     Read-Host 'MatoLoop instance URL (https://host)'
 } }
@@ -234,7 +235,7 @@ try {
     $config = if (Test-Path -LiteralPath $configFile) {
         Get-Content -LiteralPath $configFile -Raw -Encoding UTF8 | ConvertFrom-Json
     } else { [pscustomobject] @{} }
-    $config | Add-Member -NotePropertyName homeDirectory -NotePropertyValue $Home -Force
+    $config | Add-Member -NotePropertyName homeDirectory -NotePropertyValue $HomeDirectory -Force
     $config | Add-Member -NotePropertyName allowInsecure -NotePropertyValue ($instance.Scheme -eq 'http') -Force
     $config | Add-Member -NotePropertyName shellExecutable -NotePropertyValue (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Force
     $previousConfig = if (Test-Path -LiteralPath $configFile) { Get-Content -LiteralPath $configFile -Raw } else { $null }
@@ -249,7 +250,7 @@ try {
     try {
         [IO.File]::WriteAllText($configFile, ($config | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
         $newState = [pscustomobject] @{activeVenv=$newVenv; source=$checkout;
-            homeDirectory=$Home; instanceUrl=$InstanceUrl.TrimEnd('/'); maintenanceReady=$false}
+            homeDirectory=$HomeDirectory; instanceUrl=$InstanceUrl.TrimEnd('/'); maintenanceReady=$false}
         Save-State $newState
         if (-not (Task) -or -not (Get-ScheduledTask -TaskName $maintenanceTask -ErrorAction SilentlyContinue)) {
             $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -305,7 +306,7 @@ try {
         ([IO.Path]::GetFullPath($existing.activeVenv)).StartsWith((Join-Path $root 'venvs') + '\', [StringComparison]::OrdinalIgnoreCase)) {
         Remove-Item -LiteralPath $existing.activeVenv -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Write-Host "MatoLoop Agent installed. Workspace: $Home"
+    Write-Host "MatoLoop Agent installed. Workspace: $HomeDirectory"
     if (-not (Test-Path -LiteralPath (Join-Path $data 'agent-state\credential.dat'))) {
         Write-Host 'Create a computer under Einstellungen > Computer, then pair it with:'
         Write-Host "  & '$installer' pair"

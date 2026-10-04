@@ -7,6 +7,7 @@ import {
   controlCenterIntegrationIds
 } from 'src/app/control-center/manifest'
 import { randomUuid } from 'src/utils/random-id'
+import { absoluteComputerPath } from 'src/features/files/state'
 
 export const DEFAULT_CONTROL_CENTER_SPLIT_RATIO = 60
 export const MIN_CONTROL_CENTER_SPLIT_RATIO = 30
@@ -44,8 +45,7 @@ function appTab(appId) {
 }
 
 function normalizedAbsolutePath(value) {
-  return typeof value === 'string'
-    && /^(?:\/|[A-Z]:\/)/u.test(value)
+  return absoluteComputerPath(value)
     && !value.includes('\\')
     && ![...value].some((character) => {
       const code = character.charCodeAt(0)

@@ -11,13 +11,13 @@ import stat
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 from uuid import uuid4
 
 from .config import AgentConfig
 from .errors import AgentError
+from .file_text import apply_hunks, decode_text, edited_text, parse_patch, read_result
 
 _RENAME_NOREPLACE = 1
 _RENAME_EXCHANGE = 2
@@ -32,15 +32,6 @@ if _renameat2 is not None:
         ctypes.c_uint,
     ]
     _renameat2.restype = ctypes.c_int
-
-
-@dataclass(frozen=True)
-class _PatchOperation:
-    operation: str
-    path: str
-    destination: str | None = None
-    content: str | None = None
-    hunks: tuple[tuple[str | None, tuple[str, ...], tuple[str, ...]], ...] = ()
 
 
 def _parts(value: str) -> tuple[str, ...]:
@@ -560,37 +551,7 @@ class Filesystem:
                         raise AgentError("file.tooLarge", "File exceeds the read limit")
             finally:
                 os.close(fd)
-        try:
-            text = data.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise AgentError("file.invalidEncoding", "File is not UTF-8 text") from exc
-        raw_lines = text.splitlines()
-        selected: list[str] = []
-        truncated: list[int] = []
-        response_bytes = 0
-        for index, line in enumerate(raw_lines[offset - 1 : offset - 1 + limit]):
-            line_number = offset + index
-            rendered = f"{line_number}: {line[:max_line_length]}"
-            projected = len(json.dumps(rendered).encode()) + (1 if selected else 0)
-            if response_bytes + projected > self.max_response_bytes:
-                if not selected:
-                    raise AgentError("operation.tooLarge", "A line exceeds the response limit")
-                break
-            selected.append(rendered)
-            response_bytes += projected
-            if len(line) > max_line_length:
-                truncated.append(line_number)
-        content = "\n".join(selected)
-        next_offset = offset + len(selected)
-        has_more = next_offset - 1 < len(raw_lines)
-        return {
-            "content": content,
-            "linesRead": len(selected),
-            "hasMore": has_more,
-            "nextOffset": next_offset if has_more else None,
-            "truncatedLines": truncated,
-            "sha256": hashlib.sha256(data).hexdigest(),
-        }
+        return read_result(data, offset, limit, max_line_length, self.max_response_bytes)
 
     def write(
         self,
@@ -750,162 +711,12 @@ class Filesystem:
                 data = current.read(self.max_file_bytes + 1)
             if len(data) > self.max_file_bytes:
                 raise AgentError("file.tooLarge", "File exceeds the edit limit")
-            try:
-                content = data.decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise AgentError("file.invalidEncoding", "File is not UTF-8 text") from exc
-            digest = hashlib.sha256(data).hexdigest()
-            if expected_sha256 is not None and digest != expected_sha256:
-                raise AgentError("file.changed", "File changed since it was read")
-
-            ending = "\r\n" if "\r\n" in content else "\n"
-
-            def adapt(value: str) -> str:
-                value = value.replace("\r\n", "\n")
-                return value if ending == "\n" else value.replace("\n", "\r\n")
-
-            old = adapt(old_text)
-            replacement = adapt(new_text)
-            if old == replacement:
-                raise AgentError("request.invalid", "Edit text must be different")
-            index = content.find(old)
-            if index < 0:
-                raise AgentError("file.editTextNotFound", "Edit text was not found")
-            if not replace_all and content.find(old, index + 1) >= 0:
-                raise AgentError("file.editTextNotUnique", "Edit text is not unique")
-            updated = (
-                content.replace(old, replacement)
-                if replace_all
-                else content[:index] + replacement + content[index + len(old) :]
-            )
+            updated, digest = edited_text(data, old_text, new_text, replace_all, expected_sha256)
             return self.write(
                 path,
                 updated,
                 digest,
             )
-
-    def _parse_patch(self, patch: str) -> list[_PatchOperation]:
-        if "\r" in patch or "\0" in patch:
-            raise AgentError("request.invalid", "Patch must use LF text")
-        if len(patch.encode("utf-8")) > min(self.max_transfer_bytes, 512 * 1024):
-            raise AgentError("operation.tooLarge", "Patch exceeds the operation limit")
-        lines = patch.split("\n")
-        if lines[-1] == "":
-            lines.pop()
-        if not lines or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
-            raise AgentError("request.invalid", "Patch markers are invalid")
-
-        operations: list[_PatchOperation] = []
-        index = 1
-        while index < len(lines) - 1:
-            header = lines[index]
-            index += 1
-            if header.startswith("*** Add File: "):
-                operation, path = "add", header.removeprefix("*** Add File: ")
-            elif header.startswith("*** Update File: "):
-                operation, path = "update", header.removeprefix("*** Update File: ")
-            elif header.startswith("*** Delete File: "):
-                operation, path = "delete", header.removeprefix("*** Delete File: ")
-            else:
-                raise AgentError("request.invalid", "Patch operation marker is invalid")
-            if len(path) > 4096:
-                raise AgentError("path.invalid", "Patch path is too long")
-            _parts(path)
-
-            destination = None
-            if (
-                operation == "update"
-                and index < len(lines) - 1
-                and lines[index].startswith("*** Move to: ")
-            ):
-                destination = lines[index].removeprefix("*** Move to: ")
-                index += 1
-                if len(destination) > 4096:
-                    raise AgentError("path.invalid", "Patch destination is too long")
-                _parts(destination)
-
-            body_start = index
-            while index < len(lines) - 1 and not lines[index].startswith("*** "):
-                index += 1
-            body = lines[body_start:index]
-            if operation == "add":
-                if any(not line.startswith("+") for line in body):
-                    raise AgentError("request.invalid", "Added file lines must start with +")
-                content = "\n".join(line[1:] for line in body) + ("\n" if body else "")
-                operations.append(_PatchOperation(operation, path, content=content))
-            elif operation == "delete":
-                if body:
-                    raise AgentError("request.invalid", "Delete operation cannot have a body")
-                operations.append(_PatchOperation(operation, path))
-            else:
-                hunks = []
-                body_index = 0
-                while body_index < len(body):
-                    marker = body[body_index]
-                    if marker != "@@" and not marker.startswith("@@ "):
-                        raise AgentError("request.invalid", "Update hunk marker is invalid")
-                    locator = marker[3:] if marker.startswith("@@ ") else None
-                    body_index += 1
-                    old: list[str] = []
-                    new: list[str] = []
-                    changed = False
-                    while body_index < len(body) and not body[body_index].startswith("@@"):
-                        line = body[body_index]
-                        body_index += 1
-                        if not line or line[0] not in " +-":
-                            raise AgentError("request.invalid", "Update hunk line is invalid")
-                        if line[0] in " -":
-                            old.append(line[1:])
-                        if line[0] in " +":
-                            new.append(line[1:])
-                        changed |= line[0] in "+-"
-                    if not old or not changed or old == new:
-                        raise AgentError("request.invalid", "Update hunk has no exact change")
-                    hunks.append((locator, tuple(old), tuple(new)))
-                if not hunks and destination is None:
-                    raise AgentError("request.invalid", "Update requires a hunk or move")
-                if hunks and destination is not None:
-                    raise AgentError("request.invalid", "Move cannot include update hunks")
-                operations.append(
-                    _PatchOperation(
-                        "move" if destination is not None else operation,
-                        path,
-                        destination=destination,
-                        hunks=tuple(hunks),
-                    )
-                )
-            if len(operations) > self.max_entries:
-                raise AgentError("operation.tooLarge", "Patch has too many operations")
-        if not operations:
-            raise AgentError("request.invalid", "Patch has no operations")
-        return operations
-
-    @staticmethod
-    def _apply_hunks(
-        content: str,
-        hunks: tuple[tuple[str | None, tuple[str, ...], tuple[str, ...]], ...],
-    ) -> str:
-        crlf = "\r\n" in content
-        lines = content.replace("\r\n", "\n").split("\n")
-        cursor = 0
-        for locator, old, new in hunks:
-            if locator is not None:
-                locations = [i for i in range(cursor, len(lines)) if lines[i] == locator]
-                if len(locations) != 1:
-                    raise AgentError("file.patchContextMismatch", "Patch locator is not unique")
-                cursor = locations[0] + 1
-            matches = [
-                i
-                for i in range(cursor, len(lines) - len(old) + 1)
-                if tuple(lines[i : i + len(old)]) == old
-            ]
-            if len(matches) != 1:
-                raise AgentError("file.patchContextMismatch", "Patch context is not unique")
-            position = matches[0]
-            lines[position : position + len(old)] = new
-            cursor = position + len(new)
-        updated = "\n".join(lines)
-        return updated.replace("\n", "\r\n") if crlf else updated
 
     def _read_patch_file(self, path: str) -> tuple[str, bytes, str]:
         with self._parent(path) as (parent, name, _):
@@ -916,10 +727,7 @@ class Filesystem:
                 data = current.read(self.max_file_bytes + 1)
         if len(data) > self.max_file_bytes:
             raise AgentError("file.tooLarge", "File exceeds the patch limit")
-        try:
-            content = data.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise AgentError("file.invalidEncoding", "File is not UTF-8 text") from exc
+        content = decode_text(data)
         return content, data, hashlib.sha256(data).hexdigest()
 
     def _path_must_be_absent(self, path: str) -> None:
@@ -1061,7 +869,12 @@ class Filesystem:
                 os.close(destination_parent)
 
     def patch(self, patch: str, expected_sha256: dict[str, str]) -> dict:
-        operations = self._parse_patch(patch)
+        operations = parse_patch(
+            patch,
+            max_bytes=self.max_transfer_bytes,
+            max_entries=self.max_entries,
+            validate_path=_parts,
+        )
         if len(expected_sha256) > self.max_entries:
             raise AgentError("operation.tooLarge", "Patch has too many revisions")
         for path, digest in expected_sha256.items():
@@ -1100,7 +913,7 @@ class Filesystem:
                     if digest != expected_sha256[item.path]:
                         raise AgentError("file.changed", "File changed since it was read")
                     if item.operation in {"update", "move"}:
-                        content = self._apply_hunks(content, item.hunks)
+                        content = apply_hunks(content, item.hunks)
                         encoded = content.encode("utf-8")
                         if len(encoded) > self.max_file_bytes or "\0" in content:
                             raise AgentError(

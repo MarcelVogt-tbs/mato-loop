@@ -12,8 +12,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
-from uuid import uuid4
 
+from . import windows_handles as handles
 from .errors import AgentError
 from .protocol import ArtifactDescriptor
 
@@ -76,29 +76,25 @@ class WindowsCache:
     def store(self, artifact, source: BinaryIO) -> dict:
         with self.lock:
             path = self._path(artifact)
-            path.parent.mkdir(parents=True, exist_ok=True)
             if path.is_symlink():
                 raise AgentError("cache.invalidPath", "Cache file is a link")
-            temporary = path.with_name(f".cache-{uuid4().hex}")
             digest = hashlib.sha256()
             size = 0
-            try:
-                with temporary.open("xb") as destination:
-                    while chunk := source.read(1024 * 1024):
-                        size += len(chunk)
-                        if size > artifact.size:
-                            raise AgentError(
-                                "cache.invalidContent", "Cache content exceeds its size"
-                            )
-                        digest.update(chunk)
-                        destination.write(chunk)
-                    destination.flush()
-                    os.fsync(destination.fileno())
-                if size != artifact.size or digest.hexdigest() != artifact.sha256:
-                    raise AgentError("cache.invalidContent", "Cache content failed validation")
-                os.replace(temporary, path)
-            finally:
-                temporary.unlink(missing_ok=True)
+            with handles.directory(path.parent.as_posix(), create=True, write=True) as parent:
+                with handles.staged_file(parent, path.name, replace=True) as created:
+                    with handles.stream(created, "wb") as destination:
+                        while chunk := source.read(1024 * 1024):
+                            size += len(chunk)
+                            if size > artifact.size:
+                                raise AgentError(
+                                    "cache.invalidContent", "Cache content exceeds its size"
+                                )
+                            digest.update(chunk)
+                            destination.write(chunk)
+                        destination.flush()
+                        os.fsync(destination.fileno())
+                    if size != artifact.size or digest.hexdigest() != artifact.sha256:
+                        raise AgentError("cache.invalidContent", "Cache content failed validation")
             self.evict()
             return {"size": size, "sha256": artifact.sha256}
 

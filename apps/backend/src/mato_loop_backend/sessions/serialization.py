@@ -15,7 +15,7 @@ from pydantic import (
 
 from mato_loop_backend.agent.run_timing import run_timing_payload
 from mato_loop_backend.error_contract import describe_error
-from mato_loop_backend.execution.paths import absolute_path
+from mato_loop_backend.execution.paths import is_absolute_path
 from mato_loop_backend.files.service import RootFileError, RootFileService
 from mato_loop_backend.media.processing import claimed_audio_format
 from mato_loop_backend.message_content import canonical_assistant_content
@@ -33,14 +33,6 @@ from mato_loop_backend.web.fetch import WebFetchError, canonicalize_url
 
 LAST_MESSAGE_AT_UNSET = object()
 _PUBLIC_WARNING_CODES = {"privacy.placeholderRestorationIncomplete", "agent.toolCallLimitReached"}
-
-
-def _is_computer_path(value: str) -> bool:
-    try:
-        absolute_path(value)
-        return True
-    except ValueError:
-        return False
 
 
 class _StoredFileAction(BaseModel):
@@ -80,14 +72,14 @@ class _StoredFileAction(BaseModel):
             for path in self.paths:
                 if len(path) > 4_096 or (
                     self.root == "session" and (service.normalize_relative_path(path) != path or path == ".")
-                ) or (self.root == "workspace" and not _is_computer_path(path)):
+                ) or (self.root == "workspace" and not is_absolute_path(path)):
                     raise ValueError("invalid provided file path")
         if self.root == "session" and (
             service.normalize_relative_path(self.path) != self.path
             or (self.path == "." and not (self.operation == "provide" and self.kind == "directory"))
         ):
             raise ValueError("path must be a normalized file path")
-        if self.root == "workspace" and not _is_computer_path(self.path):
+        if self.root == "workspace" and not is_absolute_path(self.path):
             raise ValueError("workspace path must be absolute")
         if self.filename != self.path.rsplit("/", 1)[-1] and not (
             self.operation == "provide" and (
@@ -118,7 +110,7 @@ class _StoredFileAction(BaseModel):
             valid_id = str(UUID(self.execution_agent_id)) == self.execution_agent_id
         except ValueError:
             valid_id = False
-        if not valid_id or not _is_computer_path(self.current_directory):
+        if not valid_id or not is_absolute_path(self.current_directory):
             raise ValueError("workspace identifiers must be canonical and absolute")
         return self
 

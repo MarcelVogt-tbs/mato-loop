@@ -33,6 +33,14 @@ def windows_path(value: str) -> bool:
     return not value.startswith("/")
 
 
+def is_absolute_path(value: str) -> bool:
+    try:
+        absolute_path(value)
+        return True
+    except ValueError:
+        return False
+
+
 def parts(value: str) -> tuple[str, ...]:
     absolute_path(value)
     return (value[:3], *(part for part in value[3:].split("/") if part)) if windows_path(value) else PurePosixPath(value).parts
