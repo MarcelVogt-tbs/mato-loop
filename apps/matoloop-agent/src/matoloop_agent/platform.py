@@ -142,4 +142,8 @@ def current_platform() -> PlatformAdapter:
         from .platform_linux import LinuxPlatform
 
         return LinuxPlatform()
+    if sys.platform == "win32":
+        from .platform_windows import WindowsPlatform
+
+        return WindowsPlatform()
     raise RuntimeError(f"MatoLoop Agent does not support {sys.platform}")

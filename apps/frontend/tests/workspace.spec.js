@@ -233,6 +233,23 @@ describe('workspace store', () => {
     expect(api.get.mock.calls.map(([, config]) => config.params.path)).toEqual(['/home/user', '/home', '/'])
   })
 
+  it('keeps the Windows drive root when browsing parent folders', async () => {
+    api.get.mockResolvedValue({ data: { entries: [] } })
+    const workspace = useWorkspaceStore()
+    workspace.configure({
+      currentDirectory: 'C:/Users/Test/project',
+      workspaceContext: liveContext(['filesystem.list'])
+    })
+    for (let index = 0; index < 3; index++) {
+      await workspace.openDirectory(parentPath(workspace.directoryPath))
+    }
+    expect(workspace.directoryPath).toBe('C:/')
+    expect(parentPath('C:/')).toBe('C:/')
+    expect(api.get.mock.calls.map(([, config]) => config.params.path)).toEqual([
+      'C:/Users/Test', 'C:/Users', 'C:/'
+    ])
+  })
+
   it('defaults persisted sessions to managed files and clears stale viewer state when switching source', async () => {
     api.get.mockResolvedValue({ data: { entries: [] } })
     const workspace = useWorkspaceStore()

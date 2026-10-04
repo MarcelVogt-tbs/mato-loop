@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.execution import ExecutionAgentError, execution_agent_connections
+from mato_loop_backend.execution.paths import absolute_path, parts
 from mato_loop_backend.files.service import FileRoot, RootFileEntry, RootFileError, RootFileService
 from mato_loop_backend.models import (
     ChatSession,
@@ -79,21 +80,10 @@ _MANAGER_ERROR_CODES = {
 
 
 def _normalize_agent_path(path: str) -> str:
-    if not isinstance(path, str) or not path or "\\" in path:
-        raise ApiError(400, "file.invalidPath")
-    if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in path):
-        raise ApiError(400, "file.invalidPath")
-    parsed = PurePosixPath(path)
-    if (
-        not parsed.is_absolute()
-        or parsed.as_posix() != path
-        or (
-            path != "/"
-            and any(part in {"", ".", ".."} for part in path.split("/")[1:])
-        )
-    ):
-        raise ApiError(400, "file.invalidPath")
-    return parsed.as_posix()
+    try:
+        return absolute_path(path)
+    except ValueError as exc:
+        raise ApiError(400, "file.invalidPath") from exc
 
 
 async def _agent_context(
@@ -246,8 +236,15 @@ def _join_path(parent: str, name: str) -> str:
 
 
 def _is_same_or_descendant(path: str, parent: str) -> bool:
-    path_parts = PurePosixPath(path).parts
-    parent_parts = PurePosixPath(parent).parts
+    if not path.startswith(("/",)) and not re.match(r"^[A-Z]:/", path):
+        path_parts = PurePosixPath(path).parts
+        parent_parts = PurePosixPath(parent).parts
+    else:
+        path_parts = parts(path)
+        parent_parts = parts(parent)
+    if re.match(r"^[A-Z]:/", path):
+        path_parts = tuple(part.casefold() for part in path_parts)
+        parent_parts = tuple(part.casefold() for part in parent_parts)
     return path_parts[: len(parent_parts)] == parent_parts
 
 

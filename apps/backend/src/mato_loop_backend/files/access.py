@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import posixpath
+import re
 from typing import Any, BinaryIO, Literal
 from uuid import UUID
 
@@ -23,6 +24,8 @@ from mato_loop_backend.execution import (
     WorkspaceStatResult,
     WorkspaceWriteResult,
 )
+from mato_loop_backend.execution.paths import absolute_path
+from mato_loop_backend.execution.paths import parent as computer_parent
 from mato_loop_backend.files.archives import MAX_EXPORT_BYTES
 from mato_loop_backend.files.service import (
     FileRevision,
@@ -85,14 +88,18 @@ def execution_path(context: ToolContext, path: str) -> str:
         ord(character) < 32 or 127 <= ord(character) <= 159 for character in path
     ):
         raise ExecutionClientError("file.invalidPath")
-    if path.startswith("/"):
+    if path.startswith("/") or re.match(r"^[A-Z]:/", path):
         resolved = posixpath.normpath(path)
     elif client.current_directory is not None:
         resolved = posixpath.normpath(posixpath.join(client.current_directory, path))
     else:
         raise ExecutionClientError("file.workspaceNotSelected")
-    if not resolved.startswith("/"):
-        raise ExecutionClientError("file.invalidPath")
+    if re.fullmatch(r"[A-Z]:", resolved):
+        resolved += "/"
+    try:
+        absolute_path(resolved)
+    except ValueError as exc:
+        raise ExecutionClientError("file.invalidPath") from exc
     return resolved
 
 
@@ -147,7 +154,7 @@ def filesystem_permission(
             action_kind=action_kind,
             title=f"{action_label} erlauben?",
             summary=f"Der Agent möchte {absolute_path} verwenden.",
-            grant_path=posixpath.dirname(absolute_path) if parent_grant else absolute_path,
+            grant_path=computer_parent(absolute_path) if parent_grant else absolute_path,
         )
     selected_files = root_files or context.root_files
     if target_session_id is not None and target_session_id != context.session.id:

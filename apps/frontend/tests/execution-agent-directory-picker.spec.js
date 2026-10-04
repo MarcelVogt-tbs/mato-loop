@@ -84,3 +84,35 @@ it('browses and selects directories on the chosen execution agent', async () => 
   expect(selected.value).toBe('/home/user/projects')
   expect(open.value).toBe(false)
 })
+
+it('keeps the drive root when navigating Windows directories', async () => {
+  api.get.mockImplementation(async (_url, { params }) => ({
+    data: { path: params.path, entries: [], hasMore: false, nextOffset: null }
+  }))
+  window.scrollTo = vi.fn()
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({
+    render: () => h(ExecutionAgentDirectoryPickerDialog, {
+      modelValue: true,
+      executionAgentId: 'windows-agent',
+      initialPath: 'C:/Users/Test/workspace'
+    })
+  })
+  app.use(Quasar, {
+    components: {
+      QAvatar, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions,
+      QCardSection, QDialog, QIcon, QItem, QItemLabel, QItemSection,
+      QLinearProgress, QList, QSeparator, QToolbar
+    },
+    directives: { Ripple }
+  })
+  app.mount(root)
+  await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/workspace/entries',
+    expect.objectContaining({ params: expect.objectContaining({ path: 'C:/Users/Test/workspace' }) })))
+  ;[...document.querySelectorAll('.q-breadcrumbs__el')]
+    .find((item) => item.textContent.includes('C:/'))
+    .click()
+  await vi.waitFor(() => expect(api.get).toHaveBeenLastCalledWith('/workspace/entries',
+    expect.objectContaining({ params: expect.objectContaining({ path: 'C:/' }) })))
+})

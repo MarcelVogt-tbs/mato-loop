@@ -12,6 +12,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.execution.paths import absolute_path, within
+from mato_loop_backend.execution.paths import parent as computer_parent
 from mato_loop_backend.files.service import FileRoot, RootFileError, RootFileService
 from mato_loop_backend.integrations.youtube_transcript.client import canonicalize_youtube_video_url
 from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
@@ -204,9 +206,9 @@ _SECRET_NAME = re.compile(
 def confidential_execution_path(path: str) -> bool:
     parsed = PurePosixPath(path)
     return bool(
-        _CONFIDENTIAL_PATH_PARTS.intersection(parsed.parts)
-        or parsed.name in _CONFIDENTIAL_FILENAMES
-        or parsed.name.startswith(".env.")
+        _CONFIDENTIAL_PATH_PARTS.intersection(part.casefold() for part in parsed.parts)
+        or parsed.name.casefold() in _CONFIDENTIAL_FILENAMES
+        or parsed.name.casefold().startswith(".env.")
     )
 
 
@@ -547,15 +549,7 @@ def _project_session_path_scope(
 
 
 def execution_directory_scope(agent_id: UUID, path: str) -> str:
-    parsed = PurePosixPath(path)
-    if (
-        not parsed.is_absolute()
-        or str(parsed) != path
-        or "\\" in path
-        or (path != "/" and any(part in {"", ".", ".."} for part in path.split("/")[1:]))
-        or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in path)
-    ):
-        raise ValueError("invalid execution directory")
+    absolute_path(path)
     return json.dumps(
         {
             "agentId": str(agent_id),
@@ -1087,9 +1081,7 @@ def _root_path_scope(resource_scope: str) -> tuple[FileRoot, str, PurePosixPath]
         return None
 
 
-def _execution_directory_scope(
-    resource_scope: str,
-) -> tuple[UUID, PurePosixPath] | None:
+def _execution_directory_scope(resource_scope: str) -> tuple[UUID, str] | None:
     try:
         value = json.loads(resource_scope)
         if set(value) != {"agentId", "path"}:
@@ -1099,14 +1091,30 @@ def _execution_directory_scope(
         canonical = execution_directory_scope(agent_id, path)
         return (
             agent_id,
-            PurePosixPath(path),
+            path,
         ) if canonical == resource_scope else None
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
 
 
-def _path_is_within(resource: PurePosixPath, scope: PurePosixPath) -> bool:
-    return resource == scope or scope == PurePosixPath(".") or scope in resource.parents
+def _path_is_within(resource: str | PurePosixPath, scope: str | PurePosixPath) -> bool:
+    if str(scope) == ".":
+        return True
+    if not _valid_computer_path(str(resource)):
+        return PurePosixPath(scope) in (PurePosixPath(resource), *PurePosixPath(resource).parents)
+    return within(str(resource), str(scope))
+
+
+def _valid_computer_path(path: str) -> bool:
+    try:
+        absolute_path(path)
+        return True
+    except ValueError:
+        return False
+
+
+def _path_key(path: str) -> str:
+    return path if path.startswith("/") else path.casefold()
 
 
 def shell_command_scope(
@@ -1154,7 +1162,7 @@ def shell_command_permission(
         *(
             (
                 target.access,
-                str(PurePosixPath(target.path).parent)
+                computer_parent(target.path)
                 if target.kind in {"input", "output", "source", "script", "executable", "path"}
                 else target.path,
             )
@@ -1299,8 +1307,7 @@ def _shell_command_scope(resource_scope: str) -> dict[str, Any] | None:
         analysis_complete = value["analysisComplete"]
         if (
             not isinstance(current_directory, str)
-            or not PurePosixPath(current_directory).is_absolute()
-            or PurePosixPath(current_directory).as_posix() != current_directory
+            or not _valid_computer_path(current_directory)
             or classification not in {"read", "write"}
             or not isinstance(analysis_complete, bool)
             or not isinstance(prefixes, list)
@@ -1327,8 +1334,7 @@ def _shell_command_scope(resource_scope: str) -> dict[str, Any] | None:
             or any(access not in {None, "read", "write", "exempt"} for access in target_accesses)
             or any(
                 not isinstance(path, str)
-                or not PurePosixPath(path).is_absolute()
-                or PurePosixPath(path).as_posix() != path
+                or not _valid_computer_path(path)
                 for path in paths
             )
         ):
@@ -1404,17 +1410,14 @@ def session_grant_matches_request(
             return False
         if None in requested["targetAccesses"]:
             return False
-        paths = {
-            (requested["classification"], PurePosixPath(requested["currentDirectory"]))
-        }
+        paths = {(requested["classification"], _path_key(requested["currentDirectory"]))}
         for path, access in zip(requested["paths"], requested["targetAccesses"], strict=True):
             if access == "exempt":
                 continue
-            parsed = PurePosixPath(path)
-            paths.update(((access, parsed), (access, parsed.parent)))
+            paths.update(((access, _path_key(path)), (access, _path_key(computer_parent(path)))))
         return (
             str(granted[0]) == requested["agentId"]
-            and (grant.access, granted[1]) in paths
+            and (grant.access, _path_key(granted[1])) in paths
         )
     if resource_type == "integration_operation":
         requested = _integration_operation_scope(resource_scope)
@@ -1693,7 +1696,7 @@ class PermissionPolicy:
             if policy == ToolExecutionPolicy.DISABLED:
                 return PermissionDecision.DENY
             path = scope[1]
-            home = PurePosixPath(agent.home_directory) if agent.home_directory else None
+            home = agent.home_directory
             selected_policy = (
                 agent.home_filesystem_policy
                 if home is not None and _path_is_within(path, home)
@@ -1702,7 +1705,7 @@ class PermissionPolicy:
             if selected_policy == "deny":
                 return PermissionDecision.DENY
             workspace = (
-                PurePosixPath(chat_session.current_directory)
+                chat_session.current_directory
                 if chat_session.current_directory is not None
                 else None
             )
@@ -1754,11 +1757,11 @@ class PermissionPolicy:
             )
             if agent is None:
                 return PermissionDecision.DENY
-            home = PurePosixPath(agent.home_directory) if agent.home_directory else None
+            home = agent.home_directory
             paths = [scope["currentDirectory"], *scope["paths"]]
             zones = [
                 "home"
-                if home is not None and _path_is_within(PurePosixPath(path), home)
+                if home is not None and _path_is_within(path, home)
                 else "external"
                 for path in paths
             ]
@@ -1772,10 +1775,10 @@ class PermissionPolicy:
             if policy == ToolExecutionPolicy.DISABLED or "deny" in filesystem_policies:
                 return PermissionDecision.DENY
             workspace = (
-                PurePosixPath(chat_session.current_directory)
+                chat_session.current_directory
                 if chat_session.current_directory is not None else None
             )
-            target_paths = [PurePosixPath(path) for path in paths]
+            target_paths = paths
             # Verified metadata-only targets still participate in every hard path check.
             inside_workspace = workspace is not None and all(
                 _path_is_within(path, workspace)

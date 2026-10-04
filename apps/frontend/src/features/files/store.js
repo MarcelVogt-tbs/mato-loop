@@ -208,7 +208,7 @@ export const useWorkspaceStore = defineStore('workspace', {
           ...(action.revision != null ? { revision: action.revision, fileId: action.fileId } : {})
         }
       }
-      if (!action.executionAgentId || !action.currentDirectory || !action.path.startsWith('/')) return null
+      if (!action.executionAgentId || !action.currentDirectory || !(/^(?:\/|[A-Z]:\/)/u.test(action.path))) return null
       return {
         scope: 'filesystem',
         path: action.path,
@@ -366,7 +366,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.persistView()
     },
     openDirectory(path) {
-      if (typeof path !== 'string' || (this.scope === 'filesystem' && !path.startsWith('/'))) return false
+      if (typeof path !== 'string' || (this.scope === 'filesystem' && !(/^(?:\/|[A-Z]:\/)/u.test(path)))) return false
       this.directoryPath = path
       this.selectPath(path)
       return this.load(path)

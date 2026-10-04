@@ -103,6 +103,7 @@ from mato_loop_backend.execution import (
     stream_ticket,
     transfer_tickets,
 )
+from mato_loop_backend.execution.paths import parent as computer_parent
 from mato_loop_backend.files.archives import (
     ArchiveEntry,
     ArchivePage,
@@ -471,7 +472,7 @@ async def list_entries(
                 raise ApiError(502, "executionAgent.protocolError")
             entries = [_agent_entry(entry) for entry in raw_entries]
             for entry in entries:
-                expected_parent = PurePosixPath(entry["path"]).parent.as_posix()
+                expected_parent = computer_parent(entry["path"])
                 if expected_parent != normalized:
                     raise ApiError(502, "executionAgent.protocolError")
             return {
@@ -1555,7 +1556,7 @@ async def rename_entry(
         name = validate_upload_filename(payload.name)
     except RootFileError as exc:
         raise _context_error(exc) from exc
-    parent = PurePosixPath(payload.path).parent.as_posix()
+    parent = computer_parent(payload.path) if context.agent_id is not None else PurePosixPath(payload.path).parent.as_posix()
     destination_path = _join_path(parent, name)
     if context.agent_id is not None:
         source_path = _normalize_agent_path(payload.path)

@@ -97,7 +97,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { api } from 'src/boot/axios'
-import { parentPath } from 'src/features/files/state'
+import { absoluteComputerPath, parentPath } from 'src/features/files/state'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -114,6 +114,16 @@ const loadFailed = ref(false)
 let requestVersion = 0
 
 const breadcrumbs = computed(() => {
+  if (/^[A-Z]:\//u.test(currentPath.value)) {
+    const drive = currentPath.value.slice(0, 3)
+    const crumbs = [{ label: drive, path: drive }]
+    let path = drive.replace(/\/$/u, '')
+    for (const part of currentPath.value.slice(3).split('/').filter(Boolean)) {
+      path += `/${part}`
+      crumbs.push({ label: part, path })
+    }
+    return crumbs
+  }
   const crumbs = [{ label: '/', path: '/' }]
   let path = ''
   for (const part of currentPath.value.split('/').filter(Boolean)) {
@@ -125,7 +135,8 @@ const breadcrumbs = computed(() => {
 
 function startPath() {
   const path = String(props.initialPath || '').trim()
-  return path.startsWith('/') ? path.replace(/\/+$/u, '') || '/' : '/'
+  if (/^[A-Z]:\/$/u.test(path)) return path
+  return absoluteComputerPath(path) ? path.replace(/\/+$/u, '') || '/' : '/'
 }
 
 async function load(path, append = false) {

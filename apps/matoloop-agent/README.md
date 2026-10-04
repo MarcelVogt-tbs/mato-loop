@@ -6,9 +6,9 @@ use the same heuristic: commands without a recognized write remain `shell.read`,
 even when analysis is incomplete. The shared shell is trusted; this is not a
 sandbox guarantee. Isolated command execution remains unchanged.
 
-Standalone agent with a portable connection and dispatch core. The current Linux platform adapter provides bounded filesystem, process, POSIX terminal, transfer, OpenSCAD, browser, credential-storage, and session-cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
+Standalone agent with a portable connection and dispatch core. Linux provides bounded filesystem, process, POSIX terminal, transfer, OpenSCAD, browser, credential-storage, and session-cache operations. The Windows adapter advertises its native filesystem, PowerShell, search, transfer, and cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
 
-Platform adapters compose complete host operations behind the common core. Linux is currently the only implementation. Future macOS and Windows adapters must preserve each operation's security guarantees; Windows support also requires a coordinated extension of the protocol's normalized absolute POSIX path contract and the backend permission model.
+Platform adapters compose host operations behind the common core. Linux uses normalized absolute POSIX paths; Windows uses forward-slash drive-letter paths such as `C:/Users/Ada/workspace` on the wire. Native Windows paths are converted at the Windows adapter boundary. Unsupported capabilities are not advertised.
 
 The [Linux browser runtime](BROWSER.md) provides a persistent owner-bound headed Chromium,
 private graphical viewing, interactive prerequisite setup, and bounded browser actions.
@@ -87,6 +87,28 @@ home directories and workspaces are always preserved. The first platform impleme
 Linux system services with systemd. Browser and shared terminal capabilities remain unavailable
 when their host prerequisites are declined or unsupported.
 
+## Native Windows installation
+
+Open **Windows PowerShell as Administrator under the account that should own the Agent**.
+Copy the Windows installation command from **Einstellungen > Computer**. The script
+installs its own `uv` and Python under `%LOCALAPPDATA%\matoloop-agent` and creates
+`%USERPROFILE%\mato-loop-agent\workspace` as the default Agent home. A startup
+Scheduled Task runs under the installing account, using a password supplied only
+to Windows Task Scheduler at installation. The source checkout requires Git and
+access to the private MatoLoop repository; an existing checkout can be provided
+with `-Source`. Windows PowerShell is the shell for `shell_run`.
+
+After setup, create a computer in the UI and pair from a normal interactive
+PowerShell window with `& "$env:LOCALAPPDATA\matoloop-agent\installer.ps1" pair`.
+Use the same script with `update`, `status`, `uninstall` or `uninstall -Purge`.
+The setup also registers an on-demand maintenance task. **Agent aktualisieren**
+in the Computer settings uses that task and the same installer update function;
+both tasks run under the installing account without elevation. Task Scheduler
+stores the account password, while the Agent's own pairing state uses DPAPI.
+Updates require a clean tracked Git branch and fast-forward only. Deinstallation
+never removes the workspace. Browser, OpenSCAD, and interactive/shared terminals
+are not advertised by the Windows adapter.
+
 Run tests:
 
 ```bash
@@ -97,7 +119,7 @@ uv run python -m unittest discover -s tests -v
 
 The authenticated WebSocket sends strict `hello`, `request`, `cancel`, `response`, and `event` messages with `protocolVersion: 1`. Hello advertises `agentId`, `agentVersion`, `computerName`, `platform`, canonical `homeDirectory`, and operations.
 
-Filesystem operations use normalized absolute POSIX paths and traverse from an open `/` descriptor with `O_NOFOLLOW` on every component. Copy and move use absolute source and destination paths. Process and shell working directories are absolute. `shell.inspect` returns absolute targets and an inspection revision without root metadata.
+Linux filesystem operations use normalized absolute POSIX paths and traverse from an open `/` descriptor with `O_NOFOLLOW` on every component. Windows uses normalized forward-slash drive paths and rejects reparse-point traversal. Copy and move use absolute source and destination paths. Process and shell working directories are absolute. `shell.inspect` returns absolute targets and an inspection revision without root metadata.
 
 The fixed terminal operations are `terminal.open`, `terminal.read`, `terminal.write`, `terminal.resize`, `terminal.close`, and `terminal.run`. Interactive shells and one-shot terminal runs execute with the agent operating-system user's rights. PTYs are live process state and are not persistent terminal sessions.
 

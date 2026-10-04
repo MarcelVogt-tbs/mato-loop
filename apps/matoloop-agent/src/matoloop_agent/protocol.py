@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import base64
 import binascii
+import sys
 from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+
+from .windows_paths import absolute
 
 PROTOCOL_VERSION = 1
 UUID_PATTERN = (
@@ -52,6 +55,25 @@ def _bounded_unprotected_environment(
     if value is None:
         return None
     protected = PROTECTED_ENVIRONMENT_NAMES.intersection(value)
+    if sys.platform == "win32":
+        protected.update(
+            name
+            for name in value
+            if name.upper() in PROTECTED_ENVIRONMENT_NAMES
+            or name.upper().startswith(("DYLD_", "GIT_CONFIG_"))
+            or name.upper()
+            in {
+                "PSMODULEPATH",
+                "COMSPEC",
+                "PATHEXT",
+                "SYSTEMROOT",
+                "TEMP",
+                "TMP",
+                "USERPROFILE",
+                "APPDATA",
+                "LOCALAPPDATA",
+            }
+        )
     protected.update(name for name in value if name.startswith(("DYLD_", "GIT_CONFIG_")))
     if protected:
         raise ValueError(f"environment cannot replace {min(protected)}")
@@ -61,16 +83,7 @@ def _bounded_unprotected_environment(
 
 
 def _absolute_path(value: str) -> str:
-    parsed = PurePosixPath(value)
-    if (
-        not value.startswith("/")
-        or "\\" in value
-        or parsed.as_posix() != value
-        or (value != "/" and any(part in {"", ".", ".."} for part in value[1:].split("/")))
-        or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
-    ):
-        raise ValueError("path must be a normalized absolute POSIX path")
-    return value
+    return absolute(value)
 
 
 def _relative_path(value: str, *, allow_dot: bool = False) -> str:
@@ -120,6 +133,12 @@ class Hello(StrictModel):
     system_info: SystemInfo | None = Field(default=None, alias="systemInfo")
 
     _home_is_absolute = field_validator("home_directory")(_absolute_path)
+
+    @model_validator(mode="after")
+    def platform_path(self):
+        if self.home_directory.startswith("/") == (self.platform == "win32"):
+            raise ValueError("home path does not match the agent platform")
+        return self
 
 
 class Welcome(StrictModel):

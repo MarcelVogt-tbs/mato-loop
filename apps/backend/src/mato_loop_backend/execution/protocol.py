@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from pathlib import PurePosixPath
 from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+
+from mato_loop_backend.execution.paths import absolute_path, windows_path
 
 PROTOCOL_VERSION = 1
 MAX_MESSAGE_BYTES = 1_048_576
@@ -86,19 +87,7 @@ def _camel(value: str) -> str:
 
 
 def _absolute_path(value: str) -> str:
-    parsed = PurePosixPath(value)
-    if (
-        not value.startswith("/")
-        or "\\" in value
-        or parsed.as_posix() != value
-        or (
-            value != "/"
-            and any(part in {"", ".", ".."} for part in value[1:].split("/"))
-        )
-        or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
-    ):
-        raise ValueError("path must be a normalized absolute POSIX path")
-    return value
+    return absolute_path(value)
 
 
 class WireModel(BaseModel):
@@ -135,6 +124,8 @@ class HelloMessage(WireModel):
     @model_validator(mode="after")
     def validate_hello(self) -> HelloMessage:
         _absolute_path(self.home_directory)
+        if windows_path(self.home_directory) != (self.platform == "win32"):
+            raise ValueError("home path does not match the agent platform")
         if len(self.operations) != len(set(self.operations)):
             raise ValueError("operations must be unique")
         return self

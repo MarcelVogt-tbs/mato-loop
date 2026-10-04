@@ -7,7 +7,6 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime
-from pathlib import PurePosixPath
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
@@ -37,6 +36,7 @@ from mato_loop_backend.execution import (
     execution_agent_connections,
 )
 from mato_loop_backend.execution.client import _absolute_path
+from mato_loop_backend.execution.paths import within
 from mato_loop_backend.files.service import RootFileError, RootFileService
 from mato_loop_backend.files.storage import SessionMoveReceipt, SessionStorageError
 from mato_loop_backend.media.attachments import AttachmentInput, AttachmentService
@@ -208,9 +208,7 @@ async def execution_home(
 
 
 def _path_is_within(path: str, parent: str) -> bool:
-    path_parts = PurePosixPath(path).parts
-    parent_parts = PurePosixPath(parent).parts
-    return path_parts[: len(parent_parts)] == parent_parts
+    return within(path, parent)
 
 
 def execution_filesystem_policy(agent: ExecutionAgent, path: str) -> str:

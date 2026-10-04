@@ -4,7 +4,6 @@ import base64
 import binascii
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 from typing import Any, BinaryIO, Literal, Self
 from uuid import UUID
 
@@ -22,6 +21,8 @@ from mato_loop_backend.execution.manager import (
     ExecutionAgentError,
     execution_agent_connections,
 )
+from mato_loop_backend.execution.paths import absolute_path
+from mato_loop_backend.execution.paths import parent as computer_parent
 from mato_loop_backend.execution.protocol import EventMessage
 from mato_loop_backend.execution.transfers import (
     EXPORT_TIMEOUT_SECONDS,
@@ -42,17 +43,7 @@ class ExecutionResult(BaseModel):
 
 
 def _absolute_path(value: str) -> str:
-    parts = value.split("/")[1:]
-    if (
-        not value
-        or "\\" in value
-        or not PurePosixPath(value).is_absolute()
-        or PurePosixPath(value).as_posix() != value
-        or (value != "/" and any(part in {"", ".", ".."} for part in parts))
-        or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
-    ):
-        raise ValueError("invalid absolute path")
-    return value
+    return absolute_path(value)
 
 
 class WorkspaceEntry(ExecutionResult):
@@ -221,13 +212,15 @@ class ShellTarget(ExecutionResult):
 
     @model_validator(mode="after")
     def validate_special_target(self) -> Self:
+        if not self.path.startswith("/") and self.kind in {"discard", "toolchain_metadata"}:
+            raise ValueError("POSIX-only shell target on Windows")
         if self.kind == "discard" and self.path != "/dev/null":
             raise ValueError("invalid shell discard target")
         if self.kind == "toolchain_metadata":
             directories = {
                 "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin",
             }
-            if self.path not in directories and str(PurePosixPath(self.path).parent) not in directories:
+            if self.path not in directories and computer_parent(self.path) not in directories:
                 raise ValueError("invalid shell toolchain metadata target")
         if self.kind in {"toolchain_metadata", "discard"} and self.access is not None:
             raise ValueError("invalid shell special target access")

@@ -16,9 +16,17 @@
         <div class="text-body2 app-muted q-mb-sm">
           Auf dem Zielcomputer als normaler Benutzer ausführen. Git-Zugriff auf den MatoLoop-Quellcode wird benötigt.
         </div>
-        <q-input :model-value="installerCommand" readonly outlined dense label="Installationsbefehl">
+        <q-input :model-value="installerCommand" readonly outlined dense label="Linux-Installationsbefehl">
           <template #append>
             <q-btn flat round dense icon="content_copy" aria-label="Installationsbefehl kopieren" @click="copy(installerCommand, 'Installationsbefehl')" />
+          </template>
+        </q-input>
+        <div class="text-body2 app-muted q-mt-md q-mb-sm">
+          Windows: PowerShell als Administrator unter dem späteren Task-Benutzer öffnen. Für den Start beim Hochfahren wird dessen Passwort einmalig abgefragt.
+        </div>
+        <q-input :model-value="windowsInstallerCommand" readonly outlined dense type="textarea" autogrow label="Windows-Installationsbefehl">
+          <template #append>
+            <q-btn flat round dense icon="content_copy" aria-label="Windows-Installationsbefehl kopieren" @click="copy(windowsInstallerCommand, 'Windows-Installationsbefehl')" />
           </template>
         </q-input>
       </q-card-section>
@@ -272,6 +280,7 @@ const pairingDurationSeconds = ref(null)
 const saving = ref(false)
 const maintenanceBusy = ref(false)
 const installerCommand = `curl -fsSL ${window.location.origin}/api/execution-agents/install.sh | sh -s -- --instance-url ${window.location.origin}`
+const windowsInstallerCommand = `$installer = Join-Path $env:TEMP 'install-matoloop-agent.ps1'; Invoke-WebRequest -UseBasicParsing -Uri '${window.location.origin}/api/execution-agents/install.ps1' -OutFile $installer; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -InstanceUrl '${window.location.origin}'`
 const operationLabel = (operation) => operationLabels[operation] || operation
 const pairingDurationOptions = computed(() => pairingDurationChoices.filter((option) => (
   option.value <= (agents.pairingPolicy?.maximumDurationSeconds || 0)

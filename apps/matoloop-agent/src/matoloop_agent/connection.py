@@ -124,7 +124,7 @@ class MatoLoopAgent:
         self.operations = list(self.runtime.operations)
 
     def hello(self) -> Hello:
-        home = self.filesystem.resolve_directory(str(self.config.home_directory))
+        home = self.filesystem.resolve_directory(self.config.home_directory.as_posix())
         info = self.system_info(None)
         return Hello(
             agentId=self.config.agent_id,

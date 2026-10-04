@@ -45,13 +45,13 @@ function appTab(appId) {
 
 function normalizedAbsolutePath(value) {
   return typeof value === 'string'
-    && value.startsWith('/')
+    && /^(?:\/|[A-Z]:\/)/u.test(value)
     && !value.includes('\\')
     && ![...value].some((character) => {
       const code = character.charCodeAt(0)
       return code < 32 || (code >= 127 && code <= 159)
     })
-    && (value === '/' || !value.split('/').slice(1).some((part) => ['', '.', '..'].includes(part)))
+    && (value === '/' || /^[A-Z]:\/$/u.test(value) || !value.split('/').slice(1).some((part) => ['', '.', '..'].includes(part)))
 }
 
 function normalizedFileTarget(value) {

@@ -1,8 +1,14 @@
 export const MAX_WORKSPACE_UPLOADS = 4
 export const MAX_WORKSPACE_UPLOAD_BYTES = 64 * 1024 * 1024
 
+export function absoluteComputerPath(path) {
+  return typeof path === 'string' && (path.startsWith('/') || /^[A-Z]:\//u.test(path))
+}
+
 export function parentPath(path) {
   if (path === '/') return '/'
+  if (/^[A-Z]:\/$/u.test(path)) return path
+  if (/^[A-Z]:\//u.test(path)) return path.lastIndexOf('/') === 2 ? path.slice(0, 3) : path.slice(0, path.lastIndexOf('/'))
   if (path.startsWith('/')) return path.slice(0, path.lastIndexOf('/')) || '/'
   return path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '.'
 }

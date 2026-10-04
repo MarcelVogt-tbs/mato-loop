@@ -91,8 +91,8 @@ function safeFileUrl(value, expectedPath) {
   const executionAgentId = parsed.searchParams.get('execution_agent_id')
   const currentDirectory = parsed.searchParams.get('current_directory')
   return UUID_PATTERN.test(executionAgentId || '')
-    && path?.startsWith('/')
-    && currentDirectory?.startsWith('/')
+    && /^(?:\/|[A-Z]:\/)/u.test(path || '')
+    && /^(?:\/|[A-Z]:\/)/u.test(currentDirectory || '')
     ? value
     : null
 }

@@ -435,7 +435,11 @@ const explorerUnavailableMessage = computed(() => {
 const explorerUnavailableIcon = computed(() => (
   selectedExecutionAgent.value?.connected === false ? 'cloud_off' : 'folder_off'
 ))
-const browserRootPath = computed(() => workspace.scope === 'filesystem' ? '/' : '.')
+const browserRootPath = computed(() => {
+  if (workspace.scope !== 'filesystem') return '.'
+  const selected = workspace.currentDirectory || workspace.directoryPath
+  return /^[A-Z]:\//u.test(selected || '') ? selected.slice(0, 3) : '/'
+})
 const displayedDirectoryPath = computed(() => projectOverview.value ? '@project' : workspace.directoryPath)
 const atBrowserRoot = computed(() => projectOverview.value || (
   workspace.directoryPath === browserRootPath.value && !chat.current?.projectId
@@ -443,6 +447,8 @@ const atBrowserRoot = computed(() => projectOverview.value || (
 const selectedBreadcrumbs = computed(() => {
   const filesystem = workspace.scope === 'filesystem'
   const parts = workspace.directoryPath.split('/').filter((part) => part && part !== '.')
+  const windows = filesystem && /^[A-Z]:\//u.test(workspace.directoryPath)
+  if (windows) parts.shift()
   if (!filesystem && chat.current?.projectId) {
     if (projectOverview.value) return [{ icon: 'folder_open', label: 'Projekt', ariaLabel: 'Projekt', path: '@project' }]
     const selected = managedSessionOptions.value.find((option) => option.value === workspace.rootIdentity)
@@ -460,12 +466,12 @@ const selectedBreadcrumbs = computed(() => {
     {
       icon: filesystem ? 'computer' : 'folder_open',
       ariaLabel: filesystem ? 'Computer' : 'Ablage',
-      path: filesystem ? '/' : '.'
+      path: filesystem ? browserRootPath.value : '.'
     },
     ...parts.map((label, index) => ({
       label,
       ariaLabel: label,
-      path: `${filesystem ? '/' : ''}${parts.slice(0, index + 1).join('/')}`
+      path: `${filesystem ? browserRootPath.value.replace(/\/$/u, '') + '/' : ''}${parts.slice(0, index + 1).join('/')}`
     }))
   ]
 })
@@ -697,7 +703,7 @@ function openAbsolutePath() {
       model: workspace.directoryPath,
       type: 'text',
       label: 'Absoluter Pfad',
-      isValid: (value) => String(value || '').trim().startsWith('/')
+      isValid: (value) => /^(?:\/|[A-Z]:\/)/u.test(String(value || '').trim())
     },
     cancel: { label: 'Abbrechen', flat: true, noCaps: true },
     ok: { label: 'Öffnen', unelevated: true, noCaps: true, color: 'primary' }

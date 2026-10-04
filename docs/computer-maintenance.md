@@ -18,3 +18,14 @@ computer; a disconnect is not success, and an unconfirmed result becomes unknown
 after the worker's runtime limit. Revoking the computer remains separate. Future OS
 adapters implement the same operation with their native service and authorization
 mechanisms.
+
+Native Windows installations configure a second, on-demand Scheduled Task during
+setup, using the same account and Task Scheduler-managed password as the boot
+task. Both run with limited privileges; task ACLs permit that account to manage
+its own tasks. Only the fixed installer action runs: the Agent writes an action
+and job ID to its private data directory and starts the maintenance task. That
+PowerShell worker reads its DPAPI-protected Agent credential, invokes the existing
+installer for update or uninstall without purge, and sends the completion through
+the same authenticated backend endpoint. It survives stopping the Agent task;
+Git runs without interactive credential prompts. Missing task setup omits the
+maintenance capability. Portal maintenance requires no Windows password request.

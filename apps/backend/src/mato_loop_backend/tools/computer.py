@@ -406,7 +406,8 @@ CHANGE_DIRECTORY = ToolDefinition(
 SHELL_RUN = ToolDefinition(
             "shell_run",
             "Run one command with the host-configured shell in the session directory. "
-            "If a terminal is attached, use its persistent Bash shell and actual directory instead. "
+            "On Windows, use PowerShell syntax in isolated calls. "
+            "On Linux, an attached terminal uses persistent Bash and its actual directory. "
             "Shell state and cd persist in an attached terminal, but do not change the session workspace. "
             "Shell options also persist; set -e can close the entire terminal on a command failure. "
             "Run self-contained scripts with set -e in a child shell using bash -c, "

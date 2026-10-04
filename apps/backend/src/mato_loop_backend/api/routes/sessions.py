@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import replace
-from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -40,6 +39,7 @@ from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.events import run_events
+from mato_loop_backend.execution.paths import absolute_path
 from mato_loop_backend.files.service import RootFileError, RootFileService
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.media.attachments import (
@@ -98,17 +98,11 @@ _owned_session = session_service.owned_session
 
 
 def _normalized_absolute_path(value: str) -> bool:
-    parsed = PurePosixPath(value)
-    return (
-        "\\" not in value
-        and not any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
-        and parsed.is_absolute()
-        and parsed.as_posix() == value
-        and (
-            value == "/"
-            or not any(part in {"", ".", ".."} for part in value.split("/")[1:])
-        )
-    )
+    try:
+        absolute_path(value)
+        return True
+    except ValueError:
+        return False
 
 
 def _raise_api_error(exc: session_service.SessionServiceError) -> None:

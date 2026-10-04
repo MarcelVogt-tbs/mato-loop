@@ -92,7 +92,11 @@ class TransferClient:
             raise AgentError("transfer.tooLarge", "Transfer exceeds the configured limit")
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         metadata = directory.lstat()
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or (os.name == "nt" and metadata.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+            or not stat.S_ISDIR(metadata.st_mode)
+        ):
             raise AgentError("transfer.invalidPath", "Transfer directory is unavailable")
         temporary = directory / f".download-{uuid4().hex}.tmp"
         digest = hashlib.sha256()
@@ -106,7 +110,8 @@ class TransferClient:
                 if response.status_code != 200:
                     raise AgentError("transfer.failed", "Backend download failed")
                 with temporary.open("xb", buffering=0) as handle:
-                    os.chmod(temporary, 0o600, follow_symlinks=False)
+                    if os.name == "posix":
+                        os.chmod(temporary, 0o600, follow_symlinks=False)
                     async for chunk in response.aiter_bytes(1024 * 1024):
                         size += len(chunk)
                         if size > expected_size or size > self.max_bytes:

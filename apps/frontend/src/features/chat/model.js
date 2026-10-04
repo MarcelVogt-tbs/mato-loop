@@ -13,16 +13,17 @@ const FILESYSTEM_MUTATION_TOOLS = new Set([
 const OUTBOX_RETRY_MS = 4000
 
 function absoluteToolPath(path, currentDirectory) {
-  if (path?.startsWith('/')) return path
-  if (!path || !currentDirectory?.startsWith('/')) return null
+  if (path?.startsWith('/') || /^[A-Z]:\//u.test(path || '')) return path
+  if (!path || !(currentDirectory?.startsWith('/') || /^[A-Z]:\//u.test(currentDirectory || ''))) return null
   const parts = `${currentDirectory}/${path}`.split('/')
+  const drive = /^[A-Z]:\//u.test(currentDirectory) ? parts.shift() : null
   const normalized = []
   for (const part of parts) {
     if (!part || part === '.') continue
     if (part === '..') normalized.pop()
     else normalized.push(part)
   }
-  return `/${normalized.join('/')}`
+  return drive ? `${drive}/${normalized.join('/')}` : `/${normalized.join('/')}`
 }
 
 function controlCenterFileTarget(root, path, session) {

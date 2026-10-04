@@ -19,7 +19,7 @@ export function markdownPrintRequest(query) {
   } else {
     const executionAgentId = stringValue(query.execution_agent_id)
     const currentDirectory = stringValue(query.current_directory)
-    if (!executionAgentId || !currentDirectory || !path.startsWith('/')) return null
+    if (!executionAgentId || !currentDirectory || !(/^(?:\/|[A-Z]:\/)/u.test(path))) return null
     if (sessionId) params.session_id = sessionId
     params.execution_agent_id = executionAgentId
     params.current_directory = currentDirectory

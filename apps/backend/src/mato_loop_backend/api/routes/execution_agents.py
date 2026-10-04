@@ -52,6 +52,15 @@ async def download_installer() -> FileResponse:
     )
 
 
+@router.get("/install.ps1", include_in_schema=False)
+async def download_windows_installer() -> FileResponse:
+    return FileResponse(
+        PROJECT_ROOT / "scripts/install-matoloop-agent.ps1",
+        media_type="text/plain",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
 def _camel(value: str) -> str:
     first, *rest = value.split("_")
     return first + "".join(part.capitalize() for part in rest)
