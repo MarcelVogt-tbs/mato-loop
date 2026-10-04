@@ -294,6 +294,11 @@ class OAuthLoginManager:
                     attempt,
                     redirect,
                     lambda: attempt.callback,
+                    client_metadata_url=(
+                        redirect_uri.removesuffix(CALLBACK_PATH) + "/api/mcp/oauth/client-metadata"
+                    )
+                    if not config.client_id and redirect_uri.startswith("https://")
+                    else None,
                 )
                 provider.expected_client_id = config.client_id
 
@@ -305,6 +310,16 @@ class OAuthLoginManager:
                         metadata = OAuthMetadata.model_validate_json(response.content)
                     except ValueError:
                         return  # Protected-resource metadata is parsed by the SDK.
+                    if metadata.client_id_metadata_document_supported and not config.client_id:
+                        if provider.context.client_metadata_url is None:
+                            raise McpClientError("mcp.clientMetadataUrlRequired")
+                        # Prefer the discovered CIMD path over previously registered client IDs.
+                        if (
+                            provider.context.client_info
+                            and provider.context.client_info.client_id
+                            != provider.context.client_metadata_url
+                        ):
+                            provider.context.client_info = None
                     if (
                         metadata.grant_types_supported is not None
                         and "authorization_code" not in metadata.grant_types_supported

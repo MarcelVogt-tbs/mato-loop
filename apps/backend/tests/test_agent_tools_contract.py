@@ -2441,6 +2441,16 @@ async def test_personal_settings_exposes_one_tool_and_reuses_profile_rules(monke
     context.db.commit.assert_awaited_once()
 
 
+async def test_personal_settings_advertises_mcp_oauth_ui_setup(monkeypatch, tmp_path):
+    call = ToolCall("mcp-list", "customize_matoloop", {"action": "list"})
+    context = _context(tmp_path, call)
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=IntegrationSettings(adapter_availability={"mcp_streamable_http": "full"})))
+    result = await tool_registry.execute(call, context)
+    info = json.loads(result.content)["areas"]["integrations"]["mcp_streamable_http"]
+    assert "oauth" in info["authenticationModes"] and info["oauthSetup"]["settingsPath"] == "/settings/mcp"
+
+
 def test_secret_input_available_without_shell_and_with_shell() -> None:
     for execution_operations in (frozenset(), frozenset({"shell.run"})):
         tools = tool_registry.effective(

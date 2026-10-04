@@ -73,7 +73,16 @@ def payload():
 
 @pytest.mark.parametrize(
     "mode",
-    ["dynamic", "none", "client_secret_basic", "client_secret_post", "streaming", "redirected"],
+    [
+        "dynamic",
+        "none",
+        "client_secret_basic",
+        "client_secret_post",
+        "streaming",
+        "redirected",
+        "cimd",
+        "ha_http",
+    ],
 )
 async def test_sdk_login_and_discovery(transport, mode):
     requests, authorization = [], {}
@@ -97,11 +106,13 @@ async def test_sdk_login_and_discovery(transport, mode):
                 issuer=ISSUER,
                 authorization_endpoint=ISSUER + "/authorize",
                 token_endpoint=ISSUER + "/token",
-                registration_endpoint=ISSUER + "/register",
+                registration_endpoint=None if mode in {"cimd", "ha_http"} else ISSUER + "/register",
+                client_id_metadata_document_supported=mode in {"cimd", "ha_http"},
                 code_challenge_methods_supported=["S256"],
                 grant_types_supported=["authorization_code"],
             )
         elif path.endswith("/register"):
+            assert mode not in {"cimd", "ha_http"}
             data = {**json.loads(request.content), "client_id": "registered"}
             assert data["grant_types"] == ["authorization_code"]
         elif path.endswith("/token"):
@@ -142,10 +153,14 @@ async def test_sdk_login_and_discovery(transport, mode):
         return httpx.Response(200, json=data)
 
     transport(handle)
-    dynamic = mode in {"dynamic", "streaming", "redirected"}
+    dynamic = mode in {"dynamic", "streaming", "redirected", "cimd"}
     config = oauth.OAuthConfig(
-        client_id=None if dynamic else "client",
-        token_endpoint_auth_method="none" if dynamic else mode,
+        client_id=None
+        if dynamic
+        else "http://192.168.1.30:10020"
+        if mode == "ha_http"
+        else "client",
+        token_endpoint_auth_method="none" if dynamic or mode == "ha_http" else mode,
         scope="mcp:tools",
     )
     attempt = oauth.LoginAttempt(
@@ -164,9 +179,19 @@ async def test_sdk_login_and_discovery(transport, mode):
     manager = oauth.OAuthLoginManager()
     try:
         await manager.start(
-            attempt, "secret" if mode.startswith("client_secret") else None, CALLBACK
+            attempt,
+            "secret" if mode.startswith("client_secret") else None,
+            config.client_id + oauth.CALLBACK_PATH if mode == "ha_http" else CALLBACK,
         )
         authorization.update(parse_qs(urlsplit(attempt.authorization_url).query))
+        if mode == "ha_http":
+            assert authorization["redirect_uri"] == [
+                "http://192.168.1.30:10020" + oauth.CALLBACK_PATH
+            ]
+        if mode == "cimd":
+            assert authorization["client_id"] == [
+                "https://matoloop.example.test/api/mcp/oauth/client-metadata"
+            ]
         assert authorization["code_challenge_method"] == ["S256"] and authorization["scope"] == [
             "mcp:tools"
         ]

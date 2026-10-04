@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from typing import Annotated, Literal
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -28,6 +27,7 @@ from mato_loop_backend.integrations.mcp.oauth import (
 from mato_loop_backend.integrations.mcp.service import McpIntegrationService
 from mato_loop_backend.integrations.service import IntegrationSettingsError
 from mato_loop_backend.models import UserAccount
+from mato_loop_backend.public_url import resolve_public_base_url
 from mato_loop_backend.security import (
     hash_token,
     load_credential,
@@ -36,6 +36,7 @@ from mato_loop_backend.security import (
     require_user,
 )
 from mato_loop_backend.settings import (
+    GeneralSettings,
     IntegrationAdapterAvailability,
     IntegrationInstance,
     IntegrationSettings,
@@ -197,7 +198,12 @@ def _api_error(exc: Exception) -> ApiError:
         else 409
         if code in {"integration.changed", "mcp.authorizationRequired", "mcp.oauthBusy"}
         else 422
-        if code == "mcp.oauthConfigurationInvalid"
+        if code
+        in {
+            "mcp.oauthConfigurationInvalid",
+            "mcp.callbackUrlInvalid",
+            "mcp.clientMetadataUrlRequired",
+        }
         else 502
     )
     return ApiError(status_code, code)
@@ -375,16 +381,13 @@ def _session_hash(request: Request) -> str:
     return hash_token(request.cookies.get(get_runtime_config().session_cookie_name, ""))
 
 
-def _callback_uri(request: Request) -> str:
-    configured = get_runtime_config().public_base_url
-    origin = configured or request.headers.get("origin", "")
-    validate_oauth_url(origin)
-    parsed = urlsplit(origin)
-    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-        raise McpClientError("mcp.oauthConfigurationInvalid")
-    if not configured and origin not in get_runtime_config().cors_origin_list:
-        raise McpClientError("mcp.oauthConfigurationInvalid")
-    return validate_oauth_url(origin.rstrip("/") + CALLBACK_PATH)
+async def _callback_uri(db: AsyncSession, request: Request) -> str:
+    settings = await SettingsStore.load(db, GeneralSettings)
+    try:
+        base, _source = resolve_public_base_url(settings.public_base_url, request)
+        return base + CALLBACK_PATH
+    except ValueError as exc:
+        raise McpClientError("mcp.callbackUrlInvalid") from exc
 
 
 @router.post("/oauth/attempts", status_code=status.HTTP_201_CREATED)
@@ -401,7 +404,7 @@ async def start_mcp_oauth(
             "mcp_streamable_http"
         ) == IntegrationAdapterAvailability.DISABLED:
             raise ApiError(409, "integration.adapterDisabled")
-        redirect_uri = _callback_uri(request)
+        redirect_uri = await _callback_uri(db, request)
         revision = None
         client_info = None
         if payload.integration_id:
@@ -460,6 +463,25 @@ async def mcp_oauth_callback(
         status_code=303,
         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
     )
+
+
+@callback_router.get("/oauth/client-metadata")
+async def mcp_oauth_client_metadata(
+    request: Request, db: Annotated[AsyncSession, Depends(get_db_session)]
+):
+    try:
+        redirect_uri = await _callback_uri(db, request)
+    except McpClientError as exc:
+        raise _api_error(exc) from exc
+    base = redirect_uri.removesuffix(CALLBACK_PATH)
+    return {
+        "client_id": base + "/api/mcp/oauth/client-metadata",
+        "client_name": "MatoLoop",
+        "redirect_uris": [redirect_uri],
+        "token_endpoint_auth_method": "none",
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+    }
 
 
 @router.get("/oauth/attempts/{attempt_id}")

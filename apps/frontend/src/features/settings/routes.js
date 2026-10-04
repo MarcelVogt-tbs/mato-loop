@@ -136,6 +136,12 @@ export const settingsRoutes = [
 
 export const adminRoutes = [
   {
+    path: 'general',
+    name: 'admin-general',
+    component: () => import('src/features/settings/GeneralSettingsPage.vue'),
+    meta: { settingsLabel: 'Allgemein', settingsIcon: 'settings' }
+  },
+  {
     path: 'users',
     name: 'admin-users',
     component: () => import('src/features/auth/UserSettingsPage.vue'),

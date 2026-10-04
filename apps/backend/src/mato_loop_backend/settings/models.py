@@ -23,6 +23,8 @@ from pydantic import (
     model_validator,
 )
 
+from mato_loop_backend.public_url import normalize_public_base_url
+
 _MODEL_RUNTIME_KEYS = {
     "context_window_tokens": "contextWindowTokens",
     "discovered_context_window_tokens": "discoveredContextWindowTokens",
@@ -1144,6 +1146,10 @@ class GeneralSettings(SettingsDocument):
 
     default_locale: str = "de-DE"
     default_timezone: str = "Europe/Berlin"
+    public_base_url: str | None = Field(default=None, max_length=2083, alias="publicBaseUrl")
+
+    model_config = ConfigDict(populate_by_name=True)
+    _normalize_public_url = field_validator("public_base_url", mode="before")(normalize_public_base_url)
 
 
 class ChannelSettings(SettingsDocument):

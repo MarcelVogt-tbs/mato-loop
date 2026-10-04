@@ -156,6 +156,11 @@ async def _personal_settings(
             adapters["mcp_streamable_http"] = {
                 "fields": ["name", "enabled", "endpoint"],
                 "credentialFields": ["bearer_token"],
+                "authenticationModes": ["none", "bearer", "oauth"],
+                "oauthSetup": {
+                    "settingsPath": "/settings/mcp",
+                    "instructions": "MatoLoop supports OAuth. Start the browser login in Settings > MCP servers. This tool configures static Bearer credentials; it cannot complete interactive OAuth setup.",
+                },
             }
         return ToolResult.json({
             "areas": {
@@ -361,7 +366,9 @@ CUSTOMIZE_MATOLOOP = ToolDefinition(
     "For integrations use area=integrations, adapter_type from list, and changes with name, "
     "listed fields, and secret_refs keyed by listed credentialFields. "
     "Never put secret values in changes. "
-    "Use list to discover supported areas and fields. Changes apply from the next run.",
+    "Use list to discover supported areas and fields. Changes apply from the next run. "
+    "MCP supports no authentication, Bearer tokens, and OAuth. Interactive OAuth setup requires "
+    "Settings > MCP servers.",
     PersonalSettingsArguments,
     _personal_settings,
     group="agent", label="MatoLoop persönlich anpassen", icon="tune",

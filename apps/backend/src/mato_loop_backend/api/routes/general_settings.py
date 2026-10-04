@@ -1,0 +1,43 @@
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Request
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from mato_loop_backend.api.errors import ApiError
+from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.public_url import resolve_public_base_url
+from mato_loop_backend.security import require_admin
+from mato_loop_backend.settings import GeneralSettings, SettingsStore
+
+router = APIRouter(prefix="/general-settings", dependencies=[Depends(require_admin)])
+
+
+def _payload(settings: GeneralSettings, request: Request) -> dict:
+    try:
+        effective, source = resolve_public_base_url(settings.public_base_url, request)
+    except ValueError as exc:
+        raise ApiError(422, "settings.publicUrlInvalid") from exc
+    return {
+        "publicBaseUrl": settings.public_base_url,
+        "effectivePublicBaseUrl": effective,
+        "publicUrlSource": source,
+    }
+
+
+@router.get("")
+async def get_general_settings(
+    request: Request, db: Annotated[AsyncSession, Depends(get_db_session)]
+):
+    return _payload(await SettingsStore.load(db, GeneralSettings), request)
+
+
+@router.put("")
+async def update_general_settings(
+    payload: GeneralSettings, request: Request, db: Annotated[AsyncSession, Depends(get_db_session)]
+):
+    settings = await SettingsStore.load(db, GeneralSettings, for_update=True)
+    settings.public_base_url = payload.public_base_url
+    result = _payload(settings, request)
+    await SettingsStore.save(db, settings)
+    await db.commit()
+    return result

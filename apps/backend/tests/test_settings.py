@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.settings import (
     ChannelSettings,
     DefaultTaskListSettings,
+    GeneralSettings,
     InstanceLimits,
     IntegrationSettings,
     MemorySettings,
@@ -46,6 +47,7 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert ToolSettings().resource_labels == {}
     assert WebPushSettings().model_dump() == {"enabled": False, "contact_email": None}
     assert InstanceLimits.settings_key == "instance-limits"
+    assert GeneralSettings().public_base_url is None
     assert InstanceLimits().max_upload_mib == 64
     assert InstanceLimits().session_quota_mib == 5_120
 
@@ -57,6 +59,12 @@ def test_web_push_settings_validate_contact_email() -> None:
     assert InstanceLimits().max_extracted_characters == 5_000_000
     assert ChannelSettings.settings_key == "channels"
     assert ChannelSettings().allowed_providers == {"telegram"}
+
+
+@pytest.mark.parametrize("value", ["https://user:secret@example.test", "https://example.test/path", "https://example.test?key=secret", 123])
+def test_public_url_rejects_credentials_paths_and_invalid_values(value):
+    with pytest.raises(ValidationError):
+        GeneralSettings(publicBaseUrl=value)
 
 
 def test_instance_limits_validate_related_limits_and_aliases() -> None:

@@ -166,6 +166,8 @@ def _payload(item: IntegrationInstance) -> dict[str, Any]:
             if field in _CONFIG_FIELDS[item.adapter_type] and field != "username"
         },
         "hasCredential": item.credential_id is not None,
+        **({"authenticationMode": "oauth" if item.config.get("oauth") is not None else "bearer" if item.credential_id else "none"}
+           if item.adapter_type == "mcp_streamable_http" else {}),
         **({"executionAgentId": str(item.execution_agent_id)} if item.execution_agent_id else {}),
     }
 
