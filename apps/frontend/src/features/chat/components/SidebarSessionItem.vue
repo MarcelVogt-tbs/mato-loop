@@ -16,7 +16,7 @@
             <q-icon name="pending_actions" color="warning" size="16px" />
             <q-badge v-if="indicator.count > 1" floating rounded color="warning" text-color="dark" :label="indicator.count" />
           </template>
-          <q-spinner v-else-if="indicator.kind === 'active'" size="14px" />
+          <q-spinner-dots v-else-if="indicator.kind === 'active'" color="primary" size="18px" />
           <q-icon v-else name="fiber_manual_record" color="primary" size="8px" />
           <q-tooltip v-if="$q.platform.is.mobile !== true">{{ indicator.label }}</q-tooltip>
         </span>
@@ -41,7 +41,7 @@
       <div class="session-list-item__utility row no-wrap items-center">
         <div class="session-list-item__actions row no-wrap items-center">
           <SidebarIconButton
-            v-if="showPin" icon="push_pin" class="session-list-item__pin-button"
+            v-if="showPin && !$q.screen.lt.md" icon="push_pin" class="session-list-item__pin-button"
             :class="{ 'session-list-item__pin-button--pinned': session.pinned }"
             :color="session.pinned ? 'primary' : ($q.dark.isActive ? 'grey-5' : 'grey-7')"
             :loading="pinning"
@@ -56,6 +56,11 @@
             list-class="session-actions-menu"
           >
             <template v-if="session.title != null">
+              <SidebarNavItem
+                v-if="showPin && $q.screen.lt.md" icon="push_pin"
+                :label="session.pinned ? 'Nicht mehr anheften' : 'Anheften'"
+                :disable="pinning" v-close-popup @click="emit('toggle-pin', session)"
+              />
               <SidebarNavItem icon="edit" label="Umbenennen" v-close-popup @click="emit('rename', session)" />
               <SidebarNavItem icon="drive_file_move" label="Verschieben" v-close-popup @click="emit('move', session)" />
               <q-separator class="q-my-xs" />
@@ -70,7 +75,7 @@
           </SidebarActionMenu>
         </div>
         <time
-          v-if="timestamp" class="session-list-item__time q-ml-xs text-caption app-muted text-no-wrap text-right"
+          v-if="timestamp && !$q.screen.lt.md" class="session-list-item__time q-ml-xs text-caption app-muted text-no-wrap text-right"
           :datetime="timestamp" :title="`Letzte Aktivität: ${formatAbsoluteDateTime(timestamp)}`"
           :aria-label="`Letzte Aktivität: ${formatAbsoluteDateTime(timestamp)}`"
         >{{ formatCompactAge(timestamp, now) }}</time>
