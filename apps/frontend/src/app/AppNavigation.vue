@@ -96,6 +96,7 @@
                 v-for="project in projects.items"
                 :key="project.id"
                 v-model="expandedProjects[project.id]"
+                :duration="0"
                 dense
                 hide-expand-icon
                 class="project-list-item rounded-borders"
