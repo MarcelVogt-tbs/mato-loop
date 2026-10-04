@@ -236,6 +236,19 @@ async def test_mcp_call_cancellation_after_dispatch_is_outcome_unknown(monkeypat
     assert exc_info.value.code == "mcp.outcomeUnknown"
 
 
+async def test_oauth_registration_error_is_not_reported_as_catalog_failure(monkeypatch):
+    from mcp.client.auth import OAuthRegistrationError
+
+    class RejectedSession(FakeSession):
+        async def initialize(self):
+            raise ExceptionGroup("auth", [OAuthRegistrationError("private provider response")])
+
+    monkeypatch.setattr(client_module, "streamable_http_client", fake_transport)
+    monkeypatch.setattr(client_module, "ClientSession", RejectedSession)
+    with pytest.raises(McpClientError, match="mcp.oauthRegistrationFailed"):
+        await McpClient("https://mcp.example.test/rpc", "secret").discover_tools()
+
+
 async def test_mcp_discovery_rejects_repeated_pagination_cursor(monkeypatch) -> None:
     class RepeatingSession(FakeSession):
         async def list_tools(self, cursor=None):

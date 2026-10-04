@@ -82,10 +82,15 @@ def payload():
         "redirected",
         "cimd",
         "ha_http",
+        "lan_dynamic",
     ],
 )
 async def test_sdk_login_and_discovery(transport, mode):
     requests, authorization = [], {}
+    endpoint = "http://192.168.1.5:8123/mcp" if mode == "lan_dynamic" else ENDPOINT
+    issuer = "http://192.168.1.5:8123/auth/v1" if mode == "lan_dynamic" else ISSUER
+    callback = "http://192.168.1.30:10020" + oauth.CALLBACK_PATH if mode == "lan_dynamic" else CALLBACK
+    routes.McpOAuthStartRequest(name="MCP", endpoint=endpoint, oauth={})
 
     class Stream(httpx.AsyncByteStream):
         async def __aiter__(self):
@@ -95,19 +100,19 @@ async def test_sdk_login_and_discovery(transport, mode):
     def handle(request):
         requests.append(request)
         path = request.url.path
-        if str(request.url) == ENDPOINT + "/":
-            return httpx.Response(307, headers={"location": ENDPOINT})
+        if str(request.url) == endpoint + "/":
+            return httpx.Response(307, headers={"location": endpoint})
         if "oauth-protected-resource" in path:
             data = dict(
-                resource=ENDPOINT, authorization_servers=[ISSUER], scopes_supported=["mcp:tools"]
+                resource=endpoint, authorization_servers=[issuer], scopes_supported=["mcp:tools"]
             )
         elif path == "/auth/v1/.well-known/openid-configuration":
             data = dict(
-                issuer=ISSUER,
-                authorization_endpoint=ISSUER + "/authorize",
-                token_endpoint=ISSUER + "/token",
-                registration_endpoint=None if mode in {"cimd", "ha_http"} else ISSUER + "/register",
-                client_id_metadata_document_supported=mode in {"cimd", "ha_http"},
+                issuer=issuer,
+                authorization_endpoint=issuer + "/authorize",
+                token_endpoint=issuer + "/token",
+                registration_endpoint=None if mode in {"cimd", "ha_http"} else issuer + "/register",
+                client_id_metadata_document_supported=mode in {"cimd", "ha_http", "lan_dynamic"},
                 code_challenge_methods_supported=["S256"],
                 grant_types_supported=["authorization_code"],
             )
@@ -122,9 +127,9 @@ async def test_sdk_login_and_discovery(transport, mode):
                 base64.urlsafe_b64encode(digest).decode().rstrip("=")
                 == authorization["code_challenge"][0]
             )
-            assert form["resource"] == [ENDPOINT]
+            assert form["resource"] == [endpoint]
             data = dict(access_token="access", token_type="Bearer", expires_in=120)
-        elif str(request.url) == ENDPOINT:
+        elif str(request.url) == endpoint:
             if request.headers.get("authorization") != "Bearer access":
                 return httpx.Response(401)
             if request.method != "POST":
@@ -153,7 +158,7 @@ async def test_sdk_login_and_discovery(transport, mode):
         return httpx.Response(200, json=data)
 
     transport(handle)
-    dynamic = mode in {"dynamic", "streaming", "redirected", "cimd"}
+    dynamic = mode in {"dynamic", "streaming", "redirected", "cimd", "lan_dynamic"}
     config = oauth.OAuthConfig(
         client_id=None
         if dynamic
@@ -169,7 +174,7 @@ async def test_sdk_login_and_discovery(transport, mode):
         None,
         dict(
             name="MCP",
-            endpoint=ENDPOINT + "/" if mode == "redirected" else ENDPOINT,
+            endpoint=endpoint + "/" if mode == "redirected" else endpoint,
             enabled=True,
             oauth=config.model_dump(),
         ),
@@ -181,7 +186,7 @@ async def test_sdk_login_and_discovery(transport, mode):
         await manager.start(
             attempt,
             "secret" if mode.startswith("client_secret") else None,
-            config.client_id + oauth.CALLBACK_PATH if mode == "ha_http" else CALLBACK,
+            config.client_id + oauth.CALLBACK_PATH if mode == "ha_http" else callback,
         )
         authorization.update(parse_qs(urlsplit(attempt.authorization_url).query))
         if mode == "ha_http":
@@ -370,7 +375,7 @@ async def test_expired_without_refresh_requires_login(payload):
 
 
 @pytest.mark.parametrize(
-    "url", ["http://private.example.test", "https://user:secret@example.test", "file:///secret"]
+    "url", ["https://user:secret@example.test", "file:///secret"]
 )
 def test_oauth_url_boundary(url):
     with pytest.raises(McpClientError, match="mcp.oauthConfigurationInvalid"):

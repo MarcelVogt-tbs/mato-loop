@@ -59,7 +59,6 @@ def validate_oauth_url(value: str) -> str:
         raise McpClientError("mcp.oauthConfigurationInvalid") from exc
     if (
         url.scheme not in {"https", "http"}
-        or (url.scheme == "http" and url.host not in {"localhost", "127.0.0.1", "::1"})
         or not url.host
         or url.userinfo
         or url.fragment
@@ -310,9 +309,7 @@ class OAuthLoginManager:
                         metadata = OAuthMetadata.model_validate_json(response.content)
                     except ValueError:
                         return  # Protected-resource metadata is parsed by the SDK.
-                    if metadata.client_id_metadata_document_supported and not config.client_id:
-                        if provider.context.client_metadata_url is None:
-                            raise McpClientError("mcp.clientMetadataUrlRequired")
+                    if metadata.client_id_metadata_document_supported and provider.context.client_metadata_url:
                         # Prefer the discovered CIMD path over previously registered client IDs.
                         if (
                             provider.context.client_info

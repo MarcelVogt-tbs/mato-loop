@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 from mcp import ClientSession
+from mcp.client.auth import OAuthRegistrationError
 from mcp.client.streamable_http import streamable_http_client
 
 MAX_MCP_TOOLS = 100
@@ -70,6 +71,8 @@ class McpClientError(RuntimeError):
 def _nested_client_error(exc: BaseException) -> McpClientError | None:
     if isinstance(exc, McpClientError):
         return exc
+    if isinstance(exc, OAuthRegistrationError):
+        return McpClientError("mcp.oauthRegistrationFailed")
     if isinstance(exc, BaseExceptionGroup):
         for child in exc.exceptions:
             if error := _nested_client_error(child):

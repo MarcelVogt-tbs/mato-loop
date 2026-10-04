@@ -127,7 +127,7 @@ class McpConfig(BaseModel):
             try:
                 validate_oauth_url(str(self.endpoint))
             except McpClientError as exc:
-                raise ValueError("OAuth requires HTTPS or an HTTP loopback endpoint") from exc
+                raise ValueError("Invalid HTTP(S) OAuth endpoint") from exc
         return self
 
 

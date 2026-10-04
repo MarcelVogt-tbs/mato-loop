@@ -106,7 +106,7 @@ class McpOAuthStartRequest(McpServerCreateRequest):
         try:
             validate_oauth_url(str(self.endpoint))
         except McpClientError as exc:
-            raise ValueError("OAuth requires HTTPS or an HTTP loopback endpoint") from exc
+            raise ValueError("Invalid HTTP(S) OAuth endpoint") from exc
         if self.client_secret is not None and self.oauth.token_endpoint_auth_method == "none":
             raise ValueError("An OAuth public client cannot have a client secret")
         return self
@@ -202,7 +202,6 @@ def _api_error(exc: Exception) -> ApiError:
         in {
             "mcp.oauthConfigurationInvalid",
             "mcp.callbackUrlInvalid",
-            "mcp.clientMetadataUrlRequired",
         }
         else 502
     )

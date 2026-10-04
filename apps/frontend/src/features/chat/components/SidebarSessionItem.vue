@@ -41,7 +41,7 @@
       <div class="session-list-item__utility row no-wrap items-center">
         <div class="session-list-item__actions row no-wrap items-center">
           <SidebarIconButton
-            v-if="showPin" icon="push_pin" class="session-list-item__pin-button"
+            v-if="showPin && !$q.screen.lt.md" icon="push_pin" class="session-list-item__pin-button"
             :class="{ 'session-list-item__pin-button--pinned': session.pinned }"
             :color="session.pinned ? 'primary' : ($q.dark.isActive ? 'grey-5' : 'grey-7')"
             :loading="pinning"
@@ -56,6 +56,11 @@
             list-class="session-actions-menu"
           >
             <template v-if="session.title != null">
+              <SidebarNavItem
+                v-if="showPin && $q.screen.lt.md" icon="push_pin"
+                :label="session.pinned ? 'Nicht mehr anheften' : 'Anheften'"
+                :disable="pinning" v-close-popup @click="emit('toggle-pin', session)"
+              />
               <SidebarNavItem icon="edit" label="Umbenennen" v-close-popup @click="emit('rename', session)" />
               <SidebarNavItem icon="drive_file_move" label="Verschieben" v-close-popup @click="emit('move', session)" />
               <q-separator class="q-my-xs" />
