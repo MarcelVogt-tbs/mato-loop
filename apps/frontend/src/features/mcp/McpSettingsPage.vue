@@ -39,6 +39,10 @@
       Die MCP-Server konnten nicht geladen werden.
       <template #action><q-btn flat no-caps color="primary" label="Erneut laden" @click="load" /></template>
     </q-banner>
+    <q-banner v-if="servers.oauthFinishing" rounded class="app-surface-tonal q-mb-md" role="status">
+      <template #avatar><q-spinner color="primary" /></template>
+      OAuth-Anmeldung wird abgeschlossen und die Tools werden geprüft.
+    </q-banner>
 
     <q-card flat class="app-surface">
       <q-list separator>
@@ -58,6 +62,7 @@
               <q-chip dense :color="server.enabled ? 'positive' : 'grey-7'" text-color="white">{{ server.enabled ? 'Aktiv' : 'Deaktiviert' }}</q-chip>
               <q-chip v-if="server.available === false" dense outline color="warning">Nicht verfügbar</q-chip>
               <q-chip v-if="server.status && server.status !== 'ready'" dense outline color="warning">{{ statusLabel(server.status) }}</q-chip>
+              <q-chip v-if="server.oauth" dense outline :color="server.authStatus === 'authorized' ? 'positive' : 'warning'">{{ server.authStatus === 'authorized' ? 'OAuth angemeldet' : 'Anmeldung erforderlich' }}</q-chip>
             </div>
             <q-item-label caption lines="1">{{ server.endpoint }}</q-item-label>
             <q-item-label caption>{{ server.tools?.length || server.toolCount || 0 }} erkannte Tools</q-item-label>
@@ -102,9 +107,10 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { notifyError } from 'src/utils/notifications'
 import McpServerDialog from 'src/features/mcp/McpServerDialog.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { useAuthStore } from 'stores/auth'
@@ -113,6 +119,8 @@ import { useMcpServerStore } from 'stores/mcp-servers'
 defineOptions({ name: 'McpSettingsPage' })
 const $q = useQuasar()
 const route = useRoute()
+const router = useRouter()
+const oauthController = new AbortController()
 const { confirm } = useConfirm()
 const servers = useMcpServerStore()
 const auth = useAuthStore()
@@ -183,7 +191,31 @@ async function removeServer(server) {
     $q.notify({ type: 'positive', message: 'MCP-Server gelöscht' })
   } finally { removingId.value = null }
 }
+async function completeOAuth() {
+  const id = route.query.oauthAttempt
+  const error = route.query.oauthError
+  if (!id && !error) return
+  const query = { ...route.query }
+  delete query.oauthAttempt
+  delete query.oauthError
+  await router.replace({ query })
+  if (error) {
+    notifyError({ code: 'mcp.oauthExpired' })
+    return
+  }
+  try {
+    await servers.completeOAuth(id, oauthController.signal)
+    $q.notify({ type: 'positive', message: 'OAuth-Anmeldung abgeschlossen und MCP-Tools geladen' })
+  } catch (failure) {
+    if (failure?.code === 'mcp.oauthExpired') notifyError(failure)
+    // Axios failures are displayed by the central interceptor.
+  }
+}
+onBeforeUnmount(() => oauthController.abort())
 onMounted(() => {
-  if (route.name !== 'settings-mcp-tools') void loadPage()
+  if (route.name !== 'settings-mcp-tools') {
+    void loadPage()
+    void completeOAuth()
+  }
 })
 </script>

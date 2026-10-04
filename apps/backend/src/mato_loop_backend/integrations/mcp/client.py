@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import timedelta
 from typing import Any
 
@@ -33,12 +34,27 @@ class _BoundedStream(httpx.AsyncByteStream):
 
 
 class _BoundedTransport(httpx.AsyncBaseTransport):
-    def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        transport: httpx.AsyncBaseTransport | None = None,
+        authentication_failed: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
         self.transport = transport or httpx.AsyncHTTPTransport(retries=0)
+        self.authentication_failed = authentication_failed
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         response = await self.transport.handle_async_request(request)
         response.stream = _BoundedStream(response.stream)
+        if self.authentication_failed and (
+            response.status_code == 401
+            or (
+                response.status_code == 403
+                and "insufficient_scope" in response.headers.get("www-authenticate", "")
+            )
+        ):
+            await response.aclose()
+            await self.authentication_failed()
+            raise McpClientError("mcp.authorizationRequired")
         return response
 
     async def aclose(self) -> None:
@@ -51,29 +67,49 @@ class McpClientError(RuntimeError):
         self.code = code
 
 
+def _nested_client_error(exc: BaseException) -> McpClientError | None:
+    if isinstance(exc, McpClientError):
+        return exc
+    if isinstance(exc, BaseExceptionGroup):
+        for child in exc.exceptions:
+            if error := _nested_client_error(child):
+                return error
+    return None
+
+
 class McpClient:
-    def __init__(self, endpoint: str, token: str | None = None) -> None:
+    def __init__(
+        self,
+        endpoint: str,
+        token: str | None = None,
+        *,
+        authentication_failed: Callable[[], Awaitable[None]] | None = None,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
         self.endpoint = endpoint
         self.headers = {"Authorization": f"Bearer {token}"} if token else {}
+        self.authentication_failed = authentication_failed
+        self.http_client = http_client
 
     @asynccontextmanager
     async def _session(self):
-        async with httpx.AsyncClient(
-            headers=self.headers,
-            timeout=httpx.Timeout(60, connect=10),
-            trust_env=False,
-            transport=_BoundedTransport(),
-        ) as client:
-            async with streamable_http_client(
-                self.endpoint, http_client=client
-            ) as streams:
+        async with AsyncExitStack() as stack:
+            client = self.http_client or await stack.enter_async_context(
+                httpx.AsyncClient(
+                    headers=self.headers,
+                    timeout=httpx.Timeout(60, connect=10),
+                    trust_env=False,
+                    transport=_BoundedTransport(authentication_failed=self.authentication_failed),
+                )
+            )
+            async with streamable_http_client(self.endpoint, http_client=client) as streams:
                 yield streams
 
-    async def discover_tools(self) -> list[dict[str, Any]]:
+    async def discover_tools(self, *, read_timeout_seconds: int = 30) -> list[dict[str, Any]]:
         try:
             async with self._session() as (read, write, _session_id):
                 async with ClientSession(
-                    read, write, read_timeout_seconds=timedelta(seconds=30)
+                    read, write, read_timeout_seconds=timedelta(seconds=read_timeout_seconds)
                 ) as session:
                     await session.initialize()
                     result = await session.list_tools()
@@ -94,7 +130,7 @@ class McpClient:
         except McpClientError:
             raise
         except Exception as exc:
-            raise McpClientError("mcp.refreshFailed") from exc
+            raise _nested_client_error(exc) or McpClientError("mcp.refreshFailed") from exc
         tools = [
             {
                 "name": tool.name,
@@ -143,13 +179,11 @@ class McpClient:
                     dispatched = True
                     result = await session.call_tool(name, arguments=arguments)
         except asyncio.CancelledError as exc:
-            raise McpClientError(
-                "mcp.outcomeUnknown" if dispatched else "mcp.unavailable"
-            ) from exc
+            raise McpClientError("mcp.outcomeUnknown" if dispatched else "mcp.unavailable") from exc
         except Exception as exc:
-            raise McpClientError(
-                "mcp.outcomeUnknown" if dispatched else "mcp.unavailable"
-            ) from exc
+            if not dispatched and (error := _nested_client_error(exc)):
+                raise error from exc
+            raise McpClientError("mcp.outcomeUnknown" if dispatched else "mcp.unavailable") from exc
         payload = result.model_dump(mode="json", by_alias=True, exclude_none=True)
         try:
             result_size = len(

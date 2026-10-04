@@ -39,6 +39,7 @@ class RuntimeConfig(BaseSettings):
     bind_backend_port: int = 6020
     database_url: str = "postgresql+asyncpg://matoloop:matoloop@localhost:5432/matoloop"
     cors_origins: str = Field(default="http://localhost:10020")
+    public_base_url: str | None = None
     log_level: str = "INFO"
     data_dir: Path = PROJECT_ROOT / "data"
     session_cookie_name: str = "mato_loop_session"

@@ -98,4 +98,29 @@ describe('MCP server store', () => {
     expect(api.patch).toHaveBeenCalledWith('/integrations/mine/enabled', { enabled: false }, { params: { scope: 'personal' } })
   })
 
+
+  it('completes OAuth only after discovery is ready and reloads effective state', async () => {
+    api.post.mockResolvedValueOnce({ data: { id: 'attempt', authorizationUrl: 'https://idp.example.test/authorize' } })
+    api.get.mockResolvedValueOnce({ data: { status: 'ready' } }).mockResolvedValueOnce({ data: list })
+    api.post.mockResolvedValueOnce({ data: { ...list.servers[0], authStatus: 'authorized' } })
+    const store = useMcpServerStore()
+    store.selectScope('personal')
+    const payload = { name: 'MCP', endpoint: 'https://mcp.example.test', oauth: {} }
+    await store.startOAuth(payload)
+    const server = await store.completeOAuth('attempt')
+    expect(api.post).toHaveBeenCalledWith('/mcp/oauth/attempts', payload, { params: { scope: 'personal' } })
+    expect(api.post).toHaveBeenCalledWith('/mcp/oauth/attempts/attempt/finish', null, { signal: undefined })
+    expect(server.authStatus).toBe('authorized')
+    expect(store.oauthAttempt).toBeNull()
+    expect(store.visibleServers).toEqual(list.servers)
+  })
+
+  it('does not finish an OAuth connection after a failed login', async () => {
+    api.get.mockRejectedValueOnce({ response: { data: { error: { code: 'mcp.oauthDenied' } } } })
+    const store = useMcpServerStore()
+    await expect(store.completeOAuth('attempt')).rejects.toBeDefined()
+    expect(api.post).not.toHaveBeenCalled()
+    expect(store.visibleServers).toEqual([])
+    expect(store.oauthFinishing).toBe(false)
+  })
 })

@@ -2,21 +2,39 @@ from __future__ import annotations
 
 import logging
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi.responses import RedirectResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.integration_access import _integration
+from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.integrations.mcp.adapter import McpConfig
 from mato_loop_backend.integrations.mcp.client import McpClientError
+from mato_loop_backend.integrations.mcp.oauth import (
+    CALLBACK_PATH,
+    OAUTH_CREDENTIAL_KIND,
+    LoginAttempt,
+    OAuthConfig,
+    oauth_logins,
+    oauth_status,
+    validate_oauth_url,
+)
 from mato_loop_backend.integrations.mcp.service import McpIntegrationService
 from mato_loop_backend.integrations.service import IntegrationSettingsError
 from mato_loop_backend.models import UserAccount
-from mato_loop_backend.security import require_admin, require_user
+from mato_loop_backend.security import (
+    hash_token,
+    load_credential,
+    read_credential,
+    require_admin,
+    require_user,
+)
 from mato_loop_backend.settings import (
     IntegrationAdapterAvailability,
     IntegrationInstance,
@@ -26,6 +44,7 @@ from mato_loop_backend.settings import (
 )
 
 router = APIRouter(prefix="/mcp", dependencies=[Depends(require_user)])
+callback_router = APIRouter(prefix="/mcp")
 logger = logging.getLogger(__name__)
 SettingsApiScope = Literal["instance", "personal"]
 
@@ -46,6 +65,7 @@ class McpServerRequest(BaseModel):
         validation_alias=AliasChoices("removeBearerToken", "remove_bearer_token"),
     )
     enabled: bool = True
+    oauth: OAuthConfig | None = None
 
     @model_validator(mode="after")
     def validate_connection(self) -> McpServerRequest:
@@ -55,6 +75,10 @@ class McpServerRequest(BaseModel):
             or self.endpoint.query is not None
             or self.endpoint.fragment is not None
             or (self.bearer_token is not None and self.remove_bearer_token)
+            or (
+                self.oauth is not None
+                and (self.bearer_token is not None or self.remove_bearer_token)
+            )
         ):
             raise ValueError("Invalid MCP connection settings")
         return self
@@ -62,6 +86,29 @@ class McpServerRequest(BaseModel):
 
 class McpServerCreateRequest(McpServerRequest):
     remove_bearer_token: Literal[False] = False
+
+
+class McpOAuthStartRequest(McpServerCreateRequest):
+    oauth: OAuthConfig
+    integration_id: UUID | None = Field(
+        default=None, validation_alias=AliasChoices("integrationId", "integration_id")
+    )
+    client_secret: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=10_000,
+        validation_alias=AliasChoices("clientSecret", "client_secret"),
+    )
+
+    @model_validator(mode="after")
+    def validate_oauth(self):
+        try:
+            validate_oauth_url(str(self.endpoint))
+        except McpClientError as exc:
+            raise ValueError("OAuth requires HTTPS or an HTTP loopback endpoint") from exc
+        if self.client_secret is not None and self.oauth.token_endpoint_auth_method == "none":
+            raise ValueError("An OAuth public client cannot have a client secret")
+        return self
 
 
 class McpSettingsRequest(BaseModel):
@@ -72,9 +119,7 @@ class McpSettingsRequest(BaseModel):
     )
 
 
-async def _owner_id(
-    db: AsyncSession, scope: SettingsApiScope, user: UserAccount
-) -> UUID | None:
+async def _owner_id(db: AsyncSession, scope: SettingsApiScope, user: UserAccount) -> UUID | None:
     if scope == "instance":
         if not user.is_admin:
             raise ApiError(403, "auth.adminRequired")
@@ -93,14 +138,15 @@ async def _settings(db: AsyncSession, owner_id: UUID | None):
     return settings
 
 
-def _payload(instance: IntegrationInstance) -> dict:
+async def _connection_payload(db, instance: IntegrationInstance) -> dict:
     config = McpConfig.model_validate(instance.config)
-    return {
+    result = {
         "id": str(instance.id),
         "name": instance.name,
         "endpoint": str(config.endpoint),
         "enabled": instance.enabled,
-        "hasBearerToken": instance.credential_id is not None,
+        "hasBearerToken": instance.credential_id is not None and config.oauth is None,
+        "oauth": config.oauth.model_dump(mode="json") if config.oauth else None,
         "tools": [
             {
                 "name": tool.name,
@@ -114,6 +160,27 @@ def _payload(instance: IntegrationInstance) -> dict:
         ],
     }
 
+    if result["oauth"] is not None:
+        result.update(authStatus="authorization_required", hasClientSecret=False)
+        if instance.credential_id:
+            try:
+                credential = await load_credential(
+                    db, instance.credential_id, owner_id=instance.owner_id, populate_existing=True
+                )
+                if credential and credential.kind == OAUTH_CREDENTIAL_KIND:
+                    payload = read_credential(credential)
+                    result["authStatus"] = oauth_status(payload)
+                    result["hasClientSecret"] = bool(
+                        payload.get("client_info", {}).get("client_secret")
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Invalid MCP OAuth credential for integration %s: %s",
+                    instance.id,
+                    type(exc).__name__,
+                )
+    return result
+
 
 def _mcp_instance(settings, integration_id: UUID) -> IntegrationInstance:
     instance = _integration(settings, integration_id)
@@ -124,7 +191,15 @@ def _mcp_instance(settings, integration_id: UUID) -> IntegrationInstance:
 
 def _api_error(exc: Exception) -> ApiError:
     code = getattr(exc, "code", "mcp.unavailable")
-    status_code = 404 if code == "mcp.notFound" else 409 if code == "integration.changed" else 502
+    status_code = (
+        404
+        if code in {"mcp.notFound", "mcp.oauthExpired"}
+        else 409
+        if code in {"integration.changed", "mcp.authorizationRequired", "mcp.oauthBusy"}
+        else 422
+        if code == "mcp.oauthConfigurationInvalid"
+        else 502
+    )
     return ApiError(status_code, code)
 
 
@@ -166,10 +241,9 @@ async def list_mcp_servers(
     settings = await _settings(db, owner_id)
     return {
         "servers": [
-            _payload(instance)
+            await _connection_payload(db, instance)
             for instance in settings.instances
-            if instance.integration_type == "mcp"
-            and instance.adapter_type == "mcp_streamable_http"
+            if instance.integration_type == "mcp" and instance.adapter_type == "mcp_streamable_http"
         ]
     }
 
@@ -181,15 +255,21 @@ async def list_visible_mcp_servers(
 ) -> dict:
     instance = await SettingsStore.load(db, IntegrationSettings)
     personal = await SettingsStore.load_optional(db, UserIntegrationSettings, user_id=user.id)
+    for owner_id, settings in ((None, instance), (user.id, personal)):
+        if settings:
+            for item in settings.instances:
+                item.owner_id = owner_id
     return {
         "servers": [
             {
-                **_payload(item),
+                **await _connection_payload(db, item),
                 "scope": scope,
                 "available": (
-                    instance.availability_for("mcp_streamable_http") == IntegrationAdapterAvailability.FULL
+                    instance.availability_for("mcp_streamable_http")
+                    == IntegrationAdapterAvailability.FULL
                     if scope == "personal"
-                    else instance.availability_for("mcp_streamable_http") != IntegrationAdapterAvailability.DISABLED
+                    else instance.availability_for("mcp_streamable_http")
+                    != IntegrationAdapterAvailability.DISABLED
                 ),
             }
             for scope, settings in (("instance", instance), ("personal", personal))
@@ -208,6 +288,8 @@ async def create_mcp_server(
     user: Annotated[UserAccount, Depends(require_user)] = None,
 ) -> dict:
     owner_id = await _owner_id(db, scope, user)
+    if payload.oauth is not None:
+        raise ApiError(409, "mcp.authorizationRequired")
     try:
         instance = await McpIntegrationService.create(
             db,
@@ -221,7 +303,7 @@ async def create_mcp_server(
         await db.rollback()
         logger.warning("MCP server creation failed with %s", type(exc).__name__)
         raise _api_error(exc) from exc
-    return _payload(instance)
+    return await _connection_payload(db, instance)
 
 
 @router.put("/servers/{integration_id}")
@@ -233,6 +315,10 @@ async def update_mcp_server(
     user: Annotated[UserAccount, Depends(require_user)] = None,
 ) -> dict:
     owner_id = await _owner_id(db, scope, user)
+    if payload.oauth is not None:
+        current = _mcp_instance(await _settings(db, owner_id), integration_id)
+        if McpConfig.model_validate(current.config).oauth != payload.oauth:
+            raise ApiError(409, "mcp.authorizationRequired")
     try:
         instance = await McpIntegrationService.update(
             db,
@@ -243,12 +329,13 @@ async def update_mcp_server(
             remove_token=payload.remove_bearer_token,
             enabled=payload.enabled,
             owner_id=owner_id,
+            remove_oauth="oauth" in payload.model_fields_set and payload.oauth is None,
         )
     except (McpClientError, IntegrationSettingsError) as exc:
         await db.rollback()
         logger.warning("MCP server update failed with %s", type(exc).__name__)
         raise _api_error(exc) from exc
-    return _payload(instance)
+    return await _connection_payload(db, instance)
 
 
 @router.post("/servers/{integration_id}/refresh")
@@ -260,8 +347,8 @@ async def refresh_mcp_server(
 ) -> dict:
     owner_id = await _owner_id(db, scope, user)
     try:
-        return _payload(
-            await McpIntegrationService.refresh(db, integration_id, owner_id=owner_id)
+        return await _connection_payload(
+            db, await McpIntegrationService.refresh(db, integration_id, owner_id=owner_id)
         )
     except (McpClientError, IntegrationSettingsError) as exc:
         await db.rollback()
@@ -279,6 +366,170 @@ async def delete_mcp_server(
     owner_id = await _owner_id(db, scope, user)
     try:
         await McpIntegrationService.delete(db, integration_id, owner_id=owner_id)
+    except IntegrationSettingsError as exc:
+        await db.rollback()
+        raise _api_error(exc) from exc
+
+
+def _session_hash(request: Request) -> str:
+    return hash_token(request.cookies.get(get_runtime_config().session_cookie_name, ""))
+
+
+def _callback_uri(request: Request) -> str:
+    configured = get_runtime_config().public_base_url
+    origin = configured or request.headers.get("origin", "")
+    validate_oauth_url(origin)
+    parsed = urlsplit(origin)
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        raise McpClientError("mcp.oauthConfigurationInvalid")
+    if not configured and origin not in get_runtime_config().cors_origin_list:
+        raise McpClientError("mcp.oauthConfigurationInvalid")
+    return validate_oauth_url(origin.rstrip("/") + CALLBACK_PATH)
+
+
+@router.post("/oauth/attempts", status_code=status.HTTP_201_CREATED)
+async def start_mcp_oauth(
+    payload: McpOAuthStartRequest,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[UserAccount, Depends(require_user)],
+    scope: SettingsApiScope = "instance",
+):
+    owner_id = await _owner_id(db, scope, user)
+    try:
+        if (await SettingsStore.load(db, IntegrationSettings)).availability_for(
+            "mcp_streamable_http"
+        ) == IntegrationAdapterAvailability.DISABLED:
+            raise ApiError(409, "integration.adapterDisabled")
+        redirect_uri = _callback_uri(request)
+        revision = None
+        client_info = None
+        if payload.integration_id:
+            current = _mcp_instance(await _settings(db, owner_id), payload.integration_id)
+            revision = current.model_dump(mode="json")
+            config = McpConfig.model_validate(current.config)
+            if (
+                current.credential_id
+                and str(config.endpoint) == str(payload.endpoint)
+                and config.oauth == payload.oauth
+                and payload.client_secret is None
+            ):
+                credential = await load_credential(db, current.credential_id, owner_id=owner_id)
+                if credential and credential.kind == OAUTH_CREDENTIAL_KIND:
+                    client_info = read_credential(credential).get("client_info")
+        if (
+            payload.oauth.token_endpoint_auth_method != "none"
+            and payload.client_secret is None
+            and not (client_info and client_info.get("client_secret"))
+        ):
+            raise McpClientError("mcp.oauthConfigurationInvalid")
+        attempt = LoginAttempt(
+            user.id,
+            _session_hash(request),
+            owner_id,
+            {
+                "name": payload.name,
+                "endpoint": str(payload.endpoint),
+                "enabled": payload.enabled,
+                "oauth": payload.oauth.model_dump(mode="json"),
+            },
+            payload.integration_id,
+            revision,
+        )
+        # Do not retain a database transaction while waiting for a browser login.
+        await db.rollback()
+        await oauth_logins.start(attempt, payload.client_secret, redirect_uri, client_info)
+        return {"id": attempt.id, "authorizationUrl": attempt.authorization_url, "expiresIn": 300}
+    except McpClientError as exc:
+        raise _api_error(exc) from exc
+
+
+@callback_router.get("/oauth/callback")
+async def mcp_oauth_callback(
+    state: str = Query(default="", max_length=256),
+    code: str | None = Query(default=None, max_length=10_000),
+    error: str | None = Query(default=None, max_length=256),
+):
+    try:
+        attempt_id = oauth_logins.receive_callback(state, code, error)
+        target = "/settings/mcp?oauthAttempt=" + attempt_id
+    except McpClientError:
+        target = "/settings/mcp?oauthError=mcp.oauthExpired"
+    return RedirectResponse(
+        target,
+        status_code=303,
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
+
+
+@router.get("/oauth/attempts/{attempt_id}")
+async def mcp_oauth_attempt(
+    attempt_id: str, request: Request, user: Annotated[UserAccount, Depends(require_user)]
+):
+    try:
+        attempt = oauth_logins.get(attempt_id, user.id, _session_hash(request))
+        if attempt.error_code:
+            raise McpClientError(attempt.error_code)
+        return {"status": "ready" if attempt.payload is not None else "pending"}
+    except McpClientError as exc:
+        raise _api_error(exc) from exc
+
+
+@router.post("/oauth/attempts/{attempt_id}/finish")
+async def finish_mcp_oauth(
+    attempt_id: str,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[UserAccount, Depends(require_user)],
+):
+    attempt = None
+    claimed = False
+    try:
+        attempt = oauth_logins.get(attempt_id, user.id, _session_hash(request))
+        await _owner_id(db, "personal" if attempt.owner_id is not None else "instance", user)
+        if (await SettingsStore.load(db, IntegrationSettings)).availability_for(
+            "mcp_streamable_http"
+        ) == IntegrationAdapterAvailability.DISABLED:
+            raise ApiError(409, "integration.adapterDisabled")
+        if attempt.finishing or attempt.payload is None:
+            raise McpClientError(attempt.error_code or "mcp.oauthBusy")
+        attempt.finishing = True
+        claimed = True
+        if attempt.timer:
+            attempt.timer.cancel()
+        instance = await McpIntegrationService.complete_oauth(db, attempt)
+        return await _connection_payload(db, instance)
+    except (McpClientError, IntegrationSettingsError) as exc:
+        await db.rollback()
+        raise _api_error(exc) from exc
+    finally:
+        if claimed:
+            oauth_logins.cancel(attempt_id)
+
+
+@router.delete("/oauth/attempts/{attempt_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_mcp_oauth(
+    attempt_id: str, request: Request, user: Annotated[UserAccount, Depends(require_user)]
+):
+    try:
+        attempt = oauth_logins.get(attempt_id, user.id, _session_hash(request))
+        if attempt.finishing:
+            raise McpClientError("mcp.oauthBusy")
+        oauth_logins.cancel(attempt_id)
+    except McpClientError as exc:
+        raise _api_error(exc) from exc
+
+
+@router.delete("/servers/{integration_id}/oauth", status_code=status.HTTP_204_NO_CONTENT)
+async def disconnect_mcp_oauth(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    user: Annotated[UserAccount, Depends(require_user)],
+    scope: SettingsApiScope = "instance",
+):
+    owner_id = await _owner_id(db, scope, user)
+    try:
+        await McpIntegrationService.disconnect_oauth(db, integration_id, owner_id=owner_id)
     except IntegrationSettingsError as exc:
         await db.rollback()
         raise _api_error(exc) from exc

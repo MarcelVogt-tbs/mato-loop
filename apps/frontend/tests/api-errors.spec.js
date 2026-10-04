@@ -94,6 +94,11 @@ describe('API error messages', () => {
     )
     expect(apiErrorMessage({ error: { code: 'mcp.toolNotFound' } })).toContain('Tools des Servers')
     expect(apiErrorMessage({ error: { code: 'mcp.outcomeUnknown', message: 'private transport detail' } })).toContain('nicht blind')
+    expect(apiErrorMessage({ error: { code: 'mcp.authorizationRequired', message: 'private OAuth detail' } })).toContain('MCP-Einstellungen')
+    for (const code of ['mcp.oauthConfigurationInvalid', 'mcp.oauthFailed', 'mcp.oauthDenied', 'mcp.oauthExpired', 'mcp.oauthBusy']) {
+      expect(apiErrorMessage({ error: { code, message: 'private OAuth detail' } })).not.toContain('private OAuth detail')
+      expect(apiErrorMessage({ error: { code } })).not.toBe('Die Aktion ist fehlgeschlagen.')
+    }
     for (const code of ['mcp.callFailed', 'mcp.catalogTooLarge', 'mcp.configurationInvalid', 'mcp.discoveryFailed', 'mcp.invalidCatalog', 'mcp.notFound', 'mcp.responseTooLarge', 'mcp.unavailable']) {
       expect(apiErrorMessage({ error: { code } })).not.toBe('Die Aktion ist fehlgeschlagen.')
     }

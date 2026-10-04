@@ -13,6 +13,7 @@ from mato_loop_backend.api.routes.health import router as health_router
 from mato_loop_backend.api.routes.instance_limits import router as instance_limits_router
 from mato_loop_backend.api.routes.integrations import router as integrations_router
 from mato_loop_backend.api.routes.mail import router as mail_router
+from mato_loop_backend.api.routes.mcp import callback_router as mcp_callback_router
 from mato_loop_backend.api.routes.mcp import router as mcp_router
 from mato_loop_backend.api.routes.media import router as media_router
 from mato_loop_backend.api.routes.memories import router as memories_router
@@ -50,6 +51,7 @@ api_router.include_router(browser_integrations_router, tags=["integrations"])
 api_router.include_router(browsers_router, tags=["browsers"])
 api_router.include_router(mail_router, tags=["mail"])
 api_router.include_router(mcp_router, tags=["mcp"])
+api_router.include_router(mcp_callback_router, tags=["mcp"])
 api_router.include_router(memories_router, tags=["memories"])
 api_router.include_router(notifications_router, tags=["notifications"])
 api_router.include_router(personal_variables_router, tags=["personal-variables"])

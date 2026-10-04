@@ -16,12 +16,19 @@ from mato_loop_backend.integrations.contracts import (
     ToolContribution,
 )
 from mato_loop_backend.integrations.mcp.client import McpClient, McpClientError
-from mato_loop_backend.security import load_credential, read_credential
+from mato_loop_backend.integrations.mcp.oauth import (
+    OAuthConfig,
+    connection_token,
+    mark_authorization_required,
+    validate_oauth_url,
+)
 from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
 from mato_loop_backend.tools.actions import ToolAction
 
 MCP_CREDENTIAL_KIND = "mcp.bearer"
-MCP_ACTION = ToolAction("mcp.call", "MCP-Tool aufrufen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK)
+MCP_ACTION = ToolAction(
+    "mcp.call", "MCP-Tool aufrufen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK
+)
 MAX_MCP_SCHEMA_BYTES = 64 * 1024
 MAX_MCP_SCHEMA_DEPTH = 64
 
@@ -46,9 +53,7 @@ def validate_mcp_schema(value: dict[str, Any], *, require_object: bool) -> dict[
     _validate_schema_value(value)
     try:
         size = len(
-            json.dumps(
-                value, ensure_ascii=True, separators=(",", ":"), allow_nan=False
-            ).encode()
+            json.dumps(value, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode()
         )
     except (TypeError, ValueError) as exc:
         raise ValueError("MCP schema must be finite JSON") from exc
@@ -96,12 +101,8 @@ class McpCatalogTool(BaseModel):
 
     @field_validator("output_schema")
     @classmethod
-    def validate_output_schema(
-        cls, value: dict[str, Any] | None
-    ) -> dict[str, Any] | None:
-        return (
-            validate_mcp_schema(value, require_object=False) if value is not None else None
-        )
+    def validate_output_schema(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return validate_mcp_schema(value, require_object=False) if value is not None else None
 
 
 class McpConfig(BaseModel):
@@ -109,6 +110,7 @@ class McpConfig(BaseModel):
 
     endpoint: HttpUrl
     tools: list[McpCatalogTool] = Field(default_factory=list, max_length=100)
+    oauth: OAuthConfig | None = None
 
     @field_validator("tools")
     @classmethod
@@ -121,6 +123,11 @@ class McpConfig(BaseModel):
     def endpoint_without_query(self) -> McpConfig:
         if self.endpoint.query is not None:
             raise ValueError("MCP endpoint must not contain a query")
+        if self.oauth is not None:
+            try:
+                validate_oauth_url(str(self.endpoint))
+            except McpClientError as exc:
+                raise ValueError("OAuth requires HTTPS or an HTTP loopback endpoint") from exc
         return self
 
 
@@ -131,27 +138,6 @@ def mcp_resource_key(tool_name: str) -> str:
 def mcp_model_tool_name(instance_id: Any, tool_name: str) -> str:
     digest = hashlib.sha256(tool_name.encode()).hexdigest()[:12]
     return f"mcp_{instance_id.hex}_{digest}"
-
-
-async def _credential(context: Any, instance: IntegrationInstance) -> str | None:
-    if instance.credential_id is None:
-        return None
-    try:
-        record = await load_credential(
-            context.db, instance.credential_id, owner_id=instance.owner_id
-        )
-        if record is None or record.kind != MCP_CREDENTIAL_KIND:
-            raise ValueError("invalid MCP credential")
-        token = read_credential(record).get("token")
-        if not isinstance(token, str) or not token:
-            raise ValueError("invalid MCP token")
-    except Exception as exc:
-        if isinstance(exc, McpClientError):
-            raise
-        raise McpClientError("mcp.configurationInvalid") from exc
-    if not token:
-        raise McpClientError("mcp.configurationInvalid")
-    return token
 
 
 def mcp_tool_contribution(
@@ -181,8 +167,26 @@ def mcp_tool_contribution(
             return ToolResult.error("tool.unavailable")
         try:
             config = McpConfig.model_validate(current.config)
+            token = await connection_token(context.db, current)
+            if config.oauth:
+                latest = next(
+                    (
+                        candidate
+                        for candidate in (await context.current_integrations()).instances
+                        if candidate.id == current.id
+                    ),
+                    None,
+                )
+                if latest is None or latest.model_dump(mode="json") != current.model_dump(
+                    mode="json"
+                ):
+                    return ToolResult.error("tool.unavailable")
             payload, is_error = await McpClient(
-                str(config.endpoint), await _credential(context, current)
+                str(config.endpoint),
+                token,
+                authentication_failed=(lambda: mark_authorization_required(current, token))
+                if config.oauth
+                else None,
             ).call_tool(item.name, arguments, item.output_schema)
         except McpClientError as exc:
             return ToolResult.error(exc.code)

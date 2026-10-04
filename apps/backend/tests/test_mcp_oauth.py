@@ -1,0 +1,414 @@
+import asyncio
+import base64
+import hashlib
+import json
+import logging
+import os
+import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from urllib.parse import parse_qs, urlsplit
+from uuid import uuid4
+
+import httpx
+import pytest
+from fastapi import FastAPI
+from mcp.types import LATEST_PROTOCOL_VERSION
+from sqlalchemy import delete
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+from starlette.requests import Request
+
+from mato_loop_backend.api.errors import ApiError
+from mato_loop_backend.api.routes import mcp as routes
+from mato_loop_backend.config import get_runtime_config
+from mato_loop_backend.integrations.mcp import adapter, oauth, service
+from mato_loop_backend.integrations.mcp.client import McpClientError, _BoundedTransport
+from mato_loop_backend.models import Credential
+from mato_loop_backend.security import hash_token, store_credential
+from mato_loop_backend.settings import (
+    IntegrationInstance,
+    IntegrationSettings,
+    SettingsStore,
+    UserIntegrationSettings,
+)
+
+ENDPOINT = "https://mcp.example.test/mcp"
+ISSUER = "https://idp.example.test/auth/v1"
+CALLBACK = "https://matoloop.example.test" + oauth.CALLBACK_PATH
+
+
+@pytest.fixture
+def transport(monkeypatch):
+    def install(handler):
+        original = _BoundedTransport.__init__
+        monkeypatch.setattr(
+            _BoundedTransport,
+            "__init__",
+            lambda self, transport=None, authentication_failed=None: original(
+                self, httpx.MockTransport(handler), authentication_failed
+            ),
+        )
+
+    return install
+
+
+@pytest.fixture
+def payload():
+    return dict(
+        endpoint=ENDPOINT,
+        issuer=ISSUER,
+        resource=ENDPOINT,
+        token_endpoint=ISSUER + "/token",
+        client_info=dict(
+            client_id="client",
+            issuer=ISSUER,
+            redirect_uris=[CALLBACK],
+            token_endpoint_auth_method="none",
+        ),
+        tokens=dict(access_token="old", refresh_token="refresh"),
+        expires_at=0,
+    )
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["dynamic", "none", "client_secret_basic", "client_secret_post", "streaming", "redirected"],
+)
+async def test_sdk_login_and_discovery(transport, mode):
+    requests, authorization = [], {}
+
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield ("event: message\ndata: " + json.dumps(self.message) + "\n\n").encode()
+            await asyncio.Event().wait()
+
+    def handle(request):
+        requests.append(request)
+        path = request.url.path
+        if str(request.url) == ENDPOINT + "/":
+            return httpx.Response(307, headers={"location": ENDPOINT})
+        if "oauth-protected-resource" in path:
+            data = dict(
+                resource=ENDPOINT, authorization_servers=[ISSUER], scopes_supported=["mcp:tools"]
+            )
+        elif path == "/auth/v1/.well-known/openid-configuration":
+            data = dict(
+                issuer=ISSUER,
+                authorization_endpoint=ISSUER + "/authorize",
+                token_endpoint=ISSUER + "/token",
+                registration_endpoint=ISSUER + "/register",
+                code_challenge_methods_supported=["S256"],
+                grant_types_supported=["authorization_code"],
+            )
+        elif path.endswith("/register"):
+            data = {**json.loads(request.content), "client_id": "registered"}
+            assert data["grant_types"] == ["authorization_code"]
+        elif path.endswith("/token"):
+            form = parse_qs(request.content.decode())
+            digest = hashlib.sha256(form["code_verifier"][0].encode()).digest()
+            assert (
+                base64.urlsafe_b64encode(digest).decode().rstrip("=")
+                == authorization["code_challenge"][0]
+            )
+            assert form["resource"] == [ENDPOINT]
+            data = dict(access_token="access", token_type="Bearer", expires_in=120)
+        elif str(request.url) == ENDPOINT:
+            if request.headers.get("authorization") != "Bearer access":
+                return httpx.Response(401)
+            if request.method != "POST":
+                return httpx.Response(405)
+            message = json.loads(request.content)
+            if "id" not in message:
+                return httpx.Response(202)
+            result = (
+                dict(
+                    protocolVersion=LATEST_PROTOCOL_VERSION,
+                    capabilities={"tools": {}},
+                    serverInfo={"name": "test", "version": "1"},
+                )
+                if message["method"] == "initialize"
+                else {"tools": [{"name": "lookup", "inputSchema": {"type": "object"}}]}
+            )
+            data = dict(jsonrpc="2.0", id=message["id"], result=result)
+            if mode == "streaming" and message["method"] == "initialize":
+                stream = Stream()
+                stream.message = data
+                return httpx.Response(
+                    200, headers={"content-type": "text/event-stream"}, stream=stream
+                )
+        else:
+            return httpx.Response(404)
+        return httpx.Response(200, json=data)
+
+    transport(handle)
+    dynamic = mode in {"dynamic", "streaming", "redirected"}
+    config = oauth.OAuthConfig(
+        client_id=None if dynamic else "client",
+        token_endpoint_auth_method="none" if dynamic else mode,
+        scope="mcp:tools",
+    )
+    attempt = oauth.LoginAttempt(
+        uuid4(),
+        "session",
+        None,
+        dict(
+            name="MCP",
+            endpoint=ENDPOINT + "/" if mode == "redirected" else ENDPOINT,
+            enabled=True,
+            oauth=config.model_dump(),
+        ),
+        None,
+        None,
+    )
+    manager = oauth.OAuthLoginManager()
+    try:
+        await manager.start(
+            attempt, "secret" if mode.startswith("client_secret") else None, CALLBACK
+        )
+        authorization.update(parse_qs(urlsplit(attempt.authorization_url).query))
+        assert authorization["code_challenge_method"] == ["S256"] and authorization["scope"] == [
+            "mcp:tools"
+        ]
+        manager.receive_callback(authorization["state"][0], "code", None)
+        await asyncio.wait_for(attempt.task, 3)
+        assert attempt.error_code is None and attempt.tools[0]["name"] == "lookup"
+        token_request = next(request for request in requests if request.url.path.endswith("/token"))
+        if mode == "client_secret_basic":
+            assert (
+                token_request.headers["authorization"]
+                == "Basic " + base64.b64encode(b"client:secret").decode()
+            )
+        elif mode == "client_secret_post":
+            assert parse_qs(token_request.content.decode())["client_secret"] == ["secret"]
+    finally:
+        await manager.shutdown()
+
+
+@pytest.fixture
+async def login(monkeypatch, payload):
+    manager = oauth.OAuthLoginManager()
+    user = SimpleNamespace(id=uuid4(), is_admin=True)
+    attempt = oauth.LoginAttempt(user.id, hash_token("session"), None, {}, None, None)
+    attempt.payload, attempt.tools, attempt.state = payload, [], "state"
+    attempt.callback = asyncio.get_running_loop().create_future()
+    manager.attempts[attempt.id] = attempt
+    cookie = get_runtime_config().session_cookie_name
+    request = Request({"type": "http", "headers": [(b"cookie", f"{cookie}=session".encode())]})
+    monkeypatch.setattr(routes, "oauth_logins", manager)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=IntegrationSettings()))
+    return manager, attempt, request, user, AsyncMock()
+
+
+@pytest.mark.parametrize("failure", ["user", "session", "state", "replay", "expired"])
+async def test_login_binding_and_single_use(login, failure):
+    manager, attempt, _request, user, _db = login
+    if failure == "expired":
+        attempt.created_at -= oauth.LOGIN_TTL
+    if failure == "replay":
+        manager.receive_callback("state", "code", None)
+    with pytest.raises(McpClientError, match="mcp.oauthExpired"):
+        if failure in {"state", "replay"}:
+            manager.receive_callback("wrong" if failure == "state" else "state", "code", None)
+        else:
+            manager.get(
+                attempt.id,
+                uuid4() if failure == "user" else user.id,
+                "wrong" if failure == "session" else hash_token("session"),
+            )
+    await manager.shutdown()
+
+
+async def test_public_callback_cannot_persist(login):
+    manager, attempt, _request, _user, db = login
+    app = FastAPI()
+    app.include_router(routes.callback_router, prefix="/api")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="https://matoloop.example.test"
+    ) as client:
+        response = await client.get(oauth.CALLBACK_PATH, params={"state": "state", "code": "code"})
+    assert response.status_code == 303 and "code=" not in response.headers["location"]
+    db.commit.assert_not_awaited()
+    await manager.shutdown()
+
+
+@pytest.mark.parametrize("failure", ["pending", "denied", "admin", "changed"])
+async def test_failed_finish_keeps_connection(login, monkeypatch, failure):
+    manager, attempt, request, user, db = login
+    if failure in {"pending", "denied"}:
+        attempt.payload = None
+        attempt.error_code = "mcp.oauthDenied" if failure == "denied" else None
+    user.is_admin = failure != "admin"
+    if failure == "changed":
+        attempt.integration_id, attempt.revision = uuid4(), {}
+    else:
+        persist = AsyncMock()
+        monkeypatch.setattr(service.McpIntegrationService, "complete_oauth", persist)
+    with pytest.raises(ApiError):
+        await routes.finish_mcp_oauth(attempt.id, request, db, user)
+    db.commit.assert_not_awaited()
+    if failure != "changed":
+        persist.assert_not_awaited()
+    await manager.shutdown()
+
+
+@pytest.mark.parametrize("owner_id", [None, uuid4()])
+async def test_oauth_credential_uses_connection_owner(monkeypatch, payload, owner_id):
+    settings = UserIntegrationSettings() if owner_id else IntegrationSettings()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    store = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+    monkeypatch.setattr(service, "store_credential", store)
+    attempt = oauth.LoginAttempt(
+        uuid4(),
+        "session",
+        owner_id,
+        dict(name="MCP", endpoint=ENDPOINT, enabled=True, oauth={}),
+        None,
+        None,
+    )
+    attempt.payload, attempt.tools = payload, []
+    await service.McpIntegrationService.complete_oauth(AsyncMock(), attempt)
+    assert store.await_args.kwargs["owner_id"] == owner_id
+
+
+async def test_rebind_during_token_preparation_stops_dispatch(monkeypatch):
+    instance = IntegrationInstance(
+        name="MCP",
+        integration_type="mcp",
+        adapter_type="mcp_streamable_http",
+        credential_id=uuid4(),
+        config={
+            "endpoint": ENDPOINT,
+            "oauth": {},
+            "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+        },
+    )
+    monkeypatch.setattr(adapter, "connection_token", AsyncMock(return_value="token"))
+    current = instance.model_copy(update={"credential_id": uuid4()})
+    context = SimpleNamespace(
+        db=AsyncMock(),
+        integration_settings=IntegrationSettings(instances=[instance]),
+        current_integrations=AsyncMock(return_value=IntegrationSettings(instances=[current])),
+    )
+    assert (
+        await adapter.MCP_ADAPTER.contributions(instance).tools[0].handler({}, context)
+    ).is_error
+
+
+async def test_duplicate_finish_does_not_cancel_original(login, monkeypatch):
+    manager, attempt, request, user, db = login
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def persist(_db, current):
+        started.set()
+        await release.wait()
+        assert current.payload is not None
+        return IntegrationInstance(
+            name="MCP",
+            integration_type="mcp",
+            adapter_type="mcp_streamable_http",
+            config={"endpoint": ENDPOINT},
+        )
+
+    monkeypatch.setattr(service.McpIntegrationService, "complete_oauth", persist)
+    first = asyncio.create_task(routes.finish_mcp_oauth(attempt.id, request, db, user))
+    await started.wait()
+    with pytest.raises(ApiError):
+        await routes.finish_mcp_oauth(attempt.id, request, db, user)
+    release.set()
+    await first
+    await manager.shutdown()
+
+
+@pytest.mark.parametrize("status", [200, 400, 503])
+async def test_refresh_preserves_token_and_distinguishes_failures(transport, payload, status):
+    transport(
+        lambda _request: httpx.Response(status, json={"access_token": "new", "expires_in": 60})
+    )
+    if status != 200:
+        with pytest.raises(
+            McpClientError,
+            match="mcp.authorizationRequired" if status == 400 else "mcp.unavailable",
+        ):
+            await oauth.refresh_oauth_payload(payload)
+    else:
+        result = await oauth.refresh_oauth_payload(payload)
+        assert result["tokens"]["refresh_token"] == "refresh" and result["expires_at"] > time.time()
+        assert await oauth.refresh_oauth_payload(result) is result
+
+
+async def test_expired_without_refresh_requires_login(payload):
+    payload["tokens"].pop("refresh_token")
+    with pytest.raises(McpClientError, match="mcp.authorizationRequired"):
+        await oauth.refresh_oauth_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "url", ["http://private.example.test", "https://user:secret@example.test", "file:///secret"]
+)
+def test_oauth_url_boundary(url):
+    with pytest.raises(McpClientError, match="mcp.oauthConfigurationInvalid"):
+        oauth.validate_oauth_url(url)
+
+
+def test_callback_log_redaction():
+    record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        "",
+        0,
+        "%s %s %s %s %s",
+        ("client", "GET", oauth.CALLBACK_PATH + "?code=private", "1.1", 303),
+        None,
+    )
+    oauth._redact_callback_log(record)
+    assert "private" not in record.getMessage()
+
+
+@pytest.mark.skipif(
+    os.getenv("MATO_LOOP_MCP_DB_TEST") != "1", reason="Requires development PostgreSQL"
+)
+async def test_concurrent_refresh_uses_token_once(transport, payload, monkeypatch):
+    calls = []
+
+    def refresh(request):
+        calls.append(request)
+        return httpx.Response(
+            200, json={"access_token": "new", "expires_in": 60, "refresh_token": "rotated"}
+        )
+
+    transport(refresh)
+    engine = create_async_engine(get_runtime_config().database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(oauth, "AsyncSessionFactory", factory)
+    credential_id = None
+    try:
+        async with factory() as db:
+            credential = await store_credential(
+                db,
+                owner_id=None,
+                kind=oauth.OAUTH_CREDENTIAL_KIND,
+                label="MCP OAuth concurrency test",
+                payload=payload,
+            )
+            credential_id = credential.id
+            await db.commit()
+        instance = IntegrationInstance(
+            name="MCP",
+            integration_type="mcp",
+            adapter_type="mcp_streamable_http",
+            credential_id=credential_id,
+            config={"endpoint": ENDPOINT, "oauth": {}},
+        )
+        assert await asyncio.gather(oauth.oauth_token(instance), oauth.oauth_token(instance)) == [
+            "new",
+            "new",
+        ]
+        assert len(calls) == 1
+    finally:
+        if credential_id:
+            async with factory() as db:
+                await db.execute(delete(Credential).where(Credential.id == credential_id))
+                await db.commit()
+        await engine.dispose()

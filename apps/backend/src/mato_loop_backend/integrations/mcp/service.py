@@ -10,6 +10,12 @@ from mato_loop_backend.integrations.mcp.adapter import (
     mcp_resource_key,
 )
 from mato_loop_backend.integrations.mcp.client import McpClient, McpClientError
+from mato_loop_backend.integrations.mcp.oauth import (
+    OAUTH_CREDENTIAL_KIND,
+    connection_token,
+    mark_authorization_required,
+    oauth_status,
+)
 from mato_loop_backend.integrations.registry import validate_integration
 from mato_loop_backend.integrations.service import (
     IntegrationSettingsDocument,
@@ -22,8 +28,6 @@ from mato_loop_backend.integrations.service import (
 )
 from mato_loop_backend.security import (
     delete_credential,
-    load_credential,
-    read_credential,
     store_credential,
 )
 from mato_loop_backend.settings import IntegrationInstance
@@ -73,7 +77,9 @@ class McpIntegrationService:
             raise IntegrationSettingsError("mcp.configurationInvalid") from exc
 
     @classmethod
-    def _find(cls, settings: IntegrationSettingsDocument, integration_id: UUID) -> IntegrationInstance | None:
+    def _find(
+        cls, settings: IntegrationSettingsDocument, integration_id: UUID
+    ) -> IntegrationInstance | None:
         return next(
             (
                 item
@@ -84,28 +90,6 @@ class McpIntegrationService:
             ),
             None,
         )
-
-    @staticmethod
-    async def _token(
-        db: AsyncSession, instance: IntegrationInstance
-    ) -> str | None:
-        if instance.credential_id is None:
-            return None
-        try:
-            credential = await load_credential(
-                db,
-                instance.credential_id,
-                owner_id=instance.owner_id,
-                populate_existing=True,
-            )
-            if credential is None or credential.kind != MCP_CREDENTIAL_KIND:
-                raise ValueError("invalid MCP credential")
-            token = read_credential(credential).get("token")
-        except Exception as exc:
-            raise IntegrationSettingsError("mcp.configurationInvalid") from exc
-        if not isinstance(token, str) or not token:
-            raise IntegrationSettingsError("mcp.configurationInvalid")
-        return token
 
     @staticmethod
     def _prune_tool_state(tools, integration_id: UUID, resource_keys: set[str]) -> bool:
@@ -142,12 +126,29 @@ class McpIntegrationService:
         return changed
 
     @classmethod
-    async def _discover(cls, endpoint: str, token: str | None) -> list[dict]:
-        tools = await McpClient(endpoint, token).discover_tools()
+    async def _discover(
+        cls, endpoint: str, token: str | None, *, authentication_failed=None
+    ) -> list[dict]:
+        tools = await McpClient(
+            endpoint, token, authentication_failed=authentication_failed
+        ).discover_tools()
         try:
             return cls.config_model(endpoint=endpoint, tools=tools).model_dump(mode="json")["tools"]
         except ValueError as exc:
             raise McpClientError("mcp.invalidResponse") from exc
+
+    @classmethod
+    async def _discover_instance(cls, db, instance):
+        config = cls.config_model.model_validate(instance.config)
+        token = await connection_token(db, instance)
+        cls._validate_connection(str(config.endpoint), token)
+        return await cls._discover(
+            str(config.endpoint),
+            token,
+            authentication_failed=(lambda: mark_authorization_required(instance, token))
+            if config.oauth
+            else None,
+        )
 
     @classmethod
     async def create(
@@ -202,18 +203,30 @@ class McpIntegrationService:
         remove_token: bool,
         enabled: bool,
         owner_id: UUID | None,
+        remove_oauth: bool = False,
     ) -> IntegrationInstance:
         initial = await _load_integrations(db, owner_id)
         current = cls._find(initial, integration_id)
         if current is None:
             raise IntegrationSettingsError("mcp.notFound")
         current.owner_id = owner_id
-        discovery_token = token
-        if discovery_token is None and not remove_token:
-            discovery_token = await cls._token(db, current)
-        cls._validate_connection(endpoint, discovery_token)
-        tools = await cls._discover(endpoint, discovery_token)
         revision = current.model_dump(mode="json")
+        current_config = cls.config_model.model_validate(current.config)
+        remove_oauth = remove_oauth and current_config.oauth is not None
+        if current_config.oauth is not None and not remove_oauth:
+            if str(current_config.endpoint) != endpoint or token is not None or remove_token:
+                raise McpClientError("mcp.authorizationRequired")
+            tools = (
+                await cls._discover_instance(db, current)
+                if enabled
+                else [item.model_dump(mode="json") for item in current_config.tools]
+            )
+        else:
+            discovery_token = token
+            if discovery_token is None and not remove_token and current_config.oauth is None:
+                discovery_token = await connection_token(db, current)
+            cls._validate_connection(endpoint, discovery_token)
+            tools = await cls._discover(endpoint, discovery_token)
 
         settings = await _load_integrations(db, owner_id, for_update=True)
         instance = cls._find(settings, integration_id)
@@ -221,14 +234,19 @@ class McpIntegrationService:
             raise IntegrationSettingsError("mcp.notFound")
         if instance.model_dump(mode="json") != revision:
             raise IntegrationSettingsError("integration.changed")
-        endpoint_changed = str(cls.config_model.model_validate(instance.config).endpoint) != endpoint
+        endpoint_changed = (
+            str(cls.config_model.model_validate(instance.config).endpoint) != endpoint
+        )
         old_credential_id = instance.credential_id
         instance.name = name
         instance.enabled = enabled
         instance.config = {
+            **instance.config,
             "endpoint": endpoint,
             "tools": tools,
         }
+        if remove_oauth:
+            instance.config.pop("oauth", None)
         validate_integration(instance)
         if token is not None:
             credential = await store_credential(
@@ -239,22 +257,19 @@ class McpIntegrationService:
                 payload={"token": token},
             )
             instance.credential_id = credential.id
-        elif remove_token:
+        elif remove_token or remove_oauth:
             instance.credential_id = None
         if old_credential_id is not None and old_credential_id != instance.credential_id:
             await delete_credential(db, old_credential_id, owner_id=owner_id)
         tool_settings = await _load_tools(db, owner_id, for_update=True)
-        if endpoint_changed:
+        if endpoint_changed or (remove_oauth and current_config.oauth is not None):
             changed = _clear_integration_policies(tool_settings, integration_id)
             changed = (
-                tool_settings.resource_labels.pop(str(integration_id), None) is not None
-                or changed
+                tool_settings.resource_labels.pop(str(integration_id), None) is not None or changed
             )
             if changed:
                 await _save_settings(db, tool_settings, owner_id)
-            await clear_profile_integration_policies(
-                db, integration_id, owner_id=owner_id
-            )
+            await clear_profile_integration_policies(db, integration_id, owner_id=owner_id)
         else:
             resource_keys = {mcp_resource_key(tool["name"]) for tool in tools}
             if cls._prune_tool_state(tool_settings, integration_id, resource_keys):
@@ -272,11 +287,8 @@ class McpIntegrationService:
         if current is None:
             raise IntegrationSettingsError("mcp.notFound")
         current.owner_id = owner_id
-        config = cls.config_model.model_validate(current.config)
-        token = await cls._token(db, current)
-        cls._validate_connection(str(config.endpoint), token)
-        tools = await cls._discover(str(config.endpoint), token)
         revision = current.model_dump(mode="json")
+        tools = await cls._discover_instance(db, current)
 
         settings = await _load_integrations(db, owner_id, for_update=True)
         instance = cls._find(settings, integration_id)
@@ -295,9 +307,7 @@ class McpIntegrationService:
         return instance
 
     @classmethod
-    async def delete(
-        cls, db: AsyncSession, integration_id: UUID, *, owner_id: UUID | None
-    ) -> None:
+    async def delete(cls, db: AsyncSession, integration_id: UUID, *, owner_id: UUID | None) -> None:
         settings = await _load_integrations(db, owner_id, for_update=True)
         instance = cls._find(settings, integration_id)
         if instance is None:
@@ -315,15 +325,79 @@ class McpIntegrationService:
         await db.commit()
 
     @classmethod
-    async def test(
-        cls, db: AsyncSession, integration_id: UUID, *, owner_id: UUID | None
-    ) -> None:
+    async def test(cls, db: AsyncSession, integration_id: UUID, *, owner_id: UUID | None) -> None:
         settings = await _load_integrations(db, owner_id)
         instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("mcp.notFound")
         instance.owner_id = owner_id
-        config = cls.config_model.model_validate(instance.config)
-        token = await cls._token(db, instance)
-        cls._validate_connection(str(config.endpoint), token)
-        await cls._discover(str(config.endpoint), token)
+        await cls._discover_instance(db, instance)
+
+    @classmethod
+    async def complete_oauth(cls, db, attempt):
+        if oauth_status(attempt.payload) != "authorized":
+            raise McpClientError("mcp.authorizationRequired")
+        settings = await _load_integrations(db, attempt.owner_id, for_update=True)
+        instance = cls._find(settings, attempt.integration_id) if attempt.integration_id else None
+        if attempt.integration_id and (
+            instance is None or instance.model_dump(mode="json") != attempt.revision
+        ):
+            raise IntegrationSettingsError("integration.changed")
+        if instance is None:
+            instance = IntegrationInstance(
+                name=attempt.draft["name"],
+                integration_type="mcp",
+                adapter_type="mcp_streamable_http",
+            )
+            settings.instances.append(instance)
+        instance.owner_id = attempt.owner_id
+        old_credential_id = instance.credential_id
+        credential = await store_credential(
+            db,
+            owner_id=attempt.owner_id,
+            kind=OAUTH_CREDENTIAL_KIND,
+            label=attempt.draft["name"],
+            payload=attempt.payload,
+        )
+        instance.name = attempt.draft["name"]
+        instance.enabled = attempt.draft["enabled"]
+        instance.config = {
+            **instance.config,
+            "endpoint": attempt.draft["endpoint"],
+            "oauth": attempt.draft["oauth"],
+            "tools": attempt.tools,
+        }
+        instance.credential_id = credential.id
+        validate_integration(instance)
+        if old_credential_id:
+            await delete_credential(db, old_credential_id, owner_id=attempt.owner_id)
+        if attempt.integration_id:
+            await cls._clear_binding_policies(db, instance)
+        await _save_settings(db, settings, attempt.owner_id)
+        await db.commit()
+        return instance
+
+    @classmethod
+    async def _clear_binding_policies(cls, db, instance):
+        tools = await _load_tools(db, instance.owner_id, for_update=True)
+        _clear_integration_policies(tools, instance.id)
+        tools.resource_labels.pop(str(instance.id), None)
+        await _save_settings(db, tools, instance.owner_id)
+        await clear_profile_integration_policies(db, instance.id, owner_id=instance.owner_id)
+
+    @classmethod
+    async def disconnect_oauth(cls, db, integration_id, *, owner_id):
+        settings = await _load_integrations(db, owner_id, for_update=True)
+        instance = cls._find(settings, integration_id)
+        if instance is None:
+            raise IntegrationSettingsError("mcp.notFound")
+        instance.owner_id = owner_id
+        if instance.config.get("oauth") is None:
+            raise IntegrationSettingsError("mcp.oauthConfigurationInvalid")
+        if instance.credential_id:
+            await delete_credential(db, instance.credential_id, owner_id=owner_id)
+        instance.credential_id = None
+        await cls._clear_binding_policies(db, instance)
+        await _save_settings(db, settings, owner_id)
+        await db.commit()
+        return instance

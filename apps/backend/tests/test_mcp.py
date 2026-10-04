@@ -13,6 +13,7 @@ from jsonschema import ValidationError as JsonSchemaValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.integrations.mcp.client as client_module
+import mato_loop_backend.integrations.mcp.oauth as oauth_module
 import mato_loop_backend.integrations.mcp.service as service_module
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import mcp as mcp_routes
@@ -198,11 +199,14 @@ async def test_mcp_transport_bounds_each_response() -> None:
                 await response.aread()
 
 
-async def test_mcp_call_failure_after_dispatch_is_outcome_unknown(monkeypatch) -> None:
+@pytest.mark.parametrize("failure", [RuntimeError("raw upstream failure"), McpClientError("mcp.authorizationRequired")])
+async def test_mcp_call_failure_after_dispatch_is_outcome_unknown(monkeypatch, failure) -> None:
+    calls = []
     class FailingSession(FakeSession):
         async def call_tool(self, name, arguments):
             assert self._tool_output_schemas[name] == {"type": "object"}
-            raise RuntimeError("raw upstream failure")
+            calls.append(name)
+            raise failure
 
     monkeypatch.setattr(client_module, "streamable_http_client", fake_transport)
     monkeypatch.setattr(client_module, "ClientSession", FailingSession)
@@ -213,6 +217,7 @@ async def test_mcp_call_failure_after_dispatch_is_outcome_unknown(monkeypatch) -
         ).call_tool("lookup", {}, {"type": "object"})
 
     assert exc_info.value.code == "mcp.outcomeUnknown"
+    assert calls == ["lookup"]
 
 
 async def test_mcp_call_cancellation_after_dispatch_is_outcome_unknown(monkeypatch) -> None:
@@ -761,7 +766,7 @@ async def test_service_allows_retained_bearer_over_http(monkeypatch) -> None:
         AsyncMock(side_effect=load),
     )
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
-    monkeypatch.setattr(McpIntegrationService, "_token", AsyncMock(return_value="secret"))
+    monkeypatch.setattr(service_module, "connection_token", AsyncMock(return_value="secret"))
     discover = AsyncMock(return_value=[])
     monkeypatch.setattr(McpIntegrationService, "_discover", discover)
 
@@ -833,7 +838,8 @@ async def test_endpoint_change_clears_server_and_tool_policy_state(monkeypatch) 
     db.commit.assert_awaited_once()
 
 
-async def test_same_endpoint_update_prunes_only_removed_tool_state(monkeypatch) -> None:
+@pytest.mark.parametrize("oauth_config", [None, {"scope": "mcp:tools"}])
+async def test_same_endpoint_update_prunes_only_removed_tool_state(monkeypatch, oauth_config) -> None:
     endpoint = "https://mcp.example.test/rpc"
     instance = IntegrationInstance(
         name="Server",
@@ -848,6 +854,8 @@ async def test_same_endpoint_update_prunes_only_removed_tool_state(monkeypatch) 
         },
     )
     integrations = IntegrationSettings(instances=[instance])
+    instance.config["oauth"] = oauth_config
+    monkeypatch.setattr(service_module, "connection_token", AsyncMock(return_value="secret"))
     tools = ToolSettings()
     keep = mcp_resource_key("keep")
     remove = mcp_resource_key("remove")
@@ -889,6 +897,7 @@ async def test_same_endpoint_update_prunes_only_removed_tool_state(monkeypatch) 
         keep: {"mcp.call": ToolExecutionPolicy.AUTO}
     }
     assert tools.resource_labels[str(instance.id)] == {keep: "Keep"}
+    assert instance.config["oauth"] == oauth_config
 
 
 async def test_refresh_prunes_removed_tool_state_only(monkeypatch) -> None:
@@ -940,11 +949,17 @@ async def test_credential_decode_failure_maps_to_safe_configuration_error(monkey
         adapter_type="mcp_streamable_http",
         credential_id=uuid4(),
     )
-    monkeypatch.setattr(service_module, "load_credential", AsyncMock(return_value=SimpleNamespace(kind="mcp.bearer")))
-    monkeypatch.setattr(service_module, "read_credential", lambda _record: (_ for _ in ()).throw(ValueError("secret raw error")))
+    monkeypatch.setattr(
+        oauth_module, "load_credential", AsyncMock(return_value=SimpleNamespace(kind="mcp.bearer"))
+    )
+    monkeypatch.setattr(
+        oauth_module,
+        "read_credential",
+        lambda _record: (_ for _ in ()).throw(ValueError("secret raw error")),
+    )
 
-    with pytest.raises(IntegrationSettingsError) as exc_info:
-        await McpIntegrationService._token(AsyncMock(), instance)
+    with pytest.raises(McpClientError) as exc_info:
+        await oauth_module.connection_token(AsyncMock(), instance)
 
     assert exc_info.value.code == "mcp.configurationInvalid"
 

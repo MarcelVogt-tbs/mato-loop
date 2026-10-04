@@ -22,6 +22,8 @@ export const useMcpServerStore = defineStore('mcp-servers', {
     settingsLoading: false,
     settingsSaving: false,
     scope: 'instance',
+    oauthAttempt: null,
+    oauthFinishing: false,
     loadVersion: 0
   }),
   actions: {
@@ -128,6 +130,44 @@ export const useMcpServerStore = defineStore('mcp-servers', {
         else this.servers[index] = data
       }
       return data
+    },
+    async startOAuth(payload) {
+      const { data } = await api.post('/mcp/oauth/attempts', payload, branchConfig(this.scope))
+      this.oauthAttempt = data
+      return data
+    },
+    async cancelOAuth() {
+      const attempt = this.oauthAttempt
+      if (!attempt) return
+      try {
+        await api.delete(`/mcp/oauth/attempts/${attempt.id}`, { suppressErrorToast: true })
+      } finally {
+        if (this.oauthAttempt?.id === attempt.id) this.oauthAttempt = null
+      }
+    },
+    async completeOAuth(id, signal) {
+      this.oauthFinishing = true
+      try {
+        // Only this settings interaction polls; no global timer or event channel.
+        for (let poll = 0; poll < 300; poll++) {
+          signal?.throwIfAborted()
+          const { data } = await api.get(`/mcp/oauth/attempts/${id}`, { signal })
+          if (data.status === 'ready') {
+            const result = (await api.post(`/mcp/oauth/attempts/${id}/finish`, null, { signal })).data
+            this.oauthAttempt = null
+            await this.fetchVisibleServers()
+            return result
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1000))
+        }
+        await api.delete(`/mcp/oauth/attempts/${id}`)
+        throw { code: 'mcp.oauthExpired' }
+      } finally {
+        this.oauthFinishing = false
+      }
+    },
+    async disconnectOAuth(server) {
+      await api.delete(`/mcp/servers/${server.id}/oauth`, branchConfig(server.scope))
     }
   }
 })
