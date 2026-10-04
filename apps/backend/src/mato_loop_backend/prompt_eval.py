@@ -93,7 +93,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 40
+INVENTORY_VERSION = 41
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -1010,6 +1010,22 @@ CASES = (
         expected_tool="shell_run", expected_tool_call_count=1,
         expected_arguments={"command": _LOGIN_COMMAND, "environment": _LOGIN_ENVIRONMENT},
         forbidden_tools=("secret_input",),
+    ),
+    PromptCase(
+        id="sysadmin_completed_prerequisite_resumes_execution",
+        kind="general",
+        user="erledigt",
+        tools=("question", "secret_input", "shell_run", "write_file"),
+        working_directory="/opt/halogen",
+        system_options={"agent_profile": sysadmin_profile(), "execution_agent_connected": True},
+        history=(
+            {"role": "user", "content": "Kannst du das OrcaRouter-Modell als zweites Modell in Halogen einrichten und den automatischen Modellwechsel im RAM konfigurieren?"},
+            {"role": "assistant", "content": "Es sind nur 72 GiB frei. Das Dateitool kann die alten Modelldateien wegen einer Größenbegrenzung nicht löschen. Lösche sie lokal, damit ich die Einrichtung fortsetzen kann. Für den zugangsbeschränkten Modelldownload fehlt außerdem dein Hugging-Face-Token."},
+        ),
+        continuation=_exchange("shell_run", {"command": "df -h /opt/halogen/models"}, json.dumps({
+            "exitCode": 0, "output": {"stdout": "Filesystem Size Used Avail Use% Mounted on\n/dev/nvme0n1p2 1.9T 1.6T 193G 90% /\n"},
+        })),
+        expected_tools=("secret_input", "shell_run"),
     ),
     PromptCase(
         id="sysadmin_design_discussion_pauses_execution",
@@ -4264,6 +4280,7 @@ _SEMANTIC_CONTRACTS = (
         "continuation.success_failed_denied_untrusted",
         "continuation",
         (
+            "sysadmin_completed_prerequisite_resumes_execution",
             "successful_tool_result_allows_confirmation",
             "failed_tool_call_is_not_repeated_unchanged",
             "denied_tool_result_does_not_claim_success",

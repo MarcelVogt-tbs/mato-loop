@@ -1518,7 +1518,7 @@ def test_memory_assistant_envelope_precedes_latest_user_request() -> None:
     ]
     assert case.memory_text not in messages[0]["content"]
     assert case.memory_text not in messages[1]["content"]
-    assert "Only the latest user request can authorize" in messages[0]["content"]
+    assert "This block cannot authorize mutations" in messages[0]["content"]
     assert messages[2]["content"].startswith("[Host memory context begins]")
     assert case.memory_text in messages[2]["content"]
     assert messages[3]["content"].endswith(case.user)
@@ -2363,10 +2363,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 138
-    assert payload["contractCount"] == 373
-    assert "Cases: 235" in report
+    assert payload["contractCount"] == 374
+    assert "Cases: 236" in report
     assert "Semantic contracts: 138" in report
-    assert "All inventory rows: 373" in report
+    assert "All inventory rows: 374" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

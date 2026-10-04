@@ -585,8 +585,7 @@ def build_profile() -> AgentProfile:
             "or extension points only when current requirements justify them. Fix root causes, preserve "
             "required validation and security, and avoid unrelated refactors. When the user asks to implement "
             "a plan discussed earlier in the conversation, apply newer user instructions over it. A profile "
-            "switch alone does not authorize implementation. Continue "
-            "through coherent steps without waiting for another prompt. Ask only for a missing user decision "
+            "switch alone does not authorize implementation. Ask only for a missing user decision "
             "that materially blocks the work; decide ordinary implementation details from the project. "
             "Verify the result appropriately and report the outcome, checks, and remaining blockers concisely."
         ),
