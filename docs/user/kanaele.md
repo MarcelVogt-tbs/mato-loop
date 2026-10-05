@@ -4,7 +4,7 @@ Kanäle verbinden persönliche Messenger mit MatoLoop. Sie sind keine Integratio
 
 ## Telegram verbinden
 
-Erstellen Sie mit BotFather einen persönlichen Telegram-Bot. Öffnen Sie unter **Einstellungen > Kanäle** den Tab **Kanalinstanzen**, wählen Sie **Kanal hinzufügen** und anschließend den Anbieter **Telegram**. MatoLoop speichert den eingegebenen Bot-Token verschlüsselt und zeigt ihn später nicht wieder an. Öffnen Sie anschließend den angezeigten Telegram-Link oder senden Sie `/start KOPPLUNGSCODE` in einem privaten Chat an den Bot. Gruppen- und Kanalnachrichten werden nicht verarbeitet.
+Create a personal Telegram bot with BotFather. Once an administrator has enabled communication channels, open **Einstellungen > Kanäle**, choose **Kanal hinzufügen**, and select **Telegram**. MatoLoop encrypts the bot token and never displays it again. Follow the Telegram link or send `/start PAIRING_CODE` in a private chat with the bot. Group and channel messages are not processed.
 
 After pairing, you can send text, images, files, audio, video, and voice messages to the bot. Voice messages follow the same processing as web recordings: the original audio is stored as a message attachment and displayed with a player in MatoLoop. Automatic transcription adds recognized text to your request without replacing the recording. If transcription fails or is unavailable, the audio remains accessible. The model can access the stored attachment later through the normal attachment tools. Ordinary audio files are stored without automatic transcription.
 
@@ -23,4 +23,6 @@ Die endgültige Antwort wird als normale Nachricht zugestellt und zusammen mit d
 
 ## Administrative Freigabe
 
-Telegram is enabled for new installations. Administrators can disable or enable the provider under **Einstellungen > Kanäle > Verfügbare Kanäle**. While disabled, personal Telegram instances remain stored but are unavailable. Queued Telegram deliveries are not replayed after re-enabling the provider. Scheduled automation turns and their results are available in their normal MatoLoop session; there is no separate automation output-channel configuration.
+Communication channels are globally disabled by default, including when existing settings have no explicit global value. Administrators activate **Kommunikationskanäle aktivieren** under **Administration > Kanäle > Einstellungen**, the initial tab. **Verwaltung** lists available providers and their individual allowance toggles; Telegram is allowed by default. A channel requires both global activation and provider allowance. The global switch applies to administrators too.
+
+Disabling channels or a provider preserves personal connections, encrypted credentials, and provider allowances. Receive, delivery, pairing, and connection tests are unavailable while disabled. Pending external deliveries are terminated and never replayed after re-enabling; pending automation destinations fall back to the canonical app result. Scheduled automation turns and their results remain available in their normal MatoLoop session.

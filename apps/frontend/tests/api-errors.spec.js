@@ -279,6 +279,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'skill.notFound' } })).toBe(
       'Der Skill wurde nicht gefunden.'
     )
+    expect(apiErrorMessage({ error: { code: 'skill.personalDisabled' } })).toBe(
+      'Persönliche Skills sind für diese Instanz deaktiviert.'
+    )
     expect(apiErrorMessage({ error: { code: 'skill.duplicate' } })).toBe(
       'Ein Skill mit diesem Namen ist bereits vorhanden.'
     )

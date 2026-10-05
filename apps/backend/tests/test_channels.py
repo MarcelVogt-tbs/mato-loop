@@ -24,6 +24,7 @@ from mato_loop_backend.messaging.approvals import (
     MessagingApprovalPayload,
     decode_approval_callback,
 )
+from mato_loop_backend.messaging.policy import channel_provider_allowed
 from mato_loop_backend.messaging.questions import (
     MessagingQuestionEnvelope,
     QuestionInteraction,
@@ -35,7 +36,6 @@ from mato_loop_backend.messaging.telegram import endpoint_payload
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
-    AutomationRun,
     ChatSession,
     MessagingEndpoint,
     MessagingInbox,
@@ -56,47 +56,41 @@ def _admin() -> UserAccount:
     )
 
 
-async def test_admin_disables_provider_and_pending_delivery(monkeypatch) -> None:
+@pytest.mark.parametrize("global_switch", [False, True])
+async def test_admin_disables_channels_and_pending_delivery(monkeypatch, global_switch) -> None:
     db = AsyncMock(spec=AsyncSession)
-    settings = ChannelSettings()
-    outbox = MessagingOutbox(
-        endpoint_id=uuid4(),
-        automation_run_id=uuid4(),
-        destination="1",
-        deduplication_key="test",
-        payload={"text": "test"},
-    )
-    run = AutomationRun(
-        automation_id=uuid4(),
-        automation_revision=1,
-        trigger="manual",
-        status="completed",
-        definition_snapshot={},
-        delivery_status="pending",
-    )
-    run_rows = Mock()
-    run_rows.all.return_value = [run]
-    outbox_rows = Mock()
-    outbox_rows.all.return_value = [outbox]
-    db.scalars.side_effect = [run_rows, outbox_rows]
+    settings = ChannelSettings(enabled=True)
     load = AsyncMock(return_value=settings)
     save = AsyncMock()
     monkeypatch.setattr(routes.SettingsStore, "load", load)
     monkeypatch.setattr(routes.SettingsStore, "save", save)
 
-    result = await routes.update_channel_provider(
-        "telegram", routes.ChannelProviderRequest(allowed=False), _admin(), db
-    )
+    if global_switch:
+        result = await routes.update_channel_settings(routes.ChannelSettingsRequest(enabled=False), _admin(), db)
+    else:
+        result = await routes.update_channel_provider(
+            "telegram", routes.ChannelProviderRequest(allowed=False), _admin(), db
+        )
 
-    assert result["allowed"] is False
-    assert settings.allowed_providers == set()
-    assert outbox.status == "failed"
-    assert outbox.error_code == "channel.providerDisabled"
-    assert run.delivery_status == "pending"
-    assert run.delivery_channel_type == "app"
-    assert run.delivery_endpoint_id is None
+    assert result["enabled" if global_switch else "allowed"] is False
+    assert settings.allowed_providers == ({"telegram"} if global_switch else set())
+    updates = [call.args[0] for call in db.execute.await_args_list if getattr(call.args[0], "is_update", False)]
+    assert [statement.compile().params for statement in updates] == [
+        {"delivery_channel_type": "app", "delivery_endpoint_id": None, "delivery_destination": None, "delivery_status_1": "pending", **({} if global_switch else {"provider_1": "telegram"})},
+        {"status": "failed", "processing_at": None, "next_attempt_at": None, "error_code": "channel.providerDisabled", "status_1": ["pending", "processing"], **({} if global_switch else {"provider_1": "telegram"})},
+    ]
     save.assert_awaited_once_with(db, settings)
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.parametrize(("settings", "expected"), [
+    (ChannelSettings(), False),
+    (ChannelSettings(enabled=True), True),
+    (ChannelSettings(enabled=True, allowed_providers=set()), False),
+])
+async def test_channel_policy_requires_global_and_provider_enablement(monkeypatch, settings, expected):
+    monkeypatch.setattr(routes.SettingsStore, "load", AsyncMock(return_value=settings))
+    assert await channel_provider_allowed(AsyncMock(spec=AsyncSession), "telegram") is expected
 
 
 def test_channel_endpoint_payload_has_no_integration_fields() -> None:

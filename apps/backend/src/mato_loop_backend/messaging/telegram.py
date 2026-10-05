@@ -76,10 +76,10 @@ from mato_loop_backend.permissions.decisions import ApprovalDecisionError
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings import (
-    GENERAL_PROFILE_ID,
     InstanceLimits,
     SettingsStore,
 )
+from mato_loop_backend.settings.effective import default_agent_profile_id
 
 logger = logging.getLogger(__name__)
 TELEGRAM_CREDENTIAL_KIND = "telegram.bot_token"
@@ -578,7 +578,7 @@ async def _new_session(
         title="Neue Session",
         title_generation_status=TitleGenerationStatus.PENDING.value,
         model_config_id=None,
-        agent_profile_id=GENERAL_PROFILE_ID,
+        agent_profile_id=await default_agent_profile_id(db),
     )
     db.add(item)
     await db.flush()

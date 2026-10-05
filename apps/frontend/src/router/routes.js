@@ -30,7 +30,7 @@ const routes = [
         component: () => import('src/features/settings/SettingsPage.vue'),
         props: { admin: true },
         meta: { requiresAdmin: true },
-        redirect: { name: 'admin-users' },
+        redirect: { name: 'admin-general' },
         children: adminRoutes
       }
     ]

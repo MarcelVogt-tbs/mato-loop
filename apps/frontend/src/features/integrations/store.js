@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { notifyError } from 'src/utils/notifications'
+import { useAuthStore } from 'stores/auth'
 
 const emptySearch = () => ({
   configured: false,
@@ -129,12 +130,24 @@ export const useIntegrationStore = defineStore('integrations', {
     adapterAvailable: (state) => (adapterType, scope = state.scope) => {
       const adapter = state.catalog.find((item) => item.adapterType === adapterType)
       if (!adapter || state.catalogLoadFailed) return false
-      if (scope === 'personal') return adapter.availability === 'full'
+      if (scope === 'personal') return adapter.availability === 'full' || useAuthStore().isAdmin && adapter.availability === 'instance_only'
       return !adapter.personalOnly && adapter.executionLocation === 'backend'
         && ['full', 'instance_only'].includes(adapter.availability)
     }
   },
   actions: {
+    async fetchProfileAvailability(id, scope) {
+      return (await api.get(`/integrations/profiles/${id}/availability`, { params: { scope } })).data
+    },
+    async saveProfileAvailability(id, scope, value) {
+      return (await api.put(`/integrations/profiles/${id}/availability`, value, { params: { scope } })).data
+    },
+    async fetchPermissions(id, profileId = null) {
+      return (await api.get(`/integrations/${id}/permissions`, { params: { scope: this.scope, profile_id: profileId } })).data
+    },
+    async savePermissions(id, value, profileId = null) {
+      return (await api.put(`/integrations/${id}/permissions`, value, { params: { scope: this.scope, profile_id: profileId } })).data
+    },
     async setIntegrationEnabled(id, enabled, scope) {
       const { data } = await api.patch(`/integrations/${id}/enabled`, { enabled }, scopeConfig(scope))
       return data

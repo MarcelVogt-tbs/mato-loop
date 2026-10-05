@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,6 +65,12 @@ class ChannelProviderRequest(BaseModel):
     allowed: bool
 
 
+class ChannelSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
 async def _ensure_available(db: AsyncSession) -> None:
     if not await channel_provider_allowed(db, "telegram", lock=True):
         raise ApiError(409, "channel.providerDisabled")
@@ -98,6 +104,7 @@ async def list_channel_providers(
 ) -> dict:
     settings = await SettingsStore.load(db, ChannelSettings)
     return {
+        "enabled": settings.enabled,
         "providers": [
             {
                 "provider": provider,
@@ -107,6 +114,41 @@ async def list_channel_providers(
             for provider, label in CHANNEL_PROVIDERS.items()
         ]
     }
+
+
+async def _stop_channel_deliveries(db: AsyncSession, provider: str | None = None) -> None:
+    endpoint_ids = select(MessagingEndpoint.id)
+    if provider is not None:
+        endpoint_ids = endpoint_ids.where(MessagingEndpoint.provider == provider)
+    await db.execute(
+        update(AutomationRun).where(
+            AutomationRun.delivery_endpoint_id.in_(endpoint_ids),
+            AutomationRun.delivery_status == "pending",
+        ).values(delivery_channel_type="app", delivery_endpoint_id=None, delivery_destination=None)
+    )
+    await db.execute(
+        update(MessagingOutbox).where(
+            MessagingOutbox.endpoint_id.in_(endpoint_ids),
+            MessagingOutbox.status.in_(("pending", "processing")),
+        ).values(status="failed", processing_at=None, next_attempt_at=None, error_code="channel.providerDisabled")
+    )
+
+
+@router.put("/settings")
+async def update_channel_settings(
+    payload: ChannelSettingsRequest,
+    _admin: Annotated[UserAccount, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    for provider in sorted(CHANNEL_PROVIDERS):
+        await lock_channel_provider(db, provider)
+    settings = await SettingsStore.load(db, ChannelSettings, for_update=True)
+    settings.enabled = payload.enabled
+    if not settings.enabled:
+        await _stop_channel_deliveries(db)
+    await SettingsStore.save(db, settings)
+    await db.commit()
+    return {"enabled": settings.enabled}
 
 
 @router.put("/providers/{provider}")
@@ -124,47 +166,7 @@ async def update_channel_provider(
         settings.allowed_providers.add(provider)
     else:
         settings.allowed_providers.discard(provider)
-        runs = list(
-            (
-                await db.scalars(
-                    select(AutomationRun)
-                    .join(
-                        MessagingEndpoint,
-                        MessagingEndpoint.id == AutomationRun.delivery_endpoint_id,
-                    )
-                    .where(
-                        MessagingEndpoint.provider == provider,
-                        AutomationRun.delivery_status == "pending",
-                    )
-                    .with_for_update(of=AutomationRun)
-                )
-            ).all()
-        )
-        for run in runs:
-            run.delivery_channel_type = "app"
-            run.delivery_endpoint_id = None
-            run.delivery_destination = None
-        outbox_items = list(
-            (
-                await db.scalars(
-                    select(MessagingOutbox)
-                    .join(
-                        MessagingEndpoint,
-                        MessagingEndpoint.id == MessagingOutbox.endpoint_id,
-                    )
-                    .where(
-                        MessagingEndpoint.provider == provider,
-                        MessagingOutbox.status.in_(("pending", "processing")),
-                    )
-                    .with_for_update(of=MessagingOutbox)
-                )
-            ).all()
-        )
-        for item in outbox_items:
-            item.status = "failed"
-            item.processing_at = None
-            item.next_attempt_at = None
-            item.error_code = "channel.providerDisabled"
+        await _stop_channel_deliveries(db, provider)
     await SettingsStore.save(db, settings)
     await db.commit()
     return {

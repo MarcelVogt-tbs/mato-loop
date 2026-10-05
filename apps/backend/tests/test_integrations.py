@@ -971,7 +971,7 @@ async def test_personal_search_selection_uses_effective_provider_options(
     )
     monkeypatch.setattr(
         api_routes_integrations,
-        "_load_scoped_tools",
+        "_load_tools",
         AsyncMock(return_value=tools),
     )
     monkeypatch.setattr(SettingsStore, "save", save)

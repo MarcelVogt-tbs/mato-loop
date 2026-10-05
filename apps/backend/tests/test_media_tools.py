@@ -121,7 +121,7 @@ def codex_edit_settings() -> tuple[AiSettings, ModelConfig]:
 
 def mock_settings_load(monkeypatch, tools: ToolSettings, ai: AiSettings) -> AsyncMock:
     async def load(_db, settings_type, **_kwargs):
-        return tools if settings_type is ToolSettings else ai
+        return tools if settings_type is ToolSettings else ai if settings_type is AiSettings else settings_type()
 
     mocked = AsyncMock(side_effect=load)
     monkeypatch.setattr(SettingsStore, "load", mocked)
@@ -688,7 +688,7 @@ async def test_policy_revocation_during_approval_stops_media_service(
     async def load(_db, settings_type, **_kwargs):
         if settings_type is AiSettings:
             return ai
-        return ask_settings
+        return ask_settings if settings_type is ToolSettings else settings_type()
 
     disabled_settings = ToolSettings(
         private_permissions={"policies": {"media.generate.image": "disabled"}},

@@ -4,11 +4,11 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Tools</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Technische Verfügbarkeit, Netzwerkgrenzen und Zeitlimits verwalten. Rechte werden in Agentenprofilen festgelegt.
+          {{ admin ? 'Globale Tool-Defaults und Vorgaben der eingebauten Profile verwalten.' : 'Tool-Rechte der eigenen Agentenprofile anpassen.' }}
         </p>
       </div>
       <q-btn
-        v-if="auth.isAdmin"
+        v-if="canEdit"
         color="primary" unelevated no-caps icon="save" label="Speichern"
         :loading="saving"
         :disable="loading || !dirty"
@@ -16,9 +16,20 @@
       />
     </header>
 
-    <q-banner v-if="!auth.isAdmin" rounded class="app-surface-tonal">
+    <q-tabs v-if="admin" :model-value="section" dense no-caps align="left" active-color="primary" indicator-color="primary" class="q-mb-lg" @update:model-value="selectSection">
+      <q-tab name="general" icon="settings" label="Einstellungen" />
+      <q-tab name="management" icon="build" label="Verwaltung" />
+    </q-tabs>
+
+    <q-select
+      v-if="showManagement"
+      :model-value="selectedId" outlined emit-value map-options label="Agentenprofil"
+      class="q-mb-md" :options="profileOptions" :disable="loading || saving"
+      :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" @update:model-value="selectProfile"
+    />
+    <q-banner v-if="!canEdit && !loading" rounded class="app-surface-tonal">
       <template #avatar><q-icon name="admin_panel_settings" color="primary" /></template>
-      Technische Tool-Einstellungen können nur von Administratoren geändert werden.
+      {{ !allowed ? 'Persönliche Tool-Rechte wurden für diese Instanz deaktiviert.' : 'Erstelle zuerst ein persönliches Agentenprofil.' }}
     </q-banner>
 
     <q-banner v-else-if="loadFailed" rounded class="bg-negative text-white q-mb-md">
@@ -27,8 +38,26 @@
       <template #action><q-btn flat no-caps color="white" label="Erneut laden" @click="load" /></template>
     </q-banner>
 
-    <q-form v-else-if="auth.isAdmin" ref="formRef" @submit.prevent="save">
-      <q-card v-for="group in form.groups" :key="group.id" flat class="app-surface q-mb-md">
+    <q-form v-else-if="canEdit" ref="formRef" @submit.prevent="save">
+      <PersonalSettingsGate v-if="admin && section === 'general'" v-model="form.personalSettingsEnabled" title="Tool-Rechte für persönliche Agentenprofile anpassen erlauben" description="Benutzer können die Tool-Rechte ihrer eigenen Profile frei anpassen." :disabled="saving || loading" />
+      <template v-if="showManagement">
+      <q-banner rounded class="app-surface-tonal q-mb-md">
+        {{ selectedId ? 'Einzelne Werte können angepasst werden. Ohne eigenen Wert gilt die angezeigte Vorgabe.' : 'Berechtigungen sind Defaults. Ein technisch nicht verfügbares Tool kann durch Overrides nicht aktiviert werden.' }}
+      </q-banner>
+      <q-btn v-if="admin && selectedId" flat no-caps icon="restore" label="Tool-Rechte auf Standard zurücksetzen" class="q-mb-md" @click="resetPermissions" />
+      <PermissionFields v-model="form.permissions" :groups-by-trust="permissionGroups" />
+      <q-card flat class="app-surface q-mb-md">
+        <q-card-section>
+          <div class="text-subtitle1 text-weight-bold">Shell-Präfixe</div>
+          <q-select v-if="selectedId" v-model="form.shellCustom" outlined emit-value map-options label="Shell-Präfixe" :options="[{ label: 'Vom Basisprofil übernehmen', value: false }, { label: 'Eigene Werte', value: true }]" />
+          <div class="row q-col-gutter-md q-mt-sm">
+            <q-input v-model="form.shellRead" class="col-12 col-md-6" outlined type="textarea" autogrow label="Lesende Befehle" hint="Ein Präfix pro Zeile, z. B. git status." :disable="!form.shellCustom" />
+            <q-input v-model="form.shellWrite" class="col-12 col-md-6" outlined type="textarea" autogrow label="Schreibende Befehle" hint="Ein Präfix pro Zeile, z. B. npm install." :disable="!form.shellCustom" />
+          </div>
+        </q-card-section>
+      </q-card>
+      </template>
+      <q-card v-for="group in technicalGroups" :key="group.id" flat class="app-surface q-mb-md">
         <q-card-section class="row items-center q-gutter-md">
           <q-avatar color="primary" text-color="white" :icon="group.icon" />
           <div class="text-subtitle1 text-weight-bold">{{ group.label }}</div>
@@ -44,17 +73,17 @@
                   <div class="text-caption app-muted">{{ descriptions[tool.name] || tool.name }}</div>
                 </div>
               </div>
-              <q-toggle v-model="tool.available" class="col-12 col-sm-auto" color="primary" label="Verfügbar" />
+              <q-toggle v-if="showManagement" v-model="tool.available" class="col-12 col-sm-auto" color="primary" label="Verfügbar" />
             </div>
 
-            <div v-if="tool.name === 'webfetch'" class="row q-col-gutter-md q-mt-sm">
+            <div v-if="section === 'general' && tool.name === 'webfetch'" class="row q-col-gutter-md q-mt-sm">
               <q-toggle v-model="form.webFetch.publicAddressesOnly" class="col-12" color="primary" label="Nur öffentliche Adressen zulassen" />
               <q-input v-model.trim="form.webFetch.userAgent" class="col-12 col-md-8" outlined maxlength="512" label="User-Agent" :rules="[userAgentRule]" />
               <q-input v-model.number="form.webFetch.maxResponseMiB" class="col-12 col-md-4" outlined type="number" min="1" max="256" suffix="MiB" label="Maximale Antwortgröße" :rules="[responseLimitRule]" />
             </div>
 
             <q-input
-              v-if="mediaByName[tool.name]"
+              v-if="section === 'general' && mediaByName[tool.name]"
               v-model.number="form.timeouts[mediaByName[tool.name]].timeoutSeconds"
               class="q-mt-md"
               outlined type="number" min="10" max="3600" step="10"
@@ -70,19 +99,37 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { onBeforeRouteLeave } from 'vue-router'
+import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import { useConfirm } from 'src/composables/confirm'
 import { useAuthStore } from 'stores/auth'
 import { useToolSettingsStore } from 'stores/tool-settings'
+import { useAgentProfileStore } from 'stores/agent-profiles'
+import PermissionFields from './PermissionFields.vue'
+import PersonalSettingsGate from './PersonalSettingsGate.vue'
 
 defineOptions({ name: 'ToolSettingsPage' })
+const { admin } = defineProps({ admin: { type: Boolean, default: false } })
 
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const auth = useAuthStore()
+const agents = useAgentProfileStore()
+const route = useRoute()
 const tools = useToolSettingsStore()
+const selectedId = ref(route.query.profileId || null)
+const section = ref(route.query.profileId ? 'management' : 'general')
+const showManagement = computed(() => !admin || section.value === 'management')
+const permissionGroups = ref({ private: [], public: [] })
+const permissionsLoading = ref(false)
+let loadToken = 0
+const allowed = computed(() => admin || auth.isAdmin || (agents.personalAgentsEnabled && agents.personalToolPermissionsEnabled))
+const canEdit = computed(() => allowed.value && (admin || Boolean(selectedId.value)))
+const profileOptions = computed(() => [
+  ...(admin ? [{ label: 'Globaler Standard', value: null }] : []),
+  ...agents.manageableAgents.filter((agent) => admin ? agent.scope === 'instance' && agent.protected : agent.scope === 'personal').map((agent) => ({ label: agent.name, value: agent.id }))
+])
 const formRef = ref(null)
 const saving = ref(false)
 const loadFailed = ref(false)
@@ -130,16 +177,22 @@ const descriptions = {
   run_automation: 'Startet eine Automation sofort.',
   delete_automation: 'Löscht eine Automation samt Verlauf.'
 }
-const form = reactive({ groups: [], webFetch: {}, timeouts: {} })
+const emptyPermissions = () => ({ privatePermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} }, publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} } })
+const form = reactive({ groups: [], webFetch: {}, timeouts: {}, personalSettingsEnabled: false, permissions: emptyPermissions(), shellCustom: true, shellRead: '', shellWrite: '' })
+const technicalGroups = computed(() => !admin || selectedId.value ? [] : form.groups.map((group) => ({ ...group, tools: group.tools.filter((tool) => showManagement.value || tool.name === 'webfetch' || mediaByName[tool.name]) })).filter((group) => group.tools.length))
+const parsePrefixes = (value) => value.split('\n').map((line) => line.trim().split(/\s+/).filter(Boolean)).filter((tokens) => tokens.length)
 const payload = () => ({
-  configuration: {
+  ...form.permissions,
+  shellPrefixes: form.shellCustom ? { read: parsePrefixes(form.shellRead), write: parsePrefixes(form.shellWrite) } : null,
+  ...(!selectedId.value ? {
+    personalSettingsEnabled: form.personalSettingsEnabled,
     toolAvailability: Object.fromEntries(form.groups.flatMap((group) => group.tools.map((tool) => [tool.name, tool.available]))),
     webFetch: { ...form.webFetch },
     ...Object.fromEntries(Object.values(mediaByName).map((field) => [field, { ...form.timeouts[field] }]))
-  },
+  } : {})
 })
 const dirty = computed(() => Boolean(saved.value) && JSON.stringify(payload()) !== saved.value)
-const loading = computed(() => tools.loading || tools.configurationLoading)
+const loading = computed(() => tools.loading || tools.configurationLoading || permissionsLoading.value || agents.loading)
 const timeoutRule = (value) => Number.isInteger(value) && value >= 10 && value <= 3600 || '10 bis 3600 Sekunden eingeben.'
 const responseLimitRule = (value) => Number.isInteger(value) && value >= 1 && value <= 256 || '1 bis 256 MiB eingeben.'
 const userAgentRule = (value) => typeof value === 'string' && value.length >= 1 && value.length <= 512
@@ -147,25 +200,76 @@ const userAgentRule = (value) => typeof value === 'string' && value.length >= 1 
   || '1 bis 512 sichtbare ASCII-Zeichen eingeben.'
 
 async function load() {
-  if (!auth.isAdmin) return
+  if (route.query.profileId) section.value = 'management'
   loadFailed.value = false
+  selectedId.value = route.query.profileId || null
   try {
-    await tools.fetchConfiguration()
-    form.groups = tools.configurationGroups.map((group) => ({ ...group, tools: group.tools.map((tool) => ({ ...tool })) }))
-    form.webFetch = { ...tools.configurationWebFetch }
-    form.timeouts = Object.fromEntries(Object.values(mediaByName).map((field) => [field, { ...tools[field] }]))
-    saved.value = JSON.stringify(payload())
+    await agents.fetchAgents(admin ? 'instance' : 'personal')
+    if (!profileOptions.value.some((item) => item.value === selectedId.value)) selectedId.value = profileOptions.value[0]?.value || null
+    await loadPermissions()
   } catch {
     loadFailed.value = true
   }
+}
+
+async function loadPermissions() {
+  if (!canEdit.value) return
+  const token = ++loadToken
+  permissionsLoading.value = true
+  loadFailed.value = false
+  try {
+    const data = selectedId.value ? await tools.fetchProfilePermissions(selectedId.value, admin ? 'instance' : 'personal') : await tools.fetchConfiguration()
+    if (token !== loadToken) return
+    form.permissions = { privatePermissions: data.privatePermissions || emptyPermissions().privatePermissions, publicPermissions: data.publicPermissions || emptyPermissions().publicPermissions }
+    permissionGroups.value = data.groupsByTrust || { private: data.privateGroups, public: data.publicGroups }
+    const prefixes = data.shellPrefixes || data.inheritedShellPrefixes || { read: [], write: [] }
+    form.shellCustom = data.shellPrefixes !== null
+    form.shellRead = prefixes.read.map((item) => item.join(' ')).join('\n')
+    form.shellWrite = prefixes.write.map((item) => item.join(' ')).join('\n')
+    if (!selectedId.value) {
+      form.personalSettingsEnabled = data.personalSettingsEnabled
+      form.groups = tools.configurationGroups.map((group) => ({ ...group, tools: group.tools.map((tool) => ({ ...tool })) }))
+      form.webFetch = { ...tools.configurationWebFetch }
+      form.timeouts = Object.fromEntries(Object.values(mediaByName).map((field) => [field, { ...tools[field] }]))
+    }
+    saved.value = JSON.stringify(payload())
+  } catch { if (token === loadToken) loadFailed.value = true }
+  finally { if (token === loadToken) permissionsLoading.value = false }
+}
+
+async function selectProfile(id) {
+  if (!await confirmDiscardedChanges()) return
+  selectedId.value = id
+  await loadPermissions()
+}
+
+async function selectSection(value) {
+  if (value === 'general' && selectedId.value) {
+    if (!await confirmDiscardedChanges()) return
+    selectedId.value = null
+    await loadPermissions()
+  }
+  section.value = value
+}
+
+async function resetPermissions() {
+  if (!await confirm('Tool-Rechte dieses Profils auf die mitgelieferten Vorgaben zurücksetzen?', 'Tool-Rechte zurücksetzen?', { okLabel: 'Zurücksetzen' })) return
+  saving.value = true
+  try {
+    await tools.saveProfilePermissions(selectedId.value, 'instance', { ...emptyPermissions(), shellPrefixes: null })
+    await loadPermissions()
+    $q.notify({ type: 'positive', message: 'Tool-Rechte zurückgesetzt' })
+  } catch { /* Central API toast. */ }
+  finally { saving.value = false }
 }
 
 async function save() {
   if (!await formRef.value?.validate()) return
   saving.value = true
   try {
-    const value = payload()
-    await tools.saveConfiguration(value.configuration)
+    if (selectedId.value) await tools.saveProfilePermissions(selectedId.value, admin ? 'instance' : 'personal', payload())
+    else await tools.saveConfiguration(payload())
+    await loadPermissions()
     saved.value = JSON.stringify(payload())
     $q.notify({ type: 'positive', message: 'Tool-Einstellungen gespeichert' })
   } catch {
@@ -186,5 +290,6 @@ async function confirmDiscardedChanges() {
 }
 
 onMounted(load)
+watch(() => [admin, route.query.profileId], load)
 onBeforeRouteLeave(confirmDiscardedChanges)
 </script>

@@ -27,7 +27,7 @@ afterEach(() => {
 
 it('keeps global and personal lists and creation scopes separate when switching pages', async () => {
   api.get.mockImplementation((url, config) => {
-    if (url === '/providers/personal-policy') return Promise.resolve({ data: { personalProvidersEnabled: true } })
+    if (url === '/providers/personal-policy') return Promise.resolve({ data: { personalProvidersEnabled: false } })
     if (url === '/providers/codex/status') return Promise.resolve({ data: { authenticated: false } })
     if (url === '/providers' && config?.params?.scope === 'instance') return Promise.resolve({ data: {
       providers: [{ id: 'shared', name: 'Team', adapterType: 'openai-compatible', enabled: true, config: { baseUrl: 'https://team.example' } }],
@@ -59,20 +59,19 @@ it('keeps global and personal lists and creation scopes separate when switching 
   const providers = useProviderStore(pinia)
   for (const admin of [true, false]) {
     props.admin = admin
-    await vi.waitFor(() => expect(root.textContent).toContain(admin ? 'Team' : 'Privat'))
-    expect(root.textContent).not.toContain(admin ? 'Privat' : 'Team')
-    expect(root.textContent).not.toContain('Persönliche Provider')
     if (admin) {
       const tabs = [...root.querySelectorAll('[role="tab"]')]
-      tabs.find((tab) => tab.textContent.includes('Einstellungen')).click()
+      expect(tabs[0].textContent).toContain('Einstellungen')
       await vi.waitFor(() => expect(root.querySelector('[aria-label="Persönliche Provider erlauben"]')).not.toBeNull())
       expect(root.querySelector('.provider-card-list')).toBeNull()
       expect(root.textContent).not.toContain('Provider hinzufügen')
       tabs.find((tab) => tab.textContent.includes('Verwaltung')).click()
       await vi.waitFor(() => expect(root.textContent).toContain('Team'))
     } else {
-      expect(root.querySelector('[role="tab"]')).toBeNull()
+      await vi.waitFor(() => expect(root.querySelector('[role="tab"]')).toBeNull())
     }
+    await vi.waitFor(() => expect(root.textContent).toContain(admin ? 'Team' : 'Privat'))
+    expect(root.textContent).not.toContain(admin ? 'Privat' : 'Team')
     providers.selectScope(admin ? 'personal' : 'instance')
     const create = [...root.querySelectorAll('button')].find((button) => button.textContent.includes('Provider hinzufügen'))
     create.click()

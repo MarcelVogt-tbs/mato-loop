@@ -36,6 +36,12 @@ export const useToolSettingsStore = defineStore('tool-settings', {
     configurationSaveVersion: 0
   }),
   actions: {
+    async fetchProfilePermissions(id, scope) {
+      return (await api.get(`/tools/profiles/${id}/permissions`, { params: { scope } })).data
+    },
+    async saveProfilePermissions(id, scope, value) {
+      return (await api.put(`/tools/profiles/${id}/permissions`, value, { params: { scope } })).data
+    },
     async fetchAvailability() {
       const loadVersion = ++this.loadVersion
       this.loading = true

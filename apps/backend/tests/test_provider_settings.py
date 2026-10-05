@@ -1167,6 +1167,7 @@ async def test_personal_provider_read_includes_effective_selection_catalog(
         default_model_id=instance_model.id,
         title_generation_model_id=instance_model.id,
     )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=AiSettings(personal_providers_enabled=True)))
     monkeypatch.setattr(
         provider_routes, "_load_scoped_ai", AsyncMock(return_value=(personal, user.id))
     )

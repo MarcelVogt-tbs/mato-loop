@@ -4,7 +4,7 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Kanäle</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Persönliche Nachrichtenkanäle für Chats und Automationen verwalten.
+           {{ admin ? 'Kommunikationskanäle aktivieren und verfügbare Anbieter verwalten.' : 'Persönliche Nachrichtenkanäle für Chats und Automationen verwalten.' }}
         </p>
       </div>
       <q-btn
@@ -20,20 +20,6 @@
       />
     </header>
 
-    <q-tabs
-      v-if="auth.isAdmin"
-      v-model="section"
-      dense
-      no-caps
-      align="left"
-      active-color="primary"
-      indicator-color="primary"
-      class="q-mb-lg"
-    >
-      <q-tab name="instances" icon="settings" label="Kanalinstanzen" />
-      <q-tab name="catalog" icon="forum" label="Verfügbare Kanäle" />
-    </q-tabs>
-
     <q-banner v-if="channels.loadFailed" rounded class="app-surface-tonal q-mb-md">
       Die Kanäle konnten nicht geladen werden.
       <template #action>
@@ -41,7 +27,20 @@
       </template>
     </q-banner>
 
-    <q-card v-if="auth.isAdmin && section === 'catalog'" flat class="app-surface">
+    <q-tabs v-if="admin" v-model="section" dense no-caps align="left" active-color="primary" indicator-color="primary" class="q-mb-lg">
+      <q-tab name="general" icon="settings" label="Einstellungen" />
+      <q-tab name="management" icon="forum" label="Verwaltung" />
+    </q-tabs>
+
+    <q-card v-if="admin && section === 'general'" flat class="app-surface">
+      <q-card-section>
+        <q-toggle :model-value="channels.enabled" color="primary" label="Kommunikationskanäle aktivieren" :disable="channels.loading || channels.loadFailed || savingSettings" @update:model-value="setEnabled" />
+        <div class="text-caption app-muted q-mt-sm">Aktiviert Empfang und externe Zustellung für freigegebene Anbieter. Gilt für alle Benutzer einschließlich Administratoren.</div>
+      </q-card-section>
+    </q-card>
+
+    <q-card v-if="admin && section === 'management'" flat class="app-surface">
+      <q-card-section v-if="channels.loaded && !channels.enabled" class="text-caption app-muted">Kommunikationskanäle sind global deaktiviert. Die Anbieterfreigaben bleiben gespeichert.</q-card-section>
       <q-list separator>
         <q-item v-for="provider in channels.providers" :key="provider.provider" class="q-py-md">
           <q-item-section avatar>
@@ -56,7 +55,7 @@
               color="primary"
               label="Erlaubt"
               :aria-label="`${provider.label}: erlaubt`"
-              :disable="togglingProvider !== null"
+              :disable="channels.loading || channels.loadFailed || togglingProvider !== null"
               @update:model-value="setProviderAllowed(provider, $event)"
             />
           </q-item-section>
@@ -68,12 +67,12 @@
     </q-card>
 
     <template v-if="showInstances">
-      <q-card v-if="channels.loaded && !allowedProviders.length" flat class="app-surface q-pa-lg">
+      <q-card v-if="channels.loaded && (!channels.enabled || !allowedProviders.length)" flat class="app-surface q-pa-lg">
         <div class="row items-center no-wrap q-gutter-md">
           <q-avatar color="grey-7" text-color="white" icon="forum" />
           <div>
-            <div class="text-weight-medium">Keine Kanalanbieter freigegeben</div>
-            <div class="text-body2 app-muted">Vorhandene Kanäle bleiben gespeichert und werden wieder sichtbar, sobald ihr Anbieter erlaubt ist.</div>
+            <div class="text-weight-medium">{{ channels.enabled ? 'Keine Kanalanbieter freigegeben' : 'Kommunikationskanäle sind global deaktiviert' }}</div>
+            <div class="text-body2 app-muted">Vorhandene Kanäle bleiben gespeichert und werden wieder sichtbar, sobald Kommunikationskanäle und ihr Anbieter freigegeben sind.</div>
           </div>
         </div>
       </q-card>
@@ -141,31 +140,31 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ChannelConfigDialog from 'src/features/channels/ChannelConfigDialog.vue'
 import { useConfirm } from 'src/composables/confirm'
-import { useAuthStore } from 'stores/auth'
 import { useChannelStore } from 'stores/channels'
 
 defineOptions({ name: 'ChannelSettingsPage' })
+const { admin } = defineProps({ admin: { type: Boolean, default: false } })
 
 const $q = useQuasar()
 const { confirm } = useConfirm()
-const auth = useAuthStore()
 const channels = useChannelStore()
 const dialogOpen = ref(false)
 const selectedEndpoint = ref(null)
 const togglingProvider = ref(null)
+const savingSettings = ref(false)
+const section = ref('general')
 const testingId = ref(null)
 const pairingId = ref(null)
 const removingId = ref(null)
-const section = ref('instances')
 
 const allowedProviders = computed(() => channels.providers.filter((provider) => provider.allowed))
 const allowedProviderNames = computed(() => new Set(allowedProviders.value.map((provider) => provider.provider)))
-const canCreateChannel = computed(() => allowedProviders.value.length > 0)
-const showInstances = computed(() => !auth.isAdmin || section.value === 'instances')
+const canCreateChannel = computed(() => channels.enabled && allowedProviders.value.length > 0)
+const showInstances = computed(() => !admin)
 const visibleEndpoints = computed(() => channels.endpoints.filter(
   (endpoint) => allowedProviderNames.value.has(endpoint.provider)
 ))
@@ -219,6 +218,23 @@ async function setProviderAllowed(provider, allowed) {
   }
 }
 
+async function setEnabled(enabled) {
+  if (!enabled && !await confirm(
+    'Kommunikationskanäle global deaktivieren? Bereits wartende externe Zustellungen werden beendet. Persönliche Kanäle und Anbieterfreigaben bleiben gespeichert.',
+    'Kommunikationskanäle deaktivieren',
+    { okLabel: 'Deaktivieren' }
+  )) return
+  savingSettings.value = true
+  try {
+    await channels.setEnabled(enabled)
+    $q.notify({ type: 'positive', message: 'Kanaleinstellungen gespeichert' })
+  } catch {
+    // The central Axios interceptor displays the error.
+  } finally {
+    savingSettings.value = false
+  }
+}
+
 async function testEndpoint(endpoint) {
   testingId.value = endpoint.id
   try {
@@ -264,11 +280,12 @@ async function removeEndpoint(endpoint) {
 
 async function load() {
   try {
-    await channels.fetchAll()
+    await channels.fetchAll(undefined, !admin)
   } catch {
     // The central Axios interceptor displays the error.
   }
 }
 
 onMounted(() => void load())
+watch(() => admin, load)
 </script>

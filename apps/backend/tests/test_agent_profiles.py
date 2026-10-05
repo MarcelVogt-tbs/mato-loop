@@ -7,21 +7,18 @@ import pytest
 from pydantic import ValidationError
 
 from mato_loop_backend.api.errors import ApiError
+from mato_loop_backend.api.permission_settings import _validate_permissions
 from mato_loop_backend.api.routes import agent_profiles as agent_profiles_module
 from mato_loop_backend.api.routes.agent_profiles import (
     AgentProfileRequest,
-    _catalog_integration_policies,
     _ensure_unique_name,
     _profile_from_request,
     _profile_payload,
-    _validate_permissions,
-    agent_profile_integration_metadata,
     delete_agent_profile,
     list_agent_profiles,
     set_agent_profile_enabled,
     update_agent_profile,
 )
-from mato_loop_backend.integrations.contracts import IntegrationResource
 from mato_loop_backend.integrations.tbs_desk.adapter import profile_id as tbs_profile_id
 from mato_loop_backend.models import ChatSession, UserAccount
 from mato_loop_backend.settings import (
@@ -46,8 +43,6 @@ from mato_loop_backend.settings import (
     load_effective_agent_profiles,
     resolve_agent_profile,
 )
-from mato_loop_backend.tools.actions import ToolAction
-from mato_loop_backend.tools.catalog import tool_registry
 
 
 def test_builtin_agent_profile_defaults() -> None:
@@ -62,7 +57,7 @@ def test_builtin_agent_profile_defaults() -> None:
     ]
     assert [profile.name for profile in profiles] == ["Allgemein", "Plan", "Build", "Sysadmin"]
     assert AgentProfilesSettings().profiles == []
-    assert default.persona_id is None
+    assert "persona_id" not in type(default).model_fields
     assert default.private_permissions == AgentProfilePermissions()
     assert default.public_permissions == AgentProfilePermissions()
     assert plan.private_permissions == plan.public_permissions
@@ -211,7 +206,7 @@ async def test_custom_profile_switch_is_owner_scoped_and_shipped_profiles_stay_e
             GENERAL_PROFILE_ID, agent_profiles_module.EnabledRequest(enabled=False), user, db,
             scope="instance",
         )
-    load_scoped.assert_awaited_once()
+    assert load_scoped.await_count == 2
 
 
 async def test_disabled_profile_stays_resolvable_for_an_active_run(monkeypatch) -> None:
@@ -690,8 +685,10 @@ def test_builtin_access_documents_are_sparse_and_restrict_fields() -> None:
 
 
 async def test_builtin_access_update_validates_and_can_reset(monkeypatch) -> None:
-    from mato_loop_backend.api.routes.agent_profiles import update_builtin_access
-    from mato_loop_backend.settings.models import AgentProfileAccessOverrides
+    from mato_loop_backend.api.routes.tool_settings import (
+        ProfileToolPermissionsRequest,
+        update_profile_tool_permissions,
+    )
 
     settings = AgentProfilesSettings()
     user = UserAccount(id=uuid4(), username="admin", password_hash="hash", is_admin=True)
@@ -701,24 +698,21 @@ async def test_builtin_access_update_validates_and_can_reset(monkeypatch) -> Non
     monkeypatch.setattr(SettingsStore, "save", save)
     monkeypatch.setattr("mato_loop_backend.api.routes.agent_profiles._response", AsyncMock(return_value={}))
     db = AsyncMock()
-    await update_builtin_access(PLAN_PROFILE_ID, AgentProfileAccessOverrides(
+    await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(
         privatePermissions={"policies": {"filesystem.read": "ask"}}), user, db, scope="instance")
     assert settings.builtin_access_overrides[PLAN_PROFILE_ID].private_permissions.policies["filesystem.read"] == ToolExecutionPolicy.ASK
     with pytest.raises(ApiError):
-        await update_builtin_access(PLAN_PROFILE_ID, AgentProfileAccessOverrides(
-            integrationAvailability={str(uuid4()): True}), user, db, scope="instance")
-    with pytest.raises(ApiError):
-        await update_builtin_access(PLAN_PROFILE_ID, AgentProfileAccessOverrides(
+        await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(
             privatePermissions={"policies": {"unknown.action": "auto"}}), user, db, scope="instance")
-    await update_builtin_access(PLAN_PROFILE_ID, AgentProfileAccessOverrides(), user, db, scope="instance")
-    assert not settings.builtin_access_overrides
+    await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(), user, db, scope="instance")
+    assert not settings.builtin_access_overrides[PLAN_PROFILE_ID].model_fields_set
     assert save.await_count == 2
     user.is_admin = False
     with pytest.raises(ApiError, match="auth.adminRequired"):
-        await update_builtin_access(PLAN_PROFILE_ID, AgentProfileAccessOverrides(), user, db, scope="instance")
+        await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(), user, db, scope="instance")
     settings.personal_agents_enabled = False
-    with pytest.raises(ApiError, match="agentProfile.defaultProtected"):
-        await update_builtin_access(PLAN_PROFILE_ID, AgentProfileAccessOverrides(), user, db, scope="personal")
+    with pytest.raises(ApiError, match="agentProfile.personalDisabled"):
+        await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(), user, db, scope="personal")
 
 
 async def test_integration_profiles_remain_available_when_personal_profiles_are_disabled(
@@ -753,14 +747,12 @@ async def test_integration_profiles_remain_available_when_personal_profiles_are_
     assert profile.editable is False
 
 
-def test_agent_profile_permissions_reject_unknown_or_disallowed_capabilities() -> None:
+def test_tool_permissions_reject_unknown_or_disallowed_capabilities() -> None:
     allowed = {"filesystem.read": {ToolExecutionPolicy.AUTO}}
 
     _validate_permissions(
         AgentProfilePermissions(policies={"filesystem.read": "auto"}),
         allowed,
-        {},
-        set(),
         "privatePermissions",
     )
 
@@ -768,84 +760,23 @@ def test_agent_profile_permissions_reject_unknown_or_disallowed_capabilities() -
         _validate_permissions(
             AgentProfilePermissions(policies={"filesystem.read": "ask"}),
             allowed,
-            {},
-            set(),
             "publicPermissions",
         )
     with pytest.raises(ApiError):
         _validate_permissions(
             AgentProfilePermissions(policies={"unknown.action": "auto"}),
             allowed,
-            {},
-            set(),
             "publicPermissions",
         )
 
 
-def test_agent_profile_permissions_preserve_unavailable_existing_capabilities() -> None:
-    permissions = AgentProfilePermissions(policies={"mail.read": "ask"})
-
-    _validate_permissions(
-        permissions,
-        {},
-        {},
-        set(),
-        "privatePermissions",
-        permissions,
-    )
-
-
-def test_agent_profile_permissions_accept_scoped_only_grants() -> None:
-    integration_id = str(uuid4())
-
-    _validate_permissions(
-        AgentProfilePermissions(
-            integration_policies={integration_id: {"mail.read": "ask"}}
-        ),
-        {"mail.read": {ToolExecutionPolicy.ASK}},
-        {integration_id: {"mail.read": {ToolExecutionPolicy.ASK}}},
-        {integration_id},
-        "privatePermissions",
-    )
-
-
-def test_agent_profile_catalog_maps_shared_tools_to_every_integration() -> None:
-    first = str(uuid4())
-    second = str(uuid4())
-
-    result = _catalog_integration_policies(
-        [
-            {
-                "tools": [
-                    {
-                        "source": {"id": None, "ids": [first, second]},
-                        "actions": [
-                            {
-                                "capability": "calendar.read",
-                                "configurable": True,
-                                "allowedPolicies": ["disabled", "ask"],
-                            }
-                        ],
-                    }
-                ]
-            }
-        ]
-    )
-
-    assert set(result) == {first, second}
-    assert result[first]["calendar.read"] == {
-        ToolExecutionPolicy.DISABLED,
-        ToolExecutionPolicy.ASK,
-    }
-
-    with pytest.raises(ApiError):
+@pytest.mark.parametrize("field", ["integration_policies", "resource_policies"])
+def test_tool_permissions_reject_scoped_overrides(field) -> None:
+    policies = {"mail.read": "ask"} if field == "integration_policies" else {"account": {"mail.read": "ask"}}
+    with pytest.raises(ApiError, match="validation.invalidChoice"):
         _validate_permissions(
-            AgentProfilePermissions(
-                integration_policies={first: {"calendar.read": "auto"}}
-            ),
-            {},
-            result,
-            {first, second},
+            AgentProfilePermissions.model_validate({field: {str(uuid4()): policies}}),
+            {"mail.read": {ToolExecutionPolicy.ASK}},
             "privatePermissions",
         )
 
@@ -861,12 +792,9 @@ def test_agent_profile_request_rejects_blank_trimmed_text() -> None:
             overrides={"instructions": "  "},
         )
 
-    persona_id = uuid4()
-    request = AgentProfileRequest(
-        name="Agent", description="", baseProfileId=GENERAL_PROFILE_ID,
-        overrides={"personaId": persona_id},
-    )
-    assert request.overrides.persona_id == persona_id
+    with pytest.raises(ValidationError):
+        AgentProfileRequest(name="Agent", description="", baseProfileId=GENERAL_PROFILE_ID,
+                            overrides={"personaId": uuid4()})
 
 
 async def test_agent_profile_request_replaces_sparse_overrides(monkeypatch) -> None:
@@ -874,11 +802,10 @@ async def test_agent_profile_request_replaces_sparse_overrides(monkeypatch) -> N
         return settings_type()
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
-    persona_id = uuid4()
     existing = CustomAgentProfile(
         name="Agent", description="Old", baseProfileId=GENERAL_PROFILE_ID,
         enabled=False,
-        overrides={"personaId": persona_id, "instructions": "Old task", "answerDisplay": "timeline"},
+        overrides={"instructions": "Old task", "answerDisplay": "timeline"},
     )
     user = UserAccount(
         id=uuid4(), username="admin", password_hash="hash", is_admin=True
@@ -901,62 +828,3 @@ async def test_agent_profile_request_replaces_sparse_overrides(monkeypatch) -> N
     assert updated.description == "New"
     assert updated.enabled is False
     assert updated.overrides.model_dump(exclude_unset=True) == {"instructions": "New task"}
-
-
-async def test_agent_profile_integration_metadata_lists_actions_and_resources(
-    monkeypatch,
-) -> None:
-    integration = IntegrationInstance(
-        name="Kalender",
-        integration_type="calendar",
-        adapter_type="caldav",
-        config={"base_url": "https://calendar.example.com", "username": "test"},
-    )
-    profiles = AgentProfilesSettings()
-    integrations = IntegrationSettings(instances=[integration])
-    tools = ToolSettings(
-        policies={"calendar.read": ToolExecutionPolicy.AUTO},
-        integration_policies={
-            str(integration.id): {"calendar.read": ToolExecutionPolicy.ASK}
-        },
-    )
-
-    async def load_settings(_db, settings_type, **_kwargs):
-        if settings_type is IntegrationSettings:
-            return integrations
-        if settings_type is ToolSettings:
-            return tools
-        return profiles
-
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
-    monkeypatch.setattr(
-        agent_profiles_module,
-        "_integration_resources",
-        AsyncMock(return_value=(IntegrationResource("calendar:work", "Arbeit"),)),
-    )
-    monkeypatch.setattr(
-        tool_registry,
-        "integration_resource_actions",
-        lambda _instance: (
-            ToolAction(
-                "calendar.read",
-                "Kalender lesen",
-                ToolExecutionPolicy.ASK,
-                ToolExecutionPolicy.ASK,
-            ),
-        ),
-    )
-
-    result = await agent_profile_integration_metadata(
-        integration.id,
-        UserAccount(
-            id=uuid4(), username="admin", password_hash="hash", is_admin=True
-        ),
-        AsyncMock(),
-        scope="instance",
-    )
-
-    assert result["actions"][0]["capability"] == "calendar.read"
-    assert result["actions"][0]["effectiveIntegrationPolicy"] == "ask"
-    assert result["resources"][0]["key"] == "calendar:work"
-    assert result["resources"][0]["effectivePolicies"]["calendar.read"] == "ask"

@@ -21,6 +21,7 @@ import mato_loop_backend.api.integration_resources as api_integration_resources
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.integration_access import IntegrationSettingsDocument, SettingsApiScope
 from mato_loop_backend.api.integration_resources import ToolSettingsDocument, logger
+from mato_loop_backend.api.permission_settings import _load_profile_access
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.execution import ExecutionClient, ExecutionClientError
 from mato_loop_backend.execution.manager import execution_agent_connections
@@ -88,7 +89,11 @@ from mato_loop_backend.integrations.search import (
 )
 from mato_loop_backend.integrations.searxng.client import search_with_provider
 from mato_loop_backend.integrations.searxng.service import SearchIntegrationService
-from mato_loop_backend.integrations.service import IntegrationSettingsError, save_search_selection
+from mato_loop_backend.integrations.service import (
+    IntegrationSettingsError,
+    _load_tools,
+    save_search_selection,
+)
 from mato_loop_backend.integrations.sonobin.service import SonoBinIntegrationService
 from mato_loop_backend.models import ExecutionAgent, UserAccount
 from mato_loop_backend.security import load_credential, read_credential, require_admin, require_user
@@ -99,12 +104,22 @@ from mato_loop_backend.settings import (
     SettingsStore,
     ToolSettings,
     UserIntegrationSettings,
-    UserToolSettings,
     WebSearchToolSettings,
     load_effective_integrations,
     load_effective_tools,
 )
-from mato_loop_backend.settings.effective import personal_integration_tool_settings
+from mato_loop_backend.settings.effective import (
+    apply_integration_permissions,
+    load_effective_agent_profiles,
+)
+from mato_loop_backend.settings.models import (
+    AgentProfileAccessOverrides,
+    AgentProfileOverrides,
+    AgentProfilesSettings,
+    IntegrationPermissions,
+    TrustLevel,
+)
+from mato_loop_backend.tools.catalog import tool_registry
 
 router = APIRouter(prefix="/integrations", dependencies=[Depends(require_user)])
 
@@ -113,23 +128,6 @@ class EnabledRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
-
-
-async def _load_scoped_tools(
-    db: AsyncSession,
-    owner_id: UUID | None,
-    *,
-    for_update: bool = False,
-) -> ToolSettingsDocument:
-    if owner_id is None:
-        return await SettingsStore.load(db, ToolSettings, for_update=for_update)
-    personal = await SettingsStore.load_optional(
-        db, UserToolSettings, user_id=owner_id, for_update=for_update
-    )
-    if personal is not None:
-        return personal
-    instance = await SettingsStore.load(db, ToolSettings)
-    return personal_integration_tool_settings(instance)
 
 
 class SearchIntegrationRequest(BaseModel):
@@ -812,7 +810,7 @@ async def get_search_integrations(
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
 ) -> dict:
     settings, owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
-    tools = await _load_scoped_tools(db, owner_id)
+    tools = await _load_tools(db, owner_id)
     available_settings = (
         await load_effective_integrations(db, owner_id)
         if owner_id is not None
@@ -836,7 +834,7 @@ async def update_search_selection(
         if owner_id is not None
         else settings
     )
-    tools = await _load_scoped_tools(db, owner_id, for_update=True)
+    tools = await _load_tools(db, owner_id, for_update=True)
     try:
         await save_search_selection(db, owner_id, payload, available_settings, tools)
     except IntegrationSettingsError as exc:
@@ -1723,8 +1721,153 @@ async def get_integration_access(
         db, scope, user, adapter_type=instance.adapter_type
     )
     resources = await api_integration_resources._integration_resources(db, instance)
-    tools = await load_effective_tools(db, owner_id) if owner_id is not None else await _load_scoped_tools(db, owner_id)
+    tools = await load_effective_tools(db, owner_id) if owner_id is not None else await _load_tools(db, owner_id)
     return _default_resources_payload(instance, resources, tools)
+
+
+class ProfileIntegrationAvailabilityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    integrations_enabled_by_default: bool | None = Field(default=None, alias="integrationsEnabledByDefault")
+    integration_availability: dict[str, bool] = Field(default_factory=dict, alias="integrationAvailability")
+
+
+@router.get("/profiles/{profile_id}/availability")
+async def get_profile_integration_availability(
+    profile_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "personal",
+) -> dict:
+    _, _, overrides, baseline, _ = await _load_profile_access(db, user, profile_id, scope)
+    return {
+        "integrationsEnabledByDefault": overrides.integrations_enabled_by_default,
+        "integrationAvailability": overrides.integration_availability or {},
+        "inheritedIntegrationsEnabledByDefault": baseline.integrations_enabled_by_default,
+        "inheritedIntegrationAvailability": baseline.integration_availability,
+    }
+
+
+@router.put("/profiles/{profile_id}/availability")
+async def update_profile_integration_availability(
+    profile_id: UUID,
+    payload: ProfileIntegrationAvailabilityRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "personal",
+) -> dict:
+    settings, owner_id, overrides, _, _ = await _load_profile_access(db, user, profile_id, scope, for_update=True)
+    integrations = await load_effective_integrations(db, user.id) if owner_id is not None else await SettingsStore.load(db, IntegrationSettings)
+    if set(payload.integration_availability) - {str(item.id) for item in integrations.instances}:
+        raise ApiError(422, "validation.invalidChoice", field="integrationAvailability")
+    values = overrides.model_dump(exclude_unset=True, exclude={"integrations_enabled_by_default", "integration_availability"})
+    if payload.integrations_enabled_by_default is not None:
+        values["integrations_enabled_by_default"] = payload.integrations_enabled_by_default
+    if payload.integration_availability:
+        values["integration_availability"] = payload.integration_availability
+    if isinstance(settings, AgentProfilesSettings):
+        settings.builtin_access_overrides[profile_id] = AgentProfileAccessOverrides.model_validate(values)
+    else:
+        next(item for item in settings.profiles if item.id == profile_id).overrides = AgentProfileOverrides.model_validate(values)
+    await SettingsStore.save(db, settings, user_id=owner_id)
+    await db.commit()
+    return await get_profile_integration_availability(profile_id, user, db, scope)
+
+
+async def _permission_instance(db, user, scope, integration_id, *, for_update=False):
+    settings, owner_id = await api_integration_access._load_scoped_integrations(db, scope, user, for_update=for_update)
+    instance = api_integration_access._integration(settings, integration_id)
+    if instance is None:
+        raise ApiError(404, "integration.notFound")
+    await api_integration_access._load_scoped_integrations(db, scope, user, adapter_type=instance.adapter_type)
+    return settings, owner_id, instance
+
+
+@router.get("/{integration_id}/permissions")
+async def get_integration_permissions(
+    integration_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "personal",
+    profile_id: UUID | None = None,
+) -> dict:
+    _settings, owner_id, instance = await _permission_instance(db, user, scope, integration_id)
+    if profile_id is not None and owner_id is None:
+        raise ApiError(422, "validation.invalidChoice", field="profileId")
+    profiles = await load_effective_agent_profiles(db, user.id, include_integrations=False)
+    if profile_id is not None and not any(item.id == profile_id for item in profiles.profiles):
+        raise ApiError(404, "agentProfile.notFound")
+    actions = tool_registry.integration_resource_actions(instance)
+    resources = await api_integration_resources._integration_resources(db, instance) if actions else ()
+    tools = ToolSettings()
+    only = IntegrationSettings(instances=[instance])
+    if profile_id is not None:
+        apply_integration_permissions(tools, only)
+    inherited = {
+        trust.value: api_integration_resources._access_payload(instance, resources, tools.model_copy(deep=True).select_trust(trust))
+        for trust in TrustLevel
+    } if actions else {}
+    configured = instance.profile_permissions.get(profile_id, IntegrationPermissions()) if profile_id is not None else instance.permissions
+    profile = next((item for item in profiles.profiles if item.id == profile_id), None)
+    return {
+        "integrationId": str(instance.id), "name": instance.name, "providerType": instance.adapter_type,
+        "permissions": configured.model_dump(mode="json", by_alias=True),
+        "inherited": inherited,
+        "inheritedAvailable": profile.integration_availability.get(str(instance.id), profile.integrations_enabled_by_default) if profile is not None else True,
+        "profiles": [{"id": str(item.id), "name": item.name, "scope": "personal" if item.owner_id == user.id else "instance"} for item in profiles.profiles] if owner_id is not None else [],
+    }
+
+
+@router.put("/{integration_id}/permissions")
+async def update_integration_permissions(
+    integration_id: UUID,
+    payload: IntegrationPermissions,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "personal",
+    profile_id: UUID | None = None,
+) -> dict:
+    _settings, owner_id, instance = await _permission_instance(db, user, scope, integration_id)
+    if profile_id is not None:
+        if owner_id is None:
+            raise ApiError(422, "validation.invalidChoice", field="profileId")
+        profiles = await load_effective_agent_profiles(db, user.id, include_integrations=False)
+        if not any(item.id == profile_id for item in profiles.profiles):
+            raise ApiError(404, "agentProfile.notFound")
+    elif payload.available is not None:
+        raise ApiError(422, "validation.invalidChoice", field="available")
+    actions = tool_registry.integration_resource_actions(instance)
+    allowed = {action.capability: set(action.allowed_policies) for action in actions}
+    resources = await api_integration_resources._integration_resources(db, instance) if actions else ()
+    resource_by_key = {item.key: item for item in resources}
+    existing = instance.profile_permissions.get(profile_id, IntegrationPermissions()) if profile_id is not None else instance.permissions
+    for field in ("private_permissions", "public_permissions"):
+        branch = getattr(payload, field)
+        old = getattr(existing, field)
+        for key, policies in [(None, branch.policies), *branch.resource_policies.items()]:
+            previous = old.policies if key is None else old.resource_policies.get(key, {})
+            if any((capability not in allowed or policy not in allowed[capability]) and previous.get(capability) != policy for capability, policy in policies.items()):
+                raise ApiError(422, "validation.invalidChoice", field=field)
+        for key, policies in branch.resource_policies.items():
+            resource = resource_by_key.get(key)
+            if (resource is None and old.resource_policies.get(key) != policies) or resource is not None and any(
+                resource.applicable_capabilities is not None and capability not in resource.applicable_capabilities
+                for capability in policies
+            ):
+                raise ApiError(422, "validation.invalidChoice", field=field)
+    revision = instance.model_dump(mode="json")
+    settings, current_owner, current = await _permission_instance(db, user, scope, integration_id, for_update=True)
+    if current_owner != owner_id or current.model_dump(mode="json") != revision:
+        raise ApiError(409, "integration.changed")
+    if profile_id is None:
+        current.permissions = payload
+    elif payload.available is not None or any(branch.policies or branch.resource_policies for branch in (payload.private_permissions, payload.public_permissions)):
+        current.profile_permissions[profile_id] = payload
+    else:
+        current.profile_permissions.pop(profile_id, None)
+    await SettingsStore.save(db, settings, user_id=owner_id)
+    await db.commit()
+    return await get_integration_permissions(integration_id, user, db, scope, profile_id)
 
 
 @router.put("/{integration_id}/access")
@@ -1758,7 +1901,7 @@ async def update_integration_access(
         raise ApiError(404, "integration.notFound")
     if current.model_dump(mode="json") != revision:
         raise ApiError(409, "integration.changed")
-    tools = await _load_scoped_tools(db, owner_id, for_update=True)
+    tools = await _load_tools(db, owner_id, for_update=True)
     try:
         await save_caldav_defaults(
             db, owner_id, current, resources, tools,

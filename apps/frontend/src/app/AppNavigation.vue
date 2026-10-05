@@ -224,8 +224,8 @@
 
           <q-menu anchor="top right" self="bottom right" :offset="[0, 8]" class="app-user-popup app-action-menu">
             <q-list padding>
+              <SidebarNavItem v-if="auth.isAdmin" icon="admin_panel_settings" label="Administration" :to="{ name: 'admin' }" v-close-popup @click="closeDrawerOnMobile" />
               <SidebarNavItem icon="tune" label="Einstellungen" to="/settings" v-close-popup @click="closeDrawerOnMobile" />
-              <SidebarNavItem v-if="auth.isAdmin" icon="admin_panel_settings" label="Administration" :to="{ name: 'admin-users' }" v-close-popup @click="closeDrawerOnMobile" />
               <SidebarNavItem icon="manage_accounts" label="Konto" v-close-popup @click="openAccountDialog" />
               <SidebarNavItem :icon="$q.dark.isActive ? 'light_mode' : 'dark_mode'" :label="$q.dark.isActive ? 'Heller Modus' : 'Dunkler Modus'" v-close-popup @click="$q.dark.toggle()" />
               <SidebarNavItem icon="menu_book" label="Dokumentation" href="/docs/" target="_blank" rel="noopener noreferrer" v-close-popup />

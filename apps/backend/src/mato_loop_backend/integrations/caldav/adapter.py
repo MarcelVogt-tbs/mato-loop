@@ -40,8 +40,6 @@ from mato_loop_backend.settings import (
     IntegrationInstance,
     SettingsStore,
     ToolExecutionPolicy,
-    ToolSettings,
-    UserToolSettings,
 )
 from mato_loop_backend.tools.actions import ApprovalEditField, ToolAction
 from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
@@ -455,7 +453,7 @@ def _binding(context: Any, integration_id: UUID) -> tuple[IntegrationInstance, s
         None,
     )
     if instance is None or json.dumps(
-        instance.model_dump(mode="json"),
+        instance.binding_data(),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
@@ -933,20 +931,9 @@ async def _remember_resource_labels(
         if item.id == integration_id
     )
     owner_id = integration.owner_id
-    if owner_id is None:
-        tools = await SettingsStore.load(context.db, ToolSettings, for_update=True)
-    else:
-        tools = await SettingsStore.load_optional(
-            context.db, UserToolSettings, user_id=owner_id, for_update=True
-        )
-        if tools is None:
-            instance_tools = await SettingsStore.load(context.db, ToolSettings)
-            tools = UserToolSettings.model_validate(
-                {
-                    **instance_tools.model_dump(exclude={"personal_settings_enabled"}),
-                    "personal_tool_defaults_enabled": False,
-                }
-            )
+    from mato_loop_backend.integrations.service import _load_tools
+
+    tools = await _load_tools(context.db, owner_id, for_update=True)
     key = str(integration_id)
     if tools.resource_labels.get(key, {}) != labels:
         if labels:

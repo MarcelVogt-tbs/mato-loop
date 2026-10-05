@@ -59,6 +59,7 @@ def test_web_push_settings_validate_contact_email() -> None:
     assert InstanceLimits().max_extracted_characters == 5_000_000
     assert ChannelSettings.settings_key == "channels"
     assert ChannelSettings().allowed_providers == {"telegram"}
+    assert ChannelSettings().enabled is False
 
 
 @pytest.mark.parametrize("value", ["https://user:secret@example.test", "https://example.test/path", "https://example.test?key=secret", 123])

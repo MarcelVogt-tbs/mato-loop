@@ -24,7 +24,6 @@
     </header>
 
     <q-tabs
-      v-if="auth.isAdmin"
       v-model="section"
       dense
       no-caps
@@ -33,11 +32,13 @@
       indicator-color="primary"
       class="q-mb-lg"
     >
-      <q-tab name="instances" icon="settings" label="Integrationsinstanzen" />
-      <q-tab name="catalog" icon="extension" label="Verfügbare Integrationen" />
+      <q-tab name="general" icon="settings" label="Einstellungen" />
+      <q-tab name="management" icon="extension" label="Verwaltung" />
     </q-tabs>
 
-    <template v-if="auth.isAdmin && section === 'catalog'">
+    <q-banner v-if="route.query.profileId && !agents.loading && (!profileAssignmentsAllowed || !profileOptions.some((profile) => profile.value === route.query.profileId))" rounded class="app-surface-tonal q-mb-md">Die Profilzuordnungen für diesen Agenten sind hier nicht verfügbar.</q-banner>
+
+    <template v-if="admin && section === 'general'">
       <q-banner v-if="integrations.catalogLoadFailed" rounded class="app-surface-tonal q-mb-md">
         Die verfügbaren Integrationen konnten nicht geladen werden.
         <template #action>
@@ -123,9 +124,9 @@
       </template>
     </q-banner>
 
-    <q-card v-if="showInstances" flat class="app-surface q-mb-md">
+    <q-card v-if="section === 'general'" flat class="app-surface q-mb-md">
       <q-card-section>
-        <div class="text-subtitle1 text-weight-bold">Persönliche Suchprovider</div>
+        <div class="text-subtitle1 text-weight-bold">{{ admin ? 'Globale Suchprovider' : 'Persönliche Suchprovider' }}</div>
         <div class="text-body2 app-muted q-mt-xs">
           Primären Dienst und optionalen Fallback für die Websuche auswählen.
         </div>
@@ -134,7 +135,7 @@
       <q-card-section class="row q-col-gutter-md">
         <div class="col-12 col-md-6">
           <q-select
-            :model-value="personalSearch.primaryProvider"
+            :model-value="searchSelection.primaryProvider"
             outlined
             emit-value
             map-options
@@ -148,7 +149,7 @@
         </div>
         <div class="col-12 col-md-6">
           <q-select
-            :model-value="personalSearch.fallbackProvider"
+            :model-value="searchSelection.fallbackProvider"
             outlined
             emit-value
             map-options
@@ -165,11 +166,19 @@
       </q-card-section>
     </q-card>
 
-    <q-card v-if="showInstances && auth.isAdmin" flat class="app-surface q-mb-md">
-      <q-card-section class="text-subtitle1 text-weight-bold">Globale Suchprovider</q-card-section>
-      <q-card-section class="row q-col-gutter-md">
-        <q-select :model-value="instanceSearch.primaryProvider" class="col-12 col-md-6" outlined emit-value map-options label="Primärprovider" :options="instanceSearch.providerOptions.map((item) => ({ label: item.name, value: item.value }))" :disable="searchSelectionSaving" @update:model-value="saveInstanceSearch($event, instanceSearch.fallbackProvider === $event ? null : instanceSearch.fallbackProvider)" />
-        <q-select :model-value="instanceSearch.fallbackProvider" class="col-12 col-md-6" outlined clearable emit-value map-options label="Fallback-Provider" :options="instanceSearch.providerOptions.filter((item) => item.value !== instanceSearch.primaryProvider).map((item) => ({ label: item.name, value: item.value }))" :disable="searchSelectionSaving" @update:model-value="saveInstanceSearch(instanceSearch.primaryProvider, $event)" />
+    <q-card v-if="section === 'general' && profileOptions.length && profileAssignmentsAllowed" flat class="app-surface q-mb-md">
+      <q-card-section class="q-gutter-md">
+        <div class="text-subtitle1 text-weight-bold">Profilzuordnungen</div>
+        <div class="text-body2 app-muted">Legt fest, welche Integrationen ein Profil verwenden darf. Abweichungen an einer persönlichen Verbindung haben Vorrang.</div>
+        <q-select v-model="assignmentProfileId" outlined emit-value map-options label="Agentenprofil" :options="profileOptions" :disable="assignmentsLoading" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" />
+        <q-banner v-if="assignmentsFailed" rounded class="app-surface-tonal">
+          Die Profilzuordnungen konnten nicht geladen werden.
+          <template #action><q-btn flat no-caps color="primary" label="Erneut laden" @click="loadAssignments" /></template>
+        </q-banner>
+        <template v-if="assignments">
+          <q-select :model-value="assignments.integrationsEnabledByDefault" outlined emit-value map-options label="Integrationen standardmäßig" :options="availabilityChoices(assignments.inheritedIntegrationsEnabledByDefault)" :disable="assignmentsLoading" @update:model-value="saveAssignments({ integrationsEnabledByDefault: $event })" />
+          <q-select v-for="integration in agents.integrations" :key="integration.id" :model-value="assignments.integrationAvailability[integration.id] ?? null" outlined emit-value map-options :label="integration.name" :options="availabilityChoices(assignments.inheritedIntegrationAvailability[integration.id] ?? assignments.integrationsEnabledByDefault ?? assignments.inheritedIntegrationsEnabledByDefault)" :disable="assignmentsLoading" @update:model-value="setIntegrationAvailability(integration.id, $event)" />
+        </template>
       </q-card-section>
     </q-card>
 
@@ -234,16 +243,15 @@
                 @update:model-value="toggleIntegration(integration, $event)"
               />
               <q-btn
-                v-if="integration.adapterType === 'caldav'"
                 flat
                 dense
                 no-caps
                 :round="$q.screen.lt.md"
                 icon="folder_open"
-                :label="$q.screen.gt.sm ? 'Standardressourcen' : undefined"
-                aria-label="Standardressourcen verwalten"
+                :label="$q.screen.gt.sm ? 'Berechtigungen' : undefined"
+                aria-label="Integrationsrechte verwalten"
                 :disable="!canEditIntegration(integration)"
-                :to="{ name: 'settings-integration-resources', params: { integrationId: integration.id }, query: { scope: integration.scope } }"
+                :to="{ name: admin ? 'admin-integration-resources' : 'settings-integration-resources', params: { integrationId: integration.id } }"
               />
               <q-btn
                 flat
@@ -292,7 +300,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'
 import { api } from 'src/boot/axios'
@@ -303,14 +311,25 @@ import { useConfirm } from 'src/composables/confirm'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import { useAuthStore } from 'stores/auth'
+import { useAgentProfileStore } from 'stores/agent-profiles'
 
 defineOptions({ name: 'IntegrationSettingsPage' })
+const { admin } = defineProps({ admin: { type: Boolean, default: false } })
 
 const $q = useQuasar()
 const route = useRoute()
 const { confirm } = useConfirm()
 const integrations = useIntegrationStore()
 const auth = useAuthStore()
+const agents = useAgentProfileStore()
+const assignmentProfileId = ref(null)
+const assignments = ref(null)
+const assignmentsLoading = ref(false)
+const assignmentsFailed = ref(false)
+let assignmentsRevision = 0
+const profileAssignmentsAllowed = computed(() => admin || auth.isAdmin || agents.personalAgentsEnabled && agents.personalToolPermissionsEnabled)
+const profileOptions = computed(() => agents.manageableAgents.filter((agent) => admin ? agent.scope === 'instance' && agent.protected : agent.scope === 'personal').map((agent) => ({ label: agent.name, value: agent.id })))
+const availabilityChoices = (inherited) => [{ label: `Erben: ${inherited ? 'Verfügbar' : 'Nicht verfügbar'}`, value: null }, { label: 'Verfügbar', value: true }, { label: 'Nicht verfügbar', value: false }]
 const executionAgents = useExecutionAgentStore()
 const dialogOpen = ref(false)
 const selectedIntegration = ref(null)
@@ -320,50 +339,36 @@ const testingId = ref(null)
 const removingId = ref(null)
 const togglingId = ref(null)
 const searchSelectionSaving = ref(false)
-const section = ref('instances')
-const instanceIntegrations = ref([])
+const section = ref('general')
+const instanceIntegrations = computed(() => [
+  ...integrations.search.providers, ...integrations.calendar.accounts,
+  ...integrations.mail.accounts, ...integrations.knowledge.bases,
+  ...integrations.recipes.accounts, ...integrations.arcane.instances, ...integrations.music.instances
+])
 const storedPersonalIntegrations = ref([])
-const instanceSearch = ref({ primaryProvider: 'no_key', fallbackProvider: null, providerOptions: [{ name: 'Websuche ohne API-Key', value: 'no_key' }] })
-const personalSearch = ref({ primaryProvider: 'no_key', fallbackProvider: null, providerOptions: [{ name: 'Websuche ohne API-Key', value: 'no_key' }] })
-const showAccessPage = computed(() => route.name === 'settings-integration-resources')
-const showInstances = computed(() => !auth.isAdmin || section.value === 'instances')
-const searchProviders = computed(() => integrations.search.providers)
-const calendarAccounts = computed(() => integrations.calendar.accounts)
-const mailAccounts = computed(() => integrations.mail.accounts)
-const tbsDeskAccounts = computed(() => integrations.tbsDesk.accounts)
-const knowledgeBases = computed(() => integrations.knowledge.bases)
-const recipeAccounts = computed(() => integrations.recipes.accounts)
-const arcaneInstances = computed(() => integrations.arcane.instances)
-const musicInstances = computed(() => integrations.music.instances)
-const openScadInstances = computed(() => integrations.openscad.instances)
-const codingInstances = computed(() => integrations.coding.instances)
-const searchProviderOptions = computed(() => personalSearch.value.providerOptions.map((provider) => ({
+const searchSelection = ref({ primaryProvider: 'no_key', fallbackProvider: null, providerOptions: [{ name: 'Websuche ohne API-Key', value: 'no_key' }] })
+const showAccessPage = computed(() => ['settings-integration-resources', 'admin-integration-resources'].includes(route.name))
+const showInstances = computed(() => section.value === 'management')
+const searchProviderOptions = computed(() => searchSelection.value.providerOptions.map((provider) => ({
   label: provider.integrationId ? `${provider.name} · SearXNG` : provider.name,
   value: provider.value
 })))
 const fallbackSearchProviderOptions = computed(() => searchProviderOptions.value.filter(
-  (provider) => provider.value !== personalSearch.value.primaryProvider
+  (provider) => provider.value !== searchSelection.value.primaryProvider
 ))
 const personalIntegrations = computed(
   () => [
-    ...searchProviders.value,
-    ...calendarAccounts.value,
-    ...mailAccounts.value,
-    ...tbsDeskAccounts.value,
-    ...knowledgeBases.value,
-    ...recipeAccounts.value,
-    ...arcaneInstances.value,
-    ...musicInstances.value,
-    ...openScadInstances.value,
-    ...codingInstances.value,
+    ...instanceIntegrations.value,
+    ...integrations.tbsDesk.accounts,
+    ...integrations.openscad.instances,
+    ...integrations.coding.instances,
     ...integrations.browser.instances.map((item) => ({ ...item, integrationType: 'browser', providerType: 'browser' }))
   ]
 )
-const configuredIntegrations = computed(() => [
+const configuredIntegrations = computed(() => (admin ? instanceIntegrations.value.map((item) => ({ ...item, scope: 'instance' })) : [
   ...personalIntegrations.value.map((item) => ({ ...item, scope: 'personal' })),
   ...storedPersonalIntegrations.value.filter((item) => !personalIntegrations.value.some((own) => own.id === item.id)),
-  ...instanceIntegrations.value.map((item) => ({ ...item, scope: 'instance' }))
-])
+]))
 const backendAvailabilityOptions = [
   { label: 'Global und persönlich', value: 'full' },
   { label: 'Nur global', value: 'instance_only' },
@@ -376,8 +381,7 @@ const agentAvailabilityOptions = [
 const personalCreatable = computed(() => integrations.catalog.some((adapter) => integrations.adapterAvailable(adapter.adapterType, 'personal')))
 const canCreateIntegration = computed(() => (
   integrations.catalogLoaded
-  && integrations.catalog.some((adapter) => integrations.adapterAvailable(adapter.adapterType, 'personal')
-    || (auth.isAdmin && integrations.adapterAvailable(adapter.adapterType, 'instance')))
+   && integrations.catalog.some((adapter) => integrations.adapterAvailable(adapter.adapterType, admin ? 'instance' : 'personal'))
 ))
 
 function availabilityOptions(adapter) {
@@ -410,8 +414,8 @@ async function toggleIntegration(integration, enabled) {
 async function saveSearchSelection(primaryProvider, fallbackProvider) {
   searchSelectionSaving.value = true
   try {
-    const { data } = await api.put('/integrations/search', { primaryProvider, fallbackProvider }, { params: { scope: 'personal' } })
-    personalSearch.value = data
+    const { data } = await api.put('/integrations/search', { primaryProvider, fallbackProvider }, { params: { scope: admin ? 'instance' : 'personal' } })
+    searchSelection.value = data
     $q.notify({ type: 'positive', message: 'Suchprovider gespeichert' })
   } catch {
     // The central API interceptor displays the error as a toast.
@@ -423,18 +427,18 @@ async function saveSearchSelection(primaryProvider, fallbackProvider) {
 async function setPrimarySearchProvider(primaryProvider) {
   await saveSearchSelection(
     primaryProvider,
-    personalSearch.value.fallbackProvider === primaryProvider
+    searchSelection.value.fallbackProvider === primaryProvider
       ? null
-      : personalSearch.value.fallbackProvider
+      : searchSelection.value.fallbackProvider
   )
 }
 
 async function setFallbackSearchProvider(fallbackProvider) {
-  await saveSearchSelection(personalSearch.value.primaryProvider, fallbackProvider)
+  await saveSearchSelection(searchSelection.value.primaryProvider, fallbackProvider)
 }
 
 function openCreateDialog() {
-  integrations.selectScope(personalCreatable.value ? 'personal' : 'instance')
+  integrations.selectScope(admin ? 'instance' : 'personal')
   selectedIntegration.value = null
   dialogOpen.value = true
 }
@@ -447,19 +451,6 @@ function openEditDialog(integration) {
 
 function onDialogChange(open) {
   if (!open) void reload()
-}
-
-async function saveInstanceSearch(primaryProvider, fallbackProvider) {
-  searchSelectionSaving.value = true
-  try {
-    const { data } = await api.put('/integrations/search', { primaryProvider, fallbackProvider }, { params: { scope: 'instance' } })
-    instanceSearch.value = data
-    $q.notify({ type: 'positive', message: 'Suchprovider gespeichert' })
-  } catch {
-    // The central API interceptor displays the error.
-  } finally {
-    searchSelectionSaving.value = false
-  }
 }
 
 function providerLabel(providerType) {
@@ -576,29 +567,17 @@ async function removeIntegration(integration) {
 
 async function reload() {
   try {
-    integrations.selectScope('personal')
+    integrations.selectScope(admin ? 'instance' : 'personal')
     await Promise.all([
       integrations.fetchCatalog(),
       integrations.fetchAll(),
+      agents.fetchAgents(admin ? 'instance' : 'personal'),
       executionAgents.fetchAll()
     ])
-    personalSearch.value = { ...integrations.search }
+    searchSelection.value = { ...integrations.search }
     const visible = (await api.get('/integrations/visible')).data
     storedPersonalIntegrations.value = visible.filter((item) => item.scope === 'personal')
-    if (auth.isAdmin) {
-      integrations.selectScope('instance')
-      await integrations.fetchAll()
-      instanceIntegrations.value = [
-        ...integrations.search.providers, ...integrations.calendar.accounts,
-        ...integrations.mail.accounts, ...integrations.knowledge.bases,
-        ...integrations.recipes.accounts, ...integrations.arcane.instances, ...integrations.music.instances
-      ]
-      instanceSearch.value = { ...integrations.search }
-      integrations.selectScope('personal')
-      await integrations.fetchAll()
-    } else {
-      instanceIntegrations.value = visible.filter((item) => item.scope === 'instance')
-    }
+    selectRequestedProfile()
   } catch {
     // The central API interceptor displays the error as a toast.
   }
@@ -612,6 +591,49 @@ async function resetBrowser(integration) {
     $q.notify({ type: 'positive', message: 'Browserprofil zurückgesetzt' })
   } catch { /* Central API toast. */ }
   finally { resettingId.value = null }
+}
+
+async function loadAssignments() {
+  const revision = ++assignmentsRevision
+  assignments.value = null
+  assignmentsFailed.value = false
+  assignmentsLoading.value = Boolean(assignmentProfileId.value)
+  if (!assignmentProfileId.value) return
+  try {
+    const data = await integrations.fetchProfileAvailability(assignmentProfileId.value, admin ? 'instance' : 'personal')
+    if (revision === assignmentsRevision) assignments.value = data
+  } catch { if (revision === assignmentsRevision) assignmentsFailed.value = true }
+  finally { if (revision === assignmentsRevision) assignmentsLoading.value = false }
+}
+
+function selectRequestedProfile() {
+  const id = route.query.profileId
+  if (!id) return
+  section.value = 'general'
+  assignmentProfileId.value = profileAssignmentsAllowed.value && profileOptions.value.some((profile) => profile.value === id) ? id : null
+}
+
+async function saveAssignments(changes) {
+  const revision = ++assignmentsRevision
+  assignmentsLoading.value = true
+  try {
+    const data = await integrations.saveProfileAvailability(assignmentProfileId.value, admin ? 'instance' : 'personal', {
+      integrationsEnabledByDefault: assignments.value.integrationsEnabledByDefault,
+      integrationAvailability: assignments.value.integrationAvailability,
+      ...changes
+    })
+    if (revision !== assignmentsRevision) return
+    assignments.value = data
+    $q.notify({ type: 'positive', message: 'Profilzuordnungen gespeichert' })
+  } catch { /* Central API toast. */ }
+  finally { if (revision === assignmentsRevision) assignmentsLoading.value = false }
+}
+
+function setIntegrationAvailability(id, value) {
+  const integrationAvailability = { ...assignments.value.integrationAvailability }
+  if (value === null) delete integrationAvailability[id]
+  else integrationAvailability[id] = value
+  return saveAssignments({ integrationAvailability })
 }
 
 async function loadCatalog() {
@@ -633,4 +655,7 @@ async function setAdapterAvailability(adapterType, availability) {
 onMounted(() => {
   if (!showAccessPage.value) void reload()
 })
+watch(() => admin, () => { assignmentProfileId.value = null; assignments.value = null; void reload() })
+watch(assignmentProfileId, loadAssignments)
+watch(() => route.query.profileId, selectRequestedProfile)
 </script>

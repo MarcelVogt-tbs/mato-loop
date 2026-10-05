@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
+import { useAuthStore } from 'stores/auth'
 import {
   isModelEffective,
   modelOption,
@@ -14,7 +15,7 @@ function assignProviderPayload(store, payload) {
   store.availableProviders = payload.availableProviders ?? payload.providers
   store.availableModels = payload.availableModels ?? payload.models
   if ('personalProvidersEnabled' in payload) {
-    store.personalProvidersEnabled = payload.personalProvidersEnabled !== false
+    store.personalProvidersEnabled = payload.personalProvidersEnabled === true
   }
 }
 
@@ -23,7 +24,7 @@ function scopeConfig(scope, config = {}) {
 }
 
 function assignPersonalPolicy(store, policy) {
-  store.personalProvidersEnabled = policy?.personalProvidersEnabled !== false
+  store.personalProvidersEnabled = policy?.personalProvidersEnabled === true
   store.personalPolicyLoaded = true
 }
 
@@ -116,7 +117,7 @@ export const useProviderStore = defineStore('providers', {
     availableProviders: null,
     availableModels: null,
     scope: 'instance',
-    personalProvidersEnabled: true,
+    personalProvidersEnabled: false,
     personalPolicyLoaded: false,
     codex: {},
     loading: false,
@@ -190,7 +191,7 @@ export const useProviderStore = defineStore('providers', {
           : null
         if (this.loadVersion !== loadVersion || this.scope !== scope) return
         if (policy) assignPersonalPolicy(this, policy)
-        if (scope === 'personal' && !this.personalProvidersEnabled) {
+        if (scope === 'personal' && !this.personalProvidersEnabled && !useAuthStore().isAdmin) {
           assignProviderPayload(this, { providers: [], models: [] })
           assignPersonalPolicy(this, policy)
           this.lastLoadComplete = true

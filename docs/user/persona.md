@@ -1,24 +1,27 @@
-# Personalisierung
+# Personalization
 
-Unter **Einstellungen > Personalisierung** konfigurieren Sie Ihr Profil und die Identität des Assistenten.
+Under **Einstellungen > Personalisierung**, **Über mich** holds your maintained personal information; **Personas** manages your assistant name, reusable personas, and agent-specific assignments.
 
-Im Tab **Über mich** fügen Sie Angaben aus einem festen Katalog hinzu, darunter vollständiger und bevorzugter Name, Anrede, Pronomen, Hauptsprache und Hauptwohnsitz. Der vollständige Name dient dem persönlichen Kontext; der bevorzugte Name bestimmt, wie der Assistent Sie anspricht. Diese Angaben werden unabhängig von Memory verwendet und können getrennte Werte für private und öffentliche Modelle haben. Wenn das entsprechende Tool aktiviert ist, kann der Agent einzelne Angaben auf ausdrücklichen Wunsch ändern oder entfernen. Die eigene Tool-Richtlinie legt fest, ob dafür eine Freigabe erforderlich ist.
+## Personas and profile overrides
 
-Der Tab **Assistent** enthält die Persona des Agenten.
+Administrators manage global personas under **Administration > Personas > Verwaltung** and choose one **Globale Standard-Persona**. Each persona has a name and instructions describing tone and working style. You can create, read, edit, and delete your own personas when personal customization is allowed.
 
-## Anzeigename
+Choose **Override hinzufügen**, select an agent profile, and choose a persona. You may select a global or owned persona for an accessible global or personal agent. Your assignment affects only your account. Administrators set shared assignments for global profiles.
 
-Der Anzeigename erscheint als Sprechername im Chat. Eine Änderung wirkt auch auf die Darstellung älterer Nachrichten, weil diese keinen eigenen historischen Anzeigenamen speichern.
+The priority is your personal assignment, the administrative assignment if present, then the global default. The assignment dialog shows the inherited persona and previews the selected instructions. Assignments reference the same persona: editing its text affects all agents using it. Deleting an assignment restores the default. Deleting a persona makes its assignments fall back; the global default must be replaced before it can be deleted.
 
-## Anweisungen
+The agent editor's **Weitere Einstellungen** tab opens persona assignments, tool rights, and integration assignments directly for the relevant profile. A new agent must be saved first.
 
-Freie Persona-Anweisungen beschreiben beispielsweise Ton, Charakter, bevorzugte Arbeitsweise oder Antwortstil. Sie werden zusammen mit den Host-Anweisungen an das ausgewählte Modell übertragen.
+## One assistant name
 
-Änderungen gelten zuverlässig ab dem nächsten Agent-Lauf. Ein bereits laufender Vorgang verwendet weiterhin seinen bisherigen Kontext.
+**Globaler Agentenname** is a single setting under **Administration > Personas > Verwaltung**. **Mein Agentenname** optionally overrides it for all agents in your account. **Globalen Namen verwenden** removes that personal override. This name is separate from persona names and individual agent-profile names.
 
-## Änderung durch den Agenten
+## Personal customization
 
-Wenn das entsprechende Tool aktiviert ist, kann der Agent die Persona auf ausdrücklichen Wunsch ändern. Abhängig von der Tool-Richtlinie ist dafür eine Freigabe erforderlich.
+**Administration > Personas > Einstellungen > Persönliche Personas erlauben** controls your own personas, personal assignments, and personal assistant name together. Disabled values remain stored but inactive and read-only for ordinary users. Administrators retain their personal exception.
 
-!!! warning "Keine vertraulichen Daten"
-    Persona-Anweisungen werden an Modelle übertragen. Speichern Sie dort keine Passwörter, Tokens oder andere Secrets.
+On an explicit request, the agent can update your permitted name or personal persona through the settings tool. Editing an existing personal persona affects its other assignments too. If a global persona is active, the tool creates a personal persona for the current agent. Tool policy determines whether approval is needed; changes apply from the next run.
+
+!!! warning "No secrets in persona text"
+
+    Persona instructions are sent to the selected model. Do not store passwords, tokens, or other secrets in them.

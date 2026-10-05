@@ -42,25 +42,25 @@ describe('MatoLoop frontend scaffold', () => {
 
     expect(routeNames).toEqual(['chat', undefined, 'personal-variables', 'archive', 'settings', 'admin'])
     expect(settingsRoute.children.map((route) => route.name)).toEqual([
+      'settings-personalization',
       'settings-providers',
-      'settings-agents',
+      'settings-execution-agents',
       'settings-integrations',
       'settings-mcp',
-      'settings-channels',
+      'settings-skills',
+      'settings-agents',
       'settings-tools',
+      'settings-memory',
+      'settings-channels',
+      'settings-debug-access',
+      'settings-persona',
+      'settings-notifications',
       'settings-personal-variables',
       'settings-approvals',
-      'settings-execution-agents',
-      'settings-skills',
       'settings-automations',
       'settings-automation-create',
       'settings-automation-edit',
-      'settings-automation-detail',
-      'settings-personalization',
-      'settings-persona',
-      'settings-memory',
-      'settings-notifications',
-      'settings-debug-access'
+      'settings-automation-detail'
     ])
     expect(
       settingsRoute.children.find((route) => route.name === 'settings-integrations').children
@@ -84,10 +84,10 @@ describe('MatoLoop frontend scaffold', () => {
     ])
     expect(routes.find((route) => route.name === 'markdown-print')?.path).toBe('/print/markdown')
     expect(appRoute.children.find((route) => route.name === 'admin')?.meta.requiresAdmin).toBe(true)
-    expect(adminRoutes.map((route) => route.name)).toEqual(['admin-users', 'admin-providers', 'admin-instance-limits'])
+    expect(adminRoutes.map((route) => route.name)).toEqual(['admin-general', 'admin-notifications', 'admin-users', 'admin-providers', 'admin-tools', 'admin-integrations', 'admin-mcp', 'admin-skills', 'admin-personas', 'admin-agents', 'admin-channels', 'admin-instance-limits'])
     expect(settingsRoutes.find((route) => route.name === 'settings-notifications')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-debug-access')?.meta.requiresAdmin).toBe(true)
-    expect(settingsRoutes.find((route) => route.name === 'settings-tools')?.meta.requiresAdmin).toBe(true)
+    expect(settingsRoutes.find((route) => route.name === 'settings-tools')?.meta.requiresAdmin).toBeUndefined()
     expect(settingsRoutes.find((route) => route.name === 'settings-channels')?.meta).toEqual({
       settingsLabel: 'Kanäle', settingsIcon: 'forum'
     })

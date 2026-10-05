@@ -4,14 +4,19 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import require_user
-from mato_loop_backend.settings import DEFAULT_SKILLS, SkillDefinition
+from mato_loop_backend.settings import (
+    DEFAULT_SKILLS,
+    InstanceSkillsSettings,
+    SettingsStore,
+    SkillDefinition,
+)
 from mato_loop_backend.skills import (
     SkillDraft,
     SkillError,
@@ -27,6 +32,7 @@ _ERROR_STATUS = {
     "skill.notFound": status.HTTP_404_NOT_FOUND,
     "skill.inUse": status.HTTP_409_CONFLICT,
     "skill.defaultProtected": status.HTTP_409_CONFLICT,
+    "skill.personalDisabled": status.HTTP_409_CONFLICT,
 }
 
 
@@ -55,6 +61,12 @@ class SkillEnabledRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
+
+
+class SkillSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    personal_skills_enabled: StrictBool = Field(alias="personalSkillsEnabled")
 
 
 def _raise_api_error(exc: SkillError) -> None:
@@ -95,6 +107,29 @@ async def list_skills(
         _payload(skill, "personal" if skill.owner_id == user.id else "instance")
         for skill in skills
     ])
+
+
+@router.get("/settings", response_model=SkillSettingsRequest)
+async def get_skill_settings(
+    _user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SkillSettingsRequest:
+    settings = await SettingsStore.load(db, InstanceSkillsSettings)
+    return SkillSettingsRequest(personal_skills_enabled=settings.personal_skills_enabled)
+
+
+@router.put("/settings", response_model=SkillSettingsRequest)
+async def update_skill_settings(
+    payload: SkillSettingsRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SkillSettingsRequest:
+    _require_scope(user, "instance")
+    settings = await SettingsStore.load(db, InstanceSkillsSettings, for_update=True)
+    settings.personal_skills_enabled = payload.personal_skills_enabled
+    await SettingsStore.save(db, settings)
+    await db.commit()
+    return payload
 
 
 @router.post("", response_model=SkillCatalogItem, status_code=status.HTTP_201_CREATED)

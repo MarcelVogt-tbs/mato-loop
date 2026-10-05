@@ -78,6 +78,7 @@ from mato_loop_backend.settings import (
     AgentProfileUnavailable,
     AiSettings,
     EffectiveAgentIdentity,
+    InstanceSkillsSettings,
     IntegrationInstance,
     IntegrationSettings,
     MemorySettings,
@@ -2141,7 +2142,7 @@ async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> N
             ToolSettings: tool_settings,
             AiSettings: AiSettings(),
             UserAgentIdentitySettings: identity,
-        }[settings_type]
+        }.get(settings_type, settings_type())
 
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
@@ -2155,8 +2156,7 @@ async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> N
         },
     )
     context = _context(tmp_path, call)
-    persona.owner_id = context.session.user_id
-    _mock_value = AsyncMock(return_value=object())
+    _mock_value = AsyncMock(return_value=SimpleNamespace(id=GENERAL_PROFILE_ID))
     for _mock_target in (mock_tools_identity, mock_tools_coding,):
         monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
     _mock_value = AsyncMock(
@@ -2184,7 +2184,7 @@ async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> N
     assert request.resource_scope == str(context.session.user_id)
     save.assert_awaited_once()
     assert identity.display_name == "Ada"
-    assert identity.personas[0].instructions == "Antworte direkt."
+    assert (identity.profile_personas[GENERAL_PROFILE_ID], identity.personas[0].instructions) == (persona.id, "Antworte direkt.")
 
 
 async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) -> None:
@@ -2192,14 +2192,14 @@ async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) 
         {"policies": {"settings.agent_identity.update": "auto"}}
     )
     persona = PersonaProfile(name="Freundlich", instructions="Alt")
-    identity = UserAgentIdentitySettings(personas=[persona])
+    identity = UserAgentIdentitySettings()
 
     async def load_settings(_db, settings_type, **_kwargs):
         return {
             ToolSettings: tool_settings,
             AiSettings: AiSettings(),
             UserAgentIdentitySettings: identity,
-        }[settings_type]
+        }.get(settings_type, settings_type())
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
@@ -2210,8 +2210,7 @@ async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) 
     )
     context = _context(tmp_path, call, decision=PermissionDecision.DENY)
     _set_profile_settings(context, tool_settings)
-    persona.owner_id = context.session.user_id
-    _mock_value = AsyncMock(return_value=object())
+    _mock_value = AsyncMock(return_value=SimpleNamespace(id=GENERAL_PROFILE_ID, name="Agent"))
     for _mock_target in (mock_tools_identity, mock_tools_coding,):
         monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
     _mock_value = AsyncMock(
@@ -2236,14 +2235,14 @@ async def test_update_agent_identity_rejects_changed_approved_persona(
     tool_settings = _tool_settings({})
     first = PersonaProfile(name="Erste", instructions="Alt")
     second = PersonaProfile(name="Zweite", instructions="Alt")
-    identity = UserAgentIdentitySettings(personas=[first, second])
+    identity = UserAgentIdentitySettings()
 
     async def load_settings(_db, settings_type, **_kwargs):
         return {
             ToolSettings: tool_settings,
             AiSettings: AiSettings(),
             UserAgentIdentitySettings: identity,
-        }[settings_type]
+        }.get(settings_type, settings_type())
 
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
@@ -2256,8 +2255,6 @@ async def test_update_agent_identity_rejects_changed_approved_persona(
             arguments={"instructions": "Neu"},
         ),
     )
-    for persona in (first, second):
-        persona.owner_id = context.session.user_id
     _mock_value = AsyncMock(return_value=object())
     for _mock_target in (mock_tools_identity, mock_tools_coding,):
         monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
@@ -2295,7 +2292,6 @@ async def test_update_agent_identity_rejects_persona_changed_since_run_start(
         ),
     )
     context.agent_persona_id = prompted.id
-    current.owner_id = context.session.user_id
     _mock_value = AsyncMock(return_value=object())
     for _mock_target in (mock_tools_identity, mock_tools_coding,):
         monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
@@ -2313,7 +2309,7 @@ async def test_update_agent_identity_rejects_persona_changed_since_run_start(
             side_effect=lambda _db, settings_type, **_kwargs: {
                 ToolSettings: tool_settings,
                 AiSettings: AiSettings(),
-            }[settings_type]
+            }.get(settings_type, settings_type())
         ),
     )
     save = AsyncMock()
@@ -2342,7 +2338,7 @@ async def test_update_user_profile_uses_ask_policy_and_preserves_other_scope(
         return {
             ToolSettings: tool_settings,
             UserProfileSettings: profile,
-        }[settings_type]
+        }.get(settings_type, settings_type())
 
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
@@ -2394,7 +2390,7 @@ async def test_update_user_profile_both_models_auto_skips_approval(
             UserProfileSettings: UserProfileSettings(
                 preferred_name={"privateOnly": "Ada", "publicOnly": "A."}
             ),
-        }[settings_type]
+        }.get(settings_type, settings_type())
 
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
@@ -2942,7 +2938,7 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
     skills = SkillsSettings()
 
     async def load_settings(_db, settings_type, **_kwargs):
-        return {ToolSettings: tool_settings, SkillsSettings: skills}[settings_type]
+        return {ToolSettings: tool_settings, SkillsSettings: skills}.get(settings_type, settings_type())
 
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
@@ -3052,11 +3048,30 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
     save.assert_awaited_once()
 
 
+@pytest.mark.parametrize("disabled_at", ["start", "approval"])
+async def test_build_skill_obeys_personal_gate_before_generation_and_after_approval(monkeypatch, tmp_path, disabled_at):
+    instance = InstanceSkillsSettings(personal_skills_enabled=disabled_at != "start")
+    personal = SkillsSettings()
+    async def load(_db, model, **_kwargs):
+        return personal if model is SkillsSettings else model()
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=lambda _db, model, **_kwargs: instance if model is InstanceSkillsSettings else None))
+    context = _context(tmp_path, ToolCall(id="blocked-skill", name="build_skill", arguments={"brief": "Create a reusable workflow."}))
+    context.db.get.return_value = SimpleNamespace(is_admin=False)
+    context.skill_draft_handler = AsyncMock(return_value=SkillDraft(name="Workflow", description="Use for tasks.", instructions="Check results."))
+    async def approve(_request):
+        instance.personal_skills_enabled = False
+        return PermissionDecision.ALLOW
+    context.ask_handler = AsyncMock(side_effect=approve)
+    result = await tool_registry.execute(context.tool_call, context)
+    assert (result.metadata.get("errorCode"), personal.skills, context.skill_draft_handler.await_count) == ("skill.personalDisabled", [], 0 if disabled_at == "start" else 1)
+
+
 async def test_build_skill_rejects_a_draft_changed_after_approval(monkeypatch, tmp_path) -> None:
     skills = SkillsSettings()
 
     async def load_settings(_db, settings_type, **_kwargs):
-        return {ToolSettings: ToolSettings(), SkillsSettings: skills}[settings_type]
+        return {ToolSettings: ToolSettings(), SkillsSettings: skills}.get(settings_type, settings_type())
 
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
@@ -3121,7 +3136,7 @@ async def test_edit_skill_reuses_draft_approval_and_preserves_target(
     skills = SkillsSettings(skills=[existing])
 
     async def load_settings(_db, settings_type, **_kwargs):
-        return {ToolSettings: ToolSettings(), SkillsSettings: skills}[settings_type]
+        return {ToolSettings: ToolSettings(), SkillsSettings: skills}.get(settings_type, settings_type())
 
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
@@ -3182,7 +3197,7 @@ async def test_edit_skill_rejects_parallel_target_change(monkeypatch, tmp_path) 
     skills = SkillsSettings(skills=[existing])
 
     async def load_settings(_db, settings_type, **_kwargs):
-        return {ToolSettings: ToolSettings(), SkillsSettings: skills}[settings_type]
+        return {ToolSettings: ToolSettings(), SkillsSettings: skills}.get(settings_type, settings_type())
 
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
@@ -3238,7 +3253,7 @@ async def test_load_skill_activates_snapshot_without_returning_instructions(
     context = _context(tmp_path, call)
     context.skill_state.catalog[skill.id] = skill
     monkeypatch.setattr(
-        SettingsStore, "load", AsyncMock(return_value=ToolSettings())
+        SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_kw: kind())
     )
 
     result = await tool_registry.execute(call, context)
@@ -3258,14 +3273,15 @@ async def test_load_skill_auto_to_ask_policy_transition_blocks(
         description="Use when an API must be queried.",
         instructions="Call the available API tool.",
     )
+    tool_loads = iter([
+        _tool_settings({"policies": {"skills.load": "auto"}}),
+        _tool_settings({"policies": {"skills.load": "ask"}}),
+    ])
     monkeypatch.setattr(
         SettingsStore,
         "load",
         AsyncMock(
-            side_effect=[
-                _tool_settings({"policies": {"skills.load": "auto"}}),
-                _tool_settings({"policies": {"skills.load": "ask"}}),
-            ]
+            side_effect=lambda _db, kind, **_kw: next(tool_loads) if kind is ToolSettings else kind()
         ),
     )
     call = ToolCall(
@@ -3311,7 +3327,7 @@ async def test_load_skill_ask_policy_uses_the_user_skill_collection(
     settings = _tool_settings(
         {"policies": {"skills.load": "ask"}}
     )
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_kw: settings if kind is ToolSettings else kind()))
     call = ToolCall(
         id="load-ask",
         name="load_skill",
@@ -3345,7 +3361,7 @@ async def test_disabled_agent_identity_tool_is_not_offered_or_executed(
     }
 
     async def load_settings(_db, settings_type, **_kwargs):
-        return {ToolSettings: tool_settings, AiSettings: AiSettings()}[settings_type]
+        return {ToolSettings: tool_settings, AiSettings: AiSettings()}.get(settings_type, settings_type())
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
     call = ToolCall(
@@ -3372,7 +3388,7 @@ async def test_disabled_user_profile_tool_is_not_offered_or_executed(
     )
     assert "update_user_profile" not in effective.tools
 
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=tool_settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_kw: tool_settings if kind is ToolSettings else kind()))
     call = ToolCall(
         id="profile-disabled",
         name="update_user_profile",
@@ -5447,7 +5463,7 @@ async def test_webfetch_rejects_changed_bound_settings(tmp_path, monkeypatch) ->
         tool_settings=settings,
     )
     disabled = ToolSettings(tool_availability={"webfetch": False})
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=disabled))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_kw: disabled if kind is ToolSettings else kind()))
     monkeypatch.setattr(
         SettingsStore, "load_optional", AsyncMock(return_value=None)
     )

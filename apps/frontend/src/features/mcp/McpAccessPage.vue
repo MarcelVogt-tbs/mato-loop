@@ -1,11 +1,11 @@
 <template>
   <section>
+    <IntegrationAccessPage />
     <q-toolbar class="settings-detail-toolbar q-px-none q-mb-md">
-      <q-btn flat round dense icon="arrow_back" aria-label="Zurück zu den MCP-Servern" :to="{ name: 'settings-mcp', query: { scope } }" />
       <q-avatar color="primary" text-color="white" icon="construction" class="q-ml-sm" />
       <q-toolbar-title>
         <div class="text-h6 text-weight-bold">{{ server ? `Tools von ${server.name}` : 'MCP-Tools' }}</div>
-        <div class="text-body2 app-muted">Erkannte Tools anzeigen. Rechte werden in Agentenprofilen festgelegt.</div>
+         <div class="text-body2 app-muted">Erkannte Tools dieses Servers.</div>
       </q-toolbar-title>
     </q-toolbar>
 
@@ -34,15 +34,13 @@
 <script setup>
 import { computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { resolveSettingsScope } from 'src/features/settings/scope'
-import { useAuthStore } from 'stores/auth'
 import { useMcpServerStore } from 'stores/mcp-servers'
+import IntegrationAccessPage from 'src/features/integrations/IntegrationAccessPage.vue'
 
 defineOptions({ name: 'McpAccessPage' })
 const route = useRoute()
-const auth = useAuthStore()
 const servers = useMcpServerStore()
-const scope = computed(() => resolveSettingsScope(route.query.scope, auth.isAdmin))
+const scope = computed(() => String(route.name).startsWith('admin-') ? 'instance' : 'personal')
 const server = computed(() => servers.servers.find((item) => item.id === String(route.params.serverId || '')))
 
 function annotationHints(tool) {

@@ -5,6 +5,7 @@ import mato_loop_backend.tools.access as tools_access
 from mato_loop_backend.permissions.policy import agent_identity_permission, user_profile_permission
 from mato_loop_backend.settings import (
     AgentProfileUnavailable,
+    PersonaProfile,
     SettingsStore,
     ToolExecutionPolicy,
     TrustLevel,
@@ -75,9 +76,7 @@ async def _update_agent_identity(
         and effective_identity.persona.id != context.agent_persona_id
     ):
         return ToolResult.error("tool.unavailable")
-    approved_persona_id = (
-        effective_identity.persona.id if arguments.instructions is not None else None
-    )
+    approved_persona = effective_identity.persona.model_dump() if arguments.instructions is not None else None
     if (
         arguments.display_name is not None
         and not effective_identity.personal_display_name_enabled
@@ -136,8 +135,8 @@ async def _update_agent_identity(
     ) or (arguments.instructions is not None and not effective_identity.persona_editable):
         return ToolResult.error("tool.unavailable")
     if (
-        approved_persona_id is not None
-        and effective_identity.persona.id != approved_persona_id
+        approved_persona is not None
+        and effective_identity.persona.model_dump() != approved_persona
     ):
         return ToolResult.error("tool.unavailable")
 
@@ -150,17 +149,20 @@ async def _update_agent_identity(
     if arguments.display_name is not None:
         current.display_name = arguments.display_name
     if arguments.instructions is not None:
-        persona = next(
-            (
-                item
-                for item in current.personas
-                if item.id == effective_identity.persona.id
-            ),
-            None,
-        )
+        persona = next((item for item in current.personas if item.id == effective_identity.persona.id), None)
         if persona is None:
-            return ToolResult.error("tool.unavailable")
-        persona.instructions = arguments.instructions
+            name = f"Persona für {profile.name}"[:80]
+            used = {item.name.casefold() for item in current.personas}
+            candidate, suffix = name, 2
+            while candidate.casefold() in used:
+                candidate = f"{name[:70]} ({suffix})"
+                suffix += 1
+            persona = PersonaProfile(name=candidate, instructions=arguments.instructions)
+            current.personas.append(persona)
+        else:
+            persona.instructions = arguments.instructions
+        current.profile_personas[profile.id] = persona.id
+        effective_identity.persona = persona
     await SettingsStore.save(context.db, current, user_id=context.session.user_id)
     display_name = arguments.display_name or effective_identity.display_name
     identity_payload = {
@@ -282,7 +284,8 @@ async def _update_user_profile(
 
 UPDATE_AGENT_IDENTITY = ToolDefinition(
             "update_agent_identity",
-            "Update the permitted personal agent name or active personal persona instructions after an explicit user request. "
+            "Update the permitted personal agent name or the active personal persona after an explicit user request. "
+            "Editing a personal persona affects all agents assigned to it. If a global persona is active, create a personal persona and assign it only to the current agent. "
             "Changes apply reliably from the next run.",
             UpdateAgentIdentityArguments,
             _update_agent_identity,

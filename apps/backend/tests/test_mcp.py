@@ -580,7 +580,7 @@ def test_mcp_tool_offering_does_not_use_another_profile_resource_override() -> N
     contribution = MCP_ADAPTER.contributions(instance).tools[0]
     settings = ToolSettings()
     settings._agent_permissions = AgentProfilePermissions(
-        policies={"mcp.call": "disabled"},
+        integration_policies={str(instance.id): {"mcp.call": "disabled"}},
         resource_policies={
             str(instance.id): {
                 mcp_resource_key("another-tool"): {"mcp.call": "auto"}
@@ -650,7 +650,10 @@ def test_mcp_availability_defaults_instance_only_and_has_dedicated_admin_api(
 
     with TestClient(app) as client:
         initial = client.get("/api/mcp/settings")
+        assert client.get("/api/mcp/servers?scope=personal").status_code == 200
+        user.is_admin = False
         blocked = client.get("/api/mcp/servers?scope=personal")
+        user.is_admin = True
         enabled = client.put("/api/mcp/settings", json={"personalAllowed": True})
         del app.dependency_overrides[require_admin]
         user.is_admin = False
@@ -1122,7 +1125,7 @@ async def test_visible_mcp_servers_include_only_shared_and_owned_entries(monkeyp
     monkeypatch.setattr(SettingsStore, "load", load)
     monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
 
-    result = await mcp_routes.list_visible_mcp_servers(AsyncMock(), SimpleNamespace(id=user_id))
+    result = await mcp_routes.list_visible_mcp_servers(AsyncMock(), SimpleNamespace(id=user_id, is_admin=False))
 
     assert [(item["name"], item["scope"]) for item in result["servers"]] == [
         ("Shared", "instance"), ("Mine", "personal")

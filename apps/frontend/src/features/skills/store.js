@@ -4,19 +4,31 @@ import { api } from 'src/boot/axios'
 const scopeConfig = (scope) => ({ params: { scope } })
 
 export const useSkillStore = defineStore('skills', {
-  state: () => ({ items: [], scopedItems: [], scope: 'personal', loading: false, saving: false }),
+  state: () => ({ scopedItems: [], scope: 'personal', loading: false, saving: false, personalSkillsEnabled: true, settingsLoaded: false }),
   actions: {
-    selectScope(scope) {
-      this.scope = scope === 'instance' ? 'instance' : 'personal'
+    async fetchSettings() {
+      this.settingsLoaded = false
+      const { data } = await api.get('/skills/settings')
+      this.personalSkillsEnabled = data.personalSkillsEnabled
+      this.settingsLoaded = true
     },
-    async fetchSkills(scope = null) {
+    async setPersonalSkillsEnabled(enabled) {
+      this.saving = true
+      try {
+        const { data } = await api.put('/skills/settings', { personalSkillsEnabled: enabled })
+        this.personalSkillsEnabled = data.personalSkillsEnabled
+      } finally { this.saving = false }
+    },
+    selectScope(scope) {
+      const next = scope === 'instance' ? 'instance' : 'personal'
+      if (next !== this.scope) this.scopedItems = []
+      this.scope = next
+    },
+    async fetchSkills(scope) {
       this.loading = true
       try {
-        const { data } = scope
-          ? await api.get('/skills', scopeConfig(scope))
-          : await api.get('/skills')
-        if (scope) this.scopedItems = data.items
-        else this.items = data.items
+        const { data } = await api.get('/skills', scopeConfig(scope))
+        if (scope === this.scope) this.scopedItems = data.items
         return data
       } finally {
         this.loading = false

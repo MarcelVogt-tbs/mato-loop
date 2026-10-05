@@ -3,7 +3,7 @@ import { createApp, h, nextTick } from 'vue'
 import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, QAvatar, QBadge, QBanner, QBtn, QBtnToggle, QCard, QCardSection, QCheckbox, QChip, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QList, QSelect, QSeparator, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar, QToolbarTitle } from 'quasar'
+import { Quasar, QBanner, QBtn, QBtnToggle, QCard, QCardSection, QCheckbox, QForm, QIcon, QInnerLoading, QInput, QSelect, QSeparator, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar, QToolbarTitle } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), put: vi.fn() } }))
@@ -14,347 +14,136 @@ import { api } from 'src/boot/axios'
 import { useAuthStore } from '../src/stores/auth'
 
 let app, root
-const first = '00000000-0000-4000-8000-000000000010'
-const second = '00000000-0000-4000-8000-000000000011'
 const builtinId = '00000000-0000-4000-8000-000000000001'
-
-async function mountEditor(path = '/agents/agent?scope=personal', extraAgents = [], personalAgentsEnabled = true, groups = [], isAdmin = true) {
-  const builtin = {
-    id: builtinId, scope: 'instance', protected: true, name: 'Allgemein', description: 'Standard',
-    personaId: null, instructions: 'Follow the request.', answerDisplay: 'compact', maxToolCalls: 25,
-    todoEnabled: false, integrationsEnabledByDefault: true, integrationAvailability: {},
-    privatePermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} },
-    publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} },
-    delegationEnabled: false, sessionWritePaths: null, baseProfileId: null
-  }
-  let agent = {
-    id: 'agent', scope: 'personal', protected: false, name: 'Recherche', instructions: 'Check sources.',
-    answerDisplay: 'timeline',
-    maxToolCalls: null, todoEnabled: true, integrationsEnabledByDefault: false,
-    integrationAvailability: { [first]: true, [second]: false },
-    privatePermissions: { policies: {}, integrationPolicies: { [first]: { 'calendar.read': 'ask' } }, resourcePolicies: {} },
-    publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} },
-    delegationEnabled: true, sessionWritePaths: [], baseProfileId: builtinId,
-    overrides: {
-      answerDisplay: 'timeline', maxToolCalls: null, todoEnabled: true,
-      integrationsEnabledByDefault: false, integrationAvailability: { [first]: true, [second]: false },
-      privatePermissions: { policies: {}, integrationPolicies: { [first]: { 'calendar.read': 'ask' } }, resourcePolicies: {} },
-      delegationEnabled: true, sessionWritePaths: []
-    }
-  }
-  api.get.mockImplementation(async () => ({ data: {
-    defaultAgentProfileId: builtinId,
-    effectiveAgents: personalAgentsEnabled ? [builtin, agent, ...extraAgents] : [builtin],
-    personalAgentsEnabled,
-    privateGroups: groups,
-    publicGroups: groups,
-    integrations: [
-      { id: first, name: 'Kalender', enabled: true, available: true, supportsPolicies: false },
-      { id: second, name: 'SearXNG', enabled: true, available: true, supportsPolicies: false }
-    ]
-  } }))
-  api.put.mockImplementation(async (_url, payload) => { agent = { ...agent, ...payload }; return { data: {} } })
+async function mountEditor(path = '/agents/agent', extraAgents = [], personalAgentsEnabled = true, isAdmin = true) {
+  const builtin = { id: builtinId, scope: 'instance', protected: true, accessEditable: true, name: 'Allgemein', description: 'Standard', instructions: 'Follow the request.', answerDisplay: 'compact', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, sessionWritePaths: null, overrides: {}, accessBaseline: { instructions: 'Follow the request.', titleVisionFallbackEnabled: true } }
+  let agents = [builtin, { id: 'agent', scope: 'personal', protected: false, name: 'Recherche', instructions: 'Check sources.', answerDisplay: 'timeline', maxToolCalls: null, todoEnabled: true, delegationEnabled: true, sessionWritePaths: [], baseProfileId: builtinId, overrides: { answerDisplay: 'timeline', maxToolCalls: null, todoEnabled: true, delegationEnabled: true, sessionWritePaths: [], privatePermissions: { policies: { 'shell.write': 'ask' } } } }, ...extraAgents]
+  api.get.mockImplementation(async () => ({ data: { defaultAgentProfileId: builtinId, baseProfiles: agents.filter((item) => item.protected), agents, effectiveAgents: agents, personalAgentsEnabled } }))
+  api.put.mockImplementation(async (url, payload) => {
+    const id = url.split('/')[2]
+    agents = agents.map((agent) => agent.id === id ? { ...agent, ...(url.endsWith('/access') ? payload : payload.overrides), overrides: url.endsWith('/access') ? payload : payload.overrides } : agent)
+    return { data: {} }
+  })
   const router = createRouter({ history: createMemoryHistory(), routes: [
-    { path: '/agents/:agentId', name: 'settings-agent-edit', component: Editor },
     { path: '/agents/new', name: 'settings-agent-create', component: Editor },
+    { path: '/agents/:agentId', name: 'settings-agent-edit', component: Editor },
     { path: '/agents', name: 'settings-agents', component: { render: () => null } },
-    { path: '/personas', name: 'settings-personalization', component: { render: () => null } }
+    { path: '/admin/agents/new', name: 'admin-agent-create', component: Editor },
+    { path: '/admin/agents/:agentId', name: 'admin-agent-edit', component: Editor },
+    { path: '/admin/agents', name: 'admin-agents', component: { render: () => null } },
+    { path: '/tools', name: 'settings-tools', component: { render: () => null } },
+    { path: '/admin/tools', name: 'admin-tools', component: { render: () => null } },
+    { path: '/integrations', name: 'settings-integrations', component: { render: () => null } },
+    { path: '/admin/integrations', name: 'admin-integrations', component: { render: () => null } },
+    { path: '/personas', name: 'settings-persona', component: { render: () => null } },
+    { path: '/personalization', name: 'settings-personalization', component: { render: () => null } },
+    { path: '/admin/personas', name: 'admin-personas', component: { render: () => null } }
   ] })
   await router.push(path)
   root = document.createElement('div')
   document.body.append(root)
   let page
-  app = createApp({ render: () => h(RouterView, null, {
-    default: ({ Component }) => h(Component, { ref: (value) => { page = value?.$?.setupState } })
-  }) })
+  app = createApp({ render: () => h(RouterView, null, { default: ({ Component }) => h(Component, { ref: (value) => { page = value?.$?.setupState } }) }) })
   const pinia = createPinia()
-  app.use(pinia).use(router).use(Quasar, { components: { QAvatar, QBadge, QBanner, QBtn, QBtnToggle, QCard, QCardSection, QCheckbox, QChip, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QList, QSelect, QSeparator, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar, QToolbarTitle } })
+  app.use(pinia).use(router).use(Quasar, { components: { QBanner, QBtn, QBtnToggle, QCard, QCardSection, QCheckbox, QForm, QIcon, QInnerLoading, QInput, QSelect, QSeparator, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar, QToolbarTitle } })
   useAuthStore(pinia).isAdmin = isAdmin
   app.config.globalProperties.$q.notify = vi.fn()
   app.mount(root)
-  await vi.waitFor(() => expect(
-    personalAgentsEnabled ? page?.savedPayload : root.textContent
-  ).toBeTruthy())
+  await vi.waitFor(() => expect(page?.savedPayload || page?.blocked).toBeTruthy())
   await nextTick()
   return page
 }
+afterEach(() => { app?.unmount(); root?.remove(); vi.clearAllMocks() })
 
-it('starts a profile from Allgemein without copying fields or honoring copyFrom', async () => {
-  const plan = {
-    id: 'plan', scope: 'instance', protected: true, name: 'Planen', description: '',
-    instructions: 'Create a plan.', answerDisplay: 'timeline', maxToolCalls: null,
-    todoEnabled: true, integrationsEnabledByDefault: false, integrationAvailability: {},
-    privatePermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} },
-    publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} },
-    delegationEnabled: true, sessionWritePaths: [], baseProfileId: null
-  }
-  const integration = {
-    ...plan, id: 'support', scope: 'integration', name: 'Support-Assistent'
-  }
-  const page = await mountEditor('/agents/new?scope=personal&copyFrom=agent', [plan, integration])
-
-  expect(page.editingAgent).toBeNull()
-  expect(page.form).toMatchObject({
-    name: '', description: '', baseProfileId: builtinId,
-    instructions: 'Follow the request.', maxToolCalls: 25, integrationsEnabledByDefault: true
-  })
-  expect(page.ownership.instructions).toBe(false)
+it('starts a sparse profile from Allgemein and retains explicit content when changing its base', async () => {
+  const page = await mountEditor('/agents/new?copyFrom=agent', [{ id: 'plan', scope: 'instance', protected: true, name: 'Plan', instructions: 'Create a plan.', maxToolCalls: null, delegationEnabled: true }])
   expect(page.requestPayload()).toEqual({ name: '', description: '', baseProfileId: builtinId, overrides: {} })
-  expect(page.baseProfileOptions.map((option) => option.value)).toEqual([builtinId, 'plan'])
-  expect(root.textContent).toContain('Nicht angepasste Einstellungen werden vom Basisprofil übernommen.')
-
   page.setOwnership('instructions', 'own')
   page.form.instructions = 'Eigene Aufgabe'
   page.form.baseProfileId = 'plan'
   page.applyInheritedValues()
   expect(page.form).toMatchObject({ instructions: 'Eigene Aufgabe', maxToolCalls: null, delegationEnabled: true })
-  expect(page.requestPayload().overrides).toEqual({ instructions: 'Eigene Aufgabe' })
 })
 
-it('chooses global ownership in the profile creation form', async () => {
-  const page = await mountEditor('/agents/new')
-
-  expect(root.querySelector('.q-checkbox')?.textContent).toContain('Global')
-  expect(page.scope).toBe('personal')
-  await page.switchCreationScope(true)
+it('uses the administration route for global creation', async () => {
+  const page = await mountEditor('/admin/agents/new')
   expect(page.scope).toBe('instance')
   expect(api.get).toHaveBeenCalledWith('/agent-profiles', { params: { scope: 'instance' } })
+  expect(root.querySelector('.q-checkbox')?.textContent).not.toContain('Global')
+  page.section = 'access'
+  await nextTick()
+  expect([...root.querySelectorAll('button')].filter((button) => button.textContent.includes('öffnen')).every((button) => button.disabled)).toBe(true)
 })
 
-it('shows only the disabled state for a direct personal editor link', async () => {
-  const page = await mountEditor('/agents/agent?scope=personal', [], false)
+it.each([
+  ['/agents/agent', [], 'agent', '/personalization?tab=assistant&profileId=agent', ''],
+  [`/admin/agents/${builtinId}`, [], builtinId, `/admin/personas?profileId=${builtinId}`, '/admin'],
+  ['/admin/agents/custom', [{ id: 'custom', scope: 'instance', name: 'Globaler Agent', protected: false, baseProfileId: builtinId, overrides: {} }], builtinId, '/admin/personas?profileId=custom', '/admin']
+])('bundles contextual persona and access links for %s', async (path, extra, accessId, personaLink, prefix) => {
+  await mountEditor(path, extra)
+  const tab = [...root.querySelectorAll('[role="tab"]')].find((item) => item.textContent.includes('Weitere Einstellungen'))
+  tab.click()
+  await nextTick()
+  expect([...root.querySelectorAll('.q-tab-panel a')].map((link) => link.getAttribute('href'))).toEqual([
+    personaLink, `${prefix}/tools?profileId=${accessId}`, `${prefix}/integrations?profileId=${accessId}`
+  ])
+})
 
+it('blocks a regular users personal editor when personal profiles are disabled', async () => {
+  const page = await mountEditor('/agents/agent', [], false, false)
   expect(page.blocked).toBe(true)
-  expect(page.loadFailed).toBe(false)
-  expect(root.textContent).toContain('Persönliche Agenten wurden für diese Instanz deaktiviert.')
-  expect(root.textContent).not.toContain('Das Agentenprofil konnte nicht geladen werden.')
   expect(root.querySelector('form')).toBeNull()
 })
 
-it('opens a shared profile read-only for a regular user without requesting instance settings', async () => {
-  const page = await mountEditor('/agents/shared?scope=instance', [{
-    id: 'shared', scope: 'instance', protected: false, name: 'Team Agent',
-    baseProfileId: builtinId, overrides: {}, instructions: 'Team instructions',
-    privatePermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} },
-    publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} }
-  }], true, [], false)
-
-  expect(page.scope).toBe('instance')
-  expect(page.accessProtected).toBe(true)
-  expect(page.loadFailed).toBe(false)
-  expect(root.textContent).toContain('Team Agent ansehen')
-  expect(api.get).toHaveBeenCalledWith('/agent-profiles')
-  expect(api.get).not.toHaveBeenCalledWith('/agent-profiles', { params: { scope: 'instance' } })
-})
-
-it('shows the external working directory policy without a host tool', async () => {
-  const page = await mountEditor('/agents/agent?scope=personal', [], true, [{
-    id: 'working_directory', label: 'Arbeitsverzeichnis', icon: 'folder_open', tools: [], actions: [{
-      capability: 'working_directory.external',
-      label: 'Zugriff außerhalb des Arbeitsverzeichnisses',
-      policy: 'ask',
-      configurable: true,
-      allowedPolicies: ['disabled', 'ask', 'auto'],
-      available: true
-    }]
-  }])
-
-  expect(page.permissionGroups[0].label).toBe('Arbeitsverzeichnis')
-  expect(page.permissionGroups[0].actions[0].label).toBe('Zugriff außerhalb des Arbeitsverzeichnisses')
-  expect(page.baselineActions.public['working_directory.external'].policy).toBe('ask')
-})
-
-afterEach(() => {
-  app?.unmount()
-  root?.remove()
-  vi.clearAllMocks()
-})
-
-it('inherits, overrides, and clears runtime instructions without losing them on save', async () => {
+it('round-trips profile content without sending permissions through the profile API', async () => {
   const page = await mountEditor()
-  page.assignForm({
-    ...page.editingAgent,
-    runtimeInstructions: 'Inspect only.',
-    overrides: { runtimeInstructions: 'Inspect only.' }
-  })
-  expect(page.form.runtimeInstructions).toBe('Inspect only.')
+  page.setModelValue('answerDisplay', 'compact')
+  await page.saveAgent()
+  expect(api.put).toHaveBeenCalledWith('/agent-profiles/agent', expect.objectContaining({ overrides: {
+    answerDisplay: 'compact', maxToolCalls: null, todoEnabled: true, delegationEnabled: true, sessionWritePaths: []
+  } }), { params: { scope: 'personal' } })
+})
+
+it('inherits, overrides, and clears runtime instructions', async () => {
+  const page = await mountEditor()
+  page.assignForm({ ...page.editingAgent, runtimeInstructions: 'Inspect only.', overrides: { runtimeInstructions: 'Inspect only.' } })
   expect(page.requestPayload().overrides.runtimeInstructions).toBe('Inspect only.')
   page.form.runtimeInstructions = ''
   expect(page.requestPayload().overrides.runtimeInstructions).toBe('')
   page.setOwnership('runtimeInstructions', 'inherit')
   expect(page.requestPayload().overrides).not.toHaveProperty('runtimeInstructions')
-  expect(root.querySelector('[aria-label="Laufzeit-Hinweis übernehmen oder anpassen"]')).not.toBeNull()
 })
 
-it('round-trips unlimited and sparse false overrides without conflating selection and policies', async () => {
-  const page = await mountEditor()
-  expect(page.form.maxToolCalls).toBeNull()
-  expect(page.form.todoEnabled).toBe(true)
-  expect(page.form.answerDisplay).toBe('timeline')
-  expect(root.querySelector('[role="group"][aria-label="Antwortdarstellung übernehmen oder anpassen"]')).not.toBeNull()
-  expect(root.textContent).toContain('Zeigt alle Arbeitsschritte direkt')
-  expect(page.form.integrationsEnabledByDefault).toBe(false)
-  expect(root.textContent).toContain('Modell- und Dienstkosten')
-  const policies = JSON.stringify(page.form.privatePermissions)
-  page.section = 'integrations'
-  await nextTick()
-  expect(root.textContent).toContain('SearXNG')
-  expect(root.textContent).toContain('Kalender')
-  page.form.integrationsEnabledByDefault = true
-  page.form.answerDisplay = 'compact'
-  expect(page.form.integrationAvailability).toEqual({ [first]: true, [second]: false })
-  page.setIntegrationAvailability(first, false)
-  expect(page.integrationAvailable({ id: first, enabled: true })).toBe(false)
-  expect(page.effectiveIntegrationPolicy('private', first, 'calendar.read')).toBe('disabled')
-  expect(JSON.stringify(page.form.privatePermissions)).toBe(policies)
-  page.setIntegrationAvailability(second, 'inherit')
-  await page.saveAgent()
-  expect(api.put).toHaveBeenCalledWith('/agent-profiles/agent', expect.objectContaining({
-    baseProfileId: builtinId,
-    overrides: expect.objectContaining({
-      maxToolCalls: null, todoEnabled: true, integrationsEnabledByDefault: true,
-      answerDisplay: 'compact',
-      integrationAvailability: { [first]: false },
-      privatePermissions: JSON.parse(policies)
-    })
-  }), { params: { scope: 'personal' } })
-  expect(page.dirty).toBe(false)
-})
-
-it('validates finite limits even when another tab is open and preserves edits after a failed save', async () => {
+it('validates finite limits and preserves content after a failed save', async () => {
   const page = await mountEditor()
   page.form.maxToolCalls = 0
-  page.section = 'integrations'
+  page.section = 'models'
   await page.saveAgent()
-  expect(page.section).toBe('profile')
   expect(api.put).not.toHaveBeenCalled()
   page.form.maxToolCalls = 7
-  page.agents.saving = true
-  await page.saveAgent()
-  expect(api.put).not.toHaveBeenCalled()
-  page.agents.saving = false
   api.put.mockRejectedValueOnce(new Error('request failed'))
   await page.saveAgent()
   expect(page.form.maxToolCalls).toBe(7)
   expect(page.dirty).toBe(true)
-  await page.saveAgent()
-  expect(api.put).toHaveBeenLastCalledWith('/agent-profiles/agent', expect.objectContaining({
-    overrides: expect.objectContaining({ maxToolCalls: 7 })
-  }), expect.anything())
-  expect(page.dirty).toBe(false)
 })
 
-it('limits profile policy options to the action metadata', async () => {
+it('preserves all session write path meanings and validates paths', async () => {
   const page = await mountEditor()
-
-  expect(page.policyOptions('ask', ['disabled', 'ask']).map(({ value }) => value)).toEqual([
-    'inherit', 'disabled', 'ask'
-  ])
-})
-
-it('removes overrides on inherit and preserves all session write path meanings', async () => {
-  const page = await mountEditor()
-
-  page.setOwnership('delegationEnabled', 'inherit')
-  expect(page.form.delegationEnabled).toBe(false)
-  expect(page.requestPayload().overrides).not.toHaveProperty('delegationEnabled')
-
-  page.setOwnership('sessionWritePaths', 'own')
   page.form.sessionWriteMode = 'unrestricted'
   expect(page.requestPayload().overrides.sessionWritePaths).toBeNull()
   page.form.sessionWriteMode = 'denied'
   expect(page.requestPayload().overrides.sessionWritePaths).toEqual([])
   page.form.sessionWriteMode = 'paths'
   page.form.sessionWritePathsText = 'plan.md\nausgabe/bericht.md'
-  expect(page.sessionWritePathsRule()).toBe(true)
   expect(page.requestPayload().overrides.sessionWritePaths).toEqual(['plan.md', 'ausgabe/bericht.md'])
   page.form.sessionWritePathsText = '../secret'
   expect(page.sessionWritePathsRule()).not.toBe(true)
 })
 
-it('keeps integration default and selection overrides independent', async () => {
-  const sparse = {
-    id: 'sparse', scope: 'personal', protected: false, name: 'Sparse', description: '',
-    baseProfileId: builtinId, overrides: { integrationAvailability: { [first]: false } },
-    personaId: null, instructions: 'Follow the request.', answerDisplay: 'compact', maxToolCalls: 25,
-    todoEnabled: false, integrationsEnabledByDefault: true, integrationAvailability: { [first]: false },
-    privatePermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} },
-    publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} },
-    delegationEnabled: false, sessionWritePaths: null
-  }
-  const page = await mountEditor('/agents/sparse?scope=personal', [sparse])
-
-  expect(page.ownership.integrationsEnabledByDefault).toBe(false)
-  expect(page.requestPayload().overrides).toEqual({ integrationAvailability: { [first]: false } })
-  expect(page.integrationDefault).toBe('inherit')
-  for (const value of [false, true]) {
-    page.integrationDefault = value
-    expect(page.requestPayload().overrides).toEqual({
-      integrationsEnabledByDefault: value,
-      integrationAvailability: { [first]: false }
-    })
-  }
-  page.integrationDefault = 'inherit'
-  expect(page.form.integrationsEnabledByDefault).toBe(true)
-  expect(page.requestPayload().overrides).toEqual({ integrationAvailability: { [first]: false } })
-})
-
-it('edits built-in access while keeping profile instructions protected and overrides sparse', async () => {
-  const builtin = {
-    id: 'build', name: 'Build', description: '', scope: 'instance', protected: true, accessEditable: true,
-    instructions: 'Implement.', integrationsEnabledByDefault: false,
-    integrationAvailability: { [first]: true },
-    privatePermissions: { policies: { 'filesystem.write': 'auto' }, integrationPolicies: {}, resourcePolicies: {} },
-    accessBaseline: { integrationsEnabledByDefault: false, integrationAvailability: { [first]: true },
-      privatePermissions: { policies: { 'filesystem.write': 'auto' }, integrationPolicies: {}, resourcePolicies: {} } },
-    overrides: {}
-  }
-  const page = await mountEditor('/agents/build?scope=instance', [builtin])
+it('edits built-in models in administration while protecting their workflow', async () => {
+  const page = await mountEditor(`/admin/agents/${builtinId}`)
+  page.setModelValue('titleVisionFallbackEnabled', false)
   expect(page.isProtected).toBe(true)
-  expect(page.accessProtected).toBe(false)
-  expect(page.requestPayload().overrides).toEqual({})
-  expect(page.integrationAvailable({ id: first, enabled: true })).toBe(true)
-  page.setGlobalPolicy('private', 'filesystem.read', 'ask')
-  expect(page.effectiveGlobalPolicy('private', 'filesystem.write')).toBe('auto')
-  expect(page.requestPayload().overrides.privatePermissions.policies).toEqual({ 'filesystem.read': 'ask' })
-  page.setIntegrationAvailability(first, false)
-  expect(page.integrationAvailable({ id: first, enabled: true })).toBe(false)
-  page.setIntegrationAvailability(first, 'inherit')
-  expect(page.integrationAvailable({ id: first, enabled: true })).toBe(true)
-  expect(page.dirty).toBe(true)
   await page.saveAgent()
-  expect(api.put).toHaveBeenCalledWith('/agent-profiles/build/access', expect.objectContaining({
-    privatePermissions: { policies: { 'filesystem.read': 'ask' }, integrationPolicies: {}, resourcePolicies: {} }
-  }), { params: { scope: 'instance' } })
-  page.setGlobalPolicy('private', 'filesystem.read', 'inherit')
-  expect(page.requestPayload().overrides).not.toHaveProperty('privatePermissions')
-  expect(page.requestPayload().overrides).not.toHaveProperty('integrationAvailability')
-  page.setIntegrationPolicy('public', first, 'browser.read', 'ask')
-  page.setResourcePolicy('public', first, 'page', 'browser.read', 'disabled')
-  page.applyInheritedValues()
-  expect(page.requestPayload().overrides.publicPermissions).toMatchObject({
-    integrationPolicies: { [first]: { 'browser.read': 'ask' } },
-    resourcePolicies: { [first]: { page: { 'browser.read': 'disabled' } } }
-  })
-  page.setIntegrationPolicy('public', first, 'browser.read', 'inherit')
-  page.setResourcePolicy('public', first, 'page', 'browser.read', 'inherit')
-  expect(page.requestPayload().overrides).not.toHaveProperty('publicPermissions')
-  page.section = 'permissions'
-  await nextTick()
-  expect(root.textContent).not.toContain('Private Modelle Berechtigungen übernehmen oder anpassen')
-  page.section = 'integrations'
-  await nextTick()
-  expect(root.querySelector('[aria-label="Integrationsauswahl übernehmen oder anpassen"]')).toBeNull()
-})
-
-it('shows shipped profiles read-only without a save action', async () => {
-  const page = await mountEditor(`/agents/${builtinId}?scope=instance`)
-
-  expect(page.isProtected).toBe(true)
-  expect(page.form.baseProfileId).toBeNull()
-  expect(page.dirty).toBe(false)
-  expect(root.textContent).toContain('schreibgeschützt')
-  expect(root.textContent).not.toContain('Agentenprofil speichern')
-  expect(root.querySelector('form').hasAttribute('inert')).toBe(false)
-  expect([...root.querySelectorAll('[role="tab"]')].every((tab) => !tab.hasAttribute('disabled'))).toBe(true)
+  expect(api.put).toHaveBeenCalledWith(`/agent-profiles/${builtinId}/access`, { titleVisionFallbackEnabled: false }, { params: { scope: 'instance' } })
 })

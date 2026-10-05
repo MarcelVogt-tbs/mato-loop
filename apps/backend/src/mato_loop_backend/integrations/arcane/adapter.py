@@ -127,7 +127,7 @@ def _binding(context: Any, integration_id: UUID) -> tuple[IntegrationInstance, s
         raise ValueError("Arcane integration is not bound")
     instance = next((item for item in context.integration_settings.instances if item.id == integration_id
                      and item.enabled and item.adapter_type == "arcane" and item.integration_type == "infrastructure"), None)
-    if instance is None or json.dumps(instance.model_dump(mode="json"), ensure_ascii=True, separators=(",", ":"), sort_keys=True) != revision:
+    if instance is None or json.dumps(instance.binding_data(), ensure_ascii=True, separators=(",", ":"), sort_keys=True) != revision:
         raise ValueError("Arcane integration binding is stale")
     return instance, revision
 

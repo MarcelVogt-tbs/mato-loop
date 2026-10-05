@@ -14,6 +14,7 @@ from mato_loop_backend.permissions.policy import (
     skill_write_permission,
 )
 from mato_loop_backend.settings import SkillDefinition, ToolExecutionPolicy
+from mato_loop_backend.settings.effective import personal_skills_allowed
 from mato_loop_backend.skills import (
     SkillError,
     SkillService,
@@ -40,6 +41,8 @@ async def _save_skill_draft(
     name_hint: str | None = None,
     current_skill: SkillDefinition | None = None,
 ) -> ToolResult:
+    if not await personal_skills_allowed(context.db, context.session.user_id):
+        return ToolResult.error("skill.personalDisabled")
     context.tool_settings = await tools_access.profile_tool_settings(context)
     policy = permissions_resolution.tool_execution_policy(
         context.tool_settings, "skills.write", ToolExecutionPolicy.ASK

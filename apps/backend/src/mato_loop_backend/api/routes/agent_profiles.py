@@ -1,4 +1,3 @@
-import re
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
@@ -8,9 +7,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
-from mato_loop_backend.api.integration_resources import _access_payload, _integration_resources
+from mato_loop_backend.api.permission_settings import SettingsApiScope, _load_scoped
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.models import ChatSession, PermissionGrant, UserAccount
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.providers.settings_service import (
@@ -20,38 +18,31 @@ from mato_loop_backend.providers.settings_service import (
 )
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
-    GENERAL_PROFILE_ID,
     AgentIdentitySettings,
     AgentProfile,
     AgentProfileOverrides,
-    AgentProfilePermissions,
     AgentProfilesSettings,
     AiSettings,
     CustomAgentProfile,
     IntegrationSettings,
     ModelCapability,
     SettingsStore,
-    ToolExecutionPolicy,
     ToolSettings,
-    TrustLevel,
     UserAgentIdentitySettings,
     UserAgentProfilesSettings,
     load_effective_agent_profiles,
     load_effective_ai,
     load_effective_integrations,
-    load_effective_tools,
     resolve_agent_persona,
     resolve_agent_profile,
     shipped_profiles,
 )
+from mato_loop_backend.settings.effective import personal_settings_allowed
 from mato_loop_backend.settings.models import (
     AgentProfileAccessOverrides,
 )
-from mato_loop_backend.tools.catalog import tool_registry
 
 router = APIRouter(prefix="/agent-profiles", dependencies=[Depends(require_user)])
-SettingsApiScope = Literal["instance", "personal"]
-_RESOURCE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,499}$")
 
 
 def _camel_case(value: str) -> str:
@@ -81,33 +72,10 @@ class EnabledRequest(BaseModel):
     enabled: bool
 
 
-async def _load_scoped(
-    db: AsyncSession,
-    scope: SettingsApiScope,
-    user: UserAccount,
-    *,
-    for_update: bool = False,
-) -> tuple[AgentProfilesSettings | UserAgentProfilesSettings, UUID | None]:
-    if scope == "instance":
-        if not user.is_admin:
-            raise ApiError(403, "auth.adminRequired")
-        return (
-            await SettingsStore.load(
-                db, AgentProfilesSettings, for_update=for_update
-            ),
-            None,
-        )
-    instance = await SettingsStore.load(
-        db, AgentProfilesSettings, for_update=for_update
-    )
-    if not instance.personal_agents_enabled:
-        raise ApiError(409, "agentProfile.personalDisabled")
-    return (
-        await SettingsStore.load(
-            db, UserAgentProfilesSettings, user_id=user.id, for_update=for_update
-        ),
-        user.id,
-    )
+class DefaultProfileRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=_camel_case, populate_by_name=True, extra="forbid")
+
+    profile_id: UUID
 
 
 def _profile_payload(
@@ -117,7 +85,6 @@ def _profile_payload(
     personal_identity: UserAgentIdentitySettings | None,
     stored: CustomAgentProfile | None = None,
 ) -> dict:
-    resolved = resolve_agent_persona(instance_identity, personal_identity, profile)
     return {
         **profile.model_dump(mode="json", by_alias=True),
         "scope": scope,
@@ -129,8 +96,7 @@ def _profile_payload(
             if stored is not None
             else {}
         ),
-        "resolvedPersonaId": str(resolved.id),
-        "resolvedPersonaName": resolved.name,
+        "resolvedPersonaName": resolve_agent_persona(instance_identity, personal_identity, profile).name,
     }
 
 
@@ -157,16 +123,16 @@ async def _response(
     personal_identity = await SettingsStore.load_optional(
         db, UserAgentIdentitySettings, user_id=user.id
     )
+    if scope == "instance":
+        personal_identity = None
+    instance_identity = instance_identity.model_copy(deep=True)
+    instance_identity.personal_personas_enabled = await personal_settings_allowed(db, user.id, instance_identity.personal_personas_enabled)
     integrations = (
         await SettingsStore.load(db, IntegrationSettings)
         if scope == "instance"
         else await load_effective_integrations(db, user.id)
     )
-    tools = (
-        await SettingsStore.load(db, ToolSettings)
-        if scope == "instance"
-        else await load_effective_tools(db, user.id)
-    )
+    tools = await SettingsStore.load(db, ToolSettings)
     effective_profiles = [
         _profile_payload(
             profile,
@@ -180,7 +146,7 @@ async def _response(
         for profile in effective.profiles
     ]
     disabled_personal_profiles = []
-    if scope == "personal" and not effective.personal_agents_enabled and personal_profiles is not None:
+    if scope == "personal" and not effective.personal_agents_enabled and not user.is_admin and personal_profiles is not None:
         base_ids = {profile.id for profile in shipped_profiles()}
         bases = {profile.id: profile for profile in effective.profiles if profile.id in base_ids}
         disabled_personal_profiles = [
@@ -204,15 +170,10 @@ async def _response(
             accessBaseline=builtin.model_dump(mode="json", by_alias=True),
             overrides=access.model_dump(mode="json", by_alias=True) if access else {},
         )
-    public_tools = tools.model_copy(deep=True).select_trust(TrustLevel.PUBLIC)
-    private_tools = tools.model_copy(deep=True).select_trust(TrustLevel.PRIVATE)
-    groups = tool_registry.catalog(public_tools, IntegrationSettings())
     return {
-        "defaultAgentProfileId": str(GENERAL_PROFILE_ID),
+        "defaultAgentProfileId": str(instance_profiles.default_profile_id),
         "personalAgentsEnabled": effective.personal_agents_enabled,
-        "groups": groups,
-        "publicGroups": groups,
-        "privateGroups": tool_registry.catalog(private_tools, IntegrationSettings()),
+        "personalToolPermissionsEnabled": tools.personal_settings_enabled,
         "integrations": [
             {
                 "id": str(instance.id),
@@ -224,137 +185,17 @@ async def _response(
                     instance.adapter_type
                 ).value != "disabled",
                 "scope": "personal" if instance.owner_id == user.id else "instance",
-                "supportsPolicies": bool(
-                    tool_registry.integration_resource_actions(instance)
-                ),
-                "supportsResources": bool(
-                    (adapter := integration_adapter(
-                        instance.integration_type, instance.adapter_type
-                    ))
-                    and adapter.resource_loader
-                    and tool_registry.integration_resource_actions(instance)
-                ),
             }
             for instance in integrations.instances
         ],
-        "personas": [
-            {
-                **persona.model_dump(mode="json", by_alias=True),
-                "scope": "instance",
-                "effective": True,
-            }
-            for persona in instance_identity.personas
-        ]
-        + (
-            [
-                {
-                    **persona.model_dump(mode="json", by_alias=True),
-                    "scope": "personal",
-                    "effective": instance_identity.personal_personas_enabled,
-                }
-                for persona in personal_identity.personas
-            ]
-            if scope != "instance" and personal_identity is not None
-            else []
-        ),
-        "personalPersonasEnabled": instance_identity.personal_personas_enabled,
         "effectiveAgents": [profile for profile in effective_profiles if profile["enabled"]],
+        "baseProfiles": [profile for profile in effective_profiles if profile["id"] in builtins],
         "agents": disabled_personal_profiles if disabled_personal_profiles else (
             effective_profiles if settings is None or scope is None else [
                 profile for profile in effective_profiles if profile["scope"] == scope
             ]
         ),
     }
-
-
-def _catalog_policies(groups: list[dict]) -> dict[str, set[ToolExecutionPolicy]]:
-    allowed: dict[str, set[ToolExecutionPolicy]] = {}
-    for group in groups:
-        actions = [
-            *group.get("actions", []),
-            *(action for tool in group["tools"] for action in tool["actions"]),
-        ]
-        for action in actions:
-            if not action["configurable"]:
-                continue
-            modes = {
-                ToolExecutionPolicy(policy)
-                for policy in action["allowedPolicies"]
-            }
-            allowed.setdefault(action["capability"], modes).intersection_update(modes)
-    return allowed
-
-
-def _catalog_integration_policies(
-    groups: list[dict],
-) -> dict[str, dict[str, set[ToolExecutionPolicy]]]:
-    result: dict[str, dict[str, set[ToolExecutionPolicy]]] = {}
-    for group in groups:
-        for tool in group["tools"]:
-            source = tool.get("source", {})
-            integration_ids = {
-                value for value in [source.get("id"), *source.get("ids", [])] if value
-            }
-            for integration_id in integration_ids:
-                allowed = result.setdefault(integration_id, {})
-                for action in tool["actions"]:
-                    if not action["configurable"]:
-                        continue
-                    modes = {
-                        ToolExecutionPolicy(policy)
-                        for policy in action["allowedPolicies"]
-                    }
-                    allowed.setdefault(
-                        action["capability"], modes
-                    ).intersection_update(modes)
-    return result
-
-
-def _validate_permissions(
-    permissions: AgentProfilePermissions,
-    allowed: dict[str, set[ToolExecutionPolicy]],
-    integration_allowed: dict[str, dict[str, set[ToolExecutionPolicy]]],
-    integration_ids: set[str],
-    field: str,
-    existing: AgentProfilePermissions | None = None,
-) -> None:
-    def entries(value: AgentProfilePermissions):
-        for capability, policy in value.policies.items():
-            yield None, None, capability, policy
-        for integration_id, policies in value.integration_policies.items():
-            for capability, policy in policies.items():
-                yield integration_id, None, capability, policy
-        for integration_id, resources in value.resource_policies.items():
-            for resource_key, policies in resources.items():
-                for capability, policy in policies.items():
-                    yield integration_id, resource_key, capability, policy
-
-    existing_entries = set(entries(existing)) if existing is not None else set()
-    for entry in entries(permissions):
-        integration_id, resource_key, capability, policy = entry
-        if entry in existing_entries:
-            scoped_allowed = (
-                allowed
-                if integration_id is None
-                else integration_allowed.get(integration_id, {})
-            )
-            if capability not in scoped_allowed or policy not in scoped_allowed[capability]:
-                continue
-        if integration_id is not None:
-            try:
-                canonical_id = str(UUID(integration_id))
-            except ValueError as exc:
-                raise ApiError(422, "validation.invalid", field=field) from exc
-            if canonical_id != integration_id or integration_id not in integration_ids:
-                raise ApiError(422, "validation.invalidChoice", field=field)
-            scoped_allowed = integration_allowed.get(integration_id, {})
-            if capability not in scoped_allowed or policy not in scoped_allowed[capability]:
-                raise ApiError(422, "validation.invalidChoice", field=field)
-            if resource_key is not None and _RESOURCE_KEY.fullmatch(resource_key) is None:
-                raise ApiError(422, "validation.invalid", field=field)
-            continue
-        if capability not in allowed or policy not in allowed[capability]:
-            raise ApiError(422, "validation.invalidChoice", field=field)
 
 
 async def _profile_from_request(
@@ -370,26 +211,14 @@ async def _profile_from_request(
     if payload.base_profile_id not in bases:
         raise ApiError(422, "validation.invalidChoice", field="baseProfileId")
     overrides = payload.overrides
-    persona_id = overrides.persona_id
-    if "persona_id" in overrides.model_fields_set and persona_id is not None:
-        identity = await SettingsStore.load(
-            db, AgentIdentitySettings, for_update=owner_id is not None
-        )
-        allowed_persona_ids = {persona.id for persona in identity.personas}
-        if owner_id is not None and identity.personal_personas_enabled:
-            personal_identity = await SettingsStore.load_optional(
-                db,
-                UserAgentIdentitySettings,
-                user_id=user.id,
-                for_update=True,
-            )
-            if personal_identity is not None:
-                allowed_persona_ids.update(
-                    persona.id for persona in personal_identity.personas
-                )
-        if persona_id not in allowed_persona_ids:
-            raise ApiError(422, "validation.invalidChoice", field="personaId")
-
+    # Profile-content updates preserve permissions edited through the tool settings API.
+    permission_fields = {"private_permissions", "public_permissions", "shell_prefixes", "integration_availability", "integrations_enabled_by_default"}
+    if permission_fields & overrides.model_fields_set:
+        raise ApiError(422, "tools.usePermissionSettings", field="overrides")
+    values = overrides.model_dump(exclude_unset=True)
+    if existing is not None:
+        values.update(existing.overrides.model_dump(include=permission_fields, exclude_unset=True))
+    overrides = AgentProfileOverrides.model_validate(values)
     ai = (
         await load_effective_ai(db, user.id)
         if owner_id is not None
@@ -424,50 +253,6 @@ async def _profile_from_request(
         if profile is None or overrides.reasoning_effort not in profile.options:
             raise ApiError(422, "validation.invalidChoice", field="reasoningEffort")
 
-    integrations = (
-        await load_effective_integrations(db, user.id)
-        if owner_id is not None
-        else await SettingsStore.load(db, IntegrationSettings)
-    )
-    tools = (
-        await load_effective_tools(db, user.id)
-        if owner_id is not None
-        else await SettingsStore.load(db, ToolSettings)
-    )
-    groups = tool_registry.catalog(tools, integrations)
-    allowed = _catalog_policies(tool_registry.catalog(tools, IntegrationSettings()))
-    integration_allowed = _catalog_integration_policies(groups)
-    integration_ids = {str(item.id) for item in integrations.instances}
-    integration_availability = overrides.integration_availability or {}
-    existing_availability = (
-        existing.overrides.integration_availability or {} if existing is not None else {}
-    )
-    for integration_id, enabled in integration_availability.items():
-        if integration_id not in integration_ids and (
-            existing is None
-            or existing_availability.get(integration_id) is not enabled
-        ):
-            raise ApiError(422, "validation.invalidChoice", field="integrationAvailability")
-    for field, api_field in (
-        ("private_permissions", "privatePermissions"),
-        ("public_permissions", "publicPermissions"),
-    ):
-        permissions = getattr(overrides, field)
-        if field not in overrides.model_fields_set or permissions is None:
-            continue
-        existing_permissions = (
-            getattr(existing.overrides, field)
-            if existing is not None and field in existing.overrides.model_fields_set
-            else None
-        )
-        _validate_permissions(
-            permissions,
-            allowed,
-            integration_allowed,
-            integration_ids,
-            api_field,
-            existing_permissions,
-        )
     return CustomAgentProfile(
         id=profile_id or uuid4(),
         name=payload.name,
@@ -517,46 +302,6 @@ async def list_agent_profiles(
     else:
         settings, _owner_id = await _load_scoped(db, scope, user)
     return await _response(db, user, settings, scope)
-
-
-@router.get("/integration-metadata/{integration_id}")
-async def agent_profile_integration_metadata(
-    integration_id: UUID,
-    user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-    scope: SettingsApiScope = "personal",
-) -> dict:
-    await _load_scoped(db, scope, user)
-    integrations = (
-        await SettingsStore.load(db, IntegrationSettings)
-        if scope == "instance"
-        else await load_effective_integrations(db, user.id)
-    )
-    instance = next(
-        (item for item in integrations.instances if item.id == integration_id), None
-    )
-    if instance is None:
-        raise ApiError(404, "integration.notFound")
-    resources = await _integration_resources(db, instance)
-    if scope == "instance":
-        base_tools = await SettingsStore.load(db, ToolSettings)
-        public_tools = base_tools.model_copy(deep=True).select_trust(TrustLevel.PUBLIC)
-        private_tools = base_tools.model_copy(deep=True).select_trust(TrustLevel.PRIVATE)
-    else:
-        public_tools = await load_effective_tools(db, user.id, TrustLevel.PUBLIC)
-        private_tools = await load_effective_tools(db, user.id, TrustLevel.PRIVATE)
-    access = _access_payload(instance, resources, public_tools)
-    private_access = _access_payload(instance, resources, private_tools)
-    return {
-        "integrationId": str(instance.id),
-        "actions": access["actions"],
-        "resources": access["resources"],
-        "public": {"actions": access["actions"], "resources": access["resources"]},
-        "private": {
-            "actions": private_access["actions"],
-            "resources": private_access["resources"],
-        },
-    }
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -624,9 +369,16 @@ async def set_agent_profile_enabled(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     scope: SettingsApiScope = "personal",
 ) -> dict:
-    if profile_id in {profile.id for profile in shipped_profiles()}:
-        raise ApiError(409, "agentProfile.defaultProtected")
     settings, owner_id = await _load_scoped(db, scope, user, for_update=True)
+    if isinstance(settings, AgentProfilesSettings) and profile_id == settings.default_profile_id and not payload.enabled:
+        raise ApiError(409, "agentProfile.defaultMustBeActive")
+    if profile_id in {profile.id for profile in shipped_profiles()}:
+        if not isinstance(settings, AgentProfilesSettings):
+            raise ApiError(409, "agentProfile.defaultProtected")
+        settings.builtin_enabled[profile_id] = payload.enabled
+        await SettingsStore.save(db, settings)
+        await db.commit()
+        return await _response(db, user, settings, scope)
     profile = next((item for item in settings.profiles if item.id == profile_id), None)
     if profile is None:
         raise ApiError(404, "agentProfile.notFound")
@@ -656,12 +408,18 @@ async def update_builtin_access(
             settings.builtin_access_overrides.get(profile_id, AgentProfileAccessOverrides()).model_dump()
         ),
     )
+    permission_fields = {"private_permissions", "public_permissions", "shell_prefixes", "integration_availability", "integrations_enabled_by_default"}
+    if permission_fields & payload.model_fields_set:
+        raise ApiError(422, "tools.usePermissionSettings")
+    values = payload.model_dump()
+    values.update(existing.overrides.model_dump(include=permission_fields, exclude_unset=True))
     await _profile_from_request(
         db, user, owner_id,
         AgentProfileRequest(name=base.name, description=base.description, base_profile_id=base.id,
                             overrides=AgentProfileOverrides.model_validate(payload.model_dump())),
         existing=existing,
     )
+    payload = AgentProfileAccessOverrides.model_validate(values)
     if payload.model_fields_set:
         settings.builtin_access_overrides[profile_id] = payload
     else:
@@ -679,6 +437,8 @@ async def delete_agent_profile(
     scope: SettingsApiScope = "personal",
 ) -> None:
     settings, owner_id = await _load_scoped(db, scope, user, for_update=True)
+    if isinstance(settings, AgentProfilesSettings) and profile_id == settings.default_profile_id:
+        raise ApiError(409, "agentProfile.defaultMustBeActive")
     if profile_id in {profile.id for profile in shipped_profiles()}:
         raise ApiError(409, "agentProfile.defaultProtected")
     profile = next((item for item in settings.profiles if item.id == profile_id), None)
@@ -702,7 +462,7 @@ async def delete_agent_profile(
             delete(PermissionGrant).where(PermissionGrant.session_id.in_(session_ids))
         )
         for session in sessions:
-            session.agent_profile_id = GENERAL_PROFILE_ID
+            session.agent_profile_id = (await SettingsStore.load(db, AgentProfilesSettings)).default_profile_id
     settings.profiles.remove(profile)
     await SettingsStore.save(db, settings, user_id=owner_id)
     await db.commit()
@@ -719,6 +479,22 @@ async def set_personal_agents_enabled(
     )
     assert isinstance(settings, AgentProfilesSettings)
     settings.personal_agents_enabled = payload.enabled
+    await SettingsStore.save(db, settings)
+    await db.commit()
+    return await _response(db, user, settings, "instance")
+
+
+@router.patch("/default")
+async def set_default_agent_profile(
+    payload: DefaultProfileRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    settings, _ = await _load_scoped(db, "instance", user, for_update=True)
+    profiles = await load_effective_agent_profiles(db, user.id, include_personal=False, include_integrations=False)
+    if not any(profile.id == payload.profile_id and profile.enabled for profile in profiles.profiles):
+        raise ApiError(409, "agentProfile.defaultMustBeActive")
+    settings.default_profile_id = payload.profile_id
     await SettingsStore.save(db, settings)
     await db.commit()
     return await _response(db, user, settings, "instance")

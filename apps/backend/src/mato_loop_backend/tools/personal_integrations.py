@@ -174,6 +174,13 @@ def _payload(item: IntegrationInstance) -> dict[str, Any]:
 
 async def _settings(context: ToolContext) -> tuple[IntegrationSettings, UserIntegrationSettings]:
     global_settings = await SettingsStore.load(context.db, IntegrationSettings)
+    from mato_loop_backend.settings.effective import personal_settings_allowed
+
+    if await personal_settings_allowed(context.db, context.session.user_id, False):
+        global_settings = global_settings.model_copy(deep=True)
+        for adapter_type in _CONFIG_FIELDS:
+            if global_settings.availability_for(adapter_type) == IntegrationAdapterAvailability.INSTANCE_ONLY:
+                global_settings.adapter_availability[adapter_type] = IntegrationAdapterAvailability.FULL
     personal = await SettingsStore.load(
         context.db, UserIntegrationSettings, user_id=context.session.user_id
     )

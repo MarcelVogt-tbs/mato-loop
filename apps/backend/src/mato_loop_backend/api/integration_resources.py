@@ -104,7 +104,7 @@ async def _integration_resources(
 def _access_payload(
     instance: IntegrationInstance,
     resources: tuple,
-    tools: ToolSettingsDocument,
+    tools: ToolSettings,
 ) -> dict:
     adapter = integration_adapter(instance.integration_type, instance.adapter_type)
     if adapter is None:

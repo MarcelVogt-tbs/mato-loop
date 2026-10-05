@@ -3,6 +3,7 @@ import { api } from 'src/boot/axios'
 
 export const useChannelStore = defineStore('channels', {
   state: () => ({
+    enabled: false,
     providers: [],
     endpoints: [],
     loading: false,
@@ -15,6 +16,7 @@ export const useChannelStore = defineStore('channels', {
         ? await api.get('/channels/providers', config)
         : await api.get('/channels/providers')
       this.providers = data.providers
+      this.enabled = data.enabled === true
       return data
     },
     async fetchEndpoints(config) {
@@ -24,11 +26,11 @@ export const useChannelStore = defineStore('channels', {
       this.endpoints = data.endpoints
       return data
     },
-    async fetchAll(config) {
+    async fetchAll(config, includeEndpoints = true) {
       this.loading = true
       this.loadFailed = false
       try {
-        await Promise.all([this.fetchProviders(config), this.fetchEndpoints(config)])
+        await Promise.all([this.fetchProviders(config), ...(includeEndpoints ? [this.fetchEndpoints(config)] : [])])
         this.loaded = true
       } catch (error) {
         this.loadFailed = true
@@ -40,6 +42,10 @@ export const useChannelStore = defineStore('channels', {
     async setProviderAllowed(provider, allowed) {
       await api.put(`/channels/providers/${provider}`, { allowed })
       await this.fetchProviders()
+    },
+    async setEnabled(enabled) {
+      const { data } = await api.put('/channels/settings', { enabled })
+      this.enabled = data.enabled
     },
     async createTelegram(payload) {
       const { data } = await api.post('/channels/telegram/endpoints', payload)

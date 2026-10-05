@@ -164,7 +164,7 @@ async def test_profile_update_preserves_omitted_new_fields_and_unchanged_stale_i
         overrides={"maxToolCalls": None, "integrationsEnabledByDefault": False,
                    "integrationAvailability": {stale_id: False}},
     )
-    for overrides in ({}, {"integrationAvailability": {stale_id: False}}):
+    for overrides in ({}, {"maxToolCalls": None}):
         result = await _profile_from_request(
             AsyncMock(),
             user,
@@ -176,9 +176,11 @@ async def test_profile_update_preserves_omitted_new_fields_and_unchanged_stale_i
             profile_id=profile.id,
             existing=existing,
         )
-        assert result.overrides.model_dump(exclude_unset=True, by_alias=True) == overrides
+        assert result.overrides.model_dump(exclude_unset=True, by_alias=True) == {
+            **overrides, "integrationsEnabledByDefault": False, "integrationAvailability": {stale_id: False},
+        }
     for overrides in ({stale_id: True}, {str(uuid4()): False}):
-        with pytest.raises(ApiError, match="validation.invalidChoice"):
+        with pytest.raises(ApiError, match="tools.usePermissionSettings"):
             await _profile_from_request(
                 AsyncMock(),
                 user,
@@ -197,14 +199,13 @@ async def test_profile_update_preserves_omitted_new_fields_and_unchanged_stale_i
             name="Agent",
             description="",
             baseProfileId=GENERAL_PROFILE_ID,
-            overrides={"maxToolCalls": None, "integrationsEnabledByDefault": True,
-                       "integrationAvailability": {}},
+            overrides={"maxToolCalls": None},
         ),
         existing=existing,
     )
     assert result.overrides.max_tool_calls is None
-    assert result.overrides.integrations_enabled_by_default is True
-    assert result.overrides.integration_availability == {}
+    assert result.overrides.integrations_enabled_by_default is False
+    assert result.overrides.integration_availability == {stale_id: False}
 
 
 async def test_profile_scope_validation_and_listing_include_option_only_integrations(monkeypatch):
@@ -222,10 +223,10 @@ async def test_profile_scope_validation_and_listing_include_option_only_integrat
         name="Agent", description="", baseProfileId=GENERAL_PROFILE_ID,
         overrides={"integrationAvailability": {str(coding.id): True}},
     )
-    with pytest.raises(ApiError, match="validation.invalidChoice"):
+    with pytest.raises(ApiError, match="tools.usePermissionSettings"):
         await _profile_from_request(AsyncMock(), user, None, request)
-    result = await _profile_from_request(AsyncMock(), user, user.id, request)
-    assert result.overrides.integration_availability == {str(coding.id): True}
+    with pytest.raises(ApiError, match="tools.usePermissionSettings"):
+        await _profile_from_request(AsyncMock(), user, user.id, request)
     instance_result = await _response(AsyncMock(), user, scope="instance")
     personal_result = await _response(AsyncMock(), user, scope="personal")
     assert [item["id"] for item in instance_result["integrations"]] == [str(search.id)]

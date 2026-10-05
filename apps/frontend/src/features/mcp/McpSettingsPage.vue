@@ -1,32 +1,25 @@
 <template>
-  <router-view v-if="route.name === 'settings-mcp-tools'" />
+  <router-view v-if="['settings-mcp-tools', 'admin-mcp-tools'].includes(route.name)" />
   <section v-else>
     <header class="settings-section-header">
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">MCP-Server</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">Externe Tools über das Model Context Protocol bereitstellen.</p>
       </div>
-      <div class="settings-scope-actions row items-center col-auto">
+      <div v-if="showManagement" class="settings-scope-actions row items-center col-auto">
         <q-btn color="primary" unelevated no-caps no-wrap icon="add" label="MCP-Server hinzufügen" :disable="servers.loading || (personalUnavailable && !auth.isAdmin)" @click="openCreate" />
       </div>
     </header>
 
-    <q-banner rounded class="app-surface-tonal q-mb-md">
+    <q-tabs v-if="admin" v-model="section" dense no-caps align="left" active-color="primary" indicator-color="primary" class="q-mb-lg">
+      <q-tab name="general" icon="settings" label="Einstellungen" />
+      <q-tab name="management" icon="hub" label="Verwaltung" />
+    </q-tabs>
+    <q-banner v-if="showManagement" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="security" color="primary" /></template>
-      MCP-Tools können externe Aktionen ausführen. Prüfe Server und Tools; Rechte werden in Agentenprofilen festgelegt.
+       MCP-Tools können externe Aktionen ausführen. Berechtigungen werden beim jeweiligen Server verwaltet.
     </q-banner>
-    <q-card v-if="auth.isAdmin" flat class="app-surface-tonal q-mb-md">
-      <q-card-section class="row items-center justify-between q-gutter-md">
-        <div>
-          <div class="text-subtitle2 text-weight-bold">Persönliche MCP-Server</div>
-          <div class="text-caption app-muted">Erlaubt Benutzern, eigene MCP-Server einzurichten.</div>
-        </div>
-        <div class="row items-center q-gutter-sm">
-          <q-toggle v-model="personalAllowed" color="primary" label="Erlaubt" :disable="servers.settingsLoading || servers.settingsSaving || servers.settingsLoadFailed" />
-          <q-btn unelevated no-caps color="primary" icon="save" label="Speichern" :loading="servers.settingsSaving" :disable="servers.settingsLoading || !settingsDirty" @click="saveSettings" />
-        </div>
-      </q-card-section>
-    </q-card>
+    <PersonalSettingsGate v-if="admin && section === 'general'" :model-value="servers.personalAllowed" title="Persönliche MCP-Server erlauben" description="Benutzer können eigene MCP-Server einrichten." :disabled="servers.settingsLoading || servers.settingsSaving || servers.settingsLoadFailed" @update:model-value="saveSettings" />
     <q-banner v-if="personalBlocked" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="block" color="warning" /></template>
       Persönliche MCP-Server sind für diese Instanz deaktiviert.
@@ -44,16 +37,16 @@
       OAuth-Anmeldung wird abgeschlossen und die Tools werden geprüft.
     </q-banner>
 
-    <q-card flat class="app-surface">
+    <q-card v-if="showManagement" flat class="app-surface">
       <q-list separator>
-        <q-item v-if="servers.loaded && !servers.visibleServers.length" class="q-py-lg">
+         <q-item v-if="servers.loaded && !visibleServers.length" class="q-py-lg">
           <q-item-section avatar><q-avatar color="grey-7" text-color="white" icon="hub" /></q-item-section>
           <q-item-section>
             <q-item-label>Noch kein MCP-Server konfiguriert</q-item-label>
             <q-item-label caption>Füge einen streamfähigen HTTP-Endpunkt hinzu.</q-item-label>
           </q-item-section>
         </q-item>
-        <q-item v-for="server in servers.visibleServers" :key="server.id" class="q-py-md">
+         <q-item v-for="server in visibleServers" :key="server.id" class="q-py-md">
           <q-item-section avatar top><q-avatar color="primary" text-color="white" icon="hub" /></q-item-section>
           <q-item-section>
             <div class="row items-center q-gutter-sm">
@@ -70,7 +63,7 @@
           <q-item-section side top>
             <div class="row items-center no-wrap q-gutter-xs">
               <q-toggle dense :model-value="server.enabled" :aria-label="`${server.name} ${server.enabled ? 'deaktivieren' : 'aktivieren'}`" :disable="!canEdit(server) || togglingId !== null" @update:model-value="toggleServer(server, $event)" />
-              <q-btn flat dense :round="$q.screen.lt.md" no-caps icon="construction" :label="$q.screen.gt.sm ? 'Tools' : undefined" aria-label="Tools anzeigen" :disable="!canEdit(server)" :to="{ name: 'settings-mcp-tools', params: { serverId: server.id }, query: { scope: server.scope } }" />
+               <q-btn flat dense :round="$q.screen.lt.md" no-caps icon="construction" :label="$q.screen.gt.sm ? 'Tools / Rechte' : undefined" aria-label="Tools und Berechtigungen anzeigen" :disable="!canEdit(server)" :to="{ name: admin ? 'admin-mcp-tools' : 'settings-mcp-tools', params: { serverId: server.id } }" />
               <template v-if="$q.screen.lt.md">
                 <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${server.name}`" :loading="refreshingId === server.id">
                   <q-menu auto-close>
@@ -115,8 +108,10 @@ import McpServerDialog from 'src/features/mcp/McpServerDialog.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { useAuthStore } from 'stores/auth'
 import { useMcpServerStore } from 'stores/mcp-servers'
+import PersonalSettingsGate from 'src/features/settings/PersonalSettingsGate.vue'
 
 defineOptions({ name: 'McpSettingsPage' })
+const { admin } = defineProps({ admin: { type: Boolean, default: false } })
 const $q = useQuasar()
 const route = useRoute()
 const router = useRouter()
@@ -126,18 +121,19 @@ const servers = useMcpServerStore()
 const auth = useAuthStore()
 const dialogOpen = ref(false)
 const selectedServer = ref(null)
-const personalAllowed = ref(false)
+const section = ref(route.query.oauthAttempt || route.query.oauthError ? 'management' : 'general')
+const showManagement = computed(() => !admin || section.value === 'management')
 const refreshingId = ref(null)
 const removingId = ref(null)
 const togglingId = ref(null)
-const personalBlocked = computed(() => servers.settingsLoaded && !servers.personalAllowed)
+const visibleServers = computed(() => servers.visibleServers.filter((server) => server.scope === (admin ? 'instance' : 'personal')))
+const personalBlocked = computed(() => !admin && !auth.isAdmin && servers.settingsLoaded && !servers.personalAllowed)
 const personalUnavailable = computed(() => (
-  !servers.settingsLoaded || servers.settingsLoadFailed || !servers.personalAllowed
+  !servers.settingsLoaded || servers.settingsLoadFailed || !servers.personalAllowed && !auth.isAdmin
 ))
-const settingsDirty = computed(() => servers.settingsLoaded && personalAllowed.value !== servers.personalAllowed)
 
 const canEdit = (server) => server.available !== false && (server.scope === 'instance' ? auth.isAdmin : !personalUnavailable.value)
-function openCreate() { servers.selectScope(personalUnavailable.value ? 'instance' : 'personal'); selectedServer.value = null; dialogOpen.value = true }
+function openCreate() { servers.selectScope(admin ? 'instance' : 'personal'); selectedServer.value = null; dialogOpen.value = true }
 function openEdit(server) { servers.selectScope(server.scope); selectedServer.value = server; dialogOpen.value = true }
 function onDialogChange(open) { if (!open) void load() }
 function statusLabel(status) {
@@ -146,16 +142,13 @@ function statusLabel(status) {
 async function load() { try { await servers.fetchVisibleServers() } catch { /* Central API toast. */ } }
 async function loadPage() {
   try {
-    const settings = await servers.fetchSettings()
-    personalAllowed.value = settings.personalAllowed
+    await servers.fetchSettings()
   } catch { return }
   await load()
 }
-async function saveSettings() {
+async function saveSettings(enabled) {
   try {
-    const settings = await servers.saveSettings(personalAllowed.value)
-    personalAllowed.value = settings.personalAllowed
-    if (personalBlocked.value && servers.scope === 'personal') dialogOpen.value = false
+    await servers.saveSettings(enabled)
     await load()
     $q.notify({ type: 'positive', message: 'MCP-Einstellungen gespeichert' })
   } catch { /* Central API toast. */ }
@@ -213,7 +206,7 @@ async function completeOAuth() {
 }
 onBeforeUnmount(() => oauthController.abort())
 onMounted(() => {
-  if (route.name !== 'settings-mcp-tools') {
+  if (!['settings-mcp-tools', 'admin-mcp-tools'].includes(route.name)) {
     void loadPage()
     void completeOAuth()
   }

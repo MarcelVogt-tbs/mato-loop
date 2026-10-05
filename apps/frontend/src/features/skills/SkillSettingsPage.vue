@@ -4,10 +4,10 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Skills</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Wiederverwendbare Anweisungen für spezialisierte Aufgaben verwalten.
+          {{ admin ? 'Globale Skills für alle Benutzer verwalten.' : 'Eigene Anweisungen für spezialisierte Aufgaben verwalten.' }}
         </p>
       </div>
-      <div class="settings-scope-actions row items-center col-auto">
+      <div v-if="showManagement" class="settings-scope-actions row items-center col-auto">
         <q-btn
           unelevated
           no-caps
@@ -15,11 +15,20 @@
           color="primary"
           icon="add"
           label="Skill erstellen"
-          :disable="skills.loading"
+          :disable="writeBlocked"
           @click="openCreateDialog"
         />
       </div>
     </header>
+
+    <q-tabs v-if="admin" v-model="section" dense no-caps align="left" active-color="primary" indicator-color="primary" class="q-mb-lg">
+      <q-tab name="general" icon="settings" label="Einstellungen" />
+      <q-tab name="management" icon="school" label="Verwaltung" />
+    </q-tabs>
+    <PersonalSettingsGate v-if="admin && section === 'general'" :model-value="skills.personalSkillsEnabled" title="Persönliche Skills erlauben" description="Benutzer können eigene Skills und persönliche Anpassungen mitgelieferter Skills erstellen und verwenden." :disabled="writeBlocked" @update:model-value="setPersonalSkillsEnabled" />
+    <q-banner v-if="loaded && personalBlocked" rounded class="app-surface-tonal q-mb-md">
+      Persönliche Skills sind deaktiviert. Sie bleiben lesbar gespeichert, können aber nicht verändert werden und werden ab dem nächsten Agentenlauf nicht mehr verwendet. Globale Skills bleiben verfügbar.
+    </q-banner>
 
     <q-banner v-if="loadFailed" rounded class="bg-negative text-white q-mb-md">
       <template #avatar><q-icon name="error_outline" /></template>
@@ -29,21 +38,21 @@
       </template>
     </q-banner>
 
-    <q-card flat class="app-surface relative-position">
+    <q-card v-if="showManagement" flat class="app-surface relative-position">
       <q-card-section v-if="skills.loading && !loaded" class="text-center q-pa-xl">
         <q-spinner color="primary" size="36px" />
         <div class="app-muted q-mt-sm">Skills werden geladen ...</div>
       </q-card-section>
-      <q-card-section v-else-if="loaded && !skills.items.length" class="q-pa-xl">
+      <q-card-section v-else-if="loaded && !skills.scopedItems.length" class="q-pa-xl">
         <AppStateMessage
           icon="school"
           title="Noch keine Skills"
-          description="Erstelle einen persönlichen Skill oder stelle ihn als Administrator allen zur Verfügung."
+          :description="admin ? 'Erstelle einen Skill für alle Benutzer.' : 'Erstelle einen persönlichen Skill.'"
         />
       </q-card-section>
 
       <q-list v-else separator>
-        <q-item v-for="skill in skills.items" :key="skill.id" class="q-py-md">
+        <q-item v-for="skill in skills.scopedItems" :key="skill.id" class="q-py-md">
           <q-item-section avatar top>
             <q-avatar rounded color="primary" text-color="white" icon="school" />
           </q-item-section>
@@ -60,16 +69,16 @@
               <q-toggle
                 :model-value="skill.enabled"
                 :aria-label="`${skillDisplayName(skill)} ${skill.enabled ? 'deaktivieren' : 'aktivieren'}`"
-                :disable="skills.saving || (skill.scope === 'instance' && !auth.isAdmin)"
+                :disable="writeBlocked || (skill.scope === 'instance' && !auth.isAdmin)"
                 @update:model-value="setEnabled(skill, $event)"
               />
-              <q-btn v-if="skill.scope === 'personal' || auth.isAdmin" flat round dense icon="edit" :aria-label="`${skillDisplayName(skill)} bearbeiten`" @click="openEditDialog(skill)">
-                <q-tooltip>Bearbeiten</q-tooltip>
+              <q-btn v-if="skill.scope === 'personal' || auth.isAdmin" flat round dense :icon="personalBlocked ? 'visibility' : 'edit'" :aria-label="`${skillDisplayName(skill)} ${personalBlocked ? 'ansehen' : 'bearbeiten'}`" @click="openEditDialog(skill)">
+                <q-tooltip>{{ personalBlocked ? 'Ansehen' : 'Bearbeiten' }}</q-tooltip>
               </q-btn>
-              <q-btn v-if="skill.isDefault && skill.modified && auth.isAdmin" flat round dense icon="restart_alt" :aria-label="`${skillDisplayName(skill)} auf Standard zurücksetzen`" @click="resetSkill(skill)">
+              <q-btn v-if="skill.isDefault && skill.modified && auth.isAdmin" flat round dense icon="restart_alt" :aria-label="`${skillDisplayName(skill)} auf Standard zurücksetzen`" :disable="writeBlocked" @click="resetSkill(skill)">
                 <q-tooltip>Auf Standard zurücksetzen</q-tooltip>
               </q-btn>
-              <q-btn v-if="!skill.isDefault && (skill.scope === 'personal' || auth.isAdmin)" flat round dense color="negative" icon="delete_outline" :aria-label="`${skill.name} löschen`" @click="removeSkill(skill)">
+              <q-btn v-if="!skill.isDefault && (skill.scope === 'personal' || auth.isAdmin)" flat round dense color="negative" icon="delete_outline" :aria-label="`${skill.name} löschen`" :disable="writeBlocked" @click="removeSkill(skill)">
                 <q-tooltip>Löschen</q-tooltip>
               </q-btn>
             </div>
@@ -86,7 +95,7 @@
           <q-card-section class="row items-start no-wrap q-gutter-md">
             <q-avatar color="primary" text-color="white" :icon="editingSkill ? 'edit' : 'auto_awesome'" />
             <div class="col">
-              <div class="text-h6">{{ editingSkill ? 'Skill bearbeiten' : 'Skill erstellen' }}</div>
+              <div class="text-h6">{{ personalBlocked ? 'Skill ansehen' : editingSkill ? 'Skill bearbeiten' : 'Skill erstellen' }}</div>
               <div class="text-body2 app-muted">Name, Einsatzbeschreibung und Arbeitsanweisungen festlegen.</div>
             </div>
             <q-btn flat round dense icon="close" aria-label="Dialog schließen" :disable="saving" v-close-popup />
@@ -95,6 +104,7 @@
           <q-card-section class="col scroll q-gutter-md">
             <q-input
               v-model="form.name"
+              :readonly="personalBlocked"
               outlined
               autofocus
               label="Name"
@@ -105,6 +115,7 @@
             />
             <q-input
               v-model="form.description"
+              :readonly="personalBlocked"
               outlined
               autogrow
               type="textarea"
@@ -117,6 +128,7 @@
             />
             <q-input
               v-model="form.instructions"
+              :readonly="personalBlocked"
               outlined
               type="textarea"
               rows="12"
@@ -127,12 +139,11 @@
               :rules="[requiredRule]"
               hint="Beschreibe konkret, wie der Skill arbeiten soll."
             />
-            <q-checkbox v-if="auth.isAdmin && !editingSkill" v-model="shared" label="Global" />
           </q-card-section>
           <q-separator />
           <q-card-actions align="right" class="q-pa-md">
             <q-btn flat no-caps label="Abbrechen" :disable="saving" v-close-popup />
-            <q-btn unelevated no-caps color="primary" label="Speichern" type="submit" :loading="saving" />
+            <q-btn v-if="!personalBlocked" unelevated no-caps color="primary" label="Speichern" type="submit" :loading="saving" :disable="writeBlocked" />
           </q-card-actions>
         </q-form>
       </q-card>
@@ -141,15 +152,17 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
+import PersonalSettingsGate from 'src/features/settings/PersonalSettingsGate.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { skillDisplayDescription, skillDisplayName } from 'src/features/skills/skill-display'
 import { useSkillStore } from 'stores/skills'
 import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'SkillSettingsPage' })
+const { admin } = defineProps({ admin: { type: Boolean, default: false } })
 
 const $q = useQuasar()
 const { confirm } = useConfirm()
@@ -161,15 +174,21 @@ const dialogOpen = ref(false)
 const formRef = ref(null)
 const editingSkill = ref(null)
 const saving = ref(false)
-const shared = ref(false)
+const scope = computed(() => admin ? 'instance' : 'personal')
+const section = ref('general')
+const showManagement = computed(() => !admin || section.value === 'management')
+const personalBlocked = computed(() => !admin && !auth.isAdmin && !skills.personalSkillsEnabled)
+const writeBlocked = computed(() => !loaded.value || loadFailed.value || !skills.settingsLoaded || personalBlocked.value || skills.saving)
 const form = reactive({ name: '', description: '', instructions: '' })
 
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtfeld'
 
 async function load() {
+  loaded.value = false
   loadFailed.value = false
   try {
-    await skills.fetchSkills()
+    skills.selectScope(scope.value)
+    await Promise.all([skills.fetchSkills(scope.value), skills.fetchSettings()])
     loaded.value = true
   } catch {
     loadFailed.value = true
@@ -178,7 +197,6 @@ async function load() {
 
 function openCreateDialog() {
   editingSkill.value = null
-  shared.value = false
   Object.assign(form, { name: '', description: '', instructions: '' })
   dialogOpen.value = true
 }
@@ -195,6 +213,7 @@ function openEditDialog(skill) {
 }
 
 async function saveSkill() {
+  if (writeBlocked.value) return
   if (!await formRef.value?.validate()) return
   saving.value = true
   try {
@@ -207,7 +226,7 @@ async function saveSkill() {
       await skills.updateSkill(editingSkill.value.id, payload)
       $q.notify({ type: 'positive', message: 'Skill gespeichert' })
     } else {
-      skills.selectScope(auth.isAdmin && shared.value ? 'instance' : 'personal')
+      skills.selectScope(scope.value)
       await skills.createSkill(payload)
       $q.notify({ type: 'positive', message: 'Skill erstellt' })
     }
@@ -248,6 +267,13 @@ async function setEnabled(skill, enabled) {
   }
 }
 
+async function setPersonalSkillsEnabled(enabled) {
+  try {
+    await skills.setPersonalSkillsEnabled(enabled)
+    $q.notify({ type: 'positive', message: 'Einstellung gespeichert' })
+  } catch { /* Central API toast. */ }
+}
+
 async function resetSkill(skill) {
   const accepted = await confirm(
     `Soll der Skill „${skillDisplayName(skill)}“ auf den ausgelieferten Standard zurückgesetzt werden?`,
@@ -266,6 +292,7 @@ async function resetSkill(skill) {
 }
 
 onMounted(load)
+watch(() => admin, load)
 </script>
 
 <style scoped>

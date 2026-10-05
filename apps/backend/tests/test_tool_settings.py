@@ -457,7 +457,7 @@ def test_agent_profile_scoped_capability_is_offered_and_resolved_for_its_target(
         resolve_tool_execution_policy(
             settings, "mail.read", integration_id=uuid4()
         ).policy
-        == ToolExecutionPolicy.DISABLED
+        == ToolExecutionPolicy.ASK
     )
 
 

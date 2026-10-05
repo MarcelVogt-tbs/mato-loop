@@ -98,7 +98,7 @@ def _base(*, name: str = "Wiki") -> IntegrationInstance:
 
 def _revision(instance: IntegrationInstance) -> str:
     return json.dumps(
-        instance.model_dump(mode="json"),
+        instance.binding_data(),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
@@ -115,7 +115,7 @@ def test_delegation_keeps_removed_resource_limits_visible_to_aggregate_filters()
         "book:2": {"knowledge.read": "auto"},
     }}})
     snapshot = permission_snapshot(before, {"knowledge_list_books"}, IntegrationSettings(instances=[instance]))
-    live = ToolSettings(private_permissions={"policies": {"knowledge.read": "ask"}})
+    live = ToolSettings(private_permissions={"integration_policies": {str(instance.id): {"knowledge.read": "ask"}}})
     context = _context(instance, _revision(instance))
     context.tool_settings = apply_delegation_ceiling(live, snapshot)
     assert integrations_bookstack_adapter._disabled_book_keys(context, instance) == {"book:1"}
@@ -1310,11 +1310,9 @@ async def test_aggregate_books_recheck_resource_policies_after_pending_approval(
     integrations = IntegrationSettings(instances=[instance])
     profile = AgentProfile(name="Reader", instructions="Read selected books.")
     tools = ToolSettings()
-    permissions = profile.private_permissions
+    permissions = instance.permissions.private_permissions
     permissions.policies["knowledge.read"] = ToolExecutionPolicy.ASK
-    permissions.resource_policies = {
-        str(instance.id): {"book:8": {"knowledge.read": ToolExecutionPolicy.DISABLED}}
-    }
+    permissions.resource_policies = {"book:8": {"knowledge.read": ToolExecutionPolicy.DISABLED}}
 
     async def load(_db, model, **_kwargs):
         if model is IntegrationSettings:
@@ -1383,9 +1381,7 @@ async def test_aggregate_books_recheck_resource_policies_after_pending_approval(
             await waiting.wait()
             client.search.assert_not_awaited()
             client.list_books.assert_not_awaited()
-            permissions.resource_policies = {
-                str(instance.id): {"book:9": {"knowledge.read": ToolExecutionPolicy.DISABLED}}
-            }
+            permissions.resource_policies = {"book:9": {"knowledge.read": ToolExecutionPolicy.DISABLED}}
         finally:
             release.set()
         result = await pending

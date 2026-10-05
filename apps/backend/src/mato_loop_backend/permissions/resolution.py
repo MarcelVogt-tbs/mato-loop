@@ -27,9 +27,9 @@ def resolve_tool_execution_policy(
         return ToolPolicyResolution(policy, source, "configured")
 
     permissions = settings.permissions
-    configured = permissions.policies.get(capability)
+    configured = permissions.policies.get(capability) if integration_id is None or settings._legacy_integration_permissions else None
     # Preserve saved read rules until a session-specific rule replaces them.
-    if configured is None and capability == "session.files.read":
+    if integration_id is None and configured is None and capability == "session.files.read":
         configured = permissions.policies.get("filesystem.read")
     if configured is not None:
         resolution = resolve_value(configured, "global")

@@ -32,36 +32,11 @@
       indicator-color="primary"
       class="q-mb-lg"
     >
-      <q-tab name="management" icon="dns" label="Verwaltung" />
       <q-tab name="general" icon="settings" label="Einstellungen" />
+      <q-tab name="management" icon="dns" label="Verwaltung" />
     </q-tabs>
 
-    <q-card v-if="admin && section === 'general'" flat class="app-surface q-mb-md">
-      <q-card-section>
-        <div class="row items-center q-col-gutter-md">
-          <div class="col-12 col-sm row items-center no-wrap q-gutter-md">
-            <q-avatar color="primary" text-color="white" icon="person" />
-            <div>
-              <div class="text-subtitle2 text-weight-bold">Persönliche Provider erlauben</div>
-              <div class="text-caption app-muted">Benutzer können eigene Provider und Modelle verwalten.</div>
-            </div>
-          </div>
-          <q-toggle
-            :model-value="providers.personalProvidersEnabled"
-            class="col-12 col-sm-auto"
-            color="primary"
-            aria-label="Persönliche Provider erlauben"
-            :disable="gateLoading || pageLoading || loadFailed"
-            @update:model-value="togglePersonalProviders"
-          />
-        </div>
-      </q-card-section>
-    </q-card>
-
-    <q-banner v-if="admin && section === 'general' && personalBlocked" rounded class="app-surface-tonal q-mb-md">
-      <template #avatar><q-icon name="person" color="primary" /></template>
-      Persönliche Provider wurden für diese Instanz deaktiviert. Globale Provider bleiben verfügbar.
-    </q-banner>
+    <PersonalSettingsGate v-if="admin && section === 'general'" :model-value="providers.personalProvidersEnabled" title="Persönliche Provider erlauben" description="Benutzer können eigene Provider und Modelle verwalten." :disabled="gateLoading || pageLoading || loadFailed" @update:model-value="togglePersonalProviders" />
 
     <q-banner v-if="loadFailed" rounded class="app-surface-tonal q-mb-md">
       Die Provider konnten nicht geladen werden.
@@ -323,6 +298,7 @@ import {
 } from 'src/utils/provider-models'
 import { useProviderStore } from 'stores/providers'
 import { useAuthStore } from 'stores/auth'
+import PersonalSettingsGate from 'src/features/settings/PersonalSettingsGate.vue'
 
 defineOptions({ name: 'ProviderSettingsPage' })
 
@@ -339,7 +315,7 @@ const selectedModelProvider = ref(null)
 const selectedModel = ref(null)
 const testingProviderId = ref(null)
 const gateLoading = ref(false)
-const section = ref('management')
+const section = ref('general')
 const expandedProviders = reactive({})
 const syncing = reactive({})
 const syncFailed = reactive({})
@@ -355,7 +331,7 @@ const showManagement = computed(() => !admin || section.value === 'management')
 const llmProviders = computed(() => listedProviders.value.filter((item) => (
   ['openai-codex', 'openai-compatible', 'lemonade', 'azure-speech'].includes(item.adapterType)
 )))
-const personalBlocked = computed(() => !providers.personalProvidersEnabled)
+const personalBlocked = computed(() => !providers.personalProvidersEnabled && !auth.isAdmin)
 const canEdit = (provider) => provider.scope === scope.value && (admin ? auth.isAdmin : !personalBlocked.value)
 const codexFor = (provider) => ({ authenticated: provider.hasCredential })
 
@@ -610,7 +586,7 @@ async function removeProvider(provider) {
 }
 
 watch(scope, () => {
-  section.value = 'management'
+  section.value = 'general'
   dialogOpen.value = false
   modelDialogOpen.value = false
   listedProviders.value = []

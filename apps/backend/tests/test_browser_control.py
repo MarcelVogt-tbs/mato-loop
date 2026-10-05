@@ -271,7 +271,7 @@ def test_changes_during_approval_prevent_start(request_case, change):
         elif change == "session":
             case.session.preferred_execution_agent_id = uuid4()
         elif change == "policy":
-            case.settings.permissions.policies["browser.control"] = "disabled"
+            case.settings.permissions.integration_policies.setdefault(str(case.instance.id), {})["browser.control"] = "disabled"
         else:
             case.profile.integration_availability[str(case.instance.id)] = False
         return "allow_once"
@@ -301,7 +301,7 @@ def test_final_control_rpc_cannot_leave_latent_attachment(request_case, change):
     future = case.start()
     assert started.wait(3)
     if change == "policy":
-        case.settings.permissions.policies["browser.control"] = "disabled"
+        case.settings.permissions.integration_policies.setdefault(str(case.instance.id), {})["browser.control"] = "disabled"
     elif change == "run":
         case.run.status = "cancelled"
     elif change == "generation":

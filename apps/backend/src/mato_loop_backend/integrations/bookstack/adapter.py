@@ -467,7 +467,7 @@ def _binding(context: Any, integration_id: UUID) -> tuple[IntegrationInstance, s
         None,
     )
     if instance is None or json.dumps(
-        instance.model_dump(mode="json"),
+        instance.binding_data(),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,

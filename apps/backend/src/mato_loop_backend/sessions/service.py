@@ -56,7 +56,6 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.permissions.policy import execution_directory_scope
 from mato_loop_backend.settings import (
-    GENERAL_PROFILE_ID,
     AgentProfile,
     AgentProfileUnavailable,
     AiSettings,
@@ -66,6 +65,7 @@ from mato_loop_backend.settings import (
     load_agent_profile,
     load_agent_profile_ai,
 )
+from mato_loop_backend.settings.effective import default_agent_profile_id
 from mato_loop_backend.settings.models import ModelAvailability, ModelCapability
 
 from .cleanup import descendant_sessions
@@ -174,8 +174,6 @@ def provider_for_session(ai: AiSettings, model):
 async def validate_agent_profile(
     db: AsyncSession, user_id: UUID, profile_id: UUID | None
 ) -> None:
-    if profile_id in {None, GENERAL_PROFILE_ID}:
-        return
     try:
         profile = await load_agent_profile(db, user_id, profile_id, for_update=True)
         if not profile.enabled:
@@ -998,7 +996,7 @@ async def create_session(
             raise SessionServiceError(404, "project.notFound", field="projectId")
         if project.archived_at is not None:
             raise SessionServiceError(409, "project.archived")
-    agent_profile_id = payload.agent_profile_id or GENERAL_PROFILE_ID
+    agent_profile_id = payload.agent_profile_id or await default_agent_profile_id(db)
     await validate_agent_profile(db, user.id, agent_profile_id)
     ai = await _profile_ai(db, user.id, agent_profile_id)
     model_id = payload.model_id or ai.default_model_id
@@ -1281,7 +1279,7 @@ async def send_message(
     if active:
         raise SessionServiceError(409, "session.runAlreadyActive")
     requested_profile = (
-        payload.agent_profile_id or GENERAL_PROFILE_ID
+        payload.agent_profile_id or await default_agent_profile_id(db)
         if "agent_profile_id" in payload.model_fields_set
         else item.agent_profile_id
     )
@@ -1371,7 +1369,7 @@ async def update_session(
     if item is None:
         raise SessionServiceError(404, "session.notFound")
     target_profile_id = (
-        payload.agent_profile_id or GENERAL_PROFILE_ID
+        payload.agent_profile_id or await default_agent_profile_id(db)
         if "agent_profile_id" in fields
         else item.agent_profile_id
     )
@@ -1416,7 +1414,7 @@ async def update_session(
             await db.delete(grant)
     if (
         "agent_profile_id" in fields
-        and (payload.agent_profile_id or GENERAL_PROFILE_ID)
+        and target_profile_id
         != item.agent_profile_id
     ) or ("model_id" in fields and payload.model_id != item.model_config_id):
         await db.execute(
@@ -1459,7 +1457,7 @@ async def update_session(
         if "model_id" in fields:
             item.model_config_id = payload.model_id
     if "agent_profile_id" in fields:
-        agent_profile_id = payload.agent_profile_id or GENERAL_PROFILE_ID
+        agent_profile_id = target_profile_id
         await validate_agent_profile(db, user.id, agent_profile_id)
         item.agent_profile_id = agent_profile_id
     if "reasoning_effort" in fields:

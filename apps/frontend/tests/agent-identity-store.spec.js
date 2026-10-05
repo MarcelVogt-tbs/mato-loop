@@ -19,17 +19,11 @@ const settings = (values = {}) => ({
   scope: 'personal',
   configuredDisplayName: null,
   effectiveDisplayName: 'MatoLoop',
-  personalDisplayNamesEnabled: true,
   personalPersonasEnabled: true,
-  defaultPersonaId: null,
-  effectiveDefaultPersonaId: 'instance-default',
-  personas: [{
-    id: 'instance-default',
-    name: 'Standard',
-    instructions: '',
-    scope: 'instance',
-    effective: true
-  }],
+  personas: [{ id: 'global', name: 'Standard', instructions: 'Freundlich.', scope: 'instance' }],
+  defaultPersonaId: 'global',
+  profilePersonas: {},
+  profiles: [],
   ...values
 })
 
@@ -56,16 +50,7 @@ describe('agent identity store', () => {
       data: settings({
         configuredDisplayName: 'Ada',
         effectiveDisplayName: 'Ada',
-        personas: [
-          ...settings().personas,
-          {
-            id: 'personal-one',
-            name: 'Direkt',
-            instructions: 'Antworte direkt.',
-            scope: 'personal',
-            effective: true
-          }
-        ]
+        profilePersonas: { 'global-agent': 'global' }
       })
     })
     const identity = useAgentIdentityStore()
@@ -77,10 +62,10 @@ describe('agent identity store', () => {
     })
     expect(identity.configuredDisplayName).toBe('Ada')
     expect(identity.displayName).toBe('Ada')
-    expect(identity.personas.map((persona) => persona.id)).toContain('personal-one')
+    expect(identity.profilePersonas).toEqual({ 'global-agent': 'global' })
   })
 
-  it('persists scoped names and persona CRUD with exact payloads', async () => {
+  it('persists scoped names and persona overrides with exact payloads', async () => {
     const identity = useAgentIdentityStore()
     api.patch.mockResolvedValue({
       data: settings({ configuredDisplayName: 'Ada', effectiveDisplayName: 'Ada' })
@@ -94,33 +79,20 @@ describe('agent identity store', () => {
       { params: { scope: 'personal' } }
     )
 
-    api.post.mockResolvedValue({
-      data: settings({
-        personas: [
-          ...settings().personas,
-          {
-            id: 'personal-one',
-            name: 'Direkt',
-            instructions: 'Kurz.',
-            scope: 'personal',
-            effective: true
-          }
-        ]
-      })
-    })
-    await identity.createPersona({ name: 'Direkt', instructions: 'Kurz.' })
-    expect(api.post).toHaveBeenCalledWith(
-      '/agent-identity/personas',
-      { name: 'Direkt', instructions: 'Kurz.' },
+    api.put.mockResolvedValue({ data: settings({ profilePersonas: { 'global-agent': 'global' } }) })
+    await identity.savePersonaOverride('global-agent', 'global')
+    expect(api.put).toHaveBeenCalledWith(
+      '/agent-identity/persona-overrides/global-agent',
+      { personaId: 'global' },
       { params: { scope: 'personal' } }
     )
 
     api.delete.mockResolvedValue({ data: settings() })
-    await identity.deletePersona('personal-one')
-    expect(api.delete).toHaveBeenCalledWith('/agent-identity/personas/personal-one', {
+    await identity.deletePersonaOverride('global-agent')
+    expect(api.delete).toHaveBeenCalledWith('/agent-identity/persona-overrides/global-agent', {
       params: { scope: 'personal' }
     })
-    expect(identity.personas.some((persona) => persona.id === 'personal-one')).toBe(false)
+    expect(identity.profilePersonas).toEqual({})
   })
 
   it('does not let an older fetch overwrite an SSE update', async () => {

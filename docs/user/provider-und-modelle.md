@@ -2,7 +2,7 @@
 
 ## Provider verwalten
 
-Use the **Verwaltung** tab under **Administration > Provider** to add, edit, enable, test, and delete global providers and their models. This tab appears first and opens by default. Administrators control **Persönliche Provider** in the **Einstellungen** tab.
+**Administration > Provider** opens on **Einstellungen**, where administrators control **Persönliche Provider**. The second tab, **Verwaltung**, adds, edits, enables, tests, and deletes global providers and their models.
 
 **Einstellungen > Provider** manages only your own providers, including when signed in as an administrator. This navigation entry is hidden when personal providers are disabled; existing personal configuration remains stored. New providers inherit the global or personal scope from the page where they are created. Global providers and their models remain available to all users in chat and agent profiles. Personal providers and encrypted credentials belong only to their owner.
 

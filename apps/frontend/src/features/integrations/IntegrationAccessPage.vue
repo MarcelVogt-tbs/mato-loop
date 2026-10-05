@@ -8,17 +8,17 @@
         icon="arrow_back"
         aria-label="Zurück zu den Integrationen"
         :disable="saving"
-        :to="{ name: 'settings-integrations', query: { scope } }"
+        :to="{ name: listRoute }"
       />
       <q-avatar color="primary" text-color="white" icon="folder_open" class="q-ml-sm" />
-      <q-toolbar-title>
+      <div class="col q-px-sm">
         <div class="text-h6 text-weight-bold">
-          {{ integration ? `Standardressourcen für ${integration.name}` : 'Standardressourcen' }}
+          {{ permissionsData ? `Berechtigungen für ${permissionsData.name}` : 'Integrationsrechte' }}
         </div>
         <div class="text-body2 app-muted">
-          Standardkalender und Standard-Aufgabenliste festlegen. Rechte werden in Agentenprofilen verwaltet.
+          Rechte dieser Integration und gegebenenfalls Standardressourcen festlegen.
         </div>
-      </q-toolbar-title>
+      </div>
       <div class="settings-scope-actions row items-center col-auto">
         <q-btn
           class="col-auto"
@@ -67,6 +67,13 @@
       :inert="adapterBlocked"
       @submit.prevent="save"
     >
+      <q-select v-if="scope === 'personal'" :model-value="profileId" outlined emit-value map-options label="Agentenprofil" :options="profileOptions" :disable="saving || loading" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" @update:model-value="selectProfile" />
+      <q-select v-if="profileId" v-model="permissions.available" outlined emit-value map-options label="Integration für dieses Profil" :options="[{ label: `Erben: ${permissionsData?.inheritedAvailable ? 'Verfügbar' : 'Nicht verfügbar'}`, value: null }, { label: 'Verfügbar', value: true }, { label: 'Nicht verfügbar', value: false }]" :disable="saving || loading" />
+      <q-banner rounded class="app-surface-tonal">
+        {{ profileId ? 'Diese Abweichungen gelten nur für diese persönliche Integration und das gewählte Profil.' : 'Diese Integration hat eigene Berechtigungen, unabhängig von globalen Tool-Defaults.' }}
+      </q-banner>
+      <PermissionFields v-model="permissions" :groups-by-trust="permissionGroups" :resources="permissionsData?.inherited.private?.resources || []" :inherited-resources="inheritedResources" :disabled="adapterBlocked" />
+      <q-banner v-if="!permissionGroups.private?.[0]?.actions.length" rounded class="app-surface-tonal">Diese Integration bietet keine konfigurierbaren Ausführungsrechte.</q-banner>
       <q-card v-if="supportsDefaultResources" flat class="app-surface-tonal">
         <q-card-section>
           <div class="text-subtitle1 text-weight-bold">Standardressourcen dieses Kontos</div>
@@ -112,7 +119,7 @@
           no-caps
           label="Zurück"
           :disable="saving"
-          :to="{ name: 'settings-integrations', query: { scope } }"
+           :to="{ name: listRoute }"
         />
         <q-btn
           unelevated
@@ -134,13 +141,12 @@ import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import { useConfirm } from 'src/composables/confirm'
-import { resolveSettingsScope } from 'src/features/settings/scope'
+import PermissionFields from 'src/features/settings/PermissionFields.vue'
 import {
   calendarResources,
   taskListResources
 } from 'src/utils/integration-access'
 import { useIntegrationStore } from 'stores/integrations'
-import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'IntegrationAccessPage' })
 
@@ -148,8 +154,15 @@ const $q = useQuasar()
 const route = useRoute()
 const { confirm } = useConfirm()
 const integrations = useIntegrationStore()
-const auth = useAuthStore()
 const access = ref(null)
+const permissionsData = ref(null)
+const permissions = ref({ privatePermissions: { policies: {}, resourcePolicies: {} }, publicPermissions: { policies: {}, resourcePolicies: {} } })
+const profileId = ref(null)
+const savedPermissions = ref('')
+const listRoute = computed(() => `${String(route.name).startsWith('admin-') ? 'admin' : 'settings'}-${String(route.name).includes('mcp') ? 'mcp' : 'integrations'}`)
+const profileOptions = computed(() => [{ label: 'Standard für alle Profile', value: null }, ...(permissionsData.value?.profiles || []).map((item) => ({ label: `${item.name} (${item.scope === 'instance' ? 'Global' : 'Persönlich'})`, value: item.id }))])
+const permissionGroups = computed(() => Object.fromEntries(['private', 'public'].map((trust) => [trust, [{ id: 'integration', label: 'Berechtigungen', icon: 'security', tools: [], actions: (permissionsData.value?.inherited[trust]?.actions || []).map((action) => ({ ...action, available: !profileId.value || (permissions.value.available ?? permissionsData.value?.inheritedAvailable) })) }]])))
+const inheritedResources = computed(() => Object.fromEntries(['private', 'public'].map((trust) => [trust, permissionsData.value?.inherited[trust]?.resources || []])))
 const defaultResourceKey = ref(null)
 const defaultTaskListKey = ref(null)
 const loading = ref(false)
@@ -158,21 +171,13 @@ const saving = ref(false)
 const savedPayload = ref('')
 let loadToken = 0
 
-const integrationId = computed(() => String(route.params.integrationId || ''))
-const scope = computed(() => resolveSettingsScope(route.query.scope, auth.isAdmin))
-const integration = computed(() => [
-  ...integrations.search.providers,
-  ...integrations.calendar.accounts,
-  ...integrations.mail.accounts,
-  ...integrations.knowledge.bases,
-  ...integrations.music.instances,
-  ...integrations.browser.instances.map((item) => ({ ...item, integrationType: 'browser', providerType: 'browser' }))
-].find((item) => item.id === integrationId.value))
+const integrationId = computed(() => String(route.params.integrationId || route.params.serverId || ''))
+const scope = computed(() => String(route.name).startsWith('admin-') ? 'instance' : 'personal')
 const adapterBlocked = computed(() => (
-  !integration.value || !integrations.adapterAvailable(integration.value.providerType, scope.value)
+  !permissionsData.value || (permissionsData.value.providerType !== 'mcp_streamable_http' && !integrations.adapterAvailable(permissionsData.value.providerType, scope.value))
 ))
 const dirty = computed(() => Boolean(
-  access.value && JSON.stringify(requestPayload()) !== savedPayload.value
+    access.value && (JSON.stringify(requestPayload()) !== savedPayload.value || JSON.stringify(permissions.value) !== savedPermissions.value)
 ))
 const calendarResourceList = computed(() => calendarResources(access.value?.resources || []))
 const taskListResourceList = computed(() => taskListResources(access.value?.resources || []))
@@ -225,9 +230,13 @@ async function load() {
   loadFailed.value = false
   try {
     integrations.selectScope(scope.value)
-    await Promise.all([integrations.fetchCatalog(), integrations.fetchAll()])
-    if (adapterBlocked.value) return
-    const value = await integrations.fetchAccess(id)
+    await integrations.fetchCatalog()
+    const rights = await integrations.fetchPermissions(id, profileId.value)
+    if (token !== loadToken || integrationId.value !== id) return
+    permissionsData.value = rights
+    permissions.value = rights.permissions
+    savedPermissions.value = JSON.stringify(permissions.value)
+    const value = rights.providerType === 'caldav' ? await integrations.fetchAccess(id) : {}
     if (token === loadToken && integrationId.value === id) assignAccess(value)
   } catch {
     if (token === loadToken) loadFailed.value = true
@@ -242,13 +251,21 @@ async function save() {
   const payload = requestPayload()
   saving.value = true
   try {
-    const value = await integrations.saveAccess(id, payload)
-    if (integrationId.value !== id || !value) return
-    assignAccess(value)
+    if (JSON.stringify(permissions.value) !== savedPermissions.value) {
+      await integrations.savePermissions(id, permissions.value, profileId.value)
+      savedPermissions.value = JSON.stringify(permissions.value)
+    }
+    if (JSON.stringify(payload) !== savedPayload.value) assignAccess(await integrations.saveAccess(id, payload))
     $q.notify({ type: 'positive', message: 'Integrationseinstellungen gespeichert' })
-  } finally {
+  } catch { /* Central API toast. */ } finally {
     saving.value = false
   }
+}
+
+async function selectProfile(id) {
+  if (!await confirmDiscardedChanges()) return
+  profileId.value = id
+  await load()
 }
 
 async function confirmDiscardedChanges() {

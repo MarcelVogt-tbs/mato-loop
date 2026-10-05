@@ -1099,7 +1099,7 @@ async def test_runtime_uses_bound_integration_resource_policy(
         ("disabled", PermissionDecision.DENY, 0),
     ),
 )
-async def test_runtime_discovery_uses_global_not_integration_policy(
+async def test_runtime_discovery_uses_integration_baseline_not_resource_policy(
     tmp_path, monkeypatch, global_policy, expected, approval_count
 ) -> None:
     session = _session()
@@ -1129,6 +1129,9 @@ async def test_runtime_discovery_uses_global_not_integration_policy(
     if global_policy is not None:
         settings_data["policies"] = {"calendar.read": global_policy}
     tools = ToolSettings()
+    integration.permissions.public_permissions.resource_policies = {"calendar:work": {"calendar.read": "disabled"}}
+    if global_policy is not None:
+        integration.permissions.public_permissions.policies["calendar.read"] = global_policy
 
     async def load_settings(_db, settings_type, **_kwargs):
         return (
@@ -1161,7 +1164,7 @@ async def test_runtime_discovery_uses_global_not_integration_policy(
         _root_files(tmp_path, session),
     )
 
-    assert request.policy_integration_id is None
+    assert request.policy_integration_id == integration.id
     assert decision == expected
     assert request_approval.await_count == approval_count
 
@@ -1544,6 +1547,8 @@ async def test_child_integration_ceiling_cannot_widen_ask_to_auto(tmp_path, monk
     )
     monkeypatch.setattr(tool_registry, "integration_resource_actions", actions)
     snapshot = permission_snapshot(settings, {"calendar_query_events"}, integrations)
+    if layer == "global":
+        snapshot.pop("permissionVersion")  # Legacy children retain their former global ceiling.
     assert "private-user" not in str(snapshot) and str(integration.credential_id) not in str(snapshot)
     parent = _session(user_id=uuid4())
     child = _session(user_id=parent.user_id, parent_session_id=parent.id)

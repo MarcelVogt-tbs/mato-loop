@@ -6,11 +6,11 @@ const defaultSettings = () => ({
   scope: 'personal',
   configuredDisplayName: null,
   effectiveDisplayName: 'MatoLoop',
-  personalDisplayNamesEnabled: true,
   personalPersonasEnabled: true,
+  personas: [],
   defaultPersonaId: null,
-  effectiveDefaultPersonaId: null,
-  personas: []
+  profilePersonas: {},
+  profiles: []
 })
 
 export const useAgentIdentityStore = defineStore('agent-identity', {
@@ -53,11 +53,11 @@ export const useAgentIdentityStore = defineStore('agent-identity', {
         ? settings.configuredDisplayName
         : null
       this.effectiveDisplayName = String(settings?.effectiveDisplayName || 'MatoLoop')
-      this.personalDisplayNamesEnabled = settings?.personalDisplayNamesEnabled !== false
       this.personalPersonasEnabled = settings?.personalPersonasEnabled !== false
+      this.personas = settings?.personas || []
       this.defaultPersonaId = settings?.defaultPersonaId || null
-      this.effectiveDefaultPersonaId = settings?.effectiveDefaultPersonaId || null
-      this.personas = Array.isArray(settings?.personas) ? settings.personas : []
+      this.profilePersonas = settings?.profilePersonas || {}
+      this.profiles = settings?.profiles || []
       this.settingsLoaded = true
       this.settingsLoadFailed = false
       this.assignIdentity({ displayName: this.effectiveDisplayName })
@@ -104,34 +104,30 @@ export const useAgentIdentityStore = defineStore('agent-identity', {
     async resetDisplayName() {
       return this._mutate(() => api.delete('/agent-identity/settings/display-name'))
     },
-    async setPersonalDisplayNamesEnabled(enabled) {
-      return this._mutate(() => api.patch(
-        '/agent-identity/settings/personal-display-names', { enabled }
-      ))
-    },
     async setPersonalPersonasEnabled(enabled) {
       return this._mutate(() => api.patch(
         '/agent-identity/settings/personal-personas', { enabled }
       ))
     },
-    async createPersona(payload) {
-      return this._mutate(() => api.post(
-        '/agent-identity/personas', payload, scopeConfig(this.scope)
-      ))
-    },
-    async updatePersona(id, payload) {
-      return this._mutate(() => api.put(
-        `/agent-identity/personas/${id}`, payload, scopeConfig(this.scope)
-      ))
+    async savePersona(id, payload) {
+      return this._mutate(() => id
+        ? api.put(`/agent-identity/personas/${id}`, payload, scopeConfig(this.scope))
+        : api.post('/agent-identity/personas', payload, scopeConfig(this.scope)))
     },
     async deletePersona(id) {
-      return this._mutate(() => api.delete(
-        `/agent-identity/personas/${id}`, scopeConfig(this.scope)
-      ))
+      return this._mutate(() => api.delete(`/agent-identity/personas/${id}`, scopeConfig(this.scope)))
     },
     async setDefaultPersona(personaId) {
-      return this._mutate(() => api.patch(
-        '/agent-identity/personas/default', { personaId }, scopeConfig(this.scope)
+      return this._mutate(() => api.patch('/agent-identity/personas/default', { personaId }))
+    },
+    async savePersonaOverride(id, personaId) {
+      return this._mutate(() => api.put(
+        `/agent-identity/persona-overrides/${id}`, { personaId }, scopeConfig(this.scope)
+      ))
+    },
+    async deletePersonaOverride(id) {
+      return this._mutate(() => api.delete(
+        `/agent-identity/persona-overrides/${id}`, scopeConfig(this.scope)
       ))
     },
     async _mutate(request) {

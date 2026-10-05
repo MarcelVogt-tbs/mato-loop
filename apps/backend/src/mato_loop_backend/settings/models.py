@@ -129,30 +129,17 @@ def validate_integration_availability(value: dict[str, bool]) -> dict[str, bool]
 
 
 class PersonaProfile(BaseModel):
-    model_config = ConfigDict(
-        alias_generator=lambda value: _camel_case(value),
-        populate_by_name=True,
-        extra="forbid",
-    )
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     id: UUID = Field(default_factory=uuid4)
     name: str = Field(min_length=1, max_length=80)
     instructions: str = Field(default="", max_length=32_002)
-    owner_id: UUID | None = Field(default=None, exclude=True)
-
-    @field_validator("name", "instructions", mode="before")
-    @classmethod
-    def normalize_text(cls, value: Any, info: Any) -> Any:
-        if not isinstance(value, str):
-            return value
-        cleaned = value.strip()
-        if info.field_name == "name" and not cleaned:
-            raise ValueError("name must not be blank")
-        return cleaned
 
 
-def default_persona_profile() -> PersonaProfile:
-    return PersonaProfile(id=DEFAULT_PERSONA_ID, name="Standard")
+def validate_persona_catalog(personas: list[PersonaProfile]) -> list[PersonaProfile]:
+    if len({persona.id for persona in personas}) != len(personas) or len({persona.name.casefold() for persona in personas}) != len(personas):
+        raise ValueError("persona ids and names must be unique")
+    return personas
 
 
 class AgentProfilePermissions(BaseModel):
@@ -270,6 +257,7 @@ def validate_builtin_access_overrides(value: dict[UUID, AgentProfileAccessOverri
 
 
 class AgentProfile(BaseModel):
+    _shell_prefixes_configured: bool = PrivateAttr(default=False)
     model_config = ConfigDict(
         alias_generator=lambda value: _camel_case(value),
         populate_by_name=True,
@@ -280,7 +268,6 @@ class AgentProfile(BaseModel):
     enabled: StrictBool = True
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=500)
-    persona_id: UUID | None = None
     instructions: str = Field(min_length=1, max_length=16_000)
     runtime_instructions: str = Field(default="", max_length=4000)
     answer_display: Literal["timeline", "compact"] = "compact"
@@ -357,7 +344,6 @@ class AgentProfileOverrides(BaseModel):
         extra="forbid",
     )
 
-    persona_id: UUID | None = None
     instructions: str | None = Field(default=None, max_length=16_000)
     runtime_instructions: str | None = Field(default=None, max_length=4000)
     answer_display: Literal["timeline", "compact"] | None = None
@@ -395,7 +381,6 @@ class AgentProfileOverrides(BaseModel):
     @model_validator(mode="after")
     def reject_null_non_nullable_fields(self) -> Self:
         nullable = {
-            "persona_id",
             "max_tool_calls",
             "session_write_paths",
             "default_model_id",
@@ -467,16 +452,14 @@ class CustomAgentProfile(BaseModel):
 def resolve_agent_profile(
     profile: CustomAgentProfile, base: AgentProfile, owner_id: UUID | None
 ) -> AgentProfile:
-    values = apply_profile_overrides(base, profile.overrides).model_dump()
-    values.update(
-        id=profile.id,
-        enabled=profile.enabled,
-        name=profile.name,
-        description=profile.description,
-        base_profile_id=profile.base_profile_id,
-        owner_id=owner_id,
-    )
-    return AgentProfile.model_validate(values)
+    return apply_profile_overrides(base, profile.overrides).model_copy(update={
+        "id": profile.id,
+        "enabled": profile.enabled,
+        "name": profile.name,
+        "description": profile.description,
+        "base_profile_id": profile.base_profile_id,
+        "owner_id": owner_id,
+    })
 
 
 def apply_profile_overrides(
@@ -489,7 +472,9 @@ def apply_profile_overrides(
     for field in ("private_permissions", "public_permissions"):
         if field in overrides.model_fields_set:
             values[field] = getattr(base, field).merged(getattr(overrides, field)).model_dump()
-    return AgentProfile.model_validate(values)
+    result = AgentProfile.model_validate(values)
+    result._shell_prefixes_configured = base._shell_prefixes_configured or "shell_prefixes" in overrides.model_fields_set
+    return result
 
 
 def general_profile() -> AgentProfile:
@@ -644,7 +629,7 @@ def core_profiles() -> list[AgentProfile]:
 
 
 def cap_agent_profile_policy(
-    settings: ToolSettingsBase,
+    settings: ToolSettings,
     capability: str,
     baseline: ToolExecutionPolicy,
     *,
@@ -657,8 +642,8 @@ def cap_agent_profile_policy(
         return ToolExecutionPolicy.DISABLED
     if permissions is None:
         return baseline
-    profile_policy = permissions.policies.get(capability)
-    if profile_policy is None and capability == "session.files.read":
+    profile_policy = permissions.policies.get(capability) if integration_id is None or settings._legacy_integration_permissions else None
+    if integration_id is None and profile_policy is None and capability == "session.files.read":
         profile_policy = permissions.policies.get("filesystem.read")
     if integration_id is not None:
         profile_policy = permissions.integration_policies.get(
@@ -919,6 +904,21 @@ def effective_model_pseudonymization(
     return provider.pseudonymization_enabled
 
 
+class IntegrationPermissionBranch(BaseModel):
+    model_config = ConfigDict(alias_generator=_camel_case, populate_by_name=True, extra="forbid")
+
+    policies: dict[str, ToolExecutionPolicy] = Field(default_factory=dict)
+    resource_policies: dict[str, dict[str, ToolExecutionPolicy]] = Field(default_factory=dict)
+
+
+class IntegrationPermissions(BaseModel):
+    model_config = ConfigDict(alias_generator=_camel_case, populate_by_name=True, extra="forbid")
+
+    private_permissions: IntegrationPermissionBranch = Field(default_factory=IntegrationPermissionBranch)
+    public_permissions: IntegrationPermissionBranch = Field(default_factory=IntegrationPermissionBranch)
+    available: StrictBool | None = None
+
+
 class IntegrationInstance(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     name: str
@@ -932,8 +932,14 @@ class IntegrationInstance(BaseModel):
     credential_id: UUID | None = None
     owner_id: UUID | None = Field(default=None, exclude=True)
     config: dict[str, Any] = Field(default_factory=dict)
+    permissions: IntegrationPermissions = Field(default_factory=IntegrationPermissions)
+    profile_permissions: dict[UUID, IntegrationPermissions] = Field(default_factory=dict)
     _execution_operations: frozenset[str] | None = PrivateAttr(default=None)
     _browser_attached: bool = PrivateAttr(default=False)
+
+    def binding_data(self) -> dict[str, Any]:
+        """Keep live permission changes separate from the connection revision fence."""
+        return self.model_dump(mode="json", exclude={"permissions", "profile_permissions"})
 
 
 class WebFetchSettings(BaseModel):
@@ -1022,7 +1028,31 @@ class DefaultTaskListSettings(BaseModel):
     )
 
 
-class ToolSettingsBase(SettingsDocument):
+class IntegrationToolSettings(SettingsDocument):
+    resource_labels: dict[str, dict[str, str]] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("resource_labels", "resourceLabels"),
+    )
+    default_calendar: DefaultCalendarSettings | None = Field(
+        default=None,
+        validation_alias=AliasChoices("default_calendar", "defaultCalendar"),
+    )
+    default_task_list: DefaultTaskListSettings | None = Field(
+        default=None,
+        validation_alias=AliasChoices("default_task_list", "defaultTaskList"),
+    )
+    web_search: WebSearchToolSettings = Field(
+        default_factory=WebSearchToolSettings,
+        validation_alias=AliasChoices("web_search", "webSearch"),
+    )
+
+
+class ToolSettings(IntegrationToolSettings):
+    settings_key = "tools"
+
+    personal_settings_enabled: bool = False
+
+    _legacy_integration_permissions: bool = PrivateAttr(default=False)
     _agent_profile: AgentProfile | None = PrivateAttr(default=None)
     _delegation_ceiling: dict[str, Any] | None = PrivateAttr(default=None)
     _agent_permissions: AgentProfilePermissions | None = PrivateAttr(default=None)
@@ -1041,25 +1071,9 @@ class ToolSettingsBase(SettingsDocument):
         default_factory=dict,
         validation_alias=AliasChoices("tool_availability", "toolAvailability"),
     )
-    resource_labels: dict[str, dict[str, str]] = Field(
-        default_factory=dict,
-        validation_alias=AliasChoices("resource_labels", "resourceLabels"),
-    )
     shell_prefixes: ShellPrefixSettings = Field(
         default_factory=ShellPrefixSettings,
         validation_alias=AliasChoices("shell_prefixes", "shellPrefixes"),
-    )
-    default_calendar: DefaultCalendarSettings | None = Field(
-        default=None,
-        validation_alias=AliasChoices("default_calendar", "defaultCalendar"),
-    )
-    default_task_list: DefaultTaskListSettings | None = Field(
-        default=None,
-        validation_alias=AliasChoices("default_task_list", "defaultTaskList"),
-    )
-    web_search: WebSearchToolSettings = Field(
-        default_factory=WebSearchToolSettings,
-        validation_alias=AliasChoices("web_search", "webSearch"),
     )
     web_fetch: WebFetchSettings = Field(
         default_factory=WebFetchSettings,
@@ -1106,22 +1120,15 @@ class ToolSettingsBase(SettingsDocument):
     def trust_level(self) -> TrustLevel:
         return self._trust_level
 
-    def select_trust(self, trust_level: TrustLevel) -> ToolSettingsBase:
+    def select_trust(self, trust_level: TrustLevel) -> ToolSettings:
         self._trust_level = trust_level
         return self
 
-class ToolSettings(ToolSettingsBase):
-    settings_key = "tools"
 
-    personal_settings_enabled: bool = True
-
-
-class UserToolSettings(ToolSettingsBase):
+class UserToolSettings(IntegrationToolSettings):
     settings_key = "tools"
     settings_scope = SettingsScope.USER
 
-    # Existing documents are personal Tool snapshots; Integration-only documents opt out.
-    personal_tool_defaults_enabled: bool = True
 
 
 class AgentProfilesSettings(SettingsDocument):
@@ -1130,8 +1137,20 @@ class AgentProfilesSettings(SettingsDocument):
     personal_agents_enabled: bool = True
     profiles: list[CustomAgentProfile] = Field(default_factory=list, max_length=99)
     builtin_access_overrides: dict[UUID, AgentProfileAccessOverrides] = Field(default_factory=dict)
+    builtin_enabled: dict[UUID, StrictBool] = Field(default_factory=dict)
+    default_profile_id: UUID = GENERAL_PROFILE_ID
 
     _validate_builtin_access = field_validator("builtin_access_overrides")(validate_builtin_access_overrides)
+
+    @model_validator(mode="after")
+    def validate_default_profile(self) -> Self:
+        if self.builtin_enabled.keys() - CORE_PROFILE_IDS:
+            raise ValueError("only built-in profile enablement can be overridden")
+        active_ids = {key for key in CORE_PROFILE_IDS if self.builtin_enabled.get(key, True)}
+        active_ids.update(profile.id for profile in self.profiles if profile.enabled)
+        if self.default_profile_id not in active_ids:
+            raise ValueError("the default profile must be an active instance profile")
+        return self
 
 
 class UserAgentProfilesSettings(SettingsDocument):
@@ -1155,6 +1174,7 @@ class GeneralSettings(SettingsDocument):
 class ChannelSettings(SettingsDocument):
     settings_key = "channels"
 
+    enabled: bool = False
     allowed_providers: set[str] = Field(default_factory=lambda: {"telegram"})
 
 
@@ -1270,7 +1290,7 @@ class AiSettingsBase(SettingsDocument):
 class AiSettings(AiSettingsBase):
     settings_key = "ai"
 
-    personal_providers_enabled: bool = True
+    personal_providers_enabled: bool = False
 
 
 class UserAiSettings(AiSettingsBase):
@@ -1432,56 +1452,39 @@ class AgentIdentitySettings(SettingsDocument):
     settings_key = "agent-identity"
 
     display_name: str = Field(default="MatoLoop", min_length=1, max_length=80)
-    personal_display_names_enabled: bool = True
     personal_personas_enabled: bool = True
+    personas: list[PersonaProfile] = Field(default_factory=lambda: [PersonaProfile(id=DEFAULT_PERSONA_ID, name="Standard")])
     default_persona_id: UUID = DEFAULT_PERSONA_ID
-    personas: list[PersonaProfile] = Field(
-        default_factory=lambda: [default_persona_profile()], max_length=101
-    )
+    profile_personas: dict[UUID, UUID] = Field(default_factory=dict)
+
+    _validate_catalog = field_validator("personas")(validate_persona_catalog)
+
+    @model_validator(mode="after")
+    def validate_default_persona(self) -> Self:
+        ids = {persona.id for persona in self.personas}
+        if self.default_persona_id not in ids or set(self.profile_personas.values()) - ids:
+            raise ValueError("persona references must point to the instance catalog")
+        return self
 
     @field_validator("display_name")
     @classmethod
     def validate_display_name(cls, value: str) -> str:
         return normalize_agent_display_name(value)
 
-    @model_validator(mode="after")
-    def validate_personas(self) -> Self:
-        ids = [persona.id for persona in self.personas]
-        names = [persona.name.casefold() for persona in self.personas]
-        if len(ids) != len(set(ids)) or len(names) != len(set(names)):
-            raise ValueError("persona ids and names must be unique")
-        if self.default_persona_id not in ids:
-            raise ValueError("default_persona_id must reference an instance persona")
-        builtin = next(
-            (persona for persona in self.personas if persona.id == DEFAULT_PERSONA_ID),
-            None,
-        )
-        if builtin is None or builtin.instructions:
-            raise ValueError("the built-in empty persona must remain available")
-        return self
-
-
 class UserAgentIdentitySettings(SettingsDocument):
     settings_key = "agent-identity"
     settings_scope = SettingsScope.USER
 
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
-    default_persona_id: UUID | None = None
-    personas: list[PersonaProfile] = Field(default_factory=list, max_length=21)
+    personas: list[PersonaProfile] = Field(default_factory=list)
+    profile_personas: dict[UUID, UUID] = Field(default_factory=dict)
+
+    _validate_catalog = field_validator("personas")(validate_persona_catalog)
 
     @field_validator("display_name")
     @classmethod
     def validate_display_name(cls, value: str | None) -> str | None:
         return normalize_agent_display_name(value) if value is not None else None
-
-    @model_validator(mode="after")
-    def validate_personas(self) -> Self:
-        ids = [persona.id for persona in self.personas]
-        names = [persona.name.casefold() for persona in self.personas]
-        if len(ids) != len(set(ids)) or len(names) != len(set(names)):
-            raise ValueError("persona ids and names must be unique")
-        return self
-
 
 class EffectiveAgentIdentity(BaseModel):
     display_name: str
@@ -1565,6 +1568,7 @@ def default_skills() -> list[SkillDefinition]:
 class InstanceSkillsSettings(SettingsDocument):
     settings_key = "skills"
 
+    personal_skills_enabled: bool = True
     skills: list[SkillDefinition] = Field(default_factory=default_skills, max_length=40)
 
     @model_validator(mode="after")

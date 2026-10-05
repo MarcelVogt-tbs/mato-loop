@@ -57,6 +57,9 @@ _MESSAGES = {
     "agentProfile.inUse": "The agent profile is used by a session.",
     "agentProfile.limitReached": "The agent profile limit has been reached.",
     "agentProfile.personalDisabled": "Personal agent profiles are disabled.",
+    "agentProfile.defaultMustBeActive": "Select another active default profile first.",
+    "tools.personalDisabled": "Personal tool permission overrides are disabled.",
+    "tools.usePermissionSettings": "Edit permissions in the tool settings.",
     "agentProfile.selectedUnavailable": "The selected agent profile is no longer available.",
     "agentIdentity.personalDisplayNameDisabled": "Personal assistant display names are disabled.",
     "automation.alreadyRunning": "The automation already has an active run.",
@@ -160,7 +163,7 @@ _MESSAGES = {
     "channel.endpointNotFound": "The channel endpoint was not found.",
     "channel.invalidResponse": "The channel returned an invalid response.",
     "channel.pairingChanged": "The channel pairing changed before the message was processed.",
-    "channel.providerDisabled": "This channel provider is disabled by the administrator.",
+    "channel.providerDisabled": "This communication channel is disabled for the instance.",
     "channel.providerUnsupported": "The channel provider is not supported.",
     "channel.unavailable": "The channel is unavailable.",
     "openscad.alreadyConfigured": "OpenSCAD is already configured for this computer.",
@@ -370,6 +373,7 @@ _MESSAGES = {
     "skill.inUse": "The skill is still referenced by an automation.",
     "skill.defaultProtected": "A default skill cannot be deleted.",
     "skill.notEditable": "This skill cannot be edited personally.",
+    "skill.personalDisabled": "Personal skills are disabled for this instance.",
     "tool.executionFailed": "The tool execution failed.",
     "tool.executionInterrupted": (
         "The tool execution was interrupted and its outcome is unknown. Do not infer success or "

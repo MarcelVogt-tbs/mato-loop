@@ -152,7 +152,7 @@ def browser_script_case(browser_policy_case, request):
         "tabId": str(uuid4()), "observe": False,
         **({"function": "() => 1"} if request.param == "evaluate" else {"code": "async def run(page):\n    return 1"}),
     }
-    case.settings.permissions.policies["browser.code"] = "ask"
+    case.settings.permissions.integration_policies.setdefault(str(case.instance.id), {})["browser.code"] = "ask"
     return case
 
 
@@ -220,16 +220,14 @@ async def test_inherited_browser_actions_use_runtime_auto_without_approvals(brow
     assert not case.settings.permissions.integration_policies
 
 
-@pytest.mark.parametrize("scope", ["global", "integration", "profile"])
+@pytest.mark.parametrize("scope", ["integration", "profile"])
 @pytest.mark.parametrize("policy", ["ask", "disabled"])
 async def test_explicit_browser_policy_survives_auto_defaults(browser_action_case, scope, policy):
     case = browser_action_case
-    if scope == "global":
-        case.settings.permissions.policies[case.capability] = policy
-    elif scope == "integration":
+    if scope == "integration":
         case.settings.permissions.integration_policies[str(case.instance.id)] = {case.capability: policy}
     else:
-        case.settings._agent_permissions = AgentProfilePermissions(policies={case.capability: policy})
+        case.settings._agent_permissions = AgentProfilePermissions(integration_policies={str(case.instance.id): {case.capability: policy}})
     result = await case.effective.execute(case.call, case.context)
     expected_checks = len(case.capabilities) if policy == "ask" else case.capabilities.index(case.capability) + 1
     assert sum(not call.kwargs.get("check_only", False) for call in case.context.ask_handler.await_args_list) == expected_checks
@@ -280,7 +278,7 @@ async def test_browser_delegation_ceiling_is_not_relaxed(browser_action_case, mo
     case = browser_action_case
     ceiling = permission_snapshot(case.settings, set(BROWSER_TOOL_ACTIONS), case.integrations)
     if source == "policy":
-        ceiling["permissions"]["policies"][case.capability] = policy
+        ceiling["permissions"]["integration_policies"].setdefault(str(case.instance.id), {})[case.capability] = policy
     else:
         ceiling["integrationDefaults"][str(case.instance.id)][case.capability] = policy
     _mock_value = AsyncMock(return_value=ceiling)
@@ -298,12 +296,13 @@ async def test_browser_delegation_ceiling_is_not_relaxed(browser_action_case, mo
 @pytest.mark.parametrize("change", ["user_denied", "disabled"])
 async def test_explicit_browser_ask_still_denies_or_revalidates(browser_action_case, change):
     case = browser_action_case
-    case.settings.permissions.policies[case.capability] = "ask"
+    policies = case.settings.permissions.integration_policies.setdefault(str(case.instance.id), {})
+    policies[case.capability] = "ask"
 
     async def approve(*_args, **_kwargs):
         if change == "user_denied":
             return "deny"
-        case.settings.permissions.policies[case.capability] = "disabled"
+        policies[case.capability] = "disabled"
         return "allow_once"
 
     case.approval.side_effect = approve
@@ -316,7 +315,7 @@ async def test_explicit_browser_ask_still_denies_or_revalidates(browser_action_c
 
 async def test_existing_grant_under_ask_does_not_capture_guard(browser_action_case, monkeypatch):
     case = browser_action_case
-    case.settings.permissions.policies[case.capability] = "ask"
+    case.settings.permissions.integration_policies.setdefault(str(case.instance.id), {})[case.capability] = "ask"
     evaluate = AsyncMock(return_value=PermissionDecision.ALLOW)
     monkeypatch.setattr(mock_agent_runtime.PermissionPolicy, "evaluate", evaluate)
     result = await case.effective.execute(case.call, case.context)
@@ -333,7 +332,7 @@ async def test_script_requires_each_permission_even_without_observation(browser_
     case = browser_policy_case
     case.call.name = f"browser_{action}"
     case.call.arguments = {"tabId": str(uuid4()), "observe": False, **source}
-    case.settings.permissions.policies[capability] = "disabled"
+    case.settings.permissions.integration_policies.setdefault(str(case.instance.id), {})[capability] = "disabled"
     result = await case.effective.execute(case.call, case.context)
     assert result.metadata["errorCode"] == "permission.denied"
     case.coordinator.snapshot.assert_not_awaited()
@@ -345,7 +344,7 @@ async def test_multiple_asks_share_one_independent_guard_and_exact_source(browse
     case.call.name = "browser_run_code"
     code = "async def run(page):\n    await page.goto('https://example.org')\n    return 1"
     case.call.arguments = {"tabId": str(uuid4()), "code": code, "observe": False}
-    case.settings.permissions.policies.update(dict.fromkeys(("browser.read", "browser.write", "browser.code"), "ask"))
+    case.settings.permissions.integration_policies.setdefault(str(case.instance.id), {}).update(dict.fromkeys(("browser.read", "browser.write", "browser.code"), "ask"))
     case.coordinator.snapshot.return_value = "b" * 64
 
     async def approve(*args, **_kwargs):
@@ -391,18 +390,16 @@ async def test_legacy_availability_and_delegation_never_enable_new_browser_tools
 
 @pytest.mark.parametrize("capability", ["browser.read", "browser.write"])
 @pytest.mark.parametrize("policy", ["ask", "disabled"])
-@pytest.mark.parametrize("scope", ["global", "integration", "profile", "delegation"])
+@pytest.mark.parametrize("scope", ["integration", "profile", "delegation"])
 async def test_browser_final_fence_rejects_revoked_earlier_permission_during_code_approval(
     browser_script_case, monkeypatch, capability, policy, scope,
 ):
     case = browser_script_case
-    if scope == "global":
-        policies = case.settings.permissions.policies
-    elif scope == "integration":
+    if scope == "integration":
         policies = case.settings.permissions.integration_policies.setdefault(str(case.instance.id), {})
     elif scope == "profile":
         case.settings._agent_permissions = AgentProfilePermissions()
-        policies = case.settings._agent_permissions.policies
+        policies = case.settings._agent_permissions.integration_policies.setdefault(str(case.instance.id), {})
     else:
         ceiling = permission_snapshot(case.settings, set(BROWSER_TOOL_ACTIONS), case.integrations)
         _mock_value = AsyncMock(return_value=ceiling)
@@ -440,11 +437,12 @@ async def test_browser_final_fence_retains_exact_once_approval_but_never_overrid
     browser_script_case, capability, policy,
 ):
     case = browser_script_case
-    case.settings.permissions.policies[capability] = "ask"
+    policies = case.settings.permissions.integration_policies.setdefault(str(case.instance.id), {})
+    policies[capability] = "ask"
 
     async def approve(*args, **_kwargs):
         if args[-1].capability == "browser.code":
-            case.settings.permissions.policies[capability] = policy
+            policies[capability] = policy
         return "allow_once"
 
     case.approval.side_effect = approve
@@ -476,7 +474,7 @@ async def test_browser_once_proof_is_not_a_grant_for_other_scopes(browser_script
         request = replace(request, resource_scope=json.dumps(scope, sort_keys=True, separators=(",", ":")))
     elif change == "capability":
         request = replace(request, capability="browser.read")
-        case.settings.permissions.policies["browser.read"] = "ask"
+        case.settings.permissions.integration_policies.setdefault(str(case.instance.id), {})["browser.read"] = "ask"
     elif change == "profile":
         case.context.session.agent_profile_id = uuid4()
     elif change == "call":

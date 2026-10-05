@@ -143,6 +143,9 @@ async def _personal_settings(
         from mato_loop_backend.settings import IntegrationSettings
 
         instance = await SettingsStore.load(context.db, IntegrationSettings)
+        from mato_loop_backend.settings.effective import personal_settings_allowed
+
+        admin = await personal_settings_allowed(context.db, context.session.user_id, False)
         adapters = {
             adapter.adapter_type: {
                 "fields": ["name", "enabled", *_CONFIG_FIELDS[adapter.adapter_type]],
@@ -150,9 +153,9 @@ async def _personal_settings(
             }
             for adapter in integration_adapters()
             if adapter.adapter_type in _CONFIG_FIELDS
-            and instance.availability_for(adapter.adapter_type) == IntegrationAdapterAvailability.FULL
+            and (instance.availability_for(adapter.adapter_type) == IntegrationAdapterAvailability.FULL or admin and instance.availability_for(adapter.adapter_type) == IntegrationAdapterAvailability.INSTANCE_ONLY)
         }
-        if instance.availability_for("mcp_streamable_http") == IntegrationAdapterAvailability.FULL:
+        if instance.availability_for("mcp_streamable_http") == IntegrationAdapterAvailability.FULL or admin and instance.availability_for("mcp_streamable_http") == IntegrationAdapterAvailability.INSTANCE_ONLY:
             adapters["mcp_streamable_http"] = {
                 "fields": ["name", "enabled", "endpoint"],
                 "credentialFields": ["bearer_token"],

@@ -30,7 +30,7 @@ Die Produktionsvorlage setzt `MATO_LOOP_SECURE_COOKIES=true`. Ändern Sie den We
 
 ## App und Push-Benachrichtigungen
 
-Der Produktionsbuild ist eine installierbare Web-App. Betreiben Sie MatoLoop über eine vertrauenswürdige HTTPS-Adresse und setzen Sie `MATO_LOOP_SECURE_COOKIES=true`. Ein Administrator richtet Web Push einmalig unter **Einstellungen > Benachrichtigungen** mit einer betreuten Kontakt-E-Mail-Adresse ein. MatoLoop erzeugt dabei den privaten Schlüssel `/data/secrets/web-push-vapid.pem` und unterstützt die Browser-Pushdienste von Apple, Google und Mozilla.
+The production build is an installable web app. Serve MatoLoop over a trusted HTTPS address and set `MATO_LOOP_SECURE_COOKIES=true`. An administrator configures instance Web Push under **Administration > Benachrichtigungen** using a monitored contact email address. MatoLoop creates the private key `/data/secrets/web-push-vapid.pem` and supports the browser push services of Apple, Google, and Mozilla.
 
 Benutzer aktivieren Push anschließend für jeden Browser oder jede PWA-Installation über den Schalter im Benachrichtigungsbereich. Unter iOS und iPadOS ist dafür mindestens Version 16.4 erforderlich und MatoLoop muss zuvor über **Zum Home-Bildschirm** installiert worden sein. Die Systemberechtigung kann nur durch diese ausdrückliche Benutzeraktion angefordert werden.
 

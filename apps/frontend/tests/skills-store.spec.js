@@ -20,11 +20,20 @@ describe('skill store', () => {
     api.get.mockResolvedValue({ data: { items: [item] } })
     const store = useSkillStore()
 
-    await store.fetchSkills()
+    await store.fetchSkills('personal')
 
-    expect(api.get).toHaveBeenCalledWith('/skills')
-    expect(store.items).toEqual([item])
+    expect(api.get).toHaveBeenCalledWith('/skills', { params: { scope: 'personal' } })
+    expect(store.scopedItems).toEqual([item])
     expect(store.loading).toBe(false)
+  })
+
+  it('keeps the saved skill gate after a rejected change', async () => {
+    api.get.mockResolvedValue({ data: { personalSkillsEnabled: true } })
+    api.put.mockRejectedValue(new Error('failed'))
+    const store = useSkillStore()
+    await store.fetchSettings()
+    await expect(store.setPersonalSkillsEnabled(false)).rejects.toThrow('failed')
+    expect(store.personalSkillsEnabled).toBe(true)
   })
 
   it('manages the selected scope and enabled state', async () => {
@@ -51,19 +60,15 @@ describe('skill store', () => {
     expect(store.scopedItems).toEqual([])
   })
 
-  it('loads a scoped catalog without replacing effective automation choices', async () => {
-    const effective = { id: 'effective' }
-    const personal = { id: 'personal' }
-    api.get
-      .mockResolvedValueOnce({ data: { items: [effective] } })
-      .mockResolvedValueOnce({ data: { items: [personal] } })
+  it('ignores a late catalog after switching scope', async () => {
+    let resolve
+    api.get.mockImplementationOnce(() => new Promise((done) => { resolve = done }))
     const store = useSkillStore()
-
-    await store.fetchSkills()
-    await store.fetchSkills('personal')
-
-    expect(api.get).toHaveBeenLastCalledWith('/skills', { params: { scope: 'personal' } })
-    expect(store.items).toEqual([effective])
-    expect(store.scopedItems).toEqual([personal])
+    store.selectScope('instance')
+    const pending = store.fetchSkills('instance')
+    store.selectScope('personal')
+    resolve({ data: { items: [{ id: 'global' }] } })
+    await pending
+    expect(store.scopedItems).toEqual([])
   })
 })

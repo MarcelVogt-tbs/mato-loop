@@ -24,7 +24,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-it('offers global ownership only for integrations that can be shared', async () => {
+it('keeps the ownership selected by the administration or settings page', async () => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   const pinia = createPinia()
   useAuthStore(pinia).isAdmin = true
@@ -48,10 +48,9 @@ it('offers global ownership only for integrations that can be shared', async () 
   app.mount(root)
   open.value = true
 
-  await vi.waitFor(() => expect(document.querySelector('.integration-dialog .q-checkbox')?.textContent).toContain('Global'))
-  page.switchScope(true)
-  expect(integrations.scope).toBe('instance')
-  page.switchScope(false)
+  await vi.waitFor(() => expect(document.querySelector('.integration-dialog')).not.toBeNull())
+  expect(document.querySelector('.integration-dialog .q-checkbox')).toBeNull()
+  expect(integrations.scope).toBe('personal')
   page.form.integration_type = 'browser'
   page.selectIntegrationType('browser')
   await nextTick()

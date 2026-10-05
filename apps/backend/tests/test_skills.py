@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import skills as skill_routes
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import UserAccount
@@ -219,6 +220,7 @@ def test_authenticated_skill_api_creates_and_commits(monkeypatch) -> None:
         yield db
 
     app = FastAPI()
+    register_error_handlers(app)
     app.include_router(skill_routes.router, prefix="/api")
     app.dependency_overrides[get_db_session] = override_db
     app.dependency_overrides[require_user] = lambda: user
@@ -238,6 +240,11 @@ def test_authenticated_skill_api_creates_and_commits(monkeypatch) -> None:
     create.assert_awaited_once()
     assert create.await_args.args[:2] == (db, user.id)
     db.commit.assert_awaited_once()
+
+    create.side_effect = SkillError("skill.personalDisabled")
+    with TestClient(app) as client:
+        blocked = client.post("/api/skills", json=_draft().model_dump())
+    assert (blocked.status_code, blocked.json()["error"]["code"]) == (409, "skill.personalDisabled")
 
 
 async def test_effective_skills_merge_scopes_and_hide_disabled(monkeypatch) -> None:
@@ -333,6 +340,43 @@ def test_instance_skill_api_requires_admin(monkeypatch) -> None:
 
     with TestClient(app) as client:
         response = client.get("/api/skills?scope=instance")
+        settings_response = client.put("/api/skills/settings", json={"personalSkillsEnabled": False})
 
     assert response.status_code == 403
     assert response.json()["detail"] == "auth.adminRequired"
+    assert settings_response.status_code == 403
+
+
+@pytest.mark.parametrize("admin", [False, True])
+async def test_personal_skill_gate_preserves_stored_skills_and_admin_exception(monkeypatch, admin):
+    user = UserAccount(id=uuid4(), username="owner", password_hash="hash", is_admin=admin)
+    shared = DEFAULT_SKILLS[WEATHER_SKILL_ID].model_copy(update={"enabled": True})
+    override = shared.model_copy(update={"instructions": "Personal weather instructions."})
+    own = SkillDefinition(**_draft().model_dump())
+    instance = InstanceSkillsSettings(personal_skills_enabled=False, skills=[shared])
+    personal = SkillsSettings(skills=[override, own])
+    async def load(_db, model, **_kwargs):
+        return instance if model is InstanceSkillsSettings else personal
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(SettingsStore, "load_optional", load)
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = user
+    effective = await load_effective_skills(db, user.id, enabled_only=True)
+    assert [skill.instructions for skill in effective] == ([override.instructions, own.instructions] if admin else [shared.instructions])
+    assert [skill.instructions for skill in await SkillService.list_scoped(db, user.id, "personal")] == [override.instructions, own.instructions]
+    if admin:
+        await SkillService.set_enabled(db, user.id, own.id, False)
+    else:
+        with pytest.raises(SkillError, match="skill.personalDisabled"):
+            await SkillService.set_enabled(db, user.id, own.id, False)
+
+
+async def test_admin_skill_gate_update_preserves_global_catalog(monkeypatch):
+    user = UserAccount(id=uuid4(), username="admin", password_hash="hash", is_admin=True)
+    instance = InstanceSkillsSettings()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+    await skill_routes.update_skill_settings(skill_routes.SkillSettingsRequest(personalSkillsEnabled=False), user, AsyncMock(spec=AsyncSession))
+    assert save.await_args.args[1].model_dump() == InstanceSkillsSettings(personal_skills_enabled=False).model_dump()

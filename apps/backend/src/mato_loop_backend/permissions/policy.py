@@ -352,7 +352,7 @@ def integration_operation_permission(
         summary=summary,
         resource_display=resource_display,
         use_integration_policy=use_integration_policy,
-        policy_integration_id=integration_id if use_integration_policy else None,
+        policy_integration_id=integration_id,
         policy_resource_key=resource_key,
         display_items=display_items,
         force_ask=force_ask,

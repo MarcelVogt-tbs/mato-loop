@@ -142,7 +142,7 @@ def profile_id(integration_id: UUID) -> UUID:
 
 def binding_revision(instance: IntegrationInstance) -> str:
     payload = json.dumps(
-        instance.model_dump(mode="json"),
+        instance.binding_data(),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,

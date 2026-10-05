@@ -33,6 +33,8 @@ def _clear_integration_policies(
 ) -> bool:
     key = str(integration_id)
     changed = False
+    if isinstance(tools, UserToolSettings):
+        return False
     for permissions in (tools.private_permissions, tools.public_permissions):
         changed = permissions.integration_policies.pop(key, None) is not None or changed
         if resources:

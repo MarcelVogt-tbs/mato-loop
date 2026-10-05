@@ -3,16 +3,44 @@ from pathlib import Path
 from uuid import uuid4
 
 
-def _migration_module():
+def _migration_module(filename="e224cc43e462_add_scoped_persona_profiles.py"):
     path = (
         Path(__file__).parents[1]
-        / "alembic/versions/e224cc43e462_add_scoped_persona_profiles.py"
+        / "alembic/versions" / filename
     )
     spec = importlib.util.spec_from_file_location("agent_identity_migration", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_scoped_persona_assignments_preserve_catalogs_and_references():
+    migration = _migration_module("7494cba04f61_reorganize_scoped_settings.py")
+    owner = uuid4()
+    global_id, own_id, unused_id = (str(uuid4()) for _ in range(3))
+    global_agent, own_agent, inherited_agent = (str(uuid4()) for _ in range(3))
+    identity = {"default_persona_id": global_id, "personas": [
+        {"id": global_id, "name": "Default", "instructions": "Global"},
+        {"id": unused_id, "name": "Unused", "instructions": "Keep me"},
+    ]}
+    result = migration.migrate_documents({
+        ("agent-identity", None): identity,
+        ("agent-identity", owner): {"default_persona_id": own_id, "personas": [{"id": own_id, "name": "Mine", "instructions": "Mine"}]},
+        ("agent-profiles", None): {"profiles": [{"id": global_agent, "overrides": {"persona_id": unused_id}}]},
+        ("agent-profiles", owner): {"profiles": [
+            {"id": own_agent, "overrides": {"persona_id": global_id}},
+            {"id": inherited_agent, "overrides": {}},
+        ]},
+    })
+    assert (
+        result["agent-identity", None], result["agent-identity", owner],
+        result["agent-profiles", None]["profiles"][0]["overrides"],
+    ) == (
+        {**identity, "profile_personas": {global_agent: unused_id}},
+        {"personas": [{"id": own_id, "name": "Mine", "instructions": "Mine"}], "profile_personas": {own_agent: global_id, inherited_agent: own_id}},
+        {},
+    )
 
 
 def test_persona_migration_preserves_extend_and_empty_replace() -> None:

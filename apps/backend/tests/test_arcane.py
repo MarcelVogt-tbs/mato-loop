@@ -84,7 +84,7 @@ async def test_arcane_request_limits_origin_and_requires_stream_completion():
 def test_arcane_actions_and_permissions_are_target_bound():
     instance = IntegrationInstance(name="Host", integration_type="infrastructure", adapter_type="arcane",
                                    config={"base_url": "https://arcane.example.test"}, credential_id=uuid4())
-    revision = json.dumps(instance.model_dump(mode="json"), ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    revision = json.dumps(instance.binding_data(), ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     context = SimpleNamespace(bound_options={"integration_id": str(instance.id), "binding_revision": revision},
                               integration_settings=IntegrationSettings(instances=[instance]))
     arguments = ArcaneDelete(integration_id=instance.id, environment_id="0", kind="volumes", resource_id="db/data")

@@ -22,4 +22,4 @@ async def channel_provider_allowed(
     if lock:
         await lock_channel_provider(db, provider, shared=True)
     settings = await SettingsStore.load(db, ChannelSettings)
-    return provider in settings.allowed_providers
+    return settings.enabled and provider in settings.allowed_providers

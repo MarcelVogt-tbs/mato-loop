@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.models import ExecutionAgent
+from mato_loop_backend.models import ExecutionAgent, UserAccount
 from mato_loop_backend.settings.models import (
     DEFAULT_SKILLS,
     GENERAL_PROFILE_ID,
@@ -63,29 +63,39 @@ _INTEGRATION_TOOL_FIELDS = (
 )
 
 
+async def personal_settings_allowed(db: AsyncSession, user_id: UUID, enabled: bool) -> bool:
+    if enabled:
+        return True
+    user = await db.get(UserAccount, user_id, populate_existing=True)
+    return user is not None and getattr(user, "is_admin", False) is True
+
+
+async def default_agent_profile_id(db: AsyncSession) -> UUID:
+    settings = await SettingsStore.load_optional(db, AgentProfilesSettings) or AgentProfilesSettings()
+    return settings.default_profile_id
+
+
+async def personal_skills_allowed(db: AsyncSession, user_id: UUID, *, for_update: bool = False) -> bool:
+    settings = await SettingsStore.load_optional(db, InstanceSkillsSettings, for_update=for_update)
+    return await personal_settings_allowed(db, user_id, settings.personal_skills_enabled if settings is not None else True)
+
+
 def resolve_agent_persona(
     instance: AgentIdentitySettings,
     personal: UserAgentIdentitySettings | None,
     agent_profile: AgentProfile | None,
 ) -> PersonaProfile:
-    instance_personas = {persona.id: persona for persona in instance.personas}
-    fallback = instance_personas[instance.default_persona_id]
-    selected_id = agent_profile.persona_id if agent_profile is not None else None
-
-    if agent_profile is not None and agent_profile.owner_id is None:
-        return instance_personas.get(selected_id, fallback)
-
-    if selected_id in instance_personas:
-        return instance_personas[selected_id]
-    if not instance.personal_personas_enabled or personal is None:
-        return fallback
-
-    personal_personas = {persona.id: persona for persona in personal.personas}
-    if selected_id in personal_personas:
-        return personal_personas[selected_id]
-    if personal.default_persona_id in personal_personas:
-        return personal_personas[personal.default_persona_id]
-    return instance_personas.get(personal.default_persona_id, fallback)
+    catalog = {persona.id: persona for persona in instance.personas}
+    selected = instance.default_persona_id
+    if agent_profile is not None:
+        if agent_profile.owner_id is None:
+            selected = instance.profile_personas.get(agent_profile.id, selected)
+        if instance.personal_personas_enabled and personal is not None:
+            available = {**catalog, **{persona.id: persona for persona in personal.personas}}
+            personal_id = personal.profile_personas.get(agent_profile.id)
+            if personal_id in available:
+                return available[personal_id].model_copy(deep=True)
+    return catalog.get(selected, catalog[instance.default_persona_id]).model_copy(deep=True)
 
 
 async def load_effective_agent_identity(
@@ -98,47 +108,25 @@ async def load_effective_agent_identity(
     instance = await SettingsStore.load(
         db, AgentIdentitySettings, for_update=for_update
     )
+    instance = instance.model_copy(deep=True)
+    instance.personal_personas_enabled = await personal_settings_allowed(db, user_id, instance.personal_personas_enabled)
     personal = await SettingsStore.load_optional(
         db, UserAgentIdentitySettings, user_id=user_id, for_update=for_update
     )
     display_name = instance.display_name
     if (
-        instance.personal_display_names_enabled
+        instance.personal_personas_enabled
         and personal is not None
         and personal.display_name is not None
     ):
         display_name = personal.display_name
 
-    persona = resolve_agent_persona(instance, personal, agent_profile).model_copy(deep=True)
-    persona.owner_id = (
-        user_id
-        if personal is not None and any(item.id == persona.id for item in personal.personas)
-        else None
-    )
     return EffectiveAgentIdentity(
         display_name=display_name,
-        persona=persona,
-        personal_display_name_enabled=instance.personal_display_names_enabled,
-        persona_editable=persona.owner_id == user_id,
+        persona=resolve_agent_persona(instance, personal, agent_profile),
+        personal_display_name_enabled=instance.personal_personas_enabled,
+        persona_editable=instance.personal_personas_enabled and agent_profile is not None,
     )
-
-
-async def load_effective_personas(
-    db: AsyncSession, user_id: UUID
-) -> list[PersonaProfile]:
-    instance = (await SettingsStore.load(db, AgentIdentitySettings)).model_copy(deep=True)
-    for persona in instance.personas:
-        persona.owner_id = None
-    if not instance.personal_personas_enabled:
-        return instance.personas
-    personal = await SettingsStore.load_optional(
-        db, UserAgentIdentitySettings, user_id=user_id
-    )
-    if personal is not None:
-        for persona in personal.model_copy(deep=True).personas:
-            persona.owner_id = user_id
-            instance.personas.append(persona)
-    return instance.personas
 
 
 async def load_effective_ai(db: AsyncSession, user_id: UUID) -> AiSettings:
@@ -146,7 +134,7 @@ async def load_effective_ai(db: AsyncSession, user_id: UUID) -> AiSettings:
     personal = await SettingsStore.load_optional(db, UserAiSettings, user_id=user_id)
     for provider in instance.providers:
         provider.owner_id = None
-    if not instance.personal_providers_enabled or personal is None:
+    if personal is None or not await personal_settings_allowed(db, user_id, instance.personal_providers_enabled):
         return instance
 
     personal = personal.model_copy(deep=True)
@@ -187,10 +175,15 @@ async def load_effective_integrations(
         personal_instances = []
     else:
         personal_instances = personal.model_copy(deep=True).instances
+    admin_personal = await personal_settings_allowed(db, user_id, False) if any(
+        instance.availability_for(item.adapter_type) == IntegrationAdapterAvailability.INSTANCE_ONLY
+        for item in personal_instances
+    ) else False
     for item in personal_instances:
         if (
             instance.availability_for(item.adapter_type)
             != IntegrationAdapterAvailability.FULL
+            and not (admin_personal and instance.availability_for(item.adapter_type) == IntegrationAdapterAvailability.INSTANCE_ONLY)
         ):
             continue
         item.owner_id = user_id
@@ -236,8 +229,10 @@ def filter_agent_profile_integrations(
         if (ceiling is None or str(item.id) in ceiling)
         and (
             profile is None
-            or profile.integration_availability.get(
-                str(item.id), profile.integrations_enabled_by_default
+            or (
+                item.profile_permissions[profile.id].available
+                if item.owner_id is not None and profile.id in item.profile_permissions and item.profile_permissions[profile.id].available is not None
+                else profile.integration_availability.get(str(item.id), profile.integrations_enabled_by_default)
             )
         )
     ]
@@ -249,54 +244,47 @@ def filter_agent_profile_integrations(
     return effective
 
 
-def _merge_permissions(
-    baseline: AgentProfilePermissions,
-    override: AgentProfilePermissions,
-    *,
-    include_policies: bool = True,
-) -> AgentProfilePermissions:
-    return baseline.merged(override, include_policies=include_policies)
-
-
 async def load_effective_tools(
     db: AsyncSession, user_id: UUID, trust_level: TrustLevel = TrustLevel.PUBLIC
 ) -> ToolSettings:
     instance = (await SettingsStore.load(db, ToolSettings)).model_copy(deep=True)
+    if not await personal_skills_allowed(db, user_id):
+        instance.tool_availability.update(dict.fromkeys(("build_skill", "edit_skill"), False))
     if not instance.tool_availability.get("browser", True):
         from mato_loop_backend.integrations.browser.adapter import BROWSER_TOOL_ACTIONS
 
         instance.tool_availability.update(dict.fromkeys(BROWSER_TOOL_ACTIONS, False))
     personal = await SettingsStore.load_optional(db, UserToolSettings, user_id=user_id)
-    if personal is None:
-        instance.private_permissions = AgentProfilePermissions()
-        instance.public_permissions = AgentProfilePermissions()
-        instance.shell_prefixes = type(instance.shell_prefixes)()
-        return instance.select_trust(trust_level)
+    if personal is not None:
+        for field in _INTEGRATION_TOOL_FIELDS:
+            setattr(instance, field, getattr(personal, field))
+    for branch in (instance.private_permissions, instance.public_permissions):
+        branch.integration_policies = {}
+        branch.resource_policies = {}
+    return instance.select_trust(trust_level)
 
-    data = instance.model_dump()
-    personal_data = personal.model_dump()
-    for field in _INTEGRATION_TOOL_FIELDS:
-        data[field] = personal_data[field]
-    data["private_permissions"] = AgentProfilePermissions().model_dump()
-    data["public_permissions"] = AgentProfilePermissions().model_dump()
-    data["shell_prefixes"] = {"read": [], "write": []}
-    effective = ToolSettings.model_validate(data)
-    effective.tool_availability = dict(instance.tool_availability)
-    effective.web_fetch.user_agent = instance.web_fetch.user_agent
-    effective.web_fetch.max_response_mib = instance.web_fetch.max_response_mib
-    effective.web_fetch.public_addresses_only = (
-        instance.web_fetch.public_addresses_only
-    )
-    return effective.select_trust(trust_level)
+
+def apply_integration_permissions(tools: ToolSettings, integrations: IntegrationSettings, profile_id: UUID | None = None) -> None:
+    for field in ("private_permissions", "public_permissions"):
+        target = getattr(tools, field)
+        target.integration_policies = {}
+        target.resource_policies = {}
+        for instance in integrations.instances:
+            branch = getattr(instance.permissions, field)
+            policies = dict(branch.policies)
+            resources = {key: dict(value) for key, value in branch.resource_policies.items()}
+            override = instance.profile_permissions.get(profile_id) if instance.owner_id is not None else None
+            if override is not None:
+                selected = getattr(override, field)
+                policies.update(selected.policies)
+                for key, value in selected.resource_policies.items():
+                    resources.setdefault(key, {}).update(value)
+            target.integration_policies[str(instance.id)] = policies
+            target.resource_policies[str(instance.id)] = resources
 
 
 def personal_integration_tool_settings(instance: ToolSettings) -> UserToolSettings:
-    return UserToolSettings.model_validate(
-        {
-            **instance.model_dump(include=set(_INTEGRATION_TOOL_FIELDS)),
-            "personal_tool_defaults_enabled": False,
-        }
-    )
+    return UserToolSettings.model_validate(instance.model_dump(include=set(_INTEGRATION_TOOL_FIELDS)))
 
 
 class AgentProfileUnavailable(Exception):
@@ -313,6 +301,7 @@ def shipped_profiles() -> list[AgentProfile]:
 class EffectiveAgentProfiles:
     personal_agents_enabled: bool
     profiles: list[AgentProfile]
+    default_profile_id: UUID = GENERAL_PROFILE_ID
 
 
 async def load_effective_agent_profiles(
@@ -332,7 +321,7 @@ async def load_effective_agent_profiles(
     shipped = shipped_profiles()
     personal = (
         await SettingsStore.load_optional(db, UserAgentProfilesSettings, user_id=user_id, for_update=for_update)
-        if include_personal and instance.personal_agents_enabled else None
+        if include_personal and await personal_settings_allowed(db, user_id, instance.personal_agents_enabled) else None
     )
     shipped = [
         apply_profile_overrides(profile, instance.builtin_access_overrides[profile.id])
@@ -340,8 +329,11 @@ async def load_effective_agent_profiles(
         for profile in shipped
     ]
     bases = {profile.id: profile for profile in shipped}
+    for profile in shipped:
+        profile.enabled = instance.builtin_enabled.get(profile.id, True)
     effective = EffectiveAgentProfiles(
         personal_agents_enabled=instance.personal_agents_enabled,
+        default_profile_id=instance.default_profile_id,
         profiles=[
             *shipped,
             *(
@@ -370,7 +362,10 @@ async def load_effective_skills(
 ) -> list[SkillDefinition]:
     instance = await SettingsStore.load_optional(db, InstanceSkillsSettings)
     instance = instance or InstanceSkillsSettings()
-    personal = await SettingsStore.load(db, SkillsSettings, user_id=user_id)
+    personal = (
+        await SettingsStore.load(db, SkillsSettings, user_id=user_id)
+        if await personal_settings_allowed(db, user_id, instance.personal_skills_enabled) else SkillsSettings()
+    )
     skills: list[SkillDefinition] = []
     for item in instance.skills:
         skill = item.model_copy(deep=True)
@@ -396,10 +391,10 @@ async def load_agent_profile(
     *,
     for_update: bool = False,
 ) -> AgentProfile:
-    profile_id = profile_id or GENERAL_PROFILE_ID
     settings = await load_effective_agent_profiles(
         db, user_id, for_update=for_update, include_integrations=False
     )
+    profile_id = profile_id or settings.default_profile_id
     profile = next((item for item in settings.profiles if item.id == profile_id), None)
     if profile is None:
         settings = await load_effective_agent_profiles(db, user_id, for_update=for_update)
@@ -426,13 +421,17 @@ async def load_agent_profile_tools(
 ) -> tuple[ToolSettings, AgentProfile]:
     tools = await load_effective_tools(db, user_id, trust_level)
     profile = await load_agent_profile(db, user_id, profile_id)
-    tools.private_permissions = profile.private_permissions
-    tools.public_permissions = profile.public_permissions
-    tools.shell_prefixes = profile.shell_prefixes
+    permission_profile = profile
+    if profile.owner_id is not None and profile.integration_id is None and not await personal_settings_allowed(db, user_id, tools.personal_settings_enabled):
+        permission_profile = next(item for item in shipped_profiles() if item.id == profile.base_profile_id)
+        instance_profiles = await SettingsStore.load(db, AgentProfilesSettings)
+        from mato_loop_backend.settings.models import apply_profile_overrides
+
+        if permission_profile.id in instance_profiles.builtin_access_overrides:
+            permission_profile = apply_profile_overrides(permission_profile, instance_profiles.builtin_access_overrides[permission_profile.id])
+    if permission_profile._shell_prefixes_configured or permission_profile.shell_prefixes.read or permission_profile.shell_prefixes.write:
+        tools.shell_prefixes = permission_profile.shell_prefixes
+    tools._agent_permissions = AgentProfilePermissions(policies=dict(getattr(permission_profile, f"{trust_level.value}_permissions").policies))
     tools._agent_profile = profile
-    tools._agent_permissions = (
-        profile.private_permissions
-        if trust_level == TrustLevel.PRIVATE
-        else profile.public_permissions
-    )
+    apply_integration_permissions(tools, await load_effective_integrations(db, user_id), profile.id)
     return tools, profile

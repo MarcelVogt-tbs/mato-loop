@@ -45,7 +45,7 @@ Die Entwurfsdatei bleibt nach Import, Ablehnung oder Fehler in den Session-Datei
 
 ## Verwalten
 
-Unter **Einstellungen > Skills** können Sie Skills anlegen, bearbeiten und dauerhaft löschen. Ein Skill besteht aus:
+Manage your own skills under **Einstellungen > Skills**. Administrators manage global skills under **Administration > Skills > Verwaltung** and control **Persönliche Skills erlauben** under **Einstellungen** on that page. The switch starts enabled. When disabled, personal skills and personal changes to shipped skills remain readable but cannot be changed or used in new agent runs; global skills remain available. The same gate applies to chat-based creation and editing. Administrators retain their personal exception. Creation uses the current page's scope. A skill consists of:
 
 - Name mit höchstens 64 Zeichen
 - Einsatzbeschreibung mit höchstens 240 Zeichen

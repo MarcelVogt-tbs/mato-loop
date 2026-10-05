@@ -8,97 +8,48 @@ export const useAgentProfileStore = defineStore('agent-profiles', {
   state: () => ({
     agents: [],
     manageableAgents: [],
+    baseProfiles: [],
     defaultAgentProfileId: null,
-    groups: [],
-    groupsByTrust: { private: [], public: [] },
-    personas: [],
     integrations: [],
-    integrationMetadata: {},
-    integrationMetadataLoading: {},
-    integrationMetadataFailed: {},
-    integrationMetadataGeneration: 0,
     personalAgentsEnabled: true,
-    personalPersonasEnabled: true,
+    personalToolPermissionsEnabled: false,
     scope: 'personal',
     loaded: false,
     loadFailed: false,
     loading: false,
+    loadVersion: 0,
     saving: false
   }),
   getters: {
-    scopedAgents: (state) => state.agents.filter((agent) => (
-      agent.scope === state.scope
-    )),
-    byId: (state) => (id) => state.agents.find((agent) => agent.id === id) || null
+    byId: (state) => (id) => state.manageableAgents.find((agent) => agent.id === id) || state.agents.find((agent) => agent.id === id) || null
   },
   actions: {
     selectScope(scope) {
-      const next = scope === 'instance' ? 'instance' : 'personal'
-      if (next === this.scope) return
-      this.scope = next
-      this.integrationMetadata = {}
-      this.integrationMetadataLoading = {}
-      this.integrationMetadataFailed = {}
-      this.integrationMetadataGeneration += 1
-    },
-    resetIntegrationMetadata() {
-      this.integrationMetadata = {}
-      this.integrationMetadataLoading = {}
-      this.integrationMetadataFailed = {}
-      this.integrationMetadataGeneration += 1
+      this.scope = scope === 'instance' ? 'instance' : 'personal'
     },
     async fetchAgents(scope = null) {
+      const version = ++this.loadVersion
       this.loading = true
       this.loadFailed = false
       try {
         const { data } = scope
           ? await api.get('/agent-profiles', scopeConfig(scope))
           : await api.get('/agent-profiles')
+        if (version !== this.loadVersion) return data
         this.agents = Array.isArray(data?.effectiveAgents) ? data.effectiveAgents : []
         this.manageableAgents = Array.isArray(data?.agents) ? data.agents : this.agents
+        this.baseProfiles = data?.baseProfiles || this.agents.filter((agent) => agent.protected && agent.scope === 'instance')
         this.defaultAgentProfileId = data?.defaultAgentProfileId || null
-        this.groups = Array.isArray(data?.groups)
-          ? data.groups
-          : data?.privateGroups || []
-        this.groupsByTrust = {
-          private: data?.privateGroups || this.groups,
-          public: data?.publicGroups || this.groups
-        }
         this.integrations = Array.isArray(data?.integrations) ? data.integrations : []
-        this.personas = Array.isArray(data?.personas) ? data.personas : []
         this.personalAgentsEnabled = data?.personalAgentsEnabled !== false
-        this.personalPersonasEnabled = data?.personalPersonasEnabled !== false
+        this.personalToolPermissionsEnabled = data?.personalToolPermissionsEnabled === true
         this.loaded = true
         return data
       } catch (error) {
-        this.loadFailed = true
+        if (version === this.loadVersion) this.loadFailed = true
         throw error
       } finally {
-        this.loading = false
-      }
-    },
-    async fetchIntegrationMetadata(id) {
-      const scope = this.scope
-      const generation = this.integrationMetadataGeneration
-      this.integrationMetadataLoading[id] = true
-      this.integrationMetadataFailed[id] = false
-      try {
-        const { data } = await api.get(
-          `/agent-profiles/integration-metadata/${id}`,
-          scopeConfig(scope)
-        )
-        if (this.scope !== scope || this.integrationMetadataGeneration !== generation) return null
-        this.integrationMetadata[id] = data
-        return data
-      } catch (error) {
-        if (this.scope === scope && this.integrationMetadataGeneration === generation) {
-          this.integrationMetadataFailed[id] = true
-        }
-        throw error
-      } finally {
-        if (this.scope === scope && this.integrationMetadataGeneration === generation) {
-          this.integrationMetadataLoading[id] = false
-        }
+        if (version === this.loadVersion) this.loading = false
       }
     },
     async createAgent(payload) {
@@ -137,6 +88,10 @@ export const useAgentProfileStore = defineStore('agent-profiles', {
     },
     async setAgentEnabled(id, enabled, scope) {
       await api.patch(`/agent-profiles/${id}/enabled`, { enabled }, scopeConfig(scope))
+    },
+    async setDefaultAgent(id) {
+      await api.patch('/agent-profiles/default', { profileId: id })
+      await this.fetchAgents('instance')
     },
     async setPersonalAgentsEnabled(enabled) {
       const { data } = await api.patch('/agent-profiles/personal-enabled', { enabled })

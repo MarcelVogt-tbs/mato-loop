@@ -5,12 +5,12 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Agenten</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Wiederverwendbare Agentenprofile mit Anweisungen und Berechtigungen verwalten.
+          {{ admin ? 'Globale Agentenprofile und den Standard für neue Sessions verwalten.' : 'Eigene Agentenprofile mit Anweisungen und Modellen verwalten.' }}
         </p>
       </div>
-      <div class="settings-scope-actions row items-center col-auto">
+      <div v-if="showManagement" class="settings-scope-actions row items-center col-auto">
         <q-btn
-          v-if="auth.isAdmin || !personalBlocked"
+           v-if="!personalBlocked || admin"
           class="col-auto"
           unelevated
           no-caps
@@ -19,25 +19,19 @@
           icon="add"
           label="Neues Profil erstellen"
           :disable="agents.loading"
-          :to="{ name: 'settings-agent-create' }"
+          :to="{ name: admin ? 'admin-agent-create' : 'settings-agent-create' }"
         />
       </div>
     </header>
 
-    <q-card v-if="auth.isAdmin" flat class="app-surface-tonal q-mb-md">
-      <q-card-section class="row items-center justify-between q-gutter-md">
-        <div>
-          <div class="text-subtitle2 text-weight-bold">Persönliche Agentenprofile</div>
-          <div class="text-caption app-muted">Erlaubt Benutzern, eigene Profile zu erstellen und zu verwenden.</div>
-        </div>
-        <q-toggle
-          :model-value="agents.personalAgentsEnabled"
-          label="Erlaubt"
-          :disable="gateSaving"
-          @update:model-value="setPersonalAgentsEnabled"
-        />
-      </q-card-section>
-    </q-card>
+    <q-tabs v-if="admin" v-model="section" dense no-caps align="left" active-color="primary" indicator-color="primary" class="q-mb-lg">
+      <q-tab name="general" icon="settings" label="Einstellungen" />
+      <q-tab name="management" icon="smart_toy" label="Verwaltung" />
+    </q-tabs>
+
+    <PersonalSettingsGate v-if="admin && section === 'general'" :model-value="agents.personalAgentsEnabled" title="Persönliche Agentenprofile erlauben" description="Benutzer können eigene Agentenprofile erstellen und verwenden." :disabled="gateSaving || agents.loading || agents.loadFailed" @update:model-value="setPersonalAgentsEnabled" />
+
+    <q-select v-if="admin && showManagement" :model-value="agents.defaultAgentProfileId" outlined emit-value map-options label="Standardprofil" class="q-mb-md" :options="visibleAgents.filter((agent) => agent.enabled !== false).map((agent) => ({ label: agent.name, value: agent.id }))" :disable="agents.loading || gateSaving" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" @update:model-value="setDefaultProfile" />
 
     <q-banner v-if="personalBlocked" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="person" color="primary" /></template>
@@ -50,7 +44,7 @@
       <template #action><q-btn flat no-caps color="white" label="Erneut laden" @click="load" /></template>
     </q-banner>
 
-    <q-card flat class="app-surface relative-position">
+    <q-card v-if="showManagement" flat class="app-surface relative-position">
       <q-card-section v-if="agents.loaded && !visibleAgents.length" class="q-pa-xl">
         <AppStateMessage
           icon="smart_toy"
@@ -82,7 +76,7 @@
                 dense
                 :model-value="agent.enabled !== false"
                 :aria-label="`${agent.name} ${agent.enabled === false ? 'aktivieren' : 'deaktivieren'}`"
-                :disable="agent.protected || switchingId === agent.id || agents.saving || (agent.scope === 'instance' ? !auth.isAdmin : personalBlocked)"
+                :disable="agent.id === agents.defaultAgentProfileId || switchingId === agent.id || agents.saving || personalBlocked"
                 @update:model-value="setAgentEnabled(agent, $event)"
               />
               <q-btn
@@ -92,7 +86,7 @@
                 :icon="agent.scope === 'instance' && !auth.isAdmin ? 'visibility' : 'edit'"
                 :aria-label="`${agent.name} ${agent.scope === 'instance' && !auth.isAdmin ? 'ansehen' : 'bearbeiten'}`"
                 :disable="agent.scope === 'personal' && personalBlocked"
-                :to="{ name: 'settings-agent-edit', params: { agentId: agent.id }, query: { scope: agent.scope } }"
+                :to="{ name: admin ? 'admin-agent-edit' : 'settings-agent-edit', params: { agentId: agent.id } }"
               ><q-tooltip>{{ agent.scope === 'instance' && !auth.isAdmin ? 'Ansehen' : 'Bearbeiten' }}</q-tooltip></q-btn>
               <q-btn
                 flat
@@ -102,7 +96,7 @@
                 icon="delete_outline"
                 :aria-label="`${agent.name} löschen`"
                 v-if="agent.scope === 'personal' || auth.isAdmin"
-                :disable="(agent.scope === 'personal' && personalBlocked) || agent.protected"
+                :disable="personalBlocked || agent.protected || agent.id === agents.defaultAgentProfileId"
                 @click="removeAgent(agent)"
               ><q-tooltip>Löschen</q-tooltip></q-btn>
             </div>
@@ -118,35 +112,32 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'
-import { api } from 'src/boot/axios'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useAuthStore } from 'stores/auth'
+import PersonalSettingsGate from 'src/features/settings/PersonalSettingsGate.vue'
 
 defineOptions({ name: 'AgentProfileSettingsPage' })
+const { admin } = defineProps({ admin: { type: Boolean, default: false } })
 
 const $q = useQuasar()
 const route = useRoute()
 const { confirm } = useConfirm()
 const agents = useAgentProfileStore()
 const auth = useAuthStore()
-const showEditor = computed(() => ['settings-agent-create', 'settings-agent-edit'].includes(route.name))
-const storedAgents = ref([])
+const showEditor = computed(() => ['settings-agent-create', 'settings-agent-edit', 'admin-agent-create', 'admin-agent-edit'].includes(route.name))
 const switchingId = ref(null)
 const gateSaving = ref(false)
-const visibleAgents = computed(() => [
-  ...agents.manageableAgents.filter((agent) => agent.scope !== 'integration'),
-  ...storedAgents.value
-])
-const personalBlocked = computed(() => !agents.personalAgentsEnabled)
+const section = ref('general')
+const showManagement = computed(() => !admin || section.value === 'management')
+const visibleAgents = computed(() => agents.manageableAgents.filter((agent) => agent.scope === (admin ? 'instance' : 'personal')))
+const personalBlocked = computed(() => !admin && !auth.isAdmin && !agents.personalAgentsEnabled)
 
 async function load() {
   try {
-    const result = await agents.fetchAgents()
-    storedAgents.value = result.personalAgentsEnabled === false
-      ? (await api.get('/agent-profiles', { params: { scope: 'personal' } })).data.agents || []
-      : []
+    agents.selectScope(admin ? 'instance' : 'personal')
+    await agents.fetchAgents(admin ? 'instance' : 'personal')
   } catch {
     agents.loadFailed = true
   }
@@ -154,7 +145,7 @@ async function load() {
 
 async function removeAgent(agent) {
   const accepted = await confirm(
-    `Soll der Agent „${agent.name}“ dauerhaft gelöscht werden? Verwendete Sessions wechseln zu „Allgemein“.`,
+    `Soll der Agent „${agent.name}“ dauerhaft gelöscht werden? Verwendete Sessions wechseln zum aktuellen Standardprofil.`,
     'Agent löschen',
     { okLabel: 'Löschen', okColor: 'negative' }
   )
@@ -195,10 +186,20 @@ async function setAgentEnabled(agent, enabled) {
   }
 }
 
+async function setDefaultProfile(id) {
+  gateSaving.value = true
+  try {
+    await agents.setDefaultAgent(id)
+    $q.notify({ type: 'positive', message: 'Standardprofil gespeichert' })
+  } catch { /* Central API toast. */ }
+  finally { gateSaving.value = false }
+}
+
 onMounted(() => {
   if (!showEditor.value) void load()
 })
 watch(showEditor, (editing) => {
   if (!editing) void load()
 })
+watch(() => admin, load)
 </script>

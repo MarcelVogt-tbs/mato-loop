@@ -50,7 +50,7 @@ def _account(*, name: str = "Kalender") -> IntegrationInstance:
 
 def _revision(account: IntegrationInstance) -> str:
     return json.dumps(
-        account.model_dump(mode="json"),
+        account.binding_data(),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
@@ -246,7 +246,7 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
         ),
     )[0]
     assert discovery_permission.use_integration_policy is False
-    assert discovery_permission.policy_integration_id is None
+    assert discovery_permission.policy_integration_id == first.id
     assert json.loads(discovery_permission.resource_scope)["integrationId"] == str(first.id)
     actions = {action.capability: action for action in CALDAV_ADAPTER.resource_actions}
     assert actions["calendar.read"].private_default_policy == ToolExecutionPolicy.AUTO

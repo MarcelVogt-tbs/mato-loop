@@ -48,7 +48,7 @@
               color="primary"
               icon="settings"
               label="Einrichten"
-              :to="{ name: 'settings-notifications' }"
+              :to="{ name: 'admin-notifications' }"
             />
             <q-toggle
               v-else-if="notifications.pushConfigured && notifications.pushServerEnabled"

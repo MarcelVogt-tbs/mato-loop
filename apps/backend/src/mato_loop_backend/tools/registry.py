@@ -48,7 +48,7 @@ CapabilityResolver = Callable[..., set[str]]
 
 def _model_revision(value: BaseModel) -> str:
     return json.dumps(
-        value.model_dump(mode="json"),
+        value.binding_data() if isinstance(value, IntegrationInstance) else value.model_dump(mode="json"),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
@@ -477,7 +477,7 @@ class ToolRegistry:
                 'Memory tools [{names}]: enable Memory for the session and its model.'
             ),
             "settings": (
-                "Optional tools [{names}]: configure under Tools or the agent profile."
+                "Optional tools [{names}]: configure under Tools or integration settings."
             ),
             "temporary": (
                 "Temporarily unavailable tools [{names}]: finish the current required workflow first."

@@ -30,7 +30,7 @@ from mato_loop_backend.security import (
     delete_credential,
     store_credential,
 )
-from mato_loop_backend.settings import IntegrationInstance
+from mato_loop_backend.settings import IntegrationInstance, ToolSettings
 
 
 class McpIntegrationService:
@@ -56,7 +56,7 @@ class McpIntegrationService:
             resource_key = mcp_resource_key(item.name)
             labels[resource_key] = default.label
             resource_policies[resource_key] = {cls.capability: default.policy}
-        for permissions in (tools.private_permissions, tools.public_permissions):
+        for permissions in ((tools.private_permissions, tools.public_permissions) if isinstance(tools, ToolSettings) else ()):
             permissions.integration_policies[integration_id] = {
                 cls.capability: cls.defaults.server_policy
             }
@@ -95,7 +95,7 @@ class McpIntegrationService:
     def _prune_tool_state(tools, integration_id: UUID, resource_keys: set[str]) -> bool:
         key = str(integration_id)
         changed = False
-        for permissions in (tools.private_permissions, tools.public_permissions):
+        for permissions in ((tools.private_permissions, tools.public_permissions) if isinstance(tools, ToolSettings) else ()):
             resources = permissions.resource_policies.get(key)
             if resources is None:
                 continue

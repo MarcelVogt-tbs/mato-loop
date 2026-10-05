@@ -56,7 +56,7 @@ async def _load_scoped_integrations(
     )
     if availability == IntegrationAdapterAvailability.DISABLED:
         raise ApiError(409, "integration.adapterDisabled")
-    if availability == IntegrationAdapterAvailability.INSTANCE_ONLY:
+    if availability == IntegrationAdapterAvailability.INSTANCE_ONLY and not user.is_admin:
         raise ApiError(409, "integration.personalAdapterDisabled")
     settings = await SettingsStore.load(
         db, UserIntegrationSettings, user_id=user.id, for_update=for_update

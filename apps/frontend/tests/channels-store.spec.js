@@ -17,7 +17,7 @@ const endpoint = {
 
 function mockChannelReads() {
   api.get.mockImplementation((url) => Promise.resolve({
-    data: url === '/channels/providers' ? { providers } : { endpoints: [endpoint] }
+    data: url === '/channels/providers' ? { enabled: true, providers } : { endpoints: [endpoint] }
   }))
 }
 
@@ -36,6 +36,7 @@ describe('channel store', () => {
     expect(api.get).toHaveBeenCalledWith('/channels/providers')
     expect(api.get).toHaveBeenCalledWith('/channels/endpoints')
     expect(store.providers).toEqual(providers)
+    expect(store.enabled).toBe(true)
     expect(store.endpoints).toEqual([endpoint])
     expect(store.loaded).toBe(true)
     expect(store.loadFailed).toBe(false)
@@ -55,15 +56,18 @@ describe('channel store', () => {
     expect(store.loading).toBe(false)
   })
 
-  it('updates global provider allowance and refreshes it', async () => {
+  it('updates global enablement separately from provider allowance', async () => {
     mockChannelReads()
-    api.put.mockResolvedValue({ data: {} })
+    api.put.mockResolvedValue({ data: { enabled: false } })
     const store = useChannelStore()
 
     await store.setProviderAllowed('telegram', false)
+    await store.setEnabled(false)
 
     expect(api.put).toHaveBeenCalledWith('/channels/providers/telegram', { allowed: false })
     expect(api.get).toHaveBeenCalledWith('/channels/providers')
+    expect(api.put).toHaveBeenCalledWith('/channels/settings', { enabled: false })
+    expect(store.enabled).toBe(false)
   })
 
   it('dispatches Telegram mutations and refreshes personal endpoints', async () => {

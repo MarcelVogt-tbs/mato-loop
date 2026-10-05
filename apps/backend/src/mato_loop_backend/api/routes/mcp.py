@@ -126,7 +126,8 @@ async def _owner_id(db: AsyncSession, scope: SettingsApiScope, user: UserAccount
             raise ApiError(403, "auth.adminRequired")
         return None
     global_settings = await SettingsStore.load(db, IntegrationSettings)
-    if global_settings.availability_for("mcp_streamable_http").value != "full":
+    availability = global_settings.availability_for("mcp_streamable_http").value
+    if availability == "disabled" or (availability != "full" and not user.is_admin):
         raise ApiError(409, "integration.personalAdapterDisabled")
     return user.id
 
@@ -271,7 +272,9 @@ async def list_visible_mcp_servers(
                 "scope": scope,
                 "available": (
                     instance.availability_for("mcp_streamable_http")
-                    == IntegrationAdapterAvailability.FULL
+                    != IntegrationAdapterAvailability.DISABLED and (
+                        instance.availability_for("mcp_streamable_http") == IntegrationAdapterAvailability.FULL or user.is_admin
+                    )
                     if scope == "personal"
                     else instance.availability_for("mcp_streamable_http")
                     != IntegrationAdapterAvailability.DISABLED

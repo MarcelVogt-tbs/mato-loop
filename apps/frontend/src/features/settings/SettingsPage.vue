@@ -64,6 +64,6 @@ const auth = useAuthStore()
 const providers = useProviderStore()
 const navigation = computed(() => (admin ? adminRoutes : settingsRoutes).filter((item) => (
   item.meta?.settingsLabel && (!item.meta.requiresAdmin || auth.isAdmin)
-  && (item.name !== 'settings-providers' || (providers.personalPolicyLoaded && providers.personalProvidersEnabled))
+  && (item.name !== 'settings-providers' || auth.isAdmin || (providers.personalPolicyLoaded && providers.personalProvidersEnabled))
 )))
 </script>

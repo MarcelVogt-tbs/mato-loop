@@ -78,12 +78,12 @@ from mato_loop_backend.sessions.serialization import (
     session_payload as _serialize_session_payload,
 )
 from mato_loop_backend.settings import (
-    GENERAL_PROFILE_ID,
     InstanceLimits,
     MemorySettings,
     SettingsStore,
     UserPreferences,
 )
+from mato_loop_backend.settings.effective import default_agent_profile_id
 from mato_loop_backend.settings.models import ReasoningEffort
 
 router = APIRouter(prefix="/sessions", dependencies=[Depends(require_user)])
@@ -343,8 +343,8 @@ class SessionCreateRequest(BaseModel):
     run_id: UUID | None = None
     project_id: UUID | None = None
     model_id: UUID | None = None
-    agent_profile_id: UUID = Field(
-        default=GENERAL_PROFILE_ID,
+    agent_profile_id: UUID | None = Field(
+        default=None,
         validation_alias=AliasChoices("agentProfileId", "agent_profile_id"),
     )
     reasoning_effort: ReasoningEffort | None = None
@@ -731,7 +731,7 @@ async def session_defaults(
     memory = await SettingsStore.load(db, MemorySettings, user_id=user.id)
     preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
     try:
-        selected_agent_profile_id = agent_profile_id or GENERAL_PROFILE_ID
+        selected_agent_profile_id = agent_profile_id or await default_agent_profile_id(db)
         await session_service.validate_agent_profile(
             db, user.id, selected_agent_profile_id
         )

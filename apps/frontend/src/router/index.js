@@ -28,7 +28,7 @@ export default defineRouter(() => {
       if (!providers.personalPolicyLoaded || to.name === 'settings-providers') {
         await providers.fetchPersonalPolicy().catch(() => {})
       }
-      if (to.name === 'settings-providers' && (!providers.personalPolicyLoaded || !providers.personalProvidersEnabled)) {
+      if (to.name === 'settings-providers' && !auth.isAdmin && (!providers.personalPolicyLoaded || !providers.personalProvidersEnabled)) {
         return { name: 'settings-personalization' }
       }
     }

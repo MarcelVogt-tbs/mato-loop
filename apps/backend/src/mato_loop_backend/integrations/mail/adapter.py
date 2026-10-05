@@ -191,7 +191,7 @@ def mail_error_code(error: MailError) -> str:
 
 def binding_revision(instance: IntegrationInstance) -> str:
     return json.dumps(
-        instance.model_dump(mode="json"),
+        instance.binding_data(),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,

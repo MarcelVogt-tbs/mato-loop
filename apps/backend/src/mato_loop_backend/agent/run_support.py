@@ -238,7 +238,8 @@ def _tool_policy(
     snapshot: dict[str, Any] | None = None,
 ):
     integration_id = request.policy_integration_id
-    resource_key = request.policy_resource_key
+    # Account discovery uses the integration baseline without resource overrides.
+    resource_key = request.policy_resource_key if request.use_integration_policy else None
     if snapshot is not None:
         defaults = (
             snapshot["integrationDefaults"].get(str(integration_id), {})

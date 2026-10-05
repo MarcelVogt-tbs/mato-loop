@@ -349,10 +349,12 @@ async def test_delegation_intersects_live_spawn_scope_and_both_permission_ceilin
                            integrationAvailability={str(accounts[0].id): False})
     offered_tools = ToolSettings(public_permissions={
         "policies": {"session.files.write": "ask", "network.fetch": "auto", "calendar.read": "auto"},
+        "integration_policies": {str(account_id): {"calendar.read": "auto"}},
         "resource_policies": {str(account_id): {"old": {"calendar.read": "ask"}}},
     }).select_trust(TrustLevel.PUBLIC)
     live_tools = ToolSettings(public_permissions={
         "policies": {"session.files.write": "auto", "network.fetch": "ask", "calendar.read": "auto"},
+        "integration_policies": {str(account_id): {"calendar.read": "auto"}},
         "resource_policies": {str(account_id): {"spawn": {"calendar.read": "ask"}}},
     }).select_trust(TrustLevel.PUBLIC)
     live_tools.tool_availability["question"] = False
@@ -373,6 +375,7 @@ async def test_delegation_intersects_live_spawn_scope_and_both_permission_ceilin
         reopened = ToolSettings(public_permissions={"policies": {
             "session.files.write": "auto", "network.fetch": "auto", "calendar.read": "auto",
         }}).select_trust(TrustLevel.PUBLIC)
+        reopened.permissions.integration_policies[str(account_id)] = {"calendar.read": "auto"}
         bounded = subagents.apply_delegation_ceiling(reopened, snapshot)
         for capability in ("session.files.write", "network.fetch"):
             assert resolve_tool_execution_policy(bounded, capability).policy == ToolExecutionPolicy.ASK

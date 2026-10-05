@@ -36,10 +36,6 @@ describe('agent profiles store', () => {
       data: {
         defaultAgentProfileId: 'global-1',
         personalAgentsEnabled: false,
-        personalPersonasEnabled: false,
-        personas: [{ id: 'persona-1', name: 'Standard', scope: 'instance' }],
-        privateGroups: [{ id: 'private-tools' }],
-        publicGroups: [{ id: 'public-tools' }],
         effectiveAgents: agents
       }
     })
@@ -50,24 +46,7 @@ describe('agent profiles store', () => {
     expect(api.get).toHaveBeenCalledWith('/agent-profiles')
     expect(store.agents).toEqual(agents)
     expect(store.personalAgentsEnabled).toBe(false)
-    expect(store.personalPersonasEnabled).toBe(false)
-    expect(store.personas[0].id).toBe('persona-1')
     expect(store.defaultAgentProfileId).toBe('global-1')
-    expect(store.groupsByTrust.private).toEqual([{ id: 'private-tools' }])
-    expect(store.groupsByTrust.public).toEqual([{ id: 'public-tools' }])
-    expect(store.scopedAgents).toEqual([agents[1]])
-  })
-
-  it('lists built-ins only in instance scope and personal profiles only after creation', () => {
-    const store = useAgentProfileStore()
-    const builtin = { id: 'build', scope: 'instance', protected: true, accessEditable: true }
-    store.agents = [builtin]
-    expect(store.scopedAgents).toEqual([])
-    const personal = { id: 'custom', scope: 'personal' }
-    store.agents.push(personal)
-    expect(store.scopedAgents).toEqual([personal])
-    store.selectScope('instance')
-    expect(store.scopedAgents).toEqual([builtin])
   })
 
   it('uses standard global and personal REST paths for CRUD', async () => {
@@ -141,23 +120,4 @@ describe('agent profiles store', () => {
     expect(store.agents).toEqual([personal])
   })
 
-  it('loads scoped integration metadata for the editor', async () => {
-    api.get.mockResolvedValue({
-      data: {
-        integrationId: 'calendar-1',
-        actions: [{ capability: 'calendar.read' }],
-        resources: [{ key: 'calendar:work' }]
-      }
-    })
-    const store = useAgentProfileStore()
-    store.selectScope('instance')
-
-    const result = await store.fetchIntegrationMetadata('calendar-1')
-
-    expect(api.get).toHaveBeenCalledWith(
-      '/agent-profiles/integration-metadata/calendar-1',
-      { params: { scope: 'instance' } }
-    )
-    expect(store.integrationMetadata['calendar-1']).toEqual(result)
-  })
 })

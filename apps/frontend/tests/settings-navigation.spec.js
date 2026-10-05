@@ -42,7 +42,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-it('shows personal providers only when allowed, including for admins', async () => {
+it('allows admins personal provider settings regardless of the personal gate', async () => {
   useAuthStore().isAdmin = true
   api.get.mockResolvedValue({ data: { personalProvidersEnabled: false } })
   const router = createAppRouter()
@@ -56,9 +56,9 @@ it('shows personal providers only when allowed, including for admins', async () 
   } })
   app.mount(root)
   const providerLink = () => root.querySelector('a[href="/settings/providers"]')
-  expect(providerLink()).toBeNull()
+  expect(providerLink()).not.toBeNull()
   await router.push('/settings/providers')
-  expect(router.currentRoute.value.name).toBe('settings-personalization')
+  expect(router.currentRoute.value.name).toBe('settings-providers')
 
   api.get.mockResolvedValue({ data: { personalProvidersEnabled: true } })
   await router.push('/settings/providers')
@@ -68,7 +68,7 @@ it('shows personal providers only when allowed, including for admins', async () 
 
   useProviderStore().personalPolicyLoaded = false
   await nextTick()
-  expect(providerLink()).toBeNull()
+  expect(providerLink()).not.toBeNull()
 })
 
 it('keeps disabled personal providers out of direct navigation after a policy load failure', async () => {

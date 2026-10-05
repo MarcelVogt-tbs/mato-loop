@@ -40,6 +40,7 @@ def permission_snapshot(
     integrations = integration_settings or IntegrationSettings()
     # Only permission data belongs here, never integration configuration or credentials.
     return {
+        "permissionVersion": 2,
         "permissions": settings.permissions.model_dump(mode="json"),
         "agentPermissions": (
             settings._agent_permissions.model_dump(mode="json")
@@ -96,6 +97,8 @@ def ceiling_settings(snapshot: dict[str, Any], trust: TrustLevel) -> ToolSetting
         public_permissions=permissions,
         shell_prefixes=snapshot["shellPrefixes"],
     ).select_trust(trust)
+    # Existing children retain their original cross-integration permission ceiling.
+    settings._legacy_integration_permissions = snapshot.get("permissionVersion", 1) < 2
     if snapshot["agentPermissions"] is not None:
         settings._agent_permissions = AgentProfilePermissions.model_validate(
             snapshot["agentPermissions"]

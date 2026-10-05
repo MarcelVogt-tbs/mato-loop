@@ -27,7 +27,8 @@ from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 
 
 def test_personal_settings_models_and_instance_flags_have_safe_defaults() -> None:
-    assert AiSettings().personal_providers_enabled is True
+    assert AiSettings().personal_providers_enabled is False
+    assert ToolSettings().personal_settings_enabled is False
     assert AiSettings().title_vision_fallback_enabled is True
     assert UserAiSettings().title_vision_fallback_enabled is True
     integrations = IntegrationSettings(adapter_availability={"caldav": "full"})
@@ -89,6 +90,7 @@ async def test_effective_ai_combines_provider_inventory_without_personal_default
         provider_id=personal_provider.id, model_id="disabled", enabled=False
     )
     instance = AiSettings(
+        personal_providers_enabled=True,
         providers=[instance_provider],
         models=[instance_model],
         default_model_id=instance_model.id,
@@ -262,11 +264,11 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_li
         ),
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
-    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=lambda _db, model, **_kwargs: personal if model is UserToolSettings else None))
 
     effective = await load_effective_tools(AsyncMock(spec=AsyncSession), uuid4())
 
-    assert effective.permissions.policies == {}
+    assert effective.permissions.policies == {"instance": "ask"}
     assert effective.web_fetch.user_agent == "Instance Agent"
     assert effective.web_fetch.max_response_mib == 7
     assert effective.web_fetch.public_addresses_only is False
@@ -296,11 +298,11 @@ async def test_effective_tools_keeps_personal_integration_defaults_when_tool_sna
         },
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
-    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=lambda _db, model, **_kwargs: personal if model is UserToolSettings else None))
 
     effective = await load_effective_tools(AsyncMock(spec=AsyncSession), uuid4())
 
-    assert effective.permissions.policies == {}
+    assert effective.permissions.policies == {"filesystem.delete": "ask"}
     assert effective.permissions.integration_policies == {}
 
 
@@ -318,10 +320,7 @@ def test_personal_integration_tool_settings_do_not_snapshot_policies() -> None:
 
     personal = personal_integration_tool_settings(instance)
 
-    assert personal.personal_tool_defaults_enabled is False
-    assert personal.public_permissions.integration_policies == {}
-    assert personal.private_permissions.integration_policies == {}
-    assert personal.public_permissions.policies == {}
+    assert set(personal.model_dump()) == {"resource_labels", "default_calendar", "default_task_list", "web_search"}
     assert personal.web_search == instance.web_search
 
 

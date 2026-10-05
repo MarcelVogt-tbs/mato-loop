@@ -66,7 +66,7 @@ def _account(*, name: str = "Familie") -> IntegrationInstance:
 
 def _revision(account: IntegrationInstance) -> str:
     return json.dumps(
-        account.model_dump(mode="json"),
+        account.binding_data(),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,

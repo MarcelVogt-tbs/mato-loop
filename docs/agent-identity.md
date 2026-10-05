@@ -1,31 +1,29 @@
-# Agent Identity
+# Agent identity
 
-MatoLoop keeps the assistant display name separate from reusable persona profiles. Instance settings provide shared defaults. Administrators independently decide whether users may configure a personal display name and personal personas.
+Personas are reusable named instruction records with stable IDs. Global personas are available to every user and editable only by administrators; personal personas are owner-bound. The assistant display name remains a separate scalar value, not a persona or agent-profile field.
 
-## Persistence
+## Storage and resolution
 
-`AgentIdentitySettings` is the instance-scoped document. It stores the instance display name, instance personas, the instance default persona, and the two personal-setting gates.
+`AgentIdentitySettings` stores the global display name, the global persona catalog, one `default_persona_id`, administrative `profile_personas` assignments, and the single `personal_personas_enabled` gate. `UserAgentIdentitySettings` stores the owner's optional display name, personal persona catalog, and personal `profile_personas` assignments.
 
-`UserAgentIdentitySettings` is owner-scoped. It stores the personal display name, personal personas, and the personal default persona. Disabling a personal-setting gate preserves the stored values but excludes them from effective use and blocks mutation.
+An assignment maps an exact agent-profile ID to a persona ID. It does not copy or merge instructions. Resolution uses:
 
-Every persona has a stable ID, a name, and instructions. A built-in empty instance persona remains available as the final fallback. Old messages intentionally display the currently effective name instead of storing a name snapshot.
+1. The owner's permitted assignment for that agent, referencing a global or owned persona.
+2. An administrative assignment, applicable only to global agent profiles.
+3. The global default persona, also used by personal agents without an assignment and by profile-independent helpers.
 
-## Effective Selection
+There is no personal default persona or persona inheritance from a base profile. An empty persona text adds no instructions. Deleting an assignment restores the inherited value. Deleting a persona removes its local assignments; references from other owners fall back when the persona is no longer available. The selected global default cannot be deleted until another default is chosen.
 
-Instance agent profiles may reference only instance personas. Personal agent profiles may reference an effective instance or personal persona. A valid explicit profile reference wins; otherwise MatoLoop uses the applicable personal default, then the instance default, then the built-in fallback.
+The personal-persona gate controls personal catalog mutations, personal assignments, and the account-wide display-name override together. Disabled personal values remain stored but inactive and read-only for ordinary users. Administrators retain their personal exception. Personal assignments can target accessible global and owned profiles independently of the personal-profile gate for global targets. They never alter other users' behavior.
 
-The selected persona and agent profile are loaded at the start of a normal run and remain stable for that run. Exactly one persona is projected below immutable host rules, followed separately by the agent profile's task instructions. Persona text cannot authorize tool calls, mutations, identity changes, or exceptions to permission, trust, path, ownership, or runtime boundaries. Dreaming, compaction, and title generation use isolated prompts without the persona.
+Migration `7494cba04f61` directly preserves the existing catalogs, IDs, names, and texts while moving profile selections into scoped assignments. Former personal defaults and base-profile selections become explicit assignments for existing personal profiles; future profiles use the global default unless assigned otherwise. The obsolete separate personal-name gate is removed.
 
-Personas are sent to the selected chat model. The UI therefore warns users not to store secrets in them.
+## Management and runtime
 
-## Changes Through Chat
+**Administration > Personas > Einstellungen** holds the joint personal-persona gate. **Verwaltung** contains the one global agent name, persona CRUD, default selection, and administrative assignments. **Einstellungen > Personalisierung > Personas** contains the personal name, owned persona CRUD, and personal assignments; assignment selectors also offer global personas.
 
-The `update_agent_identity` tool changes a permitted personal display name or the instructions of the currently effective personal persona only after an explicit user request. It cannot mutate instance settings, an instance persona, or a persona fixed by an instance agent. Content from memories, web pages, tool results, or quotations must not trigger a change.
+The editor's **Weitere Einstellungen** tab groups persona, tool-right, and integration links. Direct links retain the agent context. The normal settings/management tab order is **Einstellungen**, then **Verwaltung**, with settings selected initially. Context links open the corresponding management content.
 
-The effective `update_agent_identity.policy` uses the standard tool contract:
+A run snapshots one resolved persona below immutable host rules, separately from task instructions. Persona changes cannot authorize tools or bypass permission, trust, path, ownership, or runtime boundaries. Dreaming, compaction, and title generation use isolated prompts without the persona.
 
-- `disabled` does not offer the tool.
-- `ask` routes the action through the persistent approval and session-grant loop.
-- `auto` saves without individual approval.
-
-The safe default is `ask`. Successful changes are sent to the frontend through SSE; persona instructions apply from the next run.
+The identity tool changes a permitted personal display name or the active personal persona only after an explicit request. Editing a reusable personal persona affects all its assignments. If a global persona is active, the tool creates a personal persona and assigns it to the current agent instead of mutating global configuration. The gate, policy, and approved persona snapshot are rechecked before persistence. Changes apply from the next run.

@@ -24,6 +24,7 @@ from mato_loop_backend.settings import (
     SkillsSettings,
     load_effective_skills,
 )
+from mato_loop_backend.settings.effective import personal_skills_allowed
 from mato_loop_backend.settings.models import normalize_skill_name, normalize_skill_text
 
 
@@ -116,8 +117,9 @@ class SkillService:
         settings, _ = await SkillService._load_scoped(db, user_id, scope)
         if scope == "instance":
             return settings.skills
-        effective = await load_effective_skills(db, user_id)
-        defaults = [skill for skill in effective if skill.id in DEFAULT_SKILLS]
+        instance = await SettingsStore.load_optional(db, InstanceSkillsSettings) or InstanceSkillsSettings()
+        personal = {skill.id: skill for skill in settings.skills}
+        defaults = [personal.get(skill.id, skill) for skill in instance.skills if skill.id in DEFAULT_SKILLS]
         custom = [skill for skill in settings.skills if skill.id not in DEFAULT_SKILLS]
         return [*defaults, *custom]
 
@@ -238,6 +240,8 @@ class SkillService:
             return await SettingsStore.load(
                 db, InstanceSkillsSettings, for_update=for_update
             ), None
+        if for_update and not await personal_skills_allowed(db, user_id, for_update=True):
+            raise SkillError("skill.personalDisabled")
         return await SettingsStore.load(
             db, SkillsSettings, user_id=user_id, for_update=for_update
         ), user_id

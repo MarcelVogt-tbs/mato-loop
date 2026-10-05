@@ -276,7 +276,7 @@ async def test_changed_binding_blocks_metadata_and_execution(preflight, change, 
     case.mutation.assert_not_awaited()
 
 
-@pytest.mark.parametrize("scope", ["global", "integration", "resource"])
+@pytest.mark.parametrize("scope", ["integration", "resource"])
 async def test_disabled_policy_blocks_metadata_before_approval(preflight, scope):
     case = preflight
     permissions = case.settings.permissions
@@ -299,19 +299,19 @@ async def test_disabled_policy_blocks_metadata_before_approval(preflight, scope)
     case.mutation.assert_not_awaited()
 
 
-@pytest.mark.parametrize("restriction", ["global", "resource", "profile", "tool", "missing_profile"])
+@pytest.mark.parametrize("restriction", ["integration", "resource", "profile", "tool", "missing_profile"])
 async def test_refreshed_settings_block_metadata_before_approval(preflight, monkeypatch, restriction):
     case = preflight
     assert case.effective.schemas()
     refreshed = case.settings.model_copy(deep=True)
-    if restriction == "global":
-        refreshed.permissions.policies["tasks.write"] = ToolExecutionPolicy.DISABLED
+    if restriction == "integration":
+        refreshed.permissions.integration_policies[str(case.instance.id)] = {"tasks.write": "disabled"}
     elif restriction == "resource":
         refreshed.permissions.resource_policies[str(case.instance.id)] = {
             case.resource.key: {"tasks.write": "disabled"}
         }
     elif restriction == "profile":
-        refreshed._agent_permissions = AgentProfilePermissions(policies={"tasks.write": "disabled"})
+        refreshed._agent_permissions = AgentProfilePermissions(integration_policies={str(case.instance.id): {"tasks.write": "disabled"}})
     elif restriction == "tool":
         refreshed.tool_availability[case.call.name] = False
     case.context.agent_profile_id = uuid4()

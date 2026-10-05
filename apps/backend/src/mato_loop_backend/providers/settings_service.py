@@ -327,7 +327,7 @@ class ProviderSettingsService:
         if user is None:
             raise ProviderSettingsError("auth.notAuthenticated")
         instance = await SettingsStore.load(db, AiSettings)
-        if not instance.personal_providers_enabled:
+        if not instance.personal_providers_enabled and not user.is_admin:
             raise ProviderSettingsError("provider.personalDisabled")
         settings = await SettingsStore.load(
             db, UserAiSettings, user_id=user.id, for_update=for_update
