@@ -310,7 +310,10 @@ async def revoke_permissions(
     if session is None or session.user_id != user.id:
         raise ApiError(404, "approval.notFound")
     await db.execute(
-        delete(PermissionGrant).where(PermissionGrant.session_id == session_id)
+        delete(PermissionGrant).where(
+            PermissionGrant.session_id == session_id,
+            PermissionGrant.run_id.is_(None),
+        )
     )
     await db.commit()
 

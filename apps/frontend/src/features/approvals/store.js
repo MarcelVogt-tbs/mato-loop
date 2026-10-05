@@ -29,7 +29,9 @@ export const useApprovalStore = defineStore('approvals', {
   }),
   getters: {
     pendingCount: (state) => state.pending.length,
-    grantsForSession: (state) => (sessionId) => state.grants.filter((item) => item.sessionId === sessionId),
+    grantsForSession: (state) => (sessionId) => state.grants.filter((item) => (
+      item.sessionId === sessionId && !item.runId
+    )),
     forSession: (state) => (sessionId) => state.pending.filter((item) => (
       item.sessionId === sessionId && (item.requestType !== 'memory_change' || item.payload?.subagentSessionId)
     ))
@@ -129,7 +131,7 @@ export const useApprovalStore = defineStore('approvals', {
     async revokeAll(sessionId) {
       await api.delete(`/approvals/sessions/${sessionId}/permissions`)
       this.grantRevision += 1
-      this.grants = this.grants.filter((item) => item.sessionId !== sessionId)
+      this.grants = this.grants.filter((item) => item.sessionId !== sessionId || item.runId)
       this.grantsLoading = false
     }
   }

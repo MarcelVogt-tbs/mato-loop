@@ -153,11 +153,12 @@ describe('inline approvals', () => {
     expect(approvals.grantsLoadFailed).toBe(false)
   })
 
-  it('exposes grants only for the selected session', () => {
+  it('exposes only session-wide grants for the selected session', () => {
     const approvals = useApprovalStore()
     approvals.grants = [
       { id: 'grant-1', sessionId: 'session-1' },
-      { id: 'grant-2', sessionId: 'session-2' }
+      { id: 'grant-2', sessionId: 'session-2' },
+      { id: 'grant-3', sessionId: 'session-1', runId: 'run-1' }
     ]
 
     expect(approvals.grantsForSession('session-1')).toEqual([
@@ -188,19 +189,23 @@ describe('inline approvals', () => {
     expect(approvals.grants).toEqual([grant])
   })
 
-  it('removes all grants of one session after bulk revoke', async () => {
+  it('removes only session-wide grants of one session after bulk revoke', async () => {
     api.delete.mockResolvedValue({})
     const approvals = useApprovalStore()
     approvals.grants = [
       { id: 'grant-1', sessionId: 'session-1' },
       { id: 'grant-2', sessionId: 'session-1' },
-      { id: 'grant-3', sessionId: 'session-2' }
+      { id: 'grant-3', sessionId: 'session-2' },
+      { id: 'grant-4', sessionId: 'session-1', runId: 'run-1' }
     ]
 
     await approvals.revokeAll('session-1')
 
     expect(api.delete).toHaveBeenCalledWith('/approvals/sessions/session-1/permissions')
-    expect(approvals.grants).toEqual([{ id: 'grant-3', sessionId: 'session-2' }])
+    expect(approvals.grants).toEqual([
+      { id: 'grant-3', sessionId: 'session-2' },
+      { id: 'grant-4', sessionId: 'session-1', runId: 'run-1' }
+    ])
   })
 
   it('keeps all grants visible when bulk revoke fails', async () => {

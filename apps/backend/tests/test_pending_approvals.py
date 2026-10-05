@@ -158,7 +158,7 @@ async def test_all_permissions_include_owned_session_context() -> None:
     assert user.id in statement.compile().params.values()
 
 
-async def test_revoke_permissions_deletes_all_grants_for_owned_session() -> None:
+async def test_revoke_permissions_deletes_only_session_wide_grants_for_owned_session() -> None:
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     session = ChatSession(id=uuid4(), user_id=user.id, title="Projekt Aurora")
     db = AsyncMock(spec=AsyncSession)
@@ -169,6 +169,7 @@ async def test_revoke_permissions_deletes_all_grants_for_owned_session() -> None
     statement = db.execute.await_args.args[0]
     assert "DELETE FROM permission_grants" in str(statement)
     assert "permission_grants.session_id =" in str(statement)
+    assert "permission_grants.run_id IS NULL" in str(statement)
     assert session.id in statement.compile().params.values()
     db.commit.assert_awaited_once()
 

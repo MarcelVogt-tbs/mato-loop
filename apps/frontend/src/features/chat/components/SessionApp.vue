@@ -72,7 +72,7 @@
                 <q-item-section>
                   <q-item-label>{{ grantDisplay(grant).label }}</q-item-label>
                   <q-item-label caption>{{ grantDisplay(grant).value }}</q-item-label>
-                  <q-item-label caption>{{ grant.runId ? 'Für diesen Lauf' : 'Für diese Session' }}</q-item-label>
+                  <q-item-label caption>Für diese Session</q-item-label>
                   <q-item-label v-if="grant.createdAt" caption>{{ formatRelativeDateTime(grant.createdAt) }}</q-item-label>
                 </q-item-section>
                 <q-item-section side>
