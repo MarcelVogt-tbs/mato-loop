@@ -23,6 +23,7 @@ import { randomUuid } from 'src/utils/random-id'
 
 const ACTIVE_RUN_STATUSES = new Set(['queued', 'running', 'waiting_approval', 'waiting_input'])
 const SESSION_ACTIVITY_REFRESH_MS = 5000
+const BACKGROUND_NOTIFICATION_REFRESH_MS = 30_000
 
 export function useShellSync({ drawerOpen, controlCenterVisible }) {
   const $q = useQuasar()
@@ -56,7 +57,11 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     }
   })
   let sessionActivityTimer = null
+  let backgroundNotificationTimer = null
   let sessionActivityRefreshPending = false
+  const originalTitle = document.title
+  const favicon = document.querySelector('link[rel="icon"][type="image/svg+xml"]')
+  const originalFavicon = favicon?.getAttribute('href')
   const presenceClientId = randomUuid(window.crypto)
   const focused = ref(appIsFocused())
   const visibleSessionId = computed(() => (
@@ -166,6 +171,11 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     event.returnValue = ''
   }
 
+  watch(() => notifications.unreadCount, (count) => {
+    document.title = count > 0 ? `(${count > 99 ? '99+' : count}) ${originalTitle}` : originalTitle
+    favicon?.setAttribute('href', count > 0 ? '/icons/matoloop-unread.svg' : originalFavicon)
+  }, { immediate: true })
+
   watch(visibleSessionId, refreshAppPresence)
   watch(() => [visibleSessionId.value, chat.current?.hasUnreadMessages, chat.current?.messages?.length], ([id, unread]) => {
     if (id && unread) void chat.markSessionRead(chat.current).catch(() => {})
@@ -237,6 +247,11 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     window.addEventListener('matoloop:service-worker-ready', refreshPushState)
     window.navigator.serviceWorker?.addEventListener('message', handlePushMessage)
     sessionActivityTimer = window.setInterval(refreshActiveSessions, SESSION_ACTIVITY_REFRESH_MS)
+    backgroundNotificationTimer = window.setInterval(() => {
+      if (!appIsFocused() && !notifications.loading) {
+        void notifications.fetchLatest({ suppressErrorToast: true }).catch(() => {})
+      }
+    }, BACKGROUND_NOTIFICATION_REFRESH_MS)
     refreshAppPresence()
     await Promise.allSettled([
       approvals.fetchPending(),
@@ -249,6 +264,8 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   })
 
   onBeforeUnmount(() => {
+    document.title = originalTitle
+    favicon?.setAttribute('href', originalFavicon)
     window.visualViewport?.removeEventListener('resize', updateVisualViewport)
     window.visualViewport?.removeEventListener('scroll', updateVisualViewport)
     window.removeEventListener('resize', updateVisualViewport)
@@ -265,6 +282,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     window.removeEventListener('matoloop:service-worker-ready', refreshPushState)
     window.navigator.serviceWorker?.removeEventListener('message', handlePushMessage)
     window.clearInterval(sessionActivityTimer)
+    window.clearInterval(backgroundNotificationTimer)
     sessionActivityTimer = null
   })
 

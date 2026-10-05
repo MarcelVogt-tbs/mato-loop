@@ -7,6 +7,7 @@ import { useBrowserStore } from 'stores/browser'
 import { useControlCenterStore } from 'stores/control-center'
 import { useIntegrationStore } from 'stores/integrations'
 import { useAutomationStore } from 'stores/automations'
+import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useRoute } from 'vue-router'
 
 const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, terminal, workspace } = vi.hoisted(() => {
@@ -76,7 +77,11 @@ vi.mock('src/features/home/store', () => ({ useHomeStore: () => ({ load: vi.fn()
 vi.mock('stores/approvals', () => ({ useApprovalStore: () => pending }))
 vi.mock('stores/questions', () => ({ useQuestionStore: () => pending }))
 vi.mock('stores/agent-identity', () => ({ useAgentIdentityStore: () => ({ fetchIdentity: vi.fn().mockResolvedValue() }) }))
-vi.mock('stores/in-app-notifications', () => ({ useInAppNotificationStore: () => notifications }))
+vi.mock('stores/in-app-notifications', async () => {
+  const { reactive } = await import('vue')
+  const store = reactive(notifications)
+  return { useInAppNotificationStore: () => store }
+})
 vi.mock('stores/control-center', async () => {
   const { reactive } = await import('vue')
   const store = reactive({
@@ -118,6 +123,8 @@ vi.mock('src/features/computers/ExecutionAgentDirectoryPickerDialog.vue', () => 
 let app, root
 beforeEach(async () => {
   vi.clearAllMocks()
+  useInAppNotificationStore().unreadCount = 0
+  document.head.innerHTML = '<title>MatoLoop</title><link rel="icon" type="image/svg+xml" href="/icons/matoloop.svg">'
   useAutomationStore().items = []
   quasar.dark.isActive = false
   quasar.screen = reactive({ lt: { sm: false, md: false, lg: false } })
@@ -178,6 +185,20 @@ beforeEach(async () => {
   await nextTick()
 })
 afterEach(() => { app?.unmount(); vi.useRealTimers() })
+
+it('badges unread notifications received in the background until read', async () => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+  const store = useInAppNotificationStore()
+  notifications.fetchLatest.mockImplementationOnce(async () => { store.unreadCount = 3 })
+  await vi.advanceTimersByTimeAsync(30_000)
+  const favicon = document.querySelector('link[rel="icon"]')
+  expect([document.title, favicon.getAttribute('href')]).toEqual(['(3) MatoLoop', '/icons/matoloop-unread.svg'])
+
+  store.unreadCount = 0
+  await nextTick()
+  expect([document.title, favicon.getAttribute('href')]).toEqual(['MatoLoop', '/icons/matoloop.svg'])
+  visibility.mockRestore()
+})
 
 it.each([
   [true, false], [true, true], [false, false], [false, true]
