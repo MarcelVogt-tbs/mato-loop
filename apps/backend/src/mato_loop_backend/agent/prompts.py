@@ -361,8 +361,11 @@ def general_system_prompt(
             "reviewable; skip needless pre-checks and fallbacks."
         )
         parts.append(
-            "Tool routing: Prefer shell_run for direct API requests, custom HTTP, pagination, multiple "
-            "requests, local processing, or computer downloads. Use webfetch when available for web pages and static "
+            "Tool routing: For direct HTTP/API requests, use shell_run with an established HTTP client "
+            "such as curl. Use custom scripts only when available command-line tools cannot reasonably "
+            "handle the required processing. Simple GET or POST requests do not need a script. "
+            "Prefer shell_run for pagination, multiple requests, local processing, or computer downloads. "
+            "Use webfetch when available for web pages and static "
             "documents. Verify unknown API paths and fields in official docs or schemas; "
             "use HTTP status and error details before retrying. "
             "Use a browser only for page interaction or browser-authenticated access. Verify saved "

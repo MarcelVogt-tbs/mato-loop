@@ -318,8 +318,11 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
         )
     )
     rule = (
-        "Tool routing: Prefer shell_run for direct API requests, custom HTTP, pagination, multiple "
-        "requests, local processing, or computer downloads. Use webfetch when available for web pages and static "
+        "Tool routing: For direct HTTP/API requests, use shell_run with an established HTTP client "
+        "such as curl. Use custom scripts only when available command-line tools cannot reasonably "
+        "handle the required processing. Simple GET or POST requests do not need a script. "
+        "Prefer shell_run for pagination, multiple requests, local processing, or computer downloads. "
+        "Use webfetch when available for web pages and static "
         "documents. Verify unknown API paths and fields in official docs or schemas; "
         "use HTTP status and error details before retrying. "
         "Use a browser only for page interaction or browser-authenticated access. Verify saved "
@@ -345,7 +348,7 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
     growth = prompt_eval.estimate_tokens(messages[0]["content"], 4.0) - prompt_eval.estimate_tokens(
         offline_messages[0]["content"], 4.0
     )
-    assert 100 <= growth <= 190
+    assert 100 <= growth <= 260
 
     shell_only_messages, _tools = build_case(
         replace(case, tools=("shell_run",))
