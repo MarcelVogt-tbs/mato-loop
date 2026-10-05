@@ -6,7 +6,7 @@
           <div class="text-h6">Session umbenennen</div>
         </q-card-section>
         <q-card-section class="q-pt-none">
-          <q-input
+          <q-input dense
             v-model="renameTitle"
             outlined
             autofocus
@@ -38,7 +38,7 @@
           <div class="text-h6">Session verschieben</div>
         </q-card-section>
         <q-card-section class="q-pt-none">
-          <q-select
+          <q-select dense
             v-model="moveProjectId"
             outlined
             emit-value

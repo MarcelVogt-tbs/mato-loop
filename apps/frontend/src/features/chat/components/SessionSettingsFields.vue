@@ -1,5 +1,5 @@
 <template>
-  <div :class="compact ? has('computer') && $q.screen.lt.sm ? 'chat-start-settings-mobile' : 'row items-center q-gutter-xs' : 'column q-gutter-md'">
+  <div :class="compact ? 'row items-center q-gutter-xs' : 'column q-gutter-md'">
     <slot name="before" />
     <q-banner v-if="showWarning && warning" dense rounded class="app-surface-tonal">
       <template #avatar><q-icon name="warning_amber" color="warning" /></template>
@@ -146,9 +146,9 @@ const selectedModelTrustIcon = computed(() => selectedModelConfig.value?.effecti
 const reasoningEffortOptions = computed(() => modelReasoningEffortOptions(selectedModelConfig.value))
 const modelSupportsTools = computed(() => selectedModelConfig.value?.supportsTools !== false)
 const memoryModeOptions = [
-  { label: 'Nutzen und speichern', shortLabel: 'Voll', value: 'full', icon: 'memory', description: 'Vorherige Chats und Erinnerungen nutzen; neue Erinnerungen speichern' },
-  { label: 'Nur nutzen', shortLabel: 'Nur nutzen', value: 'read_only', icon: 'visibility', description: 'Vorherige Chats und Erinnerungen nutzen; nichts speichern' },
-  { label: 'Sitzungsübergreifend aus', shortLabel: 'Aus', value: 'disabled', icon: 'memory_alt', description: 'Keine Inhalte aus vorherigen Chats oder Erinnerungen nutzen' }
+  { label: 'Vollständig', value: 'full', icon: 'memory', description: 'Vorherige Chats und Erinnerungen nutzen; neue Erinnerungen speichern' },
+  { label: 'Lesen', value: 'read_only', icon: 'visibility', description: 'Vorherige Chats und Erinnerungen nutzen; nichts speichern' },
+  { label: 'Deaktiviert', value: 'disabled', icon: 'memory_alt', description: 'Keine Inhalte aus vorherigen Chats oder Erinnerungen nutzen' }
 ]
 const effectiveMemoryMode = computed(() => props.session?.effectiveMemoryMode || props.session?.memoryMode || 'disabled')
 const memoryMessage = computed(() => {
@@ -242,7 +242,7 @@ function selectExecutionAgent(value) {
 const selectProps = (extra = {}) => ({
   outlined: !props.compact,
   borderless: props.compact,
-  dense: props.compact || $q.screen.gt.xs,
+  dense: true,
   optionsDense: true,
   emitValue: true,
   mapOptions: true,
@@ -354,7 +354,7 @@ const MemoryField = defineComponent(() => () => h(QSelect, selectProps({
   }),
   selected: props.compact ? () => h('span', { class: 'ellipsis' }, `Memory: ${memoryModeOptions.find(
     (option) => option.value === props.session?.memoryMode
-  )?.[$q.screen.lt.sm ? 'shortLabel' : 'label'] || 'Nicht verfügbar'}`) : undefined,
+  )?.label || 'Nicht verfügbar'}`) : undefined,
   option: (scope) => optionSlot(scope, (option) => option.icon)
 }))
 const WebSearchField = defineComponent(() => () => h(QSelect, selectProps({

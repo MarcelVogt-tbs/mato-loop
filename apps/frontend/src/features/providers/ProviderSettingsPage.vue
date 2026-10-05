@@ -77,7 +77,7 @@
               <q-item-label caption>{{ activeModelCount(provider) }} aktiv · {{ providerModels(provider).length }} Modelle</q-item-label>
             </q-item-section>
             <q-item-section side class="provider-card__header-actions">
-              <q-toggle
+              <q-toggle dense
                 :model-value="provider.enabled"
                 color="primary"
                 label="Provider aktiv"
@@ -216,7 +216,7 @@
                   </div>
                 </q-item-section>
                 <q-item-section side class="provider-model-actions">
-                  <q-toggle
+                  <q-toggle dense
                     :model-value="model.enabled"
                     color="primary"
                     label="Aktiv"

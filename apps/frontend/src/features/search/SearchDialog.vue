@@ -19,7 +19,7 @@
       <q-form class="q-px-md q-pb-md" @submit.prevent="runSearch">
         <div class="row items-start q-col-gutter-sm">
           <div class="col">
-            <q-input
+            <q-input dense
               ref="searchInput"
               v-model="search.query"
               outlined

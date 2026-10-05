@@ -6,6 +6,7 @@ let fetchPromise = null
 let pairingPolicyPromise = null
 let pollTimer = null
 let pollConsumers = 0
+let pollRefresh = null
 
 export function absoluteWebsocketUrl(value, location = globalThis.location) {
   if (typeof value !== 'string' || !value.trim()) return value
@@ -83,12 +84,16 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
         }
       }
       refresh()
+      pollRefresh = refresh
+      globalThis.document?.addEventListener('visibilitychange', refresh)
       pollTimer = globalThis.setInterval(refresh, POLL_INTERVAL_MS)
     },
     stopPolling() {
       pollConsumers = Math.max(0, pollConsumers - 1)
       if (pollConsumers || !pollTimer) return
       globalThis.clearInterval(pollTimer)
+      globalThis.document?.removeEventListener('visibilitychange', pollRefresh)
+      pollRefresh = null
       pollTimer = null
     },
     async create(settings, pairingTokenDurationSeconds) {

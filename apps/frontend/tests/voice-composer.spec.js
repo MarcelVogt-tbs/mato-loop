@@ -29,6 +29,7 @@ vi.mock('src/features/approvals/ApprovalCard.vue', () => ({ default: { render: (
 vi.mock('src/features/chat/components/AgentActivityPanel.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/shared/ui/AppLogo.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/home/HomeContent.vue', () => ({ default: { render: () => h('section', { class: 'home-stub' }, 'Übersicht') } }))
+vi.mock('src/features/chat/components/ComputerChoiceStrip.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/chat/components/ChatQueuedMessages.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/app/control-center/ControlCenterPanel.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: { render: () => null } }))

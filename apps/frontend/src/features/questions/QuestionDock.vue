@@ -97,7 +97,7 @@
             :key="option.label"
             class="question-dock__option row items-start"
           >
-            <q-radio
+            <q-radio dense
               v-if="current.type === 'single_choice'"
               class="question-dock__option-control col"
               :model-value="customSelected ? null : (currentAnswers[0] || null)"
@@ -107,7 +107,7 @@
               :disable="busy"
               @update:model-value="selectSingle(option.label)"
             />
-            <q-checkbox
+            <q-checkbox dense
               v-else
               class="question-dock__option-control col"
               :model-value="currentAnswers.includes(option.label)"
@@ -122,7 +122,7 @@
 
           <div v-if="current.allow_custom !== false" class="question-dock__option">
             <div class="row items-start no-wrap">
-              <q-radio
+              <q-radio dense
                 v-if="current.type === 'single_choice'"
                 :model-value="customSelected ? 'custom' : null"
                 :tabindex="customSelected ? 0 : -1"
@@ -131,7 +131,7 @@
                 :disable="busy"
                 @update:model-value="enableCustom"
               />
-              <q-checkbox
+              <q-checkbox dense
                 v-else
                 :model-value="customSelected"
                 label="Eigene Antwort"
@@ -158,7 +158,7 @@
         </div>
 
         <template v-else-if="['free_text', 'value', 'password'].includes(current.type)">
-          <q-input
+          <q-input dense
             ref="freeTextInput"
             :model-value="currentAnswers[0] || ''"
             outlined
@@ -173,7 +173,7 @@
             @update:model-value="setFreeText"
           />
           <template v-if="oneTime">
-            <q-checkbox
+            <q-checkbox dense
               v-model="draft.rememberForSession[current.id]"
               color="primary"
               :label="current.administrator

@@ -69,7 +69,7 @@ const runs = computed(() => automations.runs.filter((run) => run.automationId ==
 const activeRun = computed(() => ['queued', 'running', 'waiting_approval', 'waiting_input'].includes(selectedRun.value?.status))
 const runtimeItems = computed(() => {
   const runtime = selectedRun.value?.definition?.runtime || {}
-  const labels = { full: 'Vollständig', read_only: 'Nur lesen', disabled: 'Deaktiviert', required: 'Erforderlich', available: 'Verfügbar' }
+  const labels = { full: 'Vollständig', read_only: 'Lesen', disabled: 'Deaktiviert', required: 'Erforderlich', available: 'Verfügbar' }
   return [['Modell', runtime.modelId], ['Memory', runtime.memoryMode], ['Websuche', runtime.webSearchPolicy], ['Computer-ID', runtime.preferredExecutionAgentId], ['Aktueller Ordner', runtime.currentDirectory]]
     .filter(([, value]) => value).map(([label, value]) => ({ label, value: labels[value] || value }))
 })

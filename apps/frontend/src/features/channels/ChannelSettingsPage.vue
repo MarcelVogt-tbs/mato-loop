@@ -34,7 +34,7 @@
 
     <q-card v-if="admin && section === 'general'" flat class="app-surface">
       <q-card-section>
-        <q-toggle :model-value="channels.enabled" color="primary" label="Kommunikationskanäle aktivieren" :disable="channels.loading || channels.loadFailed || savingSettings" @update:model-value="setEnabled" />
+        <q-toggle dense :model-value="channels.enabled" color="primary" label="Kommunikationskanäle aktivieren" :disable="channels.loading || channels.loadFailed || savingSettings" @update:model-value="setEnabled" />
         <div class="text-caption app-muted q-mt-sm">Aktiviert Empfang und externe Zustellung für freigegebene Anbieter. Gilt für alle Benutzer einschließlich Administratoren.</div>
       </q-card-section>
     </q-card>
@@ -50,7 +50,7 @@
             <q-item-label class="text-weight-medium">{{ provider.label }}</q-item-label>
           </q-item-section>
           <q-item-section side>
-            <q-toggle
+            <q-toggle dense
               :model-value="provider.allowed"
               color="primary"
               label="Erlaubt"

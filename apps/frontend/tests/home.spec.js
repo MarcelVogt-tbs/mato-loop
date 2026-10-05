@@ -3,12 +3,13 @@ import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, QBanner, QBtn, QIcon, QItem, QItemLabel, QItemSection, QLayout, QList, QPageContainer, QSkeleton, Ripple } from 'quasar'
+import { Quasar, QBanner, QBtn, QIcon, QItem, QItemLabel, QItemSection, QLayout, QList, QPageContainer, QSkeleton, QTabs, QTab, Ripple } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 const mocks = vi.hoisted(() => ({ get: vi.fn() }))
 vi.mock('src/boot/axios', () => ({ api: { get: mocks.get } }))
 import HomeContent from '../src/features/home/HomeContent.vue'
+import ComputerChoiceStrip from '../src/features/chat/components/ComputerChoiceStrip.vue'
 import { useExecutionAgentStore } from '../src/features/computers/store'
 import { useProjectStore } from '../src/features/projects/store'
 import { useAutomationStore } from '../src/features/automations/store'
@@ -65,13 +66,13 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   expect(mocks.get).toHaveBeenCalledWith('/sessions', { params: { pageSize: 6, sort: 'recent' } })
   expect(root.textContent).toContain('Neue Antwort')
   expect(root.textContent).toContain('Agent arbeitet')
-  root.querySelector('[aria-label="Notebook: Online. Computer auswählen"]').click()
-  expect(useChatStore().activeContext).toMatchObject({ preferredExecutionAgentId: 'computer-1', currentDirectory: '/home/user' })
-  expect(root.textContent).toContain('1 offene Aufgabe · 2 ungelesene Benachrichtigungen')
   app.config.globalProperties.$q.screen.gt.xs = false
+  app.config.globalProperties.$q.screen.lt.sm = true
   await nextTick()
-  expect([root.querySelector('h1').textContent, root.querySelector('#home-sessions'), root.querySelector('[aria-label="Notebook: Online. Computer auswählen"]')]).toEqual(['Willkommen zurück', null, null])
+  expect(root.querySelector('#home-sessions').textContent).toBe('Zuletzt aktiv')
+  expect(root.querySelector('a[href*="session=session-1"]').classList.contains('q-item--dense')).toBe(true)
   app.config.globalProperties.$q.screen.gt.xs = true
+  app.config.globalProperties.$q.screen.lt.sm = false
   await nextTick()
   expect(root.querySelector('#home-automations')).toBeNull()
   useAutomationStore().items[0].effectiveState = { enabled: true, nextRunAt: '2026-10-04T12:00:00Z' }
@@ -87,4 +88,38 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   sessions = []
   root.querySelector('button').click()
   await vi.waitFor(() => expect(root.textContent).toContain('Deine letzten Gespräche erscheinen hier.'))
+})
+
+it('selects, switches and clears a computer while keeping offline computers last', async () => {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  useExecutionAgentStore().$patch({ loaded: true, items: [
+    { id: 'offline', alias: 'Server', connected: false },
+    { id: 'one', alias: 'Notebook', connected: true, homeDirectory: '/home/user' },
+    { id: 'two', alias: 'Desktop', connected: true, homeDirectory: '/work' }
+  ] })
+  const chat = useChatStore()
+  root = document.createElement('div'); document.body.append(root)
+  app = createApp({ render: () => h(ComputerChoiceStrip, { session: chat.activeContext, onUpdate: chat.updateActive }) })
+  app.use(pinia).use(Quasar, { components: { QTabs, QTab, QIcon } })
+  app.mount(root)
+  await nextTick()
+  expect([...root.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual([
+    'computerNotebook', 'computerDesktop', 'desktop_access_disabledServer'
+  ])
+  const selections = []
+  for (const name of ['Notebook', 'Desktop', 'Desktop']) {
+    root.querySelector(`[aria-label^="${name}:"]`).click()
+    await nextTick()
+    selections.push({
+      id: chat.activeContext.preferredExecutionAgentId,
+      directory: chat.activeContext.currentDirectory,
+      active: root.querySelectorAll('[role="tab"][aria-selected="true"]').length
+    })
+  }
+  expect(selections).toEqual([
+    { id: 'one', directory: '/home/user', active: 1 },
+    { id: 'two', directory: '/work', active: 1 },
+    { id: null, directory: null, active: 0 }
+  ])
 })

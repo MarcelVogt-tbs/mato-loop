@@ -21,7 +21,7 @@
       <q-tab name="management" icon="build" label="Verwaltung" />
     </q-tabs>
 
-    <q-select
+    <q-select dense
       v-if="showManagement"
       :model-value="selectedId" outlined emit-value map-options label="Agentenprofil"
       class="q-mb-md" :options="profileOptions" :disable="loading || saving"
@@ -49,10 +49,10 @@
       <q-card flat class="app-surface q-mb-md">
         <q-card-section>
           <div class="text-subtitle1 text-weight-bold">Shell-Präfixe</div>
-          <q-select v-if="selectedId" v-model="form.shellCustom" outlined emit-value map-options label="Shell-Präfixe" :options="[{ label: 'Vom Basisprofil übernehmen', value: false }, { label: 'Eigene Werte', value: true }]" />
+          <q-select dense v-if="selectedId" v-model="form.shellCustom" outlined emit-value map-options label="Shell-Präfixe" :options="[{ label: 'Vom Basisprofil übernehmen', value: false }, { label: 'Eigene Werte', value: true }]" />
           <div class="row q-col-gutter-md q-mt-sm">
-            <q-input v-model="form.shellRead" class="col-12 col-md-6" outlined type="textarea" autogrow label="Lesende Befehle" hint="Ein Präfix pro Zeile, z. B. git status." :disable="!form.shellCustom" />
-            <q-input v-model="form.shellWrite" class="col-12 col-md-6" outlined type="textarea" autogrow label="Schreibende Befehle" hint="Ein Präfix pro Zeile, z. B. npm install." :disable="!form.shellCustom" />
+            <q-input dense v-model="form.shellRead" class="col-12 col-md-6" outlined type="textarea" autogrow label="Lesende Befehle" hint="Ein Präfix pro Zeile, z. B. git status." :disable="!form.shellCustom" />
+            <q-input dense v-model="form.shellWrite" class="col-12 col-md-6" outlined type="textarea" autogrow label="Schreibende Befehle" hint="Ein Präfix pro Zeile, z. B. npm install." :disable="!form.shellCustom" />
           </div>
         </q-card-section>
       </q-card>
@@ -73,16 +73,16 @@
                   <div class="text-caption app-muted">{{ descriptions[tool.name] || tool.name }}</div>
                 </div>
               </div>
-              <q-toggle v-if="showManagement" v-model="tool.available" class="col-12 col-sm-auto" color="primary" label="Verfügbar" />
+              <q-toggle dense v-if="showManagement" v-model="tool.available" class="col-12 col-sm-auto" color="primary" label="Verfügbar" />
             </div>
 
             <div v-if="section === 'general' && tool.name === 'webfetch'" class="row q-col-gutter-md q-mt-sm">
-              <q-toggle v-model="form.webFetch.publicAddressesOnly" class="col-12" color="primary" label="Nur öffentliche Adressen zulassen" />
-              <q-input v-model.trim="form.webFetch.userAgent" class="col-12 col-md-8" outlined maxlength="512" label="User-Agent" :rules="[userAgentRule]" />
-              <q-input v-model.number="form.webFetch.maxResponseMiB" class="col-12 col-md-4" outlined type="number" min="1" max="256" suffix="MiB" label="Maximale Antwortgröße" :rules="[responseLimitRule]" />
+              <q-toggle dense v-model="form.webFetch.publicAddressesOnly" class="col-12" color="primary" label="Nur öffentliche Adressen zulassen" />
+              <q-input dense v-model.trim="form.webFetch.userAgent" class="col-12 col-md-8" outlined maxlength="512" label="User-Agent" :rules="[userAgentRule]" />
+              <q-input dense v-model.number="form.webFetch.maxResponseMiB" class="col-12 col-md-4" outlined type="number" min="1" max="256" suffix="MiB" label="Maximale Antwortgröße" :rules="[responseLimitRule]" />
             </div>
 
-            <q-input
+            <q-input dense
               v-if="section === 'general' && mediaByName[tool.name]"
               v-model.number="form.timeouts[mediaByName[tool.name]].timeoutSeconds"
               class="q-mt-md"

@@ -24,7 +24,7 @@
 
         <q-card-section class="col scroll q-gutter-md">
           <div class="text-subtitle1 text-weight-medium">Passwort ändern</div>
-          <q-input
+          <q-input dense
             v-model="currentPassword"
             outlined
             autofocus
@@ -33,7 +33,7 @@
             autocomplete="current-password"
             :rules="[requiredRule]"
           />
-          <q-input
+          <q-input dense
             v-model="newPassword"
             outlined
             type="password"
@@ -42,7 +42,7 @@
             hint="Mindestens 10 Zeichen"
             :rules="[passwordRule]"
           />
-          <q-input
+          <q-input dense
             v-model="passwordConfirmation"
             outlined
             type="password"

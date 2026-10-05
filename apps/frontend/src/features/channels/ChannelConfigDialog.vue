@@ -22,7 +22,7 @@
       <q-separator />
       <q-form ref="formRef" class="col column no-wrap" @submit.prevent="save">
         <q-card-section class="col scroll q-gutter-md">
-          <q-select
+          <q-select dense
             v-model="form.provider"
             outlined
             emit-value
@@ -36,7 +36,7 @@
             @update:model-value="selectProvider"
           />
           <template v-if="form.provider === 'telegram'">
-          <q-input
+          <q-input dense
             v-model="form.name"
             outlined
             label="Name"
@@ -45,7 +45,7 @@
             :disable="createdEndpointId !== null"
             :rules="[requiredRule]"
           />
-          <q-input
+          <q-input dense
             v-model="form.token"
             outlined
             type="password"
@@ -55,7 +55,7 @@
             :disable="createdEndpointId !== null"
             :rules="endpoint ? [] : [requiredRule]"
           />
-          <q-toggle
+          <q-toggle dense
             v-model="form.enabled"
             color="primary"
             label="Kanal aktivieren"
@@ -70,7 +70,7 @@
               </q-chip>
             </div>
             <template v-if="pairing.pairingCode">
-              <q-input :model-value="pairing.pairingCode" outlined readonly label="Kopplungscode">
+              <q-input dense :model-value="pairing.pairingCode" outlined readonly label="Kopplungscode">
                 <template #append>
                   <q-btn flat round dense icon="content_copy" aria-label="Kopplungscode kopieren" @click="copyPairingCode" />
                 </template>

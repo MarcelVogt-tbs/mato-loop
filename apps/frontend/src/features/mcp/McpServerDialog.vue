@@ -13,8 +13,8 @@
 
       <q-form ref="formRef" class="col column no-wrap" @submit.prevent="save">
         <q-card-section class="col scroll q-gutter-md">
-          <q-input v-model.trim="form.name" outlined label="Name" maxlength="120" lazy-rules :rules="[requiredRule]" :disable="locked" />
-          <q-input
+          <q-input dense v-model.trim="form.name" outlined label="Name" maxlength="120" lazy-rules :rules="[requiredRule]" :disable="locked" />
+          <q-input dense
             v-model.trim="form.endpoint"
             outlined
             type="url"
@@ -30,8 +30,8 @@
             <template #avatar><q-icon name="warning_amber" color="warning" /></template>
             HTTP überträgt MCP-Daten und Zugangsdaten unverschlüsselt. Verwende es nur in einem vertrauenswürdigen lokalen Netz.
           </q-banner>
-          <q-select v-model="authMode" outlined label="Authentifizierung" emit-value map-options :options="authModes" :disable="locked" />
-          <q-input
+          <q-select dense v-model="authMode" outlined label="Authentifizierung" emit-value map-options :options="authModes" :disable="locked" />
+          <q-input dense
             v-if="authMode === 'static'"
             v-model="form.bearerToken"
             outlined
@@ -42,7 +42,7 @@
             lazy-rules
             persistent-hint
           />
-          <q-toggle
+          <q-toggle dense
             v-if="authMode === 'static' && server?.hasBearerToken"
             v-model="form.removeBearerToken"
             color="negative"
@@ -54,12 +54,12 @@
             <q-banner rounded class="app-surface-tonal">
               {{ server?.authStatus === 'authorized' ? 'OAuth-Anmeldung gespeichert.' : 'Melde dich im Browser beim OAuth-Anbieter des MCP-Servers an.' }}
             </q-banner>
-            <q-input v-model.trim="oauth.scope" outlined label="Scopes (optional)" hint="Leer lassen für die vom MCP-Server angegebenen Scopes; mehrere Scopes mit Leerzeichen trennen." persistent-hint maxlength="1024" :disable="locked" />
-            <q-toggle v-model="registeredClient" label="Vorregistrierten Client verwenden" :disable="locked" />
+            <q-input dense v-model.trim="oauth.scope" outlined label="Scopes (optional)" hint="Leer lassen für die vom MCP-Server angegebenen Scopes; mehrere Scopes mit Leerzeichen trennen." persistent-hint maxlength="1024" :disable="locked" />
+            <q-toggle dense v-model="registeredClient" label="Vorregistrierten Client verwenden" :disable="locked" />
             <template v-if="registeredClient">
-              <q-input v-model.trim="oauth.client_id" outlined label="Client-ID" maxlength="1024" lazy-rules :rules="[requiredRule]" :disable="locked" />
-              <q-select v-model="oauth.token_endpoint_auth_method" outlined label="Client-Authentifizierung" emit-value map-options :options="clientMethods" :disable="locked" />
-              <q-input v-if="oauth.token_endpoint_auth_method !== 'none'" v-model="clientSecret" outlined type="password" autocomplete="new-password" label="Client-Secret" :hint="server?.hasClientSecret ? 'Leer lassen, um das gespeicherte Secret bei unveränderten Client-Einstellungen zu verwenden.' : undefined" persistent-hint maxlength="10000" :disable="locked" />
+              <q-input dense v-model.trim="oauth.client_id" outlined label="Client-ID" maxlength="1024" lazy-rules :rules="[requiredRule]" :disable="locked" />
+              <q-select dense v-model="oauth.token_endpoint_auth_method" outlined label="Client-Authentifizierung" emit-value map-options :options="clientMethods" :disable="locked" />
+              <q-input dense v-if="oauth.token_endpoint_auth_method !== 'none'" v-model="clientSecret" outlined type="password" autocomplete="new-password" label="Client-Secret" :hint="server?.hasClientSecret ? 'Leer lassen, um das gespeicherte Secret bei unveränderten Client-Einstellungen zu verwenden.' : undefined" persistent-hint maxlength="10000" :disable="locked" />
             </template>
             <q-banner v-if="servers.oauthAttempt" rounded class="app-surface-tonal" role="status">
               Die Anmeldung ist vorbereitet. Öffne den Anbieter, um die Verbindung abzuschließen.
@@ -67,7 +67,7 @@
             <q-btn v-else-if="server?.oauth" outline no-caps color="primary" :label="server.authStatus === 'authorized' ? 'Erneut anmelden' : 'Verbinden'" :loading="saving" @click="connectOAuth" />
             <q-btn v-if="server?.oauth" flat no-caps color="negative" label="Anmeldung entfernen" :disable="locked" @click="disconnectOAuth" />
           </template>
-          <q-toggle v-model="form.enabled" color="primary" label="MCP-Server aktivieren" :disable="locked" />
+          <q-toggle dense v-model="form.enabled" color="primary" label="MCP-Server aktivieren" :disable="locked" />
         </q-card-section>
         <q-separator />
         <q-card-actions class="q-pa-md">

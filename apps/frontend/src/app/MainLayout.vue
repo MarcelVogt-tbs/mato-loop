@@ -27,6 +27,17 @@
       <q-space />
       <q-btn
         v-if="showFloatingControlCenter"
+        id="notification-center-toggle"
+        class="app-floating-control app-floating-control--flat q-mr-xs"
+        flat round icon="notifications_none"
+        :aria-label="`Benachrichtigungen öffnen, ${notifications.unreadCount} ungelesen`"
+        aria-controls="control-center-panel"
+        @click="controlCenter.openApp('notifications').catch(() => {})"
+      >
+        <q-badge v-if="notifications.unreadCount" floating rounded color="negative" :label="notifications.unreadCount > 99 ? '99+' : notifications.unreadCount" aria-hidden="true" />
+      </q-btn>
+      <q-btn
+        v-if="showFloatingControlCenter"
         id="control-center-toggle"
         class="app-floating-control"
         round
@@ -38,12 +49,12 @@
         @click="openControlCenter"
       >
         <q-badge
-          v-if="notificationBadgeCount"
+          v-if="attentionCount"
           floating
           rounded
-          :color="attentionCount ? 'warning' : 'primary'"
-          :text-color="attentionCount ? 'dark' : 'white'"
-          :label="notificationBadgeLabel"
+          color="warning"
+          text-color="dark"
+          :label="attentionCount > 99 ? '99+' : attentionCount"
           aria-hidden="true"
         />
         <q-tooltip>Control Center öffnen</q-tooltip>
@@ -110,10 +121,6 @@ const showFloatingControls = computed(() => (
 const attentionCount = computed(() => (
   approvals.pending.length + questions.pending.length
 ))
-const notificationBadgeCount = computed(() => attentionCount.value + notifications.unreadCount)
-const notificationBadgeLabel = computed(() => notificationBadgeCount.value > 99
-  ? '99+'
-  : String(notificationBadgeCount.value || ''))
 const notificationBellLabel = computed(() => {
   const parts = []
   if (attentionCount.value) {

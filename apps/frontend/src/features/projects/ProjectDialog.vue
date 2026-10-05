@@ -6,7 +6,7 @@
           <div class="text-h6">{{ project ? 'Projekt bearbeiten' : 'Projekt erstellen' }}</div>
         </q-card-section>
         <q-card-section class="col scroll q-pt-none">
-          <q-input
+          <q-input dense
             v-model="name"
             outlined
             autofocus
@@ -15,7 +15,7 @@
             lazy-rules
             :rules="[requiredRule]"
           />
-          <q-input
+          <q-input dense
             v-model="instructions"
             outlined
             type="textarea"
@@ -27,7 +27,7 @@
           />
           <q-separator class="q-my-lg" />
           <div class="text-subtitle1 text-weight-bold q-mb-sm">Session-Vorgaben</div>
-          <q-select
+          <q-select dense
             v-model="executionAgentId"
             outlined
             emit-value
@@ -49,7 +49,7 @@
               </q-item>
             </template>
           </q-select>
-          <q-input
+          <q-input dense
             v-model="currentDirectory"
             outlined
             class="q-mt-md"

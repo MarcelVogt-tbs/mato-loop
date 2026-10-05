@@ -134,7 +134,7 @@
       <q-separator />
       <q-card-section class="row q-col-gutter-md">
         <div class="col-12 col-md-6">
-          <q-select
+          <q-select dense
             :model-value="searchSelection.primaryProvider"
             outlined
             emit-value
@@ -148,7 +148,7 @@
           />
         </div>
         <div class="col-12 col-md-6">
-          <q-select
+          <q-select dense
             :model-value="searchSelection.fallbackProvider"
             outlined
             emit-value
@@ -170,14 +170,14 @@
       <q-card-section class="q-gutter-md">
         <div class="text-subtitle1 text-weight-bold">Profilzuordnungen</div>
         <div class="text-body2 app-muted">Legt fest, welche Integrationen ein Profil verwenden darf. Abweichungen an einer persönlichen Verbindung haben Vorrang.</div>
-        <q-select v-model="assignmentProfileId" outlined emit-value map-options label="Agentenprofil" :options="profileOptions" :disable="assignmentsLoading" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" />
+        <q-select dense v-model="assignmentProfileId" outlined emit-value map-options label="Agentenprofil" :options="profileOptions" :disable="assignmentsLoading" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" />
         <q-banner v-if="assignmentsFailed" rounded class="app-surface-tonal">
           Die Profilzuordnungen konnten nicht geladen werden.
           <template #action><q-btn flat no-caps color="primary" label="Erneut laden" @click="loadAssignments" /></template>
         </q-banner>
         <template v-if="assignments">
-          <q-select :model-value="assignments.integrationsEnabledByDefault" outlined emit-value map-options label="Integrationen standardmäßig" :options="availabilityChoices(assignments.inheritedIntegrationsEnabledByDefault)" :disable="assignmentsLoading" @update:model-value="saveAssignments({ integrationsEnabledByDefault: $event })" />
-          <q-select v-for="integration in agents.integrations" :key="integration.id" :model-value="assignments.integrationAvailability[integration.id] ?? null" outlined emit-value map-options :label="integration.name" :options="availabilityChoices(assignments.inheritedIntegrationAvailability[integration.id] ?? assignments.integrationsEnabledByDefault ?? assignments.inheritedIntegrationsEnabledByDefault)" :disable="assignmentsLoading" @update:model-value="setIntegrationAvailability(integration.id, $event)" />
+          <q-select dense :model-value="assignments.integrationsEnabledByDefault" outlined emit-value map-options label="Integrationen standardmäßig" :options="availabilityChoices(assignments.inheritedIntegrationsEnabledByDefault)" :disable="assignmentsLoading" @update:model-value="saveAssignments({ integrationsEnabledByDefault: $event })" />
+          <q-select dense v-for="integration in agents.integrations" :key="integration.id" :model-value="assignments.integrationAvailability[integration.id] ?? null" outlined emit-value map-options :label="integration.name" :options="availabilityChoices(assignments.inheritedIntegrationAvailability[integration.id] ?? assignments.integrationsEnabledByDefault ?? assignments.inheritedIntegrationsEnabledByDefault)" :disable="assignmentsLoading" @update:model-value="setIntegrationAvailability(integration.id, $event)" />
         </template>
       </q-card-section>
     </q-card>

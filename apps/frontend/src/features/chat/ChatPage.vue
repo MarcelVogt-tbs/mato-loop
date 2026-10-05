@@ -61,7 +61,6 @@
 
         <HomeContent
           v-else-if="showHome && !runPresentation.showActivity"
-          :computer-selection-disabled="draftProjectDisabled"
         />
         <div v-else-if="isNewConversation" class="chat-session-state text-center q-pa-lg">
           <template v-if="!runPresentation.showActivity">
@@ -356,12 +355,12 @@
         @undo="undoQueuedMessage"
       />
       <div class="chat-input-dock q-pa-md" :class="{ 'chat-input-dock--with-todos': chat.current?.todos?.length }">
-        <h2 v-if="showHome" class="text-subtitle2 q-mt-none q-mb-sm">Neue Sitzung starten</h2>
+        <h2 v-if="showHome" class="text-weight-medium q-mt-none q-mb-sm" :class="$q.screen.lt.sm ? 'text-subtitle2' : 'text-subtitle1'">Neue Session</h2>
         <SessionSettingsFields
           v-if="isNewConversation"
           :session="chat.activeContext"
           :disabled="draftProjectDisabled"
-          :fields="['computer', 'memory', 'webSearch']"
+          :fields="['memory', 'webSearch']"
           compact
           class="q-mb-sm"
           @update="chat.updateActive"
@@ -396,6 +395,13 @@
             </div>
           </template>
         </SessionSettingsFields>
+        <ComputerChoiceStrip
+          v-if="isNewConversation"
+          :session="chat.activeContext"
+          :disabled="draftProjectDisabled"
+          class="q-mb-sm"
+          @update="chat.updateActive"
+        />
         <SessionTodoStrip
           :todos="chat.current?.todos || []"
           :collapsed="chat.current?.todosCollapsed || false"
@@ -508,6 +514,7 @@ import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
 import AgentActivityPanel from 'src/features/chat/components/AgentActivityPanel.vue'
 import FileChanges from 'src/features/chat/components/FileChanges.vue'
 import HomeContent from 'src/features/home/HomeContent.vue'
+import ComputerChoiceStrip from 'src/features/chat/components/ComputerChoiceStrip.vue'
 import ProjectDialog from 'src/features/projects/ProjectDialog.vue'
 import ChatComposer from 'src/features/chat/components/ChatComposer.vue'
 import ChatQueuedMessages from 'src/features/chat/components/ChatQueuedMessages.vue'

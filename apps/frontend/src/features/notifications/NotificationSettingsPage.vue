@@ -41,11 +41,11 @@
               Ermöglicht Push-Benachrichtigungen in unterstützten Browsern und installierten PWAs.
             </div>
           </div>
-          <q-toggle v-model="form.enabled" color="primary" label="Aktiv" />
+          <q-toggle dense v-model="form.enabled" color="primary" label="Aktiv" />
         </q-card-section>
         <q-separator />
         <q-card-section>
-          <q-input
+          <q-input dense
             v-model.trim="form.contactEmail"
             outlined
             type="email"

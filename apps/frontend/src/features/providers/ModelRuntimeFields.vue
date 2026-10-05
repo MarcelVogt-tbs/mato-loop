@@ -7,7 +7,7 @@
   >
     <q-card-section class="model-runtime-grid q-px-none q-pb-none">
       <div class="model-runtime-context-field">
-        <q-input
+        <q-input dense
           v-model.number="form.contextWindowTokens"
           outlined
           hide-bottom-space
@@ -30,7 +30,7 @@
         />
       </div>
       <div>
-        <q-toggle
+        <q-toggle dense
           :model-value="form.maxOutputTokens == null"
           color="primary"
           label="Ausgabelimit: Auto"
@@ -42,7 +42,7 @@
         <div v-else class="text-caption app-muted q-mb-sm">
           Auto verwendet ein gemeldetes Providerlimit oder andernfalls den Serverstandard. Ein manuelles Limit ist eine zusätzliche Obergrenze, keine reservierte Ausgabelänge.
         </div>
-        <q-input
+        <q-input dense
           v-if="form.maxOutputTokens != null"
           v-model.number="form.maxOutputTokens"
           outlined
@@ -59,7 +59,7 @@
         />
         <div v-if="!generationOptionsOmitted" class="text-caption app-muted q-mt-sm">{{ outputLimitHint }}</div>
       </div>
-      <q-input
+      <q-input dense
         v-model.number="form.charactersPerToken"
         outlined
         hide-bottom-space
@@ -71,7 +71,7 @@
         lazy-rules
         :rules="[positiveNumberRule]"
       />
-      <q-select
+      <q-select dense
         :model-value="form.trustLevel ?? 'inherit'"
         outlined
         hide-bottom-space
@@ -82,7 +82,7 @@
         :hint="`Effektiv: ${effectiveTrustLevel === 'private' ? 'Privat' : 'Öffentlich'}`"
         @update:model-value="form.trustLevel = $event === 'inherit' ? null : $event"
       />
-      <q-select
+      <q-select dense
         :model-value="form.pseudonymizationEnabled ?? 'inherit'"
         outlined
         hide-bottom-space
@@ -93,7 +93,7 @@
         :hint="`Effektiv: ${effectivePseudonymizationEnabled ? 'Aktiv' : 'Inaktiv'}. Personen und Orte werden nicht erkannt.`"
         @update:model-value="form.pseudonymizationEnabled = $event === 'inherit' ? null : $event"
       />
-      <q-select
+      <q-select dense
         v-model="form.memoryPolicy"
         outlined
         hide-bottom-space
@@ -104,23 +104,23 @@
         hint="Kann Memory für dieses Modell explizit erlauben oder sperren."
       />
       <div class="model-runtime-toggles">
-        <q-toggle
+        <q-toggle dense
           v-model="form.supportsTools"
           color="primary"
           label="Tools unterstützt"
         />
-        <q-toggle
+        <q-toggle dense
           v-model="form.supportsParallelToolCalls"
           color="primary"
           label="Parallele Tool-Aufrufe"
           :disable="!form.supportsTools"
         />
-        <q-toggle
+        <q-toggle dense
           v-model="form.supportsStreaming"
           color="primary"
           label="Streaming unterstützt"
         />
-        <q-select
+        <q-select dense
           v-model="form.inputModalities"
           class="model-runtime-wide"
           outlined
@@ -135,7 +135,7 @@
           @update:model-value="form.supportsImageInput = $event.includes('image')"
         />
         <div v-if="reasoningSummaryAvailable" class="model-runtime-wide">
-          <q-toggle
+          <q-toggle dense
             :model-value="reasoningSummaryForced || form.reasoningSummary"
             color="primary"
             :disable="reasoningSummaryForced"

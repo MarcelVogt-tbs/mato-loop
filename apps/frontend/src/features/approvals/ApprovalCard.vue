@@ -61,18 +61,18 @@
             />
           </div>
           <q-form v-if="memoryEdit" ref="memoryFormRef" class="approval-resource" @submit.prevent="decide('approve')">
-            <q-input
+            <q-input dense
               v-model="memoryEdit.content"
               outlined autofocus autogrow type="textarea" label="Inhalt" maxlength="20000"
               :disable="Boolean(loadingDecision)"
               :rules="[(value) => Boolean(value?.trim()) || 'Bitte einen Inhalt eingeben.']"
             />
-            <q-select
+            <q-select dense
               v-model="memoryEdit.category"
               outlined emit-value map-options label="Kategorie" class="q-mt-sm"
               :options="memoryCategoryOptions" :disable="Boolean(loadingDecision)"
             />
-            <q-select
+            <q-select dense
               v-model="memoryEdit.audience"
               outlined emit-value map-options label="Verfügbar für" class="q-mt-md"
               hint="Legt fest, welche Modellarten diese Erinnerung verwenden dürfen."
@@ -80,7 +80,7 @@
             >
               <template #selected><span>{{ memoryAudienceLabel(memoryEdit.audience) }}</span></template>
             </q-select>
-            <q-toggle
+            <q-toggle dense
               v-model="memoryEdit.pinned"
               color="primary" label="Immer im Kontext" class="q-mt-md"
               :disable="Boolean(loadingDecision)"
@@ -158,7 +158,7 @@
               />
             </div>
             <q-form v-if="argumentEdit" ref="argumentFormRef" class="q-mt-md">
-              <q-input
+              <q-input dense
                 v-for="field in argumentEdit"
                 :key="field.path.join('.')"
                 v-model="field.value"
@@ -223,7 +223,7 @@
     <q-separator />
     <q-card-actions class="q-pa-md">
       <div v-if="!isMemoryApproval && hasDecision('allow_session') && !argumentEditDirty" class="column col-12">
-        <q-checkbox
+        <q-checkbox dense
           v-if="hasBothAllowDecisions"
           v-model="rememberForSession"
           color="primary"

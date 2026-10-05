@@ -181,12 +181,6 @@
   max-width: 100%;
 }
 
-.chat-start-settings-mobile {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
-}
-
 .chat-input-dock--with-todos .chat-composer__card,
 .chat-input-dock--with-todos .question-dock {
   border-top-left-radius: 0;

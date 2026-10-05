@@ -69,8 +69,8 @@
           </q-card-section>
           <q-separator />
           <q-card-section>
-            <q-form class="q-gutter-y-lg" @submit.prevent="save">
-              <div v-if="visibleFields.length" class="q-gutter-y-lg">
+            <q-form class="q-gutter-y-md" @submit.prevent="save">
+              <div v-if="visibleFields.length" class="q-gutter-y-md">
                 <UserProfileFieldEditor
                   v-for="field in visibleFields"
                   :key="field.name"

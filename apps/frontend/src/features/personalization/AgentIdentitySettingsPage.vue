@@ -26,7 +26,7 @@
             <div class="text-subtitle1 text-weight-bold">{{ admin ? 'Globaler Agentenname' : 'Mein Agentenname' }}</div>
             <div class="text-caption app-muted">Ein Anzeigename für alle Agenten{{ admin ? ' dieser Instanz' : ' in deinem Konto' }}.</div>
             <q-form @submit.prevent="saveDisplayName" class="q-mt-md">
-              <q-input v-model="displayName" outlined label="Agentenname" maxlength="80" :placeholder="identity.effectiveDisplayName" :disable="mutationBlocked" :rules="admin ? [requiredRule] : []" />
+              <q-input dense v-model="displayName" outlined label="Agentenname" maxlength="80" :placeholder="identity.effectiveDisplayName" :disable="mutationBlocked" :rules="admin ? [requiredRule] : []" />
               <div class="row justify-end q-gutter-sm q-mt-md">
                 <q-btn v-if="!admin" flat no-caps label="Globalen Namen verwenden" :disable="mutationBlocked || !identity.configuredDisplayName" @click="resetDisplayName" />
                 <q-btn unelevated no-caps color="primary" label="Speichern" type="submit" :loading="identity.settingsSaving" :disable="mutationBlocked || !nameDirty" />
@@ -38,7 +38,7 @@
           <q-card-section>
             <div class="text-subtitle1 text-weight-bold">{{ admin ? 'Globale Personas' : 'Meine Personas' }}</div>
             <div class="text-caption app-muted">Eine Persona kann mehreren Agenten dienen. Änderungen gelten für alle ihre Zuordnungen.</div>
-            <q-select v-if="admin" class="q-mt-md" :model-value="identity.defaultPersonaId" outlined emit-value map-options label="Globale Standard-Persona" :options="personaOptions" :disable="mutationBlocked" @update:model-value="setDefaultPersona" />
+            <q-select dense v-if="admin" class="q-mt-md" :model-value="identity.defaultPersonaId" outlined emit-value map-options label="Globale Standard-Persona" :options="personaOptions" :disable="mutationBlocked" @update:model-value="setDefaultPersona" />
           </q-card-section>
           <q-separator />
           <q-list separator>
@@ -88,14 +88,14 @@
           <q-card-section class="col scroll q-gutter-md">
             <q-banner v-if="personalBlocked" rounded class="app-surface-tonal">Persönliche Anpassungen sind deaktiviert.</q-banner>
             <template v-if="assignmentDialog">
-              <q-select :model-value="profileId" outlined emit-value map-options label="Agentenprofil" :options="identity.profiles.filter((profile) => profile.id === profileId || !Object.hasOwn(identity.profilePersonas, profile.id)).map((profile) => ({ label: profile.name, value: profile.id }))" :disable="mutationBlocked" :rules="[requiredRule]" @update:model-value="selectProfile" />
+              <q-select dense :model-value="profileId" outlined emit-value map-options label="Agentenprofil" :options="identity.profiles.filter((profile) => profile.id === profileId || !Object.hasOwn(identity.profilePersonas, profile.id)).map((profile) => ({ label: profile.name, value: profile.id }))" :disable="mutationBlocked" :rules="[requiredRule]" @update:model-value="selectProfile" />
               <div v-if="selectedProfile" class="text-caption app-muted">Vorgabe ohne Override: {{ personaName(selectedProfile.inheritedPersonaId) }}</div>
-              <q-select v-model="selectedPersonaId" outlined emit-value map-options label="Persona" :options="personaOptions" :disable="mutationBlocked" :rules="[requiredRule]" />
-              <q-input :model-value="selectedPersona?.instructions || ''" outlined type="textarea" rows="8" label="Persona-Anweisungen" readonly />
+              <q-select dense v-model="selectedPersonaId" outlined emit-value map-options label="Persona" :options="personaOptions" :disable="mutationBlocked" :rules="[requiredRule]" />
+              <q-input dense :model-value="selectedPersona?.instructions || ''" outlined type="textarea" rows="8" label="Persona-Anweisungen" readonly />
             </template>
             <template v-else>
-              <q-input v-model="form.name" outlined label="Name" maxlength="80" :readonly="personalBlocked" :rules="[requiredRule]" />
-              <q-input v-model="form.instructions" outlined type="textarea" rows="12" label="Verhalten und Ton" maxlength="32002" :readonly="personalBlocked" hint="Diese Anweisungen werden an das ausgewählte Modell übertragen." />
+              <q-input dense v-model="form.name" outlined label="Name" maxlength="80" :readonly="personalBlocked" :rules="[requiredRule]" />
+              <q-input dense v-model="form.instructions" outlined type="textarea" rows="12" label="Verhalten und Ton" maxlength="32002" :readonly="personalBlocked" hint="Diese Anweisungen werden an das ausgewählte Modell übertragen." />
             </template>
           </q-card-section>
           <q-card-actions align="right">

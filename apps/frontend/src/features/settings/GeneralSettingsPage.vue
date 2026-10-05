@@ -13,7 +13,7 @@
     <q-form @submit.prevent="save">
       <q-card flat class="app-surface">
         <q-card-section class="q-gutter-md">
-          <q-input v-model.trim="publicBaseUrl" outlined type="url" label="Öffentliche MatoLoop-URL (optional)" placeholder="https://matoloop.example.com" maxlength="2083" :disable="settings.loading || settings.saving || !settings.loaded" :rules="[originRule]" lazy-rules hide-bottom-space hint="Basisadresse ohne Pfad. Leer lassen für die Umgebungsvariable oder automatische Erkennung. Änderungen gelten sofort für neue OAuth-Anmeldungen." persistent-hint />
+          <q-input dense v-model.trim="publicBaseUrl" outlined type="url" label="Öffentliche MatoLoop-URL (optional)" placeholder="https://matoloop.example.com" maxlength="2083" :disable="settings.loading || settings.saving || !settings.loaded" :rules="[originRule]" lazy-rules hide-bottom-space hint="Basisadresse ohne Pfad. Leer lassen für die Umgebungsvariable oder automatische Erkennung. Änderungen gelten sofort für neue OAuth-Anmeldungen." persistent-hint />
           <div v-if="settings.loaded" class="text-body2">
             <div>Wirksame Adresse: <span class="text-weight-medium">{{ settings.effectivePublicBaseUrl }}</span></div>
             <div class="app-muted">Quelle: {{ sources[settings.publicUrlSource] }}</div>

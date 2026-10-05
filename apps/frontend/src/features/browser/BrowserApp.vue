@@ -70,7 +70,7 @@
         <q-card-section class="text-h6">{{ clipboardMode === 'copy' ? 'Browsertext kopieren' : 'Text in den Browser übertragen' }}</q-card-section>
         <q-card-section class="col scroll">
           <p>{{ clipboardMode === 'copy' ? 'Browsertext lokal kopieren oder im Textfeld markieren und manuell kopieren.' : 'Text hier einfügen oder die lokale Zwischenablage ausdrücklich lesen. Der UTF-8-Text muss kleiner als 16 KiB sein.' }}</p>
-          <q-input v-model="clipboardText" outlined type="textarea" label="Text" :readonly="clipboardMode === 'copy'" :loading="browser.transferring" :disable="browser.transferring" :error="!clipboardFits(clipboardText)" error-message="Der UTF-8-Text muss kleiner als 16 KiB sein." />
+          <q-input dense v-model="clipboardText" outlined type="textarea" label="Text" :readonly="clipboardMode === 'copy'" :loading="browser.transferring" :disable="browser.transferring" :error="!clipboardFits(clipboardText)" error-message="Der UTF-8-Text muss kleiner als 16 KiB sein." />
           <p v-if="clipboardMode === 'paste'" class="text-caption q-mt-sm">„Zwischenablage setzen“ überträgt den Text unverändert. Wähle anschließend im Kontextmenü des entfernten Browsers „Einfügen“. Strg+V würde stattdessen erneut deine lokale Zwischenablage übertragen.</p>
           <div v-if="clipboardNotice" role="status">{{ clipboardNotice }}</div>
         </q-card-section>

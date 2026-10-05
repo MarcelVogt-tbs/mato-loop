@@ -48,7 +48,7 @@
                 Steuert, ob frühere Inhalte für Modellanfragen verwendet und neue Erinnerungen gespeichert werden.
               </div>
             </div>
-            <q-toggle
+            <q-toggle dense
               :model-value="settingsForm.enabled"
               color="primary"
               label="Memory aktiv"
@@ -269,7 +269,7 @@
                 <div class="text-body2 app-muted">Leitet aus abgeschlossenen Gesprächen dauerhafte Erinnerungen ab und konsolidiert bestehende. Memory funktioniert auch ohne Dreaming.</div>
               </div>
               <div v-if="settingsLoaded" class="column items-end">
-                <q-toggle
+                <q-toggle dense
                   :model-value="settingsForm.automaticDreamingEnabled"
                   color="deep-purple"
                   label="Automatisches Dreaming eingeschaltet"
@@ -288,7 +288,7 @@
                   <template #avatar><q-icon name="info_outline" color="warning" /></template>
                   {{ automaticUnavailableReasonMessage }}
                 </q-banner>
-                <q-input
+                <q-input dense
                   v-model="settingsForm.dreamingInstructions"
                   outlined
                   autogrow
@@ -305,16 +305,16 @@
                   Begrenzt die kurzen relevanten Treffer aus Erinnerungen und früheren Sessions. In Projekten haben relevante Session-Auszüge Vorrang. Diese Einstellungen gelten unabhängig von Dreaming.
                 </div>
                 <div class="settings-number-grid q-mt-md q-mb-lg">
-                  <q-input v-model.number="settingsForm.automaticMemorySnippetLimit" outlined type="number" min="0" max="5" label="Memory-Treffer bei passender Anfrage" :disable="memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
-                  <q-input v-model.number="settingsForm.automaticSessionSnippetLimit" outlined type="number" min="0" max="5" label="Relevante Session-Auszüge" :disable="memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
-                  <q-input v-model.number="settingsForm.recentSessionSnippetLimit" outlined type="number" min="0" max="5" label="Auszüge aus letzten Sessions" :disable="memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
-                  <q-input v-model.number="settingsForm.automaticContextMaxTokens" outlined type="number" min="128" max="2048" label="Max. automatischer Kontext (Tokens)" :disable="memories.settingsLoading" :rules="[integerRangeRule(128, 2048)]" />
+                  <q-input dense v-model.number="settingsForm.automaticMemorySnippetLimit" outlined type="number" min="0" max="5" label="Memory-Treffer bei passender Anfrage" :disable="memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
+                  <q-input dense v-model.number="settingsForm.automaticSessionSnippetLimit" outlined type="number" min="0" max="5" label="Relevante Session-Auszüge" :disable="memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
+                  <q-input dense v-model.number="settingsForm.recentSessionSnippetLimit" outlined type="number" min="0" max="5" label="Auszüge aus letzten Sessions" :disable="memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
+                  <q-input dense v-model.number="settingsForm.automaticContextMaxTokens" outlined type="number" min="128" max="2048" label="Max. automatischer Kontext (Tokens)" :disable="memories.settingsLoading" :rules="[integerRangeRule(128, 2048)]" />
                 </div>
                 <div class="text-subtitle2 text-weight-medium">Änderungsrichtlinien</div>
                 <div class="text-body2 app-muted q-mt-xs q-mb-md">
                   Legt fest, ob Dreaming Änderungen verwirft, zur Freigabe vorlegt oder automatisch anwendet.
                 </div>
-                <q-select
+                <q-select dense
                   v-model="settingsForm.dreamingUpdatePolicy"
                   outlined
                   emit-value
@@ -325,7 +325,7 @@
                   :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                   class="q-mb-md"
                 />
-                <q-select
+                <q-select dense
                   v-model="settingsForm.dreamingRemovePolicy"
                   outlined
                   emit-value
@@ -344,13 +344,13 @@
                   Begrenzt, wie viele Nachrichten und Erinnerungskandidaten ein Lauf verarbeitet.
                 </div>
                 <div class="settings-number-grid q-mt-md">
-                    <q-input v-model.number="settingsForm.dreamingMaxBatchMessages" outlined type="number" min="2" max="500" label="Max. Nachrichten pro Lauf" :disable="memories.settingsLoading" :rules="[integerRangeRule(2, 500)]" />
-                    <q-input v-model.number="settingsForm.dreamingMaxCandidates" outlined type="number" min="1" max="100" label="Max. Kandidaten" :disable="memories.settingsLoading" :rules="[integerRangeRule(1, 100)]" />
+                    <q-input dense v-model.number="settingsForm.dreamingMaxBatchMessages" outlined type="number" min="2" max="500" label="Max. Nachrichten pro Lauf" :disable="memories.settingsLoading" :rules="[integerRangeRule(2, 500)]" />
+                    <q-input dense v-model.number="settingsForm.dreamingMaxCandidates" outlined type="number" min="1" max="100" label="Max. Kandidaten" :disable="memories.settingsLoading" :rules="[integerRangeRule(1, 100)]" />
                 </div>
                 <q-expansion-item v-model="advancedSettingsOpen" dense-toggle icon="settings" label="Erweiterte Einstellungen" class="q-mt-lg">
                   <div class="settings-number-grid q-pt-md">
-                    <q-input v-model.number="settingsForm.dreamingIntervalMinutes" outlined type="number" min="1" max="10080" label="Intervall (Minuten)" :disable="memories.settingsLoading" :rules="[integerRangeRule(1, 10080)]" />
-                    <q-input v-model.number="settingsForm.dreamingIdleMinutes" outlined type="number" min="1" max="10080" label="Leerlauf (Minuten)" :disable="memories.settingsLoading" :rules="[integerRangeRule(1, 10080)]" />
+                    <q-input dense v-model.number="settingsForm.dreamingIntervalMinutes" outlined type="number" min="1" max="10080" label="Intervall (Minuten)" :disable="memories.settingsLoading" :rules="[integerRangeRule(1, 10080)]" />
+                    <q-input dense v-model.number="settingsForm.dreamingIdleMinutes" outlined type="number" min="1" max="10080" label="Leerlauf (Minuten)" :disable="memories.settingsLoading" :rules="[integerRangeRule(1, 10080)]" />
                   </div>
                 </q-expansion-item>
               </q-card-section>
@@ -387,7 +387,7 @@
                 <template #avatar><q-icon name="info_outline" color="warning" /></template>
                 {{ manualUnavailableReasonMessage }}
               </q-banner>
-              <q-select
+              <q-select dense
                 v-model="dreamSessionId"
                 outlined
                 clearable
@@ -472,7 +472,7 @@
           </q-card-section>
           <q-separator />
           <q-card-section class="col scroll">
-            <q-input
+            <q-input dense
               v-model="memoryForm.content"
               outlined
               autofocus
@@ -484,7 +484,7 @@
               :rules="[requiredRule]"
             />
             <div class="memory-dialog__fields q-mt-sm">
-              <q-select
+              <q-select dense
                 v-model="memoryForm.category"
                 outlined
                 emit-value
@@ -494,7 +494,7 @@
                 lazy-rules
                 :rules="[requiredRule]"
               />
-              <q-select
+              <q-select dense
                 v-model="memoryForm.audience"
                 outlined
                 emit-value
@@ -504,7 +504,7 @@
                 :options="audienceOptions"
               />
             </div>
-            <q-toggle
+            <q-toggle dense
               v-if="editingMemory"
               :model-value="memoryForm.pinned"
               color="primary"

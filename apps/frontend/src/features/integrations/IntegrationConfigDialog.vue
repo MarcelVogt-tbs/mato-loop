@@ -20,7 +20,7 @@
       <q-separator />
       <q-form ref="formRef" class="col column no-wrap">
         <q-card-section class="col scroll q-gutter-md">
-          <q-select
+          <q-select dense
             v-model="form.integration_type"
             outlined
             emit-value
@@ -30,7 +30,7 @@
             :disable="isEditing"
             @update:model-value="selectIntegrationType"
           />
-          <q-select
+          <q-select dense
             v-model="form.provider_type"
             outlined
             emit-value
@@ -41,14 +41,14 @@
           />
 
           <template v-if="providerTypes.some(({ value }) => value === form.provider_type)">
-            <q-input
+            <q-input dense
               v-model="form.name"
               outlined
               label="Name"
               lazy-rules
               :rules="[requiredRule]"
             />
-            <q-input
+            <q-input dense
               v-if="!['openscad', 'mail', 'browser'].includes(form.integration_type)"
               v-model="form.base_url"
               outlined
@@ -60,19 +60,19 @@
             <template v-if="form.integration_type === 'mail'">
               <div class="text-subtitle2 text-weight-medium">Posteingang (IMAP)</div>
               <div class="row q-col-gutter-sm">
-                <q-input v-model="form.imap_host" outlined label="IMAP-Host" class="col-12 col-sm" lazy-rules :rules="[requiredRule]" />
-                <q-input v-model.number="form.imap_port" outlined type="number" label="IMAP-Port" class="col-5 col-sm-3" lazy-rules :rules="[portRule]" />
-                <q-select v-model="form.imap_security" outlined emit-value map-options label="IMAP-Sicherheit" class="col-7 col-sm-4" :options="securityOptions" />
+                <q-input dense v-model="form.imap_host" outlined label="IMAP-Host" class="col-12 col-sm" lazy-rules :rules="[requiredRule]" />
+                <q-input dense v-model.number="form.imap_port" outlined type="number" label="IMAP-Port" class="col-5 col-sm-3" lazy-rules :rules="[portRule]" />
+                <q-select dense v-model="form.imap_security" outlined emit-value map-options label="IMAP-Sicherheit" class="col-7 col-sm-4" :options="securityOptions" />
               </div>
               <div class="text-subtitle2 text-weight-medium">Postausgang (SMTP)</div>
               <div class="row q-col-gutter-sm">
-                <q-input v-model="form.smtp_host" outlined label="SMTP-Host" class="col-12 col-sm" lazy-rules :rules="[requiredRule]" />
-                <q-input v-model.number="form.smtp_port" outlined type="number" label="SMTP-Port" class="col-5 col-sm-3" lazy-rules :rules="[portRule]" />
-                <q-select v-model="form.smtp_security" outlined emit-value map-options label="SMTP-Sicherheit" class="col-7 col-sm-4" :options="securityOptions" />
+                <q-input dense v-model="form.smtp_host" outlined label="SMTP-Host" class="col-12 col-sm" lazy-rules :rules="[requiredRule]" />
+                <q-input dense v-model.number="form.smtp_port" outlined type="number" label="SMTP-Port" class="col-5 col-sm-3" lazy-rules :rules="[portRule]" />
+                <q-select dense v-model="form.smtp_security" outlined emit-value map-options label="SMTP-Sicherheit" class="col-7 col-sm-4" :options="securityOptions" />
               </div>
-              <q-input v-model="form.username" outlined label="Benutzername" lazy-rules :rules="[requiredRule]" />
-              <q-input v-model="form.from_address" outlined type="email" label="Fester Absender" hint="Diese Absenderadresse wird für ausgehende E-Mails verwendet." lazy-rules :rules="[requiredRule, emailRule]" />
-              <q-input
+              <q-input dense v-model="form.username" outlined label="Benutzername" lazy-rules :rules="[requiredRule]" />
+              <q-input dense v-model="form.from_address" outlined type="email" label="Fester Absender" hint="Diese Absenderadresse wird für ausgehende E-Mails verwendet." lazy-rules :rules="[requiredRule, emailRule]" />
+              <q-input dense
                 v-model="form.password"
                 outlined
                 type="password"
@@ -99,7 +99,7 @@
               <div class="text-caption">Der Token muss <code>SONOBIN_MCP_BEARER_TOKEN</code> entsprechen. Außerdem müssen <code>SONOBIN_MCP_USER</code> und <code>SONOBIN_MCP_PUBLIC_BASE_URL</code> in SonoBin konfiguriert sein.</div>
             </q-banner>
             <div v-if="['openscad', 'browser'].includes(form.integration_type)" class="row items-start q-col-gutter-sm">
-              <q-select
+              <q-select dense
                 v-model="form.executionAgentId"
                 class="col"
                 outlined
@@ -133,7 +133,7 @@
                 />
               </div>
             </div>
-            <q-input
+            <q-input dense
               v-if="form.integration_type === 'openscad'"
               v-model="form.binaryPath"
               outlined
@@ -156,7 +156,7 @@
                 Headless-Vorschau {{ discovery.headlessPreview ? 'verfügbar' : 'nicht verfügbar' }}
               </div>
             </q-banner>
-            <q-input
+            <q-input dense
               v-if="['calendar', 'support'].includes(form.integration_type)"
               v-model="form.username"
               outlined
@@ -164,7 +164,7 @@
               lazy-rules
               :rules="[requiredRule]"
             />
-            <q-input
+            <q-input dense
               v-if="['calendar', 'support'].includes(form.integration_type)"
               v-model="form.password"
               outlined
@@ -175,14 +175,14 @@
               :rules="isEditing ? [] : [requiredRule]"
             />
             <template v-if="form.integration_type === 'coding'">
-              <q-input
+              <q-input dense
                 v-model="form.username"
                 outlined
                 label="Benutzername"
                 lazy-rules
                 :rules="[requiredRule]"
               />
-              <q-input
+              <q-input dense
                 v-model="form.password"
                 outlined
                 type="password"
@@ -190,7 +190,7 @@
                 :hint="integration?.hasCredential ? 'Leer lassen, um das gespeicherte Passwort beizubehalten.' : ''"
                 :disable="form.removePassword"
               />
-              <q-toggle
+              <q-toggle dense
                 v-if="isEditing && integration?.hasCredential"
                 v-model="form.removePassword"
                 color="negative"
@@ -198,7 +198,7 @@
                 @update:model-value="form.password = ''"
               />
             </template>
-            <q-input
+            <q-input dense
               v-if="form.integration_type === 'knowledge'"
               v-model="form.token_id"
               outlined
@@ -207,7 +207,7 @@
               lazy-rules
               :rules="isEditing ? [tokenPairRule] : [requiredRule]"
             />
-            <q-input
+            <q-input dense
               v-if="form.integration_type === 'recipes'"
               v-model="form.token"
               outlined
@@ -217,7 +217,7 @@
               lazy-rules
               :rules="isEditing ? [] : [requiredRule]"
             />
-            <q-input
+            <q-input dense
               v-if="form.integration_type === 'infrastructure'"
               v-model="form.apiKey"
               outlined
@@ -227,7 +227,7 @@
               lazy-rules
               :rules="isEditing ? [] : [requiredRule]"
             />
-            <q-input
+            <q-input dense
               v-if="form.integration_type === 'music'"
               v-model="form.bearerToken"
               outlined
@@ -237,7 +237,7 @@
               lazy-rules
               :rules="isEditing ? [] : [requiredRule]"
             />
-            <q-input
+            <q-input dense
               v-if="form.integration_type === 'knowledge'"
               v-model="form.token_secret"
               outlined
@@ -246,7 +246,7 @@
               lazy-rules
               :rules="isEditing ? [tokenPairRule] : [requiredRule]"
             />
-            <q-toggle v-model="form.enabled" color="primary" label="Integration aktivieren" />
+            <q-toggle dense v-model="form.enabled" color="primary" label="Integration aktivieren" />
             <template v-if="form.integration_type === 'browser'">
               <p class="text-caption app-muted">Ein dauerhaftes Browserprofil pro Computer. Die Agent-Freigabe erfolgt in der Browser-App; die Integrationsauswahl im Agentenprofil bleibt maßgeblich.</p>
               <q-btn v-if="integration?.id" outline no-caps icon="terminal" label="Browser einrichten / Status anzeigen" @click="setupOpen = true" />

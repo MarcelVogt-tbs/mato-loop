@@ -1,10 +1,11 @@
 <template>
   <div>
     <div class="row items-start no-wrap q-gutter-x-sm">
-      <q-input
+      <q-input dense
         class="col"
         :model-value="modelValue"
         outlined
+        hide-bottom-space
         clearable
         maxlength="20000"
         :label="field.label"
@@ -16,7 +17,7 @@
         flat
         round
         dense
-        class="q-mt-sm"
+        class="q-mt-xs"
         color="negative"
         icon="delete_outline"
         :aria-label="`${field.label} entfernen`"
@@ -26,7 +27,7 @@
         <q-tooltip>Angabe entfernen</q-tooltip>
       </q-btn>
     </div>
-    <q-checkbox
+    <q-checkbox dense
       v-if="audience === 'private'"
       :model-value="shared"
       class="q-mt-sm"

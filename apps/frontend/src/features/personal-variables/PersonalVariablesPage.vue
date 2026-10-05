@@ -55,8 +55,8 @@
         <q-separator />
         <q-form class="col column no-wrap" @submit="save">
           <q-card-section class="col scroll q-gutter-md">
-            <q-input v-model="form.name" outlined autofocus label="Name" maxlength="120" lazy-rules :rules="[requiredRule]" />
-            <q-input
+            <q-input dense v-model="form.name" outlined autofocus label="Name" maxlength="120" lazy-rules :rules="[requiredRule]" />
+            <q-input dense
               v-model="form.description"
               outlined
               autogrow
@@ -65,7 +65,7 @@
               hint="Hilft dem Assistenten, den passenden Wert auszuwählen. Keine Zugangsdaten eintragen."
               maxlength="500"
             />
-            <q-input
+            <q-input dense
               v-model="form.value"
               outlined
               :type="form.secret ? 'password' : 'textarea'"
@@ -75,7 +75,7 @@
               :rules="selected?.secret && form.secret ? [] : [requiredRule]"
               :autocomplete="form.secret ? 'new-password' : undefined"
             />
-            <q-toggle v-model="form.secret" color="primary" label="Als Secret schützen" />
+            <q-toggle dense v-model="form.secret" color="primary" label="Als Secret schützen" />
             <q-banner v-if="form.secret" rounded class="app-surface-tonal">
               Der Wert ist nach dem Speichern nicht mehr sichtbar.
             </q-banner>

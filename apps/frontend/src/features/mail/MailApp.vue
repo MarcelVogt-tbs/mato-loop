@@ -191,14 +191,14 @@
             <q-banner v-if="compose.sendPayload" rounded class="bg-warning text-dark">
               Der Versandstatus ist unklar. Ein erneuter Versuch verwendet unverändert dieselbe E-Mail.
             </q-banner>
-             <q-input v-model="compose.to" outlined label="An" hint="Mehrere Adressen mit Komma trennen." :disable="Boolean(compose.sendPayload)" />
+             <q-input dense v-model="compose.to" outlined label="An" hint="Mehrere Adressen mit Komma trennen." :disable="Boolean(compose.sendPayload)" />
             <div class="row q-col-gutter-sm">
-              <q-input v-model="compose.cc" outlined label="Cc" class="col-12 col-sm-6" :disable="Boolean(compose.sendPayload)" />
-              <q-input v-model="compose.bcc" outlined label="Bcc" class="col-12 col-sm-6" :disable="Boolean(compose.sendPayload)" />
+              <q-input dense v-model="compose.cc" outlined label="Cc" class="col-12 col-sm-6" :disable="Boolean(compose.sendPayload)" />
+              <q-input dense v-model="compose.bcc" outlined label="Bcc" class="col-12 col-sm-6" :disable="Boolean(compose.sendPayload)" />
             </div>
-            <q-input v-model="compose.subject" outlined label="Betreff" :disable="Boolean(compose.sendPayload)" />
-            <q-input v-model="compose.body" outlined type="textarea" autogrow label="Nachricht" :disable="Boolean(compose.sendPayload)" />
-            <q-file v-model="compose.files" outlined multiple use-chips append clearable label="Anhänge hinzufügen" :disable="Boolean(compose.sendPayload)">
+            <q-input dense v-model="compose.subject" outlined label="Betreff" :disable="Boolean(compose.sendPayload)" />
+            <q-input dense v-model="compose.body" outlined type="textarea" autogrow label="Nachricht" :disable="Boolean(compose.sendPayload)" />
+            <q-file dense v-model="compose.files" outlined multiple use-chips append clearable label="Anhänge hinzufügen" :disable="Boolean(compose.sendPayload)">
               <template #prepend><q-icon name="attach_file" /></template>
             </q-file>
             <q-list v-if="compose.existingAttachments.length" bordered separator class="rounded-borders">

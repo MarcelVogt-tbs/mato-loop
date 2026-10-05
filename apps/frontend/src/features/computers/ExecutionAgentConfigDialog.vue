@@ -29,7 +29,7 @@
 
       <q-form ref="formRef" class="col column no-wrap" @submit.prevent="save">
         <q-card-section class="col scroll q-gutter-md">
-          <q-input
+          <q-input dense
             v-model="alias"
             autofocus
             outlined
@@ -39,7 +39,7 @@
             :rules="[requiredRule]"
           />
 
-          <q-select
+          <q-select dense
             v-for="field in policyFields"
             :key="field.key"
             v-model="settings[field.key]"
@@ -50,7 +50,7 @@
             :label="field.label"
           />
 
-          <q-toggle
+          <q-toggle dense
             v-for="field in shellFields"
             :key="field.key"
             v-model="settings[field.key]"
@@ -59,7 +59,7 @@
           />
 
           <template v-if="isEditing">
-            <q-checkbox
+            <q-checkbox dense
               v-model="useAsDefault"
               color="primary"
               label="Als Standardcomputer verwenden"
@@ -69,7 +69,7 @@
             </div>
           </template>
 
-          <q-select
+          <q-select dense
             v-else
             v-model="pairingDurationSeconds"
             outlined

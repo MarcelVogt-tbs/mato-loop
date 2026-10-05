@@ -15,7 +15,7 @@
       <q-separator />
 
       <q-card-section class="provider-dialog__body q-gutter-md scroll">
-        <q-select
+        <q-select dense
           v-model="providerType"
           outlined
           emit-value
@@ -38,7 +38,7 @@
         </q-select>
 
         <div v-if="providerType" class="provider-form-grid">
-          <q-select
+          <q-select dense
             v-model="form.trust_level"
             outlined
             emit-value
@@ -46,12 +46,12 @@
             label="Vertrauenslevel"
             :options="trustLevelOptions"
           />
-          <q-toggle
+          <q-toggle dense
             v-model="form.pseudonymization_enabled"
             color="primary"
             label="Kennungen und Secrets für öffentliche Modelle schützen"
           />
-          <q-select
+          <q-select dense
             v-model="form.memory_policy"
             class="provider-form-section"
             outlined
@@ -64,14 +64,14 @@
         </div>
 
         <q-form v-if="isConfiguredProvider" ref="formRef" class="provider-form-grid">
-          <q-input
+          <q-input dense
             v-model="form.name"
             outlined
             label="Name"
             lazy-rules
             :rules="[requiredRule]"
           />
-          <q-input
+          <q-input dense
             v-model="form.base_url"
             outlined
             :label="isAzureSpeech ? 'Azure-Speech-Endpunkt' : 'Base URL'"
@@ -80,7 +80,7 @@
             lazy-rules
             :rules="[requiredRule, urlRule]"
           />
-          <q-select
+          <q-select dense
             v-if="providerType === 'openai-compatible'"
             v-model="form.api_type"
             outlined
@@ -89,7 +89,7 @@
             label="API-Protokoll"
             :options="apiTypes"
           />
-          <q-input
+          <q-input dense
             v-model="form.api_key"
             outlined
             type="password"
@@ -99,7 +99,7 @@
             lazy-rules
             :rules="isAzureSpeech && !provider?.hasCredential ? [requiredRule] : []"
           />
-          <q-checkbox
+          <q-checkbox dense
             v-if="provider?.hasCredential"
             v-model="form.remove_api_key"
             class="provider-form-section"
@@ -133,7 +133,7 @@
             <q-banner rounded class="app-surface-tonal">
               Öffne die ChatGPT-Anmeldeseite und gib dort den folgenden einmaligen Code ein. Der Code läuft nach 15 Minuten ab.
             </q-banner>
-            <q-input
+            <q-input dense
               :model-value="codexLogin.userCode"
               outlined
               readonly

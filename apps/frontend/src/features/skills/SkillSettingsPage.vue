@@ -66,7 +66,7 @@
           </q-item-section>
           <q-item-section side top>
             <div class="row no-wrap q-gutter-xs">
-              <q-toggle
+              <q-toggle dense
                 :model-value="skill.enabled"
                 :aria-label="`${skillDisplayName(skill)} ${skill.enabled ? 'deaktivieren' : 'aktivieren'}`"
                 :disable="writeBlocked || (skill.scope === 'instance' && !auth.isAdmin)"
@@ -102,7 +102,7 @@
           </q-card-section>
           <q-separator />
           <q-card-section class="col scroll q-gutter-md">
-            <q-input
+            <q-input dense
               v-model="form.name"
               :readonly="personalBlocked"
               outlined
@@ -113,7 +113,7 @@
               lazy-rules
               :rules="[requiredRule]"
             />
-            <q-input
+            <q-input dense
               v-model="form.description"
               :readonly="personalBlocked"
               outlined
@@ -126,7 +126,7 @@
               :rules="[requiredRule]"
               hint="Bestimmt die automatische Auswahl: Was macht der Skill und wann soll er verwendet werden?"
             />
-            <q-input
+            <q-input dense
               v-model="form.instructions"
               :readonly="personalBlocked"
               outlined

@@ -30,7 +30,7 @@
             tag="label"
             :active="selectedLabel === candidate.label"
           >
-            <q-item-section avatar><q-radio v-model="selectedLabel" :val="candidate.label" /></q-item-section>
+            <q-item-section avatar><q-radio dense v-model="selectedLabel" :val="candidate.label" /></q-item-section>
             <q-item-section>
               <q-item-label>{{ candidate.displayName }}</q-item-label>
               <q-item-label caption>{{ candidate.erpId }}<span v-if="candidate.activeCall"> · Aktiver Anruf</span></q-item-label>

@@ -35,6 +35,10 @@ describe('projects store', () => {
     expect(store.loading).toBe(false)
     expect(store.loaded).toBe(true)
     expect(store.loadFailed).toBe(false)
+
+    const refresh = store.fetchAll({ suppressErrorToast: true })
+    expect(store.loading).toBe(false)
+    await refresh
   })
 
   it('ignores stale reads', async () => {

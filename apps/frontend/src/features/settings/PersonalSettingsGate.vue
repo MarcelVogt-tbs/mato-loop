@@ -10,7 +10,7 @@
             <div class="text-caption app-muted">Gilt für reguläre Benutzer. Administratoren können persönliche Einstellungen weiterhin verwenden.</div>
           </div>
         </div>
-        <q-toggle :model-value="modelValue" class="col-12 col-sm-auto" color="primary" :aria-label="title" :disable="disabled" @update:model-value="$emit('update:modelValue', $event)" />
+        <q-toggle dense :model-value="modelValue" class="col-12 col-sm-auto" color="primary" :aria-label="title" :disable="disabled" @update:model-value="$emit('update:modelValue', $event)" />
       </div>
     </q-card-section>
   </q-card>

@@ -11,7 +11,7 @@
 
     <q-card flat class="app-surface">
       <q-card-section class="q-gutter-y-md">
-        <q-toggle
+        <q-toggle dense
           :model-value="access.configured"
           :disable="access.loading || access.saving"
           label="Debug-Zugang aktiv"
@@ -24,7 +24,7 @@
           auf. Andere Benutzerkonten und Zugangsdaten bleiben unzugänglich.
         </q-banner>
 
-        <q-input :model-value="endpoint" readonly outlined label="MCP-Adresse">
+        <q-input dense :model-value="endpoint" readonly outlined label="MCP-Adresse">
           <template #append>
             <q-btn flat round dense icon="content_copy" aria-label="MCP-Adresse kopieren" @click="copy(endpoint, 'MCP-Adresse')" />
           </template>
@@ -58,7 +58,7 @@
           </q-banner>
         </q-card-section>
         <q-card-section class="q-pt-none">
-          <q-input :model-value="token" readonly outlined type="textarea" autogrow label="Bearer-Token">
+          <q-input dense :model-value="token" readonly outlined type="textarea" autogrow label="Bearer-Token">
             <template #append>
               <q-btn flat round dense icon="content_copy" aria-label="Debug-Token kopieren" @click="copy(token, 'Debug-Token')" />
             </template>

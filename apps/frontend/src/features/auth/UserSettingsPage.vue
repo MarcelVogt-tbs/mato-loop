@@ -38,7 +38,7 @@
           </q-item-section>
           <q-item-section side top class="user-list-item__actions">
             <div class="row items-center no-wrap q-gutter-sm">
-              <q-toggle
+              <q-toggle dense
                 :model-value="user.isAdmin"
                 color="primary"
                 label="Admin"
@@ -96,8 +96,8 @@
             <div class="text-h6">Benutzer anlegen</div>
           </q-card-section>
           <q-card-section class="q-pt-none q-gutter-md">
-            <q-input v-model="createForm.username" outlined autofocus label="Benutzername" autocomplete="off" :rules="[requiredRule]" />
-            <q-input
+            <q-input dense v-model="createForm.username" outlined autofocus label="Benutzername" autocomplete="off" :rules="[requiredRule]" />
+            <q-input dense
               v-model="createForm.password"
               outlined
               type="password"
@@ -106,7 +106,7 @@
               hint="Mindestens 10 Zeichen"
               :rules="[passwordRule]"
             />
-            <q-input
+            <q-input dense
               v-model="createForm.confirmation"
               outlined
               type="password"
@@ -114,7 +114,7 @@
               autocomplete="new-password"
               :rules="[(value) => confirmationRule(value, createForm.password)]"
             />
-            <q-toggle v-model="createForm.isAdmin" color="primary" label="Administratorrechte" />
+            <q-toggle dense v-model="createForm.isAdmin" color="primary" label="Administratorrechte" />
           </q-card-section>
           <q-card-actions align="right" class="q-pa-md q-pt-none">
             <q-btn v-close-popup flat no-caps label="Abbrechen" :disable="saving" />
@@ -132,7 +132,7 @@
             <div class="text-body2 app-muted q-mt-xs">{{ selectedUser?.username }}</div>
           </q-card-section>
           <q-card-section class="q-pt-none q-gutter-md">
-            <q-input
+            <q-input dense
               v-model="newPassword"
               outlined
               autofocus
@@ -142,7 +142,7 @@
               hint="Mindestens 10 Zeichen"
               :rules="[passwordRule]"
             />
-            <q-input
+            <q-input dense
               v-model="passwordConfirmation"
               outlined
               type="password"

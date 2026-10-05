@@ -22,7 +22,7 @@
 
         <q-card-section class="provider-dialog__body col scroll">
           <div class="provider-form-grid">
-            <q-input
+            <q-input dense
               v-model="form.modelId"
               outlined
               hide-bottom-space
@@ -32,14 +32,14 @@
               :rules="[requiredRule]"
               :hint="isDiscovered ? 'Die ID eines entdeckten Modells wird vom Provider vorgegeben.' : ''"
             />
-            <q-input
+            <q-input dense
               v-model="form.name"
               outlined
               hide-bottom-space
               label="Anzeigename (optional)"
               hint="Ohne Anzeigename wird die Modell-ID verwendet."
             />
-            <q-toggle
+            <q-toggle dense
               v-model="form.enabled"
               class="provider-form-section"
               color="primary"
@@ -47,7 +47,7 @@
               aria-label="Modell aktiv"
               :disable="model?.availability === 'missing'"
             />
-            <q-select
+            <q-select dense
               v-model="form.capabilities"
               class="provider-form-section"
               outlined

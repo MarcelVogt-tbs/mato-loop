@@ -172,7 +172,7 @@
             </q-banner>
           </q-card-section>
           <q-card-section class="q-pt-none">
-            <q-select
+            <q-select dense
               v-model="pairingDurationSeconds"
               outlined
               emit-value
@@ -198,18 +198,18 @@
           </q-banner>
         </q-card-section>
         <q-card-section class="q-pt-none q-gutter-y-md">
-          <q-input :model-value="pairingResult?.agent?.id" readonly outlined label="Computer-ID">
+          <q-input dense :model-value="pairingResult?.agent?.id" readonly outlined label="Computer-ID">
             <template #append>
               <q-btn flat round dense icon="content_copy" aria-label="Computer-ID kopieren" @click="copy(pairingResult?.agent?.id, 'Computer-ID')" />
             </template>
           </q-input>
-          <q-input :model-value="pairingResult?.websocketUrl" readonly outlined label="WebSocket-Adresse">
+          <q-input dense :model-value="pairingResult?.websocketUrl" readonly outlined label="WebSocket-Adresse">
             <template #append>
               <q-btn flat round dense icon="content_copy" aria-label="WebSocket-Adresse kopieren" @click="copy(pairingResult?.websocketUrl, 'WebSocket-Adresse')" />
             </template>
           </q-input>
-          <q-input :model-value="formatExpiry(pairingResult?.pairingTokenExpiresAt)" readonly outlined label="Gültig bis" />
-          <q-input :model-value="pairingResult?.pairingToken" readonly outlined type="textarea" autogrow label="Kopplungstoken">
+          <q-input dense :model-value="formatExpiry(pairingResult?.pairingTokenExpiresAt)" readonly outlined label="Gültig bis" />
+          <q-input dense :model-value="pairingResult?.pairingToken" readonly outlined type="textarea" autogrow label="Kopplungstoken">
             <template #append>
               <q-btn flat round dense icon="content_copy" aria-label="Kopplungstoken kopieren" @click="copy(pairingResult?.pairingToken, 'Kopplungstoken')" />
             </template>
@@ -381,7 +381,7 @@ async function maintain(agent, action) {
           $q.dialog({
             title: 'sudo-Passwort benötigt',
             message: `Gib das sudo-Passwort auf „${agent.alias}“ für diese Wartung ein. Es wird nur für diesen Auftrag verwendet.`,
-            prompt: { model: '', type: 'password', label: 'sudo-Passwort', outlined: true, maxlength: 4096, autocomplete: 'new-password', isValid: Boolean },
+            prompt: { model: '', type: 'password', label: 'sudo-Passwort', outlined: true, dense: true, maxlength: 4096, autocomplete: 'new-password', isValid: Boolean },
             cancel: { label: 'Abbrechen', flat: true },
             ok: { label: 'Wartung starten', color: 'primary' },
             maximized: $q.screen.lt.sm

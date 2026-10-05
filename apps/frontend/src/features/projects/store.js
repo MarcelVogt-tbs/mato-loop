@@ -12,7 +12,7 @@ export const useProjectStore = defineStore('projects', {
   actions: {
     async fetchAll(config = {}) {
       const revision = ++this.revision
-      this.loading = true
+      this.loading = !this.loaded
       this.loadFailed = false
       try {
         const { data } = await api.get('/projects', config)

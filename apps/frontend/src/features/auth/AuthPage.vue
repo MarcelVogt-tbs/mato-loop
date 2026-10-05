@@ -12,8 +12,8 @@
           </q-card-section>
           <q-form @submit.prevent="submit">
             <q-card-section class="q-gutter-md">
-              <q-input v-model="username" outlined label="Benutzername" autocomplete="username" autofocus />
-              <q-input
+              <q-input dense v-model="username" outlined label="Benutzername" autocomplete="username" autofocus />
+              <q-input dense
                 v-model="password"
                 outlined
                 type="password"

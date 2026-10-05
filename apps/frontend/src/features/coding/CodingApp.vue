@@ -196,7 +196,7 @@
               <q-expansion-item v-for="plan in coding.plans" :key="plan.id" group="coding-plans">
                 <template #header>
                   <q-item-section avatar>
-                    <q-checkbox v-model="selectedPlans" :val="plan.id" :aria-label="`Plan ${plan.title} auswählen`" @click.stop />
+                    <q-checkbox dense v-model="selectedPlans" :val="plan.id" :aria-label="`Plan ${plan.title} auswählen`" @click.stop />
                   </q-item-section>
                   <q-item-section>
                     <q-item-label>{{ plan.title }}</q-item-label>
@@ -265,7 +265,7 @@
             <div class="text-h6">{{ bound ? 'OpenCode-Zuordnung ändern' : 'OpenCode verbinden' }}</div>
           </q-card-section>
           <q-card-section class="col scroll q-pt-none">
-            <q-select
+            <q-select dense
               v-model="bindingIntegrationId"
               outlined
               emit-value
@@ -282,7 +282,7 @@
                 <q-item><q-item-section class="app-muted">Keine aktive OpenCode-Integration verfügbar</q-item-section></q-item>
               </template>
             </q-select>
-            <q-select
+            <q-select dense
               v-model="bindingIndex"
               outlined
               emit-value

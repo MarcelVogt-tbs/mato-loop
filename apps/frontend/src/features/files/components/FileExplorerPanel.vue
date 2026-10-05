@@ -263,7 +263,7 @@
             <div class="text-caption app-muted q-mt-xs ellipsis">{{ renameTarget?.path }}</div>
           </q-card-section>
           <q-card-section class="q-pt-none">
-            <q-input
+            <q-input dense
               v-model="renameName"
               autofocus
               outlined
@@ -297,7 +297,7 @@
             <div class="text-caption app-muted q-mt-xs ellipsis">{{ mutationDirectory }}</div>
           </q-card-section>
           <q-card-section class="q-pt-none q-gutter-y-md">
-            <q-select
+            <q-select dense
               v-if="createKind === 'file'"
               v-model="createSuffix"
               outlined
@@ -306,7 +306,7 @@
               label="Dateityp"
               :options="fileTypeOptions"
             />
-            <q-input
+            <q-input dense
               v-model="createName"
               autofocus
               outlined
@@ -701,6 +701,7 @@ function openAbsolutePath() {
   $q.dialog({
     title: 'Absoluten Pfad öffnen',
     prompt: {
+      dense: true,
       model: workspace.directoryPath,
       type: 'text',
       label: 'Absoluter Pfad',

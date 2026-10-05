@@ -50,7 +50,7 @@
               label="Einrichten"
               :to="{ name: 'admin-notifications' }"
             />
-            <q-toggle
+            <q-toggle dense
               v-else-if="notifications.pushConfigured && notifications.pushServerEnabled"
               color="primary"
               :model-value="notifications.pushSubscribed"

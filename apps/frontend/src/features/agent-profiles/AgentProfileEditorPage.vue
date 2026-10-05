@@ -23,33 +23,33 @@
         <q-tab-panel name="profile" class="q-pa-none">
           <q-card flat class="app-surface q-mt-md">
             <q-card-section class="q-gutter-md">
-              <q-input v-model="form.name" outlined maxlength="80" label="Name" :disable="isProtected" :rules="[requiredRule]" />
-              <q-input v-model="form.description" outlined maxlength="500" type="textarea" autogrow label="Beschreibung" :disable="isProtected" />
-              <q-select v-if="!isProtected" v-model="form.baseProfileId" outlined emit-value map-options label="Basisprofil" :options="baseProfileOptions" @update:model-value="applyInheritedValues" />
+              <q-input dense v-model="form.name" outlined maxlength="80" label="Name" :disable="isProtected" :rules="[requiredRule]" />
+              <q-input dense v-model="form.description" outlined maxlength="500" type="textarea" autogrow label="Beschreibung" :disable="isProtected" />
+              <q-select dense v-if="!isProtected" v-model="form.baseProfileId" outlined emit-value map-options label="Basisprofil" :options="baseProfileOptions" @update:model-value="applyInheritedValues" />
               <div v-if="!isProtected" class="text-caption app-muted">Nicht angepasste Einstellungen werden vom Basisprofil übernommen.</div>
               <template v-for="field in textFields" :key="field.key">
                 <q-btn-toggle v-if="!isProtected" :model-value="ownership[field.key] ? 'own' : 'inherit'" unelevated no-caps toggle-color="primary" :options="inheritOptions" role="group" :aria-label="`${field.label} übernehmen oder anpassen`" @update:model-value="setOwnership(field.key, $event)" />
-                <q-input v-model="form[field.key]" outlined type="textarea" autogrow :label="field.label" :maxlength="field.max" :disable="isProtected || !ownership[field.key]" :rules="field.key === 'instructions' && ownership.instructions ? [requiredRule] : []" />
+                <q-input dense v-model="form[field.key]" outlined type="textarea" autogrow :label="field.label" :maxlength="field.max" :disable="isProtected || !ownership[field.key]" :rules="field.key === 'instructions' && ownership.instructions ? [requiredRule] : []" />
               </template>
-               <q-select :model-value="modelValue('answerDisplay')" outlined emit-value map-options label="Antwortdarstellung" :options="inheritedOptions('answerDisplay', answerDisplayOptions)" :hint="answerDisplayOptions.find((option) => option.value === form.answerDisplay)?.hint" persistent-hint :disable="isProtected" @update:model-value="setModelValue('answerDisplay', $event)" />
+               <q-select dense :model-value="modelValue('answerDisplay')" outlined emit-value map-options label="Antwortdarstellung" :options="inheritedOptions('answerDisplay', answerDisplayOptions)" :hint="answerDisplayOptions.find((option) => option.value === form.answerDisplay)?.hint" persistent-hint :disable="isProtected" @update:model-value="setModelValue('answerDisplay', $event)" />
               <q-btn-toggle v-if="!isProtected" :model-value="ownership.maxToolCalls ? 'own' : 'inherit'" unelevated no-caps toggle-color="primary" :options="inheritOptions" @update:model-value="setOwnership('maxToolCalls', $event)" />
-              <q-checkbox :model-value="form.maxToolCalls === null" label="Tool-Aufrufe unbegrenzt" :disable="isProtected || !ownership.maxToolCalls" @update:model-value="form.maxToolCalls = $event ? null : 25" />
-              <q-input v-if="form.maxToolCalls !== null" v-model.number="form.maxToolCalls" outlined type="number" min="1" label="Maximale Tool-Aufrufe" :disable="isProtected || !ownership.maxToolCalls" :rules="[toolLimitRule]" />
+              <q-checkbox dense :model-value="form.maxToolCalls === null" label="Tool-Aufrufe unbegrenzt" :disable="isProtected || !ownership.maxToolCalls" @update:model-value="form.maxToolCalls = $event ? null : 25" />
+              <q-input dense v-if="form.maxToolCalls !== null" v-model.number="form.maxToolCalls" outlined type="number" min="1" label="Maximale Tool-Aufrufe" :disable="isProtected || !ownership.maxToolCalls" :rules="[toolLimitRule]" />
               <div class="text-caption app-muted">Unbegrenzte Aufrufe können Modell- und Dienstkosten erhöhen.</div>
-               <q-select v-for="field in booleanFields" :key="field.key" :model-value="modelValue(field.key)" outlined emit-value map-options :label="field.label" :options="inheritedOptions(field.key, [{ label: 'An', value: true }, { label: 'Aus', value: false }])" :disable="isProtected" @update:model-value="setModelValue(field.key, $event)" />
+               <q-select dense v-for="field in booleanFields" :key="field.key" :model-value="modelValue(field.key)" outlined emit-value map-options :label="field.label" :options="inheritedOptions(field.key, [{ label: 'An', value: true }, { label: 'Aus', value: false }])" :disable="isProtected" @update:model-value="setModelValue(field.key, $event)" />
               <q-btn-toggle v-if="!isProtected" :model-value="ownership.sessionWritePaths ? 'own' : 'inherit'" unelevated no-caps toggle-color="primary" :options="inheritOptions" @update:model-value="setOwnership('sessionWritePaths', $event)" />
-              <q-select v-model="form.sessionWriteMode" outlined emit-value map-options label="Schreiben in die Session-Ablage" :options="sessionWriteModeOptions" :disable="isProtected || !ownership.sessionWritePaths" />
-              <q-input v-if="form.sessionWriteMode === 'paths'" v-model="form.sessionWritePathsText" outlined type="textarea" autogrow label="Erlaubte relative Pfade" :disable="isProtected || !ownership.sessionWritePaths" :rules="[sessionWritePathsRule]" />
+              <q-select dense v-model="form.sessionWriteMode" outlined emit-value map-options label="Schreiben in die Session-Ablage" :options="sessionWriteModeOptions" :disable="isProtected || !ownership.sessionWritePaths" />
+              <q-input dense v-if="form.sessionWriteMode === 'paths'" v-model="form.sessionWritePathsText" outlined type="textarea" autogrow label="Erlaubte relative Pfade" :disable="isProtected || !ownership.sessionWritePaths" :rules="[sessionWritePathsRule]" />
             </q-card-section>
           </q-card>
         </q-tab-panel>
         <q-tab-panel name="models" class="q-pa-none">
           <q-card flat class="app-surface q-mt-md">
             <q-card-section class="q-gutter-md">
-              <q-select :model-value="modelValue('defaultModelId')" outlined clearable emit-value map-options label="Agentmodell" :options="modelOptions({ field: 'defaultModelId', requiresTools: true })" :disable="accessProtected" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" hint="Benötigt Tool-Unterstützung. Ohne Auswahl kann dieses Profil keine Agentenläufe starten." @update:model-value="setModelValue('defaultModelId', $event)" />
-              <q-select :model-value="modelValue('reasoningEffort')" outlined emit-value map-options label="Reasoning-Stufe" :options="reasoningSelectionOptions" :disable="accessProtected" @update:model-value="setModelValue('reasoningEffort', $event)" />
-              <q-select v-for="setting in additionalModelSettings" :key="setting.field" :model-value="modelValue(setting.field)" outlined clearable emit-value map-options :label="setting.label" :options="modelOptions(setting)" :disable="accessProtected" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" @update:model-value="setModelValue(setting.field, $event)" />
-              <q-select :model-value="modelValue('titleVisionFallbackEnabled')" outlined emit-value map-options label="Bei Bildinhalten auf das Visionmodell ausweichen" :options="titleVisionFallbackOptions" :disable="accessProtected" @update:model-value="setModelValue('titleVisionFallbackEnabled', $event)" />
+              <q-select dense :model-value="modelValue('defaultModelId')" outlined clearable emit-value map-options label="Agentmodell" :options="modelOptions({ field: 'defaultModelId', requiresTools: true })" :disable="accessProtected" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" hint="Benötigt Tool-Unterstützung. Ohne Auswahl kann dieses Profil keine Agentenläufe starten." @update:model-value="setModelValue('defaultModelId', $event)" />
+              <q-select dense :model-value="modelValue('reasoningEffort')" outlined emit-value map-options label="Reasoning-Stufe" :options="reasoningSelectionOptions" :disable="accessProtected" @update:model-value="setModelValue('reasoningEffort', $event)" />
+              <q-select dense v-for="setting in additionalModelSettings" :key="setting.field" :model-value="modelValue(setting.field)" outlined clearable emit-value map-options :label="setting.label" :options="modelOptions(setting)" :disable="accessProtected" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" @update:model-value="setModelValue(setting.field, $event)" />
+              <q-select dense :model-value="modelValue('titleVisionFallbackEnabled')" outlined emit-value map-options label="Bei Bildinhalten auf das Visionmodell ausweichen" :options="titleVisionFallbackOptions" :disable="accessProtected" @update:model-value="setModelValue('titleVisionFallbackEnabled', $event)" />
             </q-card-section>
           </q-card>
         </q-tab-panel>
